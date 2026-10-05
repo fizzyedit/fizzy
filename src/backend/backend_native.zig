@@ -144,6 +144,51 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportOpen(at, title);
     }
 
+    /// A window to carry a view past every window of the app's, over the desktop: clear, the pointer
+    /// passing through it, above every window, placed and drawn as any viewport (`placeMain`,
+    /// `present`). Where it can be made (`carries`).
+    pub fn openCarry(at: Rect) ?*Viewport {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
+    }
+
+    /// A carry window's shape this frame (`openCarry`): what it carries fills it, rounded by
+    /// `radius` physical pixels — the OS's material and shadow in that shape — `alpha` opaque.
+    /// Null: hidden.
+    pub fn carryShape(vp: *Viewport, radius: ?f32, alpha: f32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius, alpha);
+    }
+
+    /// A float's window's corner radius, points: the OS's for a titled window (`os_frame`).
+    pub fn windowRadius() f32 {
+        if (comptime !supported) return 0;
+        return dvui.currentWindow().backend.impl.windowCornerRadius();
+    }
+
+    /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`: its
+    /// float gone to its ghost while a view is carried out of it, aimed at the places under it.
+    pub fn seeThrough(vp: *Viewport, on: bool) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportSeeThrough(vp, on);
+    }
+
+    /// Whether `vp`'s window is maximized — zoomed, or in a fullscreen Space of its own — as the
+    /// main window's is asked: nothing of the desktop behind it shows.
+    pub fn maximized(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportMaximized(vp);
+    }
+
+    /// `vp`'s window `alpha` opaque, all of it — its material too.
+    pub fn fade(vp: *Viewport, alpha: f32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportFade(vp, alpha);
+    }
+
+    /// Whether a carried view can be shown past every window (`openCarry`): macOS.
+    pub const carries = supported and builtin.os.tag == .macos;
+
     pub fn close(vp: *Viewport) void {
         if (comptime !supported) return;
         dvui.currentWindow().backend.impl.viewportClose(vp);
@@ -201,10 +246,15 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportPinPointer(pin);
     }
 
-    /// Whether the OS frames a viewport's window itself — its corners and its shadow (Windows:
-    /// DWM) — so the window is exactly the float's glass. Otherwise it is the glass with a clear
+    /// Whether the OS frames a viewport's window itself — its corners, its shadow, resizing from its
+    /// edges (Windows: DWM; macOS: a titled window, as the main window is) — so the window is
+    /// exactly the float's glass. Otherwise it is the glass with a clear
     /// margin round it, which the float draws its own shadow in.
-    pub const os_frame = supported and builtin.os.tag == .windows;
+    pub const os_frame = supported and (builtin.os.tag == .windows or builtin.os.tag == .macos);
+
+    /// Whether a viewport's window has the OS's own buttons to close, minimize and zoom it — macOS's
+    /// traffic lights, a titled window's — so its float draws no close button of its own.
+    pub const os_buttons = supported and builtin.os.tag == .macos;
 
     /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
     /// pixels in from the window's edge, `radius` its corners — for the float's frost to read the
@@ -215,20 +265,6 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
     }
 
-    /// Keep `vp`'s material out of where the main window lies under its window this frame, the
-    /// main window showing its own there through a hole in its picture (`core.FrameTarget.hole`):
-    /// then the float's glass shows through itself what it shows in the main window. True where
-    /// that is done (macOS) — and only then may the main window leave the hole.
-    pub fn maskMain(vp: *Viewport, on: bool) bool {
-        if (comptime !supported) return false;
-        return dvui.currentWindow().backend.impl.viewportMaskMain(vp, on);
-    }
-
-    /// Whether the OS moves a viewport's window by its float's header (`hints`). Not on macOS,
-    /// where the app does, as it resizes it there: AppKit's window drag runs in the window server
-    /// and tells the app where the window went after it has gone, so what the glass showed of the
-    /// main window behind it trailed the window, caught up, and trailed again.
-    pub const os_moves = supported and builtin.os.tag != .macos;
 
     /// The OS asked to close `vp`'s window.
     pub fn closeRequested(vp: *const Viewport) bool {

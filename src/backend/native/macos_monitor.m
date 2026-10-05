@@ -209,18 +209,10 @@ void fizzy_native_viewport_transact(void *nswindow) {
     if (layer) layer.presentsWithTransaction = YES;
 }
 
-/* The main window's picture this frame in the open transaction too — it leaves a hole where a
- * popped-out float's window lies over it, which moves with that window. 1 when this turned it on
- * (and `fizzy_native_viewport_presented` must turn it off); 0 when it was on already (SDL's own
- * live-resize drawing has it) or there is no layer. */
-int fizzy_native_main_transact(void *nswindow) {
-    CAMetalLayer *layer = metal_layer_of(nswindow);
-    if (layer == nil || layer.presentsWithTransaction) return 0;
-    layer.presentsWithTransaction = YES;
-    return 1;
-}
 
 void fizzy_native_viewport_presented(void *nswindow) {
     CAMetalLayer *layer = metal_layer_of(nswindow);
     if (layer) layer.presentsWithTransaction = NO;
 }
+
+

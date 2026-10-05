@@ -6015,3 +6015,24 @@ test "tree: a drag put down is not dropped where the pointer last was" {
     try dvui.testing.settle(CarriedTree.frame);
     try std.testing.expect(CarriedTree.landed == null);
 }
+
+test "a frost never captures more than the picture it reads" {
+    const within = fizzy.core.widgets.BlurBackdrop.within;
+    const Rect = dvui.Rect.Physical;
+    const win: Rect = .{ .w = 2400, .h = 1600 };
+    // Partly off the window, and smaller than it: kept whole, and so its capture size.
+    const edge: Rect = .{ .x = 2300, .y = 10, .w = 400, .h = 300 };
+    try std.testing.expectEqual(edge, within(edge, win).?);
+    // A view drag's drop zones across the main window and a float's band 100000 pixels on: cut to
+    // the window (it asked Metal for a texture 46424 pixels wide).
+    const across = within(.{ .x = 1800, .y = 200, .w = 100600, .h = 900 }, win).?;
+    try std.testing.expectEqual(@as(f32, 1800), across.x);
+    try std.testing.expectEqual(@as(f32, 600), across.w);
+    try std.testing.expectEqual(@as(f32, 900), across.h);
+    // Wholly in the band: nothing of the window.
+    try std.testing.expectEqual(@as(?Rect, null), within(.{ .x = 100000, .y = 0, .w = 3000, .h = 100 }, win));
+    // Smaller than the picture but nowhere on it — the main window's drop zones replayed into a
+    // float window's target in its band: nothing, rather than pixels from past its edge.
+    const band: Rect = .{ .x = 100000, .y = 400, .w = 712, .h = 878 };
+    try std.testing.expectEqual(@as(?Rect, null), within(.{ .x = 900, .y = 300, .w = 500, .h = 700 }, band));
+}

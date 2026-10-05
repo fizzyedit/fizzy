@@ -76,6 +76,9 @@ card_start_ns: i128 = 0,
 /// dragged and swings when it stops. This frame's shapes, head then tail.
 drop_head: core.Spring = .{},
 drop_tail: core.Spring = .{},
+/// Where the pointer was last frame, for a jump from one window's part of the frame to another's
+/// (`followAcross`).
+last_mouse: ?dvui.Point.Physical = null,
 drop_ns: i128 = 0,
 drop_shapes: [2]core.LiquidField.Shape = undefined,
 drop_n: usize = 0,
@@ -185,6 +188,23 @@ pub const Occluder = struct {
     header: dvui.Rect.Physical,
     /// The float the view is carried out of (`carriedOutOf`). It covers only while it is firm.
     source: bool = false,
+    /// A float in an OS window of its own: `bounds` and `header` are where that window lies over
+    /// the main window's frame, and these where the float is drawn in the window's band — the
+    /// pointer is read in one or the other (`SDLBackend.heldPoint`), by whether the window lets it
+    /// through to the main window (a ghost does).
+    band_bounds: ?dvui.Rect.Physical = null,
+    band_header: dvui.Rect.Physical = .{},
+
+    /// Whether `p` is over its window, in either frame it is read in.
+    fn covers(self: Occluder, p: dvui.Point.Physical) bool {
+        if (self.bounds.contains(p)) return true;
+        return if (self.band_bounds) |b| b.contains(p) else false;
+    }
+
+    /// Whether `p` is over its header, in either frame.
+    fn onHeader(self: Occluder, p: dvui.Point.Physical) bool {
+        return self.header.contains(p) or (self.band_bounds != null and self.band_header.contains(p));
+    }
 };
 
 /// What lies under a point, as far as which window: the topmost float there (0, the main window,
@@ -197,9 +217,9 @@ fn under(state: *const Layout.State, p: dvui.Point.Physical) Under {
     const d = &state.view_drag;
     var out: Under = .{};
     for (d.occluders[0..d.occluder_count]) |o| {
-        if (!o.bounds.contains(p) or o.layer < out.layer) continue;
+        if (!o.covers(p) or o.layer < out.layer) continue;
         if (o.source and !d.ghost_firm) continue;
-        out = .{ .layer = o.layer, .header = o.header.contains(p) };
+        out = .{ .layer = o.layer, .header = o.onHeader(p) };
     }
     return out;
 }
@@ -263,7 +283,7 @@ pub fn settleGhost(state: *Layout.State) bool {
     // lifted from the float's corner button, the drop started out past the float's edge, and the
     // float went toward its ghost, firmed as the drop crossed back over it on the way out, and went
     // again — a hitch in the middle of every drag out of a float.
-    if (!g.bounds.contains(mouse)) {
+    if (!g.covers(mouse)) {
         d.ghost_firm = false;
         d.ghost_rest_ns = 0;
         return false;
@@ -272,12 +292,12 @@ pub fn settleGhost(state: *Layout.State) bool {
     // Under another float over the ghost, the view is aimed at that one.
     var below: u16 = 0;
     for (d.occluders[0..d.occluder_count]) |o| {
-        if (!o.source and o.bounds.contains(a.p) and o.layer > below) below = o.layer;
+        if (!o.source and o.covers(a.p) and o.layer > below) below = o.layer;
     }
     // On a drop beneath it the view is aimed at that drop, lit as one — never the float — except
     // over the ghost's header, its handle: a drop under a ghost is its whole size, and over a small
     // ghost it can leave nowhere else to rest.
-    const on_header = g.header.contains(mouse);
+    const on_header = g.onHeader(mouse);
     if (below > g.layer or (!on_header and onDropBeneath(state, below, a.p, a.r))) {
         d.ghost_rest_ns = 0;
         return false;
@@ -493,6 +513,7 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     var d = &l.state.view_drag;
     d.drop_head = .{};
     d.drop_tail = .{};
+    d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
@@ -534,6 +555,7 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     var d = &l.state.view_drag;
     d.drop_head = .{};
     d.drop_tail = .{};
+    d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
@@ -595,6 +617,15 @@ fn mapOccluders(l: *Layout, d: *ViewDrag) void {
         if (d.occluder_count == d.occluders.len) break;
         if (f.closing or f.bounds.w <= 0 or f.bounds.h <= 0) continue;
         d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header, .source = carriedOutOf(l, f.name) };
+        // In an OS window of its own: where that window lies over the main window's places, and
+        // where the float is drawn in its band besides (`Occluder.band_bounds`).
+        if (f.viewport) |vp| {
+            const o = &d.occluders[d.occluder_count];
+            o.band_bounds = f.bounds;
+            o.band_header = f.header;
+            o.bounds = f.bounds.offsetPoint(vp.main_delta);
+            o.header = f.header.offsetPoint(vp.main_delta);
+        }
         d.occluder_count += 1;
     }
 }
@@ -1011,6 +1042,7 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
 pub fn drawOverlay(l: *Layout) void {
     const d = &l.state.view_drag;
     const now = dvui.currentWindow().frame_time_ns;
+    if (d.active()) followAcross(d, dvui.currentWindow().mouse_pt);
     const queued = if (d.pending_frame == now) d.pending[0..d.pending_count] else d.pending[0..0];
     // This frame's drops, and any from last frame still going that no place asked for this time —
     // the place a drop just landed on can be gone or changed by now, and its drop still has to run
@@ -1128,6 +1160,31 @@ const drop_r: f32 = 52;
 const drop_tail_share: f32 = 0.62;
 /// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
 const drop_pull: f32 = 0.45;
+
+/// The farthest the pointer moves in a frame within one window's part of the frame, physical
+/// pixels: past it, it went from one window to another — a float out of the main window is drawn
+/// in a band 100000 pixels on (`Floats.Viewport`).
+const across_jump: f32 = 30000;
+
+/// The pointer gone from one window's part of the frame to another's in one frame — out of a
+/// float's window over the main window, or back — the carried view goes with it as it is: its
+/// springs and the shape it is changing from move by the same jump. Left, they swept back across
+/// the band and the view showed for a frame or two in the window it had left.
+fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
+    defer d.last_mouse = mouse;
+    const was = d.last_mouse orelse return;
+    const dx = mouse.x - was.x;
+    const dy = mouse.y - was.y;
+    if (@abs(dx) < across_jump and @abs(dy) < across_jump) return;
+    for ([_]*core.Spring{ &d.drop_head, &d.drop_tail }) |sp| {
+        sp.pos.x += dx;
+        sp.pos.y += dy;
+    }
+    d.morph_rect.x += dx;
+    d.morph_rect.y += dy;
+    d.shape_rect.x += dx;
+    d.shape_rect.y += dy;
+}
 
 /// The view carried as a drop this frame — its head and tail, stepped on their springs — or none
 /// where it is carried as a card (`drawFloat`): no glass program, no photograph, or over a list.
@@ -1556,6 +1613,10 @@ fn floatTarget(from: dvui.Size.Physical, scale: f32) dvui.Size.Physical {
 /// Release at `mouse`. Does nothing unless the pointer is somewhere a drop
 /// means something, so letting go over the window frame cancels.
 pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
+    // Let go over no window of the app's, where floats are OS windows of their own: a float opens
+    // there, in a window of its own, with the view in it — as a tab torn off onto the desktop opens
+    // a window where it lands.
+    if (l.state.floats_windowed and overNoWindow(mouse)) return floatAway(l, source, mouse);
     if (chooserAt(l.state, mouse)) |o| {
         if (!o.into) return;
         if (dropOnPluginChooser(l, source, o.name, mouse)) return;
@@ -1666,7 +1727,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // Out of its own place into a window of its own: the framework's to do, not the place's —
     // a plugin region's own drop is never asked.
     if (plan == .float) {
-        floatOut(l, source, moved);
+        floatOut(l, source, moved, null);
         shutIfEmptied(l, source);
         l.state.markDirty();
         dvui.refresh(null, @src(), null);
@@ -1728,6 +1789,31 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
 /// Whether the view carried out of `source` floats when it is dropped on the middle of `source`
 /// (`float_rules.canFloat`): not out of the picker, not a document — its place is the slot a
 /// plugin made for it — and not a view already alone in a float nobody split.
+/// Over no window of the app's: past the main window, and on no screen a float's window shows
+/// (`core.screens`) — the pointer is read in the main window's frame there (`SDLBackend.heldPoint`).
+fn overNoWindow(mouse: dvui.Point.Physical) bool {
+    if (dvui.windowRectPixels().contains(mouse)) return false;
+    const s = dvui.windowNaturalScale();
+    const screen = core.screens.screenFor(.{ .x = mouse.x / s, .y = mouse.y / s });
+    const main = dvui.windowRect();
+    return screen.x == main.x and screen.y == main.y and screen.w == main.w and screen.h == main.h;
+}
+
+/// The view carried out of `source`, let go over no window of the app's (`apply`): a float of its
+/// own opens round where it was let go (`floatOut`), which the application puts in an OS window of
+/// its own. Any view that may float — a view alone in a float's window too: its window closes, and
+/// one opens where it was let go.
+fn floatAway(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
+    if (std.mem.eql(u8, source, loose_source)) return;
+    const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
+    const s = l.host.surfaceById(moved) orelse return;
+    if (!float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = false })) return;
+    floatOut(l, source, moved, mouse);
+    shutIfEmptied(l, source);
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
 fn canFloat(l: *Layout, source: []const u8) bool {
     if (std.mem.eql(u8, source, loose_source)) return false;
     const moved = movedFrom(l, source) orelse return false;
@@ -1740,7 +1826,7 @@ fn canFloat(l: *Layout, source: []const u8) bool {
 /// opens one — out of another float, a step down and right of that one — growing out of the glass
 /// it was carried in, with the photograph the drag took of it. The source loses the view; a place
 /// of several keeps the rest.
-fn floatOut(l: *Layout, source: []const u8, moved: []const u8) void {
+fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.Physical) void {
     const state = l.state;
     const cw = dvui.currentWindow();
     const scale = cw.natural_scale;
@@ -1749,10 +1835,16 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8) void {
     const window = Floats.toRules(dvui.windowRect());
     const src = placeBounds(state, source) orelse dvui.windowRectPixels();
     const out_of: ?usize = if (state.floats.rootOf(source)) |root| state.floats.find(root) else null;
-    const rect = if (out_of) |i|
+    var rect = if (out_of) |i|
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
         float_rules.initialRect(Floats.toRules(src.toNatural()), window);
+    // Let go over no window of the app's (`floatAway`): its size, round where it was let go, out
+    // there — not held on the main window.
+    if (at) |p| {
+        rect.x = p.x / scale - rect.w / 2;
+        rect.y = p.y / scale - rect.h / 2;
+    }
     // Out of a float, home is still where that float came from: the place it opened over is a
     // float's, and goes with it.
     const home = if (out_of) |i| state.floats.items.items[i].home else state.internName(l.gpa, source);

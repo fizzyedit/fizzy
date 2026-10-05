@@ -74,9 +74,21 @@ const Everywhere = struct {
     ids: [8]dvui.Id = undefined,
 };
 
+/// While something drawn across every screen may be carried past every window of the app's — a
+/// view drag where floats are OS windows of their own, and a window carries the view over the
+/// desktop — it reaches across the whole desktop (`allPixels`). The app's, each frame.
+pub fn publishBeyond(on: bool) void {
+    if (on) dvui.dataSet(null, key_id, "_beyond", true) else dvui.dataRemove(null, key_id, "_beyond");
+}
+
+/// How far past the main window the whole desktop reaches, natural units each way: further than
+/// any desktop.
+const beyond: f32 = 16384;
+
 /// Every screen at once, physical: what a floating thing drawn across all of them clips to.
 pub fn allPixels() dvui.Rect.Physical {
     var r = dvui.windowRectPixels();
+    if (dvui.dataGet(null, key_id, "_beyond", bool) orelse false) r = r.outsetAll(beyond * dvui.windowNaturalScale());
     const p = dvui.dataGetPtr(null, key_id, key, Published) orelse return r;
     const m = dvui.windowNaturalScale();
     for (p.rects[0..p.n]) |s| r = r.unionWith(.{ .x = s.x * m, .y = s.y * m, .w = s.w * m, .h = s.h * m });

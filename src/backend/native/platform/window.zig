@@ -70,7 +70,13 @@ pub fn show(win: *dvui.Window, maximized: bool) void {
 }
 
 pub fn isMaximized(win: *dvui.Window) bool {
-    const window = win.backend.impl.window;
+    return windowMaximized(win.backend.impl.window);
+}
+
+/// Whether `window` — the main window or a float's own — is maximized: zoomed, full screen, or in
+/// a fullscreen Space (on macOS through the whole of its way out of one). Nothing of the desktop
+/// behind it shows, and fizzy draws it opaque (`Editor.easeWindowOpacity`).
+pub fn windowMaximized(window: *c.SDL_Window) bool {
     const flags = c.SDL_GetWindowFlags(window);
     if (flags & c.SDL_WINDOW_MAXIMIZED != 0) return true;
     if (builtin.os.tag == .macos) {
@@ -82,8 +88,8 @@ pub fn isMaximized(win: *dvui.Window) bool {
         if (raw_ptr != null) {
             if (fizzy_macos_window_in_fullscreen_space(raw_ptr) != 0) return true;
             if (fizzy_macos_window_is_zoomed(raw_ptr) != 0) return true;
+            if (fizzy_macos_window_chrome_hidden(raw_ptr) != 0) return true;
         }
-        if (isFullscreenChromeHidden(win)) return true;
         return false;
     }
     return flags & c.SDL_WINDOW_FULLSCREEN != 0;
@@ -119,37 +125,21 @@ pub fn setStyle(win: *dvui.Window) void {
             c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
             null,
         );
-        if (raw_ptr != null) {
-            const window = objc.Object.fromId(raw_ptr);
-
-            // Re-applying styleMask while in a fullscreen Space exits the Space on macOS.
-            if (fizzy_macos_window_in_fullscreen_space(raw_ptr) == 0) {
-                // Allow content view to extend under the titlebar so vibrancy covers it.
-                const style_mask = window.msgSend(c_ulong, "styleMask", .{});
-                if (style_mask & NSWindowStyleMaskFullSizeContentView == 0) {
-                    window.msgSend(void, "setStyleMask:", .{style_mask | NSWindowStyleMaskFullSizeContentView});
-                }
-            }
-            // This sets the titlebar to transparent so our effect view shows through.
-            if (!window.msgSend(bool, "titlebarAppearsTransparent", .{})) {
-                window.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
-            }
-            // Hide the title text in the titlebar (matches Windows, where we
-            // draw our own chrome). `NSWindowTitleHidden` = 1. The window still
-            // has a programmatic title (used by the Window menu / Dock) — only
-            // the rendered titlebar string is hidden.
-            if (window.msgSend(c_long, "titleVisibility", .{}) != 1) {
-                window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
-            }
+        if (raw_ptr) |ptr| {
+            styleTitled(ptr);
             // Presses over what the app draws in the titlebar's region (a dialog, a menu) are
             // the app's, not AppKit's to move the window with.
-            fizzy_macos_titlebar_hit_test_install(raw_ptr, titlebarInteractiveAt);
-            // Green button enters a native fullscreen Space (menu bar hidden).
-            const NSWindowCollectionBehaviorFullScreenPrimary: c_ulong = 1 << 7;
-            const behavior = window.msgSend(c_ulong, "collectionBehavior", .{});
-            if (behavior & NSWindowCollectionBehaviorFullScreenPrimary == 0) {
-                window.msgSend(void, "setCollectionBehavior:", .{behavior | NSWindowCollectionBehaviorFullScreenPrimary});
-            }
+            fizzy_macos_titlebar_hit_test_install(ptr, titlebarInteractiveAt);
+        }
+        // Every float's own window too: SDL puts its own style back on them as on the main window
+        // — into and out of a fullscreen Space above all — and a float's window kept SDL's
+        // titlebar strip over its content after one. The pointer over a float's window is its
+        // own hit test's (`SDLBackend.viewportHitTest`), so no titlebar hit test of the main one's.
+        for (&win.backend.impl.viewports) |*slot| {
+            const vp = if (slot.*) |*v| v else continue;
+            if (vp.passive) continue;
+            const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
+            styleTitled(ns);
         }
     } else if (builtin.os.tag == .windows) {
         win32_titlebar.applyChrome(win);
@@ -178,6 +168,75 @@ pub fn performTitleBarButton(win: *dvui.Window, button: titlebar.TitleBarButton)
     }
 }
 
+/// A titled window of fizzy's styled as the app is — the main window and every float's own
+/// window (`setStyle`): its content under a transparent, title-less titlebar, going full screen in
+/// a Space of its own. Reads before it writes: only what SDL has put back changes.
+fn styleTitled(raw_ptr: *anyopaque) void {
+    const window = objc.Object.fromId(raw_ptr);
+
+    // Re-applying styleMask while in a fullscreen Space exits the Space on macOS.
+    if (fizzy_macos_window_in_fullscreen_space(raw_ptr) == 0) {
+        // Allow content view to extend under the titlebar so vibrancy covers it.
+        const style_mask = window.msgSend(c_ulong, "styleMask", .{});
+        if (style_mask & NSWindowStyleMaskFullSizeContentView == 0) {
+            window.msgSend(void, "setStyleMask:", .{style_mask | NSWindowStyleMaskFullSizeContentView});
+        }
+    }
+    // This sets the titlebar to transparent so our effect view shows through.
+    if (!window.msgSend(bool, "titlebarAppearsTransparent", .{})) {
+        window.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
+    }
+    // Hide the title text in the titlebar (matches Windows, where we
+    // draw our own chrome). `NSWindowTitleHidden` = 1. The window still
+    // has a programmatic title (used by the Window menu / Dock) — only
+    // the rendered titlebar string is hidden.
+    if (window.msgSend(c_long, "titleVisibility", .{}) != 1) {
+        window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
+    }
+    // Green button enters a native fullscreen Space (menu bar hidden).
+    const NSWindowCollectionBehaviorFullScreenPrimary: c_ulong = 1 << 7;
+    const behavior = window.msgSend(c_ulong, "collectionBehavior", .{});
+    if (behavior & NSWindowCollectionBehaviorFullScreenPrimary == 0) {
+        window.msgSend(void, "setCollectionBehavior:", .{behavior | NSWindowCollectionBehaviorFullScreenPrimary});
+    }
+}
+
+/// A window of fizzy's skinned as the app is: its background — what AppKit draws its title bar
+/// with, the one a fullscreen window reveals at the top among them — `color`, and its appearance
+/// light or dark by the app's theme, not the system's, so its title bar, traffic lights and
+/// vibrancy read as the app does. The main window's and every float's own window's alike
+/// (`setBackground`, `SDLBackend.viewportGlass`).
+pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
+    if (comptime builtin.os.tag != .macos) return;
+    const window = objc.Object.fromId(raw_ptr);
+    const NSColor = objc.getClass("NSColor").?;
+    const new_color = NSColor.msgSend(objc.Object, "colorWithRed:green:blue:alpha:", .{
+        @as(f64, @floatFromInt(color.r)) / 255.0,
+        @as(f64, @floatFromInt(color.g)) / 255.0,
+        @as(f64, @floatFromInt(color.b)) / 255.0,
+        @as(f64, @floatFromInt(color.a)) / 255.0,
+    });
+    // This sets both the titlebar and the window background color.
+    window.msgSend(void, "setBackgroundColor:", .{new_color.value});
+
+    // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
+    if (objc.getClass("NSAppearance")) |NSAppearance| {
+        if (objc.getClass("NSString")) |NSString| {
+            const name_c: [*c]const u8 = if (dark)
+                "NSAppearanceNameVibrantDark"
+            else
+                "NSAppearanceNameVibrantLight";
+            const name_obj = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{name_c});
+            if (name_obj.value != 0) {
+                const appearance = NSAppearance.msgSend(objc.Object, "appearanceNamed:", .{name_obj.value});
+                if (appearance.value != 0) {
+                    window.msgSend(void, "setAppearance:", .{appearance.value});
+                }
+            }
+        }
+    }
+}
+
 pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
     if (builtin.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
@@ -193,31 +252,15 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
             // Wrap content view in NSVisualEffectView once for vibrancy (blur behind window).
             wrapContentViewWithVibrancy(window);
 
-            const NSColor = objc.getClass("NSColor").?;
-            const new_color = NSColor.msgSend(objc.Object, "colorWithRed:green:blue:alpha:", .{
-                @as(f64, @floatFromInt(color.r)) / 255.0,
-                @as(f64, @floatFromInt(color.g)) / 255.0,
-                @as(f64, @floatFromInt(color.b)) / 255.0,
-                @as(f64, @floatFromInt(color.a)) / 255.0,
-            });
-            // This sets both the titlebar and the window background color.
-            window.msgSend(void, "setBackgroundColor:", .{new_color.value});
-
-            // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
-            if (objc.getClass("NSAppearance")) |NSAppearance| {
-                if (objc.getClass("NSString")) |NSString| {
-                    const name_c: [*c]const u8 = if (dvui.themeGet().dark)
-                        "NSAppearanceNameVibrantDark"
-                    else
-                        "NSAppearanceNameVibrantLight";
-                    const name_obj = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{name_c});
-                    if (name_obj.value != 0) {
-                        const appearance = NSAppearance.msgSend(objc.Object, "appearanceNamed:", .{name_obj.value});
-                        if (appearance.value != 0) {
-                            window.msgSend(void, "setAppearance:", .{appearance.value});
-                        }
-                    }
-                }
+            skin(raw_ptr.?, color, dvui.themeGet().dark);
+            // Every float's own window too, and each opened from now on (`SDLBackend.viewportGlass`):
+            // side by side, and each in a Space of its own, they are one app's windows.
+            win.backend.impl.window_skin = color;
+            for (&win.backend.impl.viewports) |*slot| {
+                const vp = if (slot.*) |*v| v else continue;
+                if (vp.passive) continue;
+                const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
+                skin(ns, color, dvui.themeGet().dark);
             }
 
             // SDL3 currently removes the shadow when the transparency flag for the window is set. This brings it back.

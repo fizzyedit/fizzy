@@ -565,15 +565,24 @@ fn acquireSwapchain(self: *GpuRenderer) !bool {
 
 /// Claim `window` on this renderer's device, to present into alongside the main window (a
 /// viewport, `SDLBackend.Viewport`): one renderer, one command buffer and one submission for
-/// every window, so every texture and program is valid in all of them. Its swapchain does not
-/// wait for the display — IMMEDIATE where the device has it (Metal without display sync), else
-/// MAILBOX — so a second window never holds the main one's frame back.
+/// every window, so every texture and program is valid in all of them.
+///
+/// macOS: its swapchain waits for the display, as the main window's does. Presented without
+/// display sync, a second window's pictures reached the window server at any moment, and the main
+/// window's next drawable came that much later and unevenly — up to 20 ms on a ProMotion display,
+/// a third of frames at 12–13 ms with a float window up; with both synced, none (measured with
+/// the user's session: 30–95 frames over 10 ms in every 2 s, then 0–8). The wait moves into the
+/// viewport's acquire, and the frame is paced once.
+/// Elsewhere it does not wait — IMMEDIATE where the device has it, else MAILBOX — so a second
+/// window never holds the main one's frame back; not yet measured there.
 pub fn claimViewport(self: *GpuRenderer, window: *c.SDL_Window) !void {
     if (!c.SDL_ClaimWindowForGPUDevice(self.device, window)) {
         log.err("SDL_ClaimWindowForGPUDevice (viewport) failed: {s}", .{c.SDL_GetError()});
         return error.GpuClaimWindow;
     }
-    const mode: c.SDL_GPUPresentMode = if (c.SDL_WindowSupportsGPUPresentMode(self.device, window, c.SDL_GPU_PRESENTMODE_IMMEDIATE))
+    const mode: c.SDL_GPUPresentMode = if (builtin.os.tag == .macos)
+        c.SDL_GPU_PRESENTMODE_VSYNC
+    else if (c.SDL_WindowSupportsGPUPresentMode(self.device, window, c.SDL_GPU_PRESENTMODE_IMMEDIATE))
         c.SDL_GPU_PRESENTMODE_IMMEDIATE
     else if (c.SDL_WindowSupportsGPUPresentMode(self.device, window, c.SDL_GPU_PRESENTMODE_MAILBOX))
         c.SDL_GPU_PRESENTMODE_MAILBOX

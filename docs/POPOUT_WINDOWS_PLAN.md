@@ -6,6 +6,15 @@ expensive part to re-derive.
 
 ## Where it stands
 
+**P6, floats are windows, is under way (2026-10-04), behind `FIZZY_POPOUT=1`.** After testing the
+P3 gesture, the user's call: "we want native os windows where we can have them" — a float that is a
+window from the frame it is made in, as VS Code's floating windows are, rather than one that splits
+out at the main window's edge. Nearly everything that went wrong in P3's polish lived in that
+crossing (the held drag, the frame the float is in neither window, the glass's look changing as it
+crosses), and a window that is a window from birth never makes it. See "P6: floats are windows"
+below. In-window floats stay where there are no OS windows to have (the web, Wayland): "faked"
+there.
+
 **Phases 2 and 3 are in, behind `FIZZY_POPOUT=1`, with no dvui change.** A float dragged past the
 main window's edge splits out into an OS window of its own, and merges back when let go wholly
 inside it. Its popups and a view drag follow it across. On macOS its window wears vibrancy behind
@@ -68,6 +77,7 @@ window's draw lists. Fizzy's natural hook is the same — dvui's deferred subwin
 | **P3** (built, flag) | The gesture: a float split out as it crosses the main window's edge, merged back when let go fully inside | the flag |
 | **P4** | Per-OS dressing, parenting, minimize / maximize / close with the main window | — (flag off) |
 | **P5** | Hybrid frost (built), mixed DPI, Wayland | — |
+| **P6** (in progress, flag) | Floats are windows: born as native, titled OS windows; the edge crossing gone | the flag |
 
 ## The viewport model
 
@@ -198,6 +208,15 @@ One loop that wakes on any window's events. Coordinate with the frame-drop and r
 flight and with `docs/MACOS_LIVE_RESIZE.md` (SDL drawing each live-resize step from
 `displayLayer:`): a popped-out window being resized must not stall the main window's frames.
 
+**Every window waits for the display on macOS** (`GpuRenderer.claimViewport`). The first cut
+presented viewports without display sync, as Dear ImGui's backends do so that a second
+`SwapBuffers` never adds a second vsync wait. On macOS, with a ProMotion display, it did the
+opposite: the viewport's pictures reached the window server at any moment, and the main window's
+`WaitAndAcquireGPUSwapchainTexture` waited up to 20 ms for its next drawable. With a float window
+up, 30–95 frames in every 2 s took 12–13 ms, against 0–8 with both synced, measured in the user's
+own session. Synced, the wait moves into the viewport's acquire and the frame is paced once.
+Windows and X11 keep IMMEDIATE/MAILBOX until measured there.
+
 ## Persistence
 
 `SavedRegion.Floating` (`src/backend/layout_file.zig`) gains
@@ -217,7 +236,8 @@ in a sandboxed fizzy driven by a demo tape where it can be (`docs/AUTOMATION.md`
 - **AccessKit** is per OS window; one `dvui.Window` across several needs a tree per viewport.
 - **OS drag and drop** into a secondary window (a file dropped on a popped-out explorer).
 - **Spaces and fullscreen** on macOS: a popped-out window on another Space, the main window going
-  fullscreen.
+  fullscreen. (P6: a float's window goes full screen in a Space of its own through the main window's
+  monitor — `macos_monitor.watch`.)
 - **Focus stealing** when a split creates a window under a held drag.
 - **D3D12 on hardware GPUs**: fizzy's backend has run on Windows only on WARP so far.
 
@@ -402,14 +422,14 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
   it as it does in the main window (`Floats.Viewport.material`). Split under a drag, its frost
   still reads the main window's frame, so what is over the main window reads the app and what is
   past it reads the vibrancy.
-- **The main window's material through it.** Where the pop-out lies over the main window, its
-  glass shows through itself what it does in the main window: the main window leaves a hole in its
-  picture there once the pop-out shows the float (`core.FrameTarget.hole`, cut after the replay),
-  and the pop-out's material is masked out of there (`viewports.maskMain`). Before, the main window
-  still drew its own picture behind the pop-out, the pop-out's vibrancy blurred that again, and
-  the glass came out more opaque than in the main window — a pop as the float split out. The mask,
-  the hole, the window's place and both windows' pictures change in one transaction
-  (`SDLBackend.renderPresent`), so the hole moves with the window.
+- **Matching the main window's glass, then not (#222, P6).** For a while the pop-out imitated a
+  glass window in the main window: its frost read the main window's picture behind it (hybrid
+  frost), the main window cut a hole under its glass and its vibrancy was masked off the main window
+  so its colour matched, and the main window's place was read from the window server so all of that
+  kept up with the OS moving the windows. It never quite could: the OS moves a window faster than
+  fizzy draws it, so the blur trailed the window and its rim streaked a pixel at a time. Once floats
+  were windows from birth (P6), the user's call: "now that its real windows, we stop trying to
+  match it to in-app dialogs and just draw it the same as the main window". All of that is gone.
 - **Autorelease pools.** Objective-C called from the frame loop needs an autorelease pool of its
   own, because SDL wraps only its own calls. Without one, the subview arrays AppKit autoreleased
   kept the window SDL closed alive in the window server after every pop-in.
@@ -421,10 +441,10 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
   window, the main one. The pop-out is ordered back above it, and again whenever it has fallen
   behind (a press on the main window, a document opened from Finder raising it): the behaviour of
   an owned window on Windows, without the child window AppKit would move with the main one.
-- **The glass out there.** It is made as see-through as what it reads, and out of the main window
-  it read the window's clear pixels: no rim, light or tint. It reads what it reads in the main
-  window now — the main window's picture where that is under it, its base past its edge, the
-  margin past the rim included ("Hybrid frost", below).
+- **Drawn as the main window.** A float in a window the OS frames has no glass of its own: the
+  window's base stands under its content, its chrome at the window's opacity over the material
+  (`Popout.backing`), as the main window's content stands on its base, and the OS draws the shadow.
+  The OS's blur of what is behind the window keeps up with any move, as the main window's does.
 
 ### Not checked
 
@@ -457,12 +477,10 @@ screen, maximized at the top, Win+arrows, macOS tiling.
   glass are (`viewports.hints`). SDL's hit test answers the OS from that (`viewport_map.hitTest`,
   unit tested): the header moves the window, and the glass's edges resize it. The window is
   created resizable, since only a window the OS may resize snaps or tiles.
-- **Not on macOS.** SDL there takes only the move (AppKit's window-background drag), and that
-  drag runs in the window server, telling the app where the window went after it has gone: what
-  the glass showed of the main window behind it trailed the window and caught up in steps. So the
-  float's own header drag and edges move and resize it there (`viewports.os_moves`), and the window
-  goes where the float is drawn in the transaction its picture is presented in. It does not take
-  part in macOS's drag tiling.
+- **macOS.** SDL there takes only the move from the hit test (AppKit's window-background drag);
+  a titled window (P6) resizes from its edges by itself. Having the app move the window instead,
+  in the transaction its picture is presented in, was tried: in step, but no tiling, and the window
+  lagged the pointer by the app's frame.
 - **The float follows its window.** When the OS moves or resizes the window, the float's rect
   follows it (`viewports.osPlaced`). The app's own placement, reported back, is told apart by
   comparing it with where the app last put the window. On X11, where placing a window is
@@ -502,6 +520,9 @@ Checked on Windows 11 on Arm in a VM, with real input inside the VM (`SendInput`
 
 ### Hybrid frost: the same glass in and out
 
+*Removed in P6: a float in its own window is drawn as the main window is ("Matching the main
+window's glass, then not", above). Kept as the record of what was tried.*
+
 A float's glass is made as see-through as what it reads, and frosts and refracts it. In the main
 window it reads the app; out of it, its window's own pixels. With nothing there it drew nothing;
 with the main window's base stood behind it (`Popout.backing`) it drew a tinted pane. That pane
@@ -534,6 +555,87 @@ What it does not do yet:
 
 - **Deferred subwindows under it.** The picture is the frame before dialogs and other floats
   replay, so a float out over another float frosts the layout, not that float.
+
+## P6: floats are windows
+
+Where the platform has OS windows (`viewports.available`: macOS, Windows, X11), every float is one,
+from the frame it is made in.
+
+**Built (first step, macOS):**
+
+- **Born as a window.** A float made by a drop on a view's own middle, or brought back from a saved
+  layout, goes into a window of its own before it is ever drawn in the main window
+  (`Popout.beginFrame`), at its whole rect (not the carried glass it lands from). One window per
+  float (`Popout.outs`, up to the backend's eight). The held drag, splitting at the main window's
+  edge and merging back are gone, with `Float.split` and the "Pop Out Float" command: a float's
+  views go back into the main window by being carried there, and an emptied float's window closes.
+- **A window a view is carried out of goes to its ghost**, as a float in the main window does
+  (`ViewDrag.settleGhost`): the whole OS window fades to the ghost's alpha, material and shadow too
+  (`viewports.fade`, `SDL_SetWindowOpacity`), and while it is a ghost a held pointer over it is read
+  as over the main window beneath (`viewports.seeThrough`; `SDLBackend.heldPoint` skips it), so the
+  places it lies over can be seen and dropped on. The drag reads such a float in both frames
+  (`ViewDrag.Occluder.band_bounds`): its band, where it is drawn and the pointer is read while it is
+  firm, and where its window lies over the main window (`Floats.Viewport.main_delta`), where the
+  pointer is read while it is a ghost and where the main window's drops slide clear of it. It firms
+  by the same rules — at once with nothing under it, after a rest or on its header otherwise. Over
+  the ghost the carry window shows what is carried, which the main window's drawing would show only
+  faintly through it.
+- **Titled, as the main window is (macOS).** Created titled, not borderless
+  (`SDLBackend.viewportOpen`), and dressed as the main window: content under a transparent title
+  bar, the title's text hidden (the float's header shows it), the OS's traffic lights, shadow,
+  corners and resizing from every edge (`fizzy_macos_viewport_glass`). The window is the glass
+  (`viewports.os_frame`): no clear margin, no shadow of fizzy's, and the float resizes nothing
+  itself. Its header draws no close button beside the traffic lights (`viewports.os_buttons`); the
+  red one closes the float, its views going home (`Floats.Viewport.close_asked`), at once, as any
+  window closes — no fly-shut.
+- **Drawn as the main window.** No frost, rim or shadow of the float's own in a window the OS frames:
+  its content on the window's base over the OS material, as the main window's content is. The hybrid
+  frost, the hole and mask under it in the main window, and reading where windows are from the
+  window server are gone with it.
+
+- **Carrying a view outside every window (macOS).** While what a view is carried as lies past the
+  main window, and over no float's window, a carry window shows it there (`Popout.carryFrame`,
+  `viewports.openCarry`): a round window of its own, the shape of what is carried (a drop's head,
+  a card, a tab) — the main window's material masked to that shape and the OS's shadow round it
+  (`viewports.carryShape`, changed in the transaction its place and picture are) — the pointer
+  passing through it, at a pop-up menu's level above every window, in no window list. The drag's
+  drawing, recorded in the main window's frame past its edge (`core.screens.publishBeyond` lets it
+  reach there), is copied into it over the main window's base, as a float's window stands on it.
+  Once any of it is past the main window the carry window shows all of it, over the main window too.
+  A drop's tail stays in the drop's shape out there. Let go over no window of the app's,
+  the view floats where it was let go (`ViewDrag.floatAway`, `State.floats_windowed`): a float of
+  its size round the pointer, in a window of its own. An OS drag-and-drop session was the
+  alternative: its image glued to the cursor, but a still picture, no liquid glass. Not yet:
+  straddling a float window's edge it is cut at that edge.
+
+- **One window machinery for every window (macOS).** A float's own window is dressed and followed
+  as the main window is, not by a copy of it: one base colour (`Editor.windowBase`), one skin — its
+  background, the title bar AppKit draws, and its light or dark appearance (`platform.window.skin`,
+  re-applied to every float window when the theme changes) — and one monitor through Spaces, zooms
+  and live resizes (`macos/window_monitor.m`, `macos_monitor.zig`), its state per window instead
+  of one window's globals, with one pump for all of them. So a float's window goes full screen in
+  a Space of its own as the main window does, several at once: the monitor feeds its live size
+  and place into SDL through the animation (`macos_monitor.watch`), the float follows the window
+  there and back, nothing places it meanwhile (`osOwnsFrame`), it is drawn opaque there as the main
+  window is, and it is not ordered against the main window across Spaces. A plain un-zoom used to
+  leave the monitor's pump, and every frame of the app, running for good; its flag now ends with
+  its frames.
+- **Growing out of the carried glass (macOS).** A float a drop makes opens as one in the main
+  window lands (`Floats.Landing`): its window shows nothing while a carry window — the drag's own
+  when it had one (`Popout.spare`), already at the drop — grows from the drop to the window's frame
+  and rounds to its corners (`viewports.windowRadius`, 16 points from macOS 26), the carried
+  photograph fading out in it (`Popout.growFrame`). Landed, the window shows under it and it fades
+  off in 120 ms (`viewports.carryShape`'s alpha, in the transaction with its shape). Growing the
+  titled window itself would have shown its traffic lights in a window the drop's size, square.
+  The float is drawn whole in its band all along, so the window has its picture the frame it shows.
+
+**Next:**
+
+1. **Windows and X11 chrome.** Windows: the float's header draws caption buttons, as the main
+   window's does (`caption_buttons.zig`). X11: client-side decorations, as the main window's. And
+   the carry window there, which the opening grows in too.
+2. **Persistence of where the windows are** (`SavedRegion.Floating.os`): a saved float comes back
+   in its window where it was on the desktop, not where it would be over the main window.
 
 ## Next steps
 

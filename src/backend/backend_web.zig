@@ -146,6 +146,20 @@ pub const viewports = struct {
         return .{};
     }
     pub const os_frame = false;
+    pub const os_buttons = false;
+    pub const carries = false;
+    pub fn seeThrough(_: *Viewport, _: bool) void {}
+    pub fn fade(_: *Viewport, _: f32) void {}
+    pub fn maximized(_: *const Viewport) bool {
+        return false;
+    }
+    pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
+    pub fn windowRadius() f32 {
+        return 0;
+    }
+    pub fn openCarry(_: Rect) ?*Viewport {
+        return null;
+    }
     pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32, app_side: f32 = 0, app_corner: f32 = 0 };
     pub fn hints(_: *Viewport, _: ?Hints) void {}
     pub fn osPlaced(_: *Viewport) ?Rect {
@@ -163,10 +177,6 @@ pub const viewports = struct {
     pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
         return false;
     }
-    pub fn maskMain(_: *Viewport, _: bool) bool {
-        return false;
-    }
-    pub const os_moves = false;
     pub fn placeMain(_: *Viewport, frame: Rect) Rect {
         return frame;
     }

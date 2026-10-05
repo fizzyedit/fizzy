@@ -118,7 +118,19 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
         if (main != nil) [window setAppearance:[main appearance]];
         [window setOpaque:NO];
         [window setBackgroundColor:[NSColor clearColor]];
-        [window setHasShadow:NO];
+        /* Titled (`SDLBackend.viewportOpen`): dressed as the main window is — its content under a
+         * transparent title bar, the title's text hidden (the float's header shows it), the OS's
+         * shadow and corners. Borderless: no AppKit shadow; the float draws its own in the clear
+         * margin round its glass. */
+        const BOOL titled = ([window styleMask] & NSWindowStyleMaskTitled) != 0;
+        if (titled) {
+            [window setStyleMask:[window styleMask] | NSWindowStyleMaskFullSizeContentView];
+            [window setTitlebarAppearsTransparent:YES];
+            [window setTitleVisibility:NSWindowTitleHidden];
+            /* Full screen in a Space of its own, as the main window goes: the main window's monitor
+             * follows it there and back (`macos_monitor.watch`, `window_monitor.m`). */
+        }
+        [window setHasShadow:titled];
         /* No OS animation as it shows or closes: it appears and goes exactly where its float is
          * drawn, in the frame it changes in. AppKit's show and close animations never finished
          * under fizzy's frame loop, and the window they stood in for stayed on screen — shrunk
@@ -151,6 +163,8 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
 /* The glass's rounded rect, `inset` points in from the window's edge with `radius` corners, as a
  * mask that stretches with the window. */
 static NSImage *glassMask(double inset, double radius) {
+    /* The glass is the whole window, framed by the OS, which rounds its corners: all of it. */
+    if (inset <= 0) return nil;
     const CGFloat in = (CGFloat)inset;
     const CGFloat r = (CGFloat)radius;
     const CGFloat edge = in + r;
@@ -166,47 +180,7 @@ static NSImage *glassMask(double inset, double radius) {
     return mask;
 }
 
-/*
- * The material behind a popped-out float's glass kept out of `ex, ey, ew, eh` (window points from
- * its top left): where the main window lies under the window. The main window shows its own
- * material there, through a hole it leaves in its picture (`core.FrameTarget.hole`); the window's
- * own, over it, blurred the main window again and the glass came out more opaque than in the main
- * window. An empty rect: the whole glass, as `fizzy_macos_viewport_glass` set it. Called inside the
- * transaction the window's place and picture change in (`SDLBackend.renderPresent`), and drawn now,
- * so the three change together.
- */
-void fizzy_macos_viewport_glass_mask(void *nswindow, double inset, double radius, double ex, double ey, double ew, double eh) {
-    @autoreleasepool {
-        NSWindow *window = (__bridge NSWindow *)nswindow;
-        if (window == nil) return;
-        NSView *frame = [[window contentView] superview];
-        if (frame == nil) return;
-        NSVisualEffectView *effect = nil;
-        for (NSView *v in [frame subviews]) {
-            if ([v isKindOfClass:[FizzyViewportGlassView class]]) effect = (NSVisualEffectView *)v;
-        }
-        if (effect == nil) return;
-        if (ew <= 0 || eh <= 0) {
-            [effect setMaskImage:glassMask(inset, radius)];
-        } else {
-            const NSSize size = [effect bounds].size;
-            const CGFloat in = (CGFloat)inset;
-            const CGFloat r = (CGFloat)radius;
-            /* The image's origin is its bottom left; the rect came from the top left. */
-            const NSRect cut = NSMakeRect(ex, size.height - ey - eh, ew, eh);
-            NSImage *mask = [NSImage imageWithSize:size
-                                           flipped:NO
-                                    drawingHandler:^BOOL(NSRect dst) {
-                                        [[NSColor blackColor] set];
-                                        [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r] fill];
-                                        NSRectFillUsingOperation(cut, NSCompositingOperationClear);
-                                        return YES;
-                                    }];
-            [effect setMaskImage:mask];
-        }
-        [effect displayIfNeeded];
-    }
-}
+
 
 /* Undo `fizzy_macos_viewport_glass` before SDL destroys the window: the vibrancy view gone, and
  * its Window menu item (`fizzy_macos_viewport_windows_item`). */
@@ -242,6 +216,9 @@ void fizzy_macos_viewport_keep_above(void *nswindow, void *main_nswindow) {
         NSWindow *main = (__bridge NSWindow *)main_nswindow;
         if (window == nil || main == nil) return;
         if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
+        /* Either in a fullscreen Space of its own: the two are on different Spaces, and ordering
+         * one against the other would pull it across. */
+        if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
         if ([window orderedIndex] < [main orderedIndex]) return;
         [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
     }
@@ -261,5 +238,105 @@ void fizzy_macos_viewport_windows_item(void *nswindow, const char *title) {
         if (t == nil) return;
         [window setExcludedFromWindowsMenu:NO];
         [NSApp changeWindowsItem:window title:t filename:NO];
+    }
+}
+
+/*
+ * A window that carries a view past every window of the app's, over the desktop
+ * (`SDLBackend.viewportOpenCarry`): a round window of its own — the main window's material behind
+ * it, in the shape of what is carried (`fizzy_macos_viewport_carry_shape`), the OS's shadow round
+ * it — the pointer passing through it to what is under it, above every window (a pop-up menu's
+ * level), on every Space, in no window list or switcher, and no OS animation.
+ */
+void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long material) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSWindow *main = (__bridge NSWindow *)main_nswindow;
+        if (main != nil) [window setAppearance:[main appearance]];
+        [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        /* The OS's shadow, round the material's shape (`fizzy_macos_viewport_carry_shape`). */
+        [window setHasShadow:YES];
+        NSView *content = [window contentView];
+        NSView *frame = [content superview];
+        if (content != nil && frame != nil) {
+            NSVisualEffectView *effect = [[FizzyViewportGlassView alloc] initWithFrame:[content frame]];
+            [effect setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
+            [effect setState:NSVisualEffectStateActive];
+            [effect setMaterial:(NSVisualEffectMaterial)material];
+            [effect setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [frame addSubview:effect positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+            [effect release];
+#endif
+        }
+        [window setIgnoresMouseEvents:YES];
+        [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+        [window setLevel:NSPopUpMenuWindowLevel];
+        [window setExcludedFromWindowsMenu:YES];
+        [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorTransient |
+                                      NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary];
+    }
+}
+
+/*
+ * A titled window's corner radius, points — what the carried glass grows into as a float's window
+ * opens out of it. AppKit says it nowhere; measured from the windows' own pictures: 16 points from
+ * macOS 26, 10 before.
+ */
+double fizzy_macos_window_corner_radius(void) {
+    if (@available(macOS 26.0, *)) return 16;
+    return 10;
+}
+
+/*
+ * The carry window's shape: its material masked to a rounded rect of `radius` points filling the
+ * window — a circle for a drop, a card for a tab — and its shadow made again round it. Called in the
+ * transaction the window's place and picture change in (`SDLBackend.renderPresent`), so the shape
+ * changes with them.
+ */
+void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, double h, double alpha) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        /* Hidden: nothing of it — its clear picture alone left its material showing, square. */
+        if (radius < 0) {
+            [window setAlphaValue:0];
+            return;
+        }
+        [window setAlphaValue:alpha];
+        NSView *frame = [[window contentView] superview];
+        if (frame == nil) return;
+        NSVisualEffectView *effect = nil;
+        for (NSView *v in [frame subviews]) {
+            if ([v isKindOfClass:[FizzyViewportGlassView class]]) effect = (NSVisualEffectView *)v;
+        }
+        if (effect == nil) return;
+        /* Drawn at the window's size, not stretched: a circle's corners are all of it, and a
+         * stretchable image's caps came to more than the window — no mask, the material square. */
+        const NSSize size = NSMakeSize(w, h);
+        const CGFloat r = (CGFloat)fmin(radius, fmin(w, h) / 2);
+        NSImage *mask = [NSImage imageWithSize:size
+                                       flipped:NO
+                                drawingHandler:^BOOL(NSRect dst) {
+                                    [[NSColor blackColor] set];
+                                    [[NSBezierPath bezierPathWithRoundedRect:dst xRadius:r yRadius:r] fill];
+                                    return YES;
+                                }];
+        [effect setMaskImage:mask];
+        [effect displayIfNeeded];
+        /* And the picture, SDL's view: what is carried fills the window only to its shape, but a
+         * glass's frost writes the rect it reads, a little past the shape — over the app, in the main
+         * window, that is the app again; here, the blur of the window's own base, a square round the
+         * orb. The window is the shape, all of it. */
+        NSView *content = [window contentView];
+        if (content != nil) {
+            [content setWantsLayer:YES];
+            CALayer *layer = [content layer];
+            [layer setCornerRadius:r];
+            [layer setMasksToBounds:YES];
+        }
+        [window invalidateShadow];
     }
 }

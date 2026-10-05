@@ -125,6 +125,9 @@ tree_cleared: bool = false,
 slide_open: []const u8 = "",
 /// A place's view being dragged to another place. Empty `name` when idle.
 view_drag: ViewDrag = .{},
+/// Floats are OS windows of their own (the application says so each frame, where it has them): a
+/// view let go over no window of the app's opens one there (`ViewDrag.apply`).
+floats_windowed: bool = false,
 /// The views floating over the window, bottom to top (`Floats`).
 floats: Floats = .{},
 /// The window the regions registering now are drawn in: 0 the main window, `n` the `n`th float
