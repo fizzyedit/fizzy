@@ -174,8 +174,15 @@ pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
     if (!frostPane(id, r, corners, scale)) {
         r.fill(corners.scale(scale, dvui.CornerRect.Physical), .{ .color = .{ .color = dialogFill() }, .fade = 1 });
     }
-    glassShadow(r, corners, scale, surfaceShadow(), 1);
+    // Shown in a window of its own, the OS's shadow is round it already.
+    if (!carried_in_window) glassShadow(r, corners, scale, surfaceShadow(), 1);
 }
+
+/// Whether what is carried is shown in a window of its own this frame, over every window of the
+/// app's (fizzy's carry window, `Popout.carryFrame`): the copy drawn under it in the app's own
+/// windows casts no shadow of its own beside the OS's. Set by the app each frame; this module's
+/// copy in the app, which is the one drawing the drag.
+pub var carried_in_window: bool = false;
 
 /// `carriedGlass` for glass whose shapes run together (`LiquidField`) — the dragged view as a
 /// drop — frosted at the dialog style. False when the style has the blur off, or the glass program

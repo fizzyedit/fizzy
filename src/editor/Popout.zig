@@ -34,10 +34,20 @@ var outs: [max_out]?Out = @splat(null);
 /// The window a carried view is shown in past every window of the app's, for as long as a view
 /// drag goes on (`carryFrame`).
 var carry: ?Carry = null;
-/// Where a float's window gone to its ghost lies over the main window's frame this frame
-/// (`windowFrame`): the drag drawn there in the main window shows only faintly through it, so the
-/// carry window shows it over it instead (`carryFrame`).
-var ghost_over: ?viewports.Rect = null;
+/// Each float's window this frame (`windowFrame`): where it lies over the main window's frame, and
+/// the band of the frame it shows. A view carried over the main window is drawn under every one of
+/// them, and one carried over a float's window is drawn in its band, cut at its edge: where it is
+/// not wholly inside the window drawing it, unobstructed, the carry window shows it, over them all
+/// (`carryFrame`).
+var covers: [max_out]Cover = undefined;
+var cover_count: usize = 0;
+
+const Cover = struct {
+    /// Where the window lies over the main window's frame, physical.
+    in_main: dvui.Rect.Physical,
+    /// The part of the frame it shows: its band.
+    band: dvui.Rect.Physical,
+};
 
 /// The carry window of a drag that has just ended, kept one frame for a float the drop made to grow
 /// out of (`growFrame`) — already where the drop is, in its shape — and let go after it otherwise.
@@ -238,7 +248,7 @@ fn release(o: *Out) void {
 /// put where it was drawn, and handed the picture.
 pub fn endFrame(state: *State) void {
     if (!enabled()) return;
-    ghost_over = null;
+    cover_count = 0;
     for (&outs) |*slot| {
         if (slot.*) |*o| windowFrame(state, o);
     }
@@ -252,18 +262,18 @@ pub fn endFrame(state: *State) void {
     }
 }
 
-/// A view carried past every window of the app's — out over the desktop, where letting go opens a
-/// float window (`ViewDrag.apply`) — is shown in a round window of its own there
-/// (`viewports.openCarry`): a window in the shape of what it is carried as, its glass on the main
-/// window's base over the OS's material and the OS's shadow round it (`viewports.carryShape`), so
-/// out there it is a window as the float it would open is. The drag's drawing, in the main window's
-/// frame past its edge, is copied into it. Once any of it is past the main window it shows all of
-/// it, over the main window too — the main window can show only what lies inside it — and over a
-/// float's window gone to its ghost, which the main window's drawing shows only faintly through;
-/// while it is wholly inside the main window, or over a float's window (in its band, which that
-/// window shows), the carry window shows nothing; it goes when the drag does. A drop's tail stays
-/// in the drop's own shape out there.
+/// A carried view is shown in a round window of its own (`viewports.openCarry`) for the whole of
+/// the drag, wherever it is: a window in the shape of what it is carried as, its glass on the main
+/// window's base over the OS's material and the OS's shadow round it (`viewports.carryShape`) —
+/// a window as the float it would open is. The drag's drawing — in the main window's frame, past
+/// its edge too, or in the band of the float's window it is over — is copied into it. Floats being
+/// windows, it was drawn in whichever window it was over until it crossed an edge: cut off at a
+/// float window's edge, under a float's window from the main one, and its glass turned from
+/// glass reading the app under it into the window's material each time it crossed into the carry
+/// window and back. Now it is the window throughout. The copy left in the app's windows, under it,
+/// casts no shadow (`core.dialogs.carried_in_window`). It goes when the drag does.
 fn carryFrame(state: *State) void {
+    fizzy.core.dialogs.carried_in_window = false;
     if (!viewports.carries) return;
     const d = &state.view_drag;
     if (!d.active()) {
@@ -280,11 +290,28 @@ fn carryFrame(state: *State) void {
     // What it is carried as: a drop's head, or the card or tab it is carried as.
     const shape = d.shape_rect;
     const main_px = dvui.windowRectPixels();
-    const inside = shape.x >= main_px.x and shape.y >= main_px.y and shape.x + shape.w <= main_px.x + main_px.w and shape.y + shape.h <= main_px.y + main_px.h;
-    // Over a float's window it is in that window's band, far past the main window (`Floats.Viewport`).
-    const banded = shape.x > main_px.x + main_px.w + 40000;
-    const under_ghost = if (ghost_over) |g| shape.x < g.x + g.w and g.x < shape.x + shape.w and shape.y < g.y + g.h and g.y < shape.y + shape.h else false;
-    const want = shape.w > 0 and shape.h > 0 and (!inside or under_ghost) and !banded;
+    // Where the carry window goes, in the main window's frame. Over a float's window the view is
+    // drawn in that window's band, far past the main window (`Floats.Viewport`): the carry window
+    // goes where that part of the band lies on the screen, its picture still read from the band.
+    var place = shape;
+    const want = if (shape.w <= 0 or shape.h <= 0) false else if (shape.x > main_px.x + main_px.w + 40000) banded: {
+        // The window whose band it lies on — the one it overlaps most: near an edge its middle is
+        // already past it while the pointer is still on the window.
+        var best: ?Cover = null;
+        var best_area: f32 = 0;
+        for (covers[0..cover_count]) |cv| {
+            const o = cv.band.intersect(shape);
+            const area = o.w * o.h;
+            if (area > best_area) {
+                best = cv;
+                best_area = area;
+            }
+        }
+        const cover = best orelse break :banded false;
+        place = shape.offsetPoint(.{ .x = cover.in_main.x - cover.band.x, .y = cover.in_main.y - cover.band.y });
+        break :banded true;
+    } else true;
+    fizzy.core.dialogs.carried_in_window = want;
     if (!want) {
         if (carry) |*c| if (c.target) |t| {
             t.clear();
@@ -294,11 +321,11 @@ fn carryFrame(state: *State) void {
         return;
     }
     if (carry == null) {
-        const vp = viewports.openCarry(.{ .x = shape.x, .y = shape.y, .w = shape.w, .h = shape.h }) orelse return;
+        const vp = viewports.openCarry(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }) orelse return;
         carry = .{ .viewport = vp };
     }
     const c = &carry.?;
-    const drawing = carryBegin(c, shape, d.shape_radius, 1) orelse return;
+    const drawing = carryBegin(c, place, shape, d.shape_radius, 1) orelse return;
     defer carryEnd(c, drawing);
     // What the drag draws across every screen (`core.screens.markEverywhere`), copied in, left for
     // the main window's replay: what of it lies past the window falls outside.
@@ -316,14 +343,16 @@ const CarryDrawing = struct {
     shown: dvui.Rect.Physical,
 };
 
-/// Put `c`'s window where it shows `shape` of the main window's frame, in its shape (`radius`,
-/// physical), `alpha` opaque, and start its picture: the main window's base under it, over the
+/// Put `c`'s window where it shows `place` of the main window's frame, in its shape (`radius`,
+/// physical), `alpha` opaque, and start its picture, read from `shape` of the frame (the same rect,
+/// or the band of a float's window it lies over): the main window's base under it, over the
 /// window's material, for glass to read — glass over the window's clear pixels draws nothing — as a
 /// float's window stands on it. Drawn into it until `carryEnd`; null with nothing to draw into.
-fn carryBegin(c: *Carry, shape: dvui.Rect.Physical, radius: f32, alpha: f32) ?CarryDrawing {
+fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, radius: f32, alpha: f32) ?CarryDrawing {
     const cw = dvui.currentWindow();
-    const placed = viewports.placeMain(c.viewport, .{ .x = shape.x, .y = shape.y, .w = shape.w, .h = shape.h });
-    const shown: dvui.Rect.Physical = .{ .x = placed.x, .y = placed.y, .w = placed.w, .h = placed.h };
+    const placed = viewports.placeMain(c.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h });
+    // The part of the frame it shows: where it was put, read from where its picture is drawn.
+    const shown: dvui.Rect.Physical = .{ .x = shape.x + (placed.x - place.x), .y = shape.y + (placed.y - place.y), .w = placed.w, .h = placed.h };
     viewports.carryShape(c.viewport, radius, alpha);
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
@@ -395,7 +424,7 @@ fn growFrame(o: *Out, f: *const Floats.Float) bool {
             .h = @max(1, std.math.lerp(from.h, to.h, t)),
         };
         g.radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
-        const drawing = carryBegin(&g.carry, rect, g.radius, 1) orelse return false;
+        const drawing = carryBegin(&g.carry, rect, rect, g.radius, 1) orelse return false;
         defer carryEnd(&g.carry, drawing);
         if (land.photo) |tex| {
             const prev_clip = dvui.clipGet();
@@ -460,7 +489,16 @@ fn windowFrame(state: *State, o: *Out) void {
         const carried_out = d.active() and !d.loose() and if (state.floatRoot(d.name)) |root| std.mem.eql(u8, root, f.name) else false;
         const see_through = carried_out and !d.ghost_firm;
         viewports.seeThrough(o.viewport, see_through);
-        if (see_through) ghost_over = viewports.inMain(o.viewport);
+        // Where the window lies, for a view carried under or out of it (`carryFrame`).
+        if (cover_count < covers.len) {
+            const m = viewports.inMain(o.viewport);
+            const band = viewports.frameOf(o.viewport);
+            covers[cover_count] = .{
+                .in_main = .{ .x = m.x, .y = m.y, .w = m.w, .h = m.h },
+                .band = .{ .x = band.x, .y = band.y, .w = band.w, .h = band.h },
+            };
+            cover_count += 1;
+        }
         // Nothing of it while it grows out of the carried glass (`growFrame`).
         const growing = growFrame(o, f);
         viewports.fade(o.viewport, if (growing) 0 else Floats.ghostLook(f.aside.at()).alpha);
