@@ -1804,12 +1804,15 @@ fn overNoWindow(mouse: dvui.Point.Physical) bool {
 /// its own. Any view that may float — a view alone in a float's window too: its window closes, and
 /// one opens where it was let go.
 fn floatAway(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
-    if (std.mem.eql(u8, source, loose_source)) return;
-    const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
+    // Out of the picker too (a loose drag): the view it carries, wherever it is now.
+    const from_picker = std.mem.eql(u8, source, loose_source);
+    const carried = if (from_picker) l.state.view_drag.moved_id else movedFrom(l, source) orelse return;
+    const moved = ownId(l.arena, carried) orelse return;
     const s = l.host.surfaceById(moved) orelse return;
     if (!float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = false })) return;
+    const left = if (from_picker) holderOf(l, moved) else source;
     floatOut(l, source, moved, mouse);
-    shutIfEmptied(l, source);
+    if (left) |name| shutIfEmptied(l, name);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
 }
@@ -1833,8 +1836,11 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     var buf: [32]u8 = undefined;
     const name = state.internName(l.gpa, float_rules.nextName(&buf, state.floats.names(l.arena)));
     const window = Floats.toRules(dvui.windowRect());
-    const src = placeBounds(state, source) orelse dvui.windowRectPixels();
-    const out_of: ?usize = if (state.floats.rootOf(source)) |root| state.floats.find(root) else null;
+    // Carried out of the picker (a loose drag), it floats out of whichever place holds it now —
+    // its home when the float closes — or, held nowhere, out of none: its keywords take it home.
+    const holder: ?[]const u8 = if (std.mem.eql(u8, source, loose_source)) holderOf(l, moved) else source;
+    const src = (if (holder) |h| placeBounds(state, h) else null) orelse dvui.windowRectPixels();
+    const out_of: ?usize = if (holder) |h| (if (state.floats.rootOf(h)) |root| state.floats.find(root) else null) else null;
     var rect = if (out_of) |i|
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
@@ -1847,7 +1853,7 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     }
     // Out of a float, home is still where that float came from: the place it opened over is a
     // float's, and goes with it.
-    const home = if (out_of) |i| state.floats.items.items[i].home else state.internName(l.gpa, source);
+    const home = if (out_of) |i| state.floats.items.items[i].home else if (holder) |h| state.internName(l.gpa, h) else "";
     // The glass it was carried in, when a drag let go of it here; the place itself, when nothing
     // was carried (the picker, a test).
     const d = &state.view_drag;
@@ -1873,7 +1879,18 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     };
     state.assign(l.gpa, name, &.{moved}) catch {};
     selectNamed(l, name, moved);
-    takeOut(l, source, moved, null);
+    takeOut(l, holder orelse source, moved, null);
+}
+
+/// The declared place showing `id` now, if one is: where a view carried out of the picker comes
+/// from (`floatOut`).
+fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
+    for (l.state.regions.items) |r| {
+        for (holding(l, r.name)) |held| {
+            if (std.mem.eql(u8, held, id)) return r.name;
+        }
+    }
+    return null;
 }
 
 /// Send the views of a closing float's places (`leaves`) back to `home`, the place the float came
