@@ -1080,22 +1080,13 @@ pub fn drawOverlay(l: *Layout) void {
     // Nothing to lay over the window.
     if (n == 0 and !d.active()) return;
     var layer: dvui.FloatingWidget = undefined;
-    layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
+    layerOver(&layer, @src());
     defer layer.deinit();
-    // Over every float. A floating widget stays just above the window it was made in — this one
-    // the app's own, which every float is over, so the drops on a float's place and the view
-    // carried over a float were drawn under its glass — and is re-added as a window of its own
-    // and raised, as the demo overlay's layers are (`automation/overlay.zig`). It takes no pointer
-    // events: what is under it still takes them, the drag's hold on the pointer included.
-    const wd = layer.data();
-    dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
-    dvui.raiseSubwindow(wd.id);
     // On every screen (`core.screens`): a place in a float popped out into its own window has
     // its drop drawn here, at that window's part of the frame, and so does the carried view
     // when the pointer is there — clipped to the main window, both were dropped as they were
     // drawn, and the app copies this layer into every such window as well as the main one.
-    core.screens.markEverywhere(wd.id);
-    dvui.clipSet(core.screens.allPixels());
+    core.screens.markEverywhere(layer.data().id);
     // The drops, then the card over them: one layer, so their order is the order drawn — the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
     // pointer so the bubble under the pointer stays in view.
@@ -1110,7 +1101,9 @@ pub fn drawOverlay(l: *Layout) void {
     for (drops[0..n], 0..) |p, i| {
         var look = p.look;
         const over = p.look.target and p.clip.contains(mouse);
-        if (!taken and over) look.carried = carried;
+        // In a window of its own, the view is not the app's glass to run in with the drop's: the
+        // bubble it is aimed at lights, as one under a pointer does (`ownWindowLayer`).
+        if (!taken and over and !core.dialogs.carry_windows) look.carried = carried;
         // The icons go over the carried view, which is laid on the drop after it: the bubble it
         // is about to be dropped in says what it does through it.
         if (d.active()) look.icons = .later;
@@ -1127,6 +1120,33 @@ pub fn drawOverlay(l: *Layout) void {
         DropZones.drawIcons(p.key, scale);
     }
     dvui.clipSet(prev_clip);
+}
+
+/// A layer of the drag's over every float, drawn on every screen (`core.screens.allPixels`). A
+/// floating widget stays just above the window it was made in — this one the app's own, which every
+/// float is over, so the drops on a float's place and the view carried over a float were drawn under
+/// its glass — and is re-added as a window of its own and raised, as the demo overlay's layers are
+/// (`automation/overlay.zig`). It takes no pointer events: what is under it still takes them, the
+/// drag's hold on the pointer included.
+fn layerOver(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) void {
+    layer.init(src, .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
+    const wd = layer.data();
+    dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
+    dvui.raiseSubwindow(wd.id);
+    dvui.clipSet(core.screens.allPixels());
+}
+
+/// Where carried things are windows of their own (`core.dialogs.carry_windows`: fizzy's carry
+/// window), what is carried — a card, a tab, a drop — is drawn in a layer of its own that only its
+/// window draws (`core.screens.markCarried`): the window is all of it, the OS's material its
+/// glass, and nothing in the app's own windows follows it. A copy there — its glass, a drop's tail,
+/// the drop it ran into — was drawn at another moment than the window server moved the window, and
+/// trailed behind it. Whether it is; the layer is the caller's to `deinit` then.
+fn ownWindowLayer(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) bool {
+    if (!core.dialogs.carry_windows) return false;
+    layerOver(layer, src);
+    core.screens.markCarried(layer.data().id);
+    return true;
 }
 
 /// A drop coming in where another is going — the place the view is aimed at now lying under the
@@ -1309,7 +1329,11 @@ fn morphProgress(d: ViewDrag, now: i128) f32 {
 fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
-    if (!taken) {
+    // In a window of its own (`ownWindowLayer`), its photograph is all the app draws of it.
+    var own_layer: dvui.FloatingWidget = undefined;
+    const own_window = ownWindowLayer(&own_layer, @src());
+    defer if (own_window) own_layer.deinit();
+    if (!taken and !own_window) {
         // At the merge it is drawn at inside a place's drop (`DropZones.merge`). Its head and tail
         // overlap, and the join between them swells the outline by up to a quarter of the merge:
         // drawn alone at a wider one, between two places — over the sash between them — the drop
@@ -1472,8 +1496,11 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     d.shape_radius = radius;
     const nat = rect.toNatural();
 
-    // A box in the drag's own layer (`drawOverlay`), not a floating window of its own: the drops
-    // go over it in the same layer, drawn after it.
+    // In a window of its own (`ownWindowLayer`), or a box in the drag's own layer (`drawOverlay`):
+    // the drops' icons go over it in the same layer, drawn after it.
+    var own_layer: dvui.FloatingWidget = undefined;
+    const own_window = ownWindowLayer(&own_layer, @src());
+    defer if (own_window) own_layer.deinit();
     const fw = dvui.box(@src(), .{}, .{
         .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h },
         // The photograph sits inset in its glass; a tab is the glass.
@@ -1483,7 +1510,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
         .border = .all(0),
     });
     defer fw.deinit();
-    {
+    if (!own_window) {
         // Glass, like every floating surface. Where the glass program draws it is the same glass
         // the drop is (`drawDrop`), under one id, so a tab becoming the drop and back is one
         // piece of glass changing shape; elsewhere the carried look (`core.dialogs.carriedGlass`),

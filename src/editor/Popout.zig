@@ -267,18 +267,17 @@ pub fn endFrame(state: *State) void {
     }
 }
 
-/// A carried view is shown in a round window of its own (`viewports.openCarry`) for the whole of
-/// the drag, wherever it is: a window in the shape of what it is carried as, the OS's material in
-/// it with no base over it — lighter than a window, which dialogs and float windows keep — and the
-/// OS's shadow round it (`viewports.carryShape`). The drag's drawing — in the main window's frame, past
-/// its edge too, or in the band of the float's window it is over — is copied into it. Floats being
-/// windows, it was drawn in whichever window it was over until it crossed an edge: cut off at a
-/// float window's edge, under a float's window from the main one, and its glass turned from
-/// glass reading the app under it into the window's material each time it crossed into the carry
-/// window and back. Now it is the window throughout. The copy left in the app's windows, under it,
-/// casts no shadow (`core.dialogs.carried_in_window`). It goes when the drag does.
+/// A carried view is shown in a round window of its own (`viewports.openCarry`),
+/// wherever it is: a window in the shape of what it is carried as, the OS's material in it with no
+/// base over it — lighter than a window, which dialogs and float windows keep — and the OS's shadow
+/// round it (`viewports.carryShape`). Its drawing — in the main window's frame, past its edge
+/// too, or in the band of the float's window it is over — is in a layer of its own
+/// (`core.screens.markCarried`), taken whole into it: the app's own windows draw nothing of it. Left
+/// in them under the carry window, a copy drawn at another moment than the window server moved the
+/// window trailed behind it. Floats being windows, it was drawn in whichever window it was over until
+/// it crossed an edge: cut off at a float window's edge, and under a float's window from the main
+/// one. It goes when the drag does.
 fn carryFrame(state: *State) void {
-    fizzy.core.dialogs.carried_in_window = false;
     if (!viewports.carries) return;
     const d = &state.view_drag;
     if (!d.active()) {
@@ -292,8 +291,10 @@ fn carryFrame(state: *State) void {
         return;
     }
     const cw = dvui.currentWindow();
-    // What it is carried as: a drop's head, or the card or tab it is carried as.
-    const shape = d.shape_rect;
+    // What it is carried as: the card or tab, or a drop — round its head, drawn out toward its
+    // tail as that lags on its spring, so a drop carried fast stretches out behind the pointer and
+    // swings back past it when it stops, as it did run together in the app's glass.
+    const shape = if (d.drop_n > 1) d.shape_rect.unionWith(d.drop_shapes[1].rect) else d.shape_rect;
     const main_px = dvui.windowRectPixels();
     // Where the carry window goes, in the main window's frame. Over a float's window the view is
     // drawn in that window's band, far past the main window (`Floats.Viewport`): the carry window
@@ -316,7 +317,6 @@ fn carryFrame(state: *State) void {
         place = shape.offsetPoint(.{ .x = cover.in_main.x - cover.band.x, .y = cover.in_main.y - cover.band.y });
         break :banded true;
     } else true;
-    fizzy.core.dialogs.carried_in_window = want;
     if (!want) {
         if (carry) |*c| if (c.target) |t| {
             t.clear();
@@ -334,12 +334,16 @@ fn carryFrame(state: *State) void {
     // window — dialogs and float windows keep theirs.
     const drawing = carryBegin(c, place, shape, d.shape_radius, 1, 0) orelse return;
     defer carryEnd(c, drawing);
-    // What the drag draws across every screen (`core.screens.markEverywhere`), copied in, left for
-    // the main window's replay: what of it lies past the window falls outside.
+    // The carried view's own layer (`core.screens.markCarried`), taken from it: dvui's replay into the main
+    // window, and the float windows' (`windowFrame`), draw nothing of it.
     for (cw.subwindows.stack.items) |*sw| {
-        if (!fizzy.core.screens.isEverywhere(sw.id)) continue;
-        cw.renderCommands(sw.render_cmds.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
-        cw.renderCommands(sw.render_cmds_after.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
+        if (!fizzy.core.screens.isCarried(sw.id)) continue;
+        const cmds = sw.render_cmds;
+        const after = sw.render_cmds_after;
+        sw.render_cmds = .empty;
+        sw.render_cmds_after = .empty;
+        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
+        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
     }
 }
 
@@ -569,11 +573,13 @@ fn windowFrame(state: *State, o: *Out) void {
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
     // dvui's replay into the main window draws nothing of them. And a layer drawn across every
-    // screen (`core.screens.markEverywhere`: a view drag's drops and carried glass) is copied in
+    // screen (`core.screens.markEverywhere`: a view drag's drops) is copied in
     // too, left in place for the main window's replay — what of it lies outside the window's part
     // of the frame falls outside its target.
     const area: dvui.Rect.Physical = .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h };
     for (cw.subwindows.stack.items) |*sw| {
+        // A carried view is its carry window's (`carryFrame`).
+        if (fizzy.core.screens.isCarried(sw.id)) continue;
         const mine = area.contains(sw.rect_pixels.center());
         if (!mine and !fizzy.core.screens.isEverywhere(sw.id)) continue;
         const cmds = sw.render_cmds;

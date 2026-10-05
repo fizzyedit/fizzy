@@ -174,15 +174,8 @@ pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
     if (!frostPane(id, r, corners, scale)) {
         r.fill(corners.scale(scale, dvui.CornerRect.Physical), .{ .color = .{ .color = dialogFill() }, .fade = 1 });
     }
-    // Shown in a window of its own, the OS's shadow is round it already.
-    if (!carried_in_window) glassShadow(r, corners, scale, surfaceShadow(), 1);
+    glassShadow(r, corners, scale, surfaceShadow(), 1);
 }
-
-/// Whether what is carried is shown in a window of its own this frame, over every window of the
-/// app's (fizzy's carry window, `Popout.carryFrame`): the copy drawn under it in the app's own
-/// windows casts no shadow of its own beside the OS's. Set by the app each frame; this module's
-/// copy in the app, which is the one drawing the drag.
-pub var carried_in_window: bool = false;
 
 /// Whether carried things are shown in windows of their own this run (fizzy's float windows on
 /// macOS): a carried view's photograph is taken without the place's background, its content over
