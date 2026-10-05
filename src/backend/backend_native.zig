@@ -122,7 +122,8 @@ pub fn saveWindowGeometry(win: *dvui.Window) void {
 pub const macosLaunchComplete = platform.macos_monitor.launchComplete;
 
 /// A window's Liquid Glass this frame (`windowGlass`, `viewports.windowGlass`): what
-/// `core.glass_look.window` says at the window's opacity, and the window's colour in it.
+/// `core.glass_look.window` says at the window's opacity, the window's colour, and the clearing
+/// bevel `core.glass_look.band` gives its size.
 pub const WindowGlassLook = struct {
     under_variant: i32,
     under_style: i32,
@@ -132,13 +133,10 @@ pub const WindowGlassLook = struct {
     blur: f32,
     glass: f32,
     fill: dvui.Color,
-    /// The colour's opacity under the glass…
-    under_fill: f32,
-    /// …and over the body's blur.
-    body_fill: f32,
+    fill_opacity: f32,
     /// Points, each.
     radius: f32,
-    rim: f32,
+    clear: f32,
     feather: f32,
 
     fn native(self: WindowGlassLook) platform.window.WindowGlass {
@@ -150,10 +148,9 @@ pub const WindowGlassLook = struct {
             .frost = self.frost,
             .blur = self.blur,
             .glass = self.glass,
-            .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.under_fill },
-            .body_fill = self.body_fill,
+            .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.fill_opacity },
             .radius = self.radius,
-            .rim = self.rim,
+            .clear = self.clear,
             .feather = self.feather,
         };
     }
@@ -232,6 +229,12 @@ pub const viewports = struct {
         fill_opacity: f32 = 0,
         lit_toward: dvui.Color = .white,
         lit_amount: f32 = 0,
+        /// Each piece's clearing bevel (`core.glass_look.band`): a share of its shorter half, at
+        /// most `bevel_cap` points, clear for `bevel_clear` of it before the frost and the colour
+        /// come in.
+        bevel: f32 = 0,
+        bevel_cap: f32 = 0,
+        bevel_clear: f32 = 0,
     };
 
     /// Overlay `vp`'s glass this frame (`openOverlay`), run together within `spacing` points, as
@@ -249,6 +252,9 @@ pub const viewports = struct {
             .glass = look.glass,
             .fill = .{ @as(f64, @floatFromInt(f.r)) / 255, @as(f64, @floatFromInt(f.g)) / 255, @as(f64, @floatFromInt(f.b)) / 255, look.fill_opacity },
             .lit_toward = .{ @as(f64, @floatFromInt(t.r)) / 255, @as(f64, @floatFromInt(t.g)) / 255, @as(f64, @floatFromInt(t.b)) / 255, look.lit_amount },
+            .bevel = look.bevel,
+            .bevel_cap = look.bevel_cap,
+            .bevel_clear = look.bevel_clear,
         });
     }
 

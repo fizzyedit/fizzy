@@ -429,9 +429,12 @@ fn overlayFrame(state: *State) void {
         .over_share = look.over_share,
         .glass = look.glass,
         .fill = window_colour,
-        .fill_opacity = look.under_fill,
+        .fill_opacity = look.fill,
         .lit_toward = lit_toward,
         .lit_amount = glass_lit,
+        .bevel = fizzy.core.glass_look.bevel,
+        .bevel_cap = fizzy.core.glass_look.bevel_cap,
+        .bevel_clear = fizzy.core.glass_look.bevel_clear,
     });
 
     // The picture: what goes over the glass — the carried view, the drops' icons — each layer of it
@@ -798,7 +801,7 @@ fn windowFrame(state: *State, o: *Out) void {
     Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
     // A window of Liquid Glass (macOS 26) stands on its glass, its colour under it on the one
     // slider, as the main window does (`Editor.windowGlassLook`): no base of its own in the frame.
-    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value)))
+    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value, .{ .w = shown.w / s, .h = shown.h / s })))
         backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity.value);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks

@@ -191,6 +191,9 @@ pub const viewports = struct {
         fill_opacity: f32 = 0,
         lit_toward: dvui.Color = .white,
         lit_amount: f32 = 0,
+        bevel: f32 = 0,
+        bevel_cap: f32 = 0,
+        bevel_clear: f32 = 0,
     };
     pub fn overlayGlass(_: *Viewport, _: []const GlassShape, _: f32, _: GlassLook) void {}
     pub fn displayInMain() Rect {
@@ -238,10 +241,9 @@ pub const WindowGlassLook = struct {
     blur: f32,
     glass: f32,
     fill: dvui.Color,
-    under_fill: f32,
-    body_fill: f32,
+    fill_opacity: f32,
     radius: f32,
-    rim: f32,
+    clear: f32,
     feather: f32,
 };
 pub fn windowGlass(_: *dvui.Window, _: WindowGlassLook) bool {

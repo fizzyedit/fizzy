@@ -3532,12 +3532,14 @@ pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, windowed: f32) void {
     }
 }
 
-/// A window of Liquid Glass at `opacity` (`backend.windowGlass`): the glass `core.glass_look.window`
-/// makes of it, in the content fill as the window's colour. The main window's and every float's
-/// own window's alike.
-pub fn windowGlassLook(opacity: f32) fizzy.backend.WindowGlassLook {
+/// A window of Liquid Glass at `opacity` (`backend.windowGlass`), `size` points: the glass
+/// `core.glass_look.window` makes of it, in the content fill as the window's colour, its clearing
+/// bevel the one every glass has for its size (`core.glass_look.band`). The main window's and
+/// every float's own window's alike.
+pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.WindowGlassLook {
     const glass_look = fizzy.core.glass_look;
     const look = glass_look.window(opacity);
+    const band = glass_look.band(@min(size.w, size.h) / 2);
     return .{
         .under_variant = look.under.variant,
         .under_style = look.under.style,
@@ -3547,11 +3549,10 @@ pub fn windowGlassLook(opacity: f32) fizzy.backend.WindowGlassLook {
         .blur = look.blur,
         .glass = look.glass,
         .fill = dvui.themeGet().color(.content, .fill),
-        .under_fill = look.under_fill,
-        .body_fill = look.body_fill,
+        .fill_opacity = look.fill,
         .radius = fizzy.backend.viewports.windowRadius(),
-        .rim = glass_look.window_rim,
-        .feather = glass_look.window_feather,
+        .clear = band.clear,
+        .feather = band.feather,
     };
 }
 
@@ -3789,7 +3790,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
         // (macOS 26, `backend.windowGlass`) the base is the glass's, on the one slider
         // (`core.glass_look.window`), and the frame draws none of its own.
-        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value));
+        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size()));
         const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is

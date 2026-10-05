@@ -31,9 +31,9 @@ extern fn fizzy_macos_window_liquid_glass_look(cocoa_window: ?*anyopaque, look: 
 
 /// A window's Liquid Glass this frame (`liquidGlassLook`), as `fizzy_macos_window_liquid_glass_look`
 /// reads it (`core.glass_look.Window`): each glass layer's variant and style; the body's frost over
-/// the lens and the plain blur over that; how much glass there is; the window's colour (0…1 each)
-/// with its opacity under the glass last, and its opacity over the body's blur; the window's corner
-/// radius, and the clear band along its edge and the feather into the body, in points.
+/// the lens and the plain blur under the colour; how much glass there is; the window's colour
+/// (0…1 each, its opacity last); the window's corner radius, and its clearing bevel — clear, then
+/// the body coming in over the feather — in points.
 pub const WindowGlass = extern struct {
     under_variant: c_long,
     under_style: c_long,
@@ -43,16 +43,15 @@ pub const WindowGlass = extern struct {
     blur: f64,
     glass: f64,
     fill: [4]f64,
-    body_fill: f64,
     radius: f64,
-    rim: f64,
+    clear: f64,
     feather: f64,
 };
 
-/// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — the
-/// window's colour under the clear lens, a body of frost and the plain blur (the vibrancy it wore
-/// before, `ns_visual_effect_material`) fading into a clear band along its edge, a compact
-/// toolbar's corners — where the OS has it (macOS 26). Once per window. Whether it is.
+/// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — a body
+/// of the plain blur (the vibrancy it wore before, `ns_visual_effect_material`) and frost fading
+/// into a clearing bevel along its edge, the window's colour over all of it under the lens, a
+/// compact toolbar's corners — where the OS has it (macOS 26). Once per window. Whether it is.
 pub fn liquidGlass(raw_ptr: *anyopaque) bool {
     if (comptime builtin.os.tag != .macos) return false;
     return fizzy_macos_window_liquid_glass(raw_ptr, ns_visual_effect_material) != 0;

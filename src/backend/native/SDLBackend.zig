@@ -209,6 +209,10 @@ pub const GlassLook = extern struct {
     fill: [4]f64 = .{ 0, 0, 0, 0 },
     /// What a lit piece's colour goes toward, and how far (the last).
     lit_toward: [4]f64 = .{ 1, 1, 1, 0 },
+    /// Each piece's clearing bevel (`core.glass_look.band`).
+    bevel: f64 = 0,
+    bevel_cap: f64 = 0,
+    bevel_clear: f64 = 0,
 };
 
 pub const InitOptions = struct {
