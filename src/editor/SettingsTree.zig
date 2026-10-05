@@ -436,9 +436,21 @@ fn drawLeaves(branch: *const Branch, query: *const fuzzy.Query) !void {
             if (drawn_w) |w| if (out_of_view and @abs(w - row.data().rect.w) < 0.5) {
                 if (dvui.minSizeGet(row.data().id)) |ms| {
                     row.data().minSizeMax(ms);
+                    dvui.dataSet(null, row_id, "_skipped", true);
                     continue;
                 }
             };
+            // Back in view after being skipped: drawn in full, it measures short on this first
+            // frame — what its widgets knew of their own sizes went while they were not drawn —
+            // and the next frame it is its own height again. Everything under it moved by the
+            // difference and back: the pane rubber-banded as it scrolled, snapping back every few
+            // ticks. It keeps the height it had for that frame, at the width it had then.
+            if (dvui.dataGet(null, row_id, "_skipped", bool) orelse false) {
+                dvui.dataSet(null, row_id, "_skipped", false);
+                if (drawn_w) |w| if (@abs(w - row.data().rect.w) < 0.5) {
+                    if (dvui.minSizeGet(row.data().id)) |ms| row.data().minSizeMax(ms);
+                };
+            }
         }
         dvui.dataSet(null, row_id, "_drawn_w", row.data().rect.w);
 
