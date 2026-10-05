@@ -393,6 +393,46 @@ The work:
 - **Anything that grows past that** — Windows composition, X11 blur — is a separate phase with its
   own go-ahead.
 
+## The first plugin consumer: pixi's dropper orb and floating buttons
+
+The user's candidate for strengthening the library (2026-10-05), because it is the first time a
+plugin, not fizzy, draws glass of its own.
+
+**What it should be:**
+- **One liquid layer.** pixi's round glass buttons floating at the canvas window's corner
+  (`widgets/glass_button.zig`) and its colour-dropper magnifier.
+- **The orb.** While the dropper is active, the magnifier is an orb of glass floating round the
+  pointer: refracting at its rim, and in its middle pixi's own pixel-exact zoom of what is under the
+  pointer, with just the crosshair.
+- **The animation.** The orb pinches off the magnifier button when the dropper starts, follows the
+  pointer on a spring, and runs back into the button when it ends. Wherever it overlaps the
+  buttons, they merge.
+- **Everywhere.** It works in float windows too. Today the magnifier does not; pixi's fix for its
+  floating surfaces is on its unpushed branch `claude/popout-screens` (`3b0aecf`).
+- **Its logic** (`FileWidget.drawSampleMagnifier*`) is the user's own, from earlier, and wants
+  redoing anyway.
+
+**What the library needs for it** — each piece general, not pixi's:
+1. **Glass outside drags.** The native overlay opens whenever any glass is declared, not only for a
+   view drag, and closes when none is. Declarations carry a **group**: pieces in one group merge
+   (pixi's buttons and its orb), pieces in different groups do not (pixi's controls and fizzy's drop
+   zones). Natively that is one container per group; in the app, one `LiquidField` per group.
+2. **Content over the glass, from any code.** Today only the carried view and the drop icons reach
+   it, through `core.screens.markCarried`. A small `core.native_glass` call for "draw this over the
+   glass" generalizes it: natively the overlay replays that layer above its glass, as it does now,
+   and in the app it is simply drawn after the glass. It is how the orb's zoom and crosshair sit
+   crisp inside the glass.
+3. **A magnifier look.** The orb's middle shows pixi's zoom, not the lens's own magnification, and
+   the glass bends only its rim band: the in-app look with the frost at 0 and the band clear, and
+   natively the lens with pixi's picture over its middle (as the carried photo is over the
+   bubble's).
+4. **Motion from core:** the orb on a `core.Spring` toward the pointer; the pinch-off and merge are
+   the group's own merging as the orb and the button come apart and together.
+5. **Plugins reach all of it through `core`:** both the declarations and the over-glass layer
+   travel in dvui's shared data, as `core.screens` does, so a plugin dylib's glass reaches fizzy's
+   overlay with no new SDK call. A change to `core` still means rebuilding pixi against the matching
+   SDK, and a release to the store.
+
 ## Screen-edge tiling for a carried view
 
 The user asked for a carried view dragged to a screen's side or top to tile as a window would. The
