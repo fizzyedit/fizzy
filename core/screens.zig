@@ -74,6 +74,26 @@ const Everywhere = struct {
     ids: [8]dvui.Id = undefined,
 };
 
+/// What is carried, in a layer of its own this frame, where the app shows it in a window of its
+/// own over every other (fizzy's carry window): that window takes the layer's drawing whole, and
+/// the app's own windows draw none of it. A copy left in them, under the carry window, was drawn
+/// at a different moment from it — the window server moves the carry window, the app presents its
+/// windows — and trailed behind it as it moved.
+pub fn markCarried(id: dvui.Id) void {
+    dvui.dataSet(null, key_id, "_carried", Carried{ .frame = dvui.currentWindow().frame_time_ns, .id = id });
+}
+
+/// Whether `id` is what is carried this frame (`markCarried`).
+pub fn isCarried(id: dvui.Id) bool {
+    const c = dvui.dataGet(null, key_id, "_carried", Carried) orelse return false;
+    return c.frame == dvui.currentWindow().frame_time_ns and c.id == id;
+}
+
+const Carried = struct {
+    frame: i128,
+    id: dvui.Id,
+};
+
 /// While something drawn across every screen may be carried past every window of the app's — a
 /// view drag where floats are OS windows of their own, and a window carries the view over the
 /// desktop — it reaches across the whole desktop (`allPixels`). The app's, each frame.

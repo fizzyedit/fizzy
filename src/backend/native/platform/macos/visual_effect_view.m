@@ -35,6 +35,7 @@
  * view under the pointer now answers NO there, as Chromium's and Electron's no-drag regions do,
  * and SDL's own answer everywhere else — the empty strip still drags and double-click zooms.
  */
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 static bool (*g_titlebar_interactive_at)(double x_px, double y_px) = NULL;
@@ -241,12 +242,66 @@ void fizzy_macos_viewport_windows_item(void *nswindow, const char *title) {
     }
 }
 
+/* The identifier the carry window's Liquid Glass goes by (`carryLiquidGlass`). */
+static NSString *const carry_glass_id = @"fizzy.carry.glass";
+
+/*
+ * Liquid Glass's lens: what is behind it refracted through it, unblurred, bent and drawn in at its
+ * rim — a drop of water, as the app's own glass is (`core.LiquidField`). AppKit's public styles are
+ * both frosted (Regular dark, Clear light); this is one of the glass's private variants
+ * (`_variant`, 2 by default), measured on macOS 26.5 over a striped window, in the window and
+ * behind it alike: 11 the lens, 6 a bright frost, 13 no glass at all. Set only on the macOS it was
+ * measured on — a variant renumbered later would leave the carried view with no glass — and only
+ * where the setter is there.
+ */
+static const long carry_glass_lens_variant = 11;
+/* The glass's own variant, its Clear style's frost: what a window's material is closest to. */
+static const long carry_glass_frost_variant = 2;
+
+static void carryGlassVariant(NSView *glass, long variant) {
+    if ([[NSProcessInfo processInfo] operatingSystemVersion].majorVersion != 26) return;
+    SEL set_variant = sel_registerName("set_variant:");
+    if (![glass respondsToSelector:set_variant]) return;
+    ((void (*)(id, SEL, long))objc_msgSend)(glass, set_variant, variant);
+}
+
+static void carryGlassLens(NSView *glass) {
+    carryGlassVariant(glass, carry_glass_lens_variant);
+}
+
+/*
+ * The carry window's material from macOS 26: Apple's Liquid Glass (`NSGlassEffectView`) as a lens
+ * (`carryGlassLens`), else its Clear style — the light one — with its own rim and its continuous
+ * corners, which the window's shape sets (`fizzy_macos_viewport_carry_shape`). Nil before macOS 26,
+ * for the vibrancy material instead. Looked up by name, and its properties set by key, so fizzy
+ * builds against SDKs from before it: Liquid Glass is the OS's, not the SDK's.
+ */
+static NSView *carryLiquidGlass(NSRect rect) {
+    if (@available(macOS 26.0, *)) {
+        Class cls = NSClassFromString(@"NSGlassEffectView");
+        if (cls == nil) return nil;
+        NSView *glass = [[cls alloc] initWithFrame:rect];
+        if (glass == nil) return nil;
+        /* NSGlassEffectViewStyleClear. */
+        [glass setValue:@(1) forKey:@"style"];
+        carryGlassLens(glass);
+        [glass setIdentifier:carry_glass_id];
+        [glass setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+#if !__has_feature(objc_arc)
+        [glass autorelease];
+#endif
+        return glass;
+    }
+    return nil;
+}
+
 /*
  * A window that carries a view past every window of the app's, over the desktop
- * (`SDLBackend.viewportOpenCarry`): a round window of its own — the main window's material behind
- * it, in the shape of what is carried (`fizzy_macos_viewport_carry_shape`), the OS's shadow round
- * it — the pointer passing through it to what is under it, above every window (a pop-up menu's
- * level), on every Space, in no window list or switcher, and no OS animation.
+ * (`SDLBackend.viewportOpenCarry`): a round window of its own — Liquid Glass from macOS 26
+ * (`carryLiquidGlass`), the main window's material before — in the shape of what is carried
+ * (`fizzy_macos_viewport_carry_shape`), the OS's shadow round it — the pointer passing through it
+ * to what is under it, above every window (a pop-up menu's level), on every Space, in no window list
+ * or switcher, and no OS animation.
  */
 void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long material) {
     @autoreleasepool {
@@ -261,15 +316,20 @@ void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long materi
         NSView *content = [window contentView];
         NSView *frame = [content superview];
         if (content != nil && frame != nil) {
-            NSVisualEffectView *effect = [[FizzyViewportGlassView alloc] initWithFrame:[content frame]];
-            [effect setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
-            [effect setState:NSVisualEffectStateActive];
-            [effect setMaterial:(NSVisualEffectMaterial)material];
-            [effect setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-            [frame addSubview:effect positioned:NSWindowBelow relativeTo:content];
+            NSView *glass = carryLiquidGlass([content frame]);
+            if (glass != nil) {
+                [frame addSubview:glass positioned:NSWindowBelow relativeTo:content];
+            } else {
+                NSVisualEffectView *effect = [[FizzyViewportGlassView alloc] initWithFrame:[content frame]];
+                [effect setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
+                [effect setState:NSVisualEffectStateActive];
+                [effect setMaterial:(NSVisualEffectMaterial)material];
+                [effect setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+                [frame addSubview:effect positioned:NSWindowBelow relativeTo:content];
 #if !__has_feature(objc_arc)
-            [effect release];
+                [effect release];
 #endif
+            }
         }
         [window setIgnoresMouseEvents:YES];
         [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
@@ -281,6 +341,23 @@ void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long materi
 }
 
 /*
+ * Points from a titled window's left edge past its traffic lights: the zoom button's right edge,
+ * and as much again as the close button stands in from the window's edge. 0 with none showing.
+ */
+double fizzy_macos_window_buttons_width(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return 0;
+        NSButton *close = [window standardWindowButton:NSWindowCloseButton];
+        NSButton *zoom = [window standardWindowButton:NSWindowZoomButton];
+        if (close == nil || zoom == nil || [zoom isHidden] || [zoom superview] == nil) return 0;
+        const NSRect c = [close convertRect:[close bounds] toView:nil];
+        const NSRect z = [zoom convertRect:[zoom bounds] toView:nil];
+        return NSMaxX(z) + NSMinX(c);
+    }
+}
+
+/*
  * A titled window's corner radius, points — what the carried glass grows into as a float's window
  * opens out of it. AppKit says it nowhere; measured from the windows' own pictures: 16 points from
  * macOS 26, 10 before.
@@ -288,6 +365,22 @@ void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long materi
 double fizzy_macos_window_corner_radius(void) {
     if (@available(macOS 26.0, *)) return 16;
     return 10;
+}
+
+/*
+ * The carry window's Liquid Glass as the lens (`carryGlassLens`) or as frost — a float's window
+ * growing out of it is frost, as its own material is. Nothing where it is not Liquid Glass.
+ */
+void fizzy_macos_viewport_carry_lens(void *nswindow, int lens) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *frame = [[window contentView] superview];
+        for (NSView *v in [frame subviews]) {
+            if (![[v identifier] isEqualToString:carry_glass_id]) continue;
+            carryGlassVariant(v, lens ? carry_glass_lens_variant : carry_glass_frost_variant);
+        }
+    }
 }
 
 /*
@@ -309,23 +402,29 @@ void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, d
         NSView *frame = [[window contentView] superview];
         if (frame == nil) return;
         NSVisualEffectView *effect = nil;
+        NSView *glass = nil;
         for (NSView *v in [frame subviews]) {
             if ([v isKindOfClass:[FizzyViewportGlassView class]]) effect = (NSVisualEffectView *)v;
+            if ([[v identifier] isEqualToString:carry_glass_id]) glass = v;
         }
-        if (effect == nil) return;
-        /* Drawn at the window's size, not stretched: a circle's corners are all of it, and a
-         * stretchable image's caps came to more than the window — no mask, the material square. */
-        const NSSize size = NSMakeSize(w, h);
         const CGFloat r = (CGFloat)fmin(radius, fmin(w, h) / 2);
-        NSImage *mask = [NSImage imageWithSize:size
-                                       flipped:NO
-                                drawingHandler:^BOOL(NSRect dst) {
-                                    [[NSColor blackColor] set];
-                                    [[NSBezierPath bezierPathWithRoundedRect:dst xRadius:r yRadius:r] fill];
-                                    return YES;
-                                }];
-        [effect setMaskImage:mask];
-        [effect displayIfNeeded];
+        if (glass != nil) {
+            /* Liquid Glass draws its own shape: its corners, and the rim along them. */
+            [glass setValue:@(r) forKey:@"cornerRadius"];
+        } else if (effect != nil) {
+            /* Drawn at the window's size, not stretched: a circle's corners are all of it, and a
+             * stretchable image's caps came to more than the window — no mask, the material square. */
+            const NSSize size = NSMakeSize(w, h);
+            NSImage *mask = [NSImage imageWithSize:size
+                                           flipped:NO
+                                    drawingHandler:^BOOL(NSRect dst) {
+                                        [[NSColor blackColor] set];
+                                        [[NSBezierPath bezierPathWithRoundedRect:dst xRadius:r yRadius:r] fill];
+                                        return YES;
+                                    }];
+            [effect setMaskImage:mask];
+            [effect displayIfNeeded];
+        } else return;
         /* And the picture, SDL's view: what is carried fills the window only to its shape, but a
          * glass's frost writes the rect it reads, a little past the shape — over the app, in the main
          * window, that is the app again; here, the blur of the window's own base, a square round the

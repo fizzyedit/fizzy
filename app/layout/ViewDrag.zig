@@ -464,8 +464,14 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     if (shot.card) {
         d.takePicture(pic);
         if (d.texture) |tex| {
-            core.anim.blit(tex, null, d.texture_rect, 0, 1);
-            d.texture = backed(tex, d.texture_rect);
+            // Over what the frame already has under the place, as its draw would have gone: the
+            // capture is clear where the place draws nothing — the window's base shows there — and
+            // put back as a dissolve (`blit`) it replaced that base with nothing, the window
+            // see-through under the place for the frame it was lifted on.
+            core.anim.blitOpaque(tex, null, d.texture_rect, 0, 1);
+            // Carried in a window of its own, it is the view's content over that window's
+            // material, which shows through between: not laid over an opaque fill.
+            if (!core.dialogs.carry_windows) d.texture = backed(tex, d.texture_rect);
         }
         return;
     }
@@ -478,6 +484,10 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
 /// place flashed dark for the frame it was lifted on. False where there is no last frame to copy
 /// (`FrameTarget.snapshot`: no targets, or a web frame nothing read); the caller captures then.
 pub fn photographFromFrame(l: *Layout, rect: dvui.Rect.Physical) bool {
+    // The frame as drawn has the place's background in it, and the window's under that: carried in
+    // a window of its own, the view is captured alone instead (`keepShot`), its content over that
+    // window's material. A frosted pane in it draws dark in that capture.
+    if (core.dialogs.carry_windows) return false;
     const d = &l.state.view_drag;
     const r = rect.intersect(dvui.windowRectPixels());
     const tex = core.FrameTarget.snapshot(r) orelse return false;
@@ -1074,22 +1084,13 @@ pub fn drawOverlay(l: *Layout) void {
     // Nothing to lay over the window.
     if (n == 0 and !d.active()) return;
     var layer: dvui.FloatingWidget = undefined;
-    layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
+    layerOver(&layer, @src());
     defer layer.deinit();
-    // Over every float. A floating widget stays just above the window it was made in — this one
-    // the app's own, which every float is over, so the drops on a float's place and the view
-    // carried over a float were drawn under its glass — and is re-added as a window of its own
-    // and raised, as the demo overlay's layers are (`automation/overlay.zig`). It takes no pointer
-    // events: what is under it still takes them, the drag's hold on the pointer included.
-    const wd = layer.data();
-    dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
-    dvui.raiseSubwindow(wd.id);
     // On every screen (`core.screens`): a place in a float popped out into its own window has
     // its drop drawn here, at that window's part of the frame, and so does the carried view
     // when the pointer is there — clipped to the main window, both were dropped as they were
     // drawn, and the app copies this layer into every such window as well as the main one.
-    core.screens.markEverywhere(wd.id);
-    dvui.clipSet(core.screens.allPixels());
+    core.screens.markEverywhere(layer.data().id);
     // The drops, then the card over them: one layer, so their order is the order drawn — the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
     // pointer so the bubble under the pointer stays in view.
@@ -1104,7 +1105,9 @@ pub fn drawOverlay(l: *Layout) void {
     for (drops[0..n], 0..) |p, i| {
         var look = p.look;
         const over = p.look.target and p.clip.contains(mouse);
-        if (!taken and over) look.carried = carried;
+        // In a window of its own, the view is not the app's glass to run in with the drop's: the
+        // bubble it is aimed at lights, as one under a pointer does (`ownWindowLayer`).
+        if (!taken and over and !core.dialogs.carry_windows) look.carried = carried;
         // The icons go over the carried view, which is laid on the drop after it: the bubble it
         // is about to be dropped in says what it does through it.
         if (d.active()) look.icons = .later;
@@ -1121,6 +1124,33 @@ pub fn drawOverlay(l: *Layout) void {
         DropZones.drawIcons(p.key, scale);
     }
     dvui.clipSet(prev_clip);
+}
+
+/// A layer of the drag's over every float, drawn on every screen (`core.screens.allPixels`). A
+/// floating widget stays just above the window it was made in — this one the app's own, which every
+/// float is over, so the drops on a float's place and the view carried over a float were drawn under
+/// its glass — and is re-added as a window of its own and raised, as the demo overlay's layers are
+/// (`automation/overlay.zig`). It takes no pointer events: what is under it still takes them, the
+/// drag's hold on the pointer included.
+fn layerOver(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) void {
+    layer.init(src, .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
+    const wd = layer.data();
+    dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
+    dvui.raiseSubwindow(wd.id);
+    dvui.clipSet(core.screens.allPixels());
+}
+
+/// Where carried things are windows of their own (`core.dialogs.carry_windows`: fizzy's carry
+/// window), what is carried — a card, a tab, a drop — is drawn in a layer of its own that only its
+/// window draws (`core.screens.markCarried`): the window is all of it, the OS's material its
+/// glass, and nothing in the app's own windows follows it. A copy there — its glass, a drop's tail,
+/// the drop it ran into — was drawn at another moment than the window server moved the window, and
+/// trailed behind it. Whether it is; the layer is the caller's to `deinit` then.
+fn ownWindowLayer(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) bool {
+    if (!core.dialogs.carry_windows) return false;
+    layerOver(layer, src);
+    core.screens.markCarried(layer.data().id);
+    return true;
 }
 
 /// A drop coming in where another is going — the place the view is aimed at now lying under the
@@ -1303,7 +1333,11 @@ fn morphProgress(d: ViewDrag, now: i128) f32 {
 fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
-    if (!taken) {
+    // In a window of its own (`ownWindowLayer`), its photograph is all the app draws of it.
+    var own_layer: dvui.FloatingWidget = undefined;
+    const own_window = ownWindowLayer(&own_layer, @src());
+    defer if (own_window) own_layer.deinit();
+    if (!taken and !own_window) {
         // At the merge it is drawn at inside a place's drop (`DropZones.merge`). Its head and tail
         // overlap, and the join between them swells the outline by up to a quarter of the merge:
         // drawn alone at a wider one, between two places — over the sash between them — the drop
@@ -1466,8 +1500,11 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     d.shape_radius = radius;
     const nat = rect.toNatural();
 
-    // A box in the drag's own layer (`drawOverlay`), not a floating window of its own: the drops
-    // go over it in the same layer, drawn after it.
+    // In a window of its own (`ownWindowLayer`), or a box in the drag's own layer (`drawOverlay`):
+    // the drops' icons go over it in the same layer, drawn after it.
+    var own_layer: dvui.FloatingWidget = undefined;
+    const own_window = ownWindowLayer(&own_layer, @src());
+    defer if (own_window) own_layer.deinit();
     const fw = dvui.box(@src(), .{}, .{
         .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h },
         // The photograph sits inset in its glass; a tab is the glass.
@@ -1477,7 +1514,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
         .border = .all(0),
     });
     defer fw.deinit();
-    {
+    if (!own_window) {
         // Glass, like every floating surface. Where the glass program draws it is the same glass
         // the drop is (`drawDrop`), under one id, so a tab becoming the drop and back is one
         // piece of glass changing shape; elsewhere the carried look (`core.dialogs.carriedGlass`),
@@ -1804,12 +1841,15 @@ fn overNoWindow(mouse: dvui.Point.Physical) bool {
 /// its own. Any view that may float — a view alone in a float's window too: its window closes, and
 /// one opens where it was let go.
 fn floatAway(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
-    if (std.mem.eql(u8, source, loose_source)) return;
-    const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
+    // Out of the picker too (a loose drag): the view it carries, wherever it is now.
+    const from_picker = std.mem.eql(u8, source, loose_source);
+    const carried = if (from_picker) l.state.view_drag.moved_id else movedFrom(l, source) orelse return;
+    const moved = ownId(l.arena, carried) orelse return;
     const s = l.host.surfaceById(moved) orelse return;
     if (!float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = false })) return;
+    const left = if (from_picker) holderOf(l, moved) else source;
     floatOut(l, source, moved, mouse);
-    shutIfEmptied(l, source);
+    if (left) |name| shutIfEmptied(l, name);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
 }
@@ -1833,25 +1873,35 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     var buf: [32]u8 = undefined;
     const name = state.internName(l.gpa, float_rules.nextName(&buf, state.floats.names(l.arena)));
     const window = Floats.toRules(dvui.windowRect());
-    const src = placeBounds(state, source) orelse dvui.windowRectPixels();
-    const out_of: ?usize = if (state.floats.rootOf(source)) |root| state.floats.find(root) else null;
+    // Carried out of the picker (a loose drag), it floats out of whichever place holds it now —
+    // its home when the float closes — or, held nowhere, out of none: its keywords take it home.
+    const holder: ?[]const u8 = if (std.mem.eql(u8, source, loose_source)) holderOf(l, moved) else source;
+    const src = (if (holder) |h| placeBounds(state, h) else null) orelse dvui.windowRectPixels();
+    const out_of: ?usize = if (holder) |h| (if (state.floats.rootOf(h)) |root| state.floats.find(root) else null) else null;
     var rect = if (out_of) |i|
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
         float_rules.initialRect(Floats.toRules(src.toNatural()), window);
-    // Let go over no window of the app's (`floatAway`): its size, round where it was let go, out
-    // there — not held on the main window.
-    if (at) |p| {
-        rect.x = p.x / scale - rect.w / 2;
-        rect.y = p.y / scale - rect.h / 2;
-    }
-    // Out of a float, home is still where that float came from: the place it opened over is a
-    // float's, and goes with it.
-    const home = if (out_of) |i| state.floats.items.items[i].home else state.internName(l.gpa, source);
     // The glass it was carried in, when a drag let go of it here; the place itself, when nothing
     // was carried (the picker, a test).
     const d = &state.view_drag;
     const carried = d.active() and std.mem.eql(u8, d.name, source) and d.shape_rect.w > 0;
+    // Let go over no window of the app's (`floatAway`): its size, out there — not held on the main
+    // window — its top left where the carried glass's was, which rode below and right of the
+    // pointer: the glass grows into it right and down from where it was let go, rather than out
+    // round the pointer. With nothing carried, round where it was let go.
+    if (at) |p| {
+        if (carried) {
+            rect.x = d.shape_rect.x / scale;
+            rect.y = d.shape_rect.y / scale;
+        } else {
+            rect.x = p.x / scale - rect.w / 2;
+            rect.y = p.y / scale - rect.h / 2;
+        }
+    }
+    // Out of a float, home is still where that float came from: the place it opened over is a
+    // float's, and goes with it.
+    const home = if (out_of) |i| state.floats.items.items[i].home else if (holder) |h| state.internName(l.gpa, h) else "";
     var landing: Floats.Landing = .{
         .from = if (carried) d.shape_rect else src,
         .radius = if (carried) d.shape_radius else core.corners.scaled(core.corners.card) * scale,
@@ -1873,7 +1923,18 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     };
     state.assign(l.gpa, name, &.{moved}) catch {};
     selectNamed(l, name, moved);
-    takeOut(l, source, moved, null);
+    takeOut(l, holder orelse source, moved, null);
+}
+
+/// The declared place showing `id` now, if one is: where a view carried out of the picker comes
+/// from (`floatOut`).
+fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
+    for (l.state.regions.items) |r| {
+        for (holding(l, r.name)) |held| {
+            if (std.mem.eql(u8, held, id)) return r.name;
+        }
+    }
+    return null;
 }
 
 /// Send the views of a closing float's places (`leaves`) back to `home`, the place the float came

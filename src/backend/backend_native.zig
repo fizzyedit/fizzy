@@ -160,6 +160,20 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius, alpha);
     }
 
+    /// A carry window's glass as the lens — the carried view, a drop of water — or as frost, as a
+    /// window's material is (a float's window growing out of it). Liquid Glass only.
+    pub fn carryLens(vp: *Viewport, lens: bool) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportCarryLens(vp, lens);
+    }
+
+    /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar (macOS's
+    /// traffic lights, `os_buttons`): 0 without them.
+    pub fn buttonsWidth(vp: *Viewport) f32 {
+        if (comptime !supported) return 0;
+        return dvui.currentWindow().backend.impl.viewportButtonsWidth(vp);
+    }
+
     /// A float's window's corner radius, points: the OS's for a titled window (`os_frame`).
     pub fn windowRadius() f32 {
         if (comptime !supported) return 0;

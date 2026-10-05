@@ -18,6 +18,11 @@ const dialogs = @import("../../dialogs.zig");
 const BlurBackdrop = @import("../BlurBackdrop.zig");
 const screens = @import("../../screens.zig");
 
+/// Natural units a menu stays in from the edges of the screen it opens on — the main window's, or
+/// a float's own window's (`core.screens`): pushed in from an edge it sat flush against it, the
+/// place picker opened from a corner button at the window's right edge among them.
+const screen_margin: f32 = 8;
+
 const Event = dvui.Event;
 const Options = dvui.Options;
 const Rect = dvui.Rect;
@@ -158,12 +163,12 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
 
     if (init_opts.from) |fr| {
         // On the screen it opens from (`core.screens`): a float's own window, when that is out.
-        self.data().rect = .cast(dvui.placeOnScreen(screens.screenFor(fr), fr, avoid, .cast(self.data().rect)));
+        self.data().rect = .cast(dvui.placeOnScreen(screens.screenFor(fr).insetAll(screen_margin), fr, avoid, .cast(self.data().rect)));
     } else {
         const centering: Rect.Natural = dvui.currentWindow().subwindows.current_rect;
         self.wd.rect.x = centering.x + (centering.w - self.wd.rect.w) / 2;
         self.wd.rect.y = centering.y + (centering.h - self.wd.rect.h) / 2;
-        self.wd.rect = .cast(dvui.placeOnScreen(screens.screenFor(centering), .{}, .none, .cast(self.data().rect)));
+        self.wd.rect = .cast(dvui.placeOnScreen(screens.screenFor(centering).insetAll(screen_margin), .{}, .none, .cast(self.data().rect)));
     }
 
     if (dvui.snapToPixels()) {
