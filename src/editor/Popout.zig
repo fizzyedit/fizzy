@@ -1,5 +1,5 @@
-//! The pop-out plan's viewports (`docs/POPOUT_WINDOWS_PLAN.md`), behind `FIZZY_POPOUT=1` on
-//! fizzy's native backend: where the platform has OS windows a float is one, from the frame it is
+//! The pop-out plan's viewports (`docs/POPOUT_WINDOWS_PLAN.md`), on by default on macOS and behind
+//! `FIZZY_POPOUT=1` elsewhere, on fizzy's native backend: where the platform has OS windows a float is one, from the frame it is
 //! made in — every float its own window (a viewport, `fizzy.backend.viewports`), titled and framed by
 //! the OS where it can be (macOS), moved, snapped and resized by the OS as any window. Its views go
 //! back into the main window by being carried there, as any view is; the window itself never
@@ -82,12 +82,15 @@ const Grow = struct {
     carry: Carry,
 };
 
-/// `FIZZY_POPOUT=1`, on a backend with viewports, where this run can open them (not Wayland).
+/// On a backend with viewports, where this run can open them (not Wayland): by default on macOS,
+/// where floats as windows are fully supported (`FIZZY_POPOUT=0` keeps floats in the main window);
+/// elsewhere with `FIZZY_POPOUT=1`, until their windows are dressed there too.
 pub fn enabled() bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.supported) return false;
     if (env_on == null) {
         const raw = std.c.getenv("FIZZY_POPOUT");
-        env_on = if (raw) |r| !std.mem.eql(u8, std.mem.span(r), "0") and viewports.available() else false;
+        const asked = if (raw) |r| !std.mem.eql(u8, std.mem.span(r), "0") else builtin.os.tag == .macos;
+        env_on = asked and viewports.available();
     }
     return env_on.?;
 }

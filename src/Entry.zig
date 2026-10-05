@@ -404,7 +404,7 @@ fn frameOnce() !dvui.App.Result {
     // seen (see `app.automation.Player.frame`).
     fizzy.editor().demo.frame();
     // A float asked out of the main window, or back into it, goes before anything is drawn
-    // (`Editor.Popout`, behind `FIZZY_POPOUT`).
+    // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
