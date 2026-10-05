@@ -61,8 +61,8 @@ small: ?Texture = null,
 levels: [max_levels]?Texture.Target = @splat(null),
 /// True until the next `deinit` runs a real capture.
 dirty: bool = true,
-/// Fizzy addition: the target the frost was last drawn into, and in which frame (`FrostJob.draw`):
-/// a pane replayed into a second target in one frame captures again from that one.
+/// Fizzy addition: the target a `.readback` capture last read, and in which frame (`deinit`): one
+/// replayed into a second target in one frame captures again from that one.
 drawn_on: usize = 0,
 drawn_frame: i128 = 0,
 /// Hash of the last `init`'s `rect` + `witness`, for auto-dirty.
@@ -165,6 +165,18 @@ pub fn init(self: *BlurBackdrop, rect: Rect, witness: anytype) void {
 /// call every frame, cheap when not dirty. Does not free the cached
 /// texture; see `releaseTexture` for that.
 pub fn deinit(self: *BlurBackdrop) void {
+    // Replayed into another target already this frame — a layer drawn across every screen (a view
+    // drag's drop zones) replayed into a float's window, then into the main window — it is
+    // captured again from this one. Its capture held the first target's part of the frame, and
+    // its glass drew nothing where the second's shapes were: drop zones without their glass. Here,
+    // not in each job that replays a capture: the drop zones' own job never had it.
+    if (self.mode == .readback) {
+        const cw = dvui.currentWindow();
+        const on: usize = if (cw.render_target.texture) |t| @intFromPtr(t.ptr) else 0;
+        if (self.drawn_frame == cw.frame_time_ns and self.drawn_on != on) self.dirty = true;
+        self.drawn_frame = cw.frame_time_ns;
+        self.drawn_on = on;
+    }
     if (!self.dirty) return;
     // As `init` left it: nothing deferred, nothing to capture.
     if (FrameTarget.unseen()) return;
@@ -335,8 +347,11 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
 /// A pane spanning places in two windows' parts of the frame (a view drag's drop zones, drawn
 /// across every screen, with a float out of the main window: `core.screens.markEverywhere`) asked
 /// for a capture the size of the gap between them, 46424 pixels wide, and Metal aborts at a
-/// texture past 32768.
+/// texture past 32768. Null too when none of `r` is in `span`: such a pane, replayed into a
+/// window's target nowhere near it, read pixels from past the target's edge — a wasted capture,
+/// and one that stood in for the target it does lie in until `deinit` learned to capture again.
 pub fn within(r: Rect.Physical, span: Rect.Physical) ?Rect.Physical {
+    if (r.x >= span.x + span.w or span.x >= r.x + r.w or r.y >= span.y + span.h or span.y >= r.y + r.h) return null;
     if (r.w <= span.w and r.h <= span.h) return r;
     var c = r.intersect(span);
     c.x = @floor(c.x);
@@ -1171,18 +1186,8 @@ const FrostJob = struct {
         const prev_alpha = dvui.currentWindow().alpha;
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
-        // Drawn into another target already this frame — a layer drawn across every screen (a view
-        // drag's drop zones) replayed into a float's window, then into the main window — it is
-        // captured again from this one. Its capture held the first target's part of the frame, and
-        // its glass drew nothing where the second's shapes were: drop zones without their glass.
-        {
-            const cw = dvui.currentWindow();
-            const on: usize = if (cw.render_target.texture) |t| @intFromPtr(t.ptr) else 0;
-            if (self.backdrop.drawn_frame == cw.frame_time_ns and self.backdrop.drawn_on != on) self.backdrop.dirty = true;
-            self.backdrop.drawn_frame = cw.frame_time_ns;
-            self.backdrop.drawn_on = on;
-        }
-        // The capture, now that everything below this pane is on the target.
+        // The capture, now that everything below this pane is on the target (again, if it was
+        // replayed into another target already this frame: `deinit`).
         self.backdrop.deinit();
         // Through the glass program where there is one: the same pane in one pass a pixel.
         if (self.field) |field| {

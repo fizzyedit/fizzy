@@ -6031,4 +6031,8 @@ test "a frost never captures more than the picture it reads" {
     try std.testing.expectEqual(@as(f32, 900), across.h);
     // Wholly in the band: nothing of the window.
     try std.testing.expectEqual(@as(?Rect, null), within(.{ .x = 100000, .y = 0, .w = 3000, .h = 100 }, win));
+    // Smaller than the picture but nowhere on it — the main window's drop zones replayed into a
+    // float window's target in its band: nothing, rather than pixels from past its edge.
+    const band: Rect = .{ .x = 100000, .y = 400, .w = 712, .h = 878 };
+    try std.testing.expectEqual(@as(?Rect, null), within(.{ .x = 900, .y = 300, .w = 500, .h = 700 }, band));
 }
