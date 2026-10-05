@@ -152,6 +152,36 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
     }
 
+    /// A piece of the OS's glass in an overlay (`overlayGlass`): a rounded rect, points from the
+    /// overlay window's top left.
+    pub const GlassShape = if (supported) Impl.GlassShape else extern struct { x: f64, y: f64, w: f64, h: f64, radius: f64, lit: f64, alpha: f64 };
+
+    /// Whether the OS has Liquid Glass to draw a view drag's glass with (`openOverlay`): macOS 26.
+    pub fn liquidGlass() bool {
+        if (comptime !supported) return false;
+        return Impl.liquidGlassAvailable();
+    }
+
+    /// A window over the display the main window is on (`displayInMain`) holding the OS's glass
+    /// (`overlayGlass`) under the picture presented into it, the pointer passing through it. Where
+    /// `liquidGlass`.
+    pub fn openOverlay(at: Rect) ?*Viewport {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOpenOverlay(at);
+    }
+
+    /// Overlay `vp`'s glass this frame (`openOverlay`), run together within `spacing` points.
+    pub fn overlayGlass(vp: *Viewport, shapes: []const GlassShape, spacing: f32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportOverlayGlass(vp, shapes, spacing);
+    }
+
+    /// The display the main window is on, in its frame (physical pixels from its top left).
+    pub fn displayInMain() Rect {
+        if (comptime !supported) return .{};
+        return dvui.currentWindow().backend.impl.viewportDisplayInMain();
+    }
+
     /// A carry window's shape this frame (`openCarry`): what it carries fills it, rounded by
     /// `radius` physical pixels — the OS's material and shadow in that shape — `alpha` opaque.
     /// Null: hidden.

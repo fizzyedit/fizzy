@@ -68,6 +68,8 @@ pub const keycaps = @import("keycaps.zig");
 pub const anchor = @import("anchor.zig");
 /// The screens floating things are placed on: the main window's, and a popped-out float's.
 pub const screens = @import("screens.zig");
+/// Glass the OS draws in place of the app's: a view drag's, as Liquid Glass on macOS 26.
+pub const native_glass = @import("native_glass.zig");
 
 /// Generic momentum/fling helper (pan, scrub, cover-flow).
 pub const Fling = @import("Fling.zig");

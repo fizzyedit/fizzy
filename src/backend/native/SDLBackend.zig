@@ -169,7 +169,29 @@ pub const Viewport = struct {
     /// How opaque it is, asked and as last applied — with its shape, in the same transaction.
     carry_alpha: f32 = 1,
     carry_alpha_shown: f32 = -1,
+    /// An overlay (`viewportOpenOverlay`): the OS's glass in it as last asked
+    /// (`viewportOverlayGlass`), applied with its picture, in the same transaction.
+    overlay: bool = false,
+    glass: [max_glass]GlassShape = undefined,
+    glass_n: usize = 0,
+    glass_spacing: f32 = 0,
+    glass_dirty: bool = false,
 };
+
+/// A piece of the OS's glass in an overlay (`viewportOverlayGlass`): a rounded rect, points from the
+/// window's top left. As `fizzy_macos_viewport_overlay_glass` reads it.
+pub const GlassShape = extern struct {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    radius: f64,
+    lit: f64,
+    alpha: f64,
+};
+
+/// The most pieces of glass an overlay holds.
+pub const max_glass = 48;
 
 pub const InitOptions = struct {
     /// Io backend and dvui should use, will be assigned to dvui.io.
@@ -806,18 +828,64 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 /// Hidden until a frame is presented into it. Null when it cannot be made, or `max_viewports`
 /// are open.
 pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8) ?*Viewport {
-    return self.openViewport(at, title_text, false);
+    return self.openViewport(at, title_text, .window);
 }
+
+const ViewportKind = enum { window, carry, overlay };
 
 /// A window that carries a view past every window of the app's, over the desktop (`Popout`'s carry
 /// window): borderless and clear, the pointer passing through it to what is under, kept above every
 /// window, in no window list, never focused. macOS. Placed and drawn as any viewport.
 pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
     if (comptime builtin.os.tag != .macos) return null;
-    return self.openViewport(at, "", true);
+    return self.openViewport(at, "", .carry);
 }
 
-fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, carry: bool) ?*Viewport {
+/// A window over a whole display that holds the OS's glass (`viewportOverlayGlass`) — Liquid Glass,
+/// its pieces run together where they come close — under the picture drawn into it: a carry window
+/// grown to its display, clear but for its glass, the pointer passing through it. macOS 26, where
+/// `liquidGlassAvailable`.
+pub fn viewportOpenOverlay(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
+    if (comptime builtin.os.tag != .macos) return null;
+    if (!liquidGlassAvailable()) return null;
+    return self.openViewport(at, "", .overlay);
+}
+
+/// Whether the OS has Liquid Glass to draw (`viewportOpenOverlay`): macOS 26.
+pub fn liquidGlassAvailable() bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    return fizzy_macos_liquid_glass_available() != 0;
+}
+
+/// The OS's glass in overlay `vp` (`viewportOpenOverlay`) this frame, applied with its picture: each
+/// a rounded rect, points from the window's top left, run together within `spacing` points.
+pub fn viewportOverlayGlass(_: *SDLBackend, vp: *Viewport, shapes: []const GlassShape, spacing: f32) void {
+    const n = @min(shapes.len, max_glass);
+    if (n == vp.glass_n and spacing == vp.glass_spacing and std.mem.eql(u8, std.mem.sliceAsBytes(vp.glass[0..n]), std.mem.sliceAsBytes(shapes[0..n]))) return;
+    @memcpy(vp.glass[0..n], shapes[0..n]);
+    vp.glass_n = n;
+    vp.glass_spacing = spacing;
+    vp.glass_dirty = true;
+}
+
+/// The display the main window is on, in the main window's frame (physical pixels from its top
+/// left): what an overlay covers.
+pub fn viewportDisplayInMain(self: *SDLBackend) viewport_map.Rect {
+    const display = c.SDL_GetDisplayForWindow(self.window);
+    var r: c.SDL_Rect = .{};
+    if (display == 0 or !c.SDL_GetDisplayBounds(display, &r)) return .{};
+    const at = self.mainOnScreen();
+    const d = self.density();
+    return .{
+        .x = (@as(f32, @floatFromInt(r.x)) - at.x) * d,
+        .y = (@as(f32, @floatFromInt(r.y)) - at.y) * d,
+        .w = @as(f32, @floatFromInt(r.w)) * d,
+        .h = @as(f32, @floatFromInt(r.h)) * d,
+    };
+}
+
+fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, role: ViewportKind) ?*Viewport {
+    const carry = role != .window;
     if (!viewportsAvailable()) return null;
     const slot = for (self.viewports, 0..) |v, i| {
         if (v == null) break i;
@@ -864,8 +932,12 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry };
+    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry, .overlay = role == .overlay };
     const vp = &self.viewports[slot].?;
+    if (role == .overlay) {
+        if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+        return vp;
+    }
     if (carry) {
         if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
         return vp;
@@ -1128,6 +1200,9 @@ extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, m
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
 extern fn fizzy_macos_window_buttons_width(nswindow: ?*anyopaque) f64;
+extern fn fizzy_macos_liquid_glass_available() c_int;
+extern fn fizzy_macos_viewport_overlay(nswindow: ?*anyopaque, main: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]const GlassShape, n: c_long, spacing: f64) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
@@ -1487,8 +1562,9 @@ pub fn renderPresent(self: *SDLBackend) void {
         for (&self.viewports, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             const first = !vp.shown and vp.pending != null;
-            const reshaped = vp.passive and (vp.carry_radius != vp.carry_radius_shown or vp.carry_alpha != vp.carry_alpha_shown or vp.carry_size_shown[0] != vp.screen.w or vp.carry_size_shown[1] != vp.screen.h);
-            if (!vp.frame_pending and !first and !reshaped) continue;
+            const reshaped = vp.passive and !vp.overlay and (vp.carry_radius != vp.carry_radius_shown or vp.carry_alpha != vp.carry_alpha_shown or vp.carry_size_shown[0] != vp.screen.w or vp.carry_size_shown[1] != vp.screen.h);
+            const reglassed = vp.overlay and vp.glass_dirty;
+            if (!vp.frame_pending and !first and !reshaped and !reglassed) continue;
             if (!any) fizzy_native_transaction_begin();
             any = true;
             transacted[i] = true;
@@ -1503,6 +1579,10 @@ pub fn renderPresent(self: *SDLBackend) void {
                 vp.carry_alpha_shown = vp.carry_alpha;
                 vp.carry_size_shown = .{ vp.screen.w, vp.screen.h };
                 fizzy_macos_viewport_carry_shape(ns, vp.carry_radius, @floatFromInt(vp.screen.w), @floatFromInt(vp.screen.h), vp.carry_alpha);
+            }
+            if (reglassed) {
+                vp.glass_dirty = false;
+                fizzy_macos_viewport_overlay_glass(ns, &vp.glass, @intCast(vp.glass_n), vp.glass_spacing);
             }
         }
     }

@@ -38,6 +38,7 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const native_glass = @import("../native_glass.zig");
 const dialogs = @import("../dialogs.zig");
 const widgets = @import("../widgets.zig");
 const BlurBackdrop = @import("BlurBackdrop.zig");
@@ -577,7 +578,12 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
         }
         // Changing shape, what is read moves and grows with the bubbles: at a size kept while it
         // fits, as for the carried drop, so it is not new targets every frame of the change.
-        took = glassCarrying(id, panes[0..n], swingRect(drawn), g, scale, merge * drawn.unit, look.carried, reshaping or sliding);
+        // Where the OS draws a view drag's glass (`native_glass`), the bubbles are declared for it
+        // instead: its glass runs them together, and into the carried drop, itself.
+        took = if (native_glass.on()) native: {
+            for (panes[0..n]) |pane| native_glass.add(.{ .rect = pane.r, .radius = pane.r.w / 2, .lit = pane.lit, .alpha = g });
+            break :native false;
+        } else glassCarrying(id, panes[0..n], swingRect(drawn), g, scale, merge * drawn.unit, look.carried, reshaping or sliding);
         st.icon_n = 0;
         st.icon_frame = now;
         for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {

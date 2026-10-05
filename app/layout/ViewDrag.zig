@@ -1333,10 +1333,18 @@ fn morphProgress(d: ViewDrag, now: i128) f32 {
 fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
-    // In a window of its own (`ownWindowLayer`), its photograph is all the app draws of it.
+    // In a window of its own (`ownWindowLayer`), its photograph is all the app draws of it. Where
+    // the OS draws the drag's glass (`core.native_glass`), its head and tail are the OS's, run
+    // together with each other and with the drop it is aimed at.
     var own_layer: dvui.FloatingWidget = undefined;
     const own_window = ownWindowLayer(&own_layer, @src());
     defer if (own_window) own_layer.deinit();
+    if (own_window and core.native_glass.on()) {
+        for (d.drop_shapes[0..d.drop_n], 0..) |sh, i| core.native_glass.add(.{
+            .rect = sh.rect,
+            .radius = if (i == 0) d.drop_radius else @min(sh.rect.w, sh.rect.h) / 2,
+        });
+    }
     if (!taken and !own_window) {
         // At the merge it is drawn at inside a place's drop (`DropZones.merge`). Its head and tail
         // overlap, and the join between them swells the outline by up to a quarter of the merge:
@@ -1514,6 +1522,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
         .border = .all(0),
     });
     defer fw.deinit();
+    if (own_window and core.native_glass.on()) core.native_glass.add(.{ .rect = rect, .radius = radius });
     if (!own_window) {
         // Glass, like every floating surface. Where the glass program draws it is the same glass
         // the drop is (`drawDrop`), under one id, so a tab becoming the drop and back is one

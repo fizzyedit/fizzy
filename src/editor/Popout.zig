@@ -104,6 +104,10 @@ pub fn beginFrame(state: *State) void {
     // Carried things are windows of their own here (`carryFrame`): photographed without their
     // place's background (`ViewDrag.photographFromFrame`).
     fizzy.core.dialogs.carry_windows = viewports.carries;
+    // And a view drag's glass is the OS's where it has Liquid Glass (`overlayFrame`): while the drag
+    // is on, and after it while its drops are still running back together (`ViewDrag.last_pending`)
+    // — their going, as their coming, is the OS's glass too.
+    fizzy.core.native_glass.publishOn(nativeGlass() and (state.view_drag.active() or state.view_drag.last_pending_count > 0));
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
     // Whatever happened, the screens floating things are placed on this frame: each window's,
     // besides the main window's (`core.screens`).
@@ -269,6 +273,7 @@ pub fn endFrame(state: *State) void {
 /// one. It goes when the drag does.
 fn carryFrame(state: *State) void {
     if (!viewports.carries) return;
+    if (nativeGlass()) return overlayFrame(state);
     const d = &state.view_drag;
     if (!d.active()) {
         // Kept a frame: a float the drop made grows out of it (`growFrame`).
@@ -340,6 +345,126 @@ fn carryFrame(state: *State) void {
 
 /// How opaque the window's base is under a carried view (`carryFrame`).
 const carried_backing: f32 = 0.2;
+
+/// A view drag's glass — the carried view and the drop zones' bubbles — is one overlay of the OS's
+/// Liquid Glass over the display the main window is on, wherever the OS has it
+/// (`viewports.liquidGlass`, macOS 26): the OS's glass where it can be, the app's where it cannot
+/// (`docs/NATIVE_WINDOWS_PLAN.md`). `FIZZY_NATIVE_GLASS=0` keeps the app's.
+var native_env: ?bool = null;
+fn nativeGlass() bool {
+    if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.carries) return false;
+    if (native_env == null) {
+        const raw = std.c.getenv("FIZZY_NATIVE_GLASS");
+        const asked_off = if (raw) |r| std.mem.eql(u8, std.mem.span(r), "0") else false;
+        native_env = !asked_off and viewports.liquidGlass();
+    }
+    return native_env.?;
+}
+
+/// The drag's overlay of the OS's glass (`overlayFrame`), while a view is carried.
+var overlay: ?Carry = null;
+
+/// Points within which the overlay's glass runs together (`NSGlassEffectContainerView`'s spacing):
+/// the app's own merge distance (`DropZones.merge`), past the gap between a drop's bubbles (16
+/// points at their size), so they run partly together and the carried drop into them readily.
+const overlay_spacing: f32 = fizzy.core.widgets.DropZones.merge;
+
+/// A view drag's glass as the OS's (`nativeGlass`): an overlay window over the main window's display
+/// (`viewports.openOverlay`) holds a piece of Liquid Glass for each piece the frame declared in
+/// place of drawing it (`core.native_glass`) — the drop zones' bubbles, the carried drop's head and
+/// tail, or its card — which the OS runs together where they come close, as it refracts what is
+/// under them. The carried view's own layer (`core.screens.markCarried`), its photograph, is taken
+/// into the overlay over its glass. Glass and picture change in one transaction. It goes when the
+/// drag does; a float the drop opens grows out of a carry window of its own (`growFrame`).
+fn overlayFrame(state: *State) void {
+    const d = &state.view_drag;
+    // Kept past the drag while its drops still go, and gone once there is no glass left.
+    if (!d.active() and fizzy.core.native_glass.shapes().len == 0) {
+        if (overlay) |*o| releaseCarry(o);
+        overlay = null;
+        return;
+    }
+    const cw = dvui.currentWindow();
+    const display = viewports.displayInMain();
+    if (display.w <= 0 or display.h <= 0) return;
+    if (overlay == null) {
+        const vp = viewports.openOverlay(display) orelse return;
+        overlay = .{ .viewport = vp };
+    }
+    const o = &overlay.?;
+    const placed = viewports.placeMain(o.viewport, display);
+    const shown: dvui.Rect.Physical = .{ .x = placed.x, .y = placed.y, .w = placed.w, .h = placed.h };
+    const main_px = dvui.windowRectPixels();
+    const s = dvui.windowNaturalScale();
+
+    // The glass, in the overlay window's points.
+    var glass: [fizzy.core.native_glass.max_shapes]viewports.GlassShape = undefined;
+    var n: usize = 0;
+    for (fizzy.core.native_glass.shapes()) |sh| {
+        const r = inMainFrame(sh.rect, main_px) orelse continue;
+        glass[n] = .{
+            .x = (r.x - shown.x) / s,
+            .y = (r.y - shown.y) / s,
+            .w = r.w / s,
+            .h = r.h / s,
+            .radius = sh.radius / s,
+            .lit = sh.lit,
+            .alpha = sh.alpha,
+        };
+        n += 1;
+    }
+    viewports.overlayGlass(o.viewport, glass[0..n], overlay_spacing);
+
+    // The picture: the carried view's layer, drawn where the carried view is — in the band of the
+    // float's window it is over, read from there. After the drag, none.
+    const band_delta: dvui.Point.Physical = if (d.active()) delta: {
+        const at = inMainFrame(d.shape_rect, main_px) orelse d.shape_rect;
+        break :delta .{ .x = d.shape_rect.x - at.x, .y = d.shape_rect.y - at.y };
+    } else .{};
+    const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
+    const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
+    if (o.target) |t| if (t.width != w or t.height != h) {
+        t.destroyLater();
+        o.target = null;
+    };
+    if (o.target == null) o.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
+    const target = o.target.?;
+    target.clear();
+    var rt = cw.render_target;
+    rt.texture = target;
+    rt.offset = .{ .x = shown.x + band_delta.x, .y = shown.y + band_delta.y };
+    rt.rendering = true;
+    const prev = dvui.renderTarget(rt);
+    for (cw.subwindows.stack.items) |*sw| {
+        if (!fizzy.core.screens.isCarried(sw.id)) continue;
+        const cmds = sw.render_cmds;
+        const after = sw.render_cmds_after;
+        sw.render_cmds = .empty;
+        sw.render_cmds_after = .empty;
+        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into the overlay", .{});
+        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into the overlay", .{});
+    }
+    _ = dvui.renderTarget(prev);
+    viewports.present(o.viewport, target);
+}
+
+/// `r` (physical, in the frame) where it lies over the main window's frame: as it is, or — drawn in
+/// the band of a float's window, past the main window — where that part of the band lies, by the
+/// window it overlaps most (`covers`). Null in a band no window shows.
+fn inMainFrame(r: dvui.Rect.Physical, main_px: dvui.Rect.Physical) ?dvui.Rect.Physical {
+    if (r.x <= main_px.x + main_px.w + 40000) return r;
+    var best: ?Cover = null;
+    var best_area: f32 = 0;
+    for (covers[0..cover_count]) |cv| {
+        const ov = cv.band.intersect(r);
+        if (ov.w * ov.h > best_area) {
+            best = cv;
+            best_area = ov.w * ov.h;
+        }
+    }
+    const cv = best orelse return null;
+    return r.offsetPoint(.{ .x = cv.in_main.x - cv.band.x, .y = cv.in_main.y - cv.band.y });
+}
 
 /// A carry window's picture under way (`carryBegin`): the frame's own target to go back to, and
 /// the part of the frame the window shows.

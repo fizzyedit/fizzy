@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <QuartzCore/CATransaction.h>
 
 /**
  * Subclass of NSVisualEffectView that passes hit-testing through to its content subview
@@ -380,6 +381,127 @@ void fizzy_macos_viewport_carry_lens(void *nswindow, int lens) {
             if (![[v identifier] isEqualToString:carry_glass_id]) continue;
             carryGlassVariant(v, lens ? carry_glass_lens_variant : carry_glass_frost_variant);
         }
+    }
+}
+
+/*
+ * The drag's glass as one overlay of Liquid Glass (macOS 26): a window over a whole display
+ * (`SDLBackend.viewportOpenOverlay`) holding an `NSGlassEffectContainerView`, its pieces of glass
+ * one view each, which the container runs together where they come within its spacing — the
+ * carried drop into the bubble it is aimed at, its head into its tail. Under SDL's view, which holds
+ * what only fizzy draws: the carried photograph.
+ */
+@interface FizzyOverlayGlassHolder : NSView
+@end
+
+@implementation FizzyOverlayGlassHolder
+/* From the top left, as fizzy places the glass. */
+- (BOOL)isFlipped {
+    return YES;
+}
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
+static NSString *const overlay_glass_id = @"fizzy.overlay.glass";
+
+/* Whether the OS has Liquid Glass, and the container that merges it: macOS 26. */
+int fizzy_macos_liquid_glass_available(void) {
+    if (@available(macOS 26.0, *)) {
+        return NSClassFromString(@"NSGlassEffectView") != nil && NSClassFromString(@"NSGlassEffectContainerView") != nil;
+    }
+    return 0;
+}
+
+void fizzy_macos_viewport_overlay(void *nswindow, void *main_nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSWindow *main = (__bridge NSWindow *)main_nswindow;
+        if (main != nil) [window setAppearance:[main appearance]];
+        [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        /* Clear but for its glass, which draws its own edge: no window shadow round the display. */
+        [window setHasShadow:NO];
+        NSView *content = [window contentView];
+        NSView *frame = [content superview];
+        Class container_class = NSClassFromString(@"NSGlassEffectContainerView");
+        if (content != nil && frame != nil && container_class != nil) {
+            NSView *container = [[container_class alloc] initWithFrame:[content frame]];
+            [container setIdentifier:overlay_glass_id];
+            [container setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            FizzyOverlayGlassHolder *holder = [[FizzyOverlayGlassHolder alloc] initWithFrame:[container bounds]];
+            [holder setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [container setValue:holder forKey:@"contentView"];
+            [frame addSubview:container positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+            [holder release];
+            [container release];
+#endif
+        }
+        [window setIgnoresMouseEvents:YES];
+        [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+        [window setLevel:NSPopUpMenuWindowLevel];
+        [window setExcludedFromWindowsMenu:YES];
+        [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorTransient |
+                                      NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary];
+    }
+}
+
+/* A piece of the overlay's glass, as `SDLBackend.GlassShape` lays it out: points from the window's
+ * top left. */
+typedef struct {
+    double x, y, w, h, radius, lit, alpha;
+} FizzyGlassShape;
+
+/*
+ * The overlay's glass this frame: one glass view for each shape, made as needed and kept for the
+ * next, the rest hidden. Lit, a piece takes the glass's pressed look, brighter (`_interactionState`
+ * 1, measured on macOS 26.5; set only there). Called in the transaction the window's picture is
+ * presented in (`SDLBackend.renderPresent`), with implicit animations off, so glass and picture
+ * change together.
+ */
+void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *shapes, long n, double spacing) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *frame = [[window contentView] superview];
+        NSView *container = nil;
+        for (NSView *v in [frame subviews]) {
+            if ([[v identifier] isEqualToString:overlay_glass_id]) container = v;
+        }
+        if (container == nil) return;
+        NSView *holder = [container valueForKey:@"contentView"];
+        if (holder == nil) return;
+        [CATransaction setDisableActions:YES];
+        ((void (*)(id, SEL, CGFloat))objc_msgSend)(container, sel_registerName("setSpacing:"), (CGFloat)spacing);
+        NSArray<NSView *> *pool = [[holder subviews] copy];
+        const SEL set_radius = sel_registerName("setCornerRadius:");
+        const SEL get_interaction = sel_registerName("_interactionState");
+        const SEL set_interaction = sel_registerName("set_interactionState:");
+        const BOOL measured = [[NSProcessInfo processInfo] operatingSystemVersion].majorVersion == 26;
+        for (long i = 0; i < n; i++) {
+            NSView *glass = (NSUInteger)i < [pool count] ? pool[(NSUInteger)i] : nil;
+            if (glass == nil) {
+                glass = carryLiquidGlass(NSZeroRect);
+                if (glass == nil) break;
+                [glass setAutoresizingMask:NSViewNotSizable];
+                [holder addSubview:glass];
+            }
+            const FizzyGlassShape s = shapes[i];
+            [glass setHidden:s.alpha <= 0.01];
+            [glass setFrame:NSMakeRect(s.x, s.y, s.w, s.h)];
+            ((void (*)(id, SEL, CGFloat))objc_msgSend)(glass, set_radius, (CGFloat)fmin(s.radius, fmin(s.w, s.h) / 2));
+            [glass setAlphaValue:(CGFloat)s.alpha];
+            if (measured && [glass respondsToSelector:set_interaction] && [glass respondsToSelector:get_interaction]) {
+                const long want = s.lit > 0.5 ? 1 : 0;
+                if (((long (*)(id, SEL))objc_msgSend)(glass, get_interaction) != want)
+                    ((void (*)(id, SEL, long))objc_msgSend)(glass, set_interaction, want);
+            }
+        }
+        for (NSUInteger i = (NSUInteger)(n < 0 ? 0 : n); i < [pool count]; i++) [pool[i] setHidden:YES];
     }
 }
 

@@ -1,0 +1,68 @@
+//! Glass the OS draws in place of the app's: Liquid Glass on macOS 26, where a view drag's glass —
+//! the carried view and the drop zones' bubbles — is one overlay of the OS's glass over every window
+//! (fizzy's `Popout`), merging and refracting as the OS's glass does. Where it is on this frame, the
+//! glass that would be drawn is declared here instead (`add`), in the main window's frame, and the
+//! app reconciles the OS's glass with it at the end of the frame; nothing of it is drawn by the app.
+//!
+//! In dvui's data, as `screens` is, so whatever draws the glass — fizzy, a plugin's drop zones —
+//! declares it the same way, with no SDK between them.
+const std = @import("std");
+const dvui = @import("dvui");
+
+/// A piece of the OS's glass: a rounded rect in the main window's frame (a float's window's band
+/// past it, where its places are drawn), physical pixels.
+pub const Shape = struct {
+    rect: dvui.Rect.Physical,
+    /// Physical pixels.
+    radius: f32,
+    /// How lit it is (0…1): the bubble a carried view is aimed at, as a hovered bubble lights.
+    lit: f32 = 0,
+    /// How much of it there is (0…1): coming in, going.
+    alpha: f32 = 1,
+};
+
+/// The most pieces of glass in a frame: a carried drop's head and tail, and the bubbles of the
+/// drops showing (a wheel's six each).
+pub const max_shapes = 48;
+
+const key_id = dvui.Id.update(.zero, "core.native_glass");
+
+const Frame = struct {
+    frame: i128 = 0,
+    on: bool = false,
+    n: u8 = 0,
+    shapes: [max_shapes]Shape = undefined,
+};
+
+fn current() *Frame {
+    const now = dvui.currentWindow().frame_time_ns;
+    const f = dvui.dataGetPtrDefault(null, key_id, "_frame", Frame, .{});
+    if (f.frame != now) f.* = .{ .frame = now, .on = f.on };
+    return f;
+}
+
+/// Whether the OS draws a view drag's glass this frame, set by the app before anything draws.
+pub fn publishOn(on_: bool) void {
+    current().on = on_;
+}
+
+/// Whether the OS draws a view drag's glass this frame (`publishOn`): declare it (`add`), draw none.
+pub fn on() bool {
+    const f = dvui.dataGetPtr(null, key_id, "_frame", Frame) orelse return false;
+    return f.on;
+}
+
+/// A piece of glass for the OS to draw this frame.
+pub fn add(s: Shape) void {
+    const f = current();
+    if (f.n >= max_shapes) return;
+    f.shapes[f.n] = s;
+    f.n += 1;
+}
+
+/// This frame's glass, as declared so far (`add`).
+pub fn shapes() []const Shape {
+    const f = dvui.dataGetPtr(null, key_id, "_frame", Frame) orelse return &.{};
+    if (f.frame != dvui.currentWindow().frame_time_ns) return &.{};
+    return f.shapes[0..f.n];
+}

@@ -164,6 +164,17 @@ pub const viewports = struct {
     pub fn openCarry(_: Rect) ?*Viewport {
         return null;
     }
+    pub const GlassShape = extern struct { x: f64, y: f64, w: f64, h: f64, radius: f64, lit: f64, alpha: f64 };
+    pub fn liquidGlass() bool {
+        return false;
+    }
+    pub fn openOverlay(_: Rect) ?*Viewport {
+        return null;
+    }
+    pub fn overlayGlass(_: *Viewport, _: []const GlassShape, _: f32) void {}
+    pub fn displayInMain() Rect {
+        return .{};
+    }
     pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32, app_side: f32 = 0, app_corner: f32 = 0 };
     pub fn hints(_: *Viewport, _: ?Hints) void {}
     pub fn osPlaced(_: *Viewport) ?Rect {
