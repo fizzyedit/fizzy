@@ -94,7 +94,9 @@ In it:
   container's `spacing` is the drop zones' merge distance (24 points), past the 16-point gap
   between a wheel's bubbles, so they run partly together (the user's choice), the head pulled
   toward the bubble it is aimed at bridges into it, and the head and its springy tail merge into
-  the wobbling drop. The aimed bubble takes the glass's pressed look (`_interactionState` 1).
+  the wobbling drop. The aimed bubble lights in fizzy's fill over the glass (below): lit with the
+  glass's pressed look (`_interactionState`), it never ran together with the drop snapped onto it
+  (measured).
 - **Their whole life is the OS's glass:** growing out of the drop and pinching off, and running
   back together after the drag. The overlay stays until the last bubble has gone; handing the
   going back to the app's glass showed them switch material as they left.
@@ -201,35 +203,70 @@ where a C patch would be rebase cost for nothing.
 - **A cadence.** Fizzy takes each SDL point release within a few weeks, tagging each step
   `fizzy-<sdl version>-<n>`, as now.
 
-## Materials: opaque to glass
+## One material, one slider
 
-What stands behind a window, a float, a dialog or a carried view is one setting with a range, not
-a per-platform accident. From most to least:
+Everything fizzy draws as glass — the drag's bubble and drop zones, floats, dialogs, popovers,
+menus, tooltips, and the main window itself — is one material, set by one slider (the window
+opacity, the user's design, 2026-10-05). It runs from fully clear refracting glass, through blur
+with the window's colour tinting in, to opaque in the window's colour. The app works at any point
+on it, opaque included, and its glass still merges and moves at every point.
 
-| Material | macOS 26 | macOS before 26 | Windows 11 | Windows 10 | Linux |
+**Two forms of every glass surface,** on the same slider, so a surface looks the same in either:
+- **In-app:** fizzy's own glass shader, kept (the user: "I don't want to trash our in-app glass"),
+  for surfaces drawn inside a window, for the web, and for every platform without native window
+  glass. It is tuned to look like macOS's Liquid Glass on the same slider — a clear lens at the
+  bottom that magnifies toward a thin bright rim, frost rising with the window's colour, the shine
+  kept until the top — so a surface looks alike in either form. Its parameters are continuous:
+  refraction kept, blur radius from 0 up, tint mix toward the window's colour from 0 to opaque.
+- **Native:** the OS's glass, for surfaces that are OS windows of their own — float windows, the
+  carry window, the drag's overlay, and dialogs, popovers and menus moved into windows — where the
+  OS has it (Liquid Glass, macOS 26).
+
+****Native where the OS has it, in the OS's own style.** Windows' glass is not macOS's, and fizzy
+should look like a Windows app there, not imitate macOS: each platform maps the slider onto its own
+materials (below), and the library that does it stays small — one interface, a short file per
+platform, the in-app glass behind it all.
+
+**The native way along the slider (built for the drag's glass in #227, measured).**** Liquid Glass
+has no blur to turn, only variants, so the way is a blend:
+- the clear lens (variant 11) crossfades into frost (Clear), then into heavier frost (Regular);
+- two layers of the same pieces do the crossfading, and stay one outline while they do;
+- the window's colour is under the glass, as native shape layers beneath it with necks where
+  pieces run together, so the glass bends and lights it and keeps its shine; drawn over the glass,
+  it muted the shine all the way up (the user);
+- only in the last tenth of the slider does the glass go, handing over to the colour drawn flat
+  and opaque over everything in the merged shape (`core.liquid_blob.fill`);
+- a lit piece is lit in the colour under the glass, never with the glass's pressed look, which
+  stops it merging.
+
+`Popout.glassLook` holds that mapping today; it moves into `core` as the app's one material
+description, read by both forms.
+
+**Native menus.** On macOS 26 AppKit's own `NSMenu` is already Liquid Glass, with the OS's keyboard
+handling and accessibility. That is the native form of a context menu: right-click opens an
+`NSMenu` built from the same menu model. Its material is the OS's, not on fizzy's slider. A menu
+fizzy draws itself, in an OS window on the native material, is the other way, kept for menus
+`NSMenu` cannot express.
+
+**Per platform**, as close to the glass as each can get:
+
+| | macOS 26 | macOS before 26 | Windows 11 | Windows 10 | Linux |
 | --- | --- | --- | --- | --- | --- |
-| glass (lens) | Liquid Glass, variant 11 | vibrancy | Acrylic | opaque | app glass over a translucent window where composited |
-| glass (frost) | Liquid Glass, Clear | vibrancy | Acrylic / Mica | opaque | as above |
-| blurred | vibrancy | vibrancy | Acrylic | opaque | translucent (KWin blur where offered) |
-| opaque | base fill | base fill | base fill | base fill | base fill |
+| native glass | Liquid Glass blend + fill | vibrancy + fill | Acrylic / Mica + fill | fill (opaque) | app glass over a translucent window, where composited |
+| in-app glass | shader | shader | shader | shader | shader |
 
-- **The window opacity slider runs across it:** the window's base drawn over the material at the
-  slider's opacity (`Editor.windowBase`, `easeWindowOpacity`), as now.
-- **The main window takes the same material** where Liquid Glass exists (the user's ask): an
-  `NSGlassEffectView` behind SDL's view in place of the vibrancy view, the base over it at the
-  slider's opacity. A float's window, the carry window and the overlay already sit beside SDL's
-  view the same way, so the main window moves to the float's view structure (the review's advice
-  too: no responder-chain repair).
-- **The carried view stands on a fifth of the base** (#224), so its picture reads over the clear
-  lens; it follows the slider once the main window's material does.
-- **Accessibility wins over looks.** macOS "Reduce transparency" (`accessibilityDisplayShouldReduceTransparency`)
-  and Windows "Transparency effects" off take every material to opaque; "Reduce motion"
-  (`accessibilityDisplayShouldReduceMotion`, `SPI_GETCLIENTAREAANIMATION`, the GTK setting) turns
-  the glass's growth, merging and wobble to fades. Natively `SDLBackend.prefersReducedMotion`
-  returns false today (the review).
-- **Capabilities, not platform names:** a backend declares what it can (`fizzy_ext`, below):
-  `liquid_glass`, `lens`, `merge`, `carry_windows`, materials offered. The app chooses the best
-  offered and falls back without breaking.
+- **The main window takes the same material** where the OS has it: an `NSGlassEffectView` pair
+  behind SDL's view in place of vibrancy, the fill over it per the slider. Float windows, the carry
+  window and the overlay already sit beside SDL's view that way, so the main window moves to the
+  float's view structure (the review's advice too: no responder-chain repair).
+- **Accessibility wins over looks.** macOS "Reduce transparency"
+  (`accessibilityDisplayShouldReduceTransparency`) and Windows "Transparency effects" off put the
+  slider at opaque. "Reduce motion" (`accessibilityDisplayShouldReduceMotion`,
+  `SPI_GETCLIENTAREAANIMATION`, the GTK setting) turns the glass's growth, merging and wobble into
+  fades. Natively `SDLBackend.prefersReducedMotion` returns false today (the review).
+- **Capabilities, not platform names.** A backend declares what it can (`fizzy_ext`): `liquid_glass`,
+  `lens`, `merge`, `carry_windows`, which materials it offers. The app picks the best one offered
+  and falls back without breaking anything.
 
 ## Screen-edge tiling for a carried view
 
@@ -251,8 +288,8 @@ coming back into a window. So fizzy tiles it itself, the way the OS does:
 1. **Done in #224:** the carried bubble is a window of Liquid Glass on macOS 26, a lens on a fifth
    of the base; a float's window grows out of it from its top left and shows only once the glass
    is its size; the lifted place keeps its base; no move cursor over a float's traffic lights.
-2. **Built, after #224:** the drag's glass as one overlay of Liquid Glass (above), on by default
-   where the OS has it. Next on it: several displays, measuring its frame cost and merging at
+2. **Built (#227):** the drag's glass as one overlay of Liquid Glass (above), on by default on
+   macOS with floats as windows, and on the slider from clear to opaque. Next on it: several displays, measuring its frame cost and merging at
    120 Hz, matching Control Center's material, screen-edge tiling.
 3. **Clean the backend first** (the review's steps 1–2, no behaviour change): delete
    `SDLBackend.zig`'s dead SDL2 arms, `initWindowSecondary`, `WindowGeometry`; split it by job
@@ -263,15 +300,18 @@ coming back into a window. So fizzy tiles it itself, the way the OS does:
    --check` in CI.
 4. **`WindowChrome`** for the main window, then floats, carry and overlay: one hit test (std-only,
    unit-tested first), one Win32 subclass, no file-level state; materials and native layers on it.
-5. **Native layers as the backend's interface,** from the overlay: the drag's glass, then the main
-   window's material, dialogs and menus where the OS draws them better.
-6. **The other platforms' path:** where native glass can't merge, the bubble is the app's glass over
+5. **One material:** `glassLook` into `core`, the in-app glass shader's blur, refraction and tint
+   read from the same slider, then the native form for float windows, the main window, dialogs and
+   popovers in OS windows, and `NSMenu` for context menus on macOS.
+6. **Native layers as the backend's interface,** from the overlay: the drag's glass, then every
+   native-form surface.
+7. **The other platforms' path:** where native glass can't merge, the bubble is the app's glass over
    a window and a carry window outside them.
-7. **The SDL patches above,** then deleting the 60 Hz pump and the private symbols; the scheduled
+8. **The SDL patches above,** then deleting the 60 Hz pump and the private symbols; the scheduled
    rebase-and-build job; upstream PRs.
-8. **Peer or palette** (open question), then window-local coordinates for settled viewports — which
+9. **Peer or palette** (open question), then window-local coordinates for settled viewports — which
    also gives Wayland settled floats and mixed DPI a path.
-9. **Packages** (the review's shape): `tape` alone, `replay`, `window` (backend, renderer, platform,
+10. **Packages** (the review's shape): `tape` alone, `replay`, `window` (backend, renderer, platform,
    viewports), `app` (layout, floats, pop-out orchestration and the glass overlay — `Popout` moves
    out of `src/editor/`), with an app's own `main`.
 
