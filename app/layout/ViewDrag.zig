@@ -89,9 +89,6 @@ drop_n: usize = 0,
 drop_radius: f32 = 0,
 /// Carried by a finger: the drop rides up and left of it, where the finger does not cover it.
 drop_touch: bool = false,
-/// Where the drop settled on the bubble it is aimed at, and that bubble's middle: held there while
-/// the pointer stays within `drop_hold` of it (`dropShapes`).
-drop_held: ?struct { bubble: dvui.Point.Physical, target: dvui.Point.Physical } = null,
 /// How far the drop is joined to the bubble it is aimed at, 0…1, eased: its photograph fades by
 /// `aim_fade` of it (`drawDrop`).
 drop_aim: f32 = 0,
@@ -1205,17 +1202,13 @@ fn handOffDrops(drops: []PendingDrop) usize {
     return n;
 }
 
-/// Points: the radius of the view carried as a drop — the drop zones' middle bubble's, so what is
-/// carried reads as big as where it goes, and is still seen beside a finger — and its tail's share
-/// of it.
+/// Points: the radius of the view carried as a drop — near the drop zones' middle bubble's (a
+/// quarter under it), so what is carried reads about as big as where it goes, and is still seen
+/// beside a finger — and its tail's share of it.
 const drop_r: f32 = 52;
 const drop_tail_share: f32 = 0.62;
 /// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
 const drop_pull: f32 = 0.45;
-/// Points the pointer may wander from where the drop settled on a bubble before the drop follows
-/// it again: a hand held still is never still, and every pixel it moved thickened and thinned the
-/// neck between the drop and the bubble — a shimmer (the user).
-const drop_hold: f32 = 6;
 
 /// The farthest the pointer moves in a frame within one window's part of the frame, physical
 /// pixels: past it, it went from one window to another — a float out of the main window is drawn
@@ -1255,7 +1248,6 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         d.drop_ns = 0;
         d.drop_head = .{};
         d.drop_tail = .{};
-        d.drop_held = null;
         d.drop_aim = 0;
         return d.drop_shapes[0..0];
     }
@@ -1285,12 +1277,6 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         aimed = b.c;
         target = .{ .x = target.x + (b.c.x - target.x) * drop_pull, .y = target.y + (b.c.y - target.y) * drop_pull };
     }
-    // On a bubble, held where it settled until the pointer has truly moved (`drop_hold`).
-    if (aimed) |bc| {
-        const keep = if (d.drop_held) |h| h.bubble.x == bc.x and h.bubble.y == bc.y and
-            @abs(h.target.x - target.x) < drop_hold * scale and @abs(h.target.y - target.y) < drop_hold * scale else false;
-        if (keep) target = d.drop_held.?.target else d.drop_held = .{ .bubble = bc, .target = target };
-    } else d.drop_held = null;
     var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = 0.55 });
     moving = d.drop_tail.step(d.drop_head.pos, dt, .{ .hz = 4.5, .playful_damping = 0.4 }) or moving;
     // The tail stays on the drop: pulled out a little way, not off it.

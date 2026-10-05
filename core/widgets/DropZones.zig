@@ -132,10 +132,12 @@ pub const Wheel = struct {
 pub const all = [_]Zone{ .center, .{ .edge = .left }, .{ .edge = .right }, .{ .edge = .top }, .{ .edge = .bottom }, .remove };
 
 /// Points: the bubbles' layout as a wheel — the middle, the four sides round it, the trash in the
-/// crook between the right and the bottom — about 290 across: big enough to aim at without
+/// crook between the right and the bottom — about 310 across: big enough to aim at without
 /// looking, small enough to leave the place in view round it. Each bubble rests `gap` from the
 /// ones beside it.
-const center_r: f32 = 52;
+/// The middle a quarter bigger than it was (52): the drop reads as one glass round it, not a
+/// cross of equals (the user).
+const center_r: f32 = 65;
 const side_r: f32 = 40;
 const remove_r: f32 = 30;
 /// Points between a bubble and the ones beside it, at rest: well inside where two run together
