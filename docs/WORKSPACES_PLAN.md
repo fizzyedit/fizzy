@@ -1,5 +1,7 @@
 # Workspaces: many tabbed areas of documents, placed as views
 
+Status: proposed. Steps tracked in #260, each its own PR.
+
 Decided with the user (2026-10-04/05):
 - **Groups and workspaces are joined into workspaces.** A workspace is a tabbed area of documents,
   and there can be any number of them. Each is a view placed by the app: in Main, in a split, or in
@@ -18,6 +20,11 @@ Decided with the user (2026-10-04/05):
   cursor, selection, scroll and zoom are per view.
 - **No default workspace unless the layout asks for one:** there is none when no place's keywords
   match a workspace's. Fizzy's Main does (`main`).
+- **⌘N opens a new window; ⌘D a new document.** "New Window" opens a window whose place takes a
+  workspace, so it opens on an empty one: a new editor, one keystroke away. "New File" is renamed
+  "New Document" (`fizzy.newFile`'s title, and the home page).
+- **The home page lists New Window first,** above New Document.
+- **A dialog opens in the window it was asked from,** not always in the main window (below).
 
 ## Why
 
@@ -84,9 +91,10 @@ It also goes against fizzy's one idea: the framework owns layout, and plugins co
   field's state) is per view. What an owner keeps on the document itself is shared unless it keys
   it by view (see "SDK"). Closing one view leaves the document open in the others; closing its last
   view closes the document, through its owner.
-- **An emptied workspace** in Main stays, and shows the workbench's home page (open folder, recent
-  files) as its empty state. Elsewhere, an emptied workspace closes its place: a split leaf
-  collapses, and a float closes, as an emptied float does now.
+- **An emptied workspace** in Main, or in a window opened by New Window, stays, and shows the
+  workbench's home page (open folder, recent files) as its empty state. Elsewhere, an emptied
+  workspace closes its place: a split leaf collapses, and a float closes, as an emptied float does
+  now.
 - **Closing a float** moves its workspace's documents into the main window's workspace: the active
   one there, else Main's.
 - **Two strips, two levels.** A place's tabs are views (`Chooser`); a workspace's tabs are its
@@ -97,6 +105,46 @@ It also goes against fizzy's one idea: the framework owns layout, and plugins co
   (the explorer does not). The place keeps the card's look (`placeCard`) and stops deciding whether
   it appears. The carried bubble photographs a surface without its card, so the glass's blur shows
   through.
+
+## New windows
+
+- **"New Window" (⌘N, `fizzy.newWindow`)** opens a float whose place is keyworded `workspace`, holding
+  a new, empty workspace. Where floats are OS windows (macOS today), that is a new OS window. On the
+  web and Wayland it is an in-window float. It opens offset from the window it was asked from, as a
+  new window does in any app, and its empty workspace shows the home page.
+- **"New Document" (⌘D, `fizzy.newFile` renamed)** asks for a new document in the active workspace.
+  ⌘D is free in fizzy today. VS Code binds it to "add the next match to the selection", which the
+  text plugin's keybinds plan (VS Code parity) would want; that binding moves to another key.
+- **The home page** (the workbench's, the empty state of a workspace) lists New Window, then New
+  Document, then Open Folder and Open Files. The workbench runs `fizzy.newWindow` by id and shows
+  the entry only when the command exists, so it imports nothing of fizzy's and stays the same in
+  an app without new windows.
+- **A new window stays when it empties,** as the main window does: its last document closed or
+  carried out, its workspace shows the home page. It closes only when the user closes it, its
+  documents moving into the main window's workspace, as for any float. A float made by tearing a
+  document off still closes when it empties (above); the float remembers which it is.
+
+## Dialogs open in the window asking
+
+Today every dialog (New Document's, Save As, a close prompt, the command palette, plugin dialogs) is
+centred on the main window, even when the request came from a float or a float's window. A dialog
+belongs to the window it was asked from.
+
+- **The window asking** is the one with focus when the command ran: the OS's key window where floats
+  are windows (`viewports`), else the float that took the last press (or the main window). A button
+  inside a window (the home page's) asks from that window, whichever has focus.
+- **Placing it there.** A float's window shows everything whose middle lies in its part of the frame
+  (`Popout.windowFrame` takes those subwindows whole), as menus and tooltips there already do
+  (`core.screens.screenFor`). So routing a dialog is centring it on the asking window's part of the
+  frame. `core.screens` publishes that rect each frame (`activeScreen`, beside `publishScreens`), and
+  `core.dialogs.dialogWindow` centres on it (`FloatingWindowWidget`'s `center_on`). No SDK change:
+  `core` is source shared, and a plugin's dialog follows once the plugin is rebuilt.
+- **Modal dialogs** dim the window they are in, not the main window and its title bar
+  (`modal_dim_titlebar`). dvui's modal still takes the input of every window; blocking only the
+  asking window is a later step.
+- **The OS's own panels** (open, save, alerts) are given the asking window as their parent
+  (`SDL_ShowOpenFileDialog`'s window), so on macOS they are sheets on that window.
+- **Independent of workspaces:** it can land before them, as its own change on `main`.
 
 ## What a workspace must do: the workbench today (step 1)
 
@@ -231,7 +279,7 @@ own.
 - **The background field** on `Surface` (above).
 - **The renames**, once the old names have no users.
 
-## Steps (each its own change; together fizzyedit/fizzy#225, on `main`)
+## Steps (each its own PR, `Part of #260`)
 
 1. **Map the workbench's document path** — how a pane draws a document today (`Workspace.drawCanvas`,
    `bindDocumentToPane`, the canvas and its handle, the home page, previews, `Openings`
@@ -261,6 +309,10 @@ own.
    the framework.
 7. **Two views of one document, and the SDK bump** (above): "Open in New Workspace", the view a
    document is drawn for, the background field, the renames.
+8. **New windows** (above): `fizzy.newWindow` on ⌘N, New Document on ⌘D, and both on the home
+   page, New Window first.
+
+Dialogs routed to the window asking (above) don't depend on any of these, and can land first.
 
 ## Answered
 
