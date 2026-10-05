@@ -119,37 +119,21 @@ pub fn setStyle(win: *dvui.Window) void {
             c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
             null,
         );
-        if (raw_ptr != null) {
-            const window = objc.Object.fromId(raw_ptr);
-
-            // Re-applying styleMask while in a fullscreen Space exits the Space on macOS.
-            if (fizzy_macos_window_in_fullscreen_space(raw_ptr) == 0) {
-                // Allow content view to extend under the titlebar so vibrancy covers it.
-                const style_mask = window.msgSend(c_ulong, "styleMask", .{});
-                if (style_mask & NSWindowStyleMaskFullSizeContentView == 0) {
-                    window.msgSend(void, "setStyleMask:", .{style_mask | NSWindowStyleMaskFullSizeContentView});
-                }
-            }
-            // This sets the titlebar to transparent so our effect view shows through.
-            if (!window.msgSend(bool, "titlebarAppearsTransparent", .{})) {
-                window.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
-            }
-            // Hide the title text in the titlebar (matches Windows, where we
-            // draw our own chrome). `NSWindowTitleHidden` = 1. The window still
-            // has a programmatic title (used by the Window menu / Dock) — only
-            // the rendered titlebar string is hidden.
-            if (window.msgSend(c_long, "titleVisibility", .{}) != 1) {
-                window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
-            }
+        if (raw_ptr) |ptr| {
+            styleTitled(ptr);
             // Presses over what the app draws in the titlebar's region (a dialog, a menu) are
             // the app's, not AppKit's to move the window with.
-            fizzy_macos_titlebar_hit_test_install(raw_ptr, titlebarInteractiveAt);
-            // Green button enters a native fullscreen Space (menu bar hidden).
-            const NSWindowCollectionBehaviorFullScreenPrimary: c_ulong = 1 << 7;
-            const behavior = window.msgSend(c_ulong, "collectionBehavior", .{});
-            if (behavior & NSWindowCollectionBehaviorFullScreenPrimary == 0) {
-                window.msgSend(void, "setCollectionBehavior:", .{behavior | NSWindowCollectionBehaviorFullScreenPrimary});
-            }
+            fizzy_macos_titlebar_hit_test_install(ptr, titlebarInteractiveAt);
+        }
+        // Every float's own window too: SDL puts its own style back on them as on the main window
+        // — into and out of a fullscreen Space above all — and a float's window kept SDL's
+        // titlebar strip over its content after one. The pointer over a float's window is its
+        // own hit test's (`SDLBackend.viewportHitTest`), so no titlebar hit test of the main one's.
+        for (&win.backend.impl.viewports) |*slot| {
+            const vp = if (slot.*) |*v| v else continue;
+            if (vp.passive) continue;
+            const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
+            styleTitled(ns);
         }
     } else if (builtin.os.tag == .windows) {
         win32_titlebar.applyChrome(win);
@@ -175,6 +159,39 @@ pub fn performTitleBarButton(win: *dvui.Window, button: titlebar.TitleBarButton)
             e.window.windowID = c.SDL_GetWindowID(window);
             _ = c.SDL_PushEvent(&e);
         },
+    }
+}
+
+/// A titled window of fizzy's styled as the app is — the main window and every float's own
+/// window (`setStyle`): its content under a transparent, title-less titlebar, going full screen in
+/// a Space of its own. Reads before it writes: only what SDL has put back changes.
+fn styleTitled(raw_ptr: *anyopaque) void {
+    const window = objc.Object.fromId(raw_ptr);
+
+    // Re-applying styleMask while in a fullscreen Space exits the Space on macOS.
+    if (fizzy_macos_window_in_fullscreen_space(raw_ptr) == 0) {
+        // Allow content view to extend under the titlebar so vibrancy covers it.
+        const style_mask = window.msgSend(c_ulong, "styleMask", .{});
+        if (style_mask & NSWindowStyleMaskFullSizeContentView == 0) {
+            window.msgSend(void, "setStyleMask:", .{style_mask | NSWindowStyleMaskFullSizeContentView});
+        }
+    }
+    // This sets the titlebar to transparent so our effect view shows through.
+    if (!window.msgSend(bool, "titlebarAppearsTransparent", .{})) {
+        window.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
+    }
+    // Hide the title text in the titlebar (matches Windows, where we
+    // draw our own chrome). `NSWindowTitleHidden` = 1. The window still
+    // has a programmatic title (used by the Window menu / Dock) — only
+    // the rendered titlebar string is hidden.
+    if (window.msgSend(c_long, "titleVisibility", .{}) != 1) {
+        window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
+    }
+    // Green button enters a native fullscreen Space (menu bar hidden).
+    const NSWindowCollectionBehaviorFullScreenPrimary: c_ulong = 1 << 7;
+    const behavior = window.msgSend(c_ulong, "collectionBehavior", .{});
+    if (behavior & NSWindowCollectionBehaviorFullScreenPrimary == 0) {
+        window.msgSend(void, "setCollectionBehavior:", .{behavior | NSWindowCollectionBehaviorFullScreenPrimary});
     }
 }
 
