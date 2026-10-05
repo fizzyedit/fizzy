@@ -598,14 +598,21 @@ from the frame it is made in.
   alternative: its image glued to the cursor, but a still picture, no liquid glass. Not yet:
   straddling a float window's edge it is cut at that edge.
 
+- **Growing out of the carried glass (macOS).** A float a drop makes opens as one in the main
+  window lands (`Floats.Landing`): its window shows nothing while a carry window — the drag's own
+  when it had one (`Popout.spare`), already at the drop — grows from the drop to the window's frame
+  and rounds to its corners (`viewports.windowRadius`, 16 points from macOS 26), the carried
+  photograph fading out in it (`Popout.growFrame`). Landed, the window shows under it and it fades
+  off in 120 ms (`viewports.carryShape`'s alpha, in the transaction with its shape). Growing the
+  titled window itself would have shown its traffic lights in a window the drop's size, square.
+  The float is drawn whole in its band all along, so the window has its picture the frame it shows.
+
 **Next:**
 
-1. **Growing out of the carried glass.** The window's frame from the drop to its rect, in step
-   with its picture (the transaction moves and resizes already use).
-2. **Windows and X11 chrome.** Windows: the float's header draws caption buttons, as the main
+1. **Windows and X11 chrome.** Windows: the float's header draws caption buttons, as the main
    window's does (`caption_buttons.zig`). X11: client-side decorations, as the main window's. And
-   the carry window there.
-3. **Persistence of where the windows are** (`SavedRegion.Floating.os`): a saved float comes back
+   the carry window there, which the opening grows in too.
+2. **Persistence of where the windows are** (`SavedRegion.Floating.os`): a saved float comes back
    in its window where it was on the desktop, not where it would be over the main window.
 
 ## Next steps

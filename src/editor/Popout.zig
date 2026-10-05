@@ -38,11 +38,21 @@ var carry: ?Carry = null;
 /// carry window shows it over it instead (`carryFrame`).
 var ghost_over: ?viewports.Rect = null;
 
+/// The carry window of a drag that has just ended, kept one frame for a float the drop made to grow
+/// out of (`growFrame`) — already where the drop is, in its shape — and let go after it otherwise.
+var spare: ?Carry = null;
+/// `spare` has been kept a frame already.
+var spare_kept = false;
+
 const Carry = struct {
     viewport: *viewports.Viewport,
     target: ?dvui.Texture.Target = null,
 };
 var env_on: ?bool = null;
+
+/// How long the carried glass, grown into a float's window, takes to fade off the window it grew
+/// into (`growFrame`).
+const grow_fade_ms: f32 = 120;
 
 const Out = struct {
     /// Which float: its serial, never handed to another (`Floats.Float.serial`) — its name is
@@ -54,6 +64,16 @@ const Out = struct {
     /// What its window is called now: the float's title, as its header says (`Floats.Float.titleText`).
     title_buf: [96]u8 = undefined,
     title_len: u8 = 0,
+    /// The carried glass it is growing out of, landing (`growFrame`).
+    grow: ?Grow = null,
+};
+
+const Grow = struct {
+    carry: Carry,
+    /// Its corner radius, physical, as last shaped.
+    radius: f32 = 0,
+    /// Landed: when the window it grew into began to show under it, and it to fade off it.
+    landed_ns: ?i128 = null,
 };
 
 /// `FIZZY_POPOUT=1`, on a backend with viewports, where this run can open them (not Wayland).
@@ -205,6 +225,8 @@ fn release(o: *Out) void {
     viewports.close(o.viewport);
     if (o.target) |t| t.destroyLater();
     o.target = null;
+    if (o.grow) |*g| releaseCarry(&g.carry);
+    o.grow = null;
 }
 
 /// After the frame has drawn and before dvui replays the subwindows into the main window's frame
@@ -217,6 +239,13 @@ pub fn endFrame(state: *State) void {
         if (slot.*) |*o| windowFrame(state, o);
     }
     carryFrame(state);
+    // A drag's carry window no float grew out of in the frame after the drag: gone.
+    if (spare) |*sp| {
+        if (spare_kept) {
+            releaseCarry(sp);
+            spare = null;
+        } else spare_kept = true;
+    }
 }
 
 /// A view carried past every window of the app's — out over the desktop, where letting go opens a
@@ -234,7 +263,12 @@ fn carryFrame(state: *State) void {
     if (!viewports.carries) return;
     const d = &state.view_drag;
     if (!d.active()) {
-        if (carry) |*c| releaseCarry(c);
+        // Kept a frame: a float the drop made grows out of it (`growFrame`).
+        if (carry) |c| {
+            if (spare) |*sp| releaseCarry(sp);
+            spare = c;
+            spare_kept = false;
+        }
         carry = null;
         return;
     }
@@ -251,7 +285,7 @@ fn carryFrame(state: *State) void {
         if (carry) |*c| if (c.target) |t| {
             t.clear();
             viewports.present(c.viewport, t);
-            viewports.carryShape(c.viewport, null);
+            viewports.carryShape(c.viewport, null, 0);
         };
         return;
     }
@@ -260,34 +294,8 @@ fn carryFrame(state: *State) void {
         carry = .{ .viewport = vp };
     }
     const c = &carry.?;
-    const shown = viewports.placeMain(c.viewport, .{ .x = shape.x, .y = shape.y, .w = shape.w, .h = shape.h });
-    viewports.carryShape(c.viewport, d.shape_radius);
-    const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
-    const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
-    if (c.target) |t| if (t.width != w or t.height != h) {
-        t.destroyLater();
-        c.target = null;
-    };
-    if (c.target == null) c.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
-    const target = c.target.?;
-    target.clear();
-    var rt = cw.render_target;
-    rt.texture = target;
-    rt.offset = .{ .x = shown.x, .y = shown.y };
-    rt.rendering = true;
-    const prev = dvui.renderTarget(rt);
-    defer _ = dvui.renderTarget(prev);
-    // The main window's base under it, over the window's material, for its glass to read — glass
-    // over the window's clear pixels draws nothing — as a float's window stands on it.
-    {
-        const prev_clip = dvui.clipGet();
-        defer dvui.clipSet(prev_clip);
-        dvui.clipSet(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h });
-        const prev_alpha = cw.alpha;
-        dvui.alphaSet(1);
-        defer dvui.alphaSet(prev_alpha);
-        shape.fill(dvui.CornerRect.Physical.all(d.shape_radius), .{ .color = .{ .color = base(true) } });
-    }
+    const drawing = carryBegin(c, shape, d.shape_radius, 1) orelse return;
+    defer carryEnd(c, drawing);
     // What the drag draws across every screen (`core.screens.markEverywhere`), copied in, left for
     // the main window's replay: what of it lies past the window falls outside.
     for (cw.subwindows.stack.items) |*sw| {
@@ -295,13 +303,119 @@ fn carryFrame(state: *State) void {
         cw.renderCommands(sw.render_cmds.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
         cw.renderCommands(sw.render_cmds_after.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
     }
-    viewports.present(c.viewport, target);
+}
+
+/// A carry window's picture under way (`carryBegin`): the frame's own target to go back to, and
+/// the part of the frame the window shows.
+const CarryDrawing = struct {
+    prev: dvui.RenderTarget,
+    shown: dvui.Rect.Physical,
+};
+
+/// Put `c`'s window where it shows `shape` of the main window's frame, in its shape (`radius`,
+/// physical), `alpha` opaque, and start its picture: the main window's base under it, over the
+/// window's material, for glass to read — glass over the window's clear pixels draws nothing — as a
+/// float's window stands on it. Drawn into it until `carryEnd`; null with nothing to draw into.
+fn carryBegin(c: *Carry, shape: dvui.Rect.Physical, radius: f32, alpha: f32) ?CarryDrawing {
+    const cw = dvui.currentWindow();
+    const placed = viewports.placeMain(c.viewport, .{ .x = shape.x, .y = shape.y, .w = shape.w, .h = shape.h });
+    const shown: dvui.Rect.Physical = .{ .x = placed.x, .y = placed.y, .w = placed.w, .h = placed.h };
+    viewports.carryShape(c.viewport, radius, alpha);
+    const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
+    const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
+    if (c.target) |t| if (t.width != w or t.height != h) {
+        t.destroyLater();
+        c.target = null;
+    };
+    if (c.target == null) c.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return null;
+    const target = c.target.?;
+    target.clear();
+    var rt = cw.render_target;
+    rt.texture = target;
+    rt.offset = .{ .x = shown.x, .y = shown.y };
+    rt.rendering = true;
+    const prev = dvui.renderTarget(rt);
+    {
+        const prev_clip = dvui.clipGet();
+        defer dvui.clipSet(prev_clip);
+        dvui.clipSet(shown);
+        const prev_alpha = cw.alpha;
+        dvui.alphaSet(1);
+        defer dvui.alphaSet(prev_alpha);
+        shape.fill(dvui.CornerRect.Physical.all(radius), .{ .color = .{ .color = base(true) } });
+    }
+    return .{ .prev = prev, .shown = shown };
+}
+
+/// `carryBegin`'s picture done: handed to its window.
+fn carryEnd(c: *Carry, drawing: CarryDrawing) void {
+    _ = dvui.renderTarget(drawing.prev);
+    if (c.target) |t| viewports.present(c.viewport, t);
 }
 
 fn releaseCarry(c: *Carry) void {
     viewports.close(c.viewport);
     if (c.target) |t| t.destroyLater();
     c.target = null;
+}
+
+/// A float made by a drop grows out of the carried glass into its window, as it grows into its
+/// glass in the main window (`Floats.Landing`): its window shows nothing while the carried glass —
+/// a carry window (`viewports.openCarry`), the drag's own when it had one, already where the drop
+/// is — grows from the drop to the window's frame and rounds to its corners, the carried view's
+/// photograph fading out in it. Landed, the window shows under it, and it fades off the window and
+/// goes. Whether the window shows nothing yet. Where there are no carry windows, the window shows
+/// at once.
+fn growFrame(o: *Out, f: *const Floats.Float) bool {
+    if (!viewports.carries) return false;
+    if (f.landing) |land| {
+        if (o.grow == null) {
+            const c = if (spare) |sp| blk: {
+                spare = null;
+                break :blk sp;
+            } else blk: {
+                const vp = viewports.openCarry(.{ .x = land.from.x, .y = land.from.y, .w = land.from.w, .h = land.from.h }) orelse return false;
+                break :blk Carry{ .viewport = vp };
+            };
+            o.grow = .{ .carry = c };
+        }
+        const g = &o.grow.?;
+        const t = Floats.landedAt(land);
+        const into = viewports.inMain(o.viewport);
+        const to: dvui.Rect.Physical = .{ .x = into.x, .y = into.y, .w = into.w, .h = into.h };
+        const from = land.from;
+        const rect: dvui.Rect.Physical = .{
+            .x = std.math.lerp(from.x, to.x, t),
+            .y = std.math.lerp(from.y, to.y, t),
+            .w = @max(1, std.math.lerp(from.w, to.w, t)),
+            .h = @max(1, std.math.lerp(from.h, to.h, t)),
+        };
+        g.radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
+        const drawing = carryBegin(&g.carry, rect, g.radius, 1) orelse return false;
+        defer carryEnd(&g.carry, drawing);
+        if (land.photo) |tex| {
+            const prev_clip = dvui.clipGet();
+            defer dvui.clipSet(prev_clip);
+            dvui.clipSet(drawing.shown);
+            Floats.drawPhoto(tex, land.photo_size, rect, .{ .x = rect.x, .y = rect.y, .w = rect.w }, g.radius, 1 - std.math.clamp(t, 0, 1));
+        }
+        return true;
+    }
+    const g = if (o.grow) |*g| g else return false;
+    const now = dvui.currentWindow().frame_time_ns;
+    const start = g.landed_ns orelse now;
+    g.landed_ns = start;
+    const dur = fizzy.core.motion.durationMs(grow_fade_ms);
+    const frac: f32 = if (dur <= 0) 1 else @as(f32, @floatFromInt(now - start)) / (dur * std.time.ns_per_ms);
+    if (frac >= 1) {
+        releaseCarry(&g.carry);
+        o.grow = null;
+        return false;
+    }
+    viewports.carryShape(g.carry.viewport, g.radius, 1 - frac);
+    if (g.carry.target) |t| viewports.present(g.carry.viewport, t);
+    dvui.refresh(null, @src(), null);
+    return false;
 }
 
 fn windowFrame(state: *State, o: *Out) void {
@@ -343,7 +457,9 @@ fn windowFrame(state: *State, o: *Out) void {
         const see_through = carried_out and !d.ghost_firm;
         viewports.seeThrough(o.viewport, see_through);
         if (see_through) ghost_over = viewports.inMain(o.viewport);
-        viewports.fade(o.viewport, Floats.ghostLook(f.aside.at()).alpha);
+        // Nothing of it while it grows out of the carried glass (`growFrame`).
+        const growing = growFrame(o, f);
+        viewports.fade(o.viewport, if (growing) 0 else Floats.ghostLook(f.aside.at()).alpha);
     }
     // Where a press is the OS's: its header moves the window and its glass's edges resize it, so
     // the OS snaps, tiles and maximizes it as any window.

@@ -153,10 +153,17 @@ pub const viewports = struct {
     }
 
     /// A carry window's shape this frame (`openCarry`): what it carries fills it, rounded by
-    /// `radius` physical pixels — the OS's material and shadow in that shape. Null: hidden.
-    pub fn carryShape(vp: *Viewport, radius: ?f32) void {
+    /// `radius` physical pixels — the OS's material and shadow in that shape — `alpha` opaque.
+    /// Null: hidden.
+    pub fn carryShape(vp: *Viewport, radius: ?f32, alpha: f32) void {
         if (comptime !supported) return;
-        dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius);
+        dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius, alpha);
+    }
+
+    /// A float's window's corner radius, points: the OS's for a titled window (`os_frame`).
+    pub fn windowRadius() f32 {
+        if (comptime !supported) return 0;
+        return dvui.currentWindow().backend.impl.windowCornerRadius();
     }
 
     /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`: its

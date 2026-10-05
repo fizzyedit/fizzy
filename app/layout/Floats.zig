@@ -428,6 +428,13 @@ const landing_ms: f32 = 300;
 /// How opaque the landing photograph is at its start — the carried card's own (`ViewDrag`).
 const photo_opacity: f32 = 0.8;
 
+/// How far a landing has got, on the arrival curve: 0 at the release, 1 in its window — past it
+/// and back on the way, when motion is playful.
+pub fn landedAt(land: Landing) f32 {
+    const frac = land.clock.fraction(core.motion.durationMs(landing_ms));
+    return if (frac >= 1) 1 else core.motion.enter(frac);
+}
+
 /// Draw every float, bottom to top: each a glass window holding its place. Called by the
 /// application after its shape has run and before it publishes the shape's regions, from the
 /// base window (`Layout.drawFloats`), so a float's places register this frame like any other's
@@ -536,23 +543,24 @@ fn drawOne(l: *Layout, i: usize) bool {
     const shown = if (as_photo or first.viewport != null) 1 else ghostLook(aside).alpha;
     const hide_live = as_photo or aside >= gone;
 
-    // Out of the main window it is wherever its OS window's part of the frame is, and lands
-    // nowhere: the window it would grow in is gone.
+    // Out of the main window it is wherever its OS window's part of the frame is. It lands there
+    // too, but the landing is its window's (`Popout`): the carried glass grows into the window, which
+    // shows once it has, the float in it drawn whole all along.
     const out = first.viewport != null;
-    if (out) endLanding(&state.floats.items.items[i]);
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
     var rect = if (first.viewport) |vp| vp.rect else first.rect;
     var corner_r = core.corners.scaled(core.corners.surface);
     var landed: f32 = 1;
     if (state.floats.items.items[i].landing) |land| {
-        const frac = land.clock.fraction(core.motion.durationMs(landing_ms));
-        landed = if (frac >= 1) 1 else core.motion.enter(frac);
-        const from = land.from.toNatural();
-        rect = fromRules(rules.lerp(toRules(from), toRules(first.rect), landed));
-        corner_r = std.math.lerp(land.radius / scale, corner_r, std.math.clamp(landed, 0, 1));
-        if (frac >= 1) endLanding(&state.floats.items.items[i]) else dvui.refresh(null, @src(), null);
+        if (!out) {
+            landed = landedAt(land);
+            const from = land.from.toNatural();
+            rect = fromRules(rules.lerp(toRules(from), toRules(first.rect), landed));
+            corner_r = std.math.lerp(land.radius / scale, corner_r, std.math.clamp(landed, 0, 1));
+        }
+        if (land.clock.fraction(core.motion.durationMs(landing_ms)) >= 1) endLanding(&state.floats.items.items[i]) else dvui.refresh(null, @src(), null);
     }
-    const landing = state.floats.items.items[i].landing != null;
+    const landing = state.floats.items.items[i].landing != null and !out;
 
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
@@ -682,9 +690,9 @@ fn drawOne(l: *Layout, i: usize) bool {
         if (whole) |*w| w.end(view_fade);
     }
     dvui.clipSet(prev_clip_live);
-    if (state.floats.items.items[i].landing) |land| {
+    if (landing) if (state.floats.items.items[i].landing) |land| {
         if (land.photo) |tex| drawPhoto(tex, land.photo_size, bounds, header, corner_r * scale, 1 - std.math.clamp(landed, 0, 1));
-    }
+    };
     // Or taken hold of this frame (a press lands in `deinit`; anything it moves is next frame's).
     const held = held_before or dvui.captured(win_id);
     win.deinit();
@@ -743,8 +751,9 @@ const Whole = struct {
 };
 
 /// The photograph the float grew out of, over its body (below `header`), cropped to fill it, at
-/// `fade` of its carried opacity.
-fn drawPhoto(tex: dvui.Texture, size: dvui.Size.Physical, bounds: dvui.Rect.Physical, header: dvui.Rect.Physical, radius: f32, fade: f32) void {
+/// `fade` of its carried opacity — in its window, or the carried glass its OS window grows out of
+/// (`Popout`). `radius` is physical.
+pub fn drawPhoto(tex: dvui.Texture, size: dvui.Size.Physical, bounds: dvui.Rect.Physical, header: dvui.Rect.Physical, radius: f32, fade: f32) void {
     if (fade <= 0.01) return;
     const top = header.y + header.h;
     const r: dvui.Rect.Physical = .{ .x = bounds.x, .y = top, .w = bounds.w, .h = bounds.y + bounds.h - top };

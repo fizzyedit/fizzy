@@ -283,12 +283,22 @@ void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long materi
 }
 
 /*
+ * A titled window's corner radius, points — what the carried glass grows into as a float's window
+ * opens out of it. AppKit says it nowhere; measured from the windows' own pictures: 16 points from
+ * macOS 26, 10 before.
+ */
+double fizzy_macos_window_corner_radius(void) {
+    if (@available(macOS 26.0, *)) return 16;
+    return 10;
+}
+
+/*
  * The carry window's shape: its material masked to a rounded rect of `radius` points filling the
  * window — a circle for a drop, a card for a tab — and its shadow made again round it. Called in the
  * transaction the window's place and picture change in (`SDLBackend.renderPresent`), so the shape
  * changes with them.
  */
-void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, double h) {
+void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, double h, double alpha) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
@@ -297,7 +307,7 @@ void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, d
             [window setAlphaValue:0];
             return;
         }
-        [window setAlphaValue:1];
+        [window setAlphaValue:alpha];
         NSView *frame = [[window contentView] superview];
         if (frame == nil) return;
         NSVisualEffectView *effect = nil;
