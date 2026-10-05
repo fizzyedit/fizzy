@@ -35,6 +35,7 @@
  * view under the pointer now answers NO there, as Chromium's and Electron's no-drag regions do,
  * and SDL's own answer everywhere else — the empty strip still drags and double-click zooms.
  */
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 static bool (*g_titlebar_interactive_at)(double x_px, double y_px) = NULL;
@@ -245,11 +246,29 @@ void fizzy_macos_viewport_windows_item(void *nswindow, const char *title) {
 static NSString *const carry_glass_id = @"fizzy.carry.glass";
 
 /*
- * The carry window's material from macOS 26: Apple's Liquid Glass (`NSGlassEffectView`), its Clear
- * style — the light one, what is carried seen through it rather than set on it — with its own rim
- * and its continuous corners, which the window's shape sets (`fizzy_macos_viewport_carry_shape`).
- * Nil before macOS 26, for the vibrancy material instead. Looked up by name, and its properties set
- * by key, so fizzy builds against SDKs from before it: Liquid Glass is the OS's, not the SDK's.
+ * Liquid Glass's lens: what is behind it refracted through it, unblurred, bent and drawn in at its
+ * rim — a drop of water, as the app's own glass is (`core.LiquidField`). AppKit's public styles are
+ * both frosted (Regular dark, Clear light); this is one of the glass's private variants
+ * (`_variant`, 2 by default), measured on macOS 26.5 over a striped window, in the window and
+ * behind it alike: 11 the lens, 6 a bright frost, 13 no glass at all. Set only on the macOS it was
+ * measured on — a variant renumbered later would leave the carried view with no glass — and only
+ * where the setter is there.
+ */
+static const long carry_glass_lens_variant = 11;
+
+static void carryGlassLens(NSView *glass) {
+    if ([[NSProcessInfo processInfo] operatingSystemVersion].majorVersion != 26) return;
+    SEL set_variant = sel_registerName("set_variant:");
+    if (![glass respondsToSelector:set_variant]) return;
+    ((void (*)(id, SEL, long))objc_msgSend)(glass, set_variant, carry_glass_lens_variant);
+}
+
+/*
+ * The carry window's material from macOS 26: Apple's Liquid Glass (`NSGlassEffectView`) as a lens
+ * (`carryGlassLens`), else its Clear style — the light one — with its own rim and its continuous
+ * corners, which the window's shape sets (`fizzy_macos_viewport_carry_shape`). Nil before macOS 26,
+ * for the vibrancy material instead. Looked up by name, and its properties set by key, so fizzy
+ * builds against SDKs from before it: Liquid Glass is the OS's, not the SDK's.
  */
 static NSView *carryLiquidGlass(NSRect rect) {
     if (@available(macOS 26.0, *)) {
@@ -259,6 +278,7 @@ static NSView *carryLiquidGlass(NSRect rect) {
         if (glass == nil) return nil;
         /* NSGlassEffectViewStyleClear. */
         [glass setValue:@(1) forKey:@"style"];
+        carryGlassLens(glass);
         [glass setIdentifier:carry_glass_id];
         [glass setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 #if !__has_feature(objc_arc)
