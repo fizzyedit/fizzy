@@ -656,8 +656,10 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         const radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
         // The float's picture over the first part of the growth, the photograph going as it comes.
         const arrive = smoothstep(std.math.clamp(Floats.landingFraction(land) / picture_share, 0, 1));
-        // The base comes in with the picture, which has its own.
-        if (!drawGrow(o, g, rect, radius, 1, 0, arrive, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
+        // The window's colour comes in with the picture, as much of it as the window it grows into
+        // will have (`windowShade`): with none, the glass ended lighter than that window, which
+        // popped darker on the last frame as it took over (the user).
+        if (!drawGrow(o, g, rect, radius, 1, windowShade() * arrive, arrive, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
         return 0;
     }
     // Landed: the window shows, and the glass goes with it.
@@ -666,6 +668,16 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         o.grow = null;
     }
     return 1;
+}
+
+/// How much of a float's window its colour covers, settled, at the window opacity: a window of
+/// Liquid Glass's colour in its body and, at the top, over all of it (`core.glass_look.window`);
+/// a window on vibrancy, its base's opacity (`Editor.windowBase`).
+fn windowShade() f32 {
+    const op = std.math.clamp(fizzy.editor().window_opacity, 0, 1);
+    if (!viewports.liquidGlass()) return op;
+    const w = fizzy.core.glass_look.window(op);
+    return 1 - (1 - w.fill) * (1 - w.top_fill);
 }
 
 /// The share of a float's growth out of the carried glass over which its picture takes over from
@@ -808,7 +820,7 @@ fn windowFrame(state: *State, o: *Out) void {
     // Zoomed or full screen there is no desktop behind it: opaque, eased there and back with the
     // OS's transitions as the main window's base is. Where it has no material it is opaque
     // throughout.
-    Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
+    Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), viewports.enteringSpace(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
     // A window of Liquid Glass (macOS 26) stands on its glass, its colour under it on the one
     // slider, as the main window does (`Editor.windowGlassLook`): no base of its own in the frame.
     if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value, .{ .w = shown.w / s, .h = shown.h / s })))

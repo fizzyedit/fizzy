@@ -39,6 +39,7 @@ pub const takeTrackpadPinchRatio = platform.gestures.takeTrackpadPinchRatio;
 
 pub const isMaximized = platform.window.isMaximized;
 pub const coversDesktop = platform.window.coversDesktop;
+pub const enteringSpace = platform.window.enteringSpace;
 pub const isFullscreenChromeHidden = platform.window.isFullscreenChromeHidden;
 pub const setWindowStyle = platform.window.setStyle;
 pub const setTitlebarColor = platform.window.setBackground;
@@ -322,6 +323,12 @@ pub const viewports = struct {
     pub fn coversDesktop(vp: *const Viewport) bool {
         if (comptime !supported) return false;
         return dvui.currentWindow().backend.impl.viewportCovers(vp);
+    }
+
+    /// Whether `vp`'s window is on its way into a fullscreen Space (`enteringSpace`).
+    pub fn enteringSpace(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportEnteringSpace(vp);
     }
 
     /// `vp`'s window `alpha` opaque, all of it — its material too.

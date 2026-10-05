@@ -3500,11 +3500,12 @@ pub const WindowOpacity = struct {
 const cover_ms = 500;
 
 /// Ease a window's opacity (`o`) toward `windowed` or, while it `covers` the desktop — zoomed, full
-/// screen, on its way into a fullscreen Space (`backend.coversDesktop`) — opaque. Across a change of
-/// `covers` it takes `cover_ms` on a smoothstep from the moment the change is seen, the start of
-/// the OS's transition, so the glass and the vibrancy fade with its animation rather than snapping
-/// or trailing after it; otherwise — the opacity slider moving — it follows closely.
-pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, windowed: f32) void {
+/// screen (`backend.coversDesktop`) — opaque. Across a change of `covers` it takes `cover_ms` on a
+/// smoothstep from the moment the change is seen; otherwise — the opacity slider moving — it follows
+/// closely. Into a fullscreen Space (`snap`) it is opaque at once, and out of one it stays opaque
+/// until the window has landed and then fades: AppKit animates a window in and out of a Space as
+/// pictures of it, and see-through they were a double window.
+pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, windowed: f32) void {
     const target: f32 = if (covers) 1.0 else windowed;
     const cover_target: f32 = if (covers) 1.0 else 0.0;
     const now = dvui.currentWindow().frame_time_ns;
@@ -3513,7 +3514,10 @@ pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, windowed: f32) void {
         o.* = .{ .value = target, .cover = cover_target, .covers = covers, .since_ns = now - span };
         return;
     }
-    if (covers != o.covers) o.* = .{ .value = o.value, .cover = o.cover, .covers = covers, .from = o.value, .from_cover = o.cover, .since_ns = now };
+    if (covers != o.covers) {
+        o.* = .{ .value = o.value, .cover = o.cover, .covers = covers, .from = o.value, .from_cover = o.cover, .since_ns = now };
+        if (snap) o.* = .{ .value = target, .cover = cover_target, .covers = covers, .since_ns = now - span };
+    }
     const elapsed = now - o.since_ns;
     if (elapsed < span) {
         const x: f32 = @floatCast(@as(f64, @floatFromInt(@max(elapsed, 0))) / @as(f64, @floatFromInt(span)));
@@ -3623,7 +3627,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
     // The draw uses `window_opacity_anim`.
-    easeWindowOpacity(&editor.window_opacity_anim, fizzy.backend.coversDesktop(dvui.currentWindow()), editor.window_opacity);
+    easeWindowOpacity(&editor.window_opacity_anim, fizzy.backend.coversDesktop(dvui.currentWindow()), fizzy.backend.enteringSpace(dvui.currentWindow()), editor.window_opacity);
 
     // Drain any "Save and Close" requests whose async save has settled.
     editor.tickPendingSaveCloses();

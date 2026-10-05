@@ -72,6 +72,10 @@ pub fn coversDesktop(_: *dvui.Window) bool {
     return true;
 }
 
+pub fn enteringSpace(_: *dvui.Window) bool {
+    return false;
+}
+
 pub fn setWindowStyle(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: a browser tab cannot take focus for itself, and the OAuth
@@ -158,6 +162,9 @@ pub const viewports = struct {
         return false;
     }
     pub fn coversDesktop(_: *const Viewport) bool {
+        return false;
+    }
+    pub fn enteringSpace(_: *const Viewport) bool {
         return false;
     }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}

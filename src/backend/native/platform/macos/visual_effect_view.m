@@ -188,10 +188,14 @@ static NSImage *glassMask(double inset, double radius) {
 
 /* Undo `fizzy_macos_viewport_glass` before SDL destroys the window: the vibrancy view gone, and
  * its Window menu item (`fizzy_macos_viewport_windows_item`). */
+/* The float windows kept over the main one (`fizzy_macos_viewport_keep_above`). */
+static NSHashTable *g_kept_above;
+
 void fizzy_macos_viewport_unglass(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
+        [g_kept_above removeObject:window];
         [NSApp removeWindowsItem:window];
         NSView *frame = [[window contentView] superview];
         if (frame == nil) return;
@@ -214,17 +218,87 @@ void fizzy_macos_viewport_unglass(void *nswindow) {
  * on the main window brings it forward). Cheap when nothing is out of order: one comparison of the
  * app's window order. Other apps' windows still go over it, as over the main window.
  */
+static void keepAboveNow(NSWindow *window, NSWindow *main) {
+    if (window == nil || main == nil) return;
+    if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
+    /* Either in a fullscreen Space of its own: the two are on different Spaces, and ordering
+     * one against the other would pull it across. */
+    if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
+    if ([window orderedIndex] < [main orderedIndex]) return;
+    [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
+}
+
+/* The main window the floats are kept over. */
+static NSWindow *g_kept_main = nil;
+static IMP g_order_window_imp = NULL;
+static id g_keep_monitor = nil;
+
+static void keepAllAbove(void) {
+    if (g_kept_above == nil || g_kept_main == nil) return;
+    for (NSWindow *w in [g_kept_above allObjects]) keepAboveNow(w, g_kept_main);
+}
+
+/* The main window ordered in front — a press on it brings it forward — and the floats back over
+ * it in the same call, before the window server has shown it over them. Put back on the app's
+ * next frame instead, the main window's content showed through a float in front of it at every
+ * press, for a frame or more (the user). */
+static void fizzy_order_window(id self, SEL cmd, NSWindowOrderingMode place, NSInteger other) {
+    typedef void (*OrderFn)(id, SEL, NSWindowOrderingMode, NSInteger);
+    if (g_order_window_imp != NULL) ((OrderFn)g_order_window_imp)(self, cmd, place, other);
+    if (self == g_kept_main && place == NSWindowAbove) keepAllAbove();
+}
+
+/* Once (idempotent): `fizzy_order_window` on the main window's class, AppKit's ordering under it;
+ * and, for any way AppKit brings it forward without ordering it so, the floats put back right after
+ * a press on it and as it becomes key. */
+static void keepAboveInstall(NSWindow *main) {
+    Class cls = [main class];
+    const SEL sel = @selector(orderWindow:relativeTo:);
+    if (class_getMethodImplementation(cls, sel) != (IMP)fizzy_order_window) {
+        Method base = class_getInstanceMethod(cls, sel);
+        if (base != NULL) {
+            const char *types = method_getTypeEncoding(base);
+            IMP inherited = method_getImplementation(base);
+            if (class_addMethod(cls, sel, (IMP)fizzy_order_window, types)) {
+                g_order_window_imp = inherited;
+            } else {
+                Method own = class_getInstanceMethod(cls, sel);
+                g_order_window_imp = method_getImplementation(own);
+                method_setImplementation(own, (IMP)fizzy_order_window);
+            }
+        }
+    }
+    if (g_keep_monitor == nil) {
+        g_keep_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown)
+                                                               handler:^NSEvent *(NSEvent *e) {
+            if ([e window] == g_kept_main) dispatch_async(dispatch_get_main_queue(), ^{ keepAllAbove(); });
+            return e;
+        }];
+#if !__has_feature(objc_arc)
+        [g_keep_monitor retain];
+#endif
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidBecomeKeyNotification
+                                                          object:main
+                                                           queue:nil
+                                                      usingBlock:^(__unused NSNotification *note) { keepAllAbove(); }];
+    }
+}
+
 void fizzy_macos_viewport_keep_above(void *nswindow, void *main_nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         NSWindow *main = (__bridge NSWindow *)main_nswindow;
         if (window == nil || main == nil) return;
-        if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
-        /* Either in a fullscreen Space of its own: the two are on different Spaces, and ordering
-         * one against the other would pull it across. */
-        if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
-        if ([window orderedIndex] < [main orderedIndex]) return;
-        [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
+        if (g_kept_above == nil) {
+            g_kept_above = [NSHashTable weakObjectsHashTable];
+#if !__has_feature(objc_arc)
+            [g_kept_above retain];
+#endif
+        }
+        if (![g_kept_above containsObject:window]) [g_kept_above addObject:window];
+        g_kept_main = main;
+        keepAboveInstall(main);
+        keepAboveNow(window, main);
     }
 }
 
@@ -496,8 +570,8 @@ typedef struct {
  * The window's colour in the overlay's glass: one shape layer for the union of every piece that
  * is all there (the first), so where pieces overlap — the carried drop's head and tail, the drop
  * snapped onto a bubble — the colour is drawn once, as the glass runs them into one; a layer of
- * its own for a piece still coming or going (its opacity its own), and for a lit piece, its light
- * over the union toward `lit_toward`. A layer per piece drew overlaps twice: the tail read as a
+ * its own for a piece still coming or going (its opacity its own), and in a lit piece a soft glow
+ * toward `lit_toward`, gone before its edge. A layer per piece drew overlaps twice: the tail read as a
  * darker circle inside the head (the user). Over the lens and the frost, faded out across each
  * piece's clearing bevel (`overlayBevelMask`): under the lens it was a disc the lens bent, where the
  * surface being dragged over should be; flat over all the glass it muted the rim's shine; under the
@@ -528,31 +602,42 @@ static void overlayFill(NSView *holder, const FizzyGlassShape *shapes, long n, d
         const double mix = lit_amount * fmin(fmax(a.lit, 0), 1);
         const BOOL coming = a.alpha < 0.99;
         if (!coming && a.alpha > 0.01) CGPathAddRoundedRect(whole, NULL, rect, ra, ra);
-        double alpha = 0;
-        CGFloat comps[4] = {0, 0, 0, 0};
-        if (coming) {
-            /* Its own colour, at its own opacity, lit as it is. */
-            alpha = opacity + mix * (1 - opacity);
-            comps[0] = (CGFloat)(look->fill[0] + (look->lit_toward[0] - look->fill[0]) * mix);
-            comps[1] = (CGFloat)(look->fill[1] + (look->lit_toward[1] - look->fill[1]) * mix);
-            comps[2] = (CGFloat)(look->fill[2] + (look->lit_toward[2] - look->fill[2]) * mix);
-        } else if (mix > 0.004) {
-            /* Its light, over the union's colour. */
-            alpha = mix;
-            comps[0] = (CGFloat)look->lit_toward[0];
-            comps[1] = (CGFloat)look->lit_toward[1];
-            comps[2] = (CGFloat)look->lit_toward[2];
+        /* Its own colour while it comes or goes, at its own opacity; lit, a soft glow in it,
+         * brightest in the middle and gone before the edge — a filled light read as a disc under
+         * the glass (the user). */
+        CAGradientLayer *glow = (CAGradientLayer *)[[layer sublayers] firstObject];
+        if (glow == nil) {
+            glow = [CAGradientLayer layer];
+            [glow setType:kCAGradientLayerRadial];
+            [glow setStartPoint:CGPointMake(0.5, 0.5)];
+            [glow setEndPoint:CGPointMake(1, 1)];
+            [glow setLocations:@[@0, @0.5, @1]];
+            [layer addSublayer:glow];
         }
-        comps[3] = (CGFloat)alpha;
-        [layer setHidden:alpha <= 0.004 || a.alpha <= 0.01];
+        const double fill_alpha = coming ? opacity : 0;
+        const BOOL lit = mix > 0.004;
+        [layer setHidden:a.alpha <= 0.01 || (fill_alpha <= 0.004 && !lit)];
         if ([layer isHidden]) continue;
         [layer setFrame:[root bounds]];
         CGPathRef path = CGPathCreateWithRoundedRect(rect, ra, ra, NULL);
         [layer setPath:path];
         CGPathRelease(path);
-        CGColorRef color = CGColorCreate(srgb, comps);
-        [layer setFillColor:color];
-        CGColorRelease(color);
+        const CGFloat fill_comps[4] = {(CGFloat)look->fill[0], (CGFloat)look->fill[1], (CGFloat)look->fill[2], (CGFloat)fill_alpha};
+        CGColorRef fill_color = CGColorCreate(srgb, fill_comps);
+        [layer setFillColor:fill_color];
+        CGColorRelease(fill_color);
+        [glow setHidden:!lit];
+        if (lit) {
+            [glow setFrame:rect];
+            CGColorRef stops[3];
+            const double alphas[3] = {0.55 * mix, 0.28 * mix, 0};
+            for (int k = 0; k < 3; k++) {
+                const CGFloat c[4] = {(CGFloat)look->lit_toward[0], (CGFloat)look->lit_toward[1], (CGFloat)look->lit_toward[2], (CGFloat)alphas[k]};
+                stops[k] = CGColorCreate(srgb, c);
+            }
+            [glow setColors:@[(__bridge id)stops[0], (__bridge id)stops[1], (__bridge id)stops[2]]];
+            for (int k = 0; k < 3; k++) CGColorRelease(stops[k]);
+        }
         [layer setOpacity:coming ? (float)fmin(fmax(a.alpha, 0), 1) : 1];
     }
     CAShapeLayer *union_layer = (CAShapeLayer *)pool[0];
@@ -955,7 +1040,10 @@ void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass
         }
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
-        const NSRect content = [[window contentView] frame];
+        /* All of the window: in full screen SDL's view stops short of its top. Square there. */
+        const NSRect content = [[[window contentView] superview] bounds];
+        const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+        const double radius = full ? 0 : g->radius;
         BOOL moved = NO;
         for (int k = 0; k < window_glass_parts; k++) {
             if (!NSEqualRects([parts[k] frame], content)) {
@@ -979,12 +1067,12 @@ void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass
 
         /* The bevel's mask, drawn again only when its key changes; the key kept on the frost's mask. */
         const double scale = [window backingScaleFactor] > 0 ? [window backingScaleFactor] : 2;
-        NSString *key = [NSString stringWithFormat:@"%.2f/%.2f/%.2f/%.2f", g->radius, g->clear, g->feather, scale];
+        NSString *key = [NSString stringWithFormat:@"%.2f/%.2f/%.2f/%.2f", radius, g->clear, g->feather, scale];
         CALayer *over_layer = [parts[window_glass_over] layer];
-        double edge = ceil(g->clear + g->feather + g->radius);
+        double edge = ceil(g->clear + g->feather + radius);
         CGImageRef bevel = NULL;
         if (over_layer != nil && ![[[over_layer mask] valueForKey:@"fizzyBevel"] isEqual:key]) {
-            bevel = bevelImage(g->radius, g->clear, g->feather, scale, &edge);
+            bevel = bevelImage(radius, g->clear, g->feather, scale, &edge);
         }
         if (over_layer != nil) {
             windowFeatherMask(over_layer, bevel, edge, scale);
@@ -1017,8 +1105,8 @@ void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass
             NSView *v = layers[k];
             [v setHidden:alphas[k] <= 0.01];
             [v setAlphaValue:(CGFloat)alphas[k]];
-            if (![v respondsToSelector:get_radius] || ((CGFloat (*)(id, SEL))objc_msgSend)(v, get_radius) != (CGFloat)g->radius)
-                ((void (*)(id, SEL, CGFloat))objc_msgSend)(v, set_radius, (CGFloat)g->radius);
+            if (![v respondsToSelector:get_radius] || ((CGFloat (*)(id, SEL))objc_msgSend)(v, get_radius) != (CGFloat)radius)
+                ((void (*)(id, SEL, CGFloat))objc_msgSend)(v, set_radius, (CGFloat)radius);
             if ([[v valueForKey:@"style"] longValue] != styles[k]) [v setValue:@(styles[k]) forKey:@"style"];
             if (![v respondsToSelector:get_variant] || ((long (*)(id, SEL))objc_msgSend)(v, get_variant) != variants[k])
                 carryGlassVariant(v, variants[k]);

@@ -1014,6 +1014,11 @@ pub fn viewportCovers(_: *SDLBackend, vp: *const Viewport) bool {
     return platform.window.windowCovers(vp.window);
 }
 
+/// Whether `vp`'s window is on its way into a fullscreen Space (`platform.window.windowEnteringSpace`).
+pub fn viewportEnteringSpace(_: *SDLBackend, vp: *const Viewport) bool {
+    return platform.window.windowEnteringSpace(vp.window);
+}
+
 /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`
 /// (`heldPoint`): its float gone to its ghost, a view carried out of it aimed at the places under it.
 pub fn viewportSeeThrough(_: *SDLBackend, vp: *Viewport, on: bool) void {

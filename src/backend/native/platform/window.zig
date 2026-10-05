@@ -140,22 +140,30 @@ pub fn windowMaximized(window: *c.SDL_Window) bool {
     return flags & c.SDL_WINDOW_FULLSCREEN != 0;
 }
 
-/// Whether `win` covers the desktop, or will once the transition it is in ends (`windowCovers`).
+/// Whether `win` covers the desktop (`windowCovers`).
 pub fn coversDesktop(win: *dvui.Window) bool {
     return windowCovers(win.backend.impl.window);
 }
 
-/// Whether `window` covers the desktop, or will once the transition it is in ends: maximized
-/// (`windowMaximized`), and not on its way out of a fullscreen Space — the desktop comes back
-/// behind it as it goes, and a window that lets the desktop through fades to it with the
-/// transition (`Editor.easeWindowOpacity`), not after.
+/// Whether `window` covers the desktop: maximized (`windowMaximized`), from the moment it sets out
+/// for a fullscreen Space and through the whole of its way back out of one. AppKit animates a
+/// window into and out of a Space as pictures of it, not the window: one fading to see-through on
+/// the way out was two see-through pictures, a double window, and the window itself, already
+/// see-through, popped in at the end (the user).
 pub fn windowCovers(window: *c.SDL_Window) bool {
-    if (builtin.os.tag == .macos) {
-        const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
-        if (raw_ptr != null and fizzy_macos_window_space_transition_active(raw_ptr) != 0 and
-            fizzy_macos_window_space_entering(raw_ptr) == 0) return false;
-    }
-    return windowMaximized(window);
+    return windowMaximized(window) or windowEnteringSpace(window);
+}
+
+/// Whether `window` is on its way into a fullscreen Space: it goes opaque at once
+/// (`Editor.easeWindowOpacity`), so the pictures AppKit animates it as are opaque too.
+pub fn windowEnteringSpace(window: *c.SDL_Window) bool {
+    if (builtin.os.tag != .macos) return false;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    return fizzy_macos_window_space_transition_active(raw_ptr) != 0 and fizzy_macos_window_space_entering(raw_ptr) != 0;
+}
+
+pub fn enteringSpace(win: *dvui.Window) bool {
+    return windowEnteringSpace(win.backend.impl.window);
 }
 
 /// True while the macOS window chrome (traffic lights / titlebar area) is hidden, i.e. while
