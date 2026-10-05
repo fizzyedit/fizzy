@@ -328,6 +328,17 @@ void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, d
                                 }];
         [effect setMaskImage:mask];
         [effect displayIfNeeded];
+        /* And the picture, SDL's view: what is carried fills the window only to its shape, but a
+         * glass's frost writes the rect it reads, a little past the shape — over the app, in the main
+         * window, that is the app again; here, the blur of the window's own base, a square round the
+         * orb. The window is the shape, all of it. */
+        NSView *content = [window contentView];
+        if (content != nil) {
+            [content setWantsLayer:YES];
+            CALayer *layer = [content layer];
+            [layer setCornerRadius:r];
+            [layer setMasksToBounds:YES];
+        }
         [window invalidateShadow];
     }
 }
