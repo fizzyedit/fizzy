@@ -67,6 +67,9 @@ const Out = struct {
     title_len: u8 = 0,
     /// The carried glass it is growing out of, landing (`growFrame`).
     grow: ?Grow = null,
+    /// Its base's opacity, eased between windowed and maximized as the main window's is
+    /// (`Editor.easeWindowOpacity`); below 0 before its first frame.
+    opacity: f32 = -1,
 };
 
 const Grow = struct {
@@ -496,8 +499,11 @@ fn windowFrame(state: *State, o: *Out) void {
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
-    // In a fullscreen Space there is no desktop behind it: opaque, as the main window goes there.
-    backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, material and !viewports.fullScreen(o.viewport));
+    // Zoomed or full screen there is no desktop behind it: opaque, eased there and back as the main
+    // window's base is — opaque through the whole of the way out of a fullscreen Space. Where it has
+    // no material it is opaque throughout.
+    Editor.easeWindowOpacity(&o.opacity, viewports.maximized(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
+    backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
@@ -525,7 +531,7 @@ fn windowFrame(state: *State, o: *Out) void {
 /// content does — all of its window where the OS frames it (`viewports.os_frame`), drawn as the main
 /// window is; elsewhere behind its glass, inside the clear margin its shadow is drawn in, in the
 /// glass's own corners, for the glass to read.
-fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, material: bool) void {
+fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, opacity: f32) void {
     const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
     const bounds = window.insetAll((reach() + margin) * dvui.windowNaturalScale());
     const cw = dvui.currentWindow();
@@ -537,7 +543,7 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, material: boo
     defer dvui.alphaSet(prev_alpha);
     const theme = dvui.themeGet();
     const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
-    bounds.fill(corners, .{ .color = .{ .color = base(material) } });
+    bounds.fill(corners, .{ .color = .{ .color = Editor.windowBase(opacity) } });
 }
 
 /// The main window's base (`Editor.windowBase`) at the window's opacity where it has a material,

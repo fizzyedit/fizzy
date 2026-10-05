@@ -173,11 +173,11 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportSeeThrough(vp, on);
     }
 
-    /// Whether `vp`'s window is in a fullscreen Space of its own, or on its way into one (macOS):
-    /// nothing of the desktop behind it to show through.
-    pub fn fullScreen(vp: *const Viewport) bool {
+    /// Whether `vp`'s window is maximized — zoomed, or in a fullscreen Space of its own — as the
+    /// main window's is asked: nothing of the desktop behind it shows.
+    pub fn maximized(vp: *const Viewport) bool {
         if (comptime !supported) return false;
-        return dvui.currentWindow().backend.impl.viewportFullScreen(vp);
+        return dvui.currentWindow().backend.impl.viewportMaximized(vp);
     }
 
     /// `vp`'s window `alpha` opaque, all of it — its material too.

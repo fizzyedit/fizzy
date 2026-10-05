@@ -361,13 +361,6 @@ pub fn osOwnsFrame(window: *c.SDL_Window) bool {
     return fizzy_macos_window_in_fullscreen_space(cocoa) != 0 or fizzy_macos_window_transition_sync_active(cocoa) != 0;
 }
 
-/// Whether a watched window (`watch`) is in a fullscreen Space of its own, or on its way into one.
-pub fn fullScreen(window: *c.SDL_Window) bool {
-    if (comptime builtin.os.tag != .macos) return false;
-    const cocoa = cocoaWindowOf(window) orelse return false;
-    return fizzy_macos_window_titlebar_strip_collapsed(cocoa) != 0;
-}
-
 /// Called at the end of AppInit: allows the monitor's pump timer to start
 /// driving dvui frames during window animations.
 pub fn launchComplete() void {

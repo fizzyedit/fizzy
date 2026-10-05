@@ -881,10 +881,10 @@ pub fn windowCornerRadius(_: *SDLBackend) f32 {
     return @floatCast(fizzy_macos_window_corner_radius());
 }
 
-/// Whether `vp`'s window is in a fullscreen Space of its own (macOS), or on its way into one.
-pub fn viewportFullScreen(_: *SDLBackend, vp: *const Viewport) bool {
-    if (comptime builtin.os.tag != .macos) return false;
-    return platform.macos_monitor.fullScreen(vp.window);
+/// Whether `vp`'s window is maximized — zoomed, or in a fullscreen Space of its own — as the main
+/// window's is asked (`platform.window.windowMaximized`).
+pub fn viewportMaximized(_: *SDLBackend, vp: *const Viewport) bool {
+    return platform.window.windowMaximized(vp.window);
 }
 
 /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`

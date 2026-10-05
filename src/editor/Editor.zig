@@ -3480,6 +3480,24 @@ pub fn flushSettings(editor: *Editor) void {
 const handle_size = 10;
 const handle_dist = 60;
 
+/// Ease a window's background (`anim`, `windowBase`'s opacity; below 0 before its first frame)
+/// between translucent while windowed (`windowed`) and fully opaque while `maximized` — zoomed or
+/// full screen, through the whole of the way out of a fullscreen Space — so the vibrancy fades in
+/// and out across those transitions rather than snapping. The main window's and every float's own
+/// window's (`Popout`), alike.
+pub fn easeWindowOpacity(anim: *f32, maximized: bool, windowed: f32) void {
+    const target: f32 = if (maximized) 1.0 else windowed;
+    if (anim.* < 0) {
+        anim.* = target;
+    } else if (anim.* != target) {
+        const dt = dvui.secondsSinceLastFrame();
+        const t = std.math.clamp(dt * 6.0, 0.0, 1.0);
+        anim.* += (target - anim.*) * t;
+        if (@abs(target - anim.*) < 0.004) anim.* = target;
+        dvui.refresh(null, @src(), null);
+    }
+}
+
 /// A window's base at `opacity`: the theme's content fill over the OS's material where the window
 /// has one (macOS, Windows), lightened as it goes see-through so the material behind reads as the
 /// same tone; opaque where there is none. Every window fizzy draws stands on it — the main window,
@@ -3541,22 +3559,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
-    // Ease the window background between translucent (windowed) and fully opaque
-    // (maximized/fullscreen) so the vibrancy fades in/out across fullscreen
-    // transitions rather than snapping. The draw uses `window_opacity_anim`.
-    {
-        const opaque_target: f32 = 1.0;
-        const target: f32 = if (fizzy.backend.isMaximized(dvui.currentWindow())) opaque_target else editor.window_opacity;
-        if (editor.window_opacity_anim < 0) {
-            editor.window_opacity_anim = target;
-        } else if (editor.window_opacity_anim != target) {
-            const dt = dvui.secondsSinceLastFrame();
-            const t = std.math.clamp(dt * 6.0, 0.0, 1.0);
-            editor.window_opacity_anim += (target - editor.window_opacity_anim) * t;
-            if (@abs(target - editor.window_opacity_anim) < 0.004) editor.window_opacity_anim = target;
-            dvui.refresh(null, @src(), null);
-        }
-    }
+    // The draw uses `window_opacity_anim`.
+    easeWindowOpacity(&editor.window_opacity_anim, fizzy.backend.isMaximized(dvui.currentWindow()), editor.window_opacity);
 
     // Drain any "Save and Close" requests whose async save has settled.
     editor.tickPendingSaveCloses();

@@ -70,7 +70,13 @@ pub fn show(win: *dvui.Window, maximized: bool) void {
 }
 
 pub fn isMaximized(win: *dvui.Window) bool {
-    const window = win.backend.impl.window;
+    return windowMaximized(win.backend.impl.window);
+}
+
+/// Whether `window` — the main window or a float's own — is maximized: zoomed, full screen, or in
+/// a fullscreen Space (on macOS through the whole of its way out of one). Nothing of the desktop
+/// behind it shows, and fizzy draws it opaque (`Editor.easeWindowOpacity`).
+pub fn windowMaximized(window: *c.SDL_Window) bool {
     const flags = c.SDL_GetWindowFlags(window);
     if (flags & c.SDL_WINDOW_MAXIMIZED != 0) return true;
     if (builtin.os.tag == .macos) {
@@ -82,8 +88,8 @@ pub fn isMaximized(win: *dvui.Window) bool {
         if (raw_ptr != null) {
             if (fizzy_macos_window_in_fullscreen_space(raw_ptr) != 0) return true;
             if (fizzy_macos_window_is_zoomed(raw_ptr) != 0) return true;
+            if (fizzy_macos_window_chrome_hidden(raw_ptr) != 0) return true;
         }
-        if (isFullscreenChromeHidden(win)) return true;
         return false;
     }
     return flags & c.SDL_WINDOW_FULLSCREEN != 0;
