@@ -229,8 +229,10 @@ platform, the in-app glass behind it all.
 
 **The native way along the slider (built for the drag's glass in #227, measured).**** Liquid Glass
 has no blur to turn, only variants, so the way is a blend:
-- the clear lens (variant 11) crossfades into frost (Clear), then into heavier frost (Regular);
-- two layers of the same pieces do the crossfading, and stay one outline while they do;
+- the clear lens (variant 11) is drawn whole, and frost (Clear) comes in over it late in the
+  slider, faded out toward each piece's edge by a radial mask, so the rim stays the clear lens
+  with its bright light and only the middle frosts, as the app's own glass does (the user's ask);
+- two layers of the same pieces do it, and stay one outline while they do;
 - the window's colour is under the glass, as native shape layers beneath it with necks where
   pieces run together, so the glass bends and lights it and keeps its shine; drawn over the glass,
   it muted the shine all the way up (the user);
@@ -248,12 +250,7 @@ handling and accessibility. That is the native form of a context menu: right-cli
 fizzy draws itself, in an OS window on the native material, is the other way, kept for menus
 `NSMenu` cannot express.
 
-**Per platform**, as close to the glass as each can get:
-
-| | macOS 26 | macOS before 26 | Windows 11 | Windows 10 | Linux |
-| --- | --- | --- | --- | --- | --- |
-| native glass | Liquid Glass blend + fill | vibrancy + fill | Acrylic / Mica + fill | fill (opaque) | app glass over a translucent window, where composited |
-| in-app glass | shader | shader | shader | shader | shader |
+**Per platform**, in each platform's own style: see "The materials library" below.
 
 - **The main window takes the same material** where the OS has it: an `NSGlassEffectView` pair
   behind SDL's view in place of vibrancy, the fill over it per the slider. Float windows, the carry
@@ -267,6 +264,134 @@ fizzy draws itself, in an OS window on the native material, is the other way, ke
 - **Capabilities, not platform names.** A backend declares what it can (`fizzy_ext`): `liquid_glass`,
   `lens`, `merge`, `carry_windows`, which materials it offers. The app picks the best one offered
   and falls back without breaking anything.
+
+## The materials library
+
+The user's brief (2026-10-05): a backend library that matches this look across operating systems
+*in their native look* — "Windows has some glass, but it's not the same as macOS" — kept small
+enough to maintain while each platform is supported on its own terms. Three studies (Windows,
+Linux, the in-app glass against Apple's) shaped what follows; their findings are summarised per
+platform below, with what to build and what to skip.
+
+### One vocabulary
+
+- **Inputs:** a surface's **role** — `window` (the main window, a float's window), `transient`
+  (menus, popovers, tooltips), `carry` (the dragged bubble), `drop` (drop zones), `scrim` (dimming
+  under a modal) — the **slider** `t` (0 clear … 1 opaque), and the **policy** each platform
+  probes: transparency allowed (macOS Reduce transparency, Windows Transparency effects / energy
+  saver / high contrast, Linux portal `contrast`), reduced motion.
+- **Output:** each platform's **realization** of that role at that point: the OS material behind
+  the window (or none), the window colour's opacity, whether the OS draws glass shapes itself (the
+  overlay), and otherwise the in-app glass's parameters.
+- **One pure module, `core/gfx/glass_look.zig`,** unit-tested: the slider's breakpoints, the native
+  mapping (today `Popout.glassLook`), the in-app mapping (`inAppLook`), and role adjustments — a
+  surface carrying text keeps a minimum of frost, so a dialog over a clear lens still reads.
+  Policy off means `t` = 1.
+- **Capabilities, not platform names:** a backend declares what it can (`liquid_glass`, `lens`,
+  `merge_overlay`, `window_backdrop`, `blur_region`, `carry_windows`); the app picks the best one
+  offered and falls back without breaking.
+
+### Each platform's realization
+
+**macOS 26 — Liquid Glass (built for the drag in #227).**
+- Every role on Liquid Glass: the lens crossfading into frost, the window colour under the glass.
+- The drag's bubble and drop zones merge in the overlay.
+- Float windows and the main window take a glass pair behind SDL's view.
+- Context menus are `NSMenu`, which is Liquid Glass already.
+- Before macOS 26: vibrancy plus the colour, no merging, the drag in the app's glass.
+
+**Windows 11 (22H2+) — DWM materials, Terminal-style.** Windows has no lens and no merging, and
+Microsoft has said it will not get a Liquid Glass-style change.
+- **Native vocabulary:** Mica for long-lived windows, Mica Alt with tabbed title bars, Acrylic
+  only for transient surfaces (Microsoft: "don't put desktop acrylic on large background
+  surfaces"), Smoke under modals.
+- **The slider along DWM's backdrop types** (`DWMWA_SYSTEMBACKDROP_TYPE`), the way Windows
+  Terminal maps its opacity setting:
+  - low end: no backdrop, the desktop sharp through the window's alpha, the colour rising;
+  - middle: Acrylic (`TRANSIENTWINDOW`) under the colour;
+  - top and default: Mica (`MAINWINDOW`) under the colour, which is Windows' native opaque window
+    and its inactive-window cue.
+  There is a visible step where the backdrop type changes; only Windows.UI.Composition could
+  remove it.
+- **Roles:**
+  - window and float: as above;
+  - float windows inactive while the main window has focus are shown solid by DWM, so Fizzy's
+    windows act as one activation group (`WM_NCACTIVATE(TRUE)` to the floats, as PowerToys does);
+  - transient: Acrylic (in-app acrylic-styled glass inside a window, a DWM Acrylic window
+    outside it);
+  - carry: a carry window with Acrylic and DWM's round corners;
+  - drop: the in-app glass styled as acrylic (blur, tint, noise, 8 px corners, no merging);
+  - scrim: Smoke, and dialogs as opaque 8 px cards.
+- **Policy probe:** `EnableTransparency`, `SPI_GETHIGHCONTRAST`, power saving status, refreshed on
+  `WM_SETTINGCHANGE` and `WM_POWERBROADCAST`. DWM goes solid on its own under them, but Fizzy's
+  own alpha and glass do not, so Fizzy clamps `t` itself.
+- **About 150 lines** in `win32_titlebar.zig`. Today's main window uses Acrylic for its
+  background, against Microsoft's guidance; it moves to Mica at the top of the slider.
+- **Phase 2, only with a go-ahead:** per-shape glass over the desktop and a continuous blur
+  through Windows.UI.Composition (`SpriteVisual`s with a backdrop brush and geometric clips, on a
+  non-topmost target under SDL's DirectComposition swapchain). Roughly 1,000 lines of hand-written
+  WinRT interop, an untested layer rule, and a one-frame skew against SDL's presents.
+- **Skip:** the undocumented `SetWindowCompositionAttribute`, the Windows App SDK, the 21H2 Mica
+  hack, OS blur on Windows 10 (alpha only there, or opaque), refraction and merging.
+
+**Linux — the compositor's blur, where it offers it.**
+- **The protocol:** `ext-background-effect-v1`, in KDE Plasma 6.7+, GNOME 51 (Mutter), Hyprland
+  0.56+, niri 26.04+ and COSMIC. Plasma 6.6 and older (Kubuntu 26.04 LTS, to 2029) use KDE's own
+  `org_kde_kwin_blur`.
+- **Blur only:** no tint, no strength — strength is the user's compositor setting — so along the
+  slider "more blurred" becomes "more tinted":
+  - an empty region at the top, so the compositor does no work (and Hyprland's default blur of
+    translucent windows is cancelled);
+  - the window's rounded rect blurred below that, the colour's opacity following `t`.
+- **Attached by Fizzy, no SDL patch,** in about 200–250 lines:
+  - borrow SDL's own libwayland (`dlopen` with `RTLD_NOLOAD`) and its `wl_display`;
+  - bind the protocol on a private event queue;
+  - set the region in the commit SDL's Vulkan present makes;
+  - check the capability bit's value (wayland-protocols 1.45 declared it wrong).
+- **Where it cannot:** Sway, labwc and GNOME 50 and older have no blur, and the slider clamps to
+  opaque. On X11, check `_NET_WM_CM_S0`: with no compositor the window is opaque and has no shadow
+  margins.
+- **Bubbles and drop zones are always the in-app glass:** there are no overlay windows on
+  Wayland, and nothing on Linux lets an app refract the desktop.
+- **Policy:** the XDG settings portal's `reduced-motion` and `contrast` (through libdbus, as SDL
+  reads the colour scheme). There is no reduce-transparency key, so high contrast stands in.
+- **Skip:** KDE's retired contrast protocol, X11 blur atoms (KWin X11 ends early 2027), and
+  per-compositor tuning.
+
+**Web — the in-app glass,** with `prefers-reduced-motion` and `prefers-reduced-transparency`.
+
+### The in-app glass, tuned to Apple's
+
+The app's glass stays, and is the form wherever no native glass exists. Measured against Apple's
+lens, it differs mostly in one place: **Apple's lens pulls the backdrop inward from a band near the
+rim** (about 29% of the radius), magnifying it and folding it into a mirrored, darker band just
+inside the edge, with the middle sharp and unblurred. The app's glass pulls from outside the edge
+instead (`liquid_glass.zig`: shrinking, never folding — an inward pull was once tried and rejected
+for its mirror line, which is exactly Apple's look).
+
+The work:
+- **Shader:** an inward bevel displacement, a band shade, a brighter rim line with a slight
+  colour fringe, and signed bevel shading that survives a full tint. That is four copies changed
+  together: GLSL (the web compiles it too), Metal, HLSL and the CPU `sample`. It fits the uniform
+  slots already there.
+- **Cheaper:** an inward pull needs almost no capture margin (today about 2.2× a pane's pixels),
+  and a clear lens can skip the blur pyramid entirely (about five render-target switches per pane
+  today).
+- **One slider:** the in-app glass reads `glass_look.inAppLook(t)` on the same breakpoints as the
+  native glass. The separate dialog glass settings become optional advanced overrides; saved
+  settings still load, since unknown keys are ignored.
+- **Defaults move:** light and dark themes default to different slider values, so each starts at a
+  different point on the trip.
+
+### Keeping it small
+
+- **One file per platform's realization, under about 300 lines each,** behind one interface:
+  `apply(window, role, look)`, `probePolicy()`, `capabilities()`. The pure mapping and the role
+  tables are unit-tested.
+- **No per-compositor or per-build tuning.** Platforms are told apart by capabilities. Nothing
+  needs an SDL patch.
+- **Anything that grows past that** — Windows composition, X11 blur — is a separate phase with its
+  own go-ahead.
 
 ## Screen-edge tiling for a carried view
 
@@ -300,9 +425,12 @@ coming back into a window. So fizzy tiles it itself, the way the OS does:
    --check` in CI.
 4. **`WindowChrome`** for the main window, then floats, carry and overlay: one hit test (std-only,
    unit-tested first), one Win32 subclass, no file-level state; materials and native layers on it.
-5. **One material:** `glassLook` into `core`, the in-app glass shader's blur, refraction and tint
-   read from the same slider, then the native form for float windows, the main window, dialogs and
-   popovers in OS windows, and `NSMenu` for context menus on macOS.
+5. **The materials library** (above), in this order:
+   - `core/gfx/glass_look.zig` with the native and in-app mappings;
+   - the in-app glass tuned to Apple's (the shader change), on the slider;
+   - macOS: float windows and the main window on Liquid Glass, `NSMenu` for context menus;
+   - Windows: the DWM mapping, roles and policy probe;
+   - Linux: the blur region and the portal.
 6. **Native layers as the backend's interface,** from the overlay: the drag's glass, then every
    native-form surface.
 7. **The other platforms' path:** where native glass can't merge, the bubble is the app's glass over
