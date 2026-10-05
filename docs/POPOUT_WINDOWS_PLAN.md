@@ -208,6 +208,15 @@ One loop that wakes on any window's events. Coordinate with the frame-drop and r
 flight and with `docs/MACOS_LIVE_RESIZE.md` (SDL drawing each live-resize step from
 `displayLayer:`): a popped-out window being resized must not stall the main window's frames.
 
+**Every window waits for the display on macOS** (`GpuRenderer.claimViewport`). The first cut
+presented viewports without display sync, as Dear ImGui's backends do so that a second
+`SwapBuffers` never adds a second vsync wait. On macOS, with a ProMotion display, it did the
+opposite: the viewport's pictures reached the window server at any moment, and the main window's
+`WaitAndAcquireGPUSwapchainTexture` waited up to 20 ms for its next drawable. With a float window
+up, 30–95 frames in every 2 s took 12–13 ms, against 0–8 with both synced, measured in the user's
+own session. Synced, the wait moves into the viewport's acquire and the frame is paced once.
+Windows and X11 keep IMMEDIATE/MAILBOX until measured there.
+
 ## Persistence
 
 `SavedRegion.Floating` (`src/backend/layout_file.zig`) gains
