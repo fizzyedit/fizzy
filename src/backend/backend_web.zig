@@ -155,6 +155,9 @@ pub const viewports = struct {
     }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
     pub fn carryLens(_: *Viewport, _: bool) void {}
+    pub fn buttonsWidth(_: *Viewport) f32 {
+        return 0;
+    }
     pub fn windowRadius() f32 {
         return 0;
     }

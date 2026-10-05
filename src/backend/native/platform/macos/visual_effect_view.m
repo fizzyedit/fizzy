@@ -341,6 +341,23 @@ void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long materi
 }
 
 /*
+ * Points from a titled window's left edge past its traffic lights: the zoom button's right edge,
+ * and as much again as the close button stands in from the window's edge. 0 with none showing.
+ */
+double fizzy_macos_window_buttons_width(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return 0;
+        NSButton *close = [window standardWindowButton:NSWindowCloseButton];
+        NSButton *zoom = [window standardWindowButton:NSWindowZoomButton];
+        if (close == nil || zoom == nil || [zoom isHidden] || [zoom superview] == nil) return 0;
+        const NSRect c = [close convertRect:[close bounds] toView:nil];
+        const NSRect z = [zoom convertRect:[zoom bounds] toView:nil];
+        return NSMaxX(z) + NSMinX(c);
+    }
+}
+
+/*
  * A titled window's corner radius, points — what the carried glass grows into as a float's window
  * opens out of it. AppKit says it nowhere; measured from the windows' own pictures: 16 points from
  * macOS 26, 10 before.

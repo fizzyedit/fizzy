@@ -110,6 +110,9 @@ pub const Viewport = struct {
     /// Its OS window has the OS's own buttons for close, minimize and zoom (macOS's traffic lights):
     /// the float's header draws no close button of its own.
     os_buttons: bool = false,
+    /// Natural units from its window's left edge past the OS's own buttons (`os_buttons`), this
+    /// frame (`Popout`): the part of its header that is theirs, not the float's to be moved by.
+    buttons_w: f32 = 0,
     /// The OS asked to close its window (its close button, ⌘W): it closes as from its header.
     close_asked: bool = false,
     /// Physical: from where the float is drawn in its band to where its window is over the main
@@ -660,8 +663,11 @@ fn drawOne(l: *Layout, i: usize) bool {
     core.anchor.markRect(win_id, header, true, "float-header:{s}", .{first.name});
     if (header_close) |r| core.anchor.markRect(win_id, r, true, "float-close:{s}", .{first.name});
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
-    // the drop put it — nor while it is out of the way.
-    win.dragAreaSet(if (landing or aside > 0) .{} else header);
+    // the drop put it — nor while it is out of the way. Not over its OS window's own buttons
+    // either, which are theirs: the move cursor showed over the traffic lights.
+    const buttons_w = if (first.viewport) |vp| (if (vp.os_buttons) vp.buttons_w * scale else 0) else 0;
+    const drag_area: dvui.Rect.Physical = .{ .x = header.x + buttons_w, .y = header.y, .w = @max(0, header.w - buttons_w), .h = header.h };
+    win.dragAreaSet(if (landing or aside > 0) .{} else drag_area);
 
     if (!fresh) {
         // The view fades with the window round it: in over the photograph it grew out of as it

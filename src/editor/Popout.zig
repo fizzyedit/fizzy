@@ -521,6 +521,9 @@ fn windowFrame(state: *State, o: *Out) void {
         @memcpy(o.title_buf[0..title.len], title);
         o.title_len = @intCast(title.len);
     }
+    // How far in from its window's left edge the OS's own buttons reach, for its header to leave
+    // them be (`Floats.Viewport.buttons_w`).
+    f.viewport.?.buttons_w = viewports.buttonsWidth(o.viewport);
     // Where its window lies over the main window's frame, from where it is drawn in its band, for a
     // drag to read it there (`Floats.Viewport.main_delta`).
     {
