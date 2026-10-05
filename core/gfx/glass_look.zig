@@ -65,6 +65,50 @@ pub fn native(t: f32) Native {
     return .{ .under = lens_material, .over = frost_material, .over_share = w.frost, .under_fill = w.tint, .glass = w.shine, .top_fill = 1 - w.shine };
 }
 
+/// A window of the OS's glass at `t` — the main window, a float's own. A window is read through,
+/// not looked at: past the bottom of the slider its body frosts early and then takes the plain
+/// blur behind the window (the vibrancy fizzy's windows wore before), so the layers in it stand
+/// apart from what is behind, while a band along its edge stays the clear lens, bending what is
+/// behind it. The body fades into that band over `window_feather` points, `window_rim` in from the
+/// edge — blur increasing inward on a curve, rather than stopping at a line.
+pub const Window = struct {
+    under: Material,
+    over: Material,
+    /// Glass frost over the lens, in the body.
+    frost: f32,
+    /// The plain blur over that, in the body.
+    blur: f32,
+    /// The window's colour under the glass: the edge's, and the body's through the frost.
+    under_fill: f32,
+    /// The window's colour over the blur, in the body — what the blur covers of `under_fill`.
+    body_fill: f32,
+    /// The glass itself, 1 until `shine_end`, 0 at the top.
+    glass: f32,
+};
+
+/// The clear band along a window's edge, points.
+pub const window_rim: f32 = 6;
+/// How far in from the band the body's frost and blur take to come in, points.
+pub const window_feather: f32 = 40;
+
+pub fn window(t: f32) Window {
+    const o = std.math.clamp(t, 0, 1);
+    const w = way(o);
+    // Colour comes in later than on a drop's glass, on a curve: about half at 0.7, opaque at
+    // `shine_end`.
+    const tint = std.math.pow(f32, std.math.clamp((o - tint_start) / (shine_end - tint_start), 0, 1), 2);
+    const blur = smoothstep(std.math.clamp((o - 0.25) / 0.55, 0, 1));
+    return .{
+        .under = lens_material,
+        .over = frost_material,
+        .frost = smoothstep(std.math.clamp((o - 0.05) / 0.35, 0, 1)),
+        .blur = blur,
+        .under_fill = tint,
+        .body_fill = tint * blur,
+        .glass = w.shine,
+    };
+}
+
 // ── The app's glass ─────────────────────────────────────────────────────────────────────────────
 
 /// The app's glass at `t`, as the glass program (`shaders/liquid_glass.glsl`) reads it. Shaped
@@ -177,6 +221,36 @@ test "the glass keeps its shine until near the top" {
 test "a surface carrying text keeps some frost over a clear lens, none once it is opaque" {
     try std.testing.expectApproxEqAbs(text_frost, forText(inApp(0)).frost, 1e-6);
     try std.testing.expectEqual(inApp(1).frost, forText(inApp(1)).frost);
+}
+
+test "a window is clear glass at the bottom, read through at 0.7, opaque by the top" {
+    const clear = window(0);
+    try std.testing.expectEqual(@as(f32, 0), clear.frost);
+    try std.testing.expectEqual(@as(f32, 0), clear.blur);
+    try std.testing.expectEqual(@as(f32, 0), clear.under_fill);
+    try std.testing.expectEqual(@as(f32, 1), clear.glass);
+    const read = window(0.7);
+    try std.testing.expectEqual(@as(f32, 1), read.frost);
+    try std.testing.expect(read.blur > 0.85 and read.blur < 1);
+    try std.testing.expect(read.under_fill > 0.4 and read.under_fill < 0.6);
+    const top = window(1);
+    try std.testing.expectEqual(@as(f32, 1), top.under_fill);
+    try std.testing.expectEqual(@as(f32, 1), top.body_fill);
+    try std.testing.expectEqual(@as(f32, 0), top.glass);
+}
+
+test "a window only gains frost, blur and colour along the way" {
+    var prev = window(0);
+    var i: usize = 1;
+    while (i <= 100) : (i += 1) {
+        const w = window(@as(f32, @floatFromInt(i)) / 100);
+        try std.testing.expect(w.frost >= prev.frost);
+        try std.testing.expect(w.blur >= prev.blur);
+        try std.testing.expect(w.under_fill >= prev.under_fill);
+        try std.testing.expect(w.body_fill >= prev.body_fill);
+        try std.testing.expect(w.glass <= prev.glass);
+        prev = w;
+    }
 }
 
 test "both forms share the way" {

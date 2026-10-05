@@ -74,8 +74,8 @@ const Out = struct {
     /// The carried glass it is growing out of, landing (`growFrame`).
     grow: ?Grow = null,
     /// Its base's opacity, eased between windowed and maximized as the main window's is
-    /// (`Editor.easeWindowOpacity`); below 0 before its first frame.
-    opacity: f32 = -1,
+    /// (`Editor.easeWindowOpacity`).
+    opacity: Editor.WindowOpacity = .{},
 };
 
 const Grow = struct {
@@ -792,14 +792,14 @@ fn windowFrame(state: *State, o: *Out) void {
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
-    // Zoomed or full screen there is no desktop behind it: opaque, eased there and back as the main
-    // window's base is — opaque through the whole of the way out of a fullscreen Space. Where it has
-    // no material it is opaque throughout.
-    Editor.easeWindowOpacity(&o.opacity, viewports.maximized(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
+    // Zoomed or full screen there is no desktop behind it: opaque, eased there and back with the
+    // OS's transitions as the main window's base is. Where it has no material it is opaque
+    // throughout.
+    Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
     // A window of Liquid Glass (macOS 26) stands on its glass, its colour under it on the one
     // slider, as the main window does (`Editor.windowGlassLook`): no base of its own in the frame.
-    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity)))
-        backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity);
+    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value)))
+        backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity.value);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so

@@ -38,6 +38,7 @@ pub const installTrackpadGestureMonitor = platform.gestures.installTrackpadGestu
 pub const takeTrackpadPinchRatio = platform.gestures.takeTrackpadPinchRatio;
 
 pub const isMaximized = platform.window.isMaximized;
+pub const coversDesktop = platform.window.coversDesktop;
 pub const isFullscreenChromeHidden = platform.window.isFullscreenChromeHidden;
 pub const setWindowStyle = platform.window.setStyle;
 pub const setTitlebarColor = platform.window.setBackground;
@@ -121,18 +122,24 @@ pub fn saveWindowGeometry(win: *dvui.Window) void {
 pub const macosLaunchComplete = platform.macos_monitor.launchComplete;
 
 /// A window's Liquid Glass this frame (`windowGlass`, `viewports.windowGlass`): what
-/// `core.glass_look.native` says at the window's opacity, and the window's colour under it.
+/// `core.glass_look.window` says at the window's opacity, and the window's colour in it.
 pub const WindowGlassLook = struct {
     under_variant: i32,
     under_style: i32,
     over_variant: i32,
     over_style: i32,
-    over_share: f32,
+    frost: f32,
+    blur: f32,
     glass: f32,
     fill: dvui.Color,
-    fill_opacity: f32,
-    /// Points.
+    /// The colour's opacity under the glass…
+    under_fill: f32,
+    /// …and over the body's blur.
+    body_fill: f32,
+    /// Points, each.
     radius: f32,
+    rim: f32,
+    feather: f32,
 
     fn native(self: WindowGlassLook) platform.window.WindowGlass {
         return .{
@@ -140,10 +147,14 @@ pub const WindowGlassLook = struct {
             .under_style = self.under_style,
             .over_variant = self.over_variant,
             .over_style = self.over_style,
-            .over_share = self.over_share,
+            .frost = self.frost,
+            .blur = self.blur,
             .glass = self.glass,
-            .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.fill_opacity },
+            .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.under_fill },
+            .body_fill = self.body_fill,
             .radius = self.radius,
+            .rim = self.rim,
+            .feather = self.feather,
         };
     }
 };
@@ -294,6 +305,13 @@ pub const viewports = struct {
     pub fn maximized(vp: *const Viewport) bool {
         if (comptime !supported) return false;
         return dvui.currentWindow().backend.impl.viewportMaximized(vp);
+    }
+
+    /// Whether `vp`'s window covers the desktop, or will once the transition it is in ends, as the
+    /// main window's is asked (`coversDesktop`).
+    pub fn coversDesktop(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportCovers(vp);
     }
 
     /// `vp`'s window `alpha` opaque, all of it — its material too.

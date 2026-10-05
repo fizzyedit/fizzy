@@ -68,6 +68,10 @@ pub fn isMaximized(_: *dvui.Window) bool {
     return true;
 }
 
+pub fn coversDesktop(_: *dvui.Window) bool {
+    return true;
+}
+
 pub fn setWindowStyle(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: a browser tab cannot take focus for itself, and the OAuth
@@ -153,6 +157,9 @@ pub const viewports = struct {
     pub fn maximized(_: *const Viewport) bool {
         return false;
     }
+    pub fn coversDesktop(_: *const Viewport) bool {
+        return false;
+    }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
     pub fn carryLens(_: *Viewport, _: bool) void {}
     pub fn windowGlass(_: *Viewport, _: WindowGlassLook) bool {
@@ -227,11 +234,15 @@ pub const WindowGlassLook = struct {
     under_style: i32,
     over_variant: i32,
     over_style: i32,
-    over_share: f32,
+    frost: f32,
+    blur: f32,
     glass: f32,
     fill: dvui.Color,
-    fill_opacity: f32,
+    under_fill: f32,
+    body_fill: f32,
     radius: f32,
+    rim: f32,
+    feather: f32,
 };
 pub fn windowGlass(_: *dvui.Window, _: WindowGlassLook) bool {
     return false;

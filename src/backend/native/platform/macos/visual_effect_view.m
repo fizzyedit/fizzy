@@ -682,9 +682,11 @@ void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *s
     }
 }
 
-/* A titled window's Liquid Glass (`fizzy_macos_window_liquid_glass`): the window's colour, the
- * lens over it, and frost over that. */
-static NSString *const window_glass_ids[3] = {@"fizzy.window.fill", @"fizzy.window.glass.under", @"fizzy.window.glass.over"};
+/* A titled window's Liquid Glass (`fizzy_macos_window_liquid_glass`), from the bottom: the
+ * window's colour, the lens over it, the body's frost over that, the plain blur behind the window
+ * over the frost, and the window's colour again over the blur. */
+enum { window_glass_fill, window_glass_under, window_glass_over, window_glass_blur, window_glass_body, window_glass_parts };
+static NSString *const window_glass_ids[window_glass_parts] = {@"fizzy.window.fill", @"fizzy.window.glass.under", @"fizzy.window.glass.over", @"fizzy.window.blur", @"fizzy.window.body"};
 
 static NSView *windowGlassPart(NSWindow *window, int k) {
     NSView *frame = [[window contentView] superview];
@@ -694,26 +696,72 @@ static NSView *windowGlassPart(NSWindow *window, int k) {
     return nil;
 }
 
+/* The plain blur behind a window of Liquid Glass, in its body: the vibrancy fizzy's windows wore
+ * before (`platform.window.ns_visual_effect_material`). Never in the way of a press. */
+@interface FizzyWindowBlurView : NSVisualEffectView
+@end
+
+@implementation FizzyWindowBlurView
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
+/*
+ * A window with a toolbar keeps it in full screen — a bar across the top of the Space, over the
+ * app — unless the window's delegate asks for it to hide with the menu bar. SDL's delegate passes
+ * on the options AppKit proposes; fizzy's answer, over it, adds the toolbar's hiding where AppKit
+ * allows that: in full screen, with the menu bar hiding by itself.
+ */
+static IMP g_sdl_full_screen_options = NULL;
+
+static NSApplicationPresentationOptions fizzy_full_screen_options(id self, SEL cmd, NSWindow *window, NSApplicationPresentationOptions proposed) {
+    typedef NSApplicationPresentationOptions (*OptionsFn)(id, SEL, NSWindow *, NSApplicationPresentationOptions);
+    NSApplicationPresentationOptions options = g_sdl_full_screen_options != NULL
+        ? ((OptionsFn)g_sdl_full_screen_options)(self, cmd, window, proposed)
+        : proposed;
+    if ([window toolbar] != nil && (options & NSApplicationPresentationFullScreen) != 0 &&
+        (options & NSApplicationPresentationAutoHideMenuBar) != 0)
+        options |= NSApplicationPresentationAutoHideToolbar;
+    return options;
+}
+
+/* Once per delegate class (idempotent): `window`'s toolbar hides with the menu bar in full screen. */
+static void windowAutoHidesToolbar(NSWindow *window) {
+    id delegate = [window delegate];
+    if (delegate == nil) return;
+    const SEL sel = @selector(window:willUseFullScreenPresentationOptions:);
+    Class cls = [delegate class];
+    if (class_getMethodImplementation(cls, sel) == (IMP)fizzy_full_screen_options) return;
+    Method existing = class_getInstanceMethod(cls, sel);
+    const char *types = existing != NULL ? method_getTypeEncoding(existing) : "Q@:@Q";
+    IMP was = class_replaceMethod(cls, sel, (IMP)fizzy_full_screen_options, types);
+    if (g_sdl_full_screen_options == NULL) g_sdl_full_screen_options = was;
+}
+
 /* Whether `nswindow` stands on Liquid Glass (`fizzy_macos_window_liquid_glass`). */
 int fizzy_macos_window_has_liquid_glass(void *nswindow) {
     NSWindow *window = (__bridge NSWindow *)nswindow;
-    return window != nil && windowGlassPart(window, 1) != nil;
+    return window != nil && windowGlassPart(window, window_glass_under) != nil;
 }
 
 /*
  * One of fizzy's titled windows — the main window, a float's — as a window of Liquid Glass (macOS
  * 26): beside SDL's view in the window's frame view, under it, the window's colour, the clear lens
- * over the colour, and frost over the lens, which `fizzy_macos_window_liquid_glass_look` sets each
- * frame from the one slider. The window clear but for them, and a compact toolbar's corners — what
- * macOS 26 rounds a window by is whether it has a toolbar: none, 16 points; compact, 20 (and a
- * 40-point title bar for 32); unified, 27 (and 66). Any vibrancy beside SDL's view (a float's) goes.
- * Once per window; 1 where it is (or was already) Liquid Glass, 0 where the OS has none.
+ * over the colour, and over the lens the body — frost, the plain blur behind the window, and the
+ * colour again — fading into a clear band along the edge, all of which
+ * `fizzy_macos_window_liquid_glass_look` sets each frame from the one slider. The window clear but
+ * for them, and a compact toolbar's corners — what macOS 26 rounds a window by is whether it has a
+ * toolbar: none, 16 points; compact, 20 (and a 40-point title bar for 32); unified, 27 (and 66).
+ * Any vibrancy beside SDL's view (a float's) goes. Once per window; 1 where it is (or was already)
+ * Liquid Glass, 0 where the OS has none.
  */
-int fizzy_macos_window_liquid_glass(void *nswindow) {
+int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil || !fizzy_macos_liquid_glass_available()) return 0;
-        if (windowGlassPart(window, 1) != nil) return 1;
+        if (windowGlassPart(window, window_glass_under) != nil) return 1;
         NSView *content = [window contentView];
         NSView *frame = [content superview];
         if (content == nil || frame == nil) return 0;
@@ -722,21 +770,37 @@ int fizzy_macos_window_liquid_glass(void *nswindow) {
         }
         [window setOpaque:NO];
         [window setBackgroundColor:[NSColor clearColor]];
-        FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
-        [fill setIdentifier:window_glass_ids[0]];
-        [fill setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-        [fill setWantsLayer:YES];
-        [frame addSubview:fill positioned:NSWindowBelow relativeTo:content];
-        for (int k = 1; k < 3; k++) {
-            NSView *glass = carryLiquidGlass([content frame]);
-            if (glass == nil) return 0;
-            [glass setIdentifier:window_glass_ids[k]];
-            if (k == 2) carryGlassVariant(glass, carry_glass_frost_variant);
-            [frame addSubview:glass positioned:NSWindowBelow relativeTo:content];
-        }
+        /* Each added directly under SDL's view, so over the one before. */
+        for (int k = 0; k < window_glass_parts; k++) {
+            NSView *part = nil;
+            if (k == window_glass_under || k == window_glass_over) {
+                part = carryLiquidGlass([content frame]);
+                if (part == nil) return 0;
+                if (k == window_glass_over) carryGlassVariant(part, carry_glass_frost_variant);
+            } else if (k == window_glass_blur) {
+                FizzyWindowBlurView *blur = [[FizzyWindowBlurView alloc] initWithFrame:[content frame]];
+                [blur setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
+                [blur setState:NSVisualEffectStateActive];
+                [blur setMaterial:(NSVisualEffectMaterial)blur_material];
+                [blur setHidden:YES];
+                part = blur;
 #if !__has_feature(objc_arc)
-        [fill release];
+                [blur autorelease];
 #endif
+            } else {
+                FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
+                part = fill;
+#if !__has_feature(objc_arc)
+                [fill autorelease];
+#endif
+            }
+            [part setIdentifier:window_glass_ids[k]];
+            [part setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            /* Its own layer, which keeps the feather's mask: one AppKit lends a view not asking
+             * for a layer (the glass, the blur) drops the mask set on it. */
+            [part setWantsLayer:YES];
+            [frame addSubview:part positioned:NSWindowBelow relativeTo:content];
+        }
         if ([window toolbar] == nil) {
             /* Added, a toolbar grows the window by its height to keep the content's area: kept
              * where it was instead, or a float's window — restored from its saved frame each
@@ -751,55 +815,142 @@ int fizzy_macos_window_liquid_glass(void *nswindow) {
 #endif
         }
         [window setTitlebarSeparatorStyle:NSTitlebarSeparatorStyleNone];
+        windowAutoHidesToolbar(window);
         return 1;
     }
 }
 
-/* A window's Liquid Glass this frame, as `platform.window.WindowGlass` lays it out: each layer's
- * variant and style, frost's share over the lens, how much glass there is, the window's colour
- * under it (opacity last), and the window's corner radius. */
+/* A window's Liquid Glass this frame, as `platform.window.WindowGlass` lays it out
+ * (`core.glass_look.Window`): each glass layer's variant and style; the body's frost and blur; how
+ * much glass there is; the window's colour with its opacity under the glass last, and its opacity
+ * over the body's blur; the window's corner radius, the clear band and the feather, in points. */
 typedef struct {
     long under_variant, under_style, over_variant, over_style;
-    double over_share, glass;
+    double frost, blur, glass;
     double fill[4];
-    double radius;
+    double body_fill, radius, rim, feather;
 } FizzyWindowGlass;
+
+/*
+ * The window's body fading into its clear band: alpha 0 `rim` points in from the edge, rising on a
+ * smoothstep to 1 `feather` points further in, its rounded corners following the window's (and
+ * tightening inward, as nested rounded rects do). A small image, nine-sliced — its middle pixel
+ * stretched to the window's size — so it is drawn again only when the radius, the band or the
+ * window's scale change, never as the window resizes. `edge` is each slice's side, points.
+ */
+static CGImageRef windowFeatherImage(double radius, double rim, double feather, double scale, double *edge) {
+    *edge = ceil(rim + feather + radius);
+    const double side = 2 * *edge + 1;
+    const size_t px = (size_t)ceil(side * scale);
+    CGContextRef ctx = CGBitmapContextCreate(NULL, px, px, 8, 0, NULL, (CGBitmapInfo)kCGImageAlphaOnly);
+    if (ctx == NULL) return NULL;
+    CGContextScaleCTM(ctx, (CGFloat)scale, (CGFloat)scale);
+    CGContextSetBlendMode(ctx, kCGBlendModeCopy);
+    const CGRect all = CGRectMake(0, 0, side, side);
+    const int steps = 32;
+    for (int i = 0; i <= steps; i++) {
+        const double t = (double)i / steps;
+        const double inset = rim + feather * t;
+        const double r = fmax(1, radius - inset * 0.5);
+        CGPathRef path = CGPathCreateWithRoundedRect(CGRectInset(all, inset, inset), r, r, NULL);
+        CGContextAddPath(ctx, path);
+        CGContextSetGrayFillColor(ctx, 0, t * t * (3 - 2 * t));
+        CGContextFillPath(ctx);
+        CGPathRelease(path);
+    }
+    CGImageRef image = CGBitmapContextCreateImage(ctx);
+    CGContextRelease(ctx);
+    return image;
+}
+
+/* `layer` masked by the feather (`windowFeatherImage`), the mask kept to its bounds. */
+static void windowFeatherMask(CALayer *layer, CGImageRef image, double edge, double scale) {
+    CALayer *mask = [layer mask];
+    if (image != NULL || mask == nil) {
+        if (mask == nil) {
+            mask = [CALayer layer];
+            [layer setMask:mask];
+        }
+        const CGFloat side = (CGFloat)(2 * edge + 1);
+        [mask setContents:(__bridge id)image];
+        [mask setContentsScale:(CGFloat)scale];
+        [mask setContentsGravity:kCAGravityResize];
+        [mask setContentsCenter:CGRectMake(edge / side, edge / side, 1 / side, 1 / side)];
+    }
+    if (!CGRectEqualToRect([mask frame], [layer bounds])) [mask setFrame:[layer bounds]];
+}
 
 /*
  * `nswindow`'s Liquid Glass this frame (`fizzy_macos_window_liquid_glass`): the window's colour
  * under the glass at its opacity — the glass bends and lights it, its shine kept — the lens whole,
- * frost over it at its share, and the glass going at the very top of the slider, the colour opaque
- * then. Its corners the window's.
+ * and the body over it — frost, the plain blur, the colour again — fading into the clear band along
+ * the edge; the glass going at the very top of the slider, the colour opaque then. Its corners the
+ * window's.
  */
 void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass *g) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil || g == NULL) return;
-        NSView *fill = windowGlassPart(window, 0);
-        NSView *under = windowGlassPart(window, 1);
-        NSView *over = windowGlassPart(window, 2);
-        if (fill == nil || under == nil || over == nil) return;
+        NSView *parts[window_glass_parts];
+        for (int k = 0; k < window_glass_parts; k++) {
+            parts[k] = windowGlassPart(window, k);
+            if (parts[k] == nil) return;
+        }
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        const CGFloat comps[4] = {(CGFloat)g->fill[0], (CGFloat)g->fill[1], (CGFloat)g->fill[2], (CGFloat)fmin(fmax(g->fill[3], 0), 1)};
-        CGColorRef color = CGColorCreate(srgb, comps);
-        [[fill layer] setBackgroundColor:color];
-        CGColorRelease(color);
+        const double fills[2] = {g->fill[3], g->body_fill};
+        NSView *colored[2] = {parts[window_glass_fill], parts[window_glass_body]};
+        for (int k = 0; k < 2; k++) {
+            const CGFloat comps[4] = {(CGFloat)g->fill[0], (CGFloat)g->fill[1], (CGFloat)g->fill[2], (CGFloat)fmin(fmax(fills[k], 0), 1)};
+            CGColorRef color = CGColorCreate(srgb, comps);
+            [[colored[k] layer] setBackgroundColor:color];
+            CGColorRelease(color);
+        }
         CGColorSpaceRelease(srgb);
+
+        /* The feather, drawn again only when its key changes; the key kept on the frost's mask. */
+        const double scale = [window backingScaleFactor] > 0 ? [window backingScaleFactor] : 2;
+        NSString *key = [NSString stringWithFormat:@"%.2f/%.2f/%.2f/%.2f", g->radius, g->rim, g->feather, scale];
+        CALayer *over_layer = [parts[window_glass_over] layer];
+        double edge = ceil(g->rim + g->feather + g->radius);
+        CGImageRef feather = NULL;
+        if (over_layer != nil && ![[[over_layer mask] valueForKey:@"fizzyFeather"] isEqual:key]) {
+            feather = windowFeatherImage(g->radius, g->rim, g->feather, scale, &edge);
+        }
+        if (over_layer != nil) {
+            windowFeatherMask(over_layer, feather, edge, scale);
+            [[over_layer mask] setValue:key forKey:@"fizzyFeather"];
+        }
+        windowFeatherMask([parts[window_glass_body] layer], feather, edge, scale);
+        if (feather != NULL) {
+            NSImage *mask = [[NSImage alloc] initWithCGImage:feather size:NSMakeSize(2 * edge + 1, 2 * edge + 1)];
+            [mask setCapInsets:NSEdgeInsetsMake(edge, edge, edge, edge)];
+            [mask setResizingMode:NSImageResizingModeStretch];
+            [(NSVisualEffectView *)parts[window_glass_blur] setMaskImage:mask];
+#if !__has_feature(objc_arc)
+            [mask release];
+#endif
+            CGImageRelease(feather);
+        }
+        const double blur = fmin(fmax(g->blur, 0), 1);
+        [parts[window_glass_blur] setHidden:blur <= 0.01];
+        [parts[window_glass_blur] setAlphaValue:(CGFloat)blur];
+
         const double glass = fmin(fmax(g->glass, 0), 1);
-        const double share = fmin(fmax(g->over_share, 0), 1);
-        const double alphas[2] = {glass, share * glass};
+        const double alphas[2] = {glass, fmin(fmax(g->frost, 0), 1) * glass};
         const long variants[2] = {g->under_variant, g->over_variant};
         const long styles[2] = {g->under_style, g->over_style};
-        NSView *layers[2] = {under, over};
+        NSView *layers[2] = {parts[window_glass_under], parts[window_glass_over]};
         const SEL set_radius = sel_registerName("setCornerRadius:");
+        const SEL get_radius = sel_registerName("cornerRadius");
         const SEL get_variant = sel_registerName("_variant");
         for (int k = 0; k < 2; k++) {
             NSView *v = layers[k];
             [v setHidden:alphas[k] <= 0.01];
             [v setAlphaValue:(CGFloat)alphas[k]];
-            ((void (*)(id, SEL, CGFloat))objc_msgSend)(v, set_radius, (CGFloat)g->radius);
+            if (![v respondsToSelector:get_radius] || ((CGFloat (*)(id, SEL))objc_msgSend)(v, get_radius) != (CGFloat)g->radius)
+                ((void (*)(id, SEL, CGFloat))objc_msgSend)(v, set_radius, (CGFloat)g->radius);
             if ([[v valueForKey:@"style"] longValue] != styles[k]) [v setValue:@(styles[k]) forKey:@"style"];
             if (![v respondsToSelector:get_variant] || ((long (*)(id, SEL))objc_msgSend)(v, get_variant) != variants[k])
                 carryGlassVariant(v, variants[k]);

@@ -22,31 +22,40 @@ pub const ns_visual_effect_material: c_long = 15;
 extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_transition_active(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_entering(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_titlebar_hit_test_install(cocoa_window: ?*anyopaque, interactive_at: *const fn (f64, f64) callconv(.c) bool) void;
-extern fn fizzy_macos_window_liquid_glass(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_liquid_glass(cocoa_window: ?*anyopaque, blur_material: c_long) c_int;
 extern fn fizzy_macos_window_has_liquid_glass(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_liquid_glass_look(cocoa_window: ?*anyopaque, look: *const WindowGlass) void;
 
 /// A window's Liquid Glass this frame (`liquidGlassLook`), as `fizzy_macos_window_liquid_glass_look`
-/// reads it: each layer's variant and style, frost's share over the lens, how much glass there is,
-/// the window's colour under it (0…1 each, its opacity last), the window's corner radius in points.
+/// reads it (`core.glass_look.Window`): each glass layer's variant and style; the body's frost over
+/// the lens and the plain blur over that; how much glass there is; the window's colour (0…1 each)
+/// with its opacity under the glass last, and its opacity over the body's blur; the window's corner
+/// radius, and the clear band along its edge and the feather into the body, in points.
 pub const WindowGlass = extern struct {
     under_variant: c_long,
     under_style: c_long,
     over_variant: c_long,
     over_style: c_long,
-    over_share: f64,
+    frost: f64,
+    blur: f64,
     glass: f64,
     fill: [4]f64,
+    body_fill: f64,
     radius: f64,
+    rim: f64,
+    feather: f64,
 };
 
 /// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — the
-/// window's colour under the clear lens and frost, a compact toolbar's corners — where the OS has
-/// it (macOS 26). Once per window. Whether it is.
+/// window's colour under the clear lens, a body of frost and the plain blur (the vibrancy it wore
+/// before, `ns_visual_effect_material`) fading into a clear band along its edge, a compact
+/// toolbar's corners — where the OS has it (macOS 26). Once per window. Whether it is.
 pub fn liquidGlass(raw_ptr: *anyopaque) bool {
     if (comptime builtin.os.tag != .macos) return false;
-    return fizzy_macos_window_liquid_glass(raw_ptr) != 0;
+    return fizzy_macos_window_liquid_glass(raw_ptr, ns_visual_effect_material) != 0;
 }
 
 /// `window`'s Liquid Glass this frame (`liquidGlass`). Whether it has any: false, and nothing set,
@@ -128,6 +137,24 @@ pub fn windowMaximized(window: *c.SDL_Window) bool {
         return false;
     }
     return flags & c.SDL_WINDOW_FULLSCREEN != 0;
+}
+
+/// Whether `win` covers the desktop, or will once the transition it is in ends (`windowCovers`).
+pub fn coversDesktop(win: *dvui.Window) bool {
+    return windowCovers(win.backend.impl.window);
+}
+
+/// Whether `window` covers the desktop, or will once the transition it is in ends: maximized
+/// (`windowMaximized`), and not on its way out of a fullscreen Space — the desktop comes back
+/// behind it as it goes, and a window that lets the desktop through fades to it with the
+/// transition (`Editor.easeWindowOpacity`), not after.
+pub fn windowCovers(window: *c.SDL_Window) bool {
+    if (builtin.os.tag == .macos) {
+        const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
+        if (raw_ptr != null and fizzy_macos_window_space_transition_active(raw_ptr) != 0 and
+            fizzy_macos_window_space_entering(raw_ptr) == 0) return false;
+    }
+    return windowMaximized(window);
 }
 
 /// True while the macOS window chrome (traffic lights / titlebar area) is hidden, i.e. while

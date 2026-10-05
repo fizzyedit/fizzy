@@ -174,12 +174,11 @@ last_load_request_path: ?[]const u8 = null,
 
 window_opacity: f32 = 1.0,
 
-/// Animated window-background opacity multiplier. Eases toward the windowed
-/// target (translucent, vibrancy shows through) or 1.0 (opaque) when
-/// maximized/fullscreen, so the vibrancy fades in/out across fullscreen
-/// transitions instead of snapping. `< 0` is a sentinel meaning "snap to the
-/// target on the first frame" so there is no fade at launch.
-window_opacity_anim: f32 = -1.0,
+/// The window's opacity as drawn (`easeWindowOpacity`): toward the windowed target (translucent,
+/// the glass or vibrancy showing through) or opaque while it covers the desktop, fading with the
+/// OS's fullscreen transitions instead of snapping. Snaps to its target on the first frame, so
+/// there is no fade at launch.
+window_opacity_anim: WindowOpacity = .{},
 
 /// Menu-bar clicks waiting for a safe point in the frame. Each is a `menu_model` tag.
 pending_native_menu_actions: [16]fizzy.backend.NativeMenuAction = undefined,
@@ -2297,8 +2296,11 @@ fn fizzyFrostPane(_: *anyopaque, id: dvui.Id, rect: dvui.Rect.Physical, corners:
     return fizzy.core.dialogs.frostPane(id, rect, corners, scale);
 }
 
+/// The cards' opacity: the setting while windowed, opaque while the window covers the desktop,
+/// eased between them with the window's own opacity (`easeWindowOpacity`).
 fn fizzyContentOpacity(ctx: *anyopaque) f32 {
-    return fizzyCtx(ctx).app.settings.content_opacity;
+    const editor = fizzyCtx(ctx);
+    return std.math.lerp(editor.app.settings.content_opacity, 1.0, std.math.clamp(editor.window_opacity_anim.cover, 0, 1));
 }
 fn fizzyIsMaximized(ctx: *anyopaque) bool {
     _ = ctx;
@@ -3480,46 +3482,83 @@ pub fn flushSettings(editor: *Editor) void {
 const handle_size = 10;
 const handle_dist = 60;
 
-/// Ease a window's background (`anim`, `windowBase`'s opacity; below 0 before its first frame)
-/// between translucent while windowed (`windowed`) and fully opaque while `maximized` — zoomed or
-/// full screen, through the whole of the way out of a fullscreen Space — so the vibrancy fades in
-/// and out across those transitions rather than snapping. The main window's and every float's own
-/// window's (`Popout`), alike.
-pub fn easeWindowOpacity(anim: *f32, maximized: bool, windowed: f32) void {
-    const target: f32 = if (maximized) 1.0 else windowed;
-    if (anim.* < 0) {
-        anim.* = target;
-    } else if (anim.* != target) {
-        const dt = dvui.secondsSinceLastFrame();
-        const t = std.math.clamp(dt * 6.0, 0.0, 1.0);
-        anim.* += (target - anim.*) * t;
-        if (@abs(target - anim.*) < 0.004) anim.* = target;
+/// A window's opacity on its way between translucent while windowed and opaque while it covers
+/// the desktop (`easeWindowOpacity`) — the main window's, and every float's own window's.
+pub const WindowOpacity = struct {
+    /// What the window is drawn at (`windowBase`, `windowGlassLook`); below 0 before its first frame.
+    value: f32 = -1,
+    /// How far it is to covering the desktop: 0 windowed, 1 zoomed or full screen.
+    cover: f32 = 0,
+    covers: bool = false,
+    from: f32 = 0,
+    from_cover: f32 = 0,
+    since_ns: i128 = 0,
+};
+
+/// How long a window takes between translucent and opaque as it comes to cover the desktop or
+/// stops: about as long as macOS takes to move it into a fullscreen Space or out of one.
+const cover_ms = 500;
+
+/// Ease a window's opacity (`o`) toward `windowed` or, while it `covers` the desktop — zoomed, full
+/// screen, on its way into a fullscreen Space (`backend.coversDesktop`) — opaque. Across a change of
+/// `covers` it takes `cover_ms` on a smoothstep from the moment the change is seen, the start of
+/// the OS's transition, so the glass and the vibrancy fade with its animation rather than snapping
+/// or trailing after it; otherwise — the opacity slider moving — it follows closely.
+pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, windowed: f32) void {
+    const target: f32 = if (covers) 1.0 else windowed;
+    const cover_target: f32 = if (covers) 1.0 else 0.0;
+    const now = dvui.currentWindow().frame_time_ns;
+    const span: i128 = cover_ms * std.time.ns_per_ms;
+    if (o.value < 0) {
+        o.* = .{ .value = target, .cover = cover_target, .covers = covers, .since_ns = now - span };
+        return;
+    }
+    if (covers != o.covers) o.* = .{ .value = o.value, .cover = o.cover, .covers = covers, .from = o.value, .from_cover = o.cover, .since_ns = now };
+    const elapsed = now - o.since_ns;
+    if (elapsed < span) {
+        const x: f32 = @floatCast(@as(f64, @floatFromInt(@max(elapsed, 0))) / @as(f64, @floatFromInt(span)));
+        const k = x * x * (3 - 2 * x);
+        o.value = std.math.lerp(o.from, target, k);
+        o.cover = std.math.lerp(o.from_cover, cover_target, k);
+        dvui.refresh(null, @src(), null);
+        return;
+    }
+    o.cover = cover_target;
+    if (o.value != target) {
+        const t = std.math.clamp(dvui.secondsSinceLastFrame() * 6.0, 0.0, 1.0);
+        o.value += (target - o.value) * t;
+        if (@abs(target - o.value) < 0.004) o.value = target;
         dvui.refresh(null, @src(), null);
     }
+}
+
+/// A window of Liquid Glass at `opacity` (`backend.windowGlass`): the glass `core.glass_look.window`
+/// makes of it, in the content fill as the window's colour. The main window's and every float's
+/// own window's alike.
+pub fn windowGlassLook(opacity: f32) fizzy.backend.WindowGlassLook {
+    const glass_look = fizzy.core.glass_look;
+    const look = glass_look.window(opacity);
+    return .{
+        .under_variant = look.under.variant,
+        .under_style = look.under.style,
+        .over_variant = look.over.variant,
+        .over_style = look.over.style,
+        .frost = look.frost,
+        .blur = look.blur,
+        .glass = look.glass,
+        .fill = dvui.themeGet().color(.content, .fill),
+        .under_fill = look.under_fill,
+        .body_fill = look.body_fill,
+        .radius = fizzy.backend.viewports.windowRadius(),
+        .rim = glass_look.window_rim,
+        .feather = glass_look.window_feather,
+    };
 }
 
 /// A window's base at `opacity`: the theme's content fill over the OS's material where the window
 /// has one (macOS, Windows), lightened as it goes see-through so the material behind reads as the
 /// same tone; opaque where there is none. Every window fizzy draws stands on it — the main window,
 /// a float's own window, the carry window (`Popout.base`) — so side by side they are one colour.
-/// A window of Liquid Glass at `opacity` (`backend.windowGlass`): the glass `core.glass_look` makes
-/// of it, and the content fill under the glass as the window's colour. The main window's and every
-/// float's own window's alike.
-pub fn windowGlassLook(opacity: f32) fizzy.backend.WindowGlassLook {
-    const look = fizzy.core.glass_look.native(opacity);
-    return .{
-        .under_variant = look.under.variant,
-        .under_style = look.under.style,
-        .over_variant = look.over.variant,
-        .over_style = look.over.style,
-        .over_share = look.over_share,
-        .glass = look.glass,
-        .fill = dvui.themeGet().color(.content, .fill),
-        .fill_opacity = look.under_fill,
-        .radius = fizzy.backend.viewports.windowRadius(),
-    };
-}
-
 pub fn windowBase(opacity: f32) dvui.Color {
     const fill = dvui.themeGet().color(.content, .fill);
     return switch (builtin.os.tag) {
@@ -3582,7 +3621,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
     // The draw uses `window_opacity_anim`.
-    easeWindowOpacity(&editor.window_opacity_anim, fizzy.backend.isMaximized(dvui.currentWindow()), editor.window_opacity);
+    easeWindowOpacity(&editor.window_opacity_anim, fizzy.backend.coversDesktop(dvui.currentWindow()), editor.window_opacity);
 
     // Drain any "Save and Close" requests whose async save has settled.
     editor.tickPendingSaveCloses();
@@ -3748,10 +3787,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
         // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
-        // (macOS 26, `backend.windowGlass`) the base is under the glass, on the one slider
-        // (`core.glass_look`), and the frame draws none of its own.
-        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim));
-        const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim);
+        // (macOS 26, `backend.windowGlass`) the base is the glass's, on the one slider
+        // (`core.glass_look.window`), and the frame draws none of its own.
+        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value));
+        const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
         // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline

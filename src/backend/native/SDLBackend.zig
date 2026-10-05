@@ -1004,6 +1004,12 @@ pub fn viewportMaximized(_: *SDLBackend, vp: *const Viewport) bool {
     return platform.window.windowMaximized(vp.window);
 }
 
+/// Whether `vp`'s window covers the desktop, or will once the transition it is in ends, as the main
+/// window's is asked (`platform.window.windowCovers`).
+pub fn viewportCovers(_: *SDLBackend, vp: *const Viewport) bool {
+    return platform.window.windowCovers(vp.window);
+}
+
 /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`
 /// (`heldPoint`): its float gone to its ghost, a view carried out of it aimed at the places under it.
 pub fn viewportSeeThrough(_: *SDLBackend, vp: *Viewport, on: bool) void {
