@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <QuartzCore/CAGradientLayer.h>
 #import <QuartzCore/CAShapeLayer.h>
 #import <QuartzCore/CATransaction.h>
 
@@ -561,12 +562,59 @@ static void overlayGlassLayer(NSView *container, const FizzyGlassShape *shapes, 
     for (NSUInteger i = (NSUInteger)(n < 0 ? 0 : n); i < [pool count]; i++) [pool[i] setHidden:YES];
 }
 
+/* Points in from a piece's edge the frost has gone, leaving the lens (`overlayFrostMask`), and over
+ * how many more it comes in. */
+static const double frost_clear_rim = 4;
+static const double frost_feather = 10;
+
+/*
+ * The over layer's frost faded out toward each piece's edge: a mask of radial gradients, one per
+ * piece, opaque in its middle and clear `frost_clear_rim` points in from its edge, so the glass's
+ * rim is the clear lens beneath — bending what is behind it, its rim light bright — and only its
+ * middle frosts, as the app's own glass does. On the container, not on each piece, so the
+ * container still runs the pieces together; a bridge between two, near both their edges, stays
+ * clear.
+ */
+static void overlayFrostMask(NSView *container, const FizzyGlassShape *shapes, long n) {
+    CALayer *root = [container layer];
+    if (root == nil) return;
+    CALayer *mask = [root mask];
+    if (mask == nil) {
+        mask = [CALayer layer];
+        [root setMask:mask];
+    }
+    [mask setFrame:[root bounds]];
+    [mask setGeometryFlipped:YES];
+    NSMutableArray<CALayer *> *pool = [NSMutableArray arrayWithArray:[mask sublayers] ?: @[]];
+    while ([pool count] < (NSUInteger)(n < 0 ? 0 : n)) {
+        CAGradientLayer *g = [CAGradientLayer layer];
+        [g setType:kCAGradientLayerRadial];
+        [g setStartPoint:CGPointMake(0.5, 0.5)];
+        [g setEndPoint:CGPointMake(1, 1)];
+        [g setColors:@[(id)[[NSColor blackColor] CGColor], (id)[[NSColor blackColor] CGColor], (id)[[NSColor clearColor] CGColor]]];
+        [mask addSublayer:g];
+        [pool addObject:g];
+    }
+    for (long i = 0; i < n; i++) {
+        const FizzyGlassShape sh = shapes[i];
+        CAGradientLayer *g = (CAGradientLayer *)pool[(NSUInteger)i];
+        const double r = fmin(sh.w, sh.h) / 2;
+        [g setHidden:sh.alpha <= 0.01 || r <= frost_clear_rim];
+        [g setFrame:CGRectMake(sh.x, sh.y, sh.w, sh.h)];
+        const double outer = fmax(0, (r - frost_clear_rim) / r);
+        const double inner = fmin(outer, fmax(0, (r - frost_clear_rim - frost_feather) / r));
+        [g setLocations:@[@0, @(inner), @(outer)]];
+    }
+    for (NSUInteger i = (NSUInteger)(n < 0 ? 0 : n); i < [pool count]; i++) [pool[i] setHidden:YES];
+}
+
 /*
  * The overlay's glass this frame: two layers of the same pieces (`overlayGlassLayer`), the under
- * one `look`'s under material and the over one its over material, crossfaded by its share — the
- * glass has no blur to turn, so the way from the clear lens to heavy frost is a blend of the two
- * materials either side (`Popout.glassLook`); a layer with nothing to show is hidden, costing
- * nothing. Each layer's pieces alike — the container runs together only glass that is: a piece
+ * one `look`'s under material (the lens) whole and the over one its over material (frost) over it
+ * at its share, faded out toward the pieces' edges (`overlayFrostMask`) — the glass has no blur to
+ * turn, so the way from the clear lens to frost is the frost coming in over it
+ * (`Popout.glassLook`), its rim the lens throughout; a layer with nothing to show is hidden,
+ * costing nothing. Each layer's pieces alike — the container runs together only glass that is: a piece
  * in the glass's pressed look (`_interactionState`) never merged with its neighbours, so a lit
  * piece is lit in fizzy's picture over it instead (`Popout.glassBase`). Called in the transaction
  * the window's picture is presented in (`SDLBackend.renderPresent`), with implicit animations off,
@@ -589,7 +637,9 @@ void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *s
         if (fill != nil) overlayFill(fill, shapes, n, spacing, look);
         const double share = fmin(fmax(look->over_share, 0), 1);
         const double glass = fmin(fmax(look->glass, 0), 1);
-        const double alphas[2] = {(1 - share) * glass, share * glass};
+        /* The under layer whole; the over one over it at its share, faded out toward the pieces'
+         * edges (`overlayFrostMask`) so the under one's rim shows round it. */
+        const double alphas[2] = {glass, share * glass};
         const long variants[2] = {look->under_variant, look->over_variant};
         const long styles[2] = {look->under_style, look->over_style};
         for (int k = 0; k < 2; k++) {
@@ -598,6 +648,7 @@ void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *s
             [layers[k] setHidden:!shows];
             [layers[k] setAlphaValue:(CGFloat)alphas[k]];
             overlayGlassLayer(layers[k], shapes, shows ? n : 0, spacing, variants[k], styles[k]);
+            if (k == 1) overlayFrostMask(layers[k], shapes, shows ? n : 0);
         }
     }
 }
