@@ -61,10 +61,6 @@ const Carry = struct {
 };
 var env_on: ?bool = null;
 
-/// How long the carried glass, grown into a float's window, takes to fade off the window it grew
-/// into (`growFrame`).
-const grow_fade_ms: f32 = 120;
-
 const Out = struct {
     /// Which float: its serial, never handed to another (`Floats.Float.serial`) — its name is
     /// the next float's once it closes.
@@ -84,8 +80,6 @@ const Out = struct {
 
 const Grow = struct {
     carry: Carry,
-    /// Landed: when the window it grew into began to show under it, and it to fade off it.
-    landed_ns: ?i128 = null,
 };
 
 /// `FIZZY_POPOUT=1`, on a backend with viewports, where this run can open them (not Wayland).
@@ -407,18 +401,17 @@ fn releaseCarry(c: *Carry) void {
 /// A float made by a drop grows out of the carried glass into its window, as it grows into its
 /// glass in the main window (`Floats.Landing`): its window shows nothing while the carried glass —
 /// a carry window (`viewports.openCarry`), the drag's own when it had one, already where the drop
-/// is — grows from the drop to the window's frame and rounds to its corners. What it carries comes
-/// in as it grows: the carried view's photograph goes, and the float's own picture — what its window
-/// will show, last frame's — arrives in its place, scaled to the glass, and the window's base with
-/// it. Landed, the glass is the window's size and shows what the window does: the window shows under
-/// it at once, and it fades off the window and goes. The window showing while it still grew — past
-/// the window's frame and back, when motion is playful — showed two sizes of one window at once.
-/// How much of the window shows. Where there are no carry windows, the window shows at once.
+/// is — grows from the drop to the window's frame and rounds to its corners. What it carries changes
+/// as it begins to grow, while it is small: the carried view's photograph goes, and the float's own
+/// picture — what its window will show, last frame's — arrives in its place, filling the glass
+/// with its proportions kept, so at the window's size it is the window's picture exactly, base and
+/// all. Crossing the two at a size where each was laid out differently showed the text of both, at
+/// two sizes. The glass grows as frost, as the window's own material is, not as the carried lens.
+/// Landed, the window shows and the glass goes in the same frame: faded off a window already
+/// showing under it, both bases at once made the window flare opaque at the end. How much of the
+/// window shows. Where there are no carry windows, the window shows at once.
 fn growFrame(o: *Out, f: *const Floats.Float) f32 {
     if (!viewports.carries) return 1;
-    const into = viewports.inMain(o.viewport);
-    const to: dvui.Rect.Physical = .{ .x = into.x, .y = into.y, .w = into.w, .h = into.h };
-    const window_radius = viewports.windowRadius() * dvui.windowNaturalScale();
     if (f.landing) |land| {
         if (o.grow == null) {
             const c = if (spare) |sp| blk: {
@@ -428,9 +421,12 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
                 const vp = viewports.openCarry(.{ .x = land.from.x, .y = land.from.y, .w = land.from.w, .h = land.from.h }) orelse return 1;
                 break :blk Carry{ .viewport = vp };
             };
+            viewports.carryLens(c.viewport, false);
             o.grow = .{ .carry = c };
         }
         const g = &o.grow.?;
+        const into = viewports.inMain(o.viewport);
+        const to: dvui.Rect.Physical = .{ .x = into.x, .y = into.y, .w = into.w, .h = into.h };
         const t = Floats.landedAt(land);
         const from = land.from;
         const rect: dvui.Rect.Physical = .{
@@ -439,31 +435,24 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
             .w = @max(1, std.math.lerp(from.w, to.w, t)),
             .h = @max(1, std.math.lerp(from.h, to.h, t)),
         };
-        const radius = std.math.lerp(land.radius, window_radius, std.math.clamp(t, 0, 1));
-        // The float's picture arrives over the middle of the growth, the photograph going as it does.
-        const arrive = smoothstep(std.math.clamp((Floats.landingFraction(land) - 0.3) / 0.5, 0, 1));
-        // The base comes in as it grows, from the carried glass's none, and hands over to the
-        // picture's own as that arrives: the window forms out of the glass.
-        if (!drawGrow(o, g, rect, radius, 1, std.math.clamp(t, 0, 1) * (1 - arrive), arrive, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
+        const radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
+        // The float's picture over the first part of the growth, the photograph going as it comes.
+        const arrive = smoothstep(std.math.clamp(Floats.landingFraction(land) / picture_share, 0, 1));
+        // The base comes in with the picture, which has its own.
+        if (!drawGrow(o, g, rect, radius, 1, 0, arrive, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
         return 0;
     }
-    const g = if (o.grow) |*g| g else return 1;
-    // Landed: at the window's frame, showing what the window shows, it fades off the window, which
-    // shows under it, and goes.
-    const now = dvui.currentWindow().frame_time_ns;
-    const start = g.landed_ns orelse now;
-    g.landed_ns = start;
-    const dur = fizzy.core.motion.durationMs(grow_fade_ms);
-    const frac: f32 = if (dur <= 0) 1 else @as(f32, @floatFromInt(now - start)) / (dur * std.time.ns_per_ms);
-    if (frac >= 1) {
+    // Landed: the window shows, and the glass goes with it.
+    if (o.grow) |*g| {
         releaseCarry(&g.carry);
         o.grow = null;
-        return 1;
     }
-    _ = drawGrow(o, g, to, window_radius, 1 - frac, 0, 1, null);
-    dvui.refresh(null, @src(), null);
     return 1;
 }
+
+/// The share of a float's growth out of the carried glass over which its picture takes over from
+/// the carried photograph (`growFrame`).
+const picture_share: f32 = 0.25;
 
 /// A photograph a growing glass carries (`drawGrow`): the carried view's, at `fade`.
 const GrowPhoto = struct {
@@ -486,9 +475,25 @@ fn drawGrow(o: *Out, g: *Grow, rect: dvui.Rect.Physical, radius: f32, alpha: f32
     if (picture > 0.01) if (o.target) |target| {
         const tex = dvui.Texture.fromTargetTemp(target) catch return true;
         const scale = dvui.windowNaturalScale();
+        // Its proportions kept, its middle filling the glass: at the window's size, all of it.
+        var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+        const tw: f32 = @floatFromInt(target.width);
+        const th: f32 = @floatFromInt(target.height);
+        if (tw > 0 and th > 0 and rect.w > 0 and rect.h > 0) {
+            const a_img = tw / th;
+            const a_box = rect.w / rect.h;
+            if (a_img > a_box) {
+                uv.w = a_box / a_img;
+                uv.x = (1 - uv.w) / 2;
+            } else {
+                uv.h = a_img / a_box;
+                uv.y = (1 - uv.h) / 2;
+            }
+        }
         dvui.renderTexture(tex, .{ .r = rect, .s = scale }, .{
             .corners = .round(radius / scale),
             .colormod = dvui.Color.white.opacity(picture),
+            .uv = uv,
         }) catch {};
     };
     return true;

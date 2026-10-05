@@ -255,12 +255,18 @@ static NSString *const carry_glass_id = @"fizzy.carry.glass";
  * where the setter is there.
  */
 static const long carry_glass_lens_variant = 11;
+/* The glass's own variant, its Clear style's frost: what a window's material is closest to. */
+static const long carry_glass_frost_variant = 2;
 
-static void carryGlassLens(NSView *glass) {
+static void carryGlassVariant(NSView *glass, long variant) {
     if ([[NSProcessInfo processInfo] operatingSystemVersion].majorVersion != 26) return;
     SEL set_variant = sel_registerName("set_variant:");
     if (![glass respondsToSelector:set_variant]) return;
-    ((void (*)(id, SEL, long))objc_msgSend)(glass, set_variant, carry_glass_lens_variant);
+    ((void (*)(id, SEL, long))objc_msgSend)(glass, set_variant, variant);
+}
+
+static void carryGlassLens(NSView *glass) {
+    carryGlassVariant(glass, carry_glass_lens_variant);
 }
 
 /*
@@ -342,6 +348,22 @@ void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long materi
 double fizzy_macos_window_corner_radius(void) {
     if (@available(macOS 26.0, *)) return 16;
     return 10;
+}
+
+/*
+ * The carry window's Liquid Glass as the lens (`carryGlassLens`) or as frost — a float's window
+ * growing out of it is frost, as its own material is. Nothing where it is not Liquid Glass.
+ */
+void fizzy_macos_viewport_carry_lens(void *nswindow, int lens) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *frame = [[window contentView] superview];
+        for (NSView *v in [frame subviews]) {
+            if (![[v identifier] isEqualToString:carry_glass_id]) continue;
+            carryGlassVariant(v, lens ? carry_glass_lens_variant : carry_glass_frost_variant);
+        }
+    }
 }
 
 /*

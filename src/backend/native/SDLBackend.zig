@@ -883,6 +883,13 @@ pub fn viewportCarryShape(_: *SDLBackend, vp: *Viewport, radius: ?f32, alpha: f3
     vp.carry_alpha = std.math.clamp(alpha, 0, 1);
 }
 
+/// A carry window's Liquid Glass as the lens (the carried view) or as frost (a float's window growing
+/// out of it, as its own material is). macOS 26; nothing elsewhere.
+pub fn viewportCarryLens(_: *SDLBackend, vp: *Viewport, lens: bool) void {
+    if (comptime builtin.os.tag != .macos) return;
+    fizzy_macos_viewport_carry_lens(cocoaWindow(vp.window), @intFromBool(lens));
+}
+
 /// The corner radius of a titled window, points: what a float's window is rounded by
 /// (`viewportCarryShape` grows the carried glass into it).
 pub fn windowCornerRadius(_: *SDLBackend) f32 {
@@ -1111,6 +1118,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
+extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;

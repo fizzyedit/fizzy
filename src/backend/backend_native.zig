@@ -160,6 +160,13 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius, alpha);
     }
 
+    /// A carry window's glass as the lens — the carried view, a drop of water — or as frost, as a
+    /// window's material is (a float's window growing out of it). Liquid Glass only.
+    pub fn carryLens(vp: *Viewport, lens: bool) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportCarryLens(vp, lens);
+    }
+
     /// A float's window's corner radius, points: the OS's for a titled window (`os_frame`).
     pub fn windowRadius() f32 {
         if (comptime !supported) return 0;
