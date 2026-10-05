@@ -61,6 +61,9 @@ mode: Mode = .preview,
 morph_from_mode: Mode = .preview,
 /// Not carried as anything yet: what it is first carried as is what was grabbed (`noteMode`).
 lifting: bool = false,
+/// Carried as a drop at some point in this drag: the point it was grabbed by means nothing since,
+/// and a card or a tab after it hangs from the pointer's corner (`drawFloat`).
+been_drop: bool = false,
 /// The carried shape as last drawn, whatever it was drawn as: its rect and corner radius,
 /// physical. A change of what the view is carried as grows the new shape out of this one —
 /// position, size and corners — so the lift from what was grabbed, the tab over a strip and the
@@ -86,6 +89,12 @@ drop_n: usize = 0,
 drop_radius: f32 = 0,
 /// Carried by a finger: the drop rides up and left of it, where the finger does not cover it.
 drop_touch: bool = false,
+/// Where the drop settled on the bubble it is aimed at, and that bubble's middle: held there while
+/// the pointer stays within `drop_hold` of it (`dropShapes`).
+drop_held: ?struct { bubble: dvui.Point.Physical, target: dvui.Point.Physical } = null,
+/// How far the drop is joined to the bubble it is aimed at, 0…1, eased: its photograph fades by
+/// `aim_fade` of it (`drawDrop`).
+drop_aim: f32 = 0,
 
 /// The places this drag can land on, and where they were, frozen at lift.
 targets: [max_targets]Target = undefined,
@@ -554,6 +563,7 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
     d.morph_radius = radius;
     d.card_start_ns = d.start_ns;
     d.lifting = true;
+    d.been_drop = false;
 }
 
 /// Begin carrying surface `id` from the picker, or from a plugin's own list (`Host.beginViewDrag`):
@@ -1202,6 +1212,10 @@ const drop_r: f32 = 52;
 const drop_tail_share: f32 = 0.62;
 /// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
 const drop_pull: f32 = 0.45;
+/// Points the pointer may wander from where the drop settled on a bubble before the drop follows
+/// it again: a hand held still is never still, and every pixel it moved thickened and thinned the
+/// neck between the drop and the bubble — a shimmer (the user).
+const drop_hold: f32 = 6;
 
 /// The farthest the pointer moves in a frame within one window's part of the frame, physical
 /// pixels: past it, it went from one window to another — a float out of the main window is drawn
@@ -1241,6 +1255,8 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         d.drop_ns = 0;
         d.drop_head = .{};
         d.drop_tail = .{};
+        d.drop_held = null;
+        d.drop_aim = 0;
         return d.drop_shapes[0..0];
     }
     const scale = cw.natural_scale;
@@ -1261,12 +1277,20 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     // covers none of it — and drawn toward the bubble it is aimed at, far enough that the two
     // run together.
     var target = dropCenter(mouse, R, d.drop_touch);
+    var aimed: ?dvui.Point.Physical = null;
     for (drops) |p| {
         if (!p.look.target or !p.clip.contains(mouse)) continue;
         const z = p.look.hovered orelse continue;
         const b = p.wheel.bubble(z);
+        aimed = b.c;
         target = .{ .x = target.x + (b.c.x - target.x) * drop_pull, .y = target.y + (b.c.y - target.y) * drop_pull };
     }
+    // On a bubble, held where it settled until the pointer has truly moved (`drop_hold`).
+    if (aimed) |bc| {
+        const keep = if (d.drop_held) |h| h.bubble.x == bc.x and h.bubble.y == bc.y and
+            @abs(h.target.x - target.x) < drop_hold * scale and @abs(h.target.y - target.y) < drop_hold * scale else false;
+        if (keep) target = d.drop_held.?.target else d.drop_held = .{ .bubble = bc, .target = target };
+    } else d.drop_held = null;
     var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = 0.55 });
     moving = d.drop_tail.step(d.drop_head.pos, dt, .{ .hz = 4.5, .playful_damping = 0.4 }) or moving;
     // The tail stays on the drop: pulled out a little way, not off it.
@@ -1277,6 +1301,11 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     if (len > reach) {
         d.drop_tail.pos = .{ .x = d.drop_head.pos.x + tx / len * reach, .y = d.drop_head.pos.y + ty / len * reach };
     }
+    // Joined to a bubble, its photograph fades (`aim_fade`), eased in and out.
+    const aim_want: f32 = if (aimed != null) 1 else 0;
+    d.drop_aim += (aim_want - d.drop_aim) * std.math.clamp(dt / aim_s, 0, 1);
+    if (@abs(aim_want - d.drop_aim) < 0.01) d.drop_aim = aim_want;
+    if (d.drop_aim != aim_want) moving = true;
     if (moving) dvui.refresh(null, @src(), null);
 
     // From the shape it was last drawn as — what was grabbed at the lift, the tab it was over a
@@ -1312,6 +1341,7 @@ fn modeAt(l: *Layout, mouse: dvui.Point.Physical) Mode {
 fn noteMode(d: *ViewDrag, mode: Mode, now: i128) void {
     const first = d.lifting;
     d.lifting = false;
+    if (mode == .drop) d.been_drop = true;
     if (mode == d.mode) return;
     d.morph_from_mode = if (first) mode else d.mode;
     d.mode = mode;
@@ -1390,7 +1420,8 @@ fn drawDrop(l: *Layout, taken: bool) void {
     }
     const radius = @max(0, d.drop_radius - pad) / scale;
     const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
-    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity * shown), .uv = uv }) catch {};
+    const photo = photo_opacity * shown * (1 - aim_fade * d.drop_aim);
+    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo), .uv = uv }) catch {};
     drawDropLabel(l, head, shown);
 }
 
@@ -1510,8 +1541,11 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     // shows — so what the tab was held by is still under the pointer, and the card grows away
     // from the place it is aimed at rather than over it. Pulled in only as far as keeps the
     // pointer on the card: a place grabbed far from its corner shrinks to a card far smaller.
+    // Once it has been a drop, the grab point is long gone: the card hangs down and right from the
+    // pointer, just inside its top left, as the drop did — kept at the grab point, a place grabbed
+    // far from its corner hung up and left of the pointer, anchored at its bottom right (the user).
     const inset = 8 * scale;
-    const tl: dvui.Point.Physical = .{
+    const tl: dvui.Point.Physical = if (d.been_drop) .{ .x = mouse.x - inset, .y = mouse.y - inset } else .{
         .x = mouse.x + std.math.clamp(off.x, -@max(0, target.w - inset), 0),
         .y = mouse.y + std.math.clamp(off.y, -@max(0, target.h - inset), 0),
     };
@@ -1572,6 +1606,12 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
 const card_padding: f32 = 6;
 /// How opaque the card's photograph is over its glass.
 const photo_opacity: f32 = 0.8;
+/// How much of the drop's photograph goes while it is joined to the bubble it is aimed at: nearly
+/// opaque over the bubble it read as a disc under it, not glass running into glass (the user) — the
+/// bubble lights itself (`DropZones`).
+const aim_fade: f32 = 0.75;
+/// Seconds the drop's photograph takes to fade as it joins a bubble, and to come back.
+const aim_s: f32 = 0.15;
 
 /// Points: the tab face on a card with no photograph — a file icon, the title and, when there
 /// are unsaved changes, the dirty dot — and the gaps between them.

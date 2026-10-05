@@ -4335,11 +4335,11 @@ test "drop: a place's drop sits in the part of it no window lies over, where it 
     try std.testing.expect(DZ.uncovered(place, &.{.{ .x = -10, .y = -10, .w = 1100, .h = 700 }}, 1, true) == null);
 }
 
-test "drop: settled, every bubble rests joined to one beside it, and none overlaps another" {
+test "drop: settled, every bubble rests joined to one beside it but the trash, which keeps apart" {
     // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum, and the
     // OS's glass container alike): at rest each bubble is joined by a neck to one beside it — the
-    // middle, or its neighbour along a strip — so the drop reads as one glass about to split,
-    // whichever the shape and the way it runs, with the trash and without. None overlaps another.
+    // middle, or its neighbour along a strip — so the drop reads as one glass, whichever the shape
+    // and the way it runs. The trash is a drop of its own, joined to nothing. None overlaps another.
     const room = DZ.wheel(.{ .x = 0, .y = 0, .w = 1e5, .h = 1e5 }, 1, true);
     try std.testing.expectEqual(@as(f32, 1), room.unit);
     for ([_]bool{ true, false }) |remove| for ([_]dvui.enums.Direction{ .horizontal, .vertical }) |dir| for ([_]f32{ 0, 1 }) |strip| {
@@ -4359,7 +4359,29 @@ test "drop: settled, every bubble rests joined to one beside it, and none overla
                 try std.testing.expect(gap > 0);
                 if (gap < DZ.merge / 2) joined = true;
             }
-            try std.testing.expect(joined);
+            try std.testing.expectEqual(a != .remove, joined);
+        }
+    };
+}
+
+test "drop: aimed at, a bubble swells clear of the others, and still the trash joins none" {
+    // The bubble the carried view is aimed at grows by `join_swell` — the trash keeps its size:
+    // swollen, it overlaps none beside it, and the trash stays a drop of its own.
+    const room = DZ.wheel(.{ .x = 0, .y = 0, .w = 1e5, .h = 1e5 }, 1, true);
+    for ([_]dvui.enums.Direction{ .horizontal, .vertical }) |dir| for ([_]f32{ 0, 1 }) |strip| {
+        const w = room.shaped(strip, dir);
+        for (DZ.all, 0..) |aimed, ai| {
+            if (aimed == .remove) continue;
+            for (DZ.all, 0..) |a, i| for (DZ.all[i + 1 ..], i + 1..) |b, j| {
+                const p = w.bubble(a);
+                const q = w.bubble(b);
+                const pr = p.r * (if (i == ai) 1 + DZ.join_swell else 1);
+                const qr = q.r * (if (j == ai) 1 + DZ.join_swell else 1);
+                const d = @sqrt((p.c.x - q.c.x) * (p.c.x - q.c.x) + (p.c.y - q.c.y) * (p.c.y - q.c.y));
+                const gap = d - pr - qr;
+                try std.testing.expect(gap > 0);
+                if (a == .remove or b == .remove) try std.testing.expect(gap > DZ.merge / 2);
+            };
         }
     };
 }

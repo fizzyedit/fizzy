@@ -140,23 +140,30 @@ const side_r: f32 = 40;
 const remove_r: f32 = 30;
 /// Points between a bubble and the ones beside it, at rest: well inside where two run together
 /// (half of `merge`, for the glass's smooth union and the OS's container alike, measured), so the
-/// drop rests as one glass, a full neck to each bubble — and splits as they swing past their places
+/// drop rests as one glass, a neck to each bubble — and splits as they swing past their places
 /// when motion is playful (`grow`), settling back joined. At 16 they rested apart; just inside
 /// half the merge, the necks were a thread.
 const gap: f32 = merge * 0.3;
 const side_d: f32 = center_r + side_r + gap;
-/// The trash on the diagonal, `gap` from the right and the bottom: |(side_d − x, x)| is
-/// d = side_r + remove_r + gap at x = (side_d + √(2·d² − side_d²)) / 2, the root out from the middle.
+/// How much bigger the bubble the carried view is aimed at grows, as it lights: its necks thicken,
+/// and it runs together more with what is carried. The bubble alone, not the whole drop (the user).
+pub const join_swell: f32 = 0.1;
+/// Points the trash keeps from the others even while one beside it swells: a drop of its own,
+/// joining none.
+const remove_apart: f32 = merge / 2 + 1;
+/// The trash on the diagonal, `remove_apart` from the right and the bottom swollen:
+/// |(side_d − x, x)| is d = side_r·(1 + join_swell) + remove_r + remove_apart at
+/// x = (side_d + √(2·d² − side_d²)) / 2, the root out from the middle.
 const remove_d: f32 = blk: {
-    const d = side_r + remove_r + gap;
+    const d = side_r * (1 + join_swell) + remove_r + remove_apart;
     break :blk (side_d + @sqrt(2 * d * d - side_d * side_d)) / 2;
 };
 /// Points: as a strip, one line with the wheel's own gap between each bubble and the next — the
 /// two sides the place's ends are at `end_d`, the other two beside the middle at `side_d`, and the
-/// trash past the end on its side. Across a place: left, top, middle, bottom, right, trash; down
+/// trash apart past the end on its side. Across a place: left, top, middle, bottom, right, trash; down
 /// one: top, left, middle, right, bottom, trash. The icons say which edge each is.
 const end_d: f32 = side_d + 2 * side_r + gap;
-const strip_remove_d: f32 = end_d + side_r + gap + remove_r;
+const strip_remove_d: f32 = end_d + side_r * (1 + join_swell) + remove_apart + remove_r;
 /// Points: a bubble's icon, as a share of its radius.
 const bubble_icon: f32 = 0.6;
 /// How far the cluster may reach either side of the middle, as a share of the place's size that
@@ -576,7 +583,9 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
             const t = orbTime(st.shown, j, order.len);
             const k = grow(t);
             const b = drawn.bubble(all[zi]);
-            const r = b.r * k;
+            // The bubble the carried view is aimed at swells as it lights (`join_swell`) — the
+            // trash, a drop of its own, keeps its size.
+            const r = b.r * k * (if (all[zi] == .remove) 1 else 1 + join_swell * st.lit[zi]);
             if (r < 0.5) continue;
             // Out of the middle to where it settles, on the same curve as its size: each bubble
             // is born inside the drop and pinches off it on its way out (`merge`), past its place
