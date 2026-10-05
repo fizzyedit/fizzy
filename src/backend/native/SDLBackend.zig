@@ -733,15 +733,24 @@ pub fn refresh(_: *SDLBackend) void {
     toErr(c.SDL_PushEvent(&ue), "SDL_PushEvent in refresh") catch {};
 }
 
+/// The main window come forward — focused (the app activated, at launch too), pressed, shown,
+/// restored — maybe over a viewport's window: they are put back over it before the frame presents
+/// (`order_pending`). From either way events arrive: polled (`addAllEvents`) or through SDL's
+/// callbacks (`appEvent`), which is how fizzy runs on macOS — where this only ever ran from the
+/// first, and a float's window opened at launch went behind the main window as the app activated.
+fn noteMainForward(self: *SDLBackend, target: ?*c.SDL_Window, event_type: u32) void {
+    if (target == null or target != self.window) return;
+    switch (event_type) {
+        c.SDL_EVENT_WINDOW_FOCUS_GAINED, c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_RESTORED => self.order_pending = true,
+        else => {},
+    }
+}
+
 pub fn addAllEvents(self: *SDLBackend, win: *dvui.Window) !void {
     var event: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&event)) {
         const target_sdl_window = getWindowFromEvent(&event);
-        // The main window come forward, maybe over a viewport's window (`order_pending`).
-        if (target_sdl_window == self.window) switch (event.type) {
-            c.SDL_EVENT_WINDOW_FOCUS_GAINED, c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_RESTORED => self.order_pending = true,
-            else => {},
-        };
+        self.noteMainForward(target_sdl_window, event.type);
         if (target_sdl_window) |target_win| {
             _ = try self.addEventWinRecursive(&event, win, target_win);
         } else {
@@ -2673,6 +2682,7 @@ fn appEvent(_: ?*anyopaque, event: ?*c.SDL_Event) callconv(.c) c.SDL_AppResult {
 
     const e = &event.?.*;
     const target_sdl_window = getWindowFromEvent(e);
+    appState.back.noteMainForward(target_sdl_window, e.type);
     if (target_sdl_window) |target_win| {
         _ = appState.back.addEventWinRecursive(e, &appState.win, target_win) catch |err| {
             log.err("dvui.Window.addEvent failed: {any}", .{err});
