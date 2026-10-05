@@ -796,7 +796,10 @@ fn windowFrame(state: *State, o: *Out) void {
     // window's base is — opaque through the whole of the way out of a fullscreen Space. Where it has
     // no material it is opaque throughout.
     Editor.easeWindowOpacity(&o.opacity, viewports.maximized(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
-    backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity);
+    // A window of Liquid Glass (macOS 26) stands on its glass, its colour under it on the one
+    // slider, as the main window does (`Editor.windowGlassLook`): no base of its own in the frame.
+    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity)))
+        backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so

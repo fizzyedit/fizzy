@@ -3502,6 +3502,24 @@ pub fn easeWindowOpacity(anim: *f32, maximized: bool, windowed: f32) void {
 /// has one (macOS, Windows), lightened as it goes see-through so the material behind reads as the
 /// same tone; opaque where there is none. Every window fizzy draws stands on it — the main window,
 /// a float's own window, the carry window (`Popout.base`) — so side by side they are one colour.
+/// A window of Liquid Glass at `opacity` (`backend.windowGlass`): the glass `core.glass_look` makes
+/// of it, and the content fill under the glass as the window's colour. The main window's and every
+/// float's own window's alike.
+pub fn windowGlassLook(opacity: f32) fizzy.backend.WindowGlassLook {
+    const look = fizzy.core.glass_look.native(opacity);
+    return .{
+        .under_variant = look.under.variant,
+        .under_style = look.under.style,
+        .over_variant = look.over.variant,
+        .over_style = look.over.style,
+        .over_share = look.over_share,
+        .glass = look.glass,
+        .fill = dvui.themeGet().color(.content, .fill),
+        .fill_opacity = look.under_fill,
+        .radius = fizzy.backend.viewports.windowRadius(),
+    };
+}
+
 pub fn windowBase(opacity: f32) dvui.Color {
     const fill = dvui.themeGet().color(.content, .fill);
     return switch (builtin.os.tag) {
@@ -3729,8 +3747,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
 
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
-        // fullscreen transitions; at 1.0 the base is the opaque fill.
-        const window_color = windowBase(editor.window_opacity_anim);
+        // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
+        // (macOS 26, `backend.windowGlass`) the base is under the glass, on the one slider
+        // (`core.glass_look`), and the frame draws none of its own.
+        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim));
+        const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
         // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline

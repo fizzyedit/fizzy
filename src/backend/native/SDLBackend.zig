@@ -1246,7 +1246,8 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         .macos => {
             const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
             const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
-            fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+            // Liquid Glass where the OS has it (macOS 26), as the main window; vibrancy before.
+            if (!platform.window.liquidGlass(ns)) fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
             // Skinned as the main window is (`platform.window.skin`).
             if (self.window_skin) |color| platform.window.skin(ns, color, dark);
             // Through Spaces, zooms and live resizes as the main window goes (`macos_monitor`).
@@ -1260,6 +1261,11 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         },
         else => return false,
     }
+}
+
+/// `vp`'s window's Liquid Glass this frame (`platform.window.liquidGlassLook`). Whether it has any.
+pub fn viewportLiquidGlass(_: *SDLBackend, vp: *Viewport, look: platform.window.WindowGlass) bool {
+    return platform.window.liquidGlassLook(vp.window, look);
 }
 
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the

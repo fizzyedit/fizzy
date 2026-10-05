@@ -120,6 +120,41 @@ pub fn saveWindowGeometry(win: *dvui.Window) void {
 /// Called at the end of AppInit: the monitor may drive frames through window animations now.
 pub const macosLaunchComplete = platform.macos_monitor.launchComplete;
 
+/// A window's Liquid Glass this frame (`windowGlass`, `viewports.windowGlass`): what
+/// `core.glass_look.native` says at the window's opacity, and the window's colour under it.
+pub const WindowGlassLook = struct {
+    under_variant: i32,
+    under_style: i32,
+    over_variant: i32,
+    over_style: i32,
+    over_share: f32,
+    glass: f32,
+    fill: dvui.Color,
+    fill_opacity: f32,
+    /// Points.
+    radius: f32,
+
+    fn native(self: WindowGlassLook) platform.window.WindowGlass {
+        return .{
+            .under_variant = self.under_variant,
+            .under_style = self.under_style,
+            .over_variant = self.over_variant,
+            .over_style = self.over_style,
+            .over_share = self.over_share,
+            .glass = self.glass,
+            .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.fill_opacity },
+            .radius = self.radius,
+        };
+    }
+};
+
+/// The main window's Liquid Glass this frame, where it is a window of Liquid Glass (macOS 26):
+/// whether it is — its colour is then under the glass, and the frame draws no base of its own.
+pub fn windowGlass(win: *dvui.Window, look: WindowGlassLook) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    return platform.window.liquidGlassLook(win.backend.impl.window, look.native());
+}
+
 /// OS windows besides the main one, each showing a part of the one frame — a float popped out
 /// (`docs/POPOUT_WINDOWS_PLAN.md`, the backend's `Viewport`). Fizzy's own backend only: on dvui's
 /// SDL3 backend (`-Dnative-backend=sdl3`) there are none, as on the web, and floats stay in.
@@ -232,6 +267,13 @@ pub const viewports = struct {
     pub fn buttonsWidth(vp: *Viewport) f32 {
         if (comptime !supported) return 0;
         return dvui.currentWindow().backend.impl.viewportButtonsWidth(vp);
+    }
+
+    /// `vp`'s window's Liquid Glass this frame, as the main window's (`windowGlass`). Whether it
+    /// has any: its float then draws no base of its own.
+    pub fn windowGlass(vp: *Viewport, look: WindowGlassLook) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportLiquidGlass(vp, look.native());
     }
 
     /// A float's window's corner radius, points: the OS's for a titled window (`os_frame`).

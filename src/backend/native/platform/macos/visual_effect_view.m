@@ -366,7 +366,9 @@ double fizzy_macos_window_buttons_width(void *nswindow) {
  * macOS 26, 10 before.
  */
 double fizzy_macos_window_corner_radius(void) {
-    if (@available(macOS 26.0, *)) return 16;
+    /* A titled window with a compact toolbar (`fizzy_macos_window_liquid_glass`, macOS 26): 20; a
+     * titled window with none, 16 — measured from the windows' own pictures. */
+    if (@available(macOS 26.0, *)) return 20;
     return 10;
 }
 
@@ -677,6 +679,132 @@ void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *s
             overlayGlassLayer(layers[k], shapes, shows ? n : 0, spacing, variants[k], styles[k]);
             if (k == 1) overlayFrostMask(layers[k], shapes, shows ? n : 0);
         }
+    }
+}
+
+/* A titled window's Liquid Glass (`fizzy_macos_window_liquid_glass`): the window's colour, the
+ * lens over it, and frost over that. */
+static NSString *const window_glass_ids[3] = {@"fizzy.window.fill", @"fizzy.window.glass.under", @"fizzy.window.glass.over"};
+
+static NSView *windowGlassPart(NSWindow *window, int k) {
+    NSView *frame = [[window contentView] superview];
+    for (NSView *v in [frame subviews]) {
+        if ([[v identifier] isEqualToString:window_glass_ids[k]]) return v;
+    }
+    return nil;
+}
+
+/* Whether `nswindow` stands on Liquid Glass (`fizzy_macos_window_liquid_glass`). */
+int fizzy_macos_window_has_liquid_glass(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    return window != nil && windowGlassPart(window, 1) != nil;
+}
+
+/*
+ * One of fizzy's titled windows — the main window, a float's — as a window of Liquid Glass (macOS
+ * 26): beside SDL's view in the window's frame view, under it, the window's colour, the clear lens
+ * over the colour, and frost over the lens, which `fizzy_macos_window_liquid_glass_look` sets each
+ * frame from the one slider. The window clear but for them, and a compact toolbar's corners — what
+ * macOS 26 rounds a window by is whether it has a toolbar: none, 16 points; compact, 20 (and a
+ * 40-point title bar for 32); unified, 27 (and 66). Any vibrancy beside SDL's view (a float's) goes.
+ * Once per window; 1 where it is (or was already) Liquid Glass, 0 where the OS has none.
+ */
+int fizzy_macos_window_liquid_glass(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil || !fizzy_macos_liquid_glass_available()) return 0;
+        if (windowGlassPart(window, 1) != nil) return 1;
+        NSView *content = [window contentView];
+        NSView *frame = [content superview];
+        if (content == nil || frame == nil) return 0;
+        for (NSView *v in [[frame subviews] copy]) {
+            if ([v isKindOfClass:[FizzyViewportGlassView class]]) [v removeFromSuperview];
+        }
+        [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
+        [fill setIdentifier:window_glass_ids[0]];
+        [fill setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [fill setWantsLayer:YES];
+        [frame addSubview:fill positioned:NSWindowBelow relativeTo:content];
+        for (int k = 1; k < 3; k++) {
+            NSView *glass = carryLiquidGlass([content frame]);
+            if (glass == nil) return 0;
+            [glass setIdentifier:window_glass_ids[k]];
+            if (k == 2) carryGlassVariant(glass, carry_glass_frost_variant);
+            [frame addSubview:glass positioned:NSWindowBelow relativeTo:content];
+        }
+#if !__has_feature(objc_arc)
+        [fill release];
+#endif
+        if ([window toolbar] == nil) {
+            /* Added, a toolbar grows the window by its height to keep the content's area: kept
+             * where it was instead, or a float's window — restored from its saved frame each
+             * launch — grew by 30 points every time. */
+            const NSRect was = [window frame];
+            NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"fizzy.window"];
+            [window setToolbar:toolbar];
+            [window setToolbarStyle:NSWindowToolbarStyleUnifiedCompact];
+            if (!NSEqualRects([window frame], was)) [window setFrame:was display:NO];
+#if !__has_feature(objc_arc)
+            [toolbar release];
+#endif
+        }
+        [window setTitlebarSeparatorStyle:NSTitlebarSeparatorStyleNone];
+        return 1;
+    }
+}
+
+/* A window's Liquid Glass this frame, as `platform.window.WindowGlass` lays it out: each layer's
+ * variant and style, frost's share over the lens, how much glass there is, the window's colour
+ * under it (opacity last), and the window's corner radius. */
+typedef struct {
+    long under_variant, under_style, over_variant, over_style;
+    double over_share, glass;
+    double fill[4];
+    double radius;
+} FizzyWindowGlass;
+
+/*
+ * `nswindow`'s Liquid Glass this frame (`fizzy_macos_window_liquid_glass`): the window's colour
+ * under the glass at its opacity — the glass bends and lights it, its shine kept — the lens whole,
+ * frost over it at its share, and the glass going at the very top of the slider, the colour opaque
+ * then. Its corners the window's.
+ */
+void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass *g) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil || g == NULL) return;
+        NSView *fill = windowGlassPart(window, 0);
+        NSView *under = windowGlassPart(window, 1);
+        NSView *over = windowGlassPart(window, 2);
+        if (fill == nil || under == nil || over == nil) return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        const CGFloat comps[4] = {(CGFloat)g->fill[0], (CGFloat)g->fill[1], (CGFloat)g->fill[2], (CGFloat)fmin(fmax(g->fill[3], 0), 1)};
+        CGColorRef color = CGColorCreate(srgb, comps);
+        [[fill layer] setBackgroundColor:color];
+        CGColorRelease(color);
+        CGColorSpaceRelease(srgb);
+        const double glass = fmin(fmax(g->glass, 0), 1);
+        const double share = fmin(fmax(g->over_share, 0), 1);
+        const double alphas[2] = {glass, share * glass};
+        const long variants[2] = {g->under_variant, g->over_variant};
+        const long styles[2] = {g->under_style, g->over_style};
+        NSView *layers[2] = {under, over};
+        const SEL set_radius = sel_registerName("setCornerRadius:");
+        const SEL get_variant = sel_registerName("_variant");
+        for (int k = 0; k < 2; k++) {
+            NSView *v = layers[k];
+            [v setHidden:alphas[k] <= 0.01];
+            [v setAlphaValue:(CGFloat)alphas[k]];
+            ((void (*)(id, SEL, CGFloat))objc_msgSend)(v, set_radius, (CGFloat)g->radius);
+            if ([[v valueForKey:@"style"] longValue] != styles[k]) [v setValue:@(styles[k]) forKey:@"style"];
+            if (![v respondsToSelector:get_variant] || ((long (*)(id, SEL))objc_msgSend)(v, get_variant) != variants[k])
+                carryGlassVariant(v, variants[k]);
+        }
+        [CATransaction commit];
     }
 }
 

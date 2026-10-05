@@ -155,6 +155,9 @@ pub const viewports = struct {
     }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
     pub fn carryLens(_: *Viewport, _: bool) void {}
+    pub fn windowGlass(_: *Viewport, _: WindowGlassLook) bool {
+        return false;
+    }
     pub fn buttonsWidth(_: *Viewport) f32 {
         return 0;
     }
@@ -218,6 +221,21 @@ pub const viewports = struct {
         return false;
     }
 };
+
+pub const WindowGlassLook = struct {
+    under_variant: i32,
+    under_style: i32,
+    over_variant: i32,
+    over_style: i32,
+    over_share: f32,
+    glass: f32,
+    fill: dvui.Color,
+    fill_opacity: f32,
+    radius: f32,
+};
+pub fn windowGlass(_: *dvui.Window, _: WindowGlassLook) bool {
+    return false;
+}
 
 pub fn titlebarStripHeight(_: *dvui.Window) f32 {
     return 0;

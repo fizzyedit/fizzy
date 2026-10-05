@@ -23,6 +23,41 @@ extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_titlebar_hit_test_install(cocoa_window: ?*anyopaque, interactive_at: *const fn (f64, f64) callconv(.c) bool) void;
+extern fn fizzy_macos_window_liquid_glass(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_has_liquid_glass(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_liquid_glass_look(cocoa_window: ?*anyopaque, look: *const WindowGlass) void;
+
+/// A window's Liquid Glass this frame (`liquidGlassLook`), as `fizzy_macos_window_liquid_glass_look`
+/// reads it: each layer's variant and style, frost's share over the lens, how much glass there is,
+/// the window's colour under it (0…1 each, its opacity last), the window's corner radius in points.
+pub const WindowGlass = extern struct {
+    under_variant: c_long,
+    under_style: c_long,
+    over_variant: c_long,
+    over_style: c_long,
+    over_share: f64,
+    glass: f64,
+    fill: [4]f64,
+    radius: f64,
+};
+
+/// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — the
+/// window's colour under the clear lens and frost, a compact toolbar's corners — where the OS has
+/// it (macOS 26). Once per window. Whether it is.
+pub fn liquidGlass(raw_ptr: *anyopaque) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    return fizzy_macos_window_liquid_glass(raw_ptr) != 0;
+}
+
+/// `window`'s Liquid Glass this frame (`liquidGlass`). Whether it has any: false, and nothing set,
+/// where it stands on vibrancy instead.
+pub fn liquidGlassLook(window: *c.SDL_Window, look: WindowGlass) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    if (fizzy_macos_window_has_liquid_glass(ns) == 0) return false;
+    fizzy_macos_window_liquid_glass_look(ns, &look);
+    return true;
+}
 
 /// For AppKit's titlebar region: whether a press at this pixel is the app's (`titlebar.interactiveAt`).
 fn titlebarInteractiveAt(x: f64, y: f64) callconv(.c) bool {
@@ -216,8 +251,10 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
         @as(f64, @floatFromInt(color.b)) / 255.0,
         @as(f64, @floatFromInt(color.a)) / 255.0,
     });
-    // This sets both the titlebar and the window background color.
-    window.msgSend(void, "setBackgroundColor:", .{new_color.value});
+    // This sets both the titlebar and the window background color — clear on a window of Liquid
+    // Glass (`liquidGlass`), whose colour is under its glass.
+    const glass = fizzy_macos_window_has_liquid_glass(raw_ptr) != 0;
+    window.msgSend(void, "setBackgroundColor:", .{if (glass) NSColor.msgSend(objc.Object, "clearColor", .{}).value else new_color.value});
 
     // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
     if (objc.getClass("NSAppearance")) |NSAppearance| {
@@ -249,8 +286,9 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
 
             setStyle(win);
 
-            // Wrap content view in NSVisualEffectView once for vibrancy (blur behind window).
-            wrapContentViewWithVibrancy(window);
+            // Liquid Glass where the OS has it (macOS 26), beside SDL's view as a float's window
+            // is; else the content view wrapped in an NSVisualEffectView once, for vibrancy.
+            if (!liquidGlass(raw_ptr.?)) wrapContentViewWithVibrancy(window);
 
             skin(raw_ptr.?, color, dvui.themeGet().dark);
             // Every float's own window too, and each opened from now on (`SDLBackend.viewportGlass`):
