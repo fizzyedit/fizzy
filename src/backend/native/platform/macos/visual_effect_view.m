@@ -112,34 +112,51 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
  */
 static NSImage *glassMask(double inset, double radius);
 
+/*
+ * A popped-out float's window dressed as the main window is, whatever it stands on — Liquid Glass
+ * or vibrancy (`fizzy_macos_viewport_glass`). Skipped with Liquid Glass, a float's window had no
+ * shadow, and with it none of the 1-point outline the OS draws round a titled window — dark against
+ * a light background, light against a dark one — that the main window has (the user).
+ */
+static void viewportDress(NSWindow *window, NSWindow *main) {
+    /* The vibrancy reads light or dark by the window's appearance: the main window's, which
+     * follows the app's theme, not the system's. */
+    if (main != nil) [window setAppearance:[main appearance]];
+    [window setOpaque:NO];
+    [window setBackgroundColor:[NSColor clearColor]];
+    /* Titled (`SDLBackend.viewportOpen`): dressed as the main window is — its content under a
+     * transparent title bar, the title's text hidden (the float's header shows it), the OS's
+     * shadow, outline and corners. Borderless: no AppKit shadow; the float draws its own in the
+     * clear margin round its glass. */
+    const BOOL titled = ([window styleMask] & NSWindowStyleMaskTitled) != 0;
+    if (titled) {
+        [window setStyleMask:[window styleMask] | NSWindowStyleMaskFullSizeContentView];
+        [window setTitlebarAppearsTransparent:YES];
+        [window setTitleVisibility:NSWindowTitleHidden];
+        /* Full screen in a Space of its own, as the main window goes: the main window's monitor
+         * follows it there and back (`macos_monitor.watch`, `window_monitor.m`). */
+    }
+    if ([window hasShadow] != titled) [window setHasShadow:titled];
+    /* No OS animation as it shows or closes: it appears and goes exactly where its float is
+     * drawn, in the frame it changes in. AppKit's show and close animations never finished
+     * under fizzy's frame loop, and the window they stood in for stayed on screen — shrunk
+     * while the float was out, and after it had gone, where it first opened. */
+    [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+}
+
+void fizzy_macos_viewport_dress(void *nswindow, void *main_nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        viewportDress(window, (__bridge NSWindow *)main_nswindow);
+    }
+}
+
 void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inset, double radius, long material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
-        /* The vibrancy reads light or dark by the window's appearance: the main window's, which
-         * follows the app's theme, not the system's. */
-        NSWindow *main = (__bridge NSWindow *)main_nswindow;
-        if (main != nil) [window setAppearance:[main appearance]];
-        [window setOpaque:NO];
-        [window setBackgroundColor:[NSColor clearColor]];
-        /* Titled (`SDLBackend.viewportOpen`): dressed as the main window is — its content under a
-         * transparent title bar, the title's text hidden (the float's header shows it), the OS's
-         * shadow and corners. Borderless: no AppKit shadow; the float draws its own in the clear
-         * margin round its glass. */
-        const BOOL titled = ([window styleMask] & NSWindowStyleMaskTitled) != 0;
-        if (titled) {
-            [window setStyleMask:[window styleMask] | NSWindowStyleMaskFullSizeContentView];
-            [window setTitlebarAppearsTransparent:YES];
-            [window setTitleVisibility:NSWindowTitleHidden];
-            /* Full screen in a Space of its own, as the main window goes: the main window's monitor
-             * follows it there and back (`macos_monitor.watch`, `window_monitor.m`). */
-        }
-        [window setHasShadow:titled];
-        /* No OS animation as it shows or closes: it appears and goes exactly where its float is
-         * drawn, in the frame it changes in. AppKit's show and close animations never finished
-         * under fizzy's frame loop, and the window they stood in for stayed on screen — shrunk
-         * while the float was out, and after it had gone, where it first opened. */
-        [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+        viewportDress(window, (__bridge NSWindow *)main_nswindow);
         NSView *content = [window contentView];
         NSView *frame = [content superview];
         if (content == nil || frame == nil) return;
