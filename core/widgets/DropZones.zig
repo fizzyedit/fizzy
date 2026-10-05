@@ -132,7 +132,7 @@ pub const Wheel = struct {
 pub const all = [_]Zone{ .center, .{ .edge = .left }, .{ .edge = .right }, .{ .edge = .top }, .{ .edge = .bottom }, .remove };
 
 /// Points: the bubbles' layout as a wheel — the middle, the four sides round it, the trash in the
-/// crook between the right and the bottom — about 310 across: big enough to aim at without
+/// crook between the right and the bottom — about 330 across: big enough to aim at without
 /// looking, small enough to leave the place in view round it. Each bubble rests `gap` from the
 /// ones beside it.
 /// The middle a quarter bigger than it was (52): the drop reads as one glass round it, not a
@@ -140,16 +140,17 @@ pub const all = [_]Zone{ .center, .{ .edge = .left }, .{ .edge = .right }, .{ .e
 const center_r: f32 = 65;
 const side_r: f32 = 40;
 const remove_r: f32 = 30;
-/// Points between a bubble and the ones beside it, at rest: well inside where two run together
-/// (half of `merge`, for the glass's smooth union and the OS's container alike, measured), so the
-/// drop rests as one glass, a neck to each bubble — and splits as they swing past their places
-/// when motion is playful (`grow`), settling back joined. At 16 they rested apart; just inside
-/// half the merge, the necks were a thread.
-const gap: f32 = merge * 0.3;
+/// Points between a bubble and the ones beside it, at rest: past where two run together (half of
+/// `merge`, for the glass's smooth union and the OS's container alike, measured), so each bubble is
+/// born inside the middle, pinches off it on its way out (`grow`) and rests a drop of its own —
+/// until the carried view is aimed at one, which swells (`join_swell`) until it runs into those
+/// beside it. Resting joined, they read as merged all the time (the user).
+const gap: f32 = merge / 2 + 4;
 const side_d: f32 = center_r + side_r + gap;
-/// How much bigger the bubble the carried view is aimed at grows, as it lights: its necks thicken,
-/// and it runs together more with what is carried. The bubble alone, not the whole drop (the user).
-pub const join_swell: f32 = 0.1;
+/// How much bigger the bubble the carried view is aimed at grows, as it lights: enough to close the
+/// gap to the bubbles beside it, so it runs into them — a side into the middle, the middle into
+/// every side — and into what is carried. The bubble alone, not the whole drop (the user).
+pub const join_swell: f32 = 0.25;
 /// Points the trash keeps from the others even while one beside it swells: a drop of its own,
 /// joining none.
 const remove_apart: f32 = merge / 2 + 1;
