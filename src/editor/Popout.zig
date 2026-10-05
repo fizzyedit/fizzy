@@ -475,20 +475,15 @@ fn drawGrow(o: *Out, g: *Grow, rect: dvui.Rect.Physical, radius: f32, alpha: f32
     if (picture > 0.01) if (o.target) |target| {
         const tex = dvui.Texture.fromTargetTemp(target) catch return true;
         const scale = dvui.windowNaturalScale();
-        // Its proportions kept, its middle filling the glass: at the window's size, all of it.
+        // Its proportions kept, filling the glass from its top left — where the window grows from
+        // (`ViewDrag.floatOut`): at the window's size, all of it.
         var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
         const tw: f32 = @floatFromInt(target.width);
         const th: f32 = @floatFromInt(target.height);
         if (tw > 0 and th > 0 and rect.w > 0 and rect.h > 0) {
             const a_img = tw / th;
             const a_box = rect.w / rect.h;
-            if (a_img > a_box) {
-                uv.w = a_box / a_img;
-                uv.x = (1 - uv.w) / 2;
-            } else {
-                uv.h = a_img / a_box;
-                uv.y = (1 - uv.h) / 2;
-            }
+            if (a_img > a_box) uv.w = a_box / a_img else uv.h = a_img / a_box;
         }
         dvui.renderTexture(tex, .{ .r = rect, .s = scale }, .{
             .corners = .round(radius / scale),

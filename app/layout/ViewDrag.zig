@@ -1878,19 +1878,26 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
         float_rules.initialRect(Floats.toRules(src.toNatural()), window);
-    // Let go over no window of the app's (`floatAway`): its size, round where it was let go, out
-    // there — not held on the main window.
-    if (at) |p| {
-        rect.x = p.x / scale - rect.w / 2;
-        rect.y = p.y / scale - rect.h / 2;
-    }
-    // Out of a float, home is still where that float came from: the place it opened over is a
-    // float's, and goes with it.
-    const home = if (out_of) |i| state.floats.items.items[i].home else if (holder) |h| state.internName(l.gpa, h) else "";
     // The glass it was carried in, when a drag let go of it here; the place itself, when nothing
     // was carried (the picker, a test).
     const d = &state.view_drag;
     const carried = d.active() and std.mem.eql(u8, d.name, source) and d.shape_rect.w > 0;
+    // Let go over no window of the app's (`floatAway`): its size, out there — not held on the main
+    // window — its top left where the carried glass's was, which rode below and right of the
+    // pointer: the glass grows into it right and down from where it was let go, rather than out
+    // round the pointer. With nothing carried, round where it was let go.
+    if (at) |p| {
+        if (carried) {
+            rect.x = d.shape_rect.x / scale;
+            rect.y = d.shape_rect.y / scale;
+        } else {
+            rect.x = p.x / scale - rect.w / 2;
+            rect.y = p.y / scale - rect.h / 2;
+        }
+    }
+    // Out of a float, home is still where that float came from: the place it opened over is a
+    // float's, and goes with it.
+    const home = if (out_of) |i| state.floats.items.items[i].home else if (holder) |h| state.internName(l.gpa, h) else "";
     var landing: Floats.Landing = .{
         .from = if (carried) d.shape_rect else src,
         .radius = if (carried) d.shape_radius else core.corners.scaled(core.corners.card) * scale,
