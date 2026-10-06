@@ -162,6 +162,26 @@ window's rect, the menu is drawn in the frame's band past it, as floats are.
 display as a screen (`core.screens`), so a menu near the window's edge hangs past it rather than
 flipping inward.
 
+**Following its window (built on macOS, #227).** A menu of the main window's is the main window's
+child window once it shows (`SDL_SetWindowParent`), so the window server moves it with the main
+window, smoothly through a drag that fizzy's frames could only follow a frame behind; the app
+re-places it only when where it lies over the main window changes. AppKit drops a child to its
+parent's level, so a menu's is set back to a popup's. A menu opened in a float that is out is
+drawn where it opened in the float's band and cannot follow the float's window; it closes when that
+window moves, as an OS menu closes on a press outside it. Where a platform cannot attach a menu to
+its window, the same rule applies to the main window: the menu closes when the window moves.
+
+**Dialogs (built on macOS, #227).** Every `core.dialogs` dialog goes the same way, ahead of the menu
+bar's dropdowns and tooltips: its own OS window, never focused (the main window keeps the keyboard,
+dvui routes keys to the dialog), the pointer read in the main window's frame, its window the main
+window's child, at the main window's level rather than a popup's, other apps' windows going over
+both. It draws no dim, frost, shadow or fill of its own, the main window is left undimmed, and its
+window fades as it flies shut. dvui draws dialogs at the very end of the frame, after the app takes
+subwindows into their windows, so `core.dialogs.drawEarly` draws fizzy's dialogs first and
+`dialogWindow` skips any it drew when dvui's pass reaches it. A setting, "Native dialogs", beside
+"Native menus". Open: a float window kept above the main one can cover a dialog; a dialog opened
+in a float that is out stays where it opened.
+
 **Open:**
 - keyboard focus — whether the popup takes it (Wayland's grab does) or the parent keeps it and
   forwards keys to the menu;
