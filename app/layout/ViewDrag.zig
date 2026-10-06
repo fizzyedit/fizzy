@@ -75,18 +75,14 @@ morph_rect: dvui.Rect.Physical = .{},
 morph_radius: f32 = 0,
 card_start_ns: i128 = 0,
 /// The view carried as a drop of glass (`dropShapes`), where the glass program draws: its head
-/// following the pointer on a spring, and a trail of smaller drops laid behind it by the hand's
+/// following the pointer, eased — critically damped, never swinging past — and a trail of smaller
+/// drops laid behind it by the hand's
 /// pace (`trail_vel`), so it draws out as it is dragged and lies back in as it slows. This frame's
 /// shapes, head first.
 drop_head: core.Spring = .{},
 /// The pointer's pace, eased (`dropShapes`), physical pixels a second, and where it was last frame.
 trail_vel: dvui.Point.Physical = .{},
 trail_mouse: ?dvui.Point.Physical = null,
-/// The trail's length this frame, physical — past the head, ahead of it, as it sloshes — and how
-/// fast it is changing, on its spring (`stepSlosh`); and the way it last lay, kept while it settles.
-trail_len: f32 = 0,
-trail_len_vel: f32 = 0,
-trail_dir: dvui.Point.Physical = .{},
 /// Where the pointer was last frame, for a jump from one window's part of the frame to another's
 /// (`followAcross`).
 last_mouse: ?dvui.Point.Physical = null,
@@ -538,8 +534,6 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     d.drop_head = .{};
     d.trail_vel = .{};
     d.trail_mouse = null;
-    d.trail_len = 0;
-    d.trail_len_vel = 0;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -584,8 +578,6 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.drop_head = .{};
     d.trail_vel = .{};
     d.trail_mouse = null;
-    d.trail_len = 0;
-    d.trail_len_vel = 0;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -1226,12 +1218,12 @@ const drop_r: f32 = 52;
 /// The drops trailing the carried view's head (`dropShapes`), the user's: each a share of the
 /// head's radius, laid behind it at a share of the trail's length — away from where the hand is
 /// going, as far as its pace draws the trail (`trail_reach_s`, at most `trail_most` of the head's
-/// radius). Its drops are not each on a spring: a drop whose drops each chased the one before rang
-/// at the least jerk of the head — pulled from one bubble to the next, it swung behind the head
-/// while it hovered (the user). From the hand alone, a bubble's pull moves the head and not the
-/// trail; only the trail's length is sprung, sloshing past the head as the hand stops
-/// (`trail_slosh_hz`). Tight to
-/// the head and subtle (the user): it peeks out behind it, at speed. Sizes step down evenly from the
+/// radius). Nothing of the drop is on a spring that swings (the user): whatever moved it on its own
+/// near the drop zones — drops chasing one another, eight points round the rim, a sloshing trail —
+/// re-formed the bubbles' joins under a hand held still, and jittered. The trail is the hand's
+/// pace, eased; the head follows the hand eased too, arriving without swinging past
+/// (`dropShapes`). A bubble's pull moves the head and not the trail. Tight to the head and subtle
+/// (the user): it peeks out behind it, at speed. Sizes step down evenly from the
 /// head to the smallest; mass is kept — the head gives up what the trail draws out of it — and
 /// while the drop is joined to a bubble its trail is poured into the head. Past the first, only
 /// where motion is playful (`core.motion`).
@@ -1245,21 +1237,9 @@ const drop_trail_tunes = [_]DropTrail{
 const trail_reach_s: f32 = 0.03;
 /// The longest the trail draws out, a share of the head's radius.
 const trail_most: f32 = 1.1;
-/// How quickly the trail takes up a change of the hand's pace, seconds.
-const trail_ease_s: f32 = 0.04;
-
-/// The trail's length is on a soft spring (`stepSlosh`, the user: wateriness, one blob moving
-/// organically): as the hand stops, it swings past the head — the drop bulging out ahead along the
-/// way it was going — and back, a few times, before it settles. One drop sloshing, from the hand's
-/// pace alone: eight points round the rim swung by its acceleration read as orbs loosely springing
-/// together, and acceleration, the noisiest thing a hand gives, kept them twitching under a drop
-/// held still over the drop zones (the user). Joined to a bubble, it settles at once.
-const trail_slosh_hz: f32 = 2.6;
-/// Damping at playful: under 1, a swing or two past the head. Critically damped where motion is
-/// minimal.
-const trail_slosh_damping: f32 = 0.32;
-/// How far ahead of the head it may swing, a share of the head's radius.
-const trail_ahead: f32 = 0.6;
+/// How quickly the trail takes up a change of the hand's pace, seconds: it lies back in about
+/// three of these after the hand stops.
+const trail_ease_s: f32 = 0.07;
 /// Points a second of the hand's pace that draw no trail: a hand held still trembles.
 const trail_still: f32 = 90;
 
@@ -1316,8 +1296,6 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         d.drop_head = .{};
         d.trail_vel = .{};
         d.trail_mouse = null;
-        d.trail_len = 0;
-        d.trail_len_vel = 0;
         d.drop_aim = 0;
         return d.drop_shapes[0..0];
     }
@@ -1347,8 +1325,8 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         aimed = b.c;
         target = .{ .x = target.x + (b.c.x - target.x) * drop_pull, .y = target.y + (b.c.y - target.y) * drop_pull };
     }
-    // Damped as it joins a bubble: pulled from one bubble to the next, it otherwise swung past.
-    var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = std.math.lerp(0.55, 0.95, d.drop_aim) });
+    // Eased onto where it goes, critically: it arrives without swinging past (`drop_trail_tunes`).
+    var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = 1 });
     // The hand's pace, eased (`trail_ease_s`) — a jump from one window's part of the frame to
     // another's is not pace (`followAcross` moved where it was by the jump).
     if (d.trail_mouse) |was| if (dt > 0) {
@@ -1362,14 +1340,10 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         d.trail_vel = .{};
     } else moving = true;
     // Behind the head, away from where the hand is going, as far as its pace past a still hand's
-    // draws the trail (`trail_still`) — on its spring, sloshing past the head as the hand stops
-    // (`stepSlosh`), along the way it last lay.
+    // draws the trail (`trail_still`).
     const going = @max(0, pace - trail_still * scale);
-    if (going > 0) d.trail_dir = .{ .x = -d.trail_vel.x / pace, .y = -d.trail_vel.y / pace };
-    const want_len: f32 = if (core.motion.off()) 0 else @min(going * trail_reach_s, trail_most * R);
-    if (stepSlosh(d, want_len, dt)) moving = true;
-    const trail_len = std.math.clamp(d.trail_len, -trail_ahead * R, trail_most * R);
-    const back = d.trail_dir;
+    const trail_len: f32 = if (core.motion.off()) 0 else @min(going * trail_reach_s, trail_most * R);
+    const back: dvui.Point.Physical = if (going > 0) .{ .x = -d.trail_vel.x / pace, .y = -d.trail_vel.y / pace } else .{};
     var trail_at: [drop_trail_tunes.len]dvui.Point.Physical = undefined;
     for (drop_trail_tunes, 0..) |tune, i| trail_at[i] = .{
         .x = d.drop_head.pos.x + back.x * trail_len * tune.at,
@@ -1426,33 +1400,6 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         d.drop_n += 1;
     }
     return d.drop_shapes[0..d.drop_n];
-}
-
-/// Step the trail's length toward `want` on its spring (`trail_slosh_hz`), damped to critical as the
-/// drop joins a bubble. Returns whether it is still moving.
-fn stepSlosh(d: *ViewDrag, want: f32, dt: f32) bool {
-    if (core.motion.off()) {
-        d.trail_len = 0;
-        d.trail_len_vel = 0;
-        return false;
-    }
-    if (dt <= 0) return d.trail_len != want;
-    const play = std.math.clamp((core.motion.level() - 0.5) * 2, 0, 1);
-    const w = 2 * std.math.pi * trail_slosh_hz * core.motion.rate();
-    const z = std.math.lerp(std.math.lerp(1, trail_slosh_damping, play), 1, d.drop_aim);
-    var left = std.math.clamp(dt, 0, 0.1);
-    while (left > 0) {
-        const h = @min(left, 0.004);
-        left -= h;
-        d.trail_len_vel += (-w * w * (d.trail_len - want) - 2 * z * w * d.trail_len_vel) * h;
-        d.trail_len += d.trail_len_vel * h;
-    }
-    if (@abs(d.trail_len - want) < 0.3 and @abs(d.trail_len_vel) < 2) {
-        d.trail_len = want;
-        d.trail_len_vel = 0;
-        return false;
-    }
-    return true;
 }
 
 /// The area two circles of radii `a` and `b`, `dist` apart, have in common.
