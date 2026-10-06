@@ -800,8 +800,10 @@ pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physi
 
 /// The least share of the size it would have with no ghost there that a drop shrinks to, to stay
 /// clear of the ghost of the float the view is carried out of (`zoneBounds`); any smaller, and it
-/// keeps that size, under the ghost.
-pub const ghost_min_share: f32 = 0.75;
+/// keeps that size, under the ghost. Two thirds or so: the drop's bubbles rest apart now, and the
+/// wider wheel shrinks further to fit beside a ghost — at three quarters, chosen for the narrower
+/// one, it sat under the ghost where it had fitted beside it.
+pub const ghost_min_share: f32 = 0.65;
 
 /// `zoneBounds` with the float the view is carried out of covering (`ghost`) or not.
 fn zoneBoundsAs(state: *const Layout.State, name: []const u8, ghost: bool) ?dvui.Rect.Physical {

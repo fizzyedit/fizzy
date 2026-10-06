@@ -132,7 +132,7 @@ pub const Wheel = struct {
 pub const all = [_]Zone{ .center, .{ .edge = .left }, .{ .edge = .right }, .{ .edge = .top }, .{ .edge = .bottom }, .remove };
 
 /// Points: the bubbles' layout as a wheel — the middle, the four sides round it, the trash in the
-/// crook between the right and the bottom — about 330 across: big enough to aim at without
+/// crook between the right and the bottom — about 345 across: big enough to aim at without
 /// looking, small enough to leave the place in view round it. Each bubble rests `gap` from the
 /// ones beside it.
 /// The middle a quarter bigger than it was (52): the drop reads as one glass round it, not a
@@ -144,22 +144,25 @@ const remove_r: f32 = 30;
 /// `merge`, for the glass's smooth union and the OS's container alike, measured), so each bubble is
 /// born inside the middle, pinches off it on its way out (`grow`) and rests a drop of its own —
 /// until the carried view is aimed at one, which swells (`join_swell`) until it runs into those
-/// beside it. Resting joined, they read as merged all the time (the user).
-const gap: f32 = merge / 2 + 4;
+/// beside it. Resting joined, they read as merged all the time; just past half the merge, they
+/// still reached for each other (the user).
+const gap: f32 = merge * 0.75;
 const side_d: f32 = center_r + side_r + gap;
 /// How much bigger the bubble the carried view is aimed at grows, as it lights: enough to close the
 /// gap to the bubbles beside it, so it runs into them — a side into the middle, the middle into
 /// every side — and into what is carried. The bubble alone, not the whole drop (the user).
-pub const join_swell: f32 = 0.25;
+pub const join_swell: f32 = 0.3;
 /// Points the trash keeps from the others even while one beside it swells: a drop of its own,
 /// joining none.
 const remove_apart: f32 = merge / 2 + 1;
-/// The trash on the diagonal, `remove_apart` from the right and the bottom swollen:
+/// The trash on the diagonal, `remove_apart` from the right and the bottom swollen —
 /// |(side_d − x, x)| is d = side_r·(1 + join_swell) + remove_r + remove_apart at
-/// x = (side_d + √(2·d² − side_d²)) / 2, the root out from the middle.
+/// x = (side_d + √(2·d² − side_d²)) / 2, the root out from the middle — and from the middle swollen.
 const remove_d: f32 = blk: {
     const d = side_r * (1 + join_swell) + remove_r + remove_apart;
-    break :blk (side_d + @sqrt(2 * d * d - side_d * side_d)) / 2;
+    const from_sides = (side_d + @sqrt(2 * d * d - side_d * side_d)) / 2;
+    const from_middle = (center_r * (1 + join_swell) + remove_r + remove_apart) / std.math.sqrt2;
+    break :blk @max(from_sides, from_middle);
 };
 /// Points: as a strip, one line with the wheel's own gap between each bubble and the next — the
 /// two sides the place's ends are at `end_d`, the other two beside the middle at `side_d`, and the
