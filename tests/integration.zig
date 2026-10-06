@@ -5171,6 +5171,31 @@ test "float: closing it sends its view home" {
     try std.testing.expect(editor.app.layout.assignment("Float 1") == null);
 }
 
+test "float: closing it loses no view its keywords would show nowhere" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    // A view whose keywords no place answers — a plugin's tools, merged into a float that came out
+    // of the panel its keywords fill.
+    try editor.app.host.registerSurface(.{ .id = "test.tools", .title = "Tools", .keywords = &.{"tools"}, .draw = ManyPanelFrame.draw });
+    try case.place("Panel", "Panel", .swap);
+    try editor.app.layout.assign(editor.app.gpa, "Float 1", &.{ "test.output", "test.tools" });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 2), case.shows("Float 1").len);
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    layout.closeFloat("Float 1");
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+    // Both back in the main window: Output where its keywords show it, Tools beside it in the
+    // place the float came out of, rather than let go to be shown nowhere.
+    const panel = case.shows("Panel");
+    try std.testing.expect(holds(panel, "test.output"));
+    try std.testing.expect(holds(panel, "test.tools"));
+}
+
 test "float: the saved layout brings it back, and Reset Layout takes it away" {
     var case = try ManyPanelCase.init();
     defer case.deinit();

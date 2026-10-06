@@ -1988,34 +1988,75 @@ fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Send the views of a closing float's places (`leaves`) back to `home`, the place the float came
-/// out of (`float_rules.goHome`): into its list when the user had arranged it, otherwise let go,
-/// for its keywords to place — which, for a place its keywords fill, is home again. Each is
-/// selected there, so the view the user had in front of them is in front of them again.
+/// Send the views of a closing float's places (`leaves`) back into the main window
+/// (`float_rules.goHome`): into the list of `home`, the place the float came out of, when the user
+/// had arranged it; let go where their keywords show them, which for a place its keywords fill is
+/// home again; and any other view into home's list all the same, or another place where home
+/// cannot take it — a view merged into the float from elsewhere may have keywords no place
+/// answers, and let go it would be shown nowhere. Each is selected where it lands, so the view
+/// the user had in front of them is in front of them again.
 pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
     const state = l.state;
-    // No home (a saved float whose home was lost): every view is let go. Not looked up — an
-    // unnamed place would answer to "".
+    // No home (a saved float whose home was lost). Not looked up — an unnamed place would answer
+    // to "".
     const r = if (home.len > 0) regionNamed(state, home) else null;
+    // Every view out of the float's places first, so what a place's keywords show is read with
+    // them all free: a view written into a place its keywords fill takes the rest of what they
+    // show there with it, and would leave behind one of the float's still held by it.
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
     for (leaves) |leaf| {
-        // A copy: assigning a view home takes it out of the leaf's list, freeing the one read.
-        const ids = l.arena.dupe([]const u8, state.assignment(leaf) orelse continue) catch continue;
-        for (ids) |raw| {
-            const id = ownId(l.arena, raw) orelse continue;
-            const held = holding(l, home);
-            switch (float_rules.goHome(.{
-                .declared = r != null,
-                .assigned = state.assignment(home) != null,
-                .shows_many = if (r) |x| x.shows == .many else false,
-                .empty = held.len == 0,
-            })) {
-                .add => state.assign(l.gpa, home, idsWith(l.arena, held, id)) catch {},
-                .put => state.assign(l.gpa, home, &.{id}) catch {},
-                .keywords => {},
-            }
-            if (r != null) selectNamed(l, home, id);
+        for (state.assignment(leaf) orelse continue) |raw| {
+            ids.append(l.arena, ownId(l.arena, raw) orelse continue) catch {};
         }
+        state.unassign(l.gpa, leaf);
     }
+    for (ids.items) |id| {
+        const held = holding(l, home);
+        var landed: ?[]const u8 = if (r != null) home else null;
+        switch (float_rules.goHome(.{
+            .declared = r != null,
+            .assigned = state.assignment(home) != null,
+            .shows_many = if (r) |x| x.shows == .many else false,
+            .empty = held.len == 0,
+            .keywords_place = keywordsPlace(l, id),
+        })) {
+            .add => state.assign(l.gpa, home, idsWith(l.arena, held, id)) catch {},
+            .put => state.assign(l.gpa, home, &.{id}) catch {},
+            .keywords => {},
+            .elsewhere => {
+                landed = null;
+                if (mainPlaceFor(l, id)) |other| {
+                    state.assign(l.gpa, other.name, idsWith(l.arena, holding(l, other.name), id)) catch {};
+                    landed = other.name;
+                }
+            },
+        }
+        if (landed) |name| selectNamed(l, name, id);
+    }
+}
+
+/// Whether a place's keywords would show `id`, held by no place's list, of their own accord: a
+/// place left to its keywords that accepts it.
+fn keywordsPlace(l: *Layout, id: []const u8) bool {
+    const s = l.host.surfaceById(id) orelse return false;
+    if (s.keywords.len == 0) return false;
+    for (l.state.regions.items) |*r| {
+        if (l.state.assignment(r.name) != null) continue;
+        if (l.offers(r, s) and sdk.keywords.accepts(r.keywords, s.keywords)) return true;
+    }
+    return false;
+}
+
+/// Where a closing float's view goes that its home cannot take and its keywords show nowhere
+/// (`sendHome`): the first place of the main window's, in the shape's order, that shows several
+/// views and may show it.
+fn mainPlaceFor(l: *Layout, id: []const u8) ?*const Region {
+    const s = l.host.surfaceById(id) orelse return null;
+    for (l.state.regions.items) |*r| {
+        if (r.shows != .many or l.state.floatRoot(r.name) != null) continue;
+        if (l.offers(r, s)) return r;
+    }
+    return null;
 }
 
 /// An empty place carried somewhere — the place itself is what moves, there being nothing in it.
