@@ -1036,6 +1036,29 @@ void fizzy_macos_viewport_order_above(void *nswindow, void *other) {
 }
 
 /*
+ * `nswindow` at `other`'s level and just above it: a float's window born of a drop, over the drag's
+ * overlay while the glass in it goes (`Popout.liftOver`) — under it, the overlay's lens bent the
+ * window's picture. `fizzy_macos_viewport_settle` puts it back at a window's own level.
+ */
+void fizzy_macos_viewport_lift(void *nswindow, void *other) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSWindow *below = (__bridge NSWindow *)other;
+        if (window == nil || below == nil) return;
+        if ([window level] < [below level]) [window setLevel:[below level]];
+        fizzy_macos_viewport_order_above(nswindow, other);
+    }
+}
+
+void fizzy_macos_viewport_settle(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil || [window level] == NSNormalWindowLevel) return;
+        [window setLevel:NSNormalWindowLevel];
+    }
+}
+
+/*
  * A menu's window made its parent's child (`SDLBackend`, `Viewport.follow_main`), so the OS moves it
  * with the parent: AppKit put it at the parent's level as it did, under every window kept above the
  * main one. Back at a menu's.

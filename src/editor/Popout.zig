@@ -101,6 +101,9 @@ const Out = struct {
     title_len: u8 = 0,
     /// The carried glass it is growing out of, landing (`growFrame`).
     grow: ?Grow = null,
+    /// Born of a drop: its window kept over the drag's overlay while that still holds glass
+    /// (`growFrame`), at the overlay's level, then back at its own.
+    lifted: bool = false,
     /// Its base's opacity, eased between windowed and maximized as the main window's is
     /// (`Editor.easeWindowOpacity`).
     opacity: Editor.WindowOpacity = .{},
@@ -729,7 +732,10 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         // colour stay in the carry window, over the glass.
         const drops = nativeGlass();
         const window_in: f32 = if (drops) growDrops(land, rect, radius, to) else 0;
-        if (drops) if (overlay) |*ov| viewports.orderAbove(g.carry.viewport, ov.viewport);
+        if (drops) if (overlay) |*ov| {
+            viewports.orderAbove(g.carry.viewport, ov.viewport);
+            liftOver(o, ov);
+        };
         // The window's colour comes in with the picture, as much of it as the window it grows into
         // will have (`windowShade`): with none, the glass ended lighter than that window, which
         // popped darker on the last frame as it took over (the user).
@@ -742,7 +748,24 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         releaseCarry(&g.carry);
         o.grow = null;
     }
+    // Over the overlay for as long as it holds glass — the drop zones it was let go over still
+    // going — and back at its own level once it is gone.
+    if (o.lifted) {
+        if (overlay) |*ov| liftOver(o, ov) else {
+            viewports.settle(o.viewport);
+            o.lifted = false;
+        }
+    }
     return 1;
+}
+
+/// A float's window born of a drop, over the drag's overlay (`overlayFrame`): under it, the glass
+/// still in the overlay — the window growing out of it, the drop zones it was let go over going, in
+/// the very place the window opens — bent the window's picture with its lens, its title folded back
+/// on itself for a frame (the user). Over it, they go beneath the window.
+fn liftOver(o: *Out, ov: *Carry) void {
+    viewports.lift(o.viewport, ov.viewport);
+    o.lifted = true;
 }
 
 /// How much of a float's window its colour covers, settled, at the window opacity: a window of

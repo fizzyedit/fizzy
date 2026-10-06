@@ -312,6 +312,18 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius, alpha);
     }
 
+    /// `vp`'s window at `other`'s level and just above it — a float born of a drop, over the drag's
+    /// glass while that goes — until `settle` puts it back at its own. macOS.
+    pub fn lift(vp: *Viewport, other: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportLift(vp, other);
+    }
+
+    pub fn settle(vp: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportSettle(vp);
+    }
+
     /// `vp`'s window put just above `other`'s in the stacking (a growing float's picture over the
     /// glass it grows out of). macOS.
     pub fn orderAbove(vp: *Viewport, other: *Viewport) void {
