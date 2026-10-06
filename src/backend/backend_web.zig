@@ -196,7 +196,7 @@ pub const viewports = struct {
         return null;
     }
     pub fn mainOffset(_: *Viewport, _: dvui.Point.Physical) void {}
-    pub const GlassShape = extern struct { x: f64, y: f64, w: f64, h: f64, radius: f64, lit: f64, alpha: f64 };
+    pub const GlassShape = extern struct { x: f64, y: f64, w: f64, h: f64, radius: f64, lit: f64, alpha: f64, frost: f64 };
     pub fn liquidGlass() bool {
         return false;
     }

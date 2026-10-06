@@ -19,6 +19,10 @@ pub const Shape = struct {
     lit: f32 = 0,
     /// How much of it there is (0…1): coming in, going.
     alpha: f32 = 1,
+    /// How much of the frost's blur it takes in its middle (0…1): whole for a bubble carrying an
+    /// icon, which reads through a blur of what is under it, as the app's own glass blurs; none
+    /// for the carried view, a clear lens over its picture beneath (`publishUnder`).
+    frost: f32 = 1,
 };
 
 /// The most pieces of glass in a frame: a carried drop's head and tail, and the bubbles of the
@@ -46,6 +50,18 @@ fn current() *Frame {
 /// Whether the OS draws a view drag's glass this frame, set by the app before anything draws.
 pub fn publishOn(on_: bool) void {
     current().on = on_;
+}
+
+/// Whether the carried view's picture goes under the OS's glass this frame, in a window of its own
+/// beneath the drag's (the app's, each frame): the glass then bends it, a lens over what is carried.
+/// The drag hands it over rather than drawing it over the glass.
+pub fn publishUnder(on_: bool) void {
+    dvui.dataSet(null, key_id, "_under", on_);
+}
+
+/// Whether the carried view's picture goes under the OS's glass this frame (`publishUnder`).
+pub fn under() bool {
+    return dvui.dataGet(null, key_id, "_under", bool) orelse false;
 }
 
 /// Whether the OS draws a view drag's glass this frame (`publishOn`): declare it (`add`), draw none.

@@ -210,6 +210,8 @@ pub const GlassShape = extern struct {
     radius: f64,
     lit: f64,
     alpha: f64,
+    /// How much of the frost's blur it takes in its middle (`core.native_glass.Shape.frost`).
+    frost: f64,
 };
 
 /// The most pieces of glass an overlay holds.

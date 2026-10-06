@@ -169,6 +169,8 @@ pub fn beginFrame(state: *State) void {
     // is on, and after it while its drops are still running back together (`ViewDrag.last_pending`)
     // — their going, as their coming, is the OS's glass too.
     fizzy.core.native_glass.publishOn(nativeGlass() and (state.view_drag.active() or state.view_drag.last_pending_count > 0));
+    // And the carried view's picture under that glass, in a window of its own (`photoFrame`).
+    fizzy.core.native_glass.publishUnder(nativeGlass() and viewports.carries);
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
     // Menus in windows of their own (`menuFrame`), kept on the display rather than the window.
     fizzy.core.screens.publishMenus(if (nativeMenus()) displayNatural() else null);
@@ -461,6 +463,7 @@ fn overlaySpacing(s: f32) f32 {
 /// drag does; a float the drop opens grows out of a carry window of its own (`growFrame`).
 fn overlayFrame(state: *State) void {
     const d = &state.view_drag;
+    defer if (overlay) |*ov| photoFrame(state, ov) else releasePhoto();
     // Kept past the drag while its drops still go, and gone once there is no glass left.
     if (!d.active() and fizzy.core.native_glass.shapes().len == 0) {
         if (overlay) |*o| releaseCarry(o);
@@ -497,6 +500,7 @@ fn overlayFrame(state: *State) void {
             .radius = sh.radius / s,
             .lit = sh.lit,
             .alpha = sh.alpha,
+            .frost = sh.frost,
         };
         n += 1;
     }
@@ -757,6 +761,48 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         }
     }
     return 1;
+}
+
+/// The carried view's picture beneath the drag's glass (`core.native_glass.publishUnder`,
+/// `ViewDrag.photo_under`): a window of its own just under the overlay, the picture in it on the
+/// window's colour, opaque, rounded to the drop's head, so the head's lens bends it as glass over a
+/// picture does. Drawn over the glass, faint over a clear lens, it was hard to tell what was carried
+/// (the user).
+var under_photo: ?Carry = null;
+
+fn photoFrame(state: *State, ov: *Carry) void {
+    const d = &state.view_drag;
+    const pu = (if (d.active()) d.photo_under else null) orelse return releasePhoto();
+    const tex = d.texture orelse return releasePhoto();
+    if (pu.alpha <= 0.01) return releasePhoto();
+    const place = inMainFrame(pu.rect, dvui.windowRectPixels()) orelse return releasePhoto();
+    if (under_photo == null) {
+        const vp = viewports.openCarry(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }) orelse return;
+        under_photo = .{ .viewport = vp };
+    }
+    const c = &under_photo.?;
+    viewports.orderAbove(ov.viewport, c.viewport);
+    const drawing = carryBegin(c, place, pu.rect, pu.radius, 1, 0) orelse return;
+    defer carryEnd(c, drawing);
+    // The picture alone: no material of its own under the glass.
+    viewports.carryShape(c.viewport, null, 1);
+    const cw = dvui.currentWindow();
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(drawing.shown);
+    const prev_alpha = cw.alpha;
+    dvui.alphaSet(1);
+    defer dvui.alphaSet(prev_alpha);
+    const s = dvui.windowNaturalScale();
+    var fill = dvui.themeGet().color(.content, .fill);
+    fill.a = @intFromFloat(@round(255 * std.math.clamp(pu.alpha, 0, 1)));
+    pu.rect.fill(dvui.CornerRect.Physical.all(pu.radius), .{ .color = .{ .color = fill }, .fade = 0 });
+    dvui.renderTexture(tex, .{ .r = pu.rect, .s = s }, .{ .corners = .round(pu.radius / s), .colormod = dvui.Color.white.opacity(pu.alpha), .uv = pu.uv }) catch {};
+}
+
+fn releasePhoto() void {
+    if (under_photo) |*p| releaseCarry(p);
+    under_photo = null;
 }
 
 /// A float's window born of a drop, over the drag's overlay (`overlayFrame`): under it, the glass
