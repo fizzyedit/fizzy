@@ -31,6 +31,7 @@ const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const core = @import("core");
 const update_notify = @import("app").update.update_notify;
+const restart = @import("app").restart;
 
 const Entry = fizzy.Entry;
 const Editor = @This();
@@ -3178,6 +3179,10 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.corner_roundness = parsed.corner_roundness;
     editor.app.settings.motion = parsed.motion;
     editor.app.settings.motion_speed = parsed.motion_speed;
+    editor.app.settings.glass_shader = parsed.glass_shader;
+    editor.app.settings.float_windows = parsed.float_windows;
+    editor.app.settings.native_glass = parsed.native_glass;
+    editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
@@ -3575,6 +3580,12 @@ pub fn windowBase(opacity: f32) dvui.Color {
     };
 }
 
+/// Whether a setting the app takes only at launch has been changed since (`Popout.restartPending`):
+/// the settings pane and the info bar offer a restart (`app.restart`).
+pub fn restartPending(_: *const Editor) bool {
+    return Popout.restartPending();
+}
+
 pub fn tick(editor: *Editor) !dvui.App.Result {
     // (A playing demo has already had its turn: `Entry.frameOnce` runs `Demo.frame` first.)
     // Finger or mouse: how far a tap may drift, here and (through the context sync) in every
@@ -3669,6 +3680,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (needs_save_status_anim_tick and dvui.timerDoneOrNone(wd.id)) {
         dvui.timer(wd.id, 16_000);
     }
+    // A restart asked for (the Restart command, a downloaded update): its quit posted before the
+    // frame's quit is read below, so unsaved documents are asked about as for any quit; with none
+    // the frame ends closing, and `Entry.AppDeinit` starts fizzy again.
+    restart.tick(Dialogs.AppQuitUnsaved.active(dvui.currentWindow()) or editor.app.quit_in_progress or
+        editor.app.quit_save_all_ids.items.len > 0 or editor.app.quit_saves_in_flight.count() > 0);
     for (dvui.events()) |*e| {
         if (e.handled) continue;
         if (!dvui.eventMatchSimple(e, wd)) continue;

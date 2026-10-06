@@ -103,11 +103,38 @@ const Grow = struct {
 pub fn enabled() bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.supported) return false;
     if (env_on == null) {
-        const raw = std.c.getenv("FIZZY_POPOUT");
-        const asked = if (raw) |r| !std.mem.eql(u8, std.mem.span(r), "0") else builtin.os.tag == .macos;
+        launched_float_windows = fizzy.editor().app.settings.float_windows;
+        const asked = envSwitch("FIZZY_POPOUT") orelse launched_float_windows.?;
         env_on = asked and viewports.available();
     }
     return env_on.?;
+}
+
+/// The float windows setting (`Settings.float_windows`) as the app launched with it: floats move
+/// in and out of windows only at launch, so a change to it waits for a restart.
+var launched_float_windows: ?bool = null;
+
+/// Whether a setting fizzy takes only at launch has been changed since (`Editor.restartPending`):
+/// floats as windows.
+pub fn restartPending() bool {
+    if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.supported) return false;
+    const launched = launched_float_windows orelse return false;
+    return launched != fizzy.editor().app.settings.float_windows and envSwitch("FIZZY_POPOUT") == null;
+}
+
+/// An environment switch, read once: `NAME=0` off, any other value on, unset null — the setting
+/// rules then. For testing and sandboxes, over the settings.
+fn envSwitch(comptime name: [:0]const u8) ?bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    const Cache = struct {
+        var read = false;
+        var value: ?bool = null;
+    };
+    if (!Cache.read) {
+        Cache.read = true;
+        Cache.value = if (std.c.getenv(name)) |v| !std.mem.eql(u8, std.mem.span(v), "0") else null;
+    }
+    return Cache.value;
 }
 
 /// Before the frame draws anything: a window whose float has gone goes too, each window the OS
@@ -371,17 +398,15 @@ const carried_backing: f32 = 0.2;
 /// A view drag's glass — the carried view and the drop zones' bubbles — is one overlay of the OS's
 /// Liquid Glass over the display the main window is on, wherever the OS has it
 /// (`viewports.liquidGlass`, macOS 26): the OS's glass where it can be, the app's where it cannot
-/// (`docs/NATIVE_WINDOWS_PLAN.md`). `FIZZY_NATIVE_GLASS=0` keeps the app's.
-var native_env: ?bool = null;
+/// (`docs/NATIVE_WINDOWS_PLAN.md`) — as the setting says (`Settings.native_glass`,
+/// `FIZZY_NATIVE_GLASS` over it). Off, the app's glass.
 fn nativeGlass() bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.carries) return false;
-    if (native_env == null) {
-        const raw = std.c.getenv("FIZZY_NATIVE_GLASS");
-        const asked_off = if (raw) |r| std.mem.eql(u8, std.mem.span(r), "0") else false;
-        native_env = !asked_off and viewports.liquidGlass();
-    }
-    return native_env.?;
+    if (!(envSwitch("FIZZY_NATIVE_GLASS") orelse fizzy.editor().app.settings.native_glass)) return false;
+    if (liquid_glass == null) liquid_glass = viewports.liquidGlass();
+    return liquid_glass.?;
 }
+var liquid_glass: ?bool = null;
 
 /// The drag's overlay of the OS's glass (`overlayFrame`), while a view is carried.
 var overlay: ?Carry = null;
@@ -890,16 +915,12 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, opacity: f32)
 }
 
 /// Whether menus are windows of their own (`menuFrame`): where the OS can show them (macOS), with
-/// floats as windows, unless `FIZZY_NATIVE_MENUS=0`.
+/// floats as windows, as the setting says (`Settings.native_menus`, `FIZZY_NATIVE_MENUS` over it).
 fn nativeMenus() bool {
     if (comptime !viewports.menus) return false;
     if (!viewports.available()) return false;
-    if (menus_env == null) {
-        menus_env = if (comptime builtin.target.cpu.arch == .wasm32) true else if (std.c.getenv("FIZZY_NATIVE_MENUS")) |v| !std.mem.eql(u8, std.mem.span(v), "0") else true;
-    }
-    return menus_env.?;
+    return envSwitch("FIZZY_NATIVE_MENUS") orelse fizzy.editor().app.settings.native_menus;
 }
-var menus_env: ?bool = null;
 
 /// The display the main window is on, natural, in the main window's frame: the screen menus are kept
 /// on where they are windows of their own (`core.screens.publishMenus`).

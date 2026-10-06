@@ -7,6 +7,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const auto_update = @import("auto_update.zig");
 const update_install = @import("update_install.zig");
+const restart = @import("../restart.zig");
 
 const Phase = enum(u8) {
     pending,
@@ -35,9 +36,9 @@ var toast_armed: bool = false;
 var progress_toast_armed: bool = false;
 
 const TOAST_TIMEOUT_US: i32 = 10 * std.time.us_per_s;
-/// Used for the progress toast: well over any plausible download/apply window,
-/// so the toast never fades out before the worker either restarts the process
-/// or moves to `.failed` / `.no_update` and the user dismisses it explicitly.
+/// Used for the progress toast: well over any plausible download window, so the
+/// toast never fades out before the download ends in a restart or in `.failed` /
+/// `.no_update`, and the user dismisses it explicitly.
 const PROGRESS_TOAST_TIMEOUT_US: i32 = std.math.maxInt(i32);
 
 /// Stable, non-null subwindow id for this toast. Using a non-null id makes DVUI's
@@ -245,9 +246,9 @@ fn displayUpdateToast(id: dvui.Id) !void {
         .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
     })) {
         // Kick the background updater on a worker thread and swap the launch
-        // toast for a progress toast in the same slot. The worker runs to either
-        // `std.process.exit(0)` (success) or `.failed`/`.no_update` (the progress
-        // toast lets the user dismiss it).
+        // toast for a progress toast in the same slot. The download ends in a
+        // restart into the new version (`restart`) or in `.failed`/`.no_update`
+        // (the progress toast lets the user dismiss it).
         kickInstall();
         dvui.toastRemove(id);
         return;
@@ -334,7 +335,11 @@ fn displayProgressToast(id: dvui.Id) !void {
     });
     defer box.deinit();
 
-    const label = update_install.phaseLabel(cur_phase);
+    // Downloaded, and the restart into it called off (an unsaved document kept open): offered
+    // again here, and in the app's own restart affordances; Velopack installs it on the next
+    // launch regardless.
+    const waiting = cur_phase == .downloaded and !restart.requested();
+    const label = if (waiting) "Update downloaded" else update_install.phaseLabel(cur_phase);
     dvui.labelNoFmt(@src(), label, .{}, .{
         .gravity_y = 0.5,
         .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
@@ -354,10 +359,28 @@ fn displayProgressToast(id: dvui.Id) !void {
     }
 
     // Terminal states get a dismiss button so the user can clear the toast.
-    // Active phases (`checking`/`downloading`/`applying`) don't — the worker
-    // is in-flight and the process will exit shortly on success.
+    // Active phases (`queued`/`downloading`, and `downloaded` while its restart
+    // runs) don't — the app is on its way to the new version.
     const terminal = cur_phase == .failed or cur_phase == .no_update;
-    if (terminal) {
+    if (waiting) {
+        if (dvui.button(@src(), "Restart to update", .{}, .{
+            .gravity_y = 0.5,
+            .style = .highlight,
+            .corners = dvui.CornerRect.all(1000),
+            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+        })) restart.request();
+        if (dvui.button(@src(), "Later", .{}, .{
+            .gravity_y = 0.5,
+            .style = .control,
+            .corners = dvui.CornerRect.all(1000),
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .margin = .{ .x = 6 },
+        })) {
+            progress_toast_armed = false;
+            dvui.toastRemove(id);
+            return;
+        }
+    } else if (terminal) {
         if (dvui.button(@src(), "Dismiss", .{}, .{
             .gravity_y = 0.5,
             .style = .control,
@@ -369,7 +392,7 @@ fn displayProgressToast(id: dvui.Id) !void {
             dvui.toastRemove(id);
             return;
         }
-    } else {
+    } else if (cur_phase != .downloaded) {
         // While the worker is running, force a frame each tick so the progress
         // value updates smoothly even when nothing else triggers a redraw.
         dvui.refresh(null, @src(), null);

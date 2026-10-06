@@ -5,6 +5,8 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const assets = @import("assets");
 const update_notify = @import("app").update.update_notify;
+const update_install = @import("app").update.update_install;
+const restart = @import("app").restart;
 const Dialogs = fizzy.Editor.Dialogs;
 /// Font, height, icon side and spacing — fizzy draws every item with these, including
 /// plugin `Entry` chips, so the bar stays uniform as the font setting changes.
@@ -135,6 +137,29 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
             },
         );
         dvui.label(@src(), "{s}", .{std.fs.path.basename(folder)}, .{ .font = font, .gravity_y = 0.5 });
+    }
+
+    // An update downloaded and waiting, or a setting taken only at launch changed since
+    // (`Editor.restartPending`): said here, and the restart one click away.
+    const update_waiting = update_install.downloaded();
+    if (update_waiting or editor.restartPending()) {
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = infobar.item_spacing } });
+        const accent = dvui.themeGet().color(.highlight, .fill);
+        fizzy.core.icon.icon(
+            @src(),
+            "restart_pending_icon",
+            icons.tvg.lucide.@"rotate-ccw",
+            .{ .stroke_color = .{ .color = accent } },
+            .{
+                .gravity_y = 0.5,
+                .min_size_content = .{ .w = infobar.iconSide(), .h = infobar.iconSide() },
+                .max_size_content = .size(.{ .w = infobar.iconSide(), .h = infobar.iconSide() }),
+            },
+        );
+        const why = if (update_waiting) "Restart to update" else "Restart to apply settings";
+        if (dvui.labelClick(@src(), "{s}", .{why}, .{}, .{ .font = font, .gravity_y = 0.5, .color_text = .{ .color = accent } })) {
+            restart.request();
+        }
     }
 
     drawPluginEntries(bar_h);

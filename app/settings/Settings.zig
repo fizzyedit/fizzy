@@ -96,6 +96,21 @@ motion_speed: f32 = core.motion.default_speed,
 /// compare the two.
 glass_shader: bool = true,
 
+/// Whether a float can leave the main window into an OS window of its own, and a view be carried
+/// past the main window to open one there. Taken at launch: a change waits for a restart, which the
+/// app says (`Editor.restartPending`). On by default on macOS; `FIZZY_POPOUT` overrides it.
+float_windows: bool = builtin.os.tag == .macos,
+
+/// Whether a view drag's glass — the carried view and the drop zones — is the OS's own (Liquid Glass,
+/// macOS 26) rather than the app's, where floats are windows. Applied at once; `FIZZY_NATIVE_GLASS`
+/// overrides it.
+native_glass: bool = true,
+
+/// Whether menus open in OS windows of their own — the OS's material, shadow and corners, over every
+/// window, past the window's edge — rather than drawn inside the window they open from, where floats
+/// are windows. Applied at once; `FIZZY_NATIVE_MENUS` overrides it.
+native_menus: bool = true,
+
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.
 input_scheme: InputScheme = .auto,
