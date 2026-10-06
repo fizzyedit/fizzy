@@ -94,7 +94,8 @@ pointer_pin: PointerPin = .none,
 /// back over it at the next present (`renderPresent`). Asking AppKit for the order is a trip to the
 /// window server — 2 ms a frame on average, 10 at worst, asked every frame — so it is asked only
 /// then.
-order_pending: bool = false,
+/// The main window has been focused once (`noteMainForward`).
+main_focused_once: bool = false,
 /// The main window's skin, as last set (`platform.window.setBackground`): each float's own window
 /// is skinned so as it opens (`viewportGlass`).
 window_skin: ?dvui.Color = null,
@@ -183,6 +184,8 @@ pub const Viewport = struct {
     /// float's band for one opened in a float that is out (`viewportMainOffset`).
     menu: bool = false,
     main_offset: viewport_map.Point = .{ .x = 0, .y = 0 },
+    /// To be put over the main window before the frame presents, once (`noteMainForward`).
+    over_main: bool = false,
     /// The window it rides on (`viewportOpenMenu`): the main window, for a menu or dialog of the
     /// main window's; a float's, for a dialog opened in it. Made that window's child once shown, so
     /// the OS moves it with it — smoothly through a drag, which the app's frames could only follow
@@ -795,17 +798,24 @@ pub fn refresh(_: *SDLBackend) void {
     toErr(c.SDL_PushEvent(&ue), "SDL_PushEvent in refresh") catch {};
 }
 
-/// The main window come forward — focused (the app activated, at launch too), pressed, shown,
-/// restored — maybe over a viewport's window: they are put back over it before the frame presents
-/// (`order_pending`). From either way events arrive: polled (`addAllEvents`) or through SDL's
-/// callbacks (`appEvent`), which is how fizzy runs on macOS — where this only ever ran from the
-/// first, and a float's window opened at launch went behind the main window as the app activated.
+/// The main window shown, restored, or first focused — the app activating at launch — over the
+/// floats' windows: they are put over it once, before the frame presents (`Viewport.over_main`).
+/// Not when it is pressed, or focused again: a float's window stacks as any window does (the user),
+/// and one put back over the main window at every press on it left the part under it unworkable.
+/// From either way events arrive: polled (`addAllEvents`) or through SDL's callbacks (`appEvent`),
+/// which is how fizzy runs on macOS.
 fn noteMainForward(self: *SDLBackend, target: ?*c.SDL_Window, event_type: u32) void {
     if (target == null or target != self.window) return;
-    switch (event_type) {
-        c.SDL_EVENT_WINDOW_FOCUS_GAINED, c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_RESTORED => self.order_pending = true,
-        else => {},
-    }
+    const over = switch (event_type) {
+        c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_RESTORED => true,
+        c.SDL_EVENT_WINDOW_FOCUS_GAINED => !self.main_focused_once,
+        else => false,
+    };
+    if (event_type == c.SDL_EVENT_WINDOW_FOCUS_GAINED) self.main_focused_once = true;
+    if (!over) return;
+    for (&self.viewports) |*slot| if (slot.*) |*v| {
+        v.over_main = true;
+    };
 }
 
 pub fn addAllEvents(self: *SDLBackend, win: *dvui.Window) !void {
@@ -1366,7 +1376,7 @@ extern fn fizzy_macos_viewport_overlay(nswindow: ?*anyopaque, main: ?*anyopaque)
 extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]const GlassShape, n: c_long, spacing: f64, look: *const GlassLook) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
-extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_over_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
 
 /// Give `vp`'s window a material behind the float's glass, so the float's frost reads the desktop
@@ -1811,19 +1821,20 @@ pub fn renderPresent(self: *SDLBackend) void {
             };
         }
         if (show) vp.shown = true;
-        self.order_pending = true;
+        vp.over_main = true;
     }
-    // Over the main window, as on Windows, where it is owned by it (`viewportOpen`): SDL showed it
-    // below the key window, and a press on the main window brings that forward.
-    if (comptime builtin.os.tag == .macos) if (self.order_pending) {
-        self.order_pending = false;
+    // Over the main window as it first shows: SDL showed it below the key window. Once
+    // (`noteMainForward`): from there it stacks as any window does.
+    if (comptime builtin.os.tag == .macos) {
         const main_ns = cocoaWindow(self.window);
         for (&self.viewports) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
+            if (!vp.over_main) continue;
+            vp.over_main = false;
             if (!vp.mapped or vp.passive or vp.menu) continue;
-            fizzy_macos_viewport_keep_above(cocoaWindow(vp.window), main_ns);
+            fizzy_macos_viewport_over_main(cocoaWindow(vp.window), main_ns);
         }
-    };
+    }
     self.manage_backend_tracking.check(.renderPresent);
 }
 

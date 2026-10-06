@@ -205,14 +205,10 @@ static NSImage *glassMask(double inset, double radius) {
 
 /* Undo `fizzy_macos_viewport_glass` before SDL destroys the window: the vibrancy view gone, and
  * its Window menu item (`fizzy_macos_viewport_windows_item`). */
-/* The float windows kept over the main one (`fizzy_macos_viewport_keep_above`). */
-static NSHashTable *g_kept_above;
-
 void fizzy_macos_viewport_unglass(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
-        [g_kept_above removeObject:window];
         [NSApp removeWindowsItem:window];
         NSView *frame = [[window contentView] superview];
         if (frame == nil) return;
@@ -227,95 +223,25 @@ void fizzy_macos_viewport_unglass(void *nswindow) {
 }
 
 /*
- * A popped-out float's window stays over the main window, as a window the main one owns does on
- * Windows — without being made its child window, which AppKit would move with it (the pop-out
- * plan's decision 2: the main window moving leaves the windows that came out of it where they
- * are). SDL orders a window it shows without activating it *below* the key window, the main one:
- * this orders it back above, and again whenever the main window has come in front of it (a press
- * on the main window brings it forward). Cheap when nothing is out of order: one comparison of the
- * app's window order. Other apps' windows still go over it, as over the main window.
+ * A popped-out float's window put over the main window, once (`SDLBackend`): as it first shows —
+ * SDL orders a window it shows without activating it *below* the key window, the main one — and as
+ * the main window first shows, the app activating at launch bringing it over the floats restored
+ * with it. Not kept there: a float's window stacks as any window does (the user) — a press on the
+ * main window brings it in front of the floats, and a press on a float brings that one forward. A
+ * float kept over the main window came back over it at every press there, and the part of the main
+ * window under it could not be worked in.
  */
-static void keepAboveNow(NSWindow *window, NSWindow *main) {
-    if (window == nil || main == nil) return;
-    if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
-    /* Either in a fullscreen Space of its own: the two are on different Spaces, and ordering
-     * one against the other would pull it across. */
-    if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
-    if ([window orderedIndex] < [main orderedIndex]) return;
-    [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
-}
-
-/* The main window the floats are kept over. */
-static NSWindow *g_kept_main = nil;
-static IMP g_order_window_imp = NULL;
-static id g_keep_monitor = nil;
-
-static void keepAllAbove(void) {
-    if (g_kept_above == nil || g_kept_main == nil) return;
-    for (NSWindow *w in [g_kept_above allObjects]) keepAboveNow(w, g_kept_main);
-}
-
-/* The main window ordered in front — a press on it brings it forward — and the floats back over
- * it in the same call, before the window server has shown it over them. Put back on the app's
- * next frame instead, the main window's content showed through a float in front of it at every
- * press, for a frame or more (the user). */
-static void fizzy_order_window(id self, SEL cmd, NSWindowOrderingMode place, NSInteger other) {
-    typedef void (*OrderFn)(id, SEL, NSWindowOrderingMode, NSInteger);
-    if (g_order_window_imp != NULL) ((OrderFn)g_order_window_imp)(self, cmd, place, other);
-    if (self == g_kept_main && place == NSWindowAbove) keepAllAbove();
-}
-
-/* Once (idempotent): `fizzy_order_window` on the main window's class, AppKit's ordering under it;
- * and, for any way AppKit brings it forward without ordering it so, the floats put back right after
- * a press on it and as it becomes key. */
-static void keepAboveInstall(NSWindow *main) {
-    Class cls = [main class];
-    const SEL sel = @selector(orderWindow:relativeTo:);
-    if (class_getMethodImplementation(cls, sel) != (IMP)fizzy_order_window) {
-        Method base = class_getInstanceMethod(cls, sel);
-        if (base != NULL) {
-            const char *types = method_getTypeEncoding(base);
-            IMP inherited = method_getImplementation(base);
-            if (class_addMethod(cls, sel, (IMP)fizzy_order_window, types)) {
-                g_order_window_imp = inherited;
-            } else {
-                Method own = class_getInstanceMethod(cls, sel);
-                g_order_window_imp = method_getImplementation(own);
-                method_setImplementation(own, (IMP)fizzy_order_window);
-            }
-        }
-    }
-    if (g_keep_monitor == nil) {
-        g_keep_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown)
-                                                               handler:^NSEvent *(NSEvent *e) {
-            if ([e window] == g_kept_main) dispatch_async(dispatch_get_main_queue(), ^{ keepAllAbove(); });
-            return e;
-        }];
-#if !__has_feature(objc_arc)
-        [g_keep_monitor retain];
-#endif
-        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidBecomeKeyNotification
-                                                          object:main
-                                                           queue:nil
-                                                      usingBlock:^(__unused NSNotification *note) { keepAllAbove(); }];
-    }
-}
-
-void fizzy_macos_viewport_keep_above(void *nswindow, void *main_nswindow) {
+void fizzy_macos_viewport_over_main(void *nswindow, void *main_nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         NSWindow *main = (__bridge NSWindow *)main_nswindow;
         if (window == nil || main == nil) return;
-        if (g_kept_above == nil) {
-            g_kept_above = [NSHashTable weakObjectsHashTable];
-#if !__has_feature(objc_arc)
-            [g_kept_above retain];
-#endif
-        }
-        if (![g_kept_above containsObject:window]) [g_kept_above addObject:window];
-        g_kept_main = main;
-        keepAboveInstall(main);
-        keepAboveNow(window, main);
+        if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
+        /* Either in a fullscreen Space of its own: the two are on different Spaces, and ordering
+         * one against the other would pull it across. */
+        if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
+        if ([window orderedIndex] < [main orderedIndex]) return;
+        [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
     }
 }
 
