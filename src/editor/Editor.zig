@@ -180,6 +180,10 @@ window_opacity: f32 = 1.0,
 /// OS's fullscreen transitions instead of snapping. Snaps to its target on the first frame, so
 /// there is no fade at launch.
 window_opacity_anim: WindowOpacity = .{},
+/// The window's chrome hidden last frame — a fullscreen Space its end state — and until when, on the
+/// way back out, frames keep coming for its opacity to fade (`tick`).
+chrome_was_hidden: bool = false,
+space_exit_watch_ns: i128 = 0,
 
 /// Menu-bar clicks waiting for a safe point in the frame. Each is a `menu_model` tag.
 pending_native_menu_actions: [16]fizzy.backend.NativeMenuAction = undefined,
@@ -3513,6 +3517,10 @@ const cover_ms = 500;
 /// pictures of it, and see-through they were a double window. Each step wakes the backend for the
 /// next: asked from a frame the window monitor drew through a transition, a plain refresh woke
 /// nothing, and the window sat opaque after leaving full screen until the mouse moved (the user).
+/// Seconds, at most, frames keep coming after the window sets out of a fullscreen Space, for it to
+/// let go of covering the desktop (`tick`).
+const space_exit_watch_s = 4;
+
 pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, windowed: f32) void {
     const target: f32 = if (covers) 1.0 else windowed;
     const cover_target: f32 = if (covers) 1.0 else 0.0;
@@ -3641,7 +3649,21 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
     // The draw uses `window_opacity_anim`.
-    easeWindowOpacity(&editor.window_opacity_anim, fizzy.backend.coversDesktop(dvui.currentWindow()), fizzy.backend.enteringSpace(dvui.currentWindow()), editor.window_opacity);
+    const covers = fizzy.backend.coversDesktop(dvui.currentWindow());
+    easeWindowOpacity(&editor.window_opacity_anim, covers, fizzy.backend.enteringSpace(dvui.currentWindow()), editor.window_opacity);
+    // Out of a fullscreen Space, the window stops covering the desktop on AppKit's and SDL's own
+    // time, after the transition, and nothing wakes a frame for it: it sat opaque until the mouse
+    // moved (the user). From the moment it sets out of the Space, frames keep coming until it no
+    // longer covers the desktop and its fade can start by itself — a few seconds at most.
+    {
+        const now = dvui.currentWindow().frame_time_ns;
+        const hidden = fizzy.backend.isFullscreenChromeHidden(dvui.currentWindow());
+        if (editor.chrome_was_hidden and !hidden) editor.space_exit_watch_ns = now + space_exit_watch_s * std.time.ns_per_s;
+        editor.chrome_was_hidden = hidden;
+        if (now < editor.space_exit_watch_ns) {
+            if (covers) dvui.refresh(dvui.currentWindow(), @src(), null) else editor.space_exit_watch_ns = 0;
+        }
+    }
 
     // Drain any "Save and Close" requests whose async save has settled.
     editor.tickPendingSaveCloses();
