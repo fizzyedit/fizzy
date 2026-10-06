@@ -359,9 +359,10 @@ fn carryFrame(state: *State) void {
     }
     const cw = dvui.currentWindow();
     // What it is carried as: the card or tab, or a drop — round its head, drawn out toward its
-    // tail as that lags on its spring, so a drop carried fast stretches out behind the pointer and
+    // trail as that lags on its springs, so a drop carried fast stretches out behind the pointer and
     // swings back past it when it stops, as it did run together in the app's glass.
-    const shape = if (d.drop_n > 1) d.shape_rect.unionWith(d.drop_shapes[1].rect) else d.shape_rect;
+    var shape = d.shape_rect;
+    for (d.drop_shapes[1..d.drop_n]) |tail| shape = shape.unionWith(tail.rect);
     const main_px = dvui.windowRectPixels();
     // Where the carry window goes, in the main window's frame. Over a float's window the view is
     // drawn in that window's band, far past the main window (`Floats.Viewport`): the carry window
