@@ -179,8 +179,16 @@ both. It draws no dim, frost, shadow or fill of its own, the main window is left
 window fades as it flies shut. dvui draws dialogs at the very end of the frame, after the app takes
 subwindows into their windows, so `core.dialogs.drawEarly` draws fizzy's dialogs first and
 `dialogWindow` skips any it drew when dvui's pass reaches it. A setting, "Native dialogs", beside
-"Native menus". Open: a float window kept above the main one can cover a dialog; a dialog opened
-in a float that is out stays where it opened.
+"Native menus".
+
+**A dialog belongs to the window it opened in (the user, 2026-10-06).** It is stacked with that
+window and no other: a dialog of the main window's sits over the main window and under the floats
+kept above it, and a dialog opened in a float that is out opens over that float, as its child
+window, and travels with it. The float's window moving, the dialog is put where it lies over the
+float as before (`Popout.dialogsRide`) and the OS carries its window there; its float closing,
+the dialog comes back over the main window (SDL destroys a window's children with it, so the
+backend lets riders go first). Sized and kept on the display, not the float, since its window is
+its own (`screens.dialogScreenFor`).
 
 **Open:**
 - keyboard focus — whether the popup takes it (Wayland's grab does) or the parent keeps it and
