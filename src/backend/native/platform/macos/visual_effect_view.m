@@ -914,50 +914,59 @@ int fizzy_macos_window_has_liquid_glass(void *nswindow) {
  * Any vibrancy beside SDL's view (a float's) goes. Once per window; 1 where it is (or was already)
  * Liquid Glass, 0 where the OS has none.
  */
+/* The glass parts beside SDL's view in `window`'s frame view (`window_glass_ids`), once; 1 where they
+ * are (or already were), 0 where the OS has no Liquid Glass. A titled window's and a menu's alike. */
+static int windowGlassInstall(NSWindow *window, long blur_material) {
+    if (window == nil || !fizzy_macos_liquid_glass_available()) return 0;
+    if (windowGlassPart(window, window_glass_under) != nil) return 1;
+    NSView *content = [window contentView];
+    NSView *frame = [content superview];
+    if (content == nil || frame == nil) return 0;
+    for (NSView *v in [[frame subviews] copy]) {
+        if ([v isKindOfClass:[FizzyViewportGlassView class]]) [v removeFromSuperview];
+    }
+    [window setOpaque:NO];
+    [window setBackgroundColor:[NSColor clearColor]];
+    /* Each added directly under SDL's view, so over the one before. */
+    for (int k = 0; k < window_glass_parts; k++) {
+        NSView *part = nil;
+        if (k == window_glass_under || k == window_glass_over) {
+            part = carryLiquidGlass([content frame]);
+            if (part == nil) return 0;
+            if (k == window_glass_over) carryGlassVariant(part, carry_glass_frost_variant);
+        } else if (k == window_glass_blur) {
+            FizzyWindowBlurView *blur = [[FizzyWindowBlurView alloc] initWithFrame:[content frame]];
+            [blur setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
+            [blur setState:NSVisualEffectStateActive];
+            [blur setMaterial:(NSVisualEffectMaterial)blur_material];
+            [blur setHidden:YES];
+            part = blur;
+#if !__has_feature(objc_arc)
+            [blur autorelease];
+#endif
+        } else {
+            FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
+            part = fill;
+#if !__has_feature(objc_arc)
+            [fill autorelease];
+#endif
+        }
+        [part setIdentifier:window_glass_ids[k]];
+        [part setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        /* Its own layer, which keeps the feather's mask: one AppKit lends a view not asking
+         * for a layer (the glass, the blur) drops the mask set on it. */
+        [part setWantsLayer:YES];
+        [frame addSubview:part positioned:NSWindowBelow relativeTo:content];
+    }
+    return 1;
+}
+
 int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil || !fizzy_macos_liquid_glass_available()) return 0;
         if (windowGlassPart(window, window_glass_under) != nil) return 1;
-        NSView *content = [window contentView];
-        NSView *frame = [content superview];
-        if (content == nil || frame == nil) return 0;
-        for (NSView *v in [[frame subviews] copy]) {
-            if ([v isKindOfClass:[FizzyViewportGlassView class]]) [v removeFromSuperview];
-        }
-        [window setOpaque:NO];
-        [window setBackgroundColor:[NSColor clearColor]];
-        /* Each added directly under SDL's view, so over the one before. */
-        for (int k = 0; k < window_glass_parts; k++) {
-            NSView *part = nil;
-            if (k == window_glass_under || k == window_glass_over) {
-                part = carryLiquidGlass([content frame]);
-                if (part == nil) return 0;
-                if (k == window_glass_over) carryGlassVariant(part, carry_glass_frost_variant);
-            } else if (k == window_glass_blur) {
-                FizzyWindowBlurView *blur = [[FizzyWindowBlurView alloc] initWithFrame:[content frame]];
-                [blur setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
-                [blur setState:NSVisualEffectStateActive];
-                [blur setMaterial:(NSVisualEffectMaterial)blur_material];
-                [blur setHidden:YES];
-                part = blur;
-#if !__has_feature(objc_arc)
-                [blur autorelease];
-#endif
-            } else {
-                FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
-                part = fill;
-#if !__has_feature(objc_arc)
-                [fill autorelease];
-#endif
-            }
-            [part setIdentifier:window_glass_ids[k]];
-            [part setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-            /* Its own layer, which keeps the feather's mask: one AppKit lends a view not asking
-             * for a layer (the glass, the blur) drops the mask set on it. */
-            [part setWantsLayer:YES];
-            [frame addSubview:part positioned:NSWindowBelow relativeTo:content];
-        }
+        if (!windowGlassInstall(window, blur_material)) return 0;
         if ([window toolbar] == nil) {
             /* Added, a toolbar grows the window by its height to keep the content's area: kept
              * where it was instead, or a float's window — restored from its saved frame each
@@ -974,6 +983,34 @@ int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
         [window setTitlebarSeparatorStyle:NSTitlebarSeparatorStyleNone];
         windowAutoHidesToolbar(window);
         return 1;
+    }
+}
+
+/*
+ * A menu's window (`SDLBackend.viewportOpenMenu`): dressed as a float's window is
+ * (`viewportDress`), but borderless, with the OS's shadow round its shape, kept above every window
+ * by its level, on every Space, in no window list — and taking the pointer, unlike a carry window.
+ * On Liquid Glass where the OS has it — the window's glass parts, whose look the app sets each frame
+ * (`fizzy_macos_window_liquid_glass_look`), rounded to the menu's corners — 1; vibrancy before, its
+ * mask rounded by `radius` points, 0.
+ */
+int fizzy_macos_viewport_menu(void *nswindow, void *main_nswindow, long material, double radius) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return 0;
+        viewportDress(window, (__bridge NSWindow *)main_nswindow);
+        [window setHasShadow:YES];
+        [window setLevel:NSPopUpMenuWindowLevel];
+        [window setExcludedFromWindowsMenu:YES];
+        [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorTransient |
+                                      NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary];
+        [window setIgnoresMouseEvents:NO];
+        [NSApp removeWindowsItem:window];
+        if (windowGlassInstall(window, material)) return 1;
+        /* A hair of inset: with none the vibrancy is left whole for the OS to round, as a titled
+         * window's is, and a borderless one it does not round. */
+        fizzy_macos_viewport_glass(nswindow, main_nswindow, 0.01, radius, material);
+        return 0;
     }
 }
 
@@ -1089,7 +1126,17 @@ void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass
             }
         }
         /* A clear window's shadow and edge are the OS's reading of what it showed: read again,
-         * or a float's kept the shape its glass had a title bar out of place. */
+         * or a float's kept the shape its glass had a title bar out of place. A borderless window's
+         * (a menu's) is read from its picture, so again whenever its size changes — a menu sliding
+         * open — where a titled window's follows its frame. */
+        if (([window styleMask] & NSWindowStyleMaskTitled) == 0) {
+            NSString *size = NSStringFromSize(content.size);
+            CALayer *top_layer = [parts[window_glass_top] layer];
+            if (![[top_layer valueForKey:@"fizzySize"] isEqual:size]) {
+                [top_layer setValue:size forKey:@"fizzySize"];
+                moved = YES;
+            }
+        }
         if (moved) [window invalidateShadow];
         CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         const double fills[2] = {g->fill[3], g->top_fill};

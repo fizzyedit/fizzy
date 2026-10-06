@@ -42,6 +42,21 @@ var carry: ?Carry = null;
 var covers: [max_out]Cover = undefined;
 var cover_count: usize = 0;
 
+/// Each open menu's window (`menuFrame`), by its subwindow — a context menu and the submenus out of
+/// it.
+var menus: [max_menus]?MenuOut = @splat(null);
+const max_menus = 4;
+
+const MenuOut = struct {
+    id: dvui.Id,
+    viewport: *viewports.Viewport,
+    target: ?dvui.Texture.Target = null,
+    /// Drawn this frame: a menu not drawn has closed, and its window goes.
+    seen: bool = false,
+    /// On Liquid Glass (`viewports.windowGlass`), else vibrancy with the menu's colour drawn over it.
+    glass: bool = false,
+};
+
 const Cover = struct {
     /// Where the window lies over the main window's frame, physical.
     in_main: dvui.Rect.Physical,
@@ -112,6 +127,9 @@ pub fn beginFrame(state: *State) void {
     // — their going, as their coming, is the OS's glass too.
     fizzy.core.native_glass.publishOn(nativeGlass() and (state.view_drag.active() or state.view_drag.last_pending_count > 0));
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
+    // Menus in windows of their own (`menuFrame`), kept on the display rather than the window.
+    fizzy.core.screens.publishMenus(if (nativeMenus()) displayNatural() else null);
+    fizzy.core.screens.publishMenusDismissed(nativeMenus() and !viewports.appActive());
     // Whatever happened, the screens floating things are placed on this frame: each window's,
     // besides the main window's (`core.screens`).
     defer publishScreens();
@@ -255,6 +273,7 @@ pub fn endFrame(state: *State) void {
         if (slot.*) |*o| windowFrame(state, o);
     }
     carryFrame(state);
+    menuFrame();
     // A drag's carry window no float grew out of in the frame after the drag: gone.
     if (spare) |*sp| {
         if (spare_kept) {
@@ -834,8 +853,9 @@ fn windowFrame(state: *State, o: *Out) void {
     // of the frame falls outside its target.
     const area: dvui.Rect.Physical = .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h };
     for (cw.subwindows.stack.items) |*sw| {
-        // A carried view is its carry window's (`carryFrame`).
+        // A carried view is its carry window's (`carryFrame`); a menu, its own (`menuFrame`).
         if (fizzy.core.screens.isCarried(sw.id)) continue;
+        if (fizzy.core.screens.isMenu(sw.id) and nativeMenus()) continue;
         const mine = area.contains(sw.rect_pixels.center());
         if (!mine and !fizzy.core.screens.isEverywhere(sw.id)) continue;
         const cmds = sw.render_cmds;
@@ -867,6 +887,128 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, opacity: f32)
     const theme = dvui.themeGet();
     const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
     bounds.fill(corners, .{ .color = .{ .color = Editor.windowBase(opacity) } });
+}
+
+/// Whether menus are windows of their own (`menuFrame`): where the OS can show them (macOS), with
+/// floats as windows, unless `FIZZY_NATIVE_MENUS=0`.
+fn nativeMenus() bool {
+    if (comptime !viewports.menus) return false;
+    if (!viewports.available()) return false;
+    if (menus_env == null) {
+        menus_env = if (comptime builtin.target.cpu.arch == .wasm32) true else if (std.c.getenv("FIZZY_NATIVE_MENUS")) |v| !std.mem.eql(u8, std.mem.span(v), "0") else true;
+    }
+    return menus_env.?;
+}
+var menus_env: ?bool = null;
+
+/// The display the main window is on, natural, in the main window's frame: the screen menus are kept
+/// on where they are windows of their own (`core.screens.publishMenus`).
+fn displayNatural() dvui.Rect.Natural {
+    const d = viewports.displayInMain();
+    const s = dvui.windowNaturalScale();
+    if (d.w <= 0 or d.h <= 0) return dvui.windowRect();
+    return .{ .x = d.x / s, .y = d.y / s, .w = d.w / s, .h = d.h / s };
+}
+
+/// The least window opacity a menu's glass takes: a menu carries text, and over a clear window
+/// there was too little behind it to read it by.
+const menu_opacity_floor: f32 = 0.6;
+
+/// Each open menu (`core.screens.markMenu`) in a window of its own (`viewports.openMenu`): the OS's
+/// material in it, its shadow round it and its corners the menu's, above every window — the menu
+/// drawn in it as the app draws it, its drawing taken whole out of the frame, so the main window and
+/// the float windows draw none of it. In the main window's frame, past its edge too; or in the band
+/// of a float that is out, its window over where that part of the band lies. A menu that closed
+/// takes its window with it.
+fn menuFrame() void {
+    for (&menus) |*slot| if (slot.*) |*m| {
+        m.seen = false;
+    };
+    defer for (&menus) |*slot| if (slot.*) |*m| if (!m.seen) {
+        releaseMenu(m);
+        slot.* = null;
+    };
+    if (!nativeMenus()) return;
+    const cw = dvui.currentWindow();
+    const main_px = dvui.windowRectPixels();
+    const s = dvui.windowNaturalScale();
+    const theme = dvui.themeGet();
+    const radius = fizzy.core.dialogs.surfaceCorners().finalize(&theme).tl.radius();
+    for (cw.subwindows.stack.items) |*sw| {
+        if (!fizzy.core.screens.isMenu(sw.id)) continue;
+        const frame = sw.rect_pixels;
+        if (frame.w < 1 or frame.h < 1) continue;
+        // Where its window lies over the main window: where the menu is, or — in a float's band —
+        // where that part of the band lies on the screen.
+        var place = frame;
+        if (frame.x > main_px.x + main_px.w + 40000) {
+            const cover = for (covers[0..cover_count]) |cv| {
+                if (cv.band.contains(frame.center())) break cv;
+            } else continue;
+            place = frame.offsetPoint(.{ .x = cover.in_main.x - cover.band.x, .y = cover.in_main.y - cover.band.y });
+        }
+        const m = menuOut(sw.id, place, radius) orelse continue;
+        m.seen = true;
+        viewports.mainOffset(m.viewport, .{ .x = frame.x - place.x, .y = frame.y - place.y });
+        const placed = viewports.placeMain(m.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h });
+        const shown: dvui.Rect.Physical = .{ .x = frame.x + (placed.x - place.x), .y = frame.y + (placed.y - place.y), .w = placed.w, .h = placed.h };
+        // Its material: Liquid Glass on the slider, no lighter than a menu's text needs; vibrancy
+        // before macOS 26, with the window's colour drawn under the menu.
+        const op = @max(std.math.clamp(fizzy.editor().window_opacity, 0, 1), menu_opacity_floor);
+        var look = Editor.windowGlassLook(op, .{ .w = shown.w / s, .h = shown.h / s });
+        look.radius = radius;
+        m.glass = viewports.windowGlass(m.viewport, look);
+        const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
+        const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
+        if (m.target) |t| if (t.width != w or t.height != h) {
+            t.destroyLater();
+            m.target = null;
+        };
+        if (m.target == null) m.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch continue;
+        const target = m.target.?;
+        target.clear();
+        var rt = cw.render_target;
+        rt.texture = target;
+        rt.offset = .{ .x = shown.x, .y = shown.y };
+        rt.rendering = true;
+        const prev = dvui.renderTarget(rt);
+        defer _ = dvui.renderTarget(prev);
+        if (!m.glass) {
+            const prev_clip = dvui.clipGet();
+            defer dvui.clipSet(prev_clip);
+            dvui.clipSet(shown);
+            const prev_alpha = cw.alpha;
+            dvui.alphaSet(1);
+            defer dvui.alphaSet(prev_alpha);
+            frame.fill(dvui.CornerRect.Physical.all(radius * s), .{ .color = .{ .color = Editor.windowBase(op) } });
+        }
+        const cmds = sw.render_cmds;
+        const after = sw.render_cmds_after;
+        sw.render_cmds = .empty;
+        sw.render_cmds_after = .empty;
+        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a menu into its window", .{});
+        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a menu into its window", .{});
+        _ = dvui.renderTarget(prev);
+        viewports.present(m.viewport, target);
+    }
+}
+
+/// Menu `id`'s window (`menuFrame`), opened at `place` (physical, in the main window's frame) where
+/// it has none yet. Null where no more windows can be opened: the menu is drawn in its window then.
+fn menuOut(id: dvui.Id, place: dvui.Rect.Physical, radius: f32) ?*MenuOut {
+    for (&menus) |*slot| if (slot.*) |*m| if (m.id == id) return m;
+    for (&menus) |*slot| if (slot.* == null) {
+        const vp = viewports.openMenu(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, radius) orelse return null;
+        slot.* = .{ .id = id, .viewport = vp };
+        return &slot.*.?;
+    };
+    return null;
+}
+
+fn releaseMenu(m: *MenuOut) void {
+    viewports.close(m.viewport);
+    if (m.target) |t| t.destroyLater();
+    m.target = null;
 }
 
 /// The main window's base (`Editor.windowBase`) at the window's opacity where it has a material,

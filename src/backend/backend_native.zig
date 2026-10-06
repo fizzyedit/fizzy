@@ -200,6 +200,30 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
     }
 
+    /// Whether one of the app's windows has the keyboard: the app is the active one.
+    pub fn appActive() bool {
+        if (comptime !supported) return true;
+        return Impl.appActive();
+    }
+
+    /// Whether menus can be windows of their own (`openMenu`): macOS, where viewports are.
+    pub const menus = supported and builtin.os.tag == .macos;
+
+    /// A window for a menu (`Popout`'s menus): borderless, above every window, never focused, the
+    /// OS's material in it — rounded by `radius` points — and the pointer over it read in the main
+    /// window's frame (`mainOffset`). Placed with `placeMain`, drawn as any viewport.
+    pub fn openMenu(at: Rect, radius: f32) ?*Viewport {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOpenMenu(at, radius);
+    }
+
+    /// Where menu `vp` is drawn in the frame from where its window lies over the main window,
+    /// physical pixels: none for a menu of the main window's.
+    pub fn mainOffset(vp: *Viewport, offset: dvui.Point.Physical) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportMainOffset(vp, .{ .x = offset.x, .y = offset.y });
+    }
+
     /// A piece of the OS's glass in an overlay (`overlayGlass`): a rounded rect, points from the
     /// overlay window's top left.
     pub const GlassShape = if (supported) Impl.GlassShape else extern struct { x: f64, y: f64, w: f64, h: f64, radius: f64, lit: f64, alpha: f64 };

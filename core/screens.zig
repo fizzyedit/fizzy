@@ -104,6 +104,74 @@ const Carried = struct {
     ids: [4]dvui.Id = undefined,
 };
 
+/// Menus in windows of their own this frame (`markMenu`): the app's, each frame, with the display
+/// the main window is on — natural, in the main window's frame — as the screen they are kept on, so
+/// one near the window's edge hangs past it. Null: menus are drawn in the window they open from, on
+/// its screen. In dvui's data, as `publish`, so a plugin's menus read it too.
+pub fn publishMenus(display: ?dvui.Rect.Natural) void {
+    if (display) |d| dvui.dataSet(null, key_id, "_menus", d) else dvui.dataRemove(null, key_id, "_menus");
+}
+
+/// Whether menus are windows of their own this frame (`publishMenus`): a menu draws no frost, fill
+/// or shadow of its own then — its window wears the OS's material and shadow.
+pub fn nativeMenus() bool {
+    return dvui.dataGet(null, key_id, "_menus", dvui.Rect.Natural) != null;
+}
+
+/// The screen a menu at `r` is kept on: the display, where menus are windows of their own and `r`'s
+/// middle is on it (`publishMenus`); else `screenFor`.
+pub fn menuScreenFor(r: dvui.Rect.Natural) dvui.Rect.Natural {
+    if (dvui.dataGet(null, key_id, "_menus", dvui.Rect.Natural)) |d| {
+        if (d.contains(r.center())) return d;
+    }
+    return screenFor(r);
+}
+
+/// `menuScreenFor`, physical: what a menu clips its drawing to.
+pub fn menuPixelsFor(r: dvui.Rect.Natural) dvui.Rect.Physical {
+    const s = menuScreenFor(r);
+    const m = dvui.windowNaturalScale();
+    return .{ .x = s.x * m, .y = s.y * m, .w = s.w * m, .h = s.h * m };
+}
+
+/// Whether every menu should close this frame: where menus are windows of their own, kept above
+/// every window, the app is not the active one — as an OS menu closes when its app is left
+/// (`core.widgets.FloatingMenuWidget`). The app's, each frame.
+pub fn publishMenusDismissed(dismissed: bool) void {
+    if (dismissed) dvui.dataSet(null, key_id, "_menus_dismissed", true) else dvui.dataRemove(null, key_id, "_menus_dismissed");
+}
+
+/// Whether every menu should close this frame (`publishMenusDismissed`).
+pub fn menusDismissed() bool {
+    return dvui.dataGet(null, key_id, "_menus_dismissed", bool) orelse false;
+}
+
+/// A menu, in a subwindow of its own this frame: where menus are windows of their own
+/// (`publishMenus`), the app shows each in one (`Popout`). Each frame it is drawn.
+pub fn markMenu(id: dvui.Id) void {
+    const now = dvui.currentWindow().frame_time_ns;
+    const m = dvui.dataGetPtrDefault(null, key_id, "_menu_ids", Marked, .{});
+    if (m.frame != now) m.* = .{ .frame = now };
+    if (m.n < m.ids.len) {
+        m.ids[m.n] = id;
+        m.n += 1;
+    }
+}
+
+/// Whether `id` is a menu this frame (`markMenu`).
+pub fn isMenu(id: dvui.Id) bool {
+    const m = dvui.dataGetPtr(null, key_id, "_menu_ids", Marked) orelse return false;
+    if (m.frame != dvui.currentWindow().frame_time_ns) return false;
+    for (m.ids[0..m.n]) |i| if (i == id) return true;
+    return false;
+}
+
+const Marked = struct {
+    frame: i128 = 0,
+    n: u8 = 0,
+    ids: [8]dvui.Id = undefined,
+};
+
 /// While something drawn across every screen may be carried past every window of the app's — a
 /// view drag where floats are OS windows of their own, and a window carries the view over the
 /// desktop — it reaches across the whole desktop (`allPixels`). The app's, each frame.

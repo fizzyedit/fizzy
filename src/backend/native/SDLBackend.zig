@@ -177,6 +177,12 @@ pub const Viewport = struct {
     glass_spacing: f32 = 0,
     glass_look: GlassLook = .{},
     glass_dirty: bool = false,
+    /// A menu's window (`viewportOpenMenu`): placed in the main window's frame, and the pointer
+    /// over it read there too, plus `main_offset` — where the menu is drawn in the frame from where
+    /// its window lies over the main one: nothing for a menu of the main window's, the way to its
+    /// float's band for one opened in a float that is out (`viewportMainOffset`).
+    menu: bool = false,
+    main_offset: viewport_map.Point = .{ .x = 0, .y = 0 },
 };
 
 /// A piece of the OS's glass in an overlay (`viewportOverlayGlass`): a rounded rect, points from the
@@ -853,7 +859,32 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     return self.openViewport(at, title_text, .window);
 }
 
-const ViewportKind = enum { window, carry, overlay };
+const ViewportKind = enum { window, carry, overlay, menu };
+
+/// A menu in a window of its own (`Popout`'s menus): borderless, kept above every window by its
+/// level, in no window list, never made key — the window it opened from keeps the keyboard, and
+/// its first click acts. Placed in the main window's frame (`viewportPlaceMain`), the pointer over it
+/// read there (`viewportMainOffset`). Its material is the OS's (`viewportLiquidGlass`, vibrancy
+/// before macOS 26). macOS.
+/// `radius`, points: the menu's corners, which vibrancy is masked to (Liquid Glass takes them from
+/// its look each frame).
+pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32) ?*Viewport {
+    if (comptime builtin.os.tag != .macos) return null;
+    const vp = self.openViewport(at, "", .menu) orelse return null;
+    _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius);
+    return vp;
+}
+
+/// Whether one of the app's windows has the keyboard: the app is the active one.
+pub fn appActive() bool {
+    return c.SDL_GetKeyboardFocus() != null;
+}
+
+/// Where menu `vp` is drawn in the frame from where its window lies over the main window, physical
+/// pixels (`Viewport.main_offset`).
+pub fn viewportMainOffset(_: *SDLBackend, vp: *Viewport, offset: viewport_map.Point) void {
+    vp.main_offset = offset;
+}
 
 /// A window that carries a view past every window of the app's, over the desktop (`Popout`'s carry
 /// window): borderless and clear, the pointer passing through it to what is under, kept above every
@@ -911,6 +942,7 @@ pub fn viewportDisplayInMain(self: *SDLBackend) viewport_map.Rect {
 
 fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, role: ViewportKind) ?*Viewport {
     const carry = role != .window;
+    const menu = role == .menu;
     if (!viewportsAvailable()) return null;
     const slot = for (self.viewports, 0..) |v, i| {
         if (v == null) break i;
@@ -934,9 +966,12 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // (`fizzy_macos_viewport_glass`). Elsewhere borderless, framed by the OS (Windows: DWM) or by
     // the float (X11).
     // A carry window is neither: borderless, and not resizable — the app puts it where the view is.
+    // A menu's window is a carry window that takes the pointer, never focused: the window it opened
+    // from keeps the keyboard, as an OS menu leaves it.
     const frame_flag: c.SDL_WindowFlags = if (builtin.os.tag == .macos and !carry) 0 else c.SDL_WINDOW_BORDERLESS;
     const size_flag: c.SDL_WindowFlags = if (carry) 0 else c.SDL_WINDOW_RESIZABLE;
-    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag;
+    const focus_flag: c.SDL_WindowFlags = if (menu) c.SDL_WINDOW_NOT_FOCUSABLE else 0;
+    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag | focus_flag;
     _ = c.SDL_SetStringProperty(props, c.SDL_PROP_WINDOW_CREATE_TITLE_STRING, title_text.ptr);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_X_NUMBER, placed.screen.x);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_Y_NUMBER, placed.screen.y);
@@ -957,8 +992,10 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry, .overlay = role == .overlay };
+    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu };
     const vp = &self.viewports[slot].?;
+    // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
+    if (menu) return vp;
     if (role == .overlay) {
         if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
         return vp;
@@ -1233,6 +1270,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64) c_int;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
@@ -1370,8 +1408,7 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
         if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
             gx < @as(f32, @floatFromInt(s.x + s.w)) and gy < @as(f32, @floatFromInt(s.y + s.h)))
         {
-            const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
-            return .{ .x = p.x, .y = p.y };
+            return self.viewportPoint(vp);
         }
     }
     const origin = self.mainOnScreen();
@@ -1386,10 +1423,17 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
 /// move: the edge overshot, was pulled back, and overshot again, shaking the window and what it
 /// shows. The plan's "while held, the window follows `SDL_GetGlobalMouseState`". Every event of a
 /// frame's burst reads the latest place, which is the one that matters.
-fn viewportPoint(vp: *const Viewport) dvui.Point.Physical {
+fn viewportPoint(self: *SDLBackend, vp: *const Viewport) dvui.Point.Physical {
     var gx: f32 = 0;
     var gy: f32 = 0;
     _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    // A menu's window lies over the main window's frame: read there, and on to where the menu is
+    // drawn (`Viewport.main_offset`).
+    if (vp.menu) {
+        const origin = self.mainOnScreen();
+        const d = self.density();
+        return .{ .x = (gx - origin.x) * d + vp.main_offset.x, .y = (gy - origin.y) * d + vp.main_offset.y };
+    }
     const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
     return .{ .x = p.x, .y = p.y };
 }
@@ -1401,12 +1445,12 @@ fn addViewportEvent(self: *SDLBackend, win: *dvui.Window, vp: *Viewport, event: 
     switch (event.type) {
         c.SDL_EVENT_MOUSE_MOTION => {
             if (event.motion.which == c.SDL_TOUCH_MOUSEID and !self.touch_mouse_events) return false;
-            return try win.addEventMouseMotion(.{ .pt = viewportPoint(vp) });
+            return try win.addEventMouseMotion(.{ .pt = self.viewportPoint(vp) });
         },
         c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_WHEEL => {
             // dvui presses and scrolls where the pointer last moved, which may have been over
             // another window: it is moved here first.
-            const pt = viewportPoint(vp);
+            const pt = self.viewportPoint(vp);
             if (pt.x != win.mouse_pt.x or pt.y != win.mouse_pt.y) _ = try win.addEventMouseMotion(.{ .pt = pt });
             return try self.addEvent(win, event);
         },
@@ -1684,7 +1728,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         const main_ns = cocoaWindow(self.window);
         for (&self.viewports) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
-            if (!vp.mapped or vp.passive) continue;
+            if (!vp.mapped or vp.passive or vp.menu) continue;
             fizzy_macos_viewport_keep_above(cocoaWindow(vp.window), main_ns);
         }
     };
