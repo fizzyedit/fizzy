@@ -185,7 +185,11 @@ pub const viewports = struct {
     pub fn appActive() bool {
         return true;
     }
-    pub fn openMenu(_: Rect, _: f32, _: bool, _: bool) ?*Viewport {
+    pub const Ride = union(enum) { none, main, viewport: *Viewport };
+    pub fn placeRiding(_: *Viewport, frame: Rect, _: Rect) Rect {
+        return frame;
+    }
+    pub fn openMenu(_: Rect, _: f32, _: Ride, _: bool) ?*Viewport {
         return null;
     }
     pub fn mainOffset(_: *Viewport, _: dvui.Point.Physical) void {}

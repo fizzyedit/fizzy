@@ -179,13 +179,22 @@ pub fn nativeDialogs() bool {
     return dvui.dataGet(null, key_id, "_dialogs", dvui.Rect.Natural) != null;
 }
 
-/// What a dialog at `r` clips its drawing to, physical: the display, where dialogs are windows of
-/// their own and `r`'s middle is on it (`publishDialogs`); else its screen (`pixelsFor`).
+/// The screen a dialog at `r` is kept on and sized to. Where dialogs are windows of their own
+/// (`publishDialogs`), the display: the one the main window is on, for a dialog over the main
+/// window; for one opened in a float that is out — in that float's band — the display's size round
+/// the dialog itself, its window being its own and no bigger than a display. Else `screenFor`.
+pub fn dialogScreenFor(r: dvui.Rect.Natural) dvui.Rect.Natural {
+    const d = dvui.dataGet(null, key_id, "_dialogs", dvui.Rect.Natural) orelse return screenFor(r);
+    if (d.contains(r.center())) return d;
+    const s = screenFor(r);
+    if (s.equals(dvui.windowRect())) return s;
+    const c = r.center();
+    return .{ .x = c.x - d.w / 2, .y = c.y - d.h / 2, .w = d.w, .h = d.h };
+}
+
+/// `dialogScreenFor`, physical: what a dialog clips its drawing to.
 pub fn dialogPixelsFor(r: dvui.Rect.Natural) dvui.Rect.Physical {
-    var s = screenFor(r);
-    if (dvui.dataGet(null, key_id, "_dialogs", dvui.Rect.Natural)) |d| {
-        if (d.contains(r.center())) s = d;
-    }
+    const s = dialogScreenFor(r);
     const m = dvui.windowNaturalScale();
     return .{ .x = s.x * m, .y = s.y * m, .w = s.w * m, .h = s.h * m };
 }

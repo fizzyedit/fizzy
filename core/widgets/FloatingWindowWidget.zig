@@ -402,7 +402,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             self.auto_size_refresh_prev_value = dvui.currentWindow().extra_frames_needed;
             dvui.currentWindow().extra_frames_needed = 0;
 
-            const ms = Size.min(Size.max(min_size, self.options.min_sizeGet()), .cast(screens.screenFor(.cast(self.wd.rect)).size()));
+            const ms = Size.min(Size.max(min_size, self.options.min_sizeGet()), .cast(self.keptOn().size()));
 
             if (self.init_options.auto_size_axes.animatesWidth() and ms.w != self.wd.rect.w) {
                 if (dvui.animationGet(self.wd.id, "_auto_width")) |a| {
@@ -499,7 +499,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
         // always make sure we are on the screen — the one it is on (`core.screens`: the main
         // window's, or a popped-out float's), unless it has a window of its own
         if (!self.init_options.detached) {
-            var screen = screens.screenFor(.cast(self.wd.rect));
+            var screen = self.keptOn();
             // okay if we are off the left or right but still see some
             const offleft = self.wd.rect.w - 48;
             screen.x -= offleft;
@@ -589,6 +589,13 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             dvui.AccessKit.nodeClearModal(ak_node);
         dvui.AccessKit.nodeAddAction(ak_node, dvui.AccessKit.Action.focus);
     }
+}
+
+/// The screen the window is kept on and sized to (`core.screens`): its window's own, for one in an
+/// OS window of its own (`native`, `screens.dialogScreenFor`).
+fn keptOn(self: *FloatingWindowWidget) dvui.Rect.Natural {
+    if (self.init_options.native) return screens.dialogScreenFor(.cast(self.wd.rect));
+    return screens.screenFor(.cast(self.wd.rect));
 }
 
 /// The OS window the window is drawn in, physical: the screen it is on (`core.screens`: the main

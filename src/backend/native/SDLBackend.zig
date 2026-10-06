@@ -183,15 +183,18 @@ pub const Viewport = struct {
     /// float's band for one opened in a float that is out (`viewportMainOffset`).
     menu: bool = false,
     main_offset: viewport_map.Point = .{ .x = 0, .y = 0 },
-    /// A menu of the main window's (`viewportOpenMenu`): made its child window once shown, so the OS
-    /// moves it with the main window — smoothly through a drag, which the app's frames could only
-    /// follow a frame behind — and put somewhere new only when where it lies over the main window
-    /// changes (`viewportPlaceMain`): that frame as last placed, and the part of it shown then.
-    follow_main: bool = false,
-    /// A dialog's window (`viewportOpenMenu`): a menu's, but in the main window's stacking.
+    /// The window it rides on (`viewportOpenMenu`): the main window, for a menu or dialog of the
+    /// main window's; a float's, for a dialog opened in it. Made that window's child once shown, so
+    /// the OS moves it with it — smoothly through a drag, which the app's frames could only follow
+    /// a frame behind — and put somewhere new only when where it lies over that window changes
+    /// (`viewportPlaceRiding`): that place as last placed (`ride_key`), and how the part of the
+    /// frame it showed then lay from the frame asked (`ride_off`, `ride_size`).
+    ride: ?*c.SDL_Window = null,
+    ride_key: ?viewport_map.Rect = null,
+    ride_off: viewport_map.Point = .{ .x = 0, .y = 0 },
+    ride_size: viewport_map.Point = .{ .x = 0, .y = 0 },
+    /// A dialog's window (`viewportOpenMenu`): a menu's, but in its window's stacking.
     dialog: bool = false,
-    main_placed: ?viewport_map.Rect = null,
-    main_shown: viewport_map.Rect = .{},
 };
 
 /// A piece of the OS's glass in an overlay (`viewportOverlayGlass`): a rounded rect, points from the
@@ -876,17 +879,27 @@ const ViewportKind = enum { window, carry, overlay, menu };
 /// read there (`viewportMainOffset`). Its material is the OS's (`viewportLiquidGlass`, vibrancy
 /// before macOS 26). macOS.
 /// `radius`, points: the menu's corners, which vibrancy is masked to (Liquid Glass takes them from
-/// its look each frame). `follow_main`: a menu of the main window's, which moves with it
-/// (`Viewport.follow_main`) — not one opened in a float that is out. `dialog`: a dialog's window
-/// (`Viewport.dialog`).
-pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, follow_main: bool, dialog: bool) ?*Viewport {
+/// its look each frame). `ride`: the window it moves with (`Viewport.ride`) — none for a menu opened
+/// in a float that is out. `dialog`: a dialog's window (`Viewport.dialog`).
+pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, ride: Ride, dialog: bool) ?*Viewport {
     if (comptime builtin.os.tag != .macos) return null;
     const vp = self.openViewport(at, "", .menu) orelse return null;
     _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
-    vp.follow_main = follow_main;
+    vp.ride = switch (ride) {
+        .none => null,
+        .main => self.window,
+        .viewport => |parent| parent.window,
+    };
     vp.dialog = dialog;
     return vp;
 }
+
+/// The window a menu's or dialog's window moves with (`viewportOpenMenu`).
+pub const Ride = union(enum) {
+    none,
+    main,
+    viewport: *Viewport,
+};
 
 /// Whether one of the app's windows has the keyboard: the app is the active one.
 pub fn appActive() bool {
@@ -1101,6 +1114,15 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
         },
         else => {},
     }
+    // What rides on it lets go first (`Viewport.ride`): SDL destroys a window's children with it,
+    // and the slot of each still holds its window. The app moves a dialog left behind back over
+    // the main window (`Popout`).
+    for (&self.viewports) |*slot| {
+        if (slot.*) |*other| if (other != vp and other.ride != null and other.ride == vp.window) {
+            _ = c.SDL_SetWindowParent(other.window, null);
+            other.ride = null;
+        };
+    }
     for (&self.viewports) |*slot| {
         if (slot.*) |*v| if (v == vp) {
             // Holding the keyboard as it goes — a float that merged back into the main window, or
@@ -1178,16 +1200,24 @@ pub const PointerPin = union(enum) {
 /// float split out of it under a drag, still in that frame — on whole points; the part of the
 /// frame it then shows.
 pub fn viewportPlaceMain(self: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
-    // A menu riding on the main window (`Viewport.follow_main`) is already where it lies over it:
-    // the OS moved it there, with the main window, ahead of the app's idea of where that is.
-    if (vp.follow_main and vp.mapped) if (vp.main_placed) |at| if (std.meta.eql(at, frame)) return vp.main_shown;
     const placed = viewport_map.placeMain(self.mainOnScreen(), self.density(), frame);
     const was = vp.screen;
     placeWindow(vp, placed.screen, was);
     vp.screen = placed.screen;
-    vp.main_placed = frame;
-    vp.main_shown = placed.frame;
     return placed.frame;
+}
+
+/// `viewportPlaceMain` for a window riding on another (`Viewport.ride`), put somewhere new only
+/// when `key` — where it lies over that window — changes. Otherwise it is already there: the OS
+/// carried it with that window, ahead of the app's idea of where the window is.
+pub fn viewportPlaceRiding(self: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect, key: viewport_map.Rect) viewport_map.Rect {
+    if (vp.ride != null and vp.mapped) if (vp.ride_key) |k| if (std.meta.eql(k, key))
+        return .{ .x = frame.x + vp.ride_off.x, .y = frame.y + vp.ride_off.y, .w = vp.ride_size.x, .h = vp.ride_size.y };
+    const shown = self.viewportPlaceMain(vp, frame);
+    vp.ride_key = key;
+    vp.ride_off = .{ .x = shown.x - frame.x, .y = shown.y - frame.y };
+    vp.ride_size = .{ .x = shown.w, .y = shown.h };
+    return shown;
 }
 
 /// `frame` of the main window's frame, as the same place on the desktop in `vp`'s band: a float
@@ -1736,10 +1766,10 @@ pub fn renderPresent(self: *SDLBackend) void {
             _ = c.SDL_ShowWindow(vp.window);
             _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
             vp.mapped = true;
-            // Riding on the main window from here (`Viewport.follow_main`) — not before it shows:
-            // made a child window, AppKit shows it at once, before it has a picture.
-            if (comptime builtin.os.tag == .macos) if (vp.follow_main) {
-                _ = c.SDL_SetWindowParent(vp.window, self.window);
+            // Riding on its window from here (`Viewport.ride`) — not before it shows: made a child
+            // window, AppKit shows it at once, before it has a picture.
+            if (comptime builtin.os.tag == .macos) if (vp.ride) |parent| {
+                _ = c.SDL_SetWindowParent(vp.window, parent);
                 if (!vp.dialog) fizzy_macos_viewport_menu_attached(cocoaWindow(vp.window));
             };
         }

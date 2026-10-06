@@ -211,13 +211,21 @@ pub const viewports = struct {
 
     /// A window for a menu (`Popout`'s menus): borderless, above every window, never focused, the
     /// OS's material in it — rounded by `radius` points — and the pointer over it read in the main
-    /// window's frame (`mainOffset`). Placed with `placeMain`, drawn as any viewport. `follow_main`:
-    /// a menu of the main window's, which the OS moves with it — smoothly, through a drag.
-    /// `dialog`: a dialog's window, the same but in the main window's stacking, not above every
-    /// window.
-    pub fn openMenu(at: Rect, radius: f32, follow_main: bool, dialog: bool) ?*Viewport {
+    /// window's frame (`mainOffset`). Placed with `placeRiding`, drawn as any viewport. `ride`: the
+    /// window the OS moves it with — smoothly, through a drag. `dialog`: a dialog's window, the same
+    /// but in its window's stacking, not above every window.
+    pub fn openMenu(at: Rect, radius: f32, ride: Ride, dialog: bool) ?*Viewport {
         if (comptime !supported) return null;
-        return dvui.currentWindow().backend.impl.viewportOpenMenu(at, radius, follow_main, dialog);
+        return dvui.currentWindow().backend.impl.viewportOpenMenu(at, radius, ride, dialog);
+    }
+
+    pub const Ride = if (supported) Impl.Ride else union(enum) { none, main, viewport: *Viewport };
+
+    /// `placeMain` for a window riding on another (`openMenu`'s `ride`), put somewhere new only when
+    /// `key` — where it lies over that window — changes.
+    pub fn placeRiding(vp: *Viewport, frame: Rect, key: Rect) Rect {
+        if (comptime !supported) return frame;
+        return dvui.currentWindow().backend.impl.viewportPlaceRiding(vp, frame, key);
     }
 
     /// Where menu `vp` is drawn in the frame from where its window lies over the main window,

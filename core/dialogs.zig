@@ -645,6 +645,9 @@ pub fn dialog(src: std.builtin.SourceLocation, opts: DialogOptions) dvui.IdMutex
     const id = id_mutex.id;
 
     dvui.dataSet(opts.window, id, "_modal", opts.modal);
+    // Where dialogs are windows of their own, a dialog belongs to the window it was asked from — a
+    // float that is out, or the main window — and opens over it (`screens.screenFor`).
+    if (screens.nativeDialogs()) dvui.dataSet(opts.window, id, "_center_on", screens.screenFor((opts.window orelse dvui.currentWindow()).subwindows.current_rect));
     dvui.dataSetSlice(opts.window, id, "_title", opts.title);
     //dvui.dataSet(opts.window, id, "_center_on", (opts.window orelse dvui.currentWindow()).subwindows.current_rect);
     dvui.dataSetSlice(opts.window, id, "_ok_label", opts.ok_label);
@@ -733,7 +736,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
 
     const resizeable = dvui.dataGet(null, id, "_resizeable", bool) orelse false;
 
-    const center_on = dvui.currentWindow().subwindows.current_rect;
+    const center_on = dvui.dataGet(null, id, "_center_on", dvui.Rect.Natural) orelse dvui.currentWindow().subwindows.current_rect;
 
     const cancel_label = dvui.dataGetSlice(null, id, "_cancel_label", []u8);
     const default = dvui.dataGet(null, id, "_default", dvui.enums.DialogResponse);

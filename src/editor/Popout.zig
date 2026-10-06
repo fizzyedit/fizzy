@@ -57,14 +57,20 @@ const MenuOut = struct {
     /// On Liquid Glass (`viewports.windowGlass`), else vibrancy with the menu's colour drawn over it.
     glass: bool = false,
     /// Opened in a float that is out: where that float's window showed its band then. Its window
-    /// moved, the menu closes (`menuFrame`).
+    /// moved, a menu closes (`menuFrame`) and a dialog goes with it (`dialogsRide`).
     float_at: ?dvui.Point.Physical = null,
+    /// That float's window, for a dialog, which rides on it.
+    float_vp: ?*viewports.Viewport = null,
+    /// A dialog's window, not a menu's.
+    dialog: bool = false,
 };
 
 /// A float holding a menu moved its window: every menu closes next frame (`menuFrame`).
 var menus_left_behind = false;
 
 const Cover = struct {
+    /// The float's window.
+    viewport: *viewports.Viewport,
     /// Where the window lies over the main window's frame, physical.
     in_main: dvui.Rect.Physical,
     /// The part of the frame it shows: its band.
@@ -163,9 +169,9 @@ pub fn beginFrame(state: *State) void {
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
     // Menus in windows of their own (`menuFrame`), kept on the display rather than the window.
     fizzy.core.screens.publishMenus(if (nativeMenus()) displayNatural() else null);
-    // And dialogs, riding on the main window.
-    fizzy.core.screens.publishDialogs(if (nativeDialogs()) displayNatural() else null);
     fizzy.core.screens.publishMenusDismissed(nativeMenus() and (!viewports.appActive() or menus_left_behind));
+    // And dialogs, each riding on the window it opened in.
+    fizzy.core.screens.publishDialogs(if (nativeDialogs()) displayNatural() else null);
     menus_left_behind = false;
     // Whatever happened, the screens floating things are placed on this frame: each window's,
     // besides the main window's (`core.screens`).
@@ -305,12 +311,16 @@ fn release(o: *Out) void {
 /// put where it was drawn, and handed the picture.
 pub fn endFrame(state: *State) void {
     if (!enabled()) return;
-    // The dialogs drawn now, for `menuFrame` to take them into windows of their own: dvui draws
-    // them later, at the very end of the frame.
-    if (nativeDialogs()) fizzy.core.dialogs.drawEarly();
     cover_count = 0;
     for (&outs) |*slot| {
         if (slot.*) |*o| windowFrame(state, o);
+    }
+    // The dialogs drawn now, for `menuFrame` to take them into windows of their own: dvui draws
+    // them later, at the very end of the frame. After the floats have their places for this frame
+    // (`covers`), which a dialog opened in one goes along with (`dialogsRide`).
+    if (nativeDialogs()) {
+        dialogsRide();
+        fizzy.core.dialogs.drawEarly();
     }
     carryFrame(state);
     menuFrame();
@@ -831,6 +841,7 @@ fn windowFrame(state: *State, o: *Out) void {
             const m = viewports.inMain(o.viewport);
             const band = viewports.frameOf(o.viewport);
             covers[cover_count] = .{
+                .viewport = o.viewport,
                 .in_main = .{ .x = m.x, .y = m.y, .w = m.w, .h = m.h },
                 .band = .{ .x = band.x, .y = band.y, .w = band.w, .h = band.h },
             };
@@ -992,15 +1003,38 @@ fn menuFrame() void {
         // where that part of the band lies on the screen.
         var place = frame;
         var float_at: ?dvui.Point.Physical = null;
+        var float_vp: ?*viewports.Viewport = null;
         if (frame.x > main_px.x + main_px.w + 40000) {
             const cover = for (covers[0..cover_count]) |cv| {
                 if (cv.band.contains(frame.center())) break cv;
             } else continue;
             place = frame.offsetPoint(.{ .x = cover.in_main.x - cover.band.x, .y = cover.in_main.y - cover.band.y });
             float_at = cover.band.topLeft();
+            float_vp = cover.viewport;
         }
-        const m = menuOut(sw.id, place, corner, float_at == null, as_dialog != null) orelse continue;
+        // The window it moves with: the main window's, or for a dialog its float's; a menu in a
+        // float is left behind by its window and closes (below). Where it lies over that window is
+        // what places it again (`viewports.placeRiding`).
+        const ride: viewports.Ride = if (float_vp) |fv| (if (as_dialog != null) .{ .viewport = fv } else .none) else .main;
+        const key: dvui.Rect.Physical = if (float_at) |at| .{ .x = frame.x - at.x, .y = frame.y - at.y, .w = frame.w, .h = frame.h } else frame;
+        const m = menuOut(sw.id, place, corner, ride, as_dialog != null) orelse {
+            // No window for a dialog out in a float's band: over the main window instead, where it
+            // is drawn in the main window — out there nothing would show it, modal over all.
+            if (as_dialog != null and float_at != null) {
+                var rect = dvui.dataGet(null, sw.id, "_rect", dvui.Rect) orelse continue;
+                const main = dvui.windowRect();
+                rect.x = main.x + (main.w - rect.w) / 2;
+                rect.y = main.y + (main.h - rect.h) / 2;
+                dvui.dataSet(null, sw.id, "_rect", rect);
+            }
+            continue;
+        };
         m.seen = true;
+        m.dialog = as_dialog != null;
+        if (m.dialog) {
+            if (m.float_at == null) m.float_at = float_at;
+            m.float_vp = float_vp;
+        }
         if (as_dialog) |d| viewports.fade(m.viewport, d.alpha);
         if (as_dialog == null) if (float_at) |at| {
             const was = m.float_at orelse at;
@@ -1008,7 +1042,7 @@ fn menuFrame() void {
             if (@abs(at.x - was.x) > 0.5 or @abs(at.y - was.y) > 0.5) menus_left_behind = true;
         };
         viewports.mainOffset(m.viewport, .{ .x = frame.x - place.x, .y = frame.y - place.y });
-        const placed = viewports.placeMain(m.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h });
+        const placed = viewports.placeRiding(m.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, .{ .x = key.x, .y = key.y, .w = key.w, .h = key.h });
         const shown: dvui.Rect.Physical = .{ .x = frame.x + (placed.x - place.x), .y = frame.y + (placed.y - place.y), .w = placed.w, .h = placed.h };
         // Its material: Liquid Glass on the slider, no lighter than a menu's text needs; vibrancy
         // before macOS 26, with the window's colour drawn under the menu.
@@ -1051,14 +1085,45 @@ fn menuFrame() void {
     }
 }
 
+/// A dialog opened in a float that is out goes with it, as a dialog belongs to the window it opened
+/// in: its float's window moved — dragged, snapped — and the dialog is put where it lies over the
+/// float as before, before it draws, so its window, the float's child, is where the OS carried it
+/// (`viewports.placeRiding`). Its float gone, it comes back over the main window rather than be
+/// left where no window shows it, modal over everything.
+fn dialogsRide() void {
+    const s = dvui.windowNaturalScale();
+    for (&menus) |*slot| if (slot.*) |*m| {
+        if (!m.dialog) continue;
+        const was = m.float_at orelse continue;
+        const vp = m.float_vp orelse continue;
+        var rect = dvui.dataGet(null, m.id, "_rect", dvui.Rect) orelse continue;
+        const cover = for (covers[0..cover_count]) |cv| {
+            if (cv.viewport == vp) break cv;
+        } else {
+            const main = dvui.windowRect();
+            rect.x = main.x + (main.w - rect.w) / 2;
+            rect.y = main.y + (main.h - rect.h) / 2;
+            dvui.dataSet(null, m.id, "_rect", rect);
+            m.float_at = null;
+            m.float_vp = null;
+            continue;
+        };
+        const at = cover.band.topLeft();
+        if (at.x == was.x and at.y == was.y) continue;
+        rect.x += (at.x - was.x) / s;
+        rect.y += (at.y - was.y) / s;
+        dvui.dataSet(null, m.id, "_rect", rect);
+        m.float_at = at;
+    };
+}
+
 /// Menu `id`'s window (`menuFrame`), opened at `place` (physical, in the main window's frame) where
-/// it has none yet — riding on the main window where it is one of the main window's
-/// (`follow_main`); a dialog's (`dialog`) in the main window's stacking. Null where no more windows
-/// can be opened: the menu is drawn in its window then.
-fn menuOut(id: dvui.Id, place: dvui.Rect.Physical, radius: f32, follow_main: bool, dialog: bool) ?*MenuOut {
+/// it has none yet — riding on `ride`; a dialog's (`dialog`) in that window's stacking. Null where
+/// no more windows can be opened: the menu is drawn in its window then.
+fn menuOut(id: dvui.Id, place: dvui.Rect.Physical, radius: f32, ride: viewports.Ride, dialog: bool) ?*MenuOut {
     for (&menus) |*slot| if (slot.*) |*m| if (m.id == id) return m;
     for (&menus) |*slot| if (slot.* == null) {
-        const vp = viewports.openMenu(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, radius, follow_main, dialog) orelse return null;
+        const vp = viewports.openMenu(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, radius, ride, dialog) orelse return null;
         slot.* = .{ .id = id, .viewport = vp };
         return &slot.*.?;
     };
