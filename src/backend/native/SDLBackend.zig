@@ -941,14 +941,30 @@ pub fn liquidGlassAvailable() bool {
 /// `look`.
 pub fn viewportOverlayGlass(_: *SDLBackend, vp: *Viewport, shapes: []const GlassShape, spacing: f32, look: GlassLook) void {
     const n = @min(shapes.len, max_glass);
+    // Where the glass merges, its necks swing at the least change of the gap between two pieces —
+    // a carried drop's spring settling, a hand's tremor through a held press — and the OS
+    // re-forms the merge each time it is handed a change, so a piece still under a pointer held
+    // still shimmered at its joins. A piece's place and size go to the OS only once they have
+    // moved half a point from what it was last handed; motion that means anything moves more.
+    var next: [max_glass]GlassShape = undefined;
+    @memcpy(next[0..n], shapes[0..n]);
+    if (n == vp.glass_n) for (next[0..n], vp.glass[0..n]) |*to, was| {
+        inline for (.{ "x", "y", "w", "h", "radius" }) |f| {
+            if (@abs(@field(to.*, f) - @field(was, f)) < glass_still) @field(to.*, f) = @field(was, f);
+        }
+    };
     if (n == vp.glass_n and spacing == vp.glass_spacing and std.meta.eql(look, vp.glass_look) and
-        std.mem.eql(u8, std.mem.sliceAsBytes(vp.glass[0..n]), std.mem.sliceAsBytes(shapes[0..n]))) return;
-    @memcpy(vp.glass[0..n], shapes[0..n]);
+        std.mem.eql(u8, std.mem.sliceAsBytes(vp.glass[0..n]), std.mem.sliceAsBytes(next[0..n]))) return;
+    @memcpy(vp.glass[0..n], next[0..n]);
     vp.glass_n = n;
     vp.glass_spacing = spacing;
     vp.glass_look = look;
     vp.glass_dirty = true;
 }
+
+/// Points a piece of an overlay's glass moves or grows before the OS is handed it
+/// (`viewportOverlayGlass`).
+const glass_still: f64 = 0.5;
 
 /// The display the main window is on, in the main window's frame (physical pixels from its top
 /// left): what an overlay covers.
