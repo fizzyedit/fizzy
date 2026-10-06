@@ -101,9 +101,15 @@ pub const Native = struct {
     top_fill: f32,
 };
 
+/// How much of the OS's frost a drop takes over its lens, at most: a drop is water, its lens bending
+/// what is under it, and a light frost only softens the dark band Apple's lens shades its edge with
+/// over a flat background. Frosted whole, drops read flat — matte discs rather than water (the
+/// user, against the web build's glass).
+pub const drop_frost: f32 = 0.4;
+
 pub fn native(t: f32) Native {
     const w = way(t);
-    return .{ .under = lens_material, .over = frost_material, .over_share = w.frost, .fill = w.top, .glass = w.shine, .top_fill = w.top };
+    return .{ .under = lens_material, .over = frost_material, .over_share = w.frost * drop_frost, .fill = w.top, .glass = w.shine, .top_fill = w.top };
 }
 
 /// A window of the OS's glass at `t` — the main window, a float's own. A window is read through,
@@ -284,7 +290,8 @@ test "a surface carrying text keeps some frost over a clear lens, none once it i
 test "a drop is rough glass until the top, not a disc of colour; text takes its colour sooner" {
     try std.testing.expectEqual(@as(f32, 0), native(0.7).fill);
     try std.testing.expectEqual(@as(f32, 0), inApp(0.7).mix);
-    try std.testing.expect(native(0.7).over_share > 0.9);
+    // Water: a light frost over the lens at most.
+    try std.testing.expectApproxEqAbs(drop_frost, native(0.7).over_share, 1e-6);
     try std.testing.expectEqual(way(0.7).tint, forText(inApp(0.7)).mix);
 }
 
@@ -333,7 +340,7 @@ test "both forms share the way" {
     var i: usize = 0;
     while (i <= 20) : (i += 1) {
         const t = @as(f32, @floatFromInt(i)) / 20;
-        try std.testing.expectEqual(native(t).over_share, inApp(t).frost);
+        try std.testing.expectApproxEqAbs(native(t).over_share, inApp(t).frost * drop_frost, 1e-6);
         try std.testing.expectEqual(native(t).fill, inApp(t).mix);
     }
 }
