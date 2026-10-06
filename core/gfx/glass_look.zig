@@ -105,11 +105,16 @@ pub const Native = struct {
 /// what is under it, and a light frost only softens the dark band Apple's lens shades its edge with
 /// over a flat background. Frosted whole, drops read flat — matte discs rather than water (the
 /// user, against the web build's glass).
-pub const drop_frost: f32 = 0.4;
+pub const drop_frost: f32 = 0.55;
+
+/// The least frost a drop keeps, at the bottom of the slider: every drop carries something to read
+/// — a drop zone's icon, the carried view's picture — and over a busy background a clear lens left
+/// it hard to make out (the user). Still water, the lens bending what is under it, only softened.
+pub const drop_frost_min: f32 = 0.3;
 
 pub fn native(t: f32) Native {
     const w = way(t);
-    return .{ .under = lens_material, .over = frost_material, .over_share = w.frost * drop_frost, .fill = w.top, .glass = w.shine, .top_fill = w.top };
+    return .{ .under = lens_material, .over = frost_material, .over_share = std.math.lerp(drop_frost_min, drop_frost, w.frost), .fill = w.top, .glass = w.shine, .top_fill = w.top };
 }
 
 /// A window of the OS's glass at `t` — the main window, a float's own. A window is read through,
@@ -215,6 +220,14 @@ pub fn inApp(t: f32) InApp {
 /// clear lens; drops and the carried bubble follow the slider as it is.
 pub const text_frost: f32 = 0.35;
 
+/// `look` for a drop — a drop zone's bubble, the carried view: frosted at least as much as the OS's
+/// glass keeps at the bottom of the slider (`native`, `drop_frost_min`), on the same way up.
+pub fn forDrops(look: InApp) InApp {
+    var l = look;
+    l.frost = std.math.lerp(drop_frost_min / drop_frost, 1, l.frost);
+    return l;
+}
+
 /// `look` for a surface carrying text: its colour from `tint_start` (`text_mix`), and at least
 /// `text_frost`.
 pub fn forText(look: InApp) InApp {
@@ -230,10 +243,11 @@ fn smoothstep(x: f32) f32 {
 
 // ── Tests ───────────────────────────────────────────────────────────────────────────────────────
 
-test "the bottom of the slider is clear glass: lens, no frost, no colour" {
+test "the bottom of the slider is clear glass: lens, no colour, a drop only softened" {
     const n = native(0);
     try std.testing.expectEqual(lens_material, n.under);
-    try std.testing.expectEqual(@as(f32, 0), n.over_share);
+    try std.testing.expectApproxEqAbs(drop_frost_min, n.over_share, 1e-6);
+    try std.testing.expectApproxEqAbs(drop_frost_min, forDrops(inApp(0)).frost * drop_frost, 1e-6);
     try std.testing.expectEqual(@as(f32, 0), n.fill);
     try std.testing.expectEqual(@as(f32, 1), n.glass);
     const a = inApp(0);
@@ -340,7 +354,7 @@ test "both forms share the way" {
     var i: usize = 0;
     while (i <= 20) : (i += 1) {
         const t = @as(f32, @floatFromInt(i)) / 20;
-        try std.testing.expectApproxEqAbs(native(t).over_share, inApp(t).frost * drop_frost, 1e-6);
+        try std.testing.expectApproxEqAbs(native(t).over_share, forDrops(inApp(t)).frost * drop_frost, 1e-6);
         try std.testing.expectEqual(native(t).fill, inApp(t).mix);
     }
 }

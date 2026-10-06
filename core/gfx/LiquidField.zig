@@ -325,7 +325,7 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     // The window behind the glass, published for this frame.
     u.backdrop[0] = if (opaqueWindow()) 1 else 0;
     // And the glass the slider makes of it this frame (`publishLook`).
-    if (publishedLook()) |l| self.applyLook(&u, if (self.text) glass_look.forText(l) else l);
+    if (publishedLook()) |l| self.applyLook(&u, if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();
