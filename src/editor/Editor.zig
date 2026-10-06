@@ -3183,6 +3183,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.float_windows = parsed.float_windows;
     editor.app.settings.native_glass = parsed.native_glass;
     editor.app.settings.native_menus = parsed.native_menus;
+    editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 

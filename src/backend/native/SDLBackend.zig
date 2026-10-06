@@ -188,6 +188,8 @@ pub const Viewport = struct {
     /// follow a frame behind — and put somewhere new only when where it lies over the main window
     /// changes (`viewportPlaceMain`): that frame as last placed, and the part of it shown then.
     follow_main: bool = false,
+    /// A dialog's window (`viewportOpenMenu`): a menu's, but in the main window's stacking.
+    dialog: bool = false,
     main_placed: ?viewport_map.Rect = null,
     main_shown: viewport_map.Rect = .{},
 };
@@ -875,12 +877,14 @@ const ViewportKind = enum { window, carry, overlay, menu };
 /// before macOS 26). macOS.
 /// `radius`, points: the menu's corners, which vibrancy is masked to (Liquid Glass takes them from
 /// its look each frame). `follow_main`: a menu of the main window's, which moves with it
-/// (`Viewport.follow_main`) — not one opened in a float that is out.
-pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, follow_main: bool) ?*Viewport {
+/// (`Viewport.follow_main`) — not one opened in a float that is out. `dialog`: a dialog's window
+/// (`Viewport.dialog`).
+pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, follow_main: bool, dialog: bool) ?*Viewport {
     if (comptime builtin.os.tag != .macos) return null;
     const vp = self.openViewport(at, "", .menu) orelse return null;
-    _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius);
+    _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
     vp.follow_main = follow_main;
+    vp.dialog = dialog;
     return vp;
 }
 
@@ -1284,7 +1288,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
-extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64) c_int;
+extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
@@ -1736,7 +1740,7 @@ pub fn renderPresent(self: *SDLBackend) void {
             // made a child window, AppKit shows it at once, before it has a picture.
             if (comptime builtin.os.tag == .macos) if (vp.follow_main) {
                 _ = c.SDL_SetWindowParent(vp.window, self.window);
-                fizzy_macos_viewport_menu_attached(cocoaWindow(vp.window));
+                if (!vp.dialog) fizzy_macos_viewport_menu_attached(cocoaWindow(vp.window));
             };
         }
         if (show) vp.shown = true;

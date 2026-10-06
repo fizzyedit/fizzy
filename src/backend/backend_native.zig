@@ -213,9 +213,11 @@ pub const viewports = struct {
     /// OS's material in it — rounded by `radius` points — and the pointer over it read in the main
     /// window's frame (`mainOffset`). Placed with `placeMain`, drawn as any viewport. `follow_main`:
     /// a menu of the main window's, which the OS moves with it — smoothly, through a drag.
-    pub fn openMenu(at: Rect, radius: f32, follow_main: bool) ?*Viewport {
+    /// `dialog`: a dialog's window, the same but in the main window's stacking, not above every
+    /// window.
+    pub fn openMenu(at: Rect, radius: f32, follow_main: bool, dialog: bool) ?*Viewport {
         if (comptime !supported) return null;
-        return dvui.currentWindow().backend.impl.viewportOpenMenu(at, radius, follow_main);
+        return dvui.currentWindow().backend.impl.viewportOpenMenu(at, radius, follow_main, dialog);
     }
 
     /// Where menu `vp` is drawn in the frame from where its window lies over the main window,

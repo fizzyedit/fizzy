@@ -994,15 +994,18 @@ int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
  * (`fizzy_macos_window_liquid_glass_look`), rounded to the menu's corners — 1; vibrancy before, its
  * mask rounded by `radius` points, 0.
  */
-int fizzy_macos_viewport_menu(void *nswindow, void *main_nswindow, long material, double radius) {
+int fizzy_macos_viewport_menu(void *nswindow, void *main_nswindow, long material, double radius, int dialog) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return 0;
         viewportDress(window, (__bridge NSWindow *)main_nswindow);
         [window setHasShadow:YES];
-        [window setLevel:NSPopUpMenuWindowLevel];
+        /* A dialog rides in the main window's stacking, as its child (`SDLBackend`), other apps'
+         * windows going over both; a menu is above every window, on every Space. */
+        [window setLevel:dialog ? NSNormalWindowLevel : NSPopUpMenuWindowLevel];
         [window setExcludedFromWindowsMenu:YES];
-        [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorTransient |
+        const NSWindowCollectionBehavior every_space = dialog ? 0 : NSWindowCollectionBehaviorCanJoinAllSpaces;
+        [window setCollectionBehavior:every_space | NSWindowCollectionBehaviorTransient |
                                       NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary];
         [window setIgnoresMouseEvents:NO];
         [NSApp removeWindowsItem:window];

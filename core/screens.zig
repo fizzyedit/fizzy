@@ -166,6 +166,64 @@ pub fn isMenu(id: dvui.Id) bool {
     return false;
 }
 
+/// Dialogs in windows of their own this frame (`markDialog`), as menus are (`publishMenus`): the
+/// app's, each frame, with the display the main window is on as the screen they are kept on. Null:
+/// dialogs are drawn in the window they open in.
+pub fn publishDialogs(display: ?dvui.Rect.Natural) void {
+    if (display) |d| dvui.dataSet(null, key_id, "_dialogs", d) else dvui.dataRemove(null, key_id, "_dialogs");
+}
+
+/// Whether dialogs are windows of their own this frame (`publishDialogs`): a dialog draws no frost,
+/// fill, shadow or dimming of its own then — its window wears the OS's material and shadow.
+pub fn nativeDialogs() bool {
+    return dvui.dataGet(null, key_id, "_dialogs", dvui.Rect.Natural) != null;
+}
+
+/// What a dialog at `r` clips its drawing to, physical: the display, where dialogs are windows of
+/// their own and `r`'s middle is on it (`publishDialogs`); else its screen (`pixelsFor`).
+pub fn dialogPixelsFor(r: dvui.Rect.Natural) dvui.Rect.Physical {
+    var s = screenFor(r);
+    if (dvui.dataGet(null, key_id, "_dialogs", dvui.Rect.Natural)) |d| {
+        if (d.contains(r.center())) s = d;
+    }
+    const m = dvui.windowNaturalScale();
+    return .{ .x = s.x * m, .y = s.y * m, .w = s.w * m, .h = s.h * m };
+}
+
+/// A dialog, in a subwindow of its own this frame: where dialogs are windows of their own
+/// (`publishDialogs`), the app shows each in one (`Popout`). Each frame it is drawn; `radius` is
+/// its corners, natural, which its window's material is rounded to, and `alpha` how far it has
+/// faded on its way shut.
+pub fn markDialog(id: dvui.Id, radius: f32, alpha: f32) void {
+    const now = dvui.currentWindow().frame_time_ns;
+    const m = dvui.dataGetPtrDefault(null, key_id, "_dialog_ids", MarkedDialogs, .{});
+    if (m.frame != now) m.* = .{ .frame = now };
+    if (m.n < m.ids.len) {
+        m.ids[m.n] = .{ .id = id, .radius = radius, .alpha = alpha };
+        m.n += 1;
+    }
+}
+
+/// `id` as a dialog this frame (`markDialog`), if it is one.
+pub fn dialog(id: dvui.Id) ?MarkedDialog {
+    const m = dvui.dataGetPtr(null, key_id, "_dialog_ids", MarkedDialogs) orelse return null;
+    if (m.frame != dvui.currentWindow().frame_time_ns) return null;
+    for (m.ids[0..m.n]) |d| if (d.id == id) return d;
+    return null;
+}
+
+pub const MarkedDialog = struct {
+    id: dvui.Id,
+    radius: f32,
+    alpha: f32,
+};
+
+const MarkedDialogs = struct {
+    frame: i128 = 0,
+    n: u8 = 0,
+    ids: [4]MarkedDialog = undefined,
+};
+
 const Marked = struct {
     frame: i128 = 0,
     n: u8 = 0,

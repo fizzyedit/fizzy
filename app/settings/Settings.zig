@@ -111,6 +111,11 @@ native_glass: bool = true,
 /// are windows. Applied at once; `FIZZY_NATIVE_MENUS` overrides it.
 native_menus: bool = true,
 
+/// Whether dialogs open in OS windows of their own — the OS's material, shadow and corners, riding
+/// on the main window — rather than drawn inside it, where floats are windows. Applied at once;
+/// `FIZZY_NATIVE_DIALOGS` overrides it.
+native_dialogs: bool = true,
+
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.
 input_scheme: InputScheme = .auto,

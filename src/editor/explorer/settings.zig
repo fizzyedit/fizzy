@@ -239,6 +239,16 @@ pub const groups = [_]Group{
                 .draw = drawNativeMenus,
                 .inline_control = true,
             },
+            .{
+                .label = "Native dialogs",
+                .key = "native_dialogs",
+                .description = "Dialogs open in windows of their own — the system's material, " ++
+                    "shadow and corners, moving with the main window — rather than drawn inside " ++
+                    "it, where floats have windows of their own.",
+                .keywords = "dialog modal alert native window material",
+                .draw = drawNativeDialogs,
+                .inline_control = true,
+            },
         },
     },
     .{
@@ -720,6 +730,10 @@ fn drawNativeGlass() void {
 
 fn drawNativeMenus() void {
     drawToggle(&fizzy.editor().app.settings.native_menus);
+}
+
+fn drawNativeDialogs() void {
+    drawToggle(&fizzy.editor().app.settings.native_dialogs);
 }
 
 /// A setting's checkbox, saved and applied as it changes.

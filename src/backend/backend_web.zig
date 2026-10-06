@@ -185,7 +185,7 @@ pub const viewports = struct {
     pub fn appActive() bool {
         return true;
     }
-    pub fn openMenu(_: Rect, _: f32, _: bool) ?*Viewport {
+    pub fn openMenu(_: Rect, _: f32, _: bool, _: bool) ?*Viewport {
         return null;
     }
     pub fn mainOffset(_: *Viewport, _: dvui.Point.Physical) void {}

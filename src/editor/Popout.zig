@@ -45,7 +45,8 @@ var cover_count: usize = 0;
 /// Each open menu's window (`menuFrame`), by its subwindow — a context menu and the submenus out of
 /// it.
 var menus: [max_menus]?MenuOut = @splat(null);
-const max_menus = 4;
+/// Menus and dialogs at once: a menu's submenus, a dialog with a menu open in it.
+const max_menus = 6;
 
 const MenuOut = struct {
     id: dvui.Id,
@@ -162,6 +163,8 @@ pub fn beginFrame(state: *State) void {
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
     // Menus in windows of their own (`menuFrame`), kept on the display rather than the window.
     fizzy.core.screens.publishMenus(if (nativeMenus()) displayNatural() else null);
+    // And dialogs, riding on the main window.
+    fizzy.core.screens.publishDialogs(if (nativeDialogs()) displayNatural() else null);
     fizzy.core.screens.publishMenusDismissed(nativeMenus() and (!viewports.appActive() or menus_left_behind));
     menus_left_behind = false;
     // Whatever happened, the screens floating things are placed on this frame: each window's,
@@ -302,6 +305,9 @@ fn release(o: *Out) void {
 /// put where it was drawn, and handed the picture.
 pub fn endFrame(state: *State) void {
     if (!enabled()) return;
+    // The dialogs drawn now, for `menuFrame` to take them into windows of their own: dvui draws
+    // them later, at the very end of the frame.
+    if (nativeDialogs()) fizzy.core.dialogs.drawEarly();
     cover_count = 0;
     for (&outs) |*slot| {
         if (slot.*) |*o| windowFrame(state, o);
@@ -929,6 +935,14 @@ fn nativeMenus() bool {
     return envSwitch("FIZZY_NATIVE_MENUS") orelse fizzy.editor().app.settings.native_menus;
 }
 
+/// Whether dialogs are windows of their own (`menuFrame`): as menus are, as the setting says
+/// (`Settings.native_dialogs`, `FIZZY_NATIVE_DIALOGS` over it).
+fn nativeDialogs() bool {
+    if (comptime !viewports.menus) return false;
+    if (!viewports.available()) return false;
+    return envSwitch("FIZZY_NATIVE_DIALOGS") orelse fizzy.editor().app.settings.native_dialogs;
+}
+
 /// The display the main window is on, natural, in the main window's frame: the screen menus are kept
 /// on where they are windows of their own (`core.screens.publishMenus`).
 fn displayNatural() dvui.Rect.Natural {
@@ -950,6 +964,10 @@ const menu_opacity_floor: f32 = 0.6;
 /// window over where that part of the band lies. A menu is drawn where it opened in its band, and
 /// the float's window moving leaves it behind, so it closes then, as an OS menu closes on a press
 /// outside it. A menu that closed takes its window with it.
+///
+/// Each open dialog (`core.screens.markDialog`) the same way, but in the main window's stacking
+/// rather than above every window, its corners its own, and its window fading with it as it flies
+/// shut. It stays where it is when a float it opened in moves; it has a place of its own.
 fn menuFrame() void {
     for (&menus) |*slot| if (slot.*) |*m| {
         m.seen = false;
@@ -958,14 +976,16 @@ fn menuFrame() void {
         releaseMenu(m);
         slot.* = null;
     };
-    if (!nativeMenus()) return;
+    if (!nativeMenus() and !nativeDialogs()) return;
     const cw = dvui.currentWindow();
     const main_px = dvui.windowRectPixels();
     const s = dvui.windowNaturalScale();
     const theme = dvui.themeGet();
     const radius = fizzy.core.dialogs.surfaceCorners().finalize(&theme).tl.radius();
     for (cw.subwindows.stack.items) |*sw| {
-        if (!fizzy.core.screens.isMenu(sw.id)) continue;
+        const as_dialog = fizzy.core.screens.dialog(sw.id);
+        if (as_dialog == null and !fizzy.core.screens.isMenu(sw.id)) continue;
+        const corner = if (as_dialog) |d| d.radius else radius;
         const frame = sw.rect_pixels;
         if (frame.w < 1 or frame.h < 1) continue;
         // Where its window lies over the main window: where the menu is, or — in a float's band —
@@ -979,13 +999,14 @@ fn menuFrame() void {
             place = frame.offsetPoint(.{ .x = cover.in_main.x - cover.band.x, .y = cover.in_main.y - cover.band.y });
             float_at = cover.band.topLeft();
         }
-        const m = menuOut(sw.id, place, radius, float_at == null) orelse continue;
+        const m = menuOut(sw.id, place, corner, float_at == null, as_dialog != null) orelse continue;
         m.seen = true;
-        if (float_at) |at| {
+        if (as_dialog) |d| viewports.fade(m.viewport, d.alpha);
+        if (as_dialog == null) if (float_at) |at| {
             const was = m.float_at orelse at;
             m.float_at = at;
             if (@abs(at.x - was.x) > 0.5 or @abs(at.y - was.y) > 0.5) menus_left_behind = true;
-        }
+        };
         viewports.mainOffset(m.viewport, .{ .x = frame.x - place.x, .y = frame.y - place.y });
         const placed = viewports.placeMain(m.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h });
         const shown: dvui.Rect.Physical = .{ .x = frame.x + (placed.x - place.x), .y = frame.y + (placed.y - place.y), .w = placed.w, .h = placed.h };
@@ -993,7 +1014,7 @@ fn menuFrame() void {
         // before macOS 26, with the window's colour drawn under the menu.
         const op = @max(std.math.clamp(fizzy.editor().window_opacity, 0, 1), menu_opacity_floor);
         var look = Editor.windowGlassLook(op, .{ .w = shown.w / s, .h = shown.h / s });
-        look.radius = radius;
+        look.radius = corner;
         m.glass = viewports.windowGlass(m.viewport, look);
         const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
         const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
@@ -1017,7 +1038,7 @@ fn menuFrame() void {
             const prev_alpha = cw.alpha;
             dvui.alphaSet(1);
             defer dvui.alphaSet(prev_alpha);
-            frame.fill(dvui.CornerRect.Physical.all(radius * s), .{ .color = .{ .color = Editor.windowBase(op) } });
+            frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) } });
         }
         const cmds = sw.render_cmds;
         const after = sw.render_cmds_after;
@@ -1032,11 +1053,12 @@ fn menuFrame() void {
 
 /// Menu `id`'s window (`menuFrame`), opened at `place` (physical, in the main window's frame) where
 /// it has none yet — riding on the main window where it is one of the main window's
-/// (`follow_main`). Null where no more windows can be opened: the menu is drawn in its window then.
-fn menuOut(id: dvui.Id, place: dvui.Rect.Physical, radius: f32, follow_main: bool) ?*MenuOut {
+/// (`follow_main`); a dialog's (`dialog`) in the main window's stacking. Null where no more windows
+/// can be opened: the menu is drawn in its window then.
+fn menuOut(id: dvui.Id, place: dvui.Rect.Physical, radius: f32, follow_main: bool, dialog: bool) ?*MenuOut {
     for (&menus) |*slot| if (slot.*) |*m| if (m.id == id) return m;
     for (&menus) |*slot| if (slot.* == null) {
-        const vp = viewports.openMenu(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, radius, follow_main) orelse return null;
+        const vp = viewports.openMenu(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, radius, follow_main, dialog) orelse return null;
         slot.* = .{ .id = id, .viewport = vp };
         return &slot.*.?;
     };
