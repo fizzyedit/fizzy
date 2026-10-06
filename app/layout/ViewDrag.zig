@@ -82,11 +82,16 @@ drop_head: core.Spring = .{},
 /// The pointer's pace, eased (`dropShapes`), physical pixels a second, and where it was last frame.
 trail_vel: dvui.Point.Physical = .{},
 trail_mouse: ?dvui.Point.Physical = null,
+/// The pace last frame, for the hand's acceleration, which swings the drop's give (`jelly`).
+trail_vel_was: dvui.Point.Physical = .{},
+/// The drop's give: for each point round its rim (`jelly_n`), how far it is pushed out of the drop
+/// (physical pixels) and how fast — a mass on a spring in the drop, swung by the hand.
+jelly: [jelly_n]Jelly = @splat(.{}),
 /// Where the pointer was last frame, for a jump from one window's part of the frame to another's
 /// (`followAcross`).
 last_mouse: ?dvui.Point.Physical = null,
 drop_ns: i128 = 0,
-drop_shapes: [1 + drop_trail_tunes.len]core.LiquidField.Shape = undefined,
+drop_shapes: [1 + drop_trail_tunes.len + jelly_n]core.LiquidField.Shape = undefined,
 drop_n: usize = 0,
 /// The head's corner radius this frame (physical), for the photograph inside it.
 drop_radius: f32 = 0,
@@ -533,6 +538,8 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     d.drop_head = .{};
     d.trail_vel = .{};
     d.trail_mouse = null;
+    d.trail_vel_was = .{};
+    d.jelly = @splat(.{});
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -577,6 +584,8 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.drop_head = .{};
     d.trail_vel = .{};
     d.trail_mouse = null;
+    d.trail_vel_was = .{};
+    d.jelly = @splat(.{});
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -1231,6 +1240,41 @@ const drop_trail_tunes = [_]DropTrail{
     .{ .share = 0.3, .at = 1.1 },
 };
 
+/// The drop's give (`dropShapes`, the user: "interactibility, jiggle, wateriness"): points round the
+/// rim, each a mass on a spring inside the drop, swung by the hand's acceleration as water is in a
+/// carried cup — pushed out of the side away from where the hand speeds up, so the drop stretches
+/// back as it is set going, and thrown out ahead of it as it stops, wobbling a few times before it
+/// settles. From the hand alone, as the trail is: a bubble's pull is no acceleration of the hand,
+/// so a drop hovering or crossing between bubbles is not set wobbling, and joined to a bubble its
+/// give is damped and drawn in. Each point is a circle of glass `jelly_size` of the head's radius
+/// at `jelly_ring` of it from the middle, inside the head at rest, bulging out of it as it swings:
+/// the drop's outline gives in any direction. Neighbours pull on each other (`jelly_couple`), so
+/// the rim moves as one surface, not lumps — six points apart read as a potato (seen, recorded) —
+/// and the hand's acceleration draws the drop out along it as well as pushing it aside, the way a
+/// drop of water stretches and squashes (`jelly_stretch`). Lively where motion is playful,
+/// critically damped where it is minimal, none where it is off.
+const jelly_n = 8;
+const jelly_ring: f32 = 0.32;
+const jelly_size: f32 = 0.68;
+/// Hertz: how quick the wobble is.
+const jelly_hz: f32 = 3.2;
+/// Damping at playful: well under 1, a few swings before it settles.
+const jelly_damping: f32 = 0.22;
+/// How strongly the hand's acceleration swings the points: 1 is a mass's own inertia.
+const jelly_gain: f32 = 0.8;
+/// How much of it draws the drop out along the acceleration, beside pushing it aside.
+const jelly_stretch: f32 = 0.5;
+/// How strongly a point is pulled toward its neighbours, a share of its own spring's.
+const jelly_couple: f32 = 0.6;
+/// How far a point may be thrown out of the drop, and drawn into it, a share of the head's radius.
+const jelly_out: f32 = 0.3;
+const jelly_in: f32 = 0.25;
+
+const Jelly = struct {
+    out: f32 = 0,
+    vel: f32 = 0,
+};
+
 /// Seconds of the hand's pace the trail reaches back: at 1000 points a second, 30 points.
 const trail_reach_s: f32 = 0.03;
 /// The longest the trail draws out, a share of the head's radius.
@@ -1292,6 +1336,8 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         d.drop_head = .{};
         d.trail_vel = .{};
         d.trail_mouse = null;
+        d.trail_vel_was = .{};
+        d.jelly = @splat(.{});
         d.drop_aim = 0;
         return d.drop_shapes[0..0];
     }
@@ -1335,6 +1381,8 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     if (pace < 1) {
         d.trail_vel = .{};
     } else moving = true;
+    // The give (`jelly`), swung by the hand's acceleration.
+    if (stepJelly(d, dt, R)) moving = true;
     // Behind the head, away from where the hand is going, as far as its pace draws the trail.
     const trail_len = if (core.motion.off()) 0 else @min(pace * trail_reach_s, trail_most * R);
     const back: dvui.Point.Physical = if (pace >= 1) .{ .x = -d.trail_vel.x / pace, .y = -d.trail_vel.y / pace } else .{};
@@ -1388,12 +1436,74 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     d.shape_radius = d.drop_radius;
     d.drop_shapes[0] = .{ .rect = head, .radii = @splat(d.drop_radius), .round = true };
     d.drop_n = 1;
+    // Every piece every frame, however small — one with nothing to show lies inside the head: the
+    // OS's glass is handed its pieces by their place in the list, and a piece coming and going
+    // re-formed the whole of it, the drop's joins with it.
     for (trail_at, tail_r) |p, tr| {
-        if (tr <= 1) continue;
-        d.drop_shapes[d.drop_n] = core.LiquidField.Shape.circle(p, tr);
+        d.drop_shapes[d.drop_n] = core.LiquidField.Shape.circle(p, @max(tr, 1));
+        d.drop_n += 1;
+    }
+    const centre = head.center();
+    const give = 1 - d.drop_aim;
+    for (d.jelly, 0..) |j, i| {
+        const a = @as(f32, @floatFromInt(i)) / jelly_n * 2 * std.math.pi;
+        const reach = jelly_ring * head_r + j.out * give;
+        const c: dvui.Point.Physical = .{ .x = centre.x + @cos(a) * reach, .y = centre.y + @sin(a) * reach };
+        d.drop_shapes[d.drop_n] = core.LiquidField.Shape.circle(c, @max(1, jelly_size * head_r * grown));
         d.drop_n += 1;
     }
     return d.drop_shapes[0..d.drop_n];
+}
+
+/// Step the drop's give (`jelly`) over `dt`: each point round the rim a mass on a spring in the
+/// drop, pushed out by the hand's acceleration away from its side — inertia — and damped toward
+/// critical as the drop joins a bubble. Returns whether it is still moving.
+fn stepJelly(d: *ViewDrag, dt: f32, R: f32) bool {
+    const accel: dvui.Point.Physical = if (dt > 0) .{ .x = (d.trail_vel.x - d.trail_vel_was.x) / dt, .y = (d.trail_vel.y - d.trail_vel_was.y) / dt } else .{};
+    d.trail_vel_was = d.trail_vel;
+    if (core.motion.off()) {
+        d.jelly = @splat(.{});
+        return false;
+    }
+    if (dt <= 0) return false;
+    const play = std.math.clamp((core.motion.level() - 0.5) * 2, 0, 1);
+    const w = 2 * std.math.pi * jelly_hz * core.motion.rate();
+    const z = std.math.lerp(std.math.lerp(1, jelly_damping, play), 1, d.drop_aim);
+    // What the hand's acceleration does at each point: inertia pushes out the side away from where
+    // it speeds up, and draws the drop out along the way it speeds up.
+    const amag = @sqrt(accel.x * accel.x + accel.y * accel.y);
+    const ux: f32 = if (amag > 0) accel.x / amag else 0;
+    const uy: f32 = if (amag > 0) accel.y / amag else 0;
+    var push: [jelly_n]f32 = undefined;
+    for (&push, 0..) |*p, i| {
+        const a = @as(f32, @floatFromInt(i)) / jelly_n * 2 * std.math.pi;
+        const along = ux * @cos(a) + uy * @sin(a);
+        p.* = jelly_gain * amag * (-along + jelly_stretch * (2 * along * along - 1));
+    }
+    const couple = jelly_couple * w * w;
+    var left = std.math.clamp(dt, 0, 0.1);
+    while (left > 0) {
+        const h = @min(left, 0.004);
+        left -= h;
+        var acc: [jelly_n]f32 = undefined;
+        for (d.jelly, 0..) |j, i| {
+            const prev = d.jelly[(i + jelly_n - 1) % jelly_n].out;
+            const next = d.jelly[(i + 1) % jelly_n].out;
+            acc[i] = -w * w * j.out - 2 * z * w * j.vel + couple * (prev + next - 2 * j.out) + push[i];
+        }
+        for (&d.jelly, acc) |*j, a| {
+            j.vel += a * h;
+            j.out += j.vel * h;
+        }
+    }
+    var moving = false;
+    for (&d.jelly) |*j| {
+        j.out = std.math.clamp(j.out, -jelly_in * R, jelly_out * R);
+        if (@abs(j.out) < 0.3 and @abs(j.vel) < 2) {
+            j.* = .{};
+        } else moving = true;
+    }
+    return moving;
 }
 
 /// The area two circles of radii `a` and `b`, `dist` apart, have in common.
@@ -2069,7 +2179,8 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
         landing.photo_size = d.texture_rect.size();
         d.texture = null;
         // And its trail, which runs into the window as it grows — carried as a drop, not a card.
-        if (d.drop_n > 1) for (d.drop_shapes[1..d.drop_n]) |sh| {
+        if (d.drop_n > 1) for (d.drop_shapes[1..@min(d.drop_n, 1 + drop_trail_tunes.len)]) |sh| {
+            if (sh.rect.w < 4) continue;
             if (landing.drops_n == landing.drops.len) break;
             landing.drops[landing.drops_n] = .{ .c = sh.rect.center(), .r = @min(sh.rect.w, sh.rect.h) / 2 };
             landing.drops_n += 1;
