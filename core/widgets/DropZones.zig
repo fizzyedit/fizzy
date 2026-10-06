@@ -896,9 +896,8 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
     return carried.len > 0;
 }
 
-/// The most carried shapes a drop runs in with its bubbles: the carried drop's head, its trail and
-/// its give (`ViewDrag`).
-const max_carried = 12;
+/// The most carried shapes a drop runs in with its bubbles.
+const max_carried = 4;
 
 /// The shared layer, drawn at replay once everything under the panes is on the frame: read and
 /// blur `bounds` once, then lay each pane's bent slice of it down with the dialogs' tint and
