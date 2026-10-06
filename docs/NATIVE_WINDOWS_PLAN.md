@@ -130,6 +130,44 @@ Windows, X11, Wayland and the web have nothing like Liquid Glass to merge.
   The capability decides which path runs (`viewports.carries` today, a glass capability tomorrow);
   the platform's name does not.
 
+## Floating surfaces: native popup windows that fizzy draws
+
+**Decided (the user, 2026-10-06):** a context menu is an OS popup window with fizzy's own menu
+drawn in it — not `NSMenu` or a Win32 menu, and not a fizzy overlay inside the main window. The OS
+gives it its shadow, corners, material and stacking; fizzy gives it its look and behaviour, the
+same on every platform. Menus first, then the menu bar's dropdowns, tooltips, popovers and, in
+time, dialogs.
+
+**The window:** an SDL popup window (`SDL_CreatePopupWindow`, `SDL_WINDOW_POPUP_MENU` or
+`SDL_WINDOW_TOOLTIP`), parented to the window the menu opens from — the main window or a float's
+own. SDL places it relative to its parent and keeps it above, on every platform; on Wayland it is
+an `xdg_popup`, the one way an app may place a window there, so menus can leave the main window
+even where floats cannot.
+
+**Its material, per platform:**
+- **macOS 26:** the window glass pair (`fizzy_macos_window_liquid_glass`), its frost reaching the
+  edge, the transient role on the slider; before 26, vibrancy.
+- **Windows 11:** DWM Acrylic (`DWMSBT_TRANSIENTWINDOW`) with round corners
+  (`DWMWCP_ROUND`) — Microsoft's own role for transient surfaces. Windows 10: opaque, or the in-app
+  frost.
+- **Linux:** the compositor's blur region (`ext-background-effect-v1`, `org_kde_kwin_blur`) where
+  it offers one, the menu's colour over it; opaque where it does not.
+
+**Drawing it:** the menu stays a dvui subwindow in the one frame. Its drawing is taken out of the
+frame and copied into its popup, as a float's window already takes the menus opened in it
+(`Popout`), and input on the popup maps back into the frame at the menu's place. Out of the main
+window's rect, the menu is drawn in the frame's band past it, as floats are.
+
+**Placing it:** with popups, a menu is kept on the display, not the window: the app publishes the
+display as a screen (`core.screens`), so a menu near the window's edge hangs past it rather than
+flipping inward.
+
+**Open:**
+- keyboard focus — whether the popup takes it (Wayland's grab does) or the parent keeps it and
+  forwards keys to the menu;
+- dismissal when the app deactivates, and on a press in another of fizzy's windows;
+- several displays; and menus opened from a float out over the desktop.
+
 ## The backend as the layer between SDL and dvui
 
 **The split.**
@@ -297,7 +335,8 @@ platform below, with what to build and what to skip.
 - Every role on Liquid Glass: the lens crossfading into frost, the window colour under the glass.
 - The drag's bubble and drop zones merge in the overlay.
 - Float windows and the main window take a glass pair behind SDL's view.
-- Context menus are `NSMenu`, which is Liquid Glass already.
+- Context menus are popup windows of Liquid Glass with fizzy's menu in them ("Floating surfaces"
+  above) — chosen over `NSMenu`, which would be Liquid Glass already but not fizzy's menu.
 - Before macOS 26: vibrancy plus the colour, no merging, the drag in the app's glass.
 
 **Windows 11 (22H2+) — DWM materials, Terminal-style.** Windows has no lens and no merging, and
@@ -474,18 +513,22 @@ coming back into a window. So fizzy tiles it itself, the way the OS does:
    - macOS: **built (#227)** the main window and float windows on Liquid Glass (the colour under
      the lens and frost, beside SDL's view, on the slider) with a compact toolbar's 20-point
      corners (measured: none 17, compact 20.5, unified 27 — the user chose compact); still to do,
-     `NSMenu` for context menus;
+     context menus as popup windows (below);
    - Windows: the DWM mapping, roles and policy probe;
    - Linux: the blur region and the portal.
-6. **Native layers as the backend's interface,** from the overlay: the drag's glass, then every
+6. **Floating surfaces as native popup windows that fizzy draws** (above): context menus first —
+   the popup viewport, the menu copied into it, input mapped back, the display as its screen — on
+   macOS, then Windows (Acrylic) and Linux (the blur region); then the menu bar's dropdowns,
+   tooltips and popovers.
+7. **Native layers as the backend's interface,** from the overlay: the drag's glass, then every
    native-form surface.
-7. **The other platforms' path:** where native glass can't merge, the bubble is the app's glass over
+8. **The other platforms' path:** where native glass can't merge, the bubble is the app's glass over
    a window and a carry window outside them.
-8. **The SDL patches above,** then deleting the 60 Hz pump and the private symbols; the scheduled
+9. **The SDL patches above,** then deleting the 60 Hz pump and the private symbols; the scheduled
    rebase-and-build job; upstream PRs.
-9. **Peer or palette** (open question), then window-local coordinates for settled viewports — which
+10. **Peer or palette** (open question), then window-local coordinates for settled viewports — which
    also gives Wayland settled floats and mixed DPI a path.
-10. **Packages** (the review's shape): `tape` alone, `replay`, `window` (backend, renderer, platform,
+11. **Packages** (the review's shape): `tape` alone, `replay`, `window` (backend, renderer, platform,
    viewports), `app` (layout, floats, pop-out orchestration and the glass overlay — `Popout` moves
    out of `src/editor/`), with an app's own `main`.
 
