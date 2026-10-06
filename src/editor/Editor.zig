@@ -3504,7 +3504,9 @@ const cover_ms = 500;
 /// smoothstep from the moment the change is seen; otherwise — the opacity slider moving — it follows
 /// closely. Into a fullscreen Space (`snap`) it is opaque at once, and out of one it stays opaque
 /// until the window has landed and then fades: AppKit animates a window in and out of a Space as
-/// pictures of it, and see-through they were a double window.
+/// pictures of it, and see-through they were a double window. Each step wakes the backend for the
+/// next: asked from a frame the window monitor drew through a transition, a plain refresh woke
+/// nothing, and the window sat opaque after leaving full screen until the mouse moved (the user).
 pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, windowed: f32) void {
     const target: f32 = if (covers) 1.0 else windowed;
     const cover_target: f32 = if (covers) 1.0 else 0.0;
@@ -3524,7 +3526,7 @@ pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, windowed: 
         const k = x * x * (3 - 2 * x);
         o.value = std.math.lerp(o.from, target, k);
         o.cover = std.math.lerp(o.from_cover, cover_target, k);
-        dvui.refresh(null, @src(), null);
+        dvui.refresh(dvui.currentWindow(), @src(), null);
         return;
     }
     o.cover = cover_target;
@@ -3532,7 +3534,7 @@ pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, windowed: 
         const t = std.math.clamp(dvui.secondsSinceLastFrame() * 6.0, 0.0, 1.0);
         o.value += (target - o.value) * t;
         if (@abs(target - o.value) < 0.004) o.value = target;
-        dvui.refresh(null, @src(), null);
+        dvui.refresh(dvui.currentWindow(), @src(), null);
     }
 }
 

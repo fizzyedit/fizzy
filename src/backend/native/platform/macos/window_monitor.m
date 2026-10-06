@@ -21,6 +21,7 @@ extern void fizzy_macos_window_pump_render(void);
 extern void fizzy_macos_window_reset_sync_cache(void *nswindow);
 extern void fizzy_macos_window_request_clear_frames(void *nswindow, int frames);
 extern void fizzy_macos_window_commit_steady_state(void *nswindow);
+extern void fizzy_macos_window_glass_toolbar(void *nswindow, int on);
 extern void fizzy_macos_window_live_resize_vsync(void *nswindow, int active);
 extern bool SDL_GetHintBoolean(const char *name, bool default_value);
 extern void fizzy_live_resize_trace_step(void *nswindow);
@@ -336,6 +337,8 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
                 double inset = titlebar_inset_for_window(w);
                 m->windowed_titlebar_inset = (inset > 0 && inset <= 100.0) ? inset : 0;
             }
+            /* After the windowed title bar's height is kept for the way back. */
+            fizzy_macos_window_glass_toolbar(win, 0);
             fizzy_macos_window_reset_sync_cache(win);
             fizzy_macos_window_request_clear_frames(win, 5);
             request_resize_pump(win, 90);
@@ -373,9 +376,13 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
                 if (!monitor_of(win)) return;
                 NSWindow *exit_win = (__bridge NSWindow *)win;
                 restore_pre_fullscreen_origin_if_nudged(exit_win);
+                fizzy_macos_window_glass_toolbar(win, 1);
                 store_exit_target(exit_win);
                 fizzy_macos_window_commit_steady_state(win);
                 fizzy_macos_window_resize_cb(win);
+                /* Frames for the window's opacity to fade in once AppKit has settled it: drawn only
+                 * through the transition, the window sat opaque until the mouse moved. */
+                request_resize_pump(win, 40);
             });
             break;
         default:

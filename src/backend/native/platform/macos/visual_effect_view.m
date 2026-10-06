@@ -977,6 +977,26 @@ int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
     }
 }
 
+/*
+ * A window of Liquid Glass's toolbar (`fizzy_macos_window_liquid_glass`) is there for the corners
+ * a compact toolbar gives a window, and in full screen there are none: shown there, it stayed at
+ * the top after the window had gone full screen, then went (the user). Hidden from the moment the
+ * window sets out for a Space (`on` 0) and shown again once it is back (`on` 1), the window's frame
+ * kept as it was — showing or hiding it, AppKit grows or shrinks the window by its height.
+ */
+void fizzy_macos_window_glass_toolbar(void *nswindow, int on) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil || windowGlassPart(window, window_glass_under) == nil) return;
+        NSToolbar *toolbar = [window toolbar];
+        if (toolbar == nil || [toolbar isVisible] == (on != 0)) return;
+        const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+        const NSRect was = [window frame];
+        [toolbar setVisible:on != 0];
+        if (!full && !NSEqualRects([window frame], was)) [window setFrame:was display:NO];
+    }
+}
+
 /* A window's Liquid Glass this frame, as `platform.window.WindowGlass` lays it out
  * (`core.glass_look.Window`): each glass layer's variant and style; the body's frost and blur; how
  * much glass there is; the window's colour (its opacity in the body last) and its opacity over all
