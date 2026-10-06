@@ -1015,6 +1015,19 @@ int fizzy_macos_viewport_menu(void *nswindow, void *main_nswindow, long material
 }
 
 /*
+ * A menu's window made its parent's child (`SDLBackend`, `Viewport.follow_main`), so the OS moves it
+ * with the parent: AppKit put it at the parent's level as it did, under every window kept above the
+ * main one. Back at a menu's.
+ */
+void fizzy_macos_viewport_menu_attached(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        [window setLevel:NSPopUpMenuWindowLevel];
+    }
+}
+
+/*
  * A window of Liquid Glass's toolbar (`fizzy_macos_window_liquid_glass`) is there for the corners
  * a compact toolbar gives a window, and in full screen there are none: shown there, it stayed at
  * the top after the window had gone full screen, then went (the user). Hidden from the moment the

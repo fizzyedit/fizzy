@@ -183,6 +183,13 @@ pub const Viewport = struct {
     /// float's band for one opened in a float that is out (`viewportMainOffset`).
     menu: bool = false,
     main_offset: viewport_map.Point = .{ .x = 0, .y = 0 },
+    /// A menu of the main window's (`viewportOpenMenu`): made its child window once shown, so the OS
+    /// moves it with the main window — smoothly through a drag, which the app's frames could only
+    /// follow a frame behind — and put somewhere new only when where it lies over the main window
+    /// changes (`viewportPlaceMain`): that frame as last placed, and the part of it shown then.
+    follow_main: bool = false,
+    main_placed: ?viewport_map.Rect = null,
+    main_shown: viewport_map.Rect = .{},
 };
 
 /// A piece of the OS's glass in an overlay (`viewportOverlayGlass`): a rounded rect, points from the
@@ -867,11 +874,13 @@ const ViewportKind = enum { window, carry, overlay, menu };
 /// read there (`viewportMainOffset`). Its material is the OS's (`viewportLiquidGlass`, vibrancy
 /// before macOS 26). macOS.
 /// `radius`, points: the menu's corners, which vibrancy is masked to (Liquid Glass takes them from
-/// its look each frame).
-pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32) ?*Viewport {
+/// its look each frame). `follow_main`: a menu of the main window's, which moves with it
+/// (`Viewport.follow_main`) — not one opened in a float that is out.
+pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, follow_main: bool) ?*Viewport {
     if (comptime builtin.os.tag != .macos) return null;
     const vp = self.openViewport(at, "", .menu) orelse return null;
     _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius);
+    vp.follow_main = follow_main;
     return vp;
 }
 
@@ -1165,10 +1174,15 @@ pub const PointerPin = union(enum) {
 /// float split out of it under a drag, still in that frame — on whole points; the part of the
 /// frame it then shows.
 pub fn viewportPlaceMain(self: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
+    // A menu riding on the main window (`Viewport.follow_main`) is already where it lies over it:
+    // the OS moved it there, with the main window, ahead of the app's idea of where that is.
+    if (vp.follow_main and vp.mapped) if (vp.main_placed) |at| if (std.meta.eql(at, frame)) return vp.main_shown;
     const placed = viewport_map.placeMain(self.mainOnScreen(), self.density(), frame);
     const was = vp.screen;
     placeWindow(vp, placed.screen, was);
     vp.screen = placed.screen;
+    vp.main_placed = frame;
+    vp.main_shown = placed.frame;
     return placed.frame;
 }
 
@@ -1271,6 +1285,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64) c_int;
+extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
@@ -1717,6 +1732,12 @@ pub fn renderPresent(self: *SDLBackend) void {
             _ = c.SDL_ShowWindow(vp.window);
             _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
             vp.mapped = true;
+            // Riding on the main window from here (`Viewport.follow_main`) — not before it shows:
+            // made a child window, AppKit shows it at once, before it has a picture.
+            if (comptime builtin.os.tag == .macos) if (vp.follow_main) {
+                _ = c.SDL_SetWindowParent(vp.window, self.window);
+                fizzy_macos_viewport_menu_attached(cocoaWindow(vp.window));
+            };
         }
         if (show) vp.shown = true;
         self.order_pending = true;

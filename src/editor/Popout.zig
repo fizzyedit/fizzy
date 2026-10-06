@@ -55,7 +55,13 @@ const MenuOut = struct {
     seen: bool = false,
     /// On Liquid Glass (`viewports.windowGlass`), else vibrancy with the menu's colour drawn over it.
     glass: bool = false,
+    /// Opened in a float that is out: where that float's window showed its band then. Its window
+    /// moved, the menu closes (`menuFrame`).
+    float_at: ?dvui.Point.Physical = null,
 };
+
+/// A float holding a menu moved its window: every menu closes next frame (`menuFrame`).
+var menus_left_behind = false;
 
 const Cover = struct {
     /// Where the window lies over the main window's frame, physical.
@@ -156,7 +162,8 @@ pub fn beginFrame(state: *State) void {
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
     // Menus in windows of their own (`menuFrame`), kept on the display rather than the window.
     fizzy.core.screens.publishMenus(if (nativeMenus()) displayNatural() else null);
-    fizzy.core.screens.publishMenusDismissed(nativeMenus() and !viewports.appActive());
+    fizzy.core.screens.publishMenusDismissed(nativeMenus() and (!viewports.appActive() or menus_left_behind));
+    menus_left_behind = false;
     // Whatever happened, the screens floating things are placed on this frame: each window's,
     // besides the main window's (`core.screens`).
     defer publishScreens();
@@ -938,9 +945,11 @@ const menu_opacity_floor: f32 = 0.6;
 /// Each open menu (`core.screens.markMenu`) in a window of its own (`viewports.openMenu`): the OS's
 /// material in it, its shadow round it and its corners the menu's, above every window — the menu
 /// drawn in it as the app draws it, its drawing taken whole out of the frame, so the main window and
-/// the float windows draw none of it. In the main window's frame, past its edge too; or in the band
-/// of a float that is out, its window over where that part of the band lies. A menu that closed
-/// takes its window with it.
+/// the float windows draw none of it. In the main window's frame, past its edge too — its window the
+/// main window's child, which the OS moves with it; or in the band of a float that is out, its
+/// window over where that part of the band lies. A menu is drawn where it opened in its band, and
+/// the float's window moving leaves it behind, so it closes then, as an OS menu closes on a press
+/// outside it. A menu that closed takes its window with it.
 fn menuFrame() void {
     for (&menus) |*slot| if (slot.*) |*m| {
         m.seen = false;
@@ -962,14 +971,21 @@ fn menuFrame() void {
         // Where its window lies over the main window: where the menu is, or — in a float's band —
         // where that part of the band lies on the screen.
         var place = frame;
+        var float_at: ?dvui.Point.Physical = null;
         if (frame.x > main_px.x + main_px.w + 40000) {
             const cover = for (covers[0..cover_count]) |cv| {
                 if (cv.band.contains(frame.center())) break cv;
             } else continue;
             place = frame.offsetPoint(.{ .x = cover.in_main.x - cover.band.x, .y = cover.in_main.y - cover.band.y });
+            float_at = cover.band.topLeft();
         }
-        const m = menuOut(sw.id, place, radius) orelse continue;
+        const m = menuOut(sw.id, place, radius, float_at == null) orelse continue;
         m.seen = true;
+        if (float_at) |at| {
+            const was = m.float_at orelse at;
+            m.float_at = at;
+            if (@abs(at.x - was.x) > 0.5 or @abs(at.y - was.y) > 0.5) menus_left_behind = true;
+        }
         viewports.mainOffset(m.viewport, .{ .x = frame.x - place.x, .y = frame.y - place.y });
         const placed = viewports.placeMain(m.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h });
         const shown: dvui.Rect.Physical = .{ .x = frame.x + (placed.x - place.x), .y = frame.y + (placed.y - place.y), .w = placed.w, .h = placed.h };
@@ -1015,11 +1031,12 @@ fn menuFrame() void {
 }
 
 /// Menu `id`'s window (`menuFrame`), opened at `place` (physical, in the main window's frame) where
-/// it has none yet. Null where no more windows can be opened: the menu is drawn in its window then.
-fn menuOut(id: dvui.Id, place: dvui.Rect.Physical, radius: f32) ?*MenuOut {
+/// it has none yet — riding on the main window where it is one of the main window's
+/// (`follow_main`). Null where no more windows can be opened: the menu is drawn in its window then.
+fn menuOut(id: dvui.Id, place: dvui.Rect.Physical, radius: f32, follow_main: bool) ?*MenuOut {
     for (&menus) |*slot| if (slot.*) |*m| if (m.id == id) return m;
     for (&menus) |*slot| if (slot.* == null) {
-        const vp = viewports.openMenu(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, radius) orelse return null;
+        const vp = viewports.openMenu(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, radius, follow_main) orelse return null;
         slot.* = .{ .id = id, .viewport = vp };
         return &slot.*.?;
     };
