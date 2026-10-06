@@ -894,6 +894,12 @@ pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, r
     return vp;
 }
 
+/// `vp`'s window just above `other`'s, where it is not already (macOS).
+pub fn viewportOrderAbove(_: *SDLBackend, vp: *Viewport, other: *Viewport) void {
+    if (comptime builtin.os.tag != .macos) return;
+    fizzy_macos_viewport_order_above(cocoaWindow(vp.window), cocoaWindow(other.window));
+}
+
 /// The window a menu's or dialog's window moves with (`viewportOpenMenu`).
 pub const Ride = union(enum) {
     none,
@@ -1336,6 +1342,7 @@ extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, i
 extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_order_above(nswindow: ?*anyopaque, other: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;

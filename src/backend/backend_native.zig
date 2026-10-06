@@ -312,6 +312,13 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius, alpha);
     }
 
+    /// `vp`'s window put just above `other`'s in the stacking (a growing float's picture over the
+    /// glass it grows out of). macOS.
+    pub fn orderAbove(vp: *Viewport, other: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportOrderAbove(vp, other);
+    }
+
     /// A carry window's glass as the lens — the carried view, a drop of water — or as frost, as a
     /// window's material is (a float's window growing out of it). Liquid Glass only.
     pub fn carryLens(vp: *Viewport, lens: bool) void {

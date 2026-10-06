@@ -2052,6 +2052,12 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
         landing.photo = d.texture;
         landing.photo_size = d.texture_rect.size();
         d.texture = null;
+        // And its trail, which runs into the window as it grows — carried as a drop, not a card.
+        if (d.drop_n > 1) for (d.drop_shapes[1..d.drop_n]) |sh| {
+            if (landing.drops_n == landing.drops.len) break;
+            landing.drops[landing.drops_n] = .{ .c = sh.rect.center(), .r = @min(sh.rect.w, sh.rect.h) / 2 };
+            landing.drops_n += 1;
+        };
     }
     _ = state.floats.add(l.gpa, .{
         .name = name,

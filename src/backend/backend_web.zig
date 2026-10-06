@@ -186,6 +186,7 @@ pub const viewports = struct {
         return true;
     }
     pub const Ride = union(enum) { none, main, viewport: *Viewport };
+    pub fn orderAbove(_: *Viewport, _: *Viewport) void {}
     pub fn placeRiding(_: *Viewport, frame: Rect, _: Rect) Rect {
         return frame;
     }

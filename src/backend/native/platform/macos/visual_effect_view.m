@@ -1018,6 +1018,24 @@ int fizzy_macos_viewport_menu(void *nswindow, void *main_nswindow, long material
 }
 
 /*
+ * `nswindow` just above `other` in the stacking, where it is not already: a growing float's
+ * picture over the overlay holding the glass it grows out of (`Popout.growDrops`), both at a popup's
+ * level, where whichever was ordered last is in front.
+ */
+void fizzy_macos_viewport_order_above(void *nswindow, void *other) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSWindow *below = (__bridge NSWindow *)other;
+        if (window == nil || below == nil || ![window isVisible]) return;
+        NSArray<NSNumber *> *order = [NSWindow windowNumbersWithOptions:0];
+        const NSUInteger mine = [order indexOfObject:@([window windowNumber])];
+        const NSUInteger theirs = [order indexOfObject:@([below windowNumber])];
+        if (mine != NSNotFound && theirs != NSNotFound && mine < theirs) return;
+        [window orderWindow:NSWindowAbove relativeTo:[below windowNumber]];
+    }
+}
+
+/*
  * A menu's window made its parent's child (`SDLBackend`, `Viewport.follow_main`), so the OS moves it
  * with the parent: AppKit put it at the parent's level as it did, under every window kept above the
  * main one. Back at a menu's.

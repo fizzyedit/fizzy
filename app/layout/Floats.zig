@@ -30,6 +30,16 @@ pub const Landing = struct {
     photo: ?dvui.Texture = null,
     /// The size it was taken at, physical, for its proportions.
     photo_size: dvui.Size.Physical = .{},
+    /// The drops trailing the carried glass when it was let go (`ViewDrag`'s trail), physical: they
+    /// run into the window as it grows, where the OS draws the drag's glass (`Popout.growFrame`).
+    drops: [max_landing_drops]Drop = undefined,
+    drops_n: u8 = 0,
+
+    pub const Drop = struct {
+        c: dvui.Point.Physical,
+        r: f32,
+    };
+    pub const max_landing_drops = 4;
 };
 
 pub const Float = struct {

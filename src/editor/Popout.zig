@@ -724,11 +724,18 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         const radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
         // The float's picture over the first part of the growth, the photograph going as it comes.
         const arrive = smoothstep(std.math.clamp(Floats.landingFraction(land) / picture_share, 0, 1));
+        // Where the OS draws the drag's glass, the window grows out of drops in it, the drag's trail
+        // running in (`growDrops`), and its own window comes in over the last of it. Its picture and
+        // colour stay in the carry window, over the glass.
+        const drops = nativeGlass();
+        const window_in: f32 = if (drops) growDrops(land, rect, radius, to) else 0;
+        if (drops) if (overlay) |*ov| viewports.orderAbove(g.carry.viewport, ov.viewport);
         // The window's colour comes in with the picture, as much of it as the window it grows into
         // will have (`windowShade`): with none, the glass ended lighter than that window, which
         // popped darker on the last frame as it took over (the user).
-        if (!drawGrow(o, g, rect, radius, 1, windowShade() * arrive, arrive, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
-        return 0;
+        const keep = 1 - window_in;
+        if (!drawGrow(o, g, rect, radius, if (drops) 0 else 1, windowShade() * arrive * keep, arrive * keep, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
+        return window_in;
     }
     // Landed: the window shows, and the glass goes with it.
     if (o.grow) |*g| {
@@ -741,6 +748,73 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
 /// How much of a float's window its colour covers, settled, at the window opacity: a window of
 /// Liquid Glass's colour in its body and, at the top, over all of it (`core.glass_look.window`);
 /// a window on vibrancy, its base's opacity (`Editor.windowBase`).
+/// Drops a float's window grows out of, where the OS draws the drag's glass (`growDrops`): each the
+/// point of the window it swells toward — shares of its width and height — its size a share of the
+/// window's shorter side, and when in the growth it starts and how long it takes, shares of it. They
+/// bud out of the growing glass at different times and sizes, ahead of it, and it takes them in as
+/// it fills its window: a liquid growing rather than a rectangle scaling (the user).
+const GrowSeed = struct {
+    at: [2]f32,
+    share: f32,
+    start: f32,
+    len: f32,
+};
+
+const grow_seeds = [_]GrowSeed{
+    .{ .at = .{ 0.76, 0.24 }, .share = 0.2, .start = 0, .len = 0.55 },
+    .{ .at = .{ 0.28, 0.74 }, .share = 0.16, .start = 0.08, .len = 0.5 },
+    .{ .at = .{ 0.76, 0.76 }, .share = 0.23, .start = 0.16, .len = 0.55 },
+    .{ .at = .{ 0.3, 0.3 }, .share = 0.13, .start = 0.04, .len = 0.45 },
+};
+
+/// How far through the growth its own window starts coming in over the glass, which goes as it
+/// does: the window's glass is not the drag's, and a cut between them showed.
+const grow_window_from: f32 = 0.7;
+
+/// A float's growth as the OS's glass (`growFrame`): the growing glass `rect` (corners `radius`),
+/// the drops budding out of it toward the window `to` (`grow_seeds`), and the drag's trail running
+/// in — each drop from where it was let go into the glass, giving itself up to it as it goes. Run
+/// together by the OS where they come close, in the drag's overlay. Returns how far the window itself
+/// has come in over it, all of the glass going by the same.
+fn growDrops(land: Floats.Landing, rect: dvui.Rect.Physical, radius: f32, to: dvui.Rect.Physical) f32 {
+    const tl = std.math.clamp(Floats.landingFraction(land), 0, 1);
+    const window_in = smoothstep(std.math.clamp((tl - grow_window_from) / (1 - grow_window_from), 0, 1));
+    const alpha = 1 - window_in;
+    if (alpha <= 0.001) return window_in;
+    const centre = rect.center();
+    fizzy.core.native_glass.add(.{ .rect = rect, .radius = radius, .alpha = alpha });
+    const side = @min(to.w, to.h);
+    for (grow_seeds) |seed| {
+        const u = std.math.clamp((tl - seed.start) / seed.len, 0, 1);
+        if (u <= 0) continue;
+        const r = side * seed.share * easeOutBack(u);
+        if (r < 1) continue;
+        const goal: dvui.Point.Physical = .{ .x = to.x + to.w * seed.at[0], .y = to.y + to.h * seed.at[1] };
+        const e = smoothstep(u);
+        const c: dvui.Point.Physical = .{ .x = std.math.lerp(centre.x, goal.x, e), .y = std.math.lerp(centre.y, goal.y, e) };
+        fizzy.core.native_glass.add(.{ .rect = .{ .x = c.x - r, .y = c.y - r, .w = 2 * r, .h = 2 * r }, .radius = r, .alpha = alpha });
+    }
+    for (land.drops[0..land.drops_n]) |dp| {
+        const u = std.math.clamp(tl / 0.6, 0, 1);
+        const r = dp.r * (1 - smoothstep(u));
+        if (r < 1) continue;
+        const e = u * u;
+        const c: dvui.Point.Physical = .{ .x = std.math.lerp(dp.c.x, centre.x, e), .y = std.math.lerp(dp.c.y, centre.y, e) };
+        fizzy.core.native_glass.add(.{ .rect = .{ .x = c.x - r, .y = c.y - r, .w = 2 * r, .h = 2 * r }, .radius = r, .alpha = alpha });
+    }
+    if (window_in < 1) dvui.refresh(null, @src(), null);
+    return window_in;
+}
+
+/// Past 1 and back on the way in, as a drop swells and settles: by how much, at the app's motion
+/// level (`core.motion`) — none where motion is minimal.
+fn easeOutBack(u: f32) f32 {
+    const play = std.math.clamp((fizzy.core.motion.level() - 0.5) * 2, 0, 1);
+    const k: f32 = 1.4 * play;
+    const v = u - 1;
+    return 1 + (k + 1) * v * v * v + k * v * v;
+}
+
 fn windowShade() f32 {
     const op = std.math.clamp(fizzy.editor().window_opacity, 0, 1);
     if (!viewports.liquidGlass()) return op;
@@ -765,6 +839,8 @@ const GrowPhoto = struct {
 /// into.
 fn drawGrow(o: *Out, g: *Grow, rect: dvui.Rect.Physical, radius: f32, alpha: f32, fill: f32, picture: f32, photo: ?GrowPhoto) bool {
     const drawing = carryBegin(&g.carry, rect, rect, radius, alpha, fill) orelse return false;
+    // Its glass in the overlay (`growDrops`): none of its own.
+    if (alpha <= 0) viewports.carryShape(g.carry.viewport, null, 1);
     defer carryEnd(&g.carry, drawing);
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);
