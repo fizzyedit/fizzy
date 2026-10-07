@@ -462,6 +462,13 @@ static void start_space_animation(NSWindow *window, NSRect to, NSTimeInterval du
 static NSArray *fizzy_custom_windows_for_space(NSWindow *window, BOOL entering) {
     WindowMonitor *m = monitor_of((__bridge void *)window);
     if (!m) return nil;
+    /* The window as it is, before AppKit or SDL touch it for the transition: where its way in starts
+     * and its way out ends, and its title bar's height for the way back. */
+    if (entering) {
+        store_exit_target(window);
+        const double inset = titlebar_inset_for_window(window);
+        m->windowed_titlebar_inset = (inset > 0 && inset <= 100.0) ? inset : 0;
+    }
     /* From here the window's opacity follows its own way (`fizzy_macos_window_space_fullness`), not
      * the transition's start: it does not jump to opaque before it moves. */
     m->anim_follow = YES;
@@ -555,9 +562,23 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             schedule_transition_watchdog(win);
             {
                 NSWindow *w = (__bridge NSWindow *)win;
-                store_exit_target(w);
-                double inset = titlebar_inset_for_window(w);
-                m->windowed_titlebar_inset = (inset > 0 && inset <= 100.0) ? inset : 0;
+                if (m->anim_follow) {
+                    /* SDL's listener has just put its own style on (titled, the content not under the
+                     * title bar), and AppKit kept the content rect: the window grew by its title bar,
+                     * and kept as the frame to come back to, it came back that much taller every
+                     * time. Fizzy's style again, and the frame it had when AppKit asked for its own
+                     * way (`fizzy_custom_windows_for_space`), which is where that way starts. */
+                    if (!(w.styleMask & NSWindowStyleMaskFullSizeContentView)) {
+                        w.styleMask = w.styleMask | NSWindowStyleMaskFullSizeContentView;
+                    }
+                    if (m->exit_window_frame_valid && !NSEqualRects(w.frame, m->exit_window_frame)) {
+                        [w setFrame:m->exit_window_frame display:NO];
+                    }
+                } else {
+                    store_exit_target(w);
+                    double inset = titlebar_inset_for_window(w);
+                    m->windowed_titlebar_inset = (inset > 0 && inset <= 100.0) ? inset : 0;
+                }
             }
             /* After the windowed title bar's height is kept for the way back. */
             fizzy_macos_window_glass_toolbar(win, 0);
