@@ -515,6 +515,11 @@ static void fizzy_start_exit_animation(__unused id self, __unused SEL cmd, NSWin
      * fading in — as Apple's own custom animation does it: AppKit leaves the full screen style on
      * until the transition is over, and the window shrank square. */
     [window setStyleMask:window.styleMask & ~NSWindowStyleMaskFullScreen];
+    /* Its toolbar back now too (hidden at will-enter): its corners on the way, and the title bar's
+     * height the content keeps clear of is the windowed one from the first step to the last. Given
+     * back at did-exit, the landing frame laid the content out under the bar without it, 4 pt
+     * higher, and the next one dropped it back. */
+    fizzy_macos_window_glass_toolbar((__bridge void *)window, 1);
     set_traffic_lights_alpha(window, 0.0);
     /* Back to the frame it had as it set out (kept at will-enter), as AppKit lets a window that is
      * no longer full screen have it: a top above the menu bar comes down below it, and the window
