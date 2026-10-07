@@ -25,6 +25,7 @@ extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_in
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_transition_active(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_entering(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_fullness(cocoa_window: ?*anyopaque) f64;
 extern fn fizzy_macos_titlebar_hit_test_install(cocoa_window: ?*anyopaque, interactive_at: *const fn (f64, f64) callconv(.c) bool) void;
 extern fn fizzy_macos_window_liquid_glass(cocoa_window: ?*anyopaque, blur_material: c_long) c_int;
 extern fn fizzy_macos_window_has_liquid_glass(cocoa_window: ?*anyopaque) c_int;
@@ -175,6 +176,20 @@ pub fn windowEnteringSpace(window: *c.SDL_Window) bool {
 
 pub fn enteringSpace(win: *dvui.Window) bool {
     return windowEnteringSpace(win.backend.impl.window);
+}
+
+/// How far `window` is into full screen, 0 to 1, while it moves itself into a fullscreen Space or
+/// out of one (`macos/window_monitor.m`'s own animation, where AppKit animates no pictures of it):
+/// its opacity follows this, the fade and the move one motion. Null otherwise.
+pub fn windowSpaceFullness(window: *c.SDL_Window) ?f32 {
+    if (builtin.os.tag != .macos) return null;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return null;
+    const f = fizzy_macos_window_space_fullness(raw_ptr);
+    return if (f < 0) null else @floatCast(std.math.clamp(f, 0, 1));
+}
+
+pub fn spaceFullness(win: *dvui.Window) ?f32 {
+    return windowSpaceFullness(win.backend.impl.window);
 }
 
 /// True while the macOS window chrome (traffic lights / titlebar area) is hidden, i.e. while

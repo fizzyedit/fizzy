@@ -76,6 +76,10 @@ pub fn enteringSpace(_: *dvui.Window) bool {
     return false;
 }
 
+pub fn spaceFullness(_: *dvui.Window) ?f32 {
+    return null;
+}
+
 pub fn setWindowStyle(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: a browser tab cannot take focus for itself, and the OAuth
@@ -166,6 +170,9 @@ pub const viewports = struct {
     }
     pub fn enteringSpace(_: *const Viewport) bool {
         return false;
+    }
+    pub fn spaceFullness(_: *const Viewport) ?f32 {
+        return null;
     }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
     pub fn carryLens(_: *Viewport, _: bool) void {}

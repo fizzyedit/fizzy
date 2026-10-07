@@ -40,6 +40,7 @@ pub const takeTrackpadPinchRatio = platform.gestures.takeTrackpadPinchRatio;
 pub const isMaximized = platform.window.isMaximized;
 pub const coversDesktop = platform.window.coversDesktop;
 pub const enteringSpace = platform.window.enteringSpace;
+pub const spaceFullness = platform.window.spaceFullness;
 pub const isFullscreenChromeHidden = platform.window.isFullscreenChromeHidden;
 pub const setWindowStyle = platform.window.setStyle;
 pub const setTitlebarColor = platform.window.setBackground;
@@ -436,6 +437,12 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportEnteringSpace(vp);
     }
 
+    /// How far `vp`'s window is into full screen as it moves itself there or back (`spaceFullness`).
+    pub fn spaceFullness(vp: *const Viewport) ?f32 {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportSpaceFullness(vp);
+    }
+
     /// `vp`'s window `alpha` opaque, all of it — its material too.
     pub fn fade(vp: *Viewport, alpha: f32) void {
         if (comptime !supported) return;
@@ -607,14 +614,16 @@ fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
 pub fn titlebarStripHeight(win: *dvui.Window) f32 {
     if (builtin.os.tag != .macos) return Constants.titlebar_height;
     const t = platform.macos_monitor.titlebarState(win);
-    return platform.window_layout.chooseTitlebarStrip(.{
+    const in: platform.window_layout.StripInputs = .{
         .collapsed = t.collapsed,
         .restoring_chrome = t.restoring_chrome,
         .live_inset = t.live_inset,
         .saved_inset = t.saved_inset,
         .titlebar_height = Constants.titlebar_height,
         .titlebar_top_buffer = Constants.titlebar_top_buffer,
-    });
+    };
+    if (platform.window.spaceFullness(win)) |f| return platform.window_layout.titlebarStripAtFullness(in, f);
+    return platform.window_layout.chooseTitlebarStrip(in);
 }
 
 // ---- The native menu bar: fizzy's menus (`menu_model`) on the platform's (`platform.menu`) ----

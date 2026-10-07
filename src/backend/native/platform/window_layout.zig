@@ -39,6 +39,22 @@ pub fn chooseTitlebarStrip(in: StripInputs) f32 {
     return @max(min_strip, appkit);
 }
 
+/// The strip while the window moves itself into a fullscreen Space or out of one (the monitor's own
+/// animation): `fullness` of the way — 0 windowed, 1 full screen — from the windowed strip to the
+/// collapsed one. The content closes up as the window fills the screen and the traffic lights fade,
+/// and opens again as it shrinks back, where a strip collapsed at will-enter slid the content under
+/// lights still showing, and one restored at will-exit dropped it at once. The windowed strip takes
+/// the inset kept from before the window set out (`restoring_chrome`): the live one reads full
+/// screen's mid-way.
+pub fn titlebarStripAtFullness(in: StripInputs, fullness: f32) f32 {
+    var open = in;
+    open.collapsed = false;
+    open.restoring_chrome = true;
+    var shut = in;
+    shut.collapsed = true;
+    return std.math.lerp(chooseTitlebarStrip(open), chooseTitlebarStrip(shut), std.math.clamp(fullness, 0, 1));
+}
+
 /// AppKit screen-coordinate rectangle (bottom-left origin). A frame's top edge
 /// is `y + h`. Matches `NSRect` field order/semantics so the C-ABI wrapper in
 /// `backend_native.zig` can forward `window.frame` straight through.
@@ -253,4 +269,23 @@ test "originNudged ignores an exact match" {
 test "originNudged ignores a large move" {
     // 200px move is the user repositioning, not the nudge.
     try std.testing.expect(!originNudged(100, 200, 100, 0, 64));
+}
+
+test "titlebarStripAtFullness runs from the windowed strip to the buffer" {
+    const in: StripInputs = .{
+        .collapsed = false,
+        .restoring_chrome = false,
+        .live_inset = 0,
+        .saved_inset = 38,
+        .titlebar_height = 24,
+        .titlebar_top_buffer = 6,
+    };
+    try std.testing.expectEqual(@as(f32, 38), titlebarStripAtFullness(in, 0));
+    try std.testing.expectEqual(@as(f32, 22), titlebarStripAtFullness(in, 0.5));
+    try std.testing.expectEqual(@as(f32, 6), titlebarStripAtFullness(in, 1));
+    // Whatever the monitor says of the chrome at the moment, the fullness decides.
+    var hidden = in;
+    hidden.collapsed = true;
+    try std.testing.expectEqual(@as(f32, 38), titlebarStripAtFullness(hidden, 0));
+    try std.testing.expectEqual(@as(f32, 6), titlebarStripAtFullness(in, 2));
 }

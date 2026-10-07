@@ -45,6 +45,7 @@ extern fn fizzy_macos_copy_screen_frames(out: [*]f64, max: c_int) c_int;
 extern fn fizzy_macos_window_sync_content_views(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_install_resize_observer(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_sdl_draws_live_resize(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_step(cocoa_window: ?*anyopaque) void;
 
 // SDL internals (linked but not in public headers) — the same hooks SDL uses
 // for macOS live resize while the window frame is animating.
@@ -176,6 +177,14 @@ export fn fizzy_macos_window_resize_cb(cocoa: ?*anyopaque) void {
     _ = c.SDL_PushEvent(&ue);
 }
 
+/// Called from the monitor's 60Hz NSTimer while a window moves itself into or out of full screen:
+/// the app draws that from its own frames, and only needs keeping awake.
+export fn fizzy_macos_window_wake() void {
+    var ue = std.mem.zeroes(c.SDL_Event);
+    ue.type = c.SDL_EVENT_USER;
+    _ = c.SDL_PushEvent(&ue);
+}
+
 /// Called from the monitor's 60Hz NSTimer for each window animating: its live sizes into SDL.
 export fn fizzy_macos_window_pump_sync(cocoa: ?*anyopaque) void {
     if (comptime builtin.os.tag == .macos) {
@@ -207,6 +216,8 @@ fn macosAppPreBeginSync(back: *Backend.SDLBackend) void {
     // (window.zon) and disabled in dvui, so there is nothing to toggle here.
     for (&watched) |*slot| {
         const w = if (slot.*) |*w| w else continue;
+        // A window moving itself into or out of full screen takes its step for this frame first.
+        fizzy_macos_window_space_step(w.cocoa);
         if (!macosTransitionSyncActive(w)) continue;
         fizzy_macos_window_sync_content_views(w.cocoa);
         macosSyncRendererSize(w, true);

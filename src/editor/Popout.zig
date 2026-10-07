@@ -1100,7 +1100,7 @@ fn windowFrame(state: *State, o: *Out) void {
     // Zoomed or full screen there is no desktop behind it: opaque, eased there and back with the
     // OS's transitions as the main window's base is. Where it has no material it is opaque
     // throughout.
-    Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), viewports.enteringSpace(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
+    Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), viewports.enteringSpace(o.viewport), viewports.spaceFullness(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
     // A window of Liquid Glass (macOS 26) stands on its glass, its colour under it on the one
     // slider, as the main window does (`Editor.windowGlassLook`): no base of its own in the frame.
     if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value, .{ .w = shown.w / s, .h = shown.h / s })))

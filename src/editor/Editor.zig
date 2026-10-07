@@ -3509,23 +3509,31 @@ pub const WindowOpacity = struct {
 /// stops: about as long as macOS takes to move it into a fullscreen Space or out of one.
 const cover_ms = 500;
 
-/// Ease a window's opacity (`o`) toward `windowed` or, while it `covers` the desktop — zoomed, full
-/// screen (`backend.coversDesktop`) — opaque. Across a change of `covers` it takes `cover_ms` on a
-/// smoothstep from the moment the change is seen; otherwise — the opacity slider moving — it follows
-/// closely. Into a fullscreen Space (`snap`) it is opaque at once, and out of one it stays opaque
-/// until the window has landed and then fades: AppKit animates a window in and out of a Space as
-/// pictures of it, and see-through they were a double window. Each step wakes the backend for the
-/// next: asked from a frame the window monitor drew through a transition, a plain refresh woke
-/// nothing, and the window sat opaque after leaving full screen until the mouse moved (the user).
 /// Seconds, at most, frames keep coming after the window sets out of a fullscreen Space, for it to
 /// let go of covering the desktop (`tick`).
 const space_exit_watch_s = 4;
 
-pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, windowed: f32) void {
+/// Ease a window's opacity (`o`) toward `windowed` or, while it `covers` the desktop — zoomed, full
+/// screen (`backend.coversDesktop`) — opaque. While the window moves itself into a fullscreen Space
+/// or out of one (`fullness`, `backend.spaceFullness`) it is as opaque as it is far into full
+/// screen: the fade and the move are one motion. Across any other change of `covers` it takes
+/// `cover_ms` on a smoothstep from the moment the change is seen; otherwise — the opacity slider
+/// moving — it follows closely. Where AppKit animates a Space transition as pictures of the window
+/// (`snap` into one) it is opaque at once, and out of one it stays opaque until the window has
+/// landed and then fades: see-through pictures were a double window. Each step wakes the backend
+/// for the next: asked from a frame the window monitor drew through a transition, a plain refresh
+/// woke nothing, and the window sat opaque after leaving full screen until the mouse moved (the
+/// user).
+pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, fullness: ?f32, windowed: f32) void {
     const target: f32 = if (covers) 1.0 else windowed;
     const cover_target: f32 = if (covers) 1.0 else 0.0;
     const now = dvui.currentWindow().frame_time_ns;
     const span: i128 = cover_ms * std.time.ns_per_ms;
+    if (fullness) |f| {
+        o.* = .{ .value = std.math.lerp(windowed, 1.0, f), .cover = f, .covers = covers, .since_ns = now - span };
+        dvui.refresh(dvui.currentWindow(), @src(), null);
+        return;
+    }
     if (o.value < 0) {
         o.* = .{ .value = target, .cover = cover_target, .covers = covers, .since_ns = now - span };
         return;
@@ -3650,7 +3658,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
     // The draw uses `window_opacity_anim`.
     const covers = fizzy.backend.coversDesktop(dvui.currentWindow());
-    easeWindowOpacity(&editor.window_opacity_anim, covers, fizzy.backend.enteringSpace(dvui.currentWindow()), editor.window_opacity);
+    easeWindowOpacity(&editor.window_opacity_anim, covers, fizzy.backend.enteringSpace(dvui.currentWindow()), fizzy.backend.spaceFullness(dvui.currentWindow()), editor.window_opacity);
     // Out of a fullscreen Space, the window stops covering the desktop on AppKit's and SDL's own
     // time, after the transition, and nothing wakes a frame for it: it sat opaque until the mouse
     // moved (the user). From the moment it sets out of the Space, frames keep coming until it no
