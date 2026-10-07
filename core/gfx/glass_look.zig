@@ -126,6 +126,11 @@ pub const drop_frost_min: f32 = 0.45;
 pub const drop_blur: f32 = 6;
 pub const drop_blur_min: f32 = 2;
 
+/// The carried view's picture in its drop, a touch out of focus, points: frosted with the glass it is
+/// in rather than printed on it, and far less than the bubbles' backdrop (`drop_blur`), so what the
+/// view shows still reads (the user: "a very slight frost").
+pub const drop_photo_blur: f32 = 1.25;
+
 /// The clearing bevel of a drop of the OS's glass, a share of its shorter half (`bevel_cap` still
 /// the most): narrower than the app's own, its frost reaching nearer the rim (the user) — the OS's
 /// lens has a bright rim of its own, which the app's glass draws across its whole band.

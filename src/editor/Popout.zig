@@ -797,7 +797,8 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
                 grow_photo = .{
                     .rect = rect,
                     .radius = radius,
-                    .blur = look.blur * frosted * keep,
+                    // From the drag's touch of frost (`drop_photo_blur`), not from sharp.
+                    .blur = @max(fizzy.core.glass_look.drop_photo_blur, look.blur * frosted) * keep,
                     .image = .{ .x = std.math.lerp(pf.x, body.x, k), .y = std.math.lerp(pf.y, body.y, k), .w = std.math.lerp(pf.w, body.w, k), .h = std.math.lerp(pf.h, body.h, k) },
                     .alpha = keep,
                 };
@@ -838,7 +839,7 @@ fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui
             viewports.overlayPhotoImage(o.viewport, std.mem.sliceAsBytes(px), d.photo_size[0], d.photo_size[1]);
             photo_sent = d.photo_gen;
         }
-        break :blk .{ .rect = pu.rect, .radius = pu.radius, .image = pu.image, .alpha = pu.alpha };
+        break :blk .{ .rect = pu.rect, .radius = pu.radius, .image = pu.image, .alpha = pu.alpha, .blur = fizzy.core.glass_look.drop_photo_blur };
     } else null else null else null;
     const p = carried orelse grow_photo orelse return hidePhoto(o);
     if (photo_sent == 0) return hidePhoto(o);
@@ -847,8 +848,9 @@ fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui
         .rect = .{ .x = (r.x - shown.x) / s, .y = (r.y - shown.y) / s, .w = r.w / s, .h = r.h / s },
         .radius = p.radius / s,
         .image = .{ .x = (p.image.x - p.rect.x) / s, .y = (p.image.y - p.rect.y) / s, .w = p.image.w / s, .h = p.image.h / s },
-        // Its content alone, on the drop's frosted glass: no ground of its own, and no blur of its
-        // own — the glass's frost under it is the drop's, as a bubble's is (the user).
+        // Its content alone, on the drop's frosted glass: no ground of its own, a touch out of focus
+        // with the glass it is in (`glass_look.drop_photo_blur`), the frost under it the drop's, as
+        // a bubble's is (the user).
         .fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .alpha = p.alpha,
         .blur = p.blur,
