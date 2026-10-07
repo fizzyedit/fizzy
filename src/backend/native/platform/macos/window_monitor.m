@@ -365,7 +365,16 @@ static void schedule_transition_watchdog(void *nswindow) {
 static NSRect fullscreen_frame_on(NSScreen *screen) {
     NSRect f = screen.frame;
     if (@available(macOS 12.0, *)) {
-        f.size.height -= ceil(screen.safeAreaInsets.top);
+        const CGFloat inset = screen.safeAreaInsets.top;
+        if (inset > 0) {
+            /* Below the menu bar band beside the housing, a point taller than the inset (39 against
+             * 38 on a 14" panel): the visible frame's top while the menu bar shows, as it does as the
+             * window sets out. Under a menu bar that hides itself, the inset. */
+            CGFloat top = NSMaxY(f) - ceil(inset);
+            const CGFloat visible_top = NSMaxY(screen.visibleFrame);
+            if (visible_top < top && visible_top > NSMaxY(f) - inset - 4) top = visible_top;
+            f.size.height = top - f.origin.y;
+        }
     }
     return f;
 }
@@ -538,6 +547,13 @@ void fizzy_macos_window_space_step(void *nswindow) {
     if (!m) return;
     if (m->anim_active) step_space_animation(m);
     hold_landing(m);
+}
+
+/* Whether `nswindow` is moving itself into or out of full screen: its step this frame goes in the
+ * transaction its picture is presented in (`macos_monitor.zig`). */
+int fizzy_macos_window_space_moving(void *nswindow) {
+    WindowMonitor *m = monitor_of(nswindow);
+    return m && m->anim_active ? 1 : 0;
 }
 
 /* How far `nswindow` is into full screen on its own way there or back, 0 to 1; below 0 when it is
@@ -909,6 +925,36 @@ static void install_constrain_override(NSWindow *window) {
     }
 }
 
+/* SDL puts its own style on the window at will-enter and did-exit of a fullscreen Space (titled,
+ * the content not under the title bar), and fizzy puts its own back the next frame (`styleTitled`).
+ * AppKit keeps the content rect across each change, so the window grew by its title bar and shrank
+ * back: kept at will-enter it came back from full screen a title bar taller each time, and at
+ * did-exit it jumped up a title bar and back down in a frame. A window the monitor follows keeps its
+ * content under the title bar through any style it is given. */
+static IMP g_nswindow_style_mask_imp = NULL;
+
+static void fizzy_set_style_mask(id self, SEL _cmd, NSWindowStyleMask mask) {
+    if (monitor_of((__bridge void *)self)) mask |= NSWindowStyleMaskFullSizeContentView;
+    ((void (*)(id, SEL, NSWindowStyleMask))g_nswindow_style_mask_imp)(self, _cmd, mask);
+}
+
+/* On the concrete (SDL) window class, as `install_constrain_override`. Idempotent. */
+static void install_style_mask_override(NSWindow *window) {
+    Class cls = object_getClass(window);
+    SEL sel = @selector(setStyleMask:);
+    if (class_getMethodImplementation(cls, sel) == (IMP)fizzy_set_style_mask) return;
+    Method base = class_getInstanceMethod([NSWindow class], sel);
+    if (!base) return;
+    g_nswindow_style_mask_imp = method_getImplementation(base);
+    if (!class_addMethod(cls, sel, (IMP)fizzy_set_style_mask, method_getTypeEncoding(base))) {
+        Method existing = class_getInstanceMethod(cls, sel);
+        if (existing) {
+            g_nswindow_style_mask_imp = method_getImplementation(existing);
+            method_setImplementation(existing, (IMP)fizzy_set_style_mask);
+        }
+    }
+}
+
 /* Keep `token`, an observer `m` added, to remove when the window is forgotten. */
 static void keep_observer(WindowMonitor *m, id token) {
     if (!m || !token || m->observer_count >= (int)(sizeof(m->observers) / sizeof(m->observers[0]))) return;
@@ -932,6 +978,7 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
     m->window = nswindow;
     NSWindow *window = (__bridge NSWindow *)nswindow;
     install_constrain_override(window);
+    install_style_mask_override(window);
     install_space_animation(window);
     store_exit_target(window);
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];

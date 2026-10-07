@@ -52,6 +52,10 @@ gpu: *GpuRenderer,
 /// Optional hook invoked during `Window.begin` just before pixel/window sizes are queried.
 /// Useful to sync AppKit window state into SDL (e.g. during Space / zoom animations).
 begin_hook: ?*const fn (*SDLBackend) void = null,
+/// Optional hook invoked at the very end of `renderPresent`, after every window's picture is
+/// presented: closes what `begin_hook` opened for the frame (a Core Animation transaction a window
+/// moved in, its picture presented with it).
+present_hook: ?*const fn (*SDLBackend) void = null,
 
 touch_mouse_events: bool = false,
 log_events: bool = false,
@@ -1824,6 +1828,8 @@ pub fn deinit(self: *SDLBackend) void {
 }
 
 pub fn renderPresent(self: *SDLBackend) void {
+    // First, so it runs last: after the viewports' own transaction below is committed into it.
+    defer if (self.present_hook) |hook| hook(self);
     // macOS: a window put somewhere new this frame goes there in the transaction its picture is
     // presented in, so the two change together (`placeWindow`). Before the pictures are copied
     // into the windows, so a resized window's drawable is already its new size. A window's first
@@ -1873,6 +1879,11 @@ pub fn renderPresent(self: *SDLBackend) void {
     // Each viewport's part of the frame goes in with the main window's, one submission for all.
     var first_frame: [max_viewports]bool = @splat(false);
     var map_empty: [max_viewports]bool = @splat(false);
+    // The main window moving itself into or out of full screen (`platform.window.windowMovingItself`):
+    // a float's or a dialog's window keeps its picture until it is over. AppKit hands their layers
+    // drawables back slowly while the main window goes through a Space transition, and waiting on
+    // them every frame halved the move's rate with one open.
+    const main_moving = platform.window.windowMovingItself(self.window);
     for (&self.viewports, 0..) |*slot, i| {
         const vp = if (slot.*) |*v| v else continue;
         const target = vp.pending orelse continue;
@@ -1881,6 +1892,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         // for up to a second: skipped, once it has been shown (it is created hidden, and covered
         // then by its own account).
         if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
+        if (vp.shown and main_moving and !platform.window.windowMovingItself(vp.window)) continue;
         const presented = self.gpu.presentInto(vp.window, target);
         if (vp.shown) continue;
         if (presented) {
