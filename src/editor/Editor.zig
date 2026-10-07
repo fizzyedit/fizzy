@@ -3626,9 +3626,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         });
         fizzy.core.dialogs.publishRefraction(editor.app.settings.dialog_refraction);
         // Every glass the app draws, on the one slider — the window opacity as the user set it,
-        // not as it eases to opaque when maximized (`core.glass_look`).
+        // not as it eases to opaque when maximized (`core.glass_look`): Apple's lens, frosting
+        // and taking the window's colour up the slider, as the OS's Liquid Glass beside it does.
+        // Not on the web, where there is no OS glass to match: there the glass stays the clear
+        // liquid glass it was, each field's own tint, lift and blur (the user: it lost its glassy
+        // look, and the lens's bright rim read as a border).
         const slider = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
-        fizzy.core.LiquidField.publishLook(fizzy.core.glass_look.inApp(slider));
+        fizzy.core.LiquidField.publishLook(if (comptime builtin.target.cpu.arch == .wasm32) null else fizzy.core.glass_look.inApp(slider));
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
