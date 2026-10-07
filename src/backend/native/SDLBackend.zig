@@ -96,6 +96,9 @@ pointer_pin: PointerPin = .none,
 /// then.
 /// The main window has been focused once (`noteMainForward`).
 main_focused_once: bool = false,
+/// Some window was shown, hidden or came forward since the floats' stacking against the main
+/// window was last read (`Viewport.under_main`): read it again at the next present.
+stack_stale: bool = true,
 /// The main window's skin, as last set (`platform.window.setBackground`): each float's own window
 /// is skinned so as it opens (`viewportGlass`).
 window_skin: ?dvui.Color = null,
@@ -190,6 +193,9 @@ pub const Viewport = struct {
     main_offset: viewport_map.Point = .{ .x = 0, .y = 0 },
     /// To be put over the main window before the frame presents, once (`noteMainForward`).
     over_main: bool = false,
+    /// Its window lies under the main window in the OS's stacking (a float's, clicked behind it):
+    /// read once whenever the stacking may have changed (`stack_stale`), not each frame.
+    under_main: bool = false,
     /// The window it rides on (`viewportOpenMenu`): the main window, for a menu or dialog of the
     /// main window's; a float's, for a dialog opened in it. Made that window's child once shown, so
     /// the OS moves it with it — smoothly through a drag, which the app's frames could only follow
@@ -829,6 +835,10 @@ pub fn refresh(_: *SDLBackend) void {
 /// From either way events arrive: polled (`addAllEvents`) or through SDL's callbacks (`appEvent`),
 /// which is how fizzy runs on macOS.
 fn noteMainForward(self: *SDLBackend, target: ?*c.SDL_Window, event_type: u32) void {
+    switch (event_type) {
+        c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_HIDDEN, c.SDL_EVENT_WINDOW_RESTORED, c.SDL_EVENT_WINDOW_MINIMIZED, c.SDL_EVENT_WINDOW_FOCUS_GAINED => self.stack_stale = true,
+        else => {},
+    }
     if (target == null or target != self.window) return;
     const over = switch (event_type) {
         c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_RESTORED => true,
@@ -941,9 +951,15 @@ pub fn viewportLift(_: *SDLBackend, vp: *Viewport, other: *Viewport) void {
 }
 
 /// `vp`'s window back at a window's own level, after `viewportLift` (macOS).
-pub fn viewportSettle(_: *SDLBackend, vp: *Viewport) void {
+pub fn viewportSettle(self: *SDLBackend, vp: *Viewport) void {
     if (comptime builtin.os.tag != .macos) return;
-    fizzy_macos_viewport_settle(cocoaWindow(vp.window));
+    fizzy_macos_viewport_settle(cocoaWindow(vp.window), cocoaWindow(self.window));
+    self.stack_stale = true;
+}
+
+/// Whether `vp`'s window lies under the main window in the OS's stacking (`Viewport.under_main`).
+pub fn viewportUnderMain(_: *SDLBackend, vp: *const Viewport) bool {
+    return vp.under_main;
 }
 
 /// The window a menu's or dialog's window moves with (`viewportOpenMenu`).
@@ -1421,7 +1437,7 @@ extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, ma
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_order_above(nswindow: ?*anyopaque, other: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_lift(nswindow: ?*anyopaque, other: ?*anyopaque) void;
-extern fn fizzy_macos_viewport_settle(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_settle(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
@@ -1434,6 +1450,7 @@ extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]c
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_over_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_under_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
 
 /// Give `vp`'s window a material behind the float's glass, so the float's frost reads the desktop
@@ -1554,9 +1571,17 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
             return .{ .x = p.x, .y = p.y };
         },
     }
+    // Over the main window, a window under it in the stacking (`Viewport.under_main`) is not
+    // what the pointer is over: the main window is.
+    const origin = self.mainOnScreen();
+    var mw: c_int = 0;
+    var mh: c_int = 0;
+    _ = c.SDL_GetWindowSize(self.window, &mw, &mh);
+    const over_main = gx >= origin.x and gy >= origin.y and gx < origin.x + @as(f32, @floatFromInt(mw)) and gy < origin.y + @as(f32, @floatFromInt(mh));
     for (&self.viewports) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.passive or vp.see_through) continue;
+        if (vp.under_main and over_main) continue;
         const s = vp.screen;
         if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
             gx < @as(f32, @floatFromInt(s.x + s.w)) and gy < @as(f32, @floatFromInt(s.y + s.h)))
@@ -1564,7 +1589,6 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
             return self.viewportPoint(vp);
         }
     }
-    const origin = self.mainOnScreen();
     const d = self.density();
     return .{ .x = (gx - origin.x) * d, .y = (gy - origin.y) * d };
 }
@@ -1892,6 +1916,17 @@ pub fn renderPresent(self: *SDLBackend) void {
             vp.over_main = false;
             if (!vp.mapped or vp.passive or vp.menu) continue;
             fizzy_macos_viewport_over_main(cocoaWindow(vp.window), main_ns);
+            self.stack_stale = true;
+        }
+        // Which floats' windows lie under the main window now, for a drag over the main window to
+        // read nothing of them there (`viewportUnderMain`). A query of the window server, so only
+        // when the stacking may have changed.
+        if (self.stack_stale) {
+            self.stack_stale = false;
+            for (&self.viewports) |*slot| {
+                const vp = if (slot.*) |*v| v else continue;
+                vp.under_main = vp.mapped and !vp.passive and !vp.menu and fizzy_macos_viewport_under_main(cocoaWindow(vp.window), main_ns) != 0;
+            }
         }
     }
     self.manage_backend_tracking.check(.renderPresent);

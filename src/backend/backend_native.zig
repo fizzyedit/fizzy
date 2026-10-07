@@ -382,6 +382,13 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportCarryLens(vp, lens);
     }
 
+    /// Whether `vp`'s window lies under the main window in the OS's stacking — a float's, clicked
+    /// behind it — as last read (macOS; never elsewhere, where floats stay over it).
+    pub fn underMain(vp: *Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportUnderMain(vp);
+    }
+
     /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar (macOS's
     /// traffic lights, `os_buttons`): 0 without them.
     pub fn buttonsWidth(vp: *Viewport) f32 {

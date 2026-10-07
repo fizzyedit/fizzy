@@ -172,6 +172,9 @@ pub const viewports = struct {
     pub fn windowGlass(_: *Viewport, _: WindowGlassLook) bool {
         return false;
     }
+    pub fn underMain(_: *Viewport) bool {
+        return false;
+    }
     pub fn buttonsWidth(_: *Viewport) f32 {
         return 0;
     }

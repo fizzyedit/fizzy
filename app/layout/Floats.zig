@@ -119,6 +119,9 @@ pub const Viewport = struct {
     /// window's frame, this frame (`Popout`) — for a drag to read the window where it lies over the
     /// main window's places (`ViewDrag.mapOccluders`).
     main_delta: dvui.Point.Physical = .{},
+    /// Its window lies under the main window in the OS's stacking (`Popout`): a float a window like
+    /// any other, clicked behind the main one. Over the main window it covers nothing there.
+    under_main: bool = false,
 };
 
 

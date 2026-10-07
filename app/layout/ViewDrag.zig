@@ -760,12 +760,17 @@ fn mapOccluders(l: *Layout, d: *ViewDrag) void {
         d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header, .source = carriedOutOf(l, f.name) };
         // In an OS window of its own: where that window lies over the main window's places, and
         // where the float is drawn in its band besides (`Occluder.band_bounds`).
+        // Under the main window in the OS's stacking (`Floats.Viewport.under_main`), it covers
+        // nothing of it: read there it is the main window's places, whole — where its window
+        // still shows, past the main window's edge, it is read in its band as ever. Taken as over
+        // it, a float clicked behind the main window cut its places' drops down to the strip
+        // beside it (the user).
         if (f.viewport) |vp| {
             const o = &d.occluders[d.occluder_count];
             o.band_bounds = f.bounds;
             o.band_header = f.header;
-            o.bounds = f.bounds.offsetPoint(vp.main_delta);
-            o.header = f.header.offsetPoint(vp.main_delta);
+            o.bounds = if (vp.under_main) .{} else f.bounds.offsetPoint(vp.main_delta);
+            o.header = if (vp.under_main) .{} else f.header.offsetPoint(vp.main_delta);
         }
         d.occluder_count += 1;
     }
@@ -1587,8 +1592,9 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const own_window = ownWindowLayer(&own_layer, @src());
     defer if (own_window) own_layer.deinit();
     if (own_window and core.native_glass.on()) {
-        // A clear lens, no frost: over the picture beneath it (`photo_under`), which it bends.
-        for (d.drop_shapes[0..d.drop_n]) |sh| core.native_glass.add(.{ .rect = sh.rect, .radius = d.drop_radius, .frost = 0 });
+        // Frosted glass as the bubbles are, its picture over the frost (`photo_under`): the drop
+        // matches the bubbles it is carried among and runs into (the user).
+        for (d.drop_shapes[0..d.drop_n]) |sh| core.native_glass.add(.{ .rect = sh.rect, .radius = d.drop_radius });
     }
     if (!taken and !own_window) {
         // At the merge it is drawn at inside a place's drop (`DropZones.merge`): drawn alone at a
@@ -1616,9 +1622,9 @@ fn drawDrop(l: *Layout, taken: bool) void {
         uv.y = std.math.clamp(d.photo_box.y + d.photo_box.h / 2 - uv.h / 2, 0, 1 - uv.h);
     }
     const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
-    // Beneath the OS's glass, where the app draws it (`core.native_glass.under`) and has its pixels
-    // to hand over: whole and on the window's colour, fitted to what it shows (`photoFit`), the
-    // head's lens bending it — clear what is carried (the user).
+    // On the OS's glass, where the app hands it over (`core.native_glass.under`) and has its pixels
+    // to: what the view shows, fitted to it (`photoFit`), over the drop's frost — clear what is
+    // carried, and the drop the bubbles' glass (the user).
     if (own_window and core.native_glass.on() and core.native_glass.under() and d.photo_pixels != null) {
         d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade_under * d.drop_aim), .image = photoFit(d.*, head) };
         drawDropLabel(l, head, shown);

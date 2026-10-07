@@ -246,6 +246,21 @@ void fizzy_macos_viewport_over_main(void *nswindow, void *main_nswindow) {
 }
 
 /*
+ * Whether `nswindow` lies under the main window in the app's stacking: a float's window clicked
+ * behind it. Not while either is hidden or in a fullscreen Space of its own.
+ */
+int fizzy_macos_viewport_under_main(void *nswindow, void *main_nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSWindow *main = (__bridge NSWindow *)main_nswindow;
+        if (window == nil || main == nil) return 0;
+        if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return 0;
+        if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return 0;
+        return [window orderedIndex] > [main orderedIndex];
+    }
+}
+
+/*
  * A popped-out float's window in the Window menu — and so in the Dock's menu for the app —
  * called `title`, as a titled window is listed by itself: AppKit lists no borderless window
  * unasked. Again whenever its title changes (the view it shows). `fizzy_macos_viewport_unglass`
@@ -483,18 +498,6 @@ void fizzy_macos_viewport_overlay(void *nswindow, void *main_nswindow) {
         NSView *content = [window contentView];
         NSView *frame = [content superview];
         Class container_class = NSClassFromString(@"NSGlassEffectContainerView");
-        /* Under everything, the carried view's picture (`fizzy_macos_viewport_overlay_photo`): the
-         * lens over it bends it. */
-        if (content != nil && frame != nil) {
-            FizzyOverlayGlassHolder *photo = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
-            [photo setIdentifier:overlay_photo_id];
-            [photo setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-            [photo setWantsLayer:YES];
-            [frame addSubview:photo positioned:NSWindowBelow relativeTo:content];
-#if !__has_feature(objc_arc)
-            [photo release];
-#endif
-        }
         /* From the bottom, each added directly under SDL's view so over the one before: the lens,
          * frost — two layers of the same glass, crossfaded to blend two of its materials — and the
          * window's colour over them (`fizzy_macos_viewport_overlay_glass`). */
@@ -514,6 +517,16 @@ void fizzy_macos_viewport_overlay(void *nswindow, void *main_nswindow) {
                     [blur release];
 #endif
                 }
+                /* Over the glass's frost, the carried view's picture (`fizzy_macos_viewport_overlay_photo`):
+                 * its content on the drop's frosted glass, as a bubble's icon is on its own. */
+                FizzyOverlayGlassHolder *photo = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
+                [photo setIdentifier:overlay_photo_id];
+                [photo setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+                [photo setWantsLayer:YES];
+                [frame addSubview:photo positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+                [photo release];
+#endif
                 FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
                 [fill setIdentifier:overlay_fill_id];
                 [fill setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
@@ -790,7 +803,10 @@ static void overlayBevelMask(NSView *view, const FizzyGlassShape *shapes, long n
  * the window's picture is presented in (`SDLBackend.renderPresent`), with implicit animations off,
  * so glass and picture change together.
  */
-/* The carried view's picture under the overlay's glass, as `SDLBackend.OverlayPhoto` lays it out. */
+/* Points inside its drop's edge the carried view's picture stops, so the rim stays glass. */
+static const double photo_rim = 4;
+
+/* The carried view's picture in the overlay's glass, as `SDLBackend.OverlayPhoto` lays it out. */
 typedef struct {
     double x, y, w, h, radius;
     double image[4];
@@ -861,11 +877,12 @@ void fizzy_macos_viewport_overlay_photo_image(void *nswindow, const unsigned cha
 }
 
 /*
- * Where the carried view's picture is under overlay `nswindow`'s glass this frame: in a rounded rect
- * on its fill, its image laid where it is told — fitted to what it shows, so it may reach past the
- * rect, cut off there — blurred as the bubbles' glass blurs what is under them, as opaque as it is
- * told. NULL hides it. Under the lens, in the same window: the lens bends it, and it moves with the
- * glass in one transaction, as a window of its own presented every frame did not.
+ * Where the carried view's picture is on overlay `nswindow`'s glass this frame: in its drop's rounded
+ * rect, a little inside its rim, on its fill (none, for a picture on frosted glass), its image laid
+ * where it is told — fitted to what it shows, so it may reach past the rect, cut off there —
+ * `blur` points blurred, as opaque as it is told. NULL hides it. Over the glass's frost, in the
+ * same window: it moves with the glass in one transaction, as a window of its own presented every
+ * frame did not.
  */
 void fizzy_macos_viewport_overlay_photo(void *nswindow, const FizzyOverlayPhoto *p) {
     @autoreleasepool {
@@ -882,8 +899,10 @@ void fizzy_macos_viewport_overlay_photo(void *nswindow, const FizzyOverlayPhoto 
             return;
         }
         [shape setHidden:NO];
-        [shape setFrame:CGRectMake(p->x, p->y, p->w, p->h)];
-        [shape setCornerRadius:fmin(fmax(p->radius, 0), fmin(p->w, p->h) / 2)];
+        /* Inside the drop's rim, which stays its glass. */
+        const double in = fmin(photo_rim, fmin(p->w, p->h) / 4);
+        [shape setFrame:CGRectMake(p->x + in, p->y + in, fmax(p->w - 2 * in, 1), fmax(p->h - 2 * in, 1))];
+        [shape setCornerRadius:fmax(0, fmin(fmax(p->radius - in, 0), fmin(p->w, p->h) / 2 - in))];
         [shape setOpacity:(float)fmin(p->alpha, 1)];
         CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         const CGFloat comps[4] = {(CGFloat)p->fill[0], (CGFloat)p->fill[1], (CGFloat)p->fill[2], (CGFloat)p->fill[3]};
@@ -891,7 +910,7 @@ void fizzy_macos_viewport_overlay_photo(void *nswindow, const FizzyOverlayPhoto 
         [shape setBackgroundColor:fill];
         CGColorRelease(fill);
         CGColorSpaceRelease(srgb);
-        [image setFrame:CGRectMake(p->image[0], p->image[1], p->image[2], p->image[3])];
+        [image setFrame:CGRectMake(p->image[0] - in, p->image[1] - in, p->image[2], p->image[3])];
         /* Blurred as the bubbles' glass blurs (`overlayBlurLayer`'s filter, on the picture itself):
          * a plain blur, none of a material's grey — `blur` points of the image as it lies here. */
         const double radius = fmax(p->blur, 0);
@@ -1201,11 +1220,17 @@ void fizzy_macos_viewport_lift(void *nswindow, void *other) {
     }
 }
 
-void fizzy_macos_viewport_settle(void *nswindow) {
+/*
+ * Back at a window's own level, from over the drag's glass (`fizzy_macos_viewport_lift`): and over
+ * the main window, as a window just opened is. Dropped to its level and left there, it went under
+ * the main window it had grown over — the float a view let go over its own place opens (the user).
+ */
+void fizzy_macos_viewport_settle(void *nswindow, void *main_nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil || [window level] == NSNormalWindowLevel) return;
         [window setLevel:NSNormalWindowLevel];
+        fizzy_macos_viewport_over_main(nswindow, main_nswindow);
     }
 }
 

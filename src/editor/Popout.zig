@@ -522,7 +522,7 @@ fn overlayFrame(state: *State) void {
         .bevel_cap = fizzy.core.glass_look.bevel_cap,
         .bevel_clear = fizzy.core.glass_look.bevel_clear,
     });
-    overlayPhoto(o, d, shown, main_px, s, look.blur);
+    overlayPhoto(o, d, shown, main_px, s);
 
     // The picture: what goes over the glass — the carried view, the drops' icons — each layer of it
     // (`core.screens.markCarried`) taken from the frame and replayed at the main window's part of it
@@ -801,13 +801,13 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
     return 1;
 }
 
-/// The carried view's picture beneath the drag's glass (`core.native_glass.publishUnder`,
-/// `ViewDrag.photo_under`): in the overlay, under its glass, so the drop's lens bends it as glass
-/// over a picture does — on the window's colour, opaque, fitted to what the view shows, and as
-/// frosted as the view would be under a bubble's glass. Its image goes over once a drag (`photo_gen`); after
-/// that it only moves, in the glass's transaction. A window of its own for it, presented every
-/// frame, cost the compositor a third window a frame (the user saw 40 fps).
-fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui.Rect.Physical, main_px: dvui.Rect.Physical, s: f32, blur: f32) void {
+/// The carried view's picture on the drag's glass (`core.native_glass.publishUnder`,
+/// `ViewDrag.photo_under`): in the overlay, over its drop's frost — what the view shows and nothing
+/// of its ground, on frosted glass as a bubble's icon is — fitted to what the view shows. Its image
+/// goes over once a drag (`photo_gen`); after that it only moves, in the glass's transaction. A
+/// window of its own for it, presented every frame, cost the compositor a third window a frame (the
+/// user saw 40 fps).
+fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui.Rect.Physical, main_px: dvui.Rect.Physical, s: f32) void {
     const px = d.photo_pixels orelse return hidePhoto(o);
     const pu = (if (d.active()) d.photo_under else null) orelse return hidePhoto(o);
     const r = inMainFrame(pu.rect, main_px) orelse return hidePhoto(o);
@@ -819,11 +819,11 @@ fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui
         .rect = .{ .x = (r.x - shown.x) / s, .y = (r.y - shown.y) / s, .w = r.w / s, .h = r.h / s },
         .radius = pu.radius / s,
         .image = .{ .x = (pu.image.x - pu.rect.x) / s, .y = (pu.image.y - pu.rect.y) / s, .w = pu.image.w / s, .h = pu.image.h / s },
-        .fill = dvui.themeGet().color(.content, .fill),
+        // Its content alone, on the drop's frosted glass: no ground of its own, and no blur of its
+        // own — the glass's frost under it is the drop's, as a bubble's is (the user).
+        .fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .alpha = pu.alpha,
-        // As blurred as the view itself would be under a bubble, whatever it is shrunk to here:
-        // the bubbles' blur on the view at its own size.
-        .blur = blur * pu.image.w / @max(1, d.texture_rect.w),
+        .blur = 0,
     });
 }
 
@@ -997,6 +997,9 @@ fn windowFrame(state: *State, o: *Out) void {
         const at = viewports.inMain(o.viewport);
         f.viewport.?.main_delta = .{ .x = at.x - band.x, .y = at.y - band.y };
     }
+    // Whether its window lies under the main window, for a drag over the main window to take no
+    // account of it there (`Floats.Viewport.under_main`).
+    f.viewport.?.under_main = viewports.underMain(o.viewport);
     // A view carried out of it: while it is its own ghost (`ViewDrag.settleGhost`), its window fades
     // to the ghost, material and all, and a held pointer over it reads the main window beneath — the
     // places it lies over can be seen and aimed at. Firm again, the pointer is the window's.
