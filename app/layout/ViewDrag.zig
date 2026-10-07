@@ -1344,7 +1344,15 @@ fn handOffDrops(drops: []PendingDrop) usize {
 const drop_r: f32 = 52;
 
 /// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
-const drop_pull: f32 = 0.45;
+const drop_pull: f32 = 0.55;
+
+/// Before it is aimed at one, the drop leans toward the nearest bubble of the place under the
+/// pointer as it comes within `lean_reach` points of it, edge to edge — up to `drop_lean` of the
+/// way there as they touch — so it is drawn in from a little way off rather than only once it is
+/// on the bubble (the user: more attraction near the bubbles). Where the hand holds it decides it
+/// (`holdHand`), nothing else: nothing eases or swings.
+const drop_lean: f32 = 0.22;
+const lean_reach: f32 = 56;
 
 /// The farthest the pointer moves in a frame within one window's part of the frame, physical
 /// pixels: past it, it went from one window to another — a float out of the main window is drawn
@@ -1433,8 +1441,32 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     if (d.drop_aim != aim_want) moving = true;
     if (d.drop_aim == 0) d.aim_at = null;
     if (moving) dvui.refresh(null, @src(), null);
+    // Leaning toward the nearest bubble as it comes near (`drop_lean`), as much less as it is joined
+    // to one; and drawn toward the one it is joined to as much as it is (`drop_pull`).
+    var lean_to: ?dvui.Point.Physical = null;
+    var lean: f32 = 0;
+    for (drops) |p| {
+        if (!p.look.target or !p.clip.contains(mouse)) continue;
+        for (DropZones.all) |z| {
+            if (z == .remove and !p.wheel.remove) continue;
+            const b = p.wheel.bubble(z);
+            const gx = b.c.x - at.x;
+            const gy = b.c.y - at.y;
+            const gap = @sqrt(gx * gx + gy * gy) - R - b.r;
+            const w = std.math.clamp(1 - gap / (lean_reach * scale), 0, 1);
+            if (w > lean) {
+                lean = w;
+                lean_to = b.c;
+            }
+        }
+    }
+    var centre = at;
+    if (lean_to) |t| {
+        const k = drop_lean * lean * lean * (3 - 2 * lean) * (1 - d.drop_aim);
+        centre = .{ .x = at.x + (t.x - at.x) * k, .y = at.y + (t.y - at.y) * k };
+    }
     const pull = drop_pull * d.drop_aim;
-    const centre: dvui.Point.Physical = if (d.aim_at) |a| .{ .x = at.x + (a.x - at.x) * pull, .y = at.y + (a.y - at.y) * pull } else at;
+    if (d.aim_at) |a| centre = .{ .x = centre.x + (a.x - centre.x) * pull, .y = centre.y + (a.y - centre.y) * pull };
 
     // From the shape it was last drawn as — what was grabbed at the lift, the tab it was over a
     // strip — to the drop, on the card's own curve: that rounded rect closing into a circle.
@@ -1538,7 +1570,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
     // to hand over: whole and on the window's colour, fitted to what it shows (`photoFit`), the
     // head's lens bending it — clear what is carried (the user).
     if (own_window and core.native_glass.on() and core.native_glass.under() and d.photo_pixels != null) {
-        d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade * d.drop_aim), .image = photoFit(d.*, head) };
+        d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade_under * d.drop_aim), .image = photoFit(d.*, head) };
         drawDropLabel(l, head, shown);
         return;
     }
@@ -1746,8 +1778,12 @@ const photo_opacity: f32 = 0.8;
 /// opaque over the bubble it read as a disc under it, not glass running into glass (the user) — the
 /// bubble lights itself (`DropZones`).
 const aim_fade: f32 = 0.75;
-/// Seconds the drop's photograph takes to fade as it joins a bubble, and to come back.
-const aim_s: f32 = 0.15;
+/// How much of the drop's photograph goes as it joins a bubble where it lies under the OS's glass:
+/// little — the bubble's glass bends and blurs it where the drop runs into it, and it reads through
+/// that (the user) — only enough that the bubble's icon reads over it.
+const aim_fade_under: f32 = 0.3;
+/// Seconds the drop takes to join a bubble — drawn to it, its photograph fading — and to come back.
+const aim_s: f32 = 0.09;
 
 /// Points: the tab face on a card with no photograph — a file icon, the title and, when there
 /// are unsaved changes, the dirty dot — and the gaps between them.

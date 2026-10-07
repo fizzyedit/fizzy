@@ -818,6 +818,9 @@ static CALayer *overlayPhotoLayers(NSView *holder, CALayer **image) {
         [shape setHidden:YES];
         CALayer *pic = [CALayer layer];
         [pic setContentsGravity:kCAGravityResize];
+        /* Shrunk to the drop several times over: mipmapped, or every move of a fraction of a pixel
+         * picks other pixels of it, and it shimmers. */
+        [pic setMinificationFilter:kCAFilterTrilinear];
         [shape addSublayer:pic];
         [root addSublayer:shape];
     }

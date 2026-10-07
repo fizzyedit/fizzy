@@ -183,6 +183,10 @@ pub const strip_gain: f32 = 1.15;
 /// How far past its edge a bubble still takes the pointer, as a share of its radius: a drop
 /// aimed at a bubble's rim is aimed at the bubble.
 const reach: f32 = 1.25;
+/// How near a drop takes a bubble, as a share of the two radii together between their middles: a
+/// little before they touch, so the drop reaches for the bubble rather than having to be pushed
+/// into it (the user: more attraction near the bubbles).
+const disc_reach: f32 = 1.2;
 
 /// Where the drop sits over `bounds`: in its middle, as a wheel — or, where a strip along the
 /// place would make the bubbles `strip_gain` bigger than a wheel fitted to it, as that strip.
@@ -392,13 +396,13 @@ pub fn at(w: Wheel, p: dvui.Point.Physical) ?Zone {
 }
 
 /// The zone a drop of radius `r` centred on `c` reads as — a carried drop of glass, aimed by
-/// where it is rather than by the finger beside it: of the bubbles it touches, the one it is most
-/// into (nearest for their sizes together), and nothing touching none. A point (`r` 0) reads as
-/// `at`.
+/// where it is rather than by the finger beside it: of the bubbles it touches or nearly does
+/// (`disc_reach`), the one it is most into (nearest for their sizes together), and nothing near
+/// none. A point (`r` 0) reads as `at`.
 pub fn atDisc(w: Wheel, c: dvui.Point.Physical, r: f32) ?Zone {
     if (r <= 0) return at(w, c);
     var best: ?Zone = null;
-    var best_d: f32 = 1;
+    var best_d: f32 = disc_reach;
     for (all) |z| {
         if (z == .remove and !w.remove) continue;
         const b = w.bubble(z);

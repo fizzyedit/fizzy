@@ -1028,11 +1028,20 @@ pub fn viewportOverlayPhotoImage(_: *SDLBackend, vp: *Viewport, rgba: ?[]const u
 }
 
 /// Where the carried view's picture is under overlay `vp`'s glass this frame, or null: none.
-/// Applied with the glass, in the same transaction.
+/// Applied with the glass, in the same transaction — and kept to its drop's glass as the OS is
+/// handed it: moved only once its drop has moved half a point (`glass_still`), as the glass is.
+/// Moved every frame under glass that was not, the picture slid about inside its lens.
 pub fn viewportOverlayPhoto(_: *SDLBackend, vp: *Viewport, photo: ?OverlayPhoto) void {
-    if (vp.photo == null and photo == null) return;
-    if (vp.photo != null and photo != null and std.meta.eql(vp.photo.?, photo.?)) return;
-    vp.photo = photo;
+    var next = photo orelse {
+        if (vp.photo != null) vp.photo_dirty = true;
+        vp.photo = null;
+        return;
+    };
+    if (vp.photo) |was| inline for (.{ "x", "y", "w", "h", "radius" }) |f| {
+        if (@abs(@field(next, f) - @field(was, f)) < glass_still) @field(next, f) = @field(was, f);
+    };
+    if (vp.photo != null and std.meta.eql(vp.photo.?, next)) return;
+    vp.photo = next;
     vp.photo_dirty = true;
 }
 
