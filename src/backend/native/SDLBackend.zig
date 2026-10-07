@@ -236,6 +236,8 @@ pub const GlassLook = extern struct {
     bevel: f64 = 0,
     bevel_cap: f64 = 0,
     bevel_clear: f64 = 0,
+    /// Points of plain blur over the lens in place of the over layer's frost: 0, the frost.
+    blur: f64 = 0,
 };
 
 pub const InitOptions = struct {
@@ -1096,6 +1098,13 @@ pub fn viewportCarryLens(_: *SDLBackend, vp: *Viewport, lens: bool) void {
     fizzy_macos_viewport_carry_lens(cocoaWindow(vp.window), @intFromBool(lens));
 }
 
+/// A carry window with nothing of its own but its picture (`viewportOpenCarry`): no material, no
+/// shadow. macOS; nothing elsewhere.
+pub fn viewportCarryBare(_: *SDLBackend, vp: *Viewport) void {
+    if (comptime builtin.os.tag != .macos) return;
+    fizzy_macos_viewport_carry_bare(cocoaWindow(vp.window));
+}
+
 /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar: the traffic
 /// lights of a titled macOS window, with the margin before them. 0 elsewhere.
 pub fn viewportButtonsWidth(_: *SDLBackend, vp: *Viewport) f32 {
@@ -1372,6 +1381,7 @@ extern fn fizzy_macos_viewport_settle(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
+extern fn fizzy_macos_viewport_carry_bare(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_window_buttons_width(nswindow: ?*anyopaque) f64;
 extern fn fizzy_macos_liquid_glass_available() c_int;
 extern fn fizzy_macos_viewport_overlay(nswindow: ?*anyopaque, main: ?*anyopaque) void;

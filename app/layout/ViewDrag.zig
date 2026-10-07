@@ -86,20 +86,19 @@ card_start_ns: i128 = 0,
 /// it is not (`drawFloat`). dvui's own drag offset is the list's, from a press the lift may have
 /// come long after, and of a rect the card is not.
 grab: dvui.Point.Physical = .{},
-/// The view carried as a drop of glass (`dropShapes`), where the glass program draws: its head
-/// following the pointer, eased — critically damped, never swinging past — and a trail of smaller
-/// drops laid behind it by the hand's
-/// pace (`trail_vel`), so it draws out as it is dragged and lies back in as it slows. This frame's
-/// shapes, head first.
-drop_head: core.Spring = .{},
-/// The pointer's pace, eased (`dropShapes`), physical pixels a second, and where it was last frame.
-trail_vel: dvui.Point.Physical = .{},
-trail_mouse: ?dvui.Point.Physical = null,
+/// Where the hand holds the drop (`holdHand`): the pointer, kept still through a tremble of it.
+/// What the drop rides off and aims with, while it is carried as one; null when it is not.
+hand: ?dvui.Point.Physical = null,
+/// The middle of the bubble the drop is drawn toward (`drop_pull`), eased onto a bubble newly
+/// aimed at — by time, not by the hand; null once it is joined to none.
+aim_at: ?dvui.Point.Physical = null,
 /// Where the pointer was last frame, for a jump from one window's part of the frame to another's
 /// (`followAcross`).
 last_mouse: ?dvui.Point.Physical = null,
 drop_ns: i128 = 0,
-drop_shapes: [1 + drop_trail_tunes.len]core.LiquidField.Shape = undefined,
+/// The view carried as a drop of glass (`dropShapes`), where the glass program draws: one drop,
+/// where the hand holds it. This frame's shapes.
+drop_shapes: [1]core.LiquidField.Shape = undefined,
 drop_n: usize = 0,
 /// The head's corner radius this frame (physical), for the photograph inside it.
 drop_radius: f32 = 0,
@@ -586,9 +585,8 @@ fn backed(tex: dvui.Texture, r: dvui.Rect.Physical) dvui.Texture {
 /// Begin carrying the view out of `name`. The place keeps drawing it throughout.
 pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dvui.Rect.Physical) void {
     var d = &l.state.view_drag;
-    d.drop_head = .{};
-    d.trail_vel = .{};
-    d.trail_mouse = null;
+    d.hand = null;
+    d.aim_at = null;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -630,9 +628,8 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
 /// caller hands over (`State.stealSnapshot`) and the drag destroys.
 pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
     var d = &l.state.view_drag;
-    d.drop_head = .{};
-    d.trail_vel = .{};
-    d.trail_mouse = null;
+    d.hand = null;
+    d.aim_at = null;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -753,15 +750,43 @@ pub fn aim(l: *Layout) Aim {
 
 /// `aim` for the pointer at `mouse` — a release's own point.
 pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
+    const d = &l.state.view_drag;
+    if (d.active() and carriedAsDrop(l.state, mouse)) _ = holdHand(d, mouse);
     return aimAt(l.state, mouse);
 }
 
+/// A drop aims from where the hand holds it (`holdHand`), so the bubble it is aimed at does not
+/// change under a trembling hand either.
 fn aimAt(state: *const Layout.State, mouse: dvui.Point.Physical) Aim {
     const d = &state.view_drag;
     const cw = dvui.currentWindow();
     if (!d.active() or !carriedAsDrop(state, mouse)) return .{ .p = mouse };
     const R = drop_r * cw.natural_scale;
-    return .{ .p = dropCenter(mouse, R, d.drop_touch), .r = R };
+    return .{ .p = dropCenter(d.hand orelse mouse, R, d.drop_touch), .r = R };
+}
+
+/// Points the pointer moves before the drop does (`holdHand`).
+const hand_still: f32 = 3;
+
+/// Where the hand holds the drop, the pointer at `mouse`: where it was, until the pointer is more
+/// than `hand_still` from it, and then dragged along behind the pointer at that distance. A hand
+/// holding a press still trembles, and the drop moved with each tremble: joined to a bubble, the
+/// OS re-formed the join each frame, and it shimmered (the user). Nothing eases or swings — it
+/// moves only as far as the hand does, and at once. Called as often as a frame likes: the same
+/// pointer leaves it where it is.
+fn holdHand(d: *ViewDrag, mouse: dvui.Point.Physical) dvui.Point.Physical {
+    const still = hand_still * dvui.currentWindow().natural_scale;
+    const h = d.hand orelse {
+        d.hand = mouse;
+        return mouse;
+    };
+    const dx = mouse.x - h.x;
+    const dy = mouse.y - h.y;
+    const dist = @sqrt(dx * dx + dy * dy);
+    if (dist <= still) return h;
+    const k = (dist - still) / dist;
+    d.hand = .{ .x = h.x + dx * k, .y = h.y + dy * k };
+    return d.hand.?;
 }
 
 /// Whether the view is carried as a drop of glass at `mouse`: where the glass program draws, with
@@ -1272,43 +1297,6 @@ fn handOffDrops(drops: []PendingDrop) usize {
 /// beside a finger.
 const drop_r: f32 = 52;
 
-/// The drops trailing the carried view's head (`dropShapes`), the user's: each a share of the
-/// head's radius, laid behind it at a share of the trail's length — away from where the hand is
-/// going, as far as its pace draws the trail (`trail_reach_s`, at most `trail_most` of the head's
-/// radius). Nothing of the drop is on a spring that swings (the user): whatever moved it on its own
-/// near the drop zones — drops chasing one another, eight points round the rim, a sloshing trail —
-/// re-formed the bubbles' joins under a hand held still, and jittered. The trail is the hand's
-/// pace, eased; the head follows the hand eased too, arriving without swinging past
-/// (`dropShapes`). A bubble's pull moves the head and not the trail. Tight to the head and subtle
-/// (the user): it peeks out behind it, at speed. Sizes step down evenly from the
-/// head to the smallest; mass is kept — the head gives up what the trail draws out of it — and
-/// while the drop is joined to a bubble its trail is poured into the head. Past the first, only
-/// where motion is playful (`core.motion`).
-const drop_trail_tunes = [_]DropTrail{
-    .{ .share = 0.62, .at = 0.45 },
-    .{ .share = 0.46, .at = 0.8 },
-    .{ .share = 0.3, .at = 1.1 },
-};
-
-/// Seconds of the hand's pace the trail reaches back: at 1000 points a second, 30 points.
-const trail_reach_s: f32 = 0.03;
-/// The longest the trail draws out, a share of the head's radius.
-const trail_most: f32 = 1.1;
-/// How quickly the trail takes up a change of the hand's pace, seconds: it lies back in about
-/// three of these after the hand stops.
-const trail_ease_s: f32 = 0.07;
-/// Points a second of the hand's pace that draw no trail: a hand held still trembles.
-const trail_still: f32 = 90;
-
-/// The least share of its radius the head keeps, however much the trail draws out of it: it still
-/// holds the view's picture.
-const drop_head_min: f32 = 0.55;
-
-const DropTrail = struct {
-    share: f32,
-    /// Where along the trail it lies, a share of the trail's length behind the head.
-    at: f32,
-};
 /// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
 const drop_pull: f32 = 0.45;
 
@@ -1318,8 +1306,8 @@ const drop_pull: f32 = 0.45;
 const across_jump: f32 = 30000;
 
 /// The pointer gone from one window's part of the frame to another's in one frame — out of a
-/// float's window over the main window, or back — the carried view goes with it as it is: its
-/// springs and the shape it is changing from move by the same jump. Left, they swept back across
+/// float's window over the main window, or back — the carried view goes with it as it is: where
+/// the hand holds it and the shape it is changing from move by the same jump. Left, they swept back across
 /// the band and the view showed for a frame or two in the window it had left.
 fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
     defer d.last_mouse = mouse;
@@ -1327,11 +1315,13 @@ fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
     const dx = mouse.x - was.x;
     const dy = mouse.y - was.y;
     if (@abs(dx) < across_jump and @abs(dy) < across_jump) return;
-    d.drop_head.pos.x += dx;
-    d.drop_head.pos.y += dy;
-    if (d.trail_mouse) |*tm| {
-        tm.x += dx;
-        tm.y += dy;
+    if (d.hand) |*h| {
+        h.x += dx;
+        h.y += dy;
+    }
+    if (d.aim_at) |*a| {
+        a.x += dx;
+        a.y += dy;
     }
     d.morph_rect.x += dx;
     d.morph_rect.y += dy;
@@ -1339,7 +1329,7 @@ fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
     d.shape_rect.y += dy;
 }
 
-/// The view carried as a drop this frame — its head and tail, stepped on their springs — or none
+/// The view carried as a drop this frame, where the hand holds it (`holdHand`) — or none
 /// where it is carried as a card (`drawFloat`): no glass program, no photograph, or over a list.
 fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.Shape {
     const d = &l.state.view_drag;
@@ -1350,9 +1340,8 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     noteMode(d, modeAt(l, mouse), now);
     if (d.mode != .drop) {
         d.drop_ns = 0;
-        d.drop_head = .{};
-        d.trail_vel = .{};
-        d.trail_mouse = null;
+        d.hand = null;
+        d.aim_at = null;
         d.drop_aim = 0;
         return d.drop_shapes[0..0];
     }
@@ -1369,119 +1358,50 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         },
         else => {},
     };
-    // Off the pointer, so the bubble under it stays in view — below and right of a mouse; up and
-    // left of a finger, the finger at the drop's bottom-right corner, where the hand holding it
-    // covers none of it — and drawn toward the bubble it is aimed at, far enough that the two
-    // run together.
-    var target = dropCenter(mouse, R, d.drop_touch);
+    // Off where the hand holds it (`holdHand`), so the bubble under the pointer stays in view —
+    // below and right of a mouse; up and left of a finger, the finger at the drop's bottom-right
+    // corner, where the hand holding it covers none of it.
+    const at = dropCenter(holdHand(d, mouse), R, d.drop_touch);
+    // And drawn toward the bubble it is aimed at, far enough that the two run together: by time,
+    // never by the hand — joined, it moves only as the hand does. A bubble newly aimed at is eased
+    // onto, without swinging past it.
     var aimed: ?dvui.Point.Physical = null;
     for (drops) |p| {
         if (!p.look.target or !p.clip.contains(mouse)) continue;
         const z = p.look.hovered orelse continue;
-        const b = p.wheel.bubble(z);
-        aimed = b.c;
-        target = .{ .x = target.x + (b.c.x - target.x) * drop_pull, .y = target.y + (b.c.y - target.y) * drop_pull };
+        aimed = p.wheel.bubble(z).c;
     }
-    // Eased onto where it goes, critically: it arrives without swinging past (`drop_trail_tunes`).
-    var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = 1 });
-    // The hand's pace, eased (`trail_ease_s`) — a jump from one window's part of the frame to
-    // another's is not pace (`followAcross` moved where it was by the jump).
-    if (d.trail_mouse) |was| if (dt > 0) {
-        const k = 1 - @exp(-dt / trail_ease_s);
-        d.trail_vel.x += ((mouse.x - was.x) / dt - d.trail_vel.x) * k;
-        d.trail_vel.y += ((mouse.y - was.y) / dt - d.trail_vel.y) * k;
-    };
-    d.trail_mouse = mouse;
-    const pace = @sqrt(d.trail_vel.x * d.trail_vel.x + d.trail_vel.y * d.trail_vel.y);
-    if (pace < 1) {
-        d.trail_vel = .{};
-    } else moving = true;
-    // Behind the head, away from where the hand is going, as far as its pace past a still hand's
-    // draws the trail (`trail_still`).
-    const going = @max(0, pace - trail_still * scale);
-    const trail_len: f32 = if (core.motion.off()) 0 else @min(going * trail_reach_s, trail_most * R);
-    const back: dvui.Point.Physical = if (going > 0) .{ .x = -d.trail_vel.x / pace, .y = -d.trail_vel.y / pace } else .{};
-    var trail_at: [drop_trail_tunes.len]dvui.Point.Physical = undefined;
-    for (drop_trail_tunes, 0..) |tune, i| trail_at[i] = .{
-        .x = d.drop_head.pos.x + back.x * trail_len * tune.at,
-        .y = d.drop_head.pos.y + back.y * trail_len * tune.at,
-    };
+    const ease = std.math.clamp(dt / aim_s, 0, 1);
+    var moving = false;
+    if (aimed) |c| {
+        if (d.aim_at) |*a| {
+            a.x += (c.x - a.x) * ease;
+            a.y += (c.y - a.y) * ease;
+            if (@abs(c.x - a.x) < 0.5 and @abs(c.y - a.y) < 0.5) a.* = c else moving = true;
+        } else d.aim_at = c;
+    }
     // Joined to a bubble, its photograph fades (`aim_fade`), eased in and out.
     const aim_want: f32 = if (aimed != null) 1 else 0;
-    d.drop_aim += (aim_want - d.drop_aim) * std.math.clamp(dt / aim_s, 0, 1);
+    d.drop_aim += (aim_want - d.drop_aim) * ease;
     if (@abs(aim_want - d.drop_aim) < 0.01) d.drop_aim = aim_want;
     if (d.drop_aim != aim_want) moving = true;
+    if (d.drop_aim == 0) d.aim_at = null;
     if (moving) dvui.refresh(null, @src(), null);
+    const pull = drop_pull * d.drop_aim;
+    const centre: dvui.Point.Physical = if (d.aim_at) |a| .{ .x = at.x + (a.x - at.x) * pull, .y = at.y + (a.y - at.y) * pull } else at;
 
     // From the shape it was last drawn as — what was grabbed at the lift, the tab it was over a
-    // strip — to the drop, on the card's own curve: that rounded rect closing into a circle round
-    // the head.
+    // strip — to the drop, on the card's own curve: that rounded rect closing into a circle.
     const t = morphProgress(d.*, now);
     const grown = std.math.clamp(t, 0, 1);
-    // The trail's drops at their sizes this frame — poured into the head while the drop is joined
-    // to a bubble (`drop_aim`): only the head meets the bubble, and the trail no longer swings into
-    // the bubbles beside it, making their joins come and go under a hovering drop.
-    const play = std.math.clamp((core.motion.level() - 0.5) * 2, 0, 1);
-    var tail_r: [drop_trail_tunes.len]f32 = undefined;
-    for (drop_trail_tunes, 0..) |tune, i| {
-        const share = if (i == 0) tune.share else tune.share * play;
-        tail_r[i] = R * share * grown * (1 - d.drop_aim);
-    }
-    // Mass kept (the user): what the trail draws out of the drop, the head gives up — each drop's
-    // area outside the one before it — so a drop drawn out into drops thins at the head and fills
-    // out again as they run back in.
-    var given: f32 = 0;
-    var lead_p = d.drop_head.pos;
-    var lead_r = R;
-    for (trail_at, tail_r) |p, r| {
-        if (r > 0) {
-            const dx = p.x - lead_p.x;
-            const dy = p.y - lead_p.y;
-            given += std.math.pi * r * r - lensArea(lead_r, r, @sqrt(dx * dx + dy * dy));
-        }
-        lead_p = p;
-        lead_r = r;
-    }
-    const head_least = drop_head_min * R;
-    const head_r = @sqrt(@max(R * R - given / std.math.pi, head_least * head_least));
-    const to: dvui.Rect.Physical = .{ .x = d.drop_head.pos.x - head_r, .y = d.drop_head.pos.y - head_r, .w = 2 * head_r, .h = 2 * head_r };
+    const to: dvui.Rect.Physical = .{ .x = centre.x - R, .y = centre.y - R, .w = 2 * R, .h = 2 * R };
     const head = lerpRect(d.morph_rect, to, t);
-    d.drop_radius = std.math.lerp(d.morph_radius, head_r, grown);
+    d.drop_radius = std.math.lerp(d.morph_radius, R, grown);
     d.shape_rect = head;
     d.shape_radius = d.drop_radius;
     d.drop_shapes[0] = .{ .rect = head, .radii = @splat(d.drop_radius), .round = true };
     d.drop_n = 1;
-    for (trail_at, tail_r) |p, tr| {
-        if (tr <= 1) continue;
-        d.drop_shapes[d.drop_n] = core.LiquidField.Shape.circle(p, tr);
-        d.drop_n += 1;
-    }
     return d.drop_shapes[0..d.drop_n];
-}
-
-/// The area two circles of radii `a` and `b`, `dist` apart, have in common.
-fn lensArea(a: f32, b: f32, dist: f32) f32 {
-    if (a <= 0 or b <= 0 or dist >= a + b) return 0;
-    if (dist <= @abs(a - b)) {
-        const m = @min(a, b);
-        return std.math.pi * m * m;
-    }
-    const a2 = a * a;
-    const b2 = b * b;
-    const d2 = dist * dist;
-    const alpha = std.math.acos(std.math.clamp((d2 + a2 - b2) / (2 * dist * a), -1, 1));
-    const beta = std.math.acos(std.math.clamp((d2 + b2 - a2) / (2 * dist * b), -1, 1));
-    const k = (-dist + a + b) * (dist + a - b) * (dist - a + b) * (dist + a + b);
-    return a2 * alpha + b2 * beta - 0.5 * @sqrt(@max(k, 0));
-}
-
-test "two circles share all of the smaller inside the larger, none apart, and between in between" {
-    try std.testing.expectApproxEqAbs(@as(f32, std.math.pi * 4), lensArea(10, 2, 3), 1e-3);
-    try std.testing.expectEqual(@as(f32, 0), lensArea(10, 2, 12));
-    const half = lensArea(5, 5, 5);
-    try std.testing.expect(half > 0 and half < std.math.pi * 25);
-    // Equal circles a radius apart: 2r²(π/3 − √3/4)·2 — the standard lens.
-    try std.testing.expectApproxEqAbs(@as(f32, 2 * 25 * (2 * std.math.pi / 3 - @sqrt(3.0) / 2)), half, 1e-2);
 }
 
 /// What the view is carried as with the pointer at `mouse` (`Mode`).
@@ -1533,26 +1453,19 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
     // In a window of its own (`ownWindowLayer`), its photograph is all the app draws of it. Where
-    // the OS draws the drag's glass (`core.native_glass`), its head and trail are the OS's, run
-    // together into one wobbling drop — or parted into drops, carried fast — and into the bubble
-    // it is aimed at. (The window's colour under them is drawn once for the union of them: drawn
-    // for each, the tail read as a darker circle trailing inside the head.)
+    // the OS draws the drag's glass (`core.native_glass`), the drop is the OS's, run together with
+    // the bubble it is aimed at.
     var own_layer: dvui.FloatingWidget = undefined;
     const own_window = ownWindowLayer(&own_layer, @src());
     defer if (own_window) own_layer.deinit();
     if (own_window and core.native_glass.on()) {
         // A clear lens, no frost: over the picture beneath it (`photo_under`), which it bends.
-        for (d.drop_shapes[0..d.drop_n], 0..) |sh, i| core.native_glass.add(.{
-            .rect = sh.rect,
-            .radius = if (i == 0) d.drop_radius else @min(sh.rect.w, sh.rect.h) / 2,
-            .frost = 0,
-        });
+        for (d.drop_shapes[0..d.drop_n]) |sh| core.native_glass.add(.{ .rect = sh.rect, .radius = d.drop_radius, .frost = 0 });
     }
     if (!taken and !own_window) {
-        // At the merge it is drawn at inside a place's drop (`DropZones.merge`). Its head and tail
-        // overlap, and the join between them swells the outline by up to a quarter of the merge:
-        // drawn alone at a wider one, between two places — over the sash between them — the drop
-        // grew by some 8% of its radius, and shrank back as the pointer reached either side.
+        // At the merge it is drawn at inside a place's drop (`DropZones.merge`): drawn alone at a
+        // wider one, between two places — over the sash between them — the drop grew by some 8% of
+        // its radius, and shrank back as the pointer reached either side.
         var field: core.LiquidField = .{ .merge_px = DropZones.merge * scale };
         for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
         _ = core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
@@ -2144,12 +2057,6 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
         landing.photo = d.texture;
         landing.photo_size = d.texture_rect.size();
         d.texture = null;
-        // And its trail, which runs into the window as it grows — carried as a drop, not a card.
-        if (d.drop_n > 1) for (d.drop_shapes[1..d.drop_n]) |sh| {
-            if (landing.drops_n == landing.drops.len) break;
-            landing.drops[landing.drops_n] = .{ .c = sh.rect.center(), .r = @min(sh.rect.w, sh.rect.h) / 2 };
-            landing.drops_n += 1;
-        };
     }
     _ = state.floats.add(l.gpa, .{
         .name = name,

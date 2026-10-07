@@ -169,6 +169,7 @@ pub const viewports = struct {
     }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
     pub fn carryLens(_: *Viewport, _: bool) void {}
+    pub fn carryBare(_: *Viewport) void {}
     pub fn windowGlass(_: *Viewport, _: WindowGlassLook) bool {
         return false;
     }
@@ -216,6 +217,7 @@ pub const viewports = struct {
         bevel: f32 = 0,
         bevel_cap: f32 = 0,
         bevel_clear: f32 = 0,
+        blur: f32 = 0,
     };
     pub fn overlayGlass(_: *Viewport, _: []const GlassShape, _: f32, _: GlassLook) void {}
     pub fn displayInMain() Rect {

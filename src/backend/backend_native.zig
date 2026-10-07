@@ -275,6 +275,10 @@ pub const viewports = struct {
         bevel: f32 = 0,
         bevel_cap: f32 = 0,
         bevel_clear: f32 = 0,
+        /// Points of plain blur over the lens in each piece's body, in place of the `over` frost,
+        /// where the OS can blur what is behind a window without its materials' tint (macOS: Core
+        /// Animation's backdrop blur): 0, or none to draw it with, and the frost it is.
+        blur: f32 = 0,
     };
 
     /// Overlay `vp`'s glass this frame (`openOverlay`), run together within `spacing` points, as
@@ -295,6 +299,7 @@ pub const viewports = struct {
             .bevel = look.bevel,
             .bevel_cap = look.bevel_cap,
             .bevel_clear = look.bevel_clear,
+            .blur = look.blur,
         });
     }
 
@@ -336,6 +341,13 @@ pub const viewports = struct {
     pub fn carryLens(vp: *Viewport, lens: bool) void {
         if (comptime !supported) return;
         dvui.currentWindow().backend.impl.viewportCarryLens(vp, lens);
+    }
+
+    /// A carry window that is its picture alone, in its shape (`carryShape`): none of the OS's
+    /// material under it and no shadow round it — a picture other glass lies over. For good.
+    pub fn carryBare(vp: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportCarryBare(vp);
     }
 
     /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar (macOS's

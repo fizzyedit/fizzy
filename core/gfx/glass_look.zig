@@ -99,22 +99,41 @@ pub const Native = struct {
     fill: f32,
     glass: f32,
     top_fill: f32,
+    /// Points of plain blur over the lens in place of the frost, where the OS can draw one
+    /// (`drop_blur`).
+    blur: f32,
 };
 
-/// How much of the OS's frost a drop takes over its lens, at most: a drop is water, its lens bending
-/// what is under it, and a light frost only softens the dark band Apple's lens shades its edge with
-/// over a flat background. Frosted whole, drops read flat — matte discs rather than water (the
-/// user, against the web build's glass).
-pub const drop_frost: f32 = 0.55;
+/// How much of the OS's frost a drop takes over its lens, at most. The frost is a blur, and the lens
+/// under it the sharp picture: at half, the sharp picture showed through it only lightened — a bloom
+/// with every line still in it, not frost (the user, against the app's own glass, which blurs);
+/// whole, nothing behind it showed at all, a muddy disc rather than frosted glass — a canvas's
+/// checkerboard gone from under it (the user). Mostly blur, a little of the picture through it.
+pub const drop_frost: f32 = 0.75;
 
 /// The least frost a drop keeps, at the bottom of the slider: every drop carries something to read
-/// — a drop zone's icon, the carried view's picture — and over a busy background a clear lens left
-/// it hard to make out (the user). Still water, the lens bending what is under it, only softened.
-pub const drop_frost_min: f32 = 0.3;
+/// — a drop zone's icon — and over a busy background a clear lens left it hard to make out (the
+/// user). Still water, the lens bending what is under it, softened.
+pub const drop_frost_min: f32 = 0.45;
+
+/// Points of plain blur over a drop's lens, at the top of its way and at the bottom, where the OS
+/// can blur what is behind a window without a material's tint (macOS: Core Animation's backdrop
+/// blur). The OS's frost is not a blur but a material: measured, it pulls whatever is under it some
+/// 29% toward one mid grey — a dark window's colour lifted, a light one dulled — and blurs past any
+/// detail, so a bubble over the window's colour read as a grey disc, and over a canvas as a flat
+/// one, nothing under it showing (the user). A plain blur keeps the colour under it and a little of
+/// its shape: clear glass, slightly frosted.
+pub const drop_blur: f32 = 6;
+pub const drop_blur_min: f32 = 2;
+
+/// The clearing bevel of a drop of the OS's glass, a share of its shorter half (`bevel_cap` still
+/// the most): narrower than the app's own, its frost reaching nearer the rim (the user) — the OS's
+/// lens has a bright rim of its own, which the app's glass draws across its whole band.
+pub const drop_bevel: f32 = 0.22;
 
 pub fn native(t: f32) Native {
     const w = way(t);
-    return .{ .under = lens_material, .over = frost_material, .over_share = std.math.lerp(drop_frost_min, drop_frost, w.frost), .fill = w.top, .glass = w.shine, .top_fill = w.top };
+    return .{ .under = lens_material, .over = frost_material, .over_share = std.math.lerp(drop_frost_min, drop_frost, w.frost), .fill = w.top, .glass = w.shine, .top_fill = w.top, .blur = std.math.lerp(drop_blur_min, drop_blur, w.frost) };
 }
 
 /// A window of the OS's glass at `t` — the main window, a float's own. A window is read through,
@@ -299,6 +318,18 @@ test "the glass grows rough before the colour comes in" {
 test "a surface carrying text keeps some frost over a clear lens, none once it is opaque" {
     try std.testing.expectApproxEqAbs(text_frost, forText(inApp(0)).frost, 1e-6);
     try std.testing.expectEqual(inApp(1).frost, forText(inApp(1)).frost);
+}
+
+test "a drop's plain blur is light, growing with the glass's roughness" {
+    try std.testing.expectApproxEqAbs(drop_blur_min, native(0).blur, 1e-6);
+    try std.testing.expectApproxEqAbs(drop_blur, native(1).blur, 1e-6);
+    var prev = native(0).blur;
+    var i: usize = 1;
+    while (i <= 20) : (i += 1) {
+        const b = native(@as(f32, @floatFromInt(i)) / 20).blur;
+        try std.testing.expect(b >= prev);
+        prev = b;
+    }
 }
 
 test "a drop is rough glass until the top, not a disc of colour; text takes its colour sooner" {

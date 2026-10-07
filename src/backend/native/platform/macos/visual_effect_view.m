@@ -406,6 +406,25 @@ void fizzy_macos_viewport_carry_lens(void *nswindow, int lens) {
 }
 
 /*
+ * A carry window that is its picture alone (`SDLBackend.viewportCarryBare`): its material taken
+ * out — Liquid Glass or the vibrancy view — and no shadow, so other glass can lie over it and bend
+ * what it shows, as the drag's lens does the carried view's picture.
+ */
+void fizzy_macos_viewport_carry_bare(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *frame = [[window contentView] superview];
+        NSMutableArray<NSView *> *gone = [NSMutableArray array];
+        for (NSView *v in [frame subviews]) {
+            if ([v isKindOfClass:[FizzyViewportGlassView class]] || [[v identifier] isEqualToString:carry_glass_id]) [gone addObject:v];
+        }
+        for (NSView *v in gone) [v removeFromSuperview];
+        [window setHasShadow:NO];
+    }
+}
+
+/*
  * The drag's glass as one overlay of Liquid Glass (macOS 26): a window over a whole display
  * (`SDLBackend.viewportOpenOverlay`) holding an `NSGlassEffectContainerView`, its pieces of glass
  * one view each, which the container runs together where they come within its spacing — the
@@ -430,6 +449,36 @@ void fizzy_macos_viewport_carry_lens(void *nswindow, int lens) {
  * the window's colour beneath them both. */
 static NSString *const overlay_glass_ids[2] = {@"fizzy.overlay.glass.under", @"fizzy.overlay.glass.over"};
 static NSString *const overlay_fill_id = @"fizzy.overlay.fill";
+static NSString *const overlay_blur_id = @"fizzy.overlay.blur";
+
+/*
+ * A plain blur of what is behind the window: Core Animation's backdrop layer, which the OS's own
+ * materials are built from, with a Gaussian blur on it and nothing else — none of a material's
+ * tint, which pulls everything toward its own grey (`core.glass_look.drop_blur`). Private: nil
+ * where the OS has no such layer, or it does not take these, and the glass keeps its frost.
+ */
+static CALayer *overlayBlurLayer(void) {
+    Class backdrop = NSClassFromString(@"CABackdropLayer");
+    Class filter = NSClassFromString(@"CAFilter");
+    const SEL make = sel_registerName("filterWithType:");
+    const SEL server = sel_registerName("setWindowServerAware:");
+    if (backdrop == nil || filter == nil || ![filter respondsToSelector:make]) return nil;
+    @try {
+        CALayer *layer = [backdrop layer];
+        /* What is behind the window, not only what is under it in it. */
+        if (![layer respondsToSelector:server]) return nil;
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(layer, server, YES);
+        id blur = ((id (*)(id, SEL, id))objc_msgSend)(filter, make, @"gaussianBlur");
+        if (blur == nil) return nil;
+        [blur setValue:@(0) forKey:@"inputRadius"];
+        [blur setValue:@YES forKey:@"inputNormalizeEdges"];
+        [layer setFilters:@[ blur ]];
+        return layer;
+    } @catch (NSException *e) {
+        (void)e;
+        return nil;
+    }
+}
 
 /* Whether the OS has Liquid Glass, and the container that merges it: macOS 26. */
 int fizzy_macos_liquid_glass_available(void) {
@@ -457,6 +506,20 @@ void fizzy_macos_viewport_overlay(void *nswindow, void *main_nswindow) {
          * window's colour over them (`fizzy_macos_viewport_overlay_glass`). */
         for (int k = 0; k < 3 && content != nil && frame != nil; k++) {
             if (k == 2) {
+                /* The plain blur over the frost's place (`overlayBlurLayer`), sized to the glass each
+                 * frame; hidden until then. */
+                CALayer *blur_layer = overlayBlurLayer();
+                if (blur_layer != nil) {
+                    NSView *blur = [[NSView alloc] initWithFrame:NSZeroRect];
+                    [blur setIdentifier:overlay_blur_id];
+                    [blur setLayer:blur_layer];
+                    [blur setWantsLayer:YES];
+                    [blur setHidden:YES];
+                    [frame addSubview:blur positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+                    [blur release];
+#endif
+                }
                 FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
                 [fill setIdentifier:overlay_fill_id];
                 [fill setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
@@ -507,6 +570,7 @@ typedef struct {
     double fill[4];
     double lit_toward[4];
     double bevel, bevel_cap, bevel_clear;
+    double blur;
 } FizzyGlassLook;
 
 /*
@@ -656,7 +720,7 @@ static CGImageRef overlayBevelImage(double radius, double clear, double feather,
  * the frost's container, not on each piece, so the container still runs the pieces together; a
  * bridge between two, near both their edges, stays clear. The colour's view masked the same way.
  */
-static void overlayBevelMask(NSView *view, const FizzyGlassShape *shapes, long n, const FizzyGlassLook *look, BOOL by_frost) {
+static void overlayBevelMask(NSView *view, const FizzyGlassShape *shapes, long n, const FizzyGlassLook *look, BOOL by_frost, double ox, double oy) {
     CALayer *root = [view layer];
     if (root == nil) return;
     CALayer *mask = [root mask];
@@ -697,7 +761,7 @@ static void overlayBevelMask(NSView *view, const FizzyGlassShape *shapes, long n
         const double frost = by_frost ? fmin(fmax(sh.frost, 0), 1) : 1;
         [slot setHidden:sh.alpha <= 0.01 || r <= clear || frost <= 0.01];
         [slot setOpacity:(float)frost];
-        [slot setFrame:CGRectMake(sh.x, sh.y, sh.w, sh.h)];
+        [slot setFrame:CGRectMake(sh.x - ox, sh.y - oy, sh.w, sh.h)];
         const double corner = fmin(fmax(sh.radius, 0), r);
         double edge = ceil(band + corner);
         CGImageRef image = NULL;
@@ -732,6 +796,35 @@ static void overlayBevelMask(NSView *view, const FizzyGlassShape *shapes, long n
  * the window's picture is presented in (`SDLBackend.renderPresent`), with implicit animations off,
  * so glass and picture change together.
  */
+/*
+ * The plain blur in the overlay's glass (`overlayBlurLayer`): one view over every piece that takes
+ * frost, as big as they are together — the blur is of all it covers, every frame — `radius` points,
+ * `alpha` opaque, through the frost's fade toward each piece's edge (`overlayBevelMask`). None, and
+ * it is hidden. `area` is SDL's view's frame, which the pieces are placed in from its top left.
+ */
+static void overlayBlur(NSView *blur, NSRect area, const FizzyGlassShape *shapes, long n, const FizzyGlassLook *look, double radius, double alpha) {
+    CGRect u = CGRectNull;
+    for (long i = 0; i < n; i++) {
+        const FizzyGlassShape sh = shapes[i];
+        if (sh.alpha <= 0.01 || sh.frost <= 0.01) continue;
+        u = CGRectUnion(u, CGRectMake(sh.x, sh.y, sh.w, sh.h));
+    }
+    const BOOL shows = radius > 0 && alpha > 0.01 && !CGRectIsNull(u);
+    [blur setHidden:!shows];
+    if (!shows) return;
+    u = CGRectIntegral(CGRectInset(u, -2, -2));
+    [blur setFrame:NSMakeRect(area.origin.x + u.origin.x, area.origin.y + area.size.height - CGRectGetMaxY(u), u.size.width, u.size.height)];
+    CALayer *layer = [blur layer];
+    @try {
+        NSNumber *was = [layer valueForKeyPath:@"filters.gaussianBlur.inputRadius"];
+        if (was == nil || fabs([was doubleValue] - radius) > 0.01) [layer setValue:@(radius) forKeyPath:@"filters.gaussianBlur.inputRadius"];
+    } @catch (NSException *e) {
+        (void)e;
+    }
+    [layer setOpacity:(float)alpha];
+    overlayBevelMask(blur, shapes, n, look, YES, u.origin.x, u.origin.y);
+}
+
 void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *shapes, long n, double spacing, const FizzyGlassLook *look) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -739,25 +832,29 @@ void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *s
         NSView *frame = [[window contentView] superview];
         NSView *layers[2] = {nil, nil};
         NSView *fill = nil;
+        NSView *blur = nil;
         for (NSView *v in [frame subviews]) {
             for (int k = 0; k < 2; k++) {
                 if ([[v identifier] isEqualToString:overlay_glass_ids[k]]) layers[k] = v;
             }
             if ([[v identifier] isEqualToString:overlay_fill_id]) fill = v;
+            if ([[v identifier] isEqualToString:overlay_blur_id]) blur = v;
         }
         [CATransaction setDisableActions:YES];
         if (fill != nil) {
             overlayFill(fill, shapes, n, spacing, look);
-            overlayBevelMask(fill, shapes, n, look, NO);
+            overlayBevelMask(fill, shapes, n, look, NO, 0, 0);
         }
         const double share = fmin(fmax(look->over_share, 0), 1);
         const double glass = fmin(fmax(look->glass, 0), 1);
-        /* The under layer whole; the over one — the frost — whole too where it shows, faded out
-         * toward the pieces' edges (`overlayBevelMask`) so the under one's rim shows round it, and
-         * over each piece as much as it takes. Laid over the lens at a share instead, the frost let
-         * the sharp picture through it: lightened, not blurred — a bloom (the user, against the
-         * app's own glass, which blurs). */
-        const double alphas[2] = {glass, share > 0.01 ? glass : 0};
+        /* The under layer whole; over it in each piece's body a plain blur (`overlayBlurLayer`) where
+         * there is one, the frost at its share (`glass_look`'s `drop_frost`) where there is not —
+         * either faded out toward the pieces' edges (`overlayBevelMask`) so the under one's rim shows
+         * round it, and over each piece as much as it takes. */
+        const double radius = fmax(look->blur, 0);
+        const BOOL blurs = blur != nil && radius > 0;
+        const double alphas[2] = {glass, blurs ? 0 : share * glass};
+        if (blur != nil) overlayBlur(blur, [[window contentView] frame], shapes, n, look, blurs ? radius : 0, glass);
         const long variants[2] = {look->under_variant, look->over_variant};
         const long styles[2] = {look->under_style, look->over_style};
         for (int k = 0; k < 2; k++) {
@@ -766,7 +863,7 @@ void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *s
             [layers[k] setHidden:!shows];
             [layers[k] setAlphaValue:(CGFloat)alphas[k]];
             overlayGlassLayer(layers[k], shapes, shows ? n : 0, spacing, variants[k], styles[k]);
-            if (k == 1) overlayBevelMask(layers[k], shapes, shows ? n : 0, look, YES);
+            if (k == 1) overlayBevelMask(layers[k], shapes, shows ? n : 0, look, YES, 0, 0);
         }
     }
 }
@@ -1230,11 +1327,12 @@ void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, d
                                     }];
             [effect setMaskImage:mask];
             [effect displayIfNeeded];
-        } else return;
-        /* And the picture, SDL's view: what is carried fills the window only to its shape, but a
-         * glass's frost writes the rect it reads, a little past the shape — over the app, in the main
-         * window, that is the app again; here, the blur of the window's own base, a square round the
-         * orb. The window is the shape, all of it. */
+        }
+        /* And the picture, SDL's view — all a bare window has (`fizzy_macos_viewport_carry_bare`):
+         * what is carried fills the window only to its shape, but a glass's frost writes the rect it
+         * reads, a little past the shape — over the app, in the main window, that is the app again;
+         * here, the blur of the window's own base, a square round the orb. The window is the shape,
+         * all of it. */
         NSView *content = [window contentView];
         if (content != nil) {
             [content setWantsLayer:YES];
