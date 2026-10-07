@@ -52,7 +52,9 @@ pub fn request() void {
         .resizeable = false,
         .default = .cancel,
         .hide_footer = true,
-        .max_size = .{ .w = 560, .h = 480 },
+        // Its width only: the list caps its own height (`max_list_h`) and scrolls, and a capped
+        // window could only cut off the buttons under it.
+        .max_size = .width(560),
         .header_kind = .info,
     });
     mutex.mutex.unlock(dvui.io);
