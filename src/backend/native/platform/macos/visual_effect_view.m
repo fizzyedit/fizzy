@@ -1230,7 +1230,15 @@ void fizzy_macos_viewport_settle(void *nswindow, void *main_nswindow) {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil || [window level] == NSNormalWindowLevel) return;
         [window setLevel:NSNormalWindowLevel];
-        fizzy_macos_viewport_over_main(nswindow, main_nswindow);
+        /* It was over every window up there, and comes down over the main one, whatever
+         * `orderedIndex` says: just after the level changes it still reads the window as in front,
+         * while AppKit has put it back where it was shown among the normal windows — under the
+         * main one (SDL shows a window it does not activate below the key window). Asked first, a
+         * float let go from a drop came up and went behind the main window as it settled. */
+        NSWindow *main = (__bridge NSWindow *)main_nswindow;
+        if (main == nil || ![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
+        if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
+        [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
     }
 }
 
