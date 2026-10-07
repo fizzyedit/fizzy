@@ -30,6 +30,10 @@ pub const Landing = struct {
     photo: ?dvui.Texture = null,
     /// The size it was taken at, physical, for its proportions.
     photo_size: dvui.Size.Physical = .{},
+    /// Where the whole of it lay in the drop it was carried in, physical, where the app showed it
+    /// on the drag's glass (`ViewDrag.photo_last`): it grows from there to where the view lies in
+    /// the window (`Popout.growFrame`). Null where it was not shown so.
+    photo_from: ?dvui.Rect.Physical = null,
 };
 
 pub const Float = struct {

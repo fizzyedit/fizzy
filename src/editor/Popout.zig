@@ -770,19 +770,36 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         // The float's picture over the first part of the growth, the photograph going as it comes.
         const arrive = smoothstep(std.math.clamp(Floats.landingFraction(land) / picture_share, 0, 1));
         // Where the OS draws the drag's glass, the window grows out of drops in it (`growDrops`),
-        // and its own window comes in over the last of it. Its picture and
-        // colour stay in the carry window, over the glass.
+        // and its own window comes in over the last of it, the drop's picture growing with it in
+        // the overlay. Elsewhere its picture and colour are the carry window's, over the glass.
         const drops = nativeGlass();
         const window_in: f32 = if (drops) growDrops(land, rect, radius, to) else 0;
-        if (drops) if (overlay) |*ov| {
-            viewports.orderAbove(g.carry.viewport, ov.viewport);
-            liftOver(o, ov);
-        };
+        if (drops) if (overlay) |*ov| liftOver(o, ov);
         // The window's colour comes in with the picture, as much of it as the window it grows into
         // will have (`windowShade`): with none, the glass ended lighter than that window, which
         // popped darker on the last frame as it took over (the user).
         const keep = 1 - window_in;
-        if (!drawGrow(o, g, rect, radius, if (drops) 0 else 1, windowShade() * arrive * keep, arrive * keep, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
+        if (drops) {
+            // The drop's picture grows with it, from where it lay in the drop to the window's top
+            // left at the size it was taken — the view as the window will show it, its own heading
+            // where the window's header is — on the glass's own way there, and goes as the window
+            // comes in over it (the user: it went as the drop was let go). The overlay holds its
+            // image (`overlayPhoto`); the carry window has nothing of its own to show here.
+            if (land.photo_from) |pf| {
+                const b = to.insetAll(reach() * dvui.windowNaturalScale());
+                const sz = land.photo_size;
+                const body: dvui.Rect.Physical = .{ .x = b.x, .y = b.y, .w = sz.w, .h = sz.h };
+                const k = std.math.clamp(t, 0, 1);
+                grow_photo = .{
+                    .rect = rect,
+                    .radius = radius,
+                    .image = .{ .x = std.math.lerp(pf.x, body.x, k), .y = std.math.lerp(pf.y, body.y, k), .w = std.math.lerp(pf.w, body.w, k), .h = std.math.lerp(pf.h, body.h, k) },
+                    .alpha = keep,
+                };
+            }
+            return window_in;
+        }
+        if (!drawGrow(o, g, rect, radius, 1, windowShade() * arrive * keep, arrive * keep, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
         return window_in;
     }
     // Landed: the window shows, and the glass goes with it.
@@ -808,30 +825,44 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
 /// window of its own for it, presented every frame, cost the compositor a third window a frame (the
 /// user saw 40 fps).
 fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui.Rect.Physical, main_px: dvui.Rect.Physical, s: f32) void {
-    const px = d.photo_pixels orelse return hidePhoto(o);
-    const pu = (if (d.active()) d.photo_under else null) orelse return hidePhoto(o);
-    const r = inMainFrame(pu.rect, main_px) orelse return hidePhoto(o);
-    if (photo_sent != d.photo_gen) {
-        viewports.overlayPhotoImage(o.viewport, std.mem.sliceAsBytes(px), d.photo_size[0], d.photo_size[1]);
-        photo_sent = d.photo_gen;
-    }
+    defer grow_photo = null;
+    // In the drop, as the drag carries it; or, the drag over, growing with the float its drop was
+    // let go as (`growFrame`), from the image the drag handed over.
+    const carried: ?PhotoPlace = if (d.active()) if (d.photo_under) |pu| if (d.photo_pixels) |px| blk: {
+        if (photo_sent != d.photo_gen) {
+            viewports.overlayPhotoImage(o.viewport, std.mem.sliceAsBytes(px), d.photo_size[0], d.photo_size[1]);
+            photo_sent = d.photo_gen;
+        }
+        break :blk .{ .rect = pu.rect, .radius = pu.radius, .image = pu.image, .alpha = pu.alpha };
+    } else null else null else null;
+    const p = carried orelse grow_photo orelse return hidePhoto(o);
+    if (photo_sent == 0) return hidePhoto(o);
+    const r = inMainFrame(p.rect, main_px) orelse return hidePhoto(o);
     viewports.overlayPhoto(o.viewport, .{
         .rect = .{ .x = (r.x - shown.x) / s, .y = (r.y - shown.y) / s, .w = r.w / s, .h = r.h / s },
-        .radius = pu.radius / s,
-        .image = .{ .x = (pu.image.x - pu.rect.x) / s, .y = (pu.image.y - pu.rect.y) / s, .w = pu.image.w / s, .h = pu.image.h / s },
+        .radius = p.radius / s,
+        .image = .{ .x = (p.image.x - p.rect.x) / s, .y = (p.image.y - p.rect.y) / s, .w = p.image.w / s, .h = p.image.h / s },
         // Its content alone, on the drop's frosted glass: no ground of its own, and no blur of its
         // own — the glass's frost under it is the drop's, as a bubble's is (the user).
         .fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .alpha = pu.alpha,
+        .alpha = p.alpha,
         .blur = 0,
     });
 }
 
+/// Where the carried view's picture is on the drag's glass this frame (`overlayPhoto`), physical:
+/// the glass it is in, its corners, where the whole picture lies, and how much of it shows.
+const PhotoPlace = struct { rect: dvui.Rect.Physical, radius: f32, image: dvui.Rect.Physical, alpha: f32 };
+
+/// The picture growing with a float out of the drop it was let go as (`growFrame`), this frame —
+/// for the overlay's pass after the windows' (`overlayPhoto`). Null when none is.
+var grow_photo: ?PhotoPlace = null;
+
+/// Nothing of the picture shows this frame. Its image is kept: the frame a drop is let go as a float
+/// shows none of it, and the frames after grow it with the float (`grow_photo`). It goes with the
+/// overlay (`overlayFrame`), or for the next drag's.
 fn hidePhoto(o: *Carry) void {
     viewports.overlayPhoto(o.viewport, null);
-    // The image is let go with the drag that took it.
-    if (photo_sent != 0) viewports.overlayPhotoImage(o.viewport, null, 0, 0);
-    photo_sent = 0;
 }
 
 /// The picture whose image the overlay holds (`ViewDrag.photo_gen`); 0, none.

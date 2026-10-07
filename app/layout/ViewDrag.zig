@@ -65,6 +65,10 @@ photo_gen: u32 = 0,
 /// The drop's picture this frame, handed to the app to draw beneath the OS's glass rather than over
 /// it (`core.native_glass.under`): null when it is drawn here, or not at all.
 photo_under: ?PhotoUnder = null,
+/// Where the whole of the drop's picture lay the last frame it was carried as a drop handed over
+/// (`PhotoUnder.image`), physical; null once it is carried as anything else. A float it is let go
+/// as grows its picture out of there (`Floats.Landing.photo_from`).
+photo_last: ?dvui.Rect.Physical = null,
 start_ns: i128 = 0,
 /// Surface lifted from the source: what the card under the pointer shows, and what lands.
 moved_id: []const u8 = "",
@@ -1627,6 +1631,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
     // carried, and the drop the bubbles' glass (the user).
     if (own_window and core.native_glass.on() and core.native_glass.under() and d.photo_pixels != null) {
         d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade_under * d.drop_aim), .image = photoFit(d.*, head) };
+        d.photo_last = d.photo_under.?.image;
         drawDropLabel(l, head, shown);
         return;
     }
@@ -1725,6 +1730,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     d.photo_under = null;
     if (!d.active()) return;
+    if (d.drop_n == 0) d.photo_last = null;
     if (d.drop_n > 0) {
         drawDrop(l, taken);
         // Frames while it is still turning from what was grabbed into the drop.
@@ -2224,6 +2230,7 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
         // The float has the photograph now; the drag's discard must not destroy it.
         landing.photo = d.texture;
         landing.photo_size = d.texture_rect.size();
+        landing.photo_from = d.photo_last;
         d.texture = null;
     }
     _ = state.floats.add(l.gpa, .{
