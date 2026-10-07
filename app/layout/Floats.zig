@@ -30,6 +30,10 @@ pub const Landing = struct {
     photo: ?dvui.Texture = null,
     /// The size it was taken at, physical, for its proportions.
     photo_size: dvui.Size.Physical = .{},
+    /// Where the whole of it lay in the drop it was carried in, physical, where the app showed it
+    /// on the drag's glass (`ViewDrag.photo_last`): it grows from there to where the view lies in
+    /// the window (`Popout.growFrame`). Null where it was not shown so.
+    photo_from: ?dvui.Rect.Physical = null,
 };
 
 pub const Float = struct {
@@ -119,6 +123,9 @@ pub const Viewport = struct {
     /// window's frame, this frame (`Popout`) — for a drag to read the window where it lies over the
     /// main window's places (`ViewDrag.mapOccluders`).
     main_delta: dvui.Point.Physical = .{},
+    /// Its window lies under the main window in the OS's stacking (`Popout`): a float a window like
+    /// any other, clicked behind the main one. Over the main window it covers nothing there.
+    under_main: bool = false,
 };
 
 

@@ -52,6 +52,10 @@ gpu: *GpuRenderer,
 /// Optional hook invoked during `Window.begin` just before pixel/window sizes are queried.
 /// Useful to sync AppKit window state into SDL (e.g. during Space / zoom animations).
 begin_hook: ?*const fn (*SDLBackend) void = null,
+/// Optional hook invoked at the very end of `renderPresent`, after every window's picture is
+/// presented: closes what `begin_hook` opened for the frame (a Core Animation transaction a window
+/// moved in, its picture presented with it).
+present_hook: ?*const fn (*SDLBackend) void = null,
 
 touch_mouse_events: bool = false,
 log_events: bool = false,
@@ -94,7 +98,11 @@ pointer_pin: PointerPin = .none,
 /// back over it at the next present (`renderPresent`). Asking AppKit for the order is a trip to the
 /// window server — 2 ms a frame on average, 10 at worst, asked every frame — so it is asked only
 /// then.
-order_pending: bool = false,
+/// The main window has been focused once (`noteMainForward`).
+main_focused_once: bool = false,
+/// Some window was shown, hidden or came forward since the floats' stacking against the main
+/// window was last read (`Viewport.under_main`): read it again at the next present.
+stack_stale: bool = true,
 /// The main window's skin, as last set (`platform.window.setBackground`): each float's own window
 /// is skinned so as it opens (`viewportGlass`).
 window_skin: ?dvui.Color = null,
@@ -169,6 +177,97 @@ pub const Viewport = struct {
     /// How opaque it is, asked and as last applied — with its shape, in the same transaction.
     carry_alpha: f32 = 1,
     carry_alpha_shown: f32 = -1,
+    /// An overlay (`viewportOpenOverlay`): the OS's glass in it as last asked
+    /// (`viewportOverlayGlass`), applied with its picture, in the same transaction.
+    overlay: bool = false,
+    glass: [max_glass]GlassShape = undefined,
+    glass_n: usize = 0,
+    glass_spacing: f32 = 0,
+    glass_look: GlassLook = .{},
+    glass_dirty: bool = false,
+    /// The carried view's picture under the overlay's glass (`viewportOverlayPhoto`) as last asked,
+    /// applied with the glass; null, none.
+    photo: ?OverlayPhoto = null,
+    photo_dirty: bool = false,
+    /// A menu's window (`viewportOpenMenu`): placed in the main window's frame, and the pointer
+    /// over it read there too, plus `main_offset` — where the menu is drawn in the frame from where
+    /// its window lies over the main one: nothing for a menu of the main window's, the way to its
+    /// float's band for one opened in a float that is out (`viewportMainOffset`).
+    menu: bool = false,
+    main_offset: viewport_map.Point = .{ .x = 0, .y = 0 },
+    /// To be put over the main window before the frame presents, once (`noteMainForward`).
+    over_main: bool = false,
+    /// Its window lies under the main window in the OS's stacking (a float's, clicked behind it):
+    /// read once whenever the stacking may have changed (`stack_stale`), not each frame.
+    under_main: bool = false,
+    /// The window it rides on (`viewportOpenMenu`): the main window, for a menu or dialog of the
+    /// main window's; a float's, for a dialog opened in it. Made that window's child once shown, so
+    /// the OS moves it with it — smoothly through a drag, which the app's frames could only follow
+    /// a frame behind — and put somewhere new only when where it lies over that window changes
+    /// (`viewportPlaceRiding`): that place as last placed (`ride_key`), and how the part of the
+    /// frame it showed then lay from the frame asked (`ride_off`, `ride_size`).
+    ride: ?*c.SDL_Window = null,
+    ride_key: ?viewport_map.Rect = null,
+    ride_off: viewport_map.Point = .{ .x = 0, .y = 0 },
+    ride_size: viewport_map.Point = .{ .x = 0, .y = 0 },
+    /// A dialog's window (`viewportOpenMenu`): a menu's, but in its window's stacking.
+    dialog: bool = false,
+};
+
+/// A piece of the OS's glass in an overlay (`viewportOverlayGlass`): a rounded rect, points from the
+/// window's top left. As `fizzy_macos_viewport_overlay_glass` reads it.
+pub const GlassShape = extern struct {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    radius: f64,
+    lit: f64,
+    alpha: f64,
+    /// How much of the frost's blur it takes in its middle (`core.native_glass.Shape.frost`).
+    frost: f64,
+};
+
+/// The most pieces of glass an overlay holds.
+pub const max_glass = 48;
+
+/// The carried view's picture under an overlay's glass (`viewportOverlayPhoto`): in a rounded rect
+/// (`x`…`radius`, points from the window's top left) on `fill`, its image laid at `image` (points
+/// from that rect's top left; it may reach past it, cut off there), `blur` points of plain blur on
+/// it, `alpha` opaque. As `fizzy_macos_viewport_overlay_photo` reads it.
+pub const OverlayPhoto = extern struct {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    radius: f64,
+    image: [4]f64,
+    fill: [4]f64,
+    alpha: f64,
+    blur: f64,
+};
+
+/// What an overlay's glass is (`viewportOverlayGlass`): two layers of the same pieces, each its own
+/// Liquid Glass variant and style, crossfaded by `over_share`. As
+/// `fizzy_macos_viewport_overlay_glass` reads it.
+pub const GlassLook = extern struct {
+    under_variant: c_long = 2,
+    under_style: c_long = 1,
+    over_variant: c_long = 2,
+    over_style: c_long = 1,
+    over_share: f64 = 0,
+    /// How much of the glass there is, both layers.
+    glass: f64 = 1,
+    /// The window's colour under the glass (0…1 each), its opacity the last.
+    fill: [4]f64 = .{ 0, 0, 0, 0 },
+    /// What a lit piece's colour goes toward, and how far (the last).
+    lit_toward: [4]f64 = .{ 1, 1, 1, 0 },
+    /// Each piece's clearing bevel (`core.glass_look.band`).
+    bevel: f64 = 0,
+    bevel_cap: f64 = 0,
+    bevel_clear: f64 = 0,
+    /// Points of plain blur over the lens in place of the over layer's frost: 0, the frost.
+    blur: f64 = 0,
 };
 
 pub const InitOptions = struct {
@@ -733,17 +832,28 @@ pub fn refresh(_: *SDLBackend) void {
     toErr(c.SDL_PushEvent(&ue), "SDL_PushEvent in refresh") catch {};
 }
 
-/// The main window come forward — focused (the app activated, at launch too), pressed, shown,
-/// restored — maybe over a viewport's window: they are put back over it before the frame presents
-/// (`order_pending`). From either way events arrive: polled (`addAllEvents`) or through SDL's
-/// callbacks (`appEvent`), which is how fizzy runs on macOS — where this only ever ran from the
-/// first, and a float's window opened at launch went behind the main window as the app activated.
+/// The main window shown, restored, or first focused — the app activating at launch — over the
+/// floats' windows: they are put over it once, before the frame presents (`Viewport.over_main`).
+/// Not when it is pressed, or focused again: a float's window stacks as any window does (the user),
+/// and one put back over the main window at every press on it left the part under it unworkable.
+/// From either way events arrive: polled (`addAllEvents`) or through SDL's callbacks (`appEvent`),
+/// which is how fizzy runs on macOS.
 fn noteMainForward(self: *SDLBackend, target: ?*c.SDL_Window, event_type: u32) void {
-    if (target == null or target != self.window) return;
     switch (event_type) {
-        c.SDL_EVENT_WINDOW_FOCUS_GAINED, c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_RESTORED => self.order_pending = true,
+        c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_HIDDEN, c.SDL_EVENT_WINDOW_RESTORED, c.SDL_EVENT_WINDOW_MINIMIZED, c.SDL_EVENT_WINDOW_FOCUS_GAINED => self.stack_stale = true,
         else => {},
     }
+    if (target == null or target != self.window) return;
+    const over = switch (event_type) {
+        c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_RESTORED => true,
+        c.SDL_EVENT_WINDOW_FOCUS_GAINED => !self.main_focused_once,
+        else => false,
+    };
+    if (event_type == c.SDL_EVENT_WINDOW_FOCUS_GAINED) self.main_focused_once = true;
+    if (!over) return;
+    for (&self.viewports) |*slot| if (slot.*) |*v| {
+        v.over_main = true;
+    };
 }
 
 pub fn addAllEvents(self: *SDLBackend, win: *dvui.Window) !void {
@@ -806,7 +916,72 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 /// Hidden until a frame is presented into it. Null when it cannot be made, or `max_viewports`
 /// are open.
 pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8) ?*Viewport {
-    return self.openViewport(at, title_text, false);
+    return self.openViewport(at, title_text, .window);
+}
+
+const ViewportKind = enum { window, carry, overlay, menu };
+
+/// A menu in a window of its own (`Popout`'s menus): borderless, kept above every window by its
+/// level, in no window list, never made key — the window it opened from keeps the keyboard, and
+/// its first click acts. Placed in the main window's frame (`viewportPlaceMain`), the pointer over it
+/// read there (`viewportMainOffset`). Its material is the OS's (`viewportLiquidGlass`, vibrancy
+/// before macOS 26). macOS.
+/// `radius`, points: the menu's corners, which vibrancy is masked to (Liquid Glass takes them from
+/// its look each frame). `ride`: the window it moves with (`Viewport.ride`) — none for a menu opened
+/// in a float that is out. `dialog`: a dialog's window (`Viewport.dialog`).
+pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, ride: Ride, dialog: bool) ?*Viewport {
+    if (comptime builtin.os.tag != .macos) return null;
+    const vp = self.openViewport(at, "", .menu) orelse return null;
+    _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
+    vp.ride = switch (ride) {
+        .none => null,
+        .main => self.window,
+        .viewport => |parent| parent.window,
+    };
+    vp.dialog = dialog;
+    return vp;
+}
+
+/// `vp`'s window just above `other`'s, where it is not already (macOS).
+pub fn viewportOrderAbove(_: *SDLBackend, vp: *Viewport, other: *Viewport) void {
+    if (comptime builtin.os.tag != .macos) return;
+    fizzy_macos_viewport_order_above(cocoaWindow(vp.window), cocoaWindow(other.window));
+}
+
+/// `vp`'s window at `other`'s level, just above it (macOS).
+pub fn viewportLift(_: *SDLBackend, vp: *Viewport, other: *Viewport) void {
+    if (comptime builtin.os.tag != .macos) return;
+    fizzy_macos_viewport_lift(cocoaWindow(vp.window), cocoaWindow(other.window));
+}
+
+/// `vp`'s window back at a window's own level, after `viewportLift` (macOS).
+pub fn viewportSettle(self: *SDLBackend, vp: *Viewport) void {
+    if (comptime builtin.os.tag != .macos) return;
+    fizzy_macos_viewport_settle(cocoaWindow(vp.window), cocoaWindow(self.window));
+    self.stack_stale = true;
+}
+
+/// Whether `vp`'s window lies under the main window in the OS's stacking (`Viewport.under_main`).
+pub fn viewportUnderMain(_: *SDLBackend, vp: *const Viewport) bool {
+    return vp.under_main;
+}
+
+/// The window a menu's or dialog's window moves with (`viewportOpenMenu`).
+pub const Ride = union(enum) {
+    none,
+    main,
+    viewport: *Viewport,
+};
+
+/// Whether one of the app's windows has the keyboard: the app is the active one.
+pub fn appActive() bool {
+    return c.SDL_GetKeyboardFocus() != null;
+}
+
+/// Where menu `vp` is drawn in the frame from where its window lies over the main window, physical
+/// pixels (`Viewport.main_offset`).
+pub fn viewportMainOffset(_: *SDLBackend, vp: *Viewport, offset: viewport_map.Point) void {
+    vp.main_offset = offset;
 }
 
 /// A window that carries a view past every window of the app's, over the desktop (`Popout`'s carry
@@ -814,10 +989,105 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
 /// window, in no window list, never focused. macOS. Placed and drawn as any viewport.
 pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
     if (comptime builtin.os.tag != .macos) return null;
-    return self.openViewport(at, "", true);
+    return self.openViewport(at, "", .carry);
 }
 
-fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, carry: bool) ?*Viewport {
+/// A window over a whole display that holds the OS's glass (`viewportOverlayGlass`) — Liquid Glass,
+/// its pieces run together where they come close — under the picture drawn into it: a carry window
+/// grown to its display, clear but for its glass, the pointer passing through it. macOS 26, where
+/// `liquidGlassAvailable`.
+pub fn viewportOpenOverlay(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
+    if (comptime builtin.os.tag != .macos) return null;
+    if (!liquidGlassAvailable()) return null;
+    return self.openViewport(at, "", .overlay);
+}
+
+/// Whether the OS has Liquid Glass to draw (`viewportOpenOverlay`): macOS 26.
+pub fn liquidGlassAvailable() bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    return fizzy_macos_liquid_glass_available() != 0;
+}
+
+/// The OS's glass in overlay `vp` (`viewportOpenOverlay`) this frame, applied with its picture: each
+/// a rounded rect, points from the window's top left, run together within `spacing` points, as
+/// `look`.
+pub fn viewportOverlayGlass(_: *SDLBackend, vp: *Viewport, shapes: []const GlassShape, spacing: f32, look: GlassLook) void {
+    const n = @min(shapes.len, max_glass);
+    // Where the glass merges, its necks swing at the least change of the gap between two pieces —
+    // a carried drop's spring settling, a hand's tremor through a held press — and the OS
+    // re-forms the merge each time it is handed a change, so a piece still under a pointer held
+    // still shimmered at its joins. A piece's place and size go to the OS only once they have
+    // moved half a point from what it was last handed; motion that means anything moves more.
+    var next: [max_glass]GlassShape = undefined;
+    @memcpy(next[0..n], shapes[0..n]);
+    if (n == vp.glass_n) for (next[0..n], vp.glass[0..n]) |*to, was| {
+        inline for (.{ "x", "y", "w", "h", "radius" }) |f| {
+            if (@abs(@field(to.*, f) - @field(was, f)) < glass_still) @field(to.*, f) = @field(was, f);
+        }
+    };
+    if (n == vp.glass_n and spacing == vp.glass_spacing and std.meta.eql(look, vp.glass_look) and
+        std.mem.eql(u8, std.mem.sliceAsBytes(vp.glass[0..n]), std.mem.sliceAsBytes(next[0..n]))) return;
+    @memcpy(vp.glass[0..n], next[0..n]);
+    vp.glass_n = n;
+    vp.glass_spacing = spacing;
+    vp.glass_look = look;
+    vp.glass_dirty = true;
+}
+
+/// The image of the carried view's picture in overlay `vp` (`viewportOverlayPhoto`): premultiplied
+/// RGBA rows, `w` by `h`, copied; null, none. Once a drag: its place each frame is cheap, as an
+/// image under the glass rather than a window of its own presented every frame.
+pub fn viewportOverlayPhotoImage(_: *SDLBackend, vp: *Viewport, rgba: ?[]const u8, w: u32, h: u32) void {
+    if (comptime builtin.os.tag != .macos) return;
+    const px = rgba orelse {
+        fizzy_macos_viewport_overlay_photo_image(cocoaWindow(vp.window), null, 0, 0);
+        return;
+    };
+    if (px.len < @as(usize, w) * h * 4) return;
+    fizzy_macos_viewport_overlay_photo_image(cocoaWindow(vp.window), px.ptr, w, h);
+}
+
+/// Where the carried view's picture is under overlay `vp`'s glass this frame, or null: none.
+/// Applied with the glass, in the same transaction — and kept to its drop's glass as the OS is
+/// handed it: moved only once its drop has moved half a point (`glass_still`), as the glass is.
+/// Moved every frame under glass that was not, the picture slid about inside its lens.
+pub fn viewportOverlayPhoto(_: *SDLBackend, vp: *Viewport, photo: ?OverlayPhoto) void {
+    var next = photo orelse {
+        if (vp.photo != null) vp.photo_dirty = true;
+        vp.photo = null;
+        return;
+    };
+    if (vp.photo) |was| inline for (.{ "x", "y", "w", "h", "radius" }) |f| {
+        if (@abs(@field(next, f) - @field(was, f)) < glass_still) @field(next, f) = @field(was, f);
+    };
+    if (vp.photo != null and std.meta.eql(vp.photo.?, next)) return;
+    vp.photo = next;
+    vp.photo_dirty = true;
+}
+
+/// Points a piece of an overlay's glass moves or grows before the OS is handed it
+/// (`viewportOverlayGlass`).
+const glass_still: f64 = 0.5;
+
+/// The display the main window is on, in the main window's frame (physical pixels from its top
+/// left): what an overlay covers.
+pub fn viewportDisplayInMain(self: *SDLBackend) viewport_map.Rect {
+    const display = c.SDL_GetDisplayForWindow(self.window);
+    var r: c.SDL_Rect = .{};
+    if (display == 0 or !c.SDL_GetDisplayBounds(display, &r)) return .{};
+    const at = self.mainOnScreen();
+    const d = self.density();
+    return .{
+        .x = (@as(f32, @floatFromInt(r.x)) - at.x) * d,
+        .y = (@as(f32, @floatFromInt(r.y)) - at.y) * d,
+        .w = @as(f32, @floatFromInt(r.w)) * d,
+        .h = @as(f32, @floatFromInt(r.h)) * d,
+    };
+}
+
+fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, role: ViewportKind) ?*Viewport {
+    const carry = role != .window;
+    const menu = role == .menu;
     if (!viewportsAvailable()) return null;
     const slot = for (self.viewports, 0..) |v, i| {
         if (v == null) break i;
@@ -841,9 +1111,12 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // (`fizzy_macos_viewport_glass`). Elsewhere borderless, framed by the OS (Windows: DWM) or by
     // the float (X11).
     // A carry window is neither: borderless, and not resizable — the app puts it where the view is.
+    // A menu's window is a carry window that takes the pointer, never focused: the window it opened
+    // from keeps the keyboard, as an OS menu leaves it.
     const frame_flag: c.SDL_WindowFlags = if (builtin.os.tag == .macos and !carry) 0 else c.SDL_WINDOW_BORDERLESS;
     const size_flag: c.SDL_WindowFlags = if (carry) 0 else c.SDL_WINDOW_RESIZABLE;
-    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag;
+    const focus_flag: c.SDL_WindowFlags = if (menu) c.SDL_WINDOW_NOT_FOCUSABLE else 0;
+    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag | focus_flag;
     _ = c.SDL_SetStringProperty(props, c.SDL_PROP_WINDOW_CREATE_TITLE_STRING, title_text.ptr);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_X_NUMBER, placed.screen.x);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_Y_NUMBER, placed.screen.y);
@@ -864,8 +1137,14 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry };
+    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu };
     const vp = &self.viewports[slot].?;
+    // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
+    if (menu) return vp;
+    if (role == .overlay) {
+        if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+        return vp;
+    }
     if (carry) {
         if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
         return vp;
@@ -911,6 +1190,23 @@ pub fn viewportMaximized(_: *SDLBackend, vp: *const Viewport) bool {
     return platform.window.windowMaximized(vp.window);
 }
 
+/// Whether `vp`'s window covers the desktop, or will once the transition it is in ends, as the main
+/// window's is asked (`platform.window.windowCovers`).
+pub fn viewportCovers(_: *SDLBackend, vp: *const Viewport) bool {
+    return platform.window.windowCovers(vp.window);
+}
+
+/// Whether `vp`'s window is on its way into a fullscreen Space (`platform.window.windowEnteringSpace`).
+pub fn viewportEnteringSpace(_: *SDLBackend, vp: *const Viewport) bool {
+    return platform.window.windowEnteringSpace(vp.window);
+}
+
+/// How far `vp`'s window is into full screen as it moves itself there or back
+/// (`platform.window.windowSpaceFullness`).
+pub fn viewportSpaceFullness(_: *SDLBackend, vp: *const Viewport) ?f32 {
+    return platform.window.windowSpaceFullness(vp.window);
+}
+
 /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`
 /// (`heldPoint`): its float gone to its ghost, a view carried out of it aimed at the places under it.
 pub fn viewportSeeThrough(_: *SDLBackend, vp: *Viewport, on: bool) void {
@@ -942,6 +1238,15 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
             self.pointer_pin = .none;
         },
         else => {},
+    }
+    // What rides on it lets go first (`Viewport.ride`): SDL destroys a window's children with it,
+    // and the slot of each still holds its window. The app moves a dialog left behind back over
+    // the main window (`Popout`).
+    for (&self.viewports) |*slot| {
+        if (slot.*) |*other| if (other != vp and other.ride != null and other.ride == vp.window) {
+            _ = c.SDL_SetWindowParent(other.window, null);
+            other.ride = null;
+        };
     }
     for (&self.viewports) |*slot| {
         if (slot.*) |*v| if (v == vp) {
@@ -1025,6 +1330,19 @@ pub fn viewportPlaceMain(self: *SDLBackend, vp: *Viewport, frame: viewport_map.R
     placeWindow(vp, placed.screen, was);
     vp.screen = placed.screen;
     return placed.frame;
+}
+
+/// `viewportPlaceMain` for a window riding on another (`Viewport.ride`), put somewhere new only
+/// when `key` — where it lies over that window — changes. Otherwise it is already there: the OS
+/// carried it with that window, ahead of the app's idea of where the window is.
+pub fn viewportPlaceRiding(self: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect, key: viewport_map.Rect) viewport_map.Rect {
+    if (vp.ride != null and vp.mapped) if (vp.ride_key) |k| if (std.meta.eql(k, key))
+        return .{ .x = frame.x + vp.ride_off.x, .y = frame.y + vp.ride_off.y, .w = vp.ride_size.x, .h = vp.ride_size.y };
+    const shown = self.viewportPlaceMain(vp, frame);
+    vp.ride_key = key;
+    vp.ride_off = .{ .x = shown.x - frame.x, .y = shown.y - frame.y };
+    vp.ride_size = .{ .x = shown.w, .y = shown.h };
+    return shown;
 }
 
 /// `frame` of the main window's frame, as the same place on the desktop in `vp`'s band: a float
@@ -1124,13 +1442,25 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 }
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
+extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
+extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_order_above(nswindow: ?*anyopaque, other: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_lift(nswindow: ?*anyopaque, other: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_settle(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
 extern fn fizzy_macos_window_buttons_width(nswindow: ?*anyopaque) f64;
+extern fn fizzy_macos_liquid_glass_available() c_int;
+extern fn fizzy_macos_viewport_overlay(nswindow: ?*anyopaque, main: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_overlay_photo_image(nswindow: ?*anyopaque, rgba: ?[*]const u8, w: c_long, h: c_long) void;
+extern fn fizzy_macos_viewport_overlay_photo(nswindow: ?*anyopaque, photo: ?*const OverlayPhoto) void;
+extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]const GlassShape, n: c_long, spacing: f64, look: *const GlassLook) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
-extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_over_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_under_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
 
 /// Give `vp`'s window a material behind the float's glass, so the float's frost reads the desktop
@@ -1150,7 +1480,12 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         .macos => {
             const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
             const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
-            fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+            // Liquid Glass where the OS has it (macOS 26), as the main window; vibrancy before.
+            // Dressed as the main window either way: its shadow and outline, no OS animation.
+            if (platform.window.liquidGlass(ns))
+                fizzy_macos_viewport_dress(ns, main_ns)
+            else
+                fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
             // Skinned as the main window is (`platform.window.skin`).
             if (self.window_skin) |color| platform.window.skin(ns, color, dark);
             // Through Spaces, zooms and live resizes as the main window goes (`macos_monitor`).
@@ -1164,6 +1499,11 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         },
         else => return false,
     }
+}
+
+/// `vp`'s window's Liquid Glass this frame (`platform.window.liquidGlassLook`). Whether it has any.
+pub fn viewportLiquidGlass(_: *SDLBackend, vp: *Viewport, look: platform.window.WindowGlass) bool {
+    return platform.window.liquidGlassLook(vp.window, look);
 }
 
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
@@ -1241,18 +1581,24 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
             return .{ .x = p.x, .y = p.y };
         },
     }
+    // Over the main window, a window under it in the stacking (`Viewport.under_main`) is not
+    // what the pointer is over: the main window is.
+    const origin = self.mainOnScreen();
+    var mw: c_int = 0;
+    var mh: c_int = 0;
+    _ = c.SDL_GetWindowSize(self.window, &mw, &mh);
+    const over_main = gx >= origin.x and gy >= origin.y and gx < origin.x + @as(f32, @floatFromInt(mw)) and gy < origin.y + @as(f32, @floatFromInt(mh));
     for (&self.viewports) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.passive or vp.see_through) continue;
+        if (vp.under_main and over_main) continue;
         const s = vp.screen;
         if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
             gx < @as(f32, @floatFromInt(s.x + s.w)) and gy < @as(f32, @floatFromInt(s.y + s.h)))
         {
-            const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
-            return .{ .x = p.x, .y = p.y };
+            return self.viewportPoint(vp);
         }
     }
-    const origin = self.mainOnScreen();
     const d = self.density();
     return .{ .x = (gx - origin.x) * d, .y = (gy - origin.y) * d };
 }
@@ -1264,10 +1610,17 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
 /// move: the edge overshot, was pulled back, and overshot again, shaking the window and what it
 /// shows. The plan's "while held, the window follows `SDL_GetGlobalMouseState`". Every event of a
 /// frame's burst reads the latest place, which is the one that matters.
-fn viewportPoint(vp: *const Viewport) dvui.Point.Physical {
+fn viewportPoint(self: *SDLBackend, vp: *const Viewport) dvui.Point.Physical {
     var gx: f32 = 0;
     var gy: f32 = 0;
     _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    // A menu's window lies over the main window's frame: read there, and on to where the menu is
+    // drawn (`Viewport.main_offset`).
+    if (vp.menu) {
+        const origin = self.mainOnScreen();
+        const d = self.density();
+        return .{ .x = (gx - origin.x) * d + vp.main_offset.x, .y = (gy - origin.y) * d + vp.main_offset.y };
+    }
     const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
     return .{ .x = p.x, .y = p.y };
 }
@@ -1279,12 +1632,12 @@ fn addViewportEvent(self: *SDLBackend, win: *dvui.Window, vp: *Viewport, event: 
     switch (event.type) {
         c.SDL_EVENT_MOUSE_MOTION => {
             if (event.motion.which == c.SDL_TOUCH_MOUSEID and !self.touch_mouse_events) return false;
-            return try win.addEventMouseMotion(.{ .pt = viewportPoint(vp) });
+            return try win.addEventMouseMotion(.{ .pt = self.viewportPoint(vp) });
         },
         c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_WHEEL => {
             // dvui presses and scrolls where the pointer last moved, which may have been over
             // another window: it is moved here first.
-            const pt = viewportPoint(vp);
+            const pt = self.viewportPoint(vp);
             if (pt.x != win.mouse_pt.x or pt.y != win.mouse_pt.y) _ = try win.addEventMouseMotion(.{ .pt = pt });
             return try self.addEvent(win, event);
         },
@@ -1475,6 +1828,8 @@ pub fn deinit(self: *SDLBackend) void {
 }
 
 pub fn renderPresent(self: *SDLBackend) void {
+    // First, so it runs last: after the viewports' own transaction below is committed into it.
+    defer if (self.present_hook) |hook| hook(self);
     // macOS: a window put somewhere new this frame goes there in the transaction its picture is
     // presented in, so the two change together (`placeWindow`). Before the pictures are copied
     // into the windows, so a resized window's drawable is already its new size. A window's first
@@ -1487,8 +1842,9 @@ pub fn renderPresent(self: *SDLBackend) void {
         for (&self.viewports, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             const first = !vp.shown and vp.pending != null;
-            const reshaped = vp.passive and (vp.carry_radius != vp.carry_radius_shown or vp.carry_alpha != vp.carry_alpha_shown or vp.carry_size_shown[0] != vp.screen.w or vp.carry_size_shown[1] != vp.screen.h);
-            if (!vp.frame_pending and !first and !reshaped) continue;
+            const reshaped = vp.passive and !vp.overlay and (vp.carry_radius != vp.carry_radius_shown or vp.carry_alpha != vp.carry_alpha_shown or vp.carry_size_shown[0] != vp.screen.w or vp.carry_size_shown[1] != vp.screen.h);
+            const reglassed = vp.overlay and (vp.glass_dirty or vp.photo_dirty);
+            if (!vp.frame_pending and !first and !reshaped and !reglassed) continue;
             if (!any) fizzy_native_transaction_begin();
             any = true;
             transacted[i] = true;
@@ -1504,6 +1860,12 @@ pub fn renderPresent(self: *SDLBackend) void {
                 vp.carry_size_shown = .{ vp.screen.w, vp.screen.h };
                 fizzy_macos_viewport_carry_shape(ns, vp.carry_radius, @floatFromInt(vp.screen.w), @floatFromInt(vp.screen.h), vp.carry_alpha);
             }
+            if (reglassed) {
+                if (vp.glass_dirty) fizzy_macos_viewport_overlay_glass(ns, &vp.glass, @intCast(vp.glass_n), vp.glass_spacing, &vp.glass_look);
+                if (vp.photo_dirty) fizzy_macos_viewport_overlay_photo(ns, if (vp.photo) |*p| p else null);
+                vp.glass_dirty = false;
+                vp.photo_dirty = false;
+            }
         }
     }
     defer if (comptime builtin.os.tag == .macos) if (any) {
@@ -1517,6 +1879,11 @@ pub fn renderPresent(self: *SDLBackend) void {
     // Each viewport's part of the frame goes in with the main window's, one submission for all.
     var first_frame: [max_viewports]bool = @splat(false);
     var map_empty: [max_viewports]bool = @splat(false);
+    // The main window moving itself into or out of full screen (`platform.window.windowMovingItself`):
+    // a float's or a dialog's window keeps its picture until it is over. AppKit hands their layers
+    // drawables back slowly while the main window goes through a Space transition, and waiting on
+    // them every frame halved the move's rate with one open.
+    const main_moving = platform.window.windowMovingItself(self.window);
     for (&self.viewports, 0..) |*slot, i| {
         const vp = if (slot.*) |*v| v else continue;
         const target = vp.pending orelse continue;
@@ -1525,6 +1892,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         // for up to a second: skipped, once it has been shown (it is created hidden, and covered
         // then by its own account).
         if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
+        if (vp.shown and main_moving and !platform.window.windowMovingItself(vp.window)) continue;
         const presented = self.gpu.presentInto(vp.window, target);
         if (vp.shown) continue;
         if (presented) {
@@ -1546,21 +1914,39 @@ pub fn renderPresent(self: *SDLBackend) void {
             _ = c.SDL_ShowWindow(vp.window);
             _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
             vp.mapped = true;
+            // Riding on its window from here (`Viewport.ride`) — not before it shows: made a child
+            // window, AppKit shows it at once, before it has a picture.
+            if (comptime builtin.os.tag == .macos) if (vp.ride) |parent| {
+                _ = c.SDL_SetWindowParent(vp.window, parent);
+                if (!vp.dialog) fizzy_macos_viewport_menu_attached(cocoaWindow(vp.window));
+            };
         }
         if (show) vp.shown = true;
-        self.order_pending = true;
+        vp.over_main = true;
     }
-    // Over the main window, as on Windows, where it is owned by it (`viewportOpen`): SDL showed it
-    // below the key window, and a press on the main window brings that forward.
-    if (comptime builtin.os.tag == .macos) if (self.order_pending) {
-        self.order_pending = false;
+    // Over the main window as it first shows: SDL showed it below the key window. Once
+    // (`noteMainForward`): from there it stacks as any window does.
+    if (comptime builtin.os.tag == .macos) {
         const main_ns = cocoaWindow(self.window);
         for (&self.viewports) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
-            if (!vp.mapped or vp.passive) continue;
-            fizzy_macos_viewport_keep_above(cocoaWindow(vp.window), main_ns);
+            if (!vp.over_main) continue;
+            vp.over_main = false;
+            if (!vp.mapped or vp.passive or vp.menu) continue;
+            fizzy_macos_viewport_over_main(cocoaWindow(vp.window), main_ns);
+            self.stack_stale = true;
         }
-    };
+        // Which floats' windows lie under the main window now, for a drag over the main window to
+        // read nothing of them there (`viewportUnderMain`). A query of the window server, so only
+        // when the stacking may have changed.
+        if (self.stack_stale) {
+            self.stack_stale = false;
+            for (&self.viewports) |*slot| {
+                const vp = if (slot.*) |*v| v else continue;
+                vp.under_main = vp.mapped and !vp.passive and !vp.menu and fizzy_macos_viewport_under_main(cocoaWindow(vp.window), main_ns) != 0;
+            }
+        }
+    }
     self.manage_backend_tracking.check(.renderPresent);
 }
 
@@ -2600,6 +2986,30 @@ const CallbackState = struct {
 /// used when doing sdl callbacks
 var appState: CallbackState = .{ .win = undefined, .back = undefined, .gpa = undefined, .io = undefined };
 
+/// A frame of the app is being built or presented (`appIterate`, from `Window.begin` to its
+/// present). AppKit calls back into the app at once from what a frame asks of it —
+/// `toggleFullScreen:` posts its will-enter before it returns — and a frame run from such a
+/// callback would nest in this one: dvui's frame state is not reentrant. The waiting after the present is
+/// outside it, where SDL itself runs frames from callbacks (`appIterate`'s `no_wait`).
+var app_frame_open = false;
+
+/// Whether a frame is open now (`app_frame_open`): a caller that would run a frame from a
+/// callback wakes the loop instead (`refresh`), and the frame follows this one.
+pub fn appFrameOpen() bool {
+    return app_frame_open;
+}
+
+/// A frame is being run from inside an OS callback (`callbackFrames`), not by SDL's loop.
+var app_callback_frames = false;
+
+/// Frames run from here on are run from inside an OS callback — the macOS window monitor's pump,
+/// from AppKit's timers and notifications through a transition — until `on` is false. Such a
+/// frame never waits for events after it presents: the wait would be an event loop nested in
+/// AppKit's callback, holding up the transition that called it (`appIterate`).
+pub fn callbackFrames(on: bool) void {
+    app_callback_frames = on;
+}
+
 // sdl3 callback
 fn appInit(appstate: ?*?*anyopaque, argc: c_int, argv: ?[*:null]?[*:0]u8) callconv(.c) c.SDL_AppResult {
     _ = appstate;
@@ -2742,6 +3152,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // beginWait coordinates with waitTime below to run frames only when needed
     const nstime = appState.win.beginWait(appState.interrupted or appState.no_wait);
 
+    app_frame_open = true;
     // marks the beginning of a frame for dvui, can call dvui functions after this
     appState.win.begin(nstime) catch |err| {
         log.err("dvui.Window.begin failed: {any}", .{err});
@@ -2767,6 +3178,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     appState.back.setCursor(appState.win.cursorRequested());
     appState.back.textInputRect(appState.win.textInputRequested());
     appState.back.renderPresent();
+    app_frame_open = false;
 
     if (res != .ok) return c.SDL_APP_SUCCESS;
 
@@ -2790,8 +3202,11 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // say so, and a wait there takes the tracking loop's own mouse events.
     // NOTE: on iOS, SDL_WaitEventTimeout stalls in UITrackingRunLoopMode during a
     // touch, so we throttle via ios_next_frame_ns above instead of waiting here.
-    if (appState.no_wait or appState.have_resize or in_live_resize or builtin.target.os.tag == .ios) {
+    if (appState.no_wait or appState.have_resize or in_live_resize or app_callback_frames or builtin.target.os.tag == .ios) {
         appState.have_resize = false;
+        // Run from a callback, it may sit inside SDL's own wait for events, which knows nothing of
+        // the frame this one asked for: wake that wait, so SDL's loop runs it.
+        if (app_callback_frames and wait_event_micros != std.math.maxInt(u32)) appState.back.refresh();
         if (builtin.target.os.tag == .ios) {
             appState.ios_next_frame_ns = appState.win.backend.nanoTime() + @as(i128, wait_event_micros) * 1000;
         }

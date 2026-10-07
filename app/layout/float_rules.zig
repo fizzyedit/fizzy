@@ -59,6 +59,21 @@ pub fn initialRect(source: Rect, window: Rect) Rect {
     return inside(.{ .x = source.centerX() - w / 2, .y = source.centerY() - h / 2, .w = w, .h = h }, window);
 }
 
+/// Where a float opens for a view carried out of `source` and let go as a drop with its picture:
+/// the place itself, its size and where it was, kept inside the window and no smaller than a float
+/// may be resized to — so the picture it grows with lands on the view as the float shows it (the
+/// user: the size the popped out region was, aligned with its snapshot).
+pub fn asTaken(source: Rect, window: Rect) Rect {
+    const cap_w = @max(0, window.w - 2 * margin);
+    const cap_h = @max(0, window.h - 2 * margin);
+    return inside(.{
+        .x = source.x,
+        .y = source.y,
+        .w = @min(@max(source.w, resize_min_w), cap_w),
+        .h = @min(@max(source.h, resize_min_h), cap_h),
+    }, window);
+}
+
 /// A float opened from the float `from`: the same size, a step down and right, kept inside.
 pub fn nudged(from: Rect, window: Rect) Rect {
     return inside(.{ .x = from.x + nudge, .y = from.y + nudge, .w = from.w, .h = from.h }, window);
@@ -171,9 +186,13 @@ pub const Home = struct {
     shows_many: bool,
     /// It shows nothing now.
     empty: bool,
+    /// Let go, the view's keywords would show it in a place of the main window's of their own
+    /// accord — a view merged into the float from elsewhere may have keywords no place answers.
+    keywords_place: bool,
 };
 
-/// What closing a float does with one of its views.
+/// What closing a float does with one of its views. Nothing a float holds is lost: every view
+/// comes back into the main window.
 pub const GoHome = enum {
     /// Added to its home's list, beside what is there.
     add,
@@ -183,12 +202,25 @@ pub const GoHome = enum {
     /// its keywords fill. Writing it into such a place would freeze the place's list against
     /// every view a plugin registers from then on.
     keywords,
+    /// Into another place of the main window's that shows several: its home is gone or holds
+    /// something else, and its keywords would show it nowhere.
+    elsewhere,
 };
 
 pub fn goHome(home: Home) GoHome {
-    if (!home.declared or !home.assigned) return .keywords;
-    if (home.shows_many) return .add;
-    return if (home.empty) .put else .keywords;
+    // A home the user arranged takes it back as it left: beside what is there, or alone where
+    // nothing is.
+    if (home.declared and home.assigned) {
+        if (home.shows_many) return .add;
+        if (home.empty) return .put;
+    }
+    // Brought back by its keywords: let go, so no place's list is written down for it.
+    if (home.keywords_place) return .keywords;
+    // Let go, it would be shown nowhere: written into its home all the same, as a drop there
+    // writes it; where the home is gone or full, into another place.
+    if (home.declared and home.shows_many) return .add;
+    if (home.declared and home.empty) return .put;
+    return .elsewhere;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────────────────────
@@ -201,6 +233,22 @@ test "a float opens at a share of its place, centred on it" {
     try std.testing.expectApproxEqAbs(@as(f32, 480), r.h, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 900), r.x + r.w / 2, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 500), r.y + r.h / 2, 0.01);
+}
+
+test "a float let go with its picture opens as its place was, kept on the window" {
+    const r = asTaken(.{ .x = 400, .y = 100, .w = 1000, .h = 800 }, test_window);
+    try std.testing.expectEqual(@as(f32, 400), r.x);
+    try std.testing.expectEqual(@as(f32, 100), r.y);
+    try std.testing.expectEqual(@as(f32, 1000), r.w);
+    try std.testing.expectEqual(@as(f32, 800), r.h);
+    // A sidebar's narrow place keeps its width, above what a float may be resized to.
+    const side = asTaken(.{ .x = 0, .y = 40, .w = 240, .h = 900 }, test_window);
+    try std.testing.expectEqual(@as(f32, 240), side.w);
+    try std.testing.expect(side.x >= margin and side.y + side.h <= test_window.h - margin);
+    // Nothing smaller than that.
+    const tiny = asTaken(.{ .x = 300, .y = 300, .w = 50, .h = 40 }, test_window);
+    try std.testing.expectEqual(resize_min_w, tiny.w);
+    try std.testing.expectEqual(resize_min_h, tiny.h);
 }
 
 test "a float out of a small place opens at the minimum" {
@@ -296,13 +344,24 @@ test "a view floats out of its own place's middle, unless it has no place or is 
 
 test "closing a float sends a view home without freezing a place its keywords fill" {
     // The sidebar, filled by keywords: let go, and the keywords bring it back.
-    try std.testing.expectEqual(GoHome.keywords, goHome(.{ .declared = true, .assigned = false, .shows_many = true, .empty = false }));
+    try std.testing.expectEqual(GoHome.keywords, goHome(.{ .declared = true, .assigned = false, .shows_many = true, .empty = false, .keywords_place = true }));
     // A panel the user arranged: added beside what is there.
-    try std.testing.expectEqual(GoHome.add, goHome(.{ .declared = true, .assigned = true, .shows_many = true, .empty = false }));
+    try std.testing.expectEqual(GoHome.add, goHome(.{ .declared = true, .assigned = true, .shows_many = true, .empty = false, .keywords_place = true }));
     // A slot the user arranged, emptied by the float: the view goes back in.
-    try std.testing.expectEqual(GoHome.put, goHome(.{ .declared = true, .assigned = true, .shows_many = false, .empty = true }));
+    try std.testing.expectEqual(GoHome.put, goHome(.{ .declared = true, .assigned = true, .shows_many = false, .empty = true, .keywords_place = true }));
     // Something else went there since: the view does not evict it.
-    try std.testing.expectEqual(GoHome.keywords, goHome(.{ .declared = true, .assigned = true, .shows_many = false, .empty = false }));
+    try std.testing.expectEqual(GoHome.keywords, goHome(.{ .declared = true, .assigned = true, .shows_many = false, .empty = false, .keywords_place = true }));
     // The place is gone (a split since closed).
-    try std.testing.expectEqual(GoHome.keywords, goHome(.{ .declared = false, .assigned = true, .shows_many = true, .empty = true }));
+    try std.testing.expectEqual(GoHome.keywords, goHome(.{ .declared = false, .assigned = true, .shows_many = true, .empty = true, .keywords_place = true }));
+}
+
+test "closing a float loses no view its keywords would show nowhere" {
+    // Merged in from elsewhere, into a float out of the sidebar its keywords fill: the sidebar
+    // takes it, beside what its keywords show there.
+    try std.testing.expectEqual(GoHome.add, goHome(.{ .declared = true, .assigned = false, .shows_many = true, .empty = false, .keywords_place = false }));
+    // A slot something else went into since, or a home gone: another place of the main window's.
+    try std.testing.expectEqual(GoHome.elsewhere, goHome(.{ .declared = true, .assigned = true, .shows_many = false, .empty = false, .keywords_place = false }));
+    try std.testing.expectEqual(GoHome.elsewhere, goHome(.{ .declared = false, .assigned = false, .shows_many = false, .empty = true, .keywords_place = false }));
+    // An empty slot takes it back in.
+    try std.testing.expectEqual(GoHome.put, goHome(.{ .declared = true, .assigned = false, .shows_many = false, .empty = true, .keywords_place = false }));
 }

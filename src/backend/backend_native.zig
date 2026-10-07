@@ -38,6 +38,9 @@ pub const installTrackpadGestureMonitor = platform.gestures.installTrackpadGestu
 pub const takeTrackpadPinchRatio = platform.gestures.takeTrackpadPinchRatio;
 
 pub const isMaximized = platform.window.isMaximized;
+pub const coversDesktop = platform.window.coversDesktop;
+pub const enteringSpace = platform.window.enteringSpace;
+pub const spaceFullness = platform.window.spaceFullness;
 pub const isFullscreenChromeHidden = platform.window.isFullscreenChromeHidden;
 pub const setWindowStyle = platform.window.setStyle;
 pub const setTitlebarColor = platform.window.setBackground;
@@ -120,6 +123,52 @@ pub fn saveWindowGeometry(win: *dvui.Window) void {
 /// Called at the end of AppInit: the monitor may drive frames through window animations now.
 pub const macosLaunchComplete = platform.macos_monitor.launchComplete;
 
+/// A window's Liquid Glass this frame (`windowGlass`, `viewports.windowGlass`): what
+/// `core.glass_look.window` says at the window's opacity, the window's colour, and the clearing
+/// bevel `core.glass_look.band` gives its size.
+pub const WindowGlassLook = struct {
+    under_variant: i32,
+    under_style: i32,
+    over_variant: i32,
+    over_style: i32,
+    frost: f32,
+    blur: f32,
+    glass: f32,
+    fill: dvui.Color,
+    /// The colour's opacity in the body…
+    fill_opacity: f32,
+    /// …and over all of it, the bevel too.
+    top_fill: f32,
+    /// Points, each.
+    radius: f32,
+    clear: f32,
+    feather: f32,
+
+    fn native(self: WindowGlassLook) platform.window.WindowGlass {
+        return .{
+            .under_variant = self.under_variant,
+            .under_style = self.under_style,
+            .over_variant = self.over_variant,
+            .over_style = self.over_style,
+            .frost = self.frost,
+            .blur = self.blur,
+            .glass = self.glass,
+            .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.fill_opacity },
+            .top_fill = self.top_fill,
+            .radius = self.radius,
+            .clear = self.clear,
+            .feather = self.feather,
+        };
+    }
+};
+
+/// The main window's Liquid Glass this frame, where it is a window of Liquid Glass (macOS 26):
+/// whether it is — its colour is then under the glass, and the frame draws no base of its own.
+pub fn windowGlass(win: *dvui.Window, look: WindowGlassLook) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    return platform.window.liquidGlassLook(win.backend.impl.window, look.native());
+}
+
 /// OS windows besides the main one, each showing a part of the one frame — a float popped out
 /// (`docs/POPOUT_WINDOWS_PLAN.md`, the backend's `Viewport`). Fizzy's own backend only: on dvui's
 /// SDL3 backend (`-Dnative-backend=sdl3`) there are none, as on the web, and floats stay in.
@@ -152,12 +201,179 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
     }
 
+    /// Whether one of the app's windows has the keyboard: the app is the active one.
+    pub fn appActive() bool {
+        if (comptime !supported) return true;
+        return Impl.appActive();
+    }
+
+    /// Whether menus can be windows of their own (`openMenu`): macOS, where viewports are.
+    pub const menus = supported and builtin.os.tag == .macos;
+
+    /// A window for a menu (`Popout`'s menus): borderless, above every window, never focused, the
+    /// OS's material in it — rounded by `radius` points — and the pointer over it read in the main
+    /// window's frame (`mainOffset`). Placed with `placeRiding`, drawn as any viewport. `ride`: the
+    /// window the OS moves it with — smoothly, through a drag. `dialog`: a dialog's window, the same
+    /// but in its window's stacking, not above every window.
+    pub fn openMenu(at: Rect, radius: f32, ride: Ride, dialog: bool) ?*Viewport {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOpenMenu(at, radius, ride, dialog);
+    }
+
+    pub const Ride = if (supported) Impl.Ride else union(enum) { none, main, viewport: *Viewport };
+
+    /// `placeMain` for a window riding on another (`openMenu`'s `ride`), put somewhere new only when
+    /// `key` — where it lies over that window — changes.
+    pub fn placeRiding(vp: *Viewport, frame: Rect, key: Rect) Rect {
+        if (comptime !supported) return frame;
+        return dvui.currentWindow().backend.impl.viewportPlaceRiding(vp, frame, key);
+    }
+
+    /// Where menu `vp` is drawn in the frame from where its window lies over the main window,
+    /// physical pixels: none for a menu of the main window's.
+    pub fn mainOffset(vp: *Viewport, offset: dvui.Point.Physical) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportMainOffset(vp, .{ .x = offset.x, .y = offset.y });
+    }
+
+    /// A piece of the OS's glass in an overlay (`overlayGlass`): a rounded rect, points from the
+    /// overlay window's top left.
+    pub const GlassShape = if (supported) Impl.GlassShape else extern struct { x: f64, y: f64, w: f64, h: f64, radius: f64, lit: f64, alpha: f64 };
+
+    /// Whether the OS has Liquid Glass to draw a view drag's glass with (`openOverlay`): macOS 26.
+    pub fn liquidGlass() bool {
+        if (comptime !supported) return false;
+        return Impl.liquidGlassAvailable();
+    }
+
+    /// A window over the display the main window is on (`displayInMain`) holding the OS's glass
+    /// (`overlayGlass`) under the picture presented into it, the pointer passing through it. Where
+    /// `liquidGlass`.
+    pub fn openOverlay(at: Rect) ?*Viewport {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOpenOverlay(at);
+    }
+
+    /// One of Liquid Glass's materials: its variant and style.
+    pub const GlassMaterial = struct { variant: i32, style: i32 };
+    /// What an overlay's glass is: two layers of the same pieces, `under` and `over`, crossfaded by
+    /// `over_share` — each layer's pieces alike, for the OS to run them together.
+    pub const GlassLook = struct {
+        under: GlassMaterial,
+        over: GlassMaterial,
+        over_share: f32,
+        /// How much of the glass there is.
+        glass: f32 = 1,
+        /// The window's colour under the glass, each piece's shape, `fill_opacity` opaque; a lit
+        /// piece's lit by `lit_amount` toward `lit_toward`.
+        fill: dvui.Color = .black,
+        fill_opacity: f32 = 0,
+        lit_toward: dvui.Color = .white,
+        lit_amount: f32 = 0,
+        /// Each piece's clearing bevel (`core.glass_look.band`): a share of its shorter half, at
+        /// most `bevel_cap` points, clear for `bevel_clear` of it before the frost and the colour
+        /// come in.
+        bevel: f32 = 0,
+        bevel_cap: f32 = 0,
+        bevel_clear: f32 = 0,
+        /// Points of plain blur over the lens in each piece's body, in place of the `over` frost,
+        /// where the OS can blur what is behind a window without its materials' tint (macOS: Core
+        /// Animation's backdrop blur): 0, or none to draw it with, and the frost it is.
+        blur: f32 = 0,
+    };
+
+    /// Overlay `vp`'s glass this frame (`openOverlay`), run together within `spacing` points, as
+    /// `look`.
+    pub fn overlayGlass(vp: *Viewport, shapes: []const GlassShape, spacing: f32, look: GlassLook) void {
+        if (comptime !supported) return;
+        const f = look.fill;
+        const t = look.lit_toward;
+        dvui.currentWindow().backend.impl.viewportOverlayGlass(vp, shapes, spacing, .{
+            .under_variant = look.under.variant,
+            .under_style = look.under.style,
+            .over_variant = look.over.variant,
+            .over_style = look.over.style,
+            .over_share = look.over_share,
+            .glass = look.glass,
+            .fill = .{ @as(f64, @floatFromInt(f.r)) / 255, @as(f64, @floatFromInt(f.g)) / 255, @as(f64, @floatFromInt(f.b)) / 255, look.fill_opacity },
+            .lit_toward = .{ @as(f64, @floatFromInt(t.r)) / 255, @as(f64, @floatFromInt(t.g)) / 255, @as(f64, @floatFromInt(t.b)) / 255, look.lit_amount },
+            .bevel = look.bevel,
+            .bevel_cap = look.bevel_cap,
+            .bevel_clear = look.bevel_clear,
+            .blur = look.blur,
+        });
+    }
+
+    /// The carried view's picture under an overlay's glass (`overlayPhoto`).
+    pub const OverlayPhoto = struct {
+        /// The rounded rect it shows in, points from the overlay window's top left.
+        rect: Rect,
+        radius: f32,
+        /// Where its image lies, points from `rect`'s top left: it may reach past it.
+        image: Rect,
+        fill: dvui.Color,
+        alpha: f32 = 1,
+        /// Points of plain blur on it.
+        blur: f32 = 0,
+    };
+
+    /// Overlay `vp`'s image of the carried view's picture: premultiplied RGBA rows, `w` by `h`,
+    /// copied; null, none. Once a drag (`overlayPhoto` places it).
+    pub fn overlayPhotoImage(vp: *Viewport, rgba: ?[]const u8, w: u32, h: u32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportOverlayPhotoImage(vp, rgba, w, h);
+    }
+
+    /// Where overlay `vp` shows the carried view's picture this frame, under its glass, so the
+    /// glass over it bends it; null, nowhere. Applied with the glass.
+    pub fn overlayPhoto(vp: *Viewport, photo: ?OverlayPhoto) void {
+        if (comptime !supported) return;
+        const p = photo orelse return dvui.currentWindow().backend.impl.viewportOverlayPhoto(vp, null);
+        const f = p.fill;
+        dvui.currentWindow().backend.impl.viewportOverlayPhoto(vp, .{
+            .x = p.rect.x,
+            .y = p.rect.y,
+            .w = p.rect.w,
+            .h = p.rect.h,
+            .radius = p.radius,
+            .image = .{ p.image.x, p.image.y, p.image.w, p.image.h },
+            .fill = .{ @as(f64, @floatFromInt(f.r)) / 255, @as(f64, @floatFromInt(f.g)) / 255, @as(f64, @floatFromInt(f.b)) / 255, @as(f64, @floatFromInt(f.a)) / 255 },
+            .alpha = p.alpha,
+            .blur = p.blur,
+        });
+    }
+
+    /// The display the main window is on, in its frame (physical pixels from its top left).
+    pub fn displayInMain() Rect {
+        if (comptime !supported) return .{};
+        return dvui.currentWindow().backend.impl.viewportDisplayInMain();
+    }
+
     /// A carry window's shape this frame (`openCarry`): what it carries fills it, rounded by
     /// `radius` physical pixels — the OS's material and shadow in that shape — `alpha` opaque.
     /// Null: hidden.
     pub fn carryShape(vp: *Viewport, radius: ?f32, alpha: f32) void {
         if (comptime !supported) return;
         dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius, alpha);
+    }
+
+    /// `vp`'s window at `other`'s level and just above it — a float born of a drop, over the drag's
+    /// glass while that goes — until `settle` puts it back at its own. macOS.
+    pub fn lift(vp: *Viewport, other: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportLift(vp, other);
+    }
+
+    pub fn settle(vp: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportSettle(vp);
+    }
+
+    /// `vp`'s window put just above `other`'s in the stacking (a growing float's picture over the
+    /// glass it grows out of). macOS.
+    pub fn orderAbove(vp: *Viewport, other: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportOrderAbove(vp, other);
     }
 
     /// A carry window's glass as the lens — the carried view, a drop of water — or as frost, as a
@@ -167,11 +383,25 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportCarryLens(vp, lens);
     }
 
+    /// Whether `vp`'s window lies under the main window in the OS's stacking — a float's, clicked
+    /// behind it — as last read (macOS; never elsewhere, where floats stay over it).
+    pub fn underMain(vp: *Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportUnderMain(vp);
+    }
+
     /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar (macOS's
     /// traffic lights, `os_buttons`): 0 without them.
     pub fn buttonsWidth(vp: *Viewport) f32 {
         if (comptime !supported) return 0;
         return dvui.currentWindow().backend.impl.viewportButtonsWidth(vp);
+    }
+
+    /// `vp`'s window's Liquid Glass this frame, as the main window's (`windowGlass`). Whether it
+    /// has any: its float then draws no base of its own.
+    pub fn windowGlass(vp: *Viewport, look: WindowGlassLook) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportLiquidGlass(vp, look.native());
     }
 
     /// A float's window's corner radius, points: the OS's for a titled window (`os_frame`).
@@ -192,6 +422,25 @@ pub const viewports = struct {
     pub fn maximized(vp: *const Viewport) bool {
         if (comptime !supported) return false;
         return dvui.currentWindow().backend.impl.viewportMaximized(vp);
+    }
+
+    /// Whether `vp`'s window covers the desktop, or will once the transition it is in ends, as the
+    /// main window's is asked (`coversDesktop`).
+    pub fn coversDesktop(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportCovers(vp);
+    }
+
+    /// Whether `vp`'s window is on its way into a fullscreen Space (`enteringSpace`).
+    pub fn enteringSpace(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportEnteringSpace(vp);
+    }
+
+    /// How far `vp`'s window is into full screen as it moves itself there or back (`spaceFullness`).
+    pub fn spaceFullness(vp: *const Viewport) ?f32 {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportSpaceFullness(vp);
     }
 
     /// `vp`'s window `alpha` opaque, all of it — its material too.
@@ -365,14 +614,16 @@ fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
 pub fn titlebarStripHeight(win: *dvui.Window) f32 {
     if (builtin.os.tag != .macos) return Constants.titlebar_height;
     const t = platform.macos_monitor.titlebarState(win);
-    return platform.window_layout.chooseTitlebarStrip(.{
+    const in: platform.window_layout.StripInputs = .{
         .collapsed = t.collapsed,
         .restoring_chrome = t.restoring_chrome,
         .live_inset = t.live_inset,
         .saved_inset = t.saved_inset,
         .titlebar_height = Constants.titlebar_height,
         .titlebar_top_buffer = Constants.titlebar_top_buffer,
-    });
+    };
+    if (platform.window.spaceFullness(win)) |f| return platform.window_layout.titlebarStripAtFullness(in, f);
+    return platform.window_layout.chooseTitlebarStrip(in);
 }
 
 // ---- The native menu bar: fizzy's menus (`menu_model`) on the platform's (`platform.menu`) ----

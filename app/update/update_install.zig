@@ -6,13 +6,15 @@
 //! singleton) that runs both steps off-thread and publishes phase + 0–100 progress
 //! back through atomics so the dialog can render a status line and a progress bar.
 //!
-//! On success the worker calls `std.process.exit(0)` after Velopack's helper takes
-//! over — same final step as the original synchronous path. On failure the job
-//! latches `.failed` with an error code; callers wipe the singleton when the user
-//! dismisses the dialog.
+//! The worker only downloads. Once the update is on disk the job latches
+//! `.downloaded` and the app restarts the way it always does (`restart`): unsaved
+//! documents are asked about first, and at teardown `applyAtExit` hands the waiting
+//! update to Velopack, which swaps the install once this process has exited and
+//! starts the new version. A restart called off leaves it downloaded — Velopack
+//! applies it on the next launch on its own. On failure the job latches `.failed`
+//! with an error code; callers wipe the singleton when the user dismisses the dialog.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const dvui = @import("dvui");
 const auto_update = @import("auto_update.zig");
 const build_opts = @import("build_opts");
@@ -29,7 +31,8 @@ const UpdateJob = @This();
 pub const Phase = enum(u8) {
     queued = 0,
     downloading = 1,
-    applying = 2,
+    /// On disk, waiting for the restart that installs it (`applyAtExit`).
+    downloaded = 2,
     failed = 3,
     no_update = 4,
 };
@@ -47,6 +50,12 @@ done: std.atomic.Value(bool) = .init(false),
 err: ?auto_update.UpdateInstallError = null,
 err_msg_buf: [320]u8 = undefined,
 err_msg_len: usize = 0,
+/// Set with `.downloaded`, read on the GUI thread once `done` is: the manager and the release
+/// it downloaded, kept for `applyAtExit`.
+manager: ?*anyopaque = null,
+update_info: ?*anyopaque = null,
+/// Raised with `.downloaded` for `takeDownloaded`, which lowers it.
+downloaded_unseen: std.atomic.Value(bool) = .init(false),
 
 // ----------------------------------------------------------------------------
 // Singleton — one in-flight install at a time. Both the About dialog and the
@@ -83,12 +92,51 @@ pub fn startOrGet(allocator: std.mem.Allocator, io: std.Io) !*UpdateJob {
 }
 
 /// Drop the singleton if the worker has published `done`. No-op while the worker
-/// is still running. Safe to call repeatedly.
+/// is still running, and for a downloaded update — that one waits for `applyAtExit`.
+/// Safe to call repeatedly.
 pub fn clearIfFinished() void {
     const j = current orelse return;
     if (!j.done.load(.acquire)) return;
+    if (j.currentPhase() == .downloaded) return;
     current = null;
     j.allocator.destroy(j);
+}
+
+/// True once, on the GUI thread, when an update the user asked for has finished downloading —
+/// the cue to restart into it (`restart.tick`).
+pub fn takeDownloaded() bool {
+    const j = current orelse return false;
+    return j.downloaded_unseen.swap(false, .acq_rel);
+}
+
+/// Whether an update is downloaded and waiting for a restart.
+pub fn downloaded() bool {
+    const j = current orelse return false;
+    return j.done.load(.acquire) and j.currentPhase() == .downloaded;
+}
+
+/// At teardown, on a restart: hand a downloaded update to Velopack, which waits for this process
+/// to exit, swaps the install and starts the new version. False when there is none, or Velopack
+/// would not take it — the app then starts itself again as it is.
+pub fn applyAtExit() bool {
+    if (!auto_update.impl) return false;
+    if (!downloaded()) return false;
+    const j = current.?;
+    const mgr: *Vpk.vpkc_update_manager_t = @ptrCast(@alignCast(j.manager orelse return false));
+    const info: *Vpk.vpkc_update_info_t = @ptrCast(@alignCast(j.update_info orelse return false));
+    defer {
+        Vpk.vpkc_free_update_info(info);
+        auto_update.freeUpdateManager(j.manager);
+        j.manager = null;
+        j.update_info = null;
+    }
+    // silent=false allows the elevation prompt — /Applications is root-owned, so the bundle swap
+    // needs admin rights; restart=true starts the new version once it is in place.
+    if (!Vpk.vpkc_wait_exit_then_apply_updates(mgr, info.TargetFullRelease, false, true, null, 0)) {
+        auto_update.logVpkError("fizzy autoupdate: wait_exit_then_apply_updates failed");
+        return false;
+    }
+    return true;
 }
 
 pub fn currentPhase(job: *const UpdateJob) Phase {
@@ -109,7 +157,7 @@ pub fn phaseLabel(p: Phase) []const u8 {
         // too instead of leaking a "Checking…" / "Preparing…" state that
         // would contradict the prior step.
         .queued, .downloading => "Downloading update…",
-        .applying => "Applying update — relaunching…",
+        .downloaded => "Restarting to update…",
         .failed => "Update failed",
         .no_update => "You're up to date.",
     };
@@ -164,7 +212,9 @@ fn workerMain(job: *UpdateJob) void {
         job.setFailed(error.NoFeed);
         return;
     };
-    defer auto_update.freeUpdateManager(mgr_opaque);
+    // Kept past a successful download, for `applyAtExit`.
+    var keep = false;
+    defer if (!keep) auto_update.freeUpdateManager(mgr_opaque);
 
     const mgr: *Vpk.vpkc_update_manager_t = @ptrCast(@alignCast(mgr_opaque));
 
@@ -188,33 +238,18 @@ fn workerMain(job: *UpdateJob) void {
     }
 
     const u = update_info.?;
-    defer Vpk.vpkc_free_update_info(u);
+    defer if (!keep) Vpk.vpkc_free_update_info(u);
     if (!Vpk.vpkc_download_updates(mgr, u, progressCb, job)) {
         auto_update.logVpkError("fizzy autoupdate: download failed");
         job.setFailed(error.DownloadFailed);
         return;
     }
 
+    // On disk: the app restarts into it (`restart`), Velopack applying it at teardown.
+    keep = true;
+    job.manager = mgr_opaque;
+    job.update_info = u;
     job.progress.store(100, .monotonic);
-    job.phase.store(@intFromEnum(Phase.applying), .release);
-    dvui.refresh(job.window, @src(), null);
-
-    const target_asset = u.TargetFullRelease;
-    // args: manager, asset, silent=false (allow elevation prompt — /Applications
-    // is root-owned so the bundle swap needs admin rights), restart=true,
-    // restartArgs=null, len=0.
-    const applied = Vpk.vpkc_wait_exit_then_apply_updates(mgr, target_asset, false, true, null, 0);
-    if (!applied) {
-        auto_update.logVpkError("fizzy autoupdate: wait_exit_then_apply_updates failed");
-        job.setFailed(error.ApplyFailed);
-        return;
-    }
-    if (builtin.os.tag == .windows) {
-        const win32 = @import("win32");
-        win32.system.threading.Sleep(2000);
-    } else {
-        const ts: std.c.timespec = .{ .sec = 2, .nsec = 0 };
-        _ = std.c.nanosleep(&ts, null);
-    }
-    std.process.exit(0);
+    job.phase.store(@intFromEnum(Phase.downloaded), .release);
+    job.downloaded_unseen.store(true, .release);
 }

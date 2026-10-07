@@ -17,6 +17,7 @@ const fizzy = @import("../../fizzy.zig");
 const icons = @import("icons");
 const dvui = @import("dvui");
 const core = @import("core");
+const restart = @import("app").restart;
 const Editor = fizzy.Editor;
 const KeybindSettings = @import("../KeybindSettings.zig");
 const FileTypeSettings = @import("../FileTypeSettings.zig");
@@ -201,6 +202,52 @@ pub const groups = [_]Group{
                     "The middle is as designed. It never stops motion; Motion at 0 does that.",
                 .keywords = "animation motion speed fast slow duration",
                 .draw = drawMotionSpeed,
+            },
+        },
+    },
+    .{
+        .title = "Windows",
+        .icon = icons.tvg.lucide.@"app-window",
+        .items = &.{
+            .{
+                .label = "Floats in their own windows",
+                .key = "float_windows",
+                .description = "A view floated out of its place can leave the main window into a " ++
+                    "window of its own, and a view carried past the main window opens one there. " ++
+                    "Takes effect after a restart.",
+                .keywords = "float popout pop out window detach tear off native restart",
+                .draw = drawFloatWindows,
+                .inline_control = true,
+            },
+            .{
+                .label = "Native glass",
+                .key = "native_glass",
+                .description = "A dragged view and the drop zones are the system's own glass " ++
+                    "(Liquid Glass on macOS 26) rather than fizzy's, where floats have windows " ++
+                    "of their own.",
+                .keywords = "glass liquid native drag drop zones blur material",
+                .draw = drawNativeGlass,
+                .inline_control = true,
+            },
+            .{
+                .label = "Native menus",
+                .key = "native_menus",
+                .description = "Menus open in windows of their own — the system's material, " ++
+                    "shadow and corners, over every window and past the window's edge — rather " ++
+                    "than drawn inside the window, where floats have windows of their own.",
+                .keywords = "menu context native window popup material",
+                .draw = drawNativeMenus,
+                .inline_control = true,
+            },
+            .{
+                .label = "Native dialogs",
+                .key = "native_dialogs",
+                .description = "Dialogs open in windows of their own — the system's material, " ++
+                    "shadow and corners, moving with the main window — rather than drawn inside " ++
+                    "it, where floats have windows of their own.",
+                .keywords = "dialog modal alert native window material",
+                .draw = drawNativeDialogs,
+                .inline_control = true,
             },
         },
     },
@@ -659,6 +706,46 @@ fn drawPluginUpdateMode() void {
                 dvui.refresh(null, @src(), null);
             }
         }
+    }
+}
+
+// ---- Windows ----------------------------------------------------------------------------
+
+fn drawFloatWindows() void {
+    const editor = fizzy.editor();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
+    defer row.deinit();
+    drawToggle(&editor.app.settings.float_windows);
+    // Taken at launch: changed, it waits for a restart, offered here and in the info bar.
+    if (editor.restartPending()) {
+        if (dvui.button(@src(), "Restart", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 6 }, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } })) {
+            restart.request();
+        }
+    }
+}
+
+fn drawNativeGlass() void {
+    drawToggle(&fizzy.editor().app.settings.native_glass);
+}
+
+fn drawNativeMenus() void {
+    drawToggle(&fizzy.editor().app.settings.native_menus);
+}
+
+fn drawNativeDialogs() void {
+    drawToggle(&fizzy.editor().app.settings.native_dialogs);
+}
+
+/// A setting's checkbox, saved and applied as it changes.
+fn drawToggle(value: *bool) void {
+    if (dvui.checkbox(@src(), value, null, .{
+        .expand = .none,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 4, .w = 4 },
+        .padding = .{ .x = 2, .w = 4, .y = 2, .h = 2 },
+    })) {
+        fizzy.editor().markSettingsDirty();
+        dvui.refresh(null, @src(), null);
     }
 }
 

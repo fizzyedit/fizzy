@@ -162,13 +162,14 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
     }
 
     if (init_opts.from) |fr| {
-        // On the screen it opens from (`core.screens`): a float's own window, when that is out.
-        self.data().rect = .cast(dvui.placeOnScreen(screens.screenFor(fr).insetAll(screen_margin), fr, avoid, .cast(self.data().rect)));
+        // On the screen it opens from (`core.screens`): a float's own window, when that is out — or
+        // the display, where menus are windows of their own, hanging past the window's edge.
+        self.data().rect = .cast(dvui.placeOnScreen(screens.menuScreenFor(fr).insetAll(screen_margin), fr, avoid, .cast(self.data().rect)));
     } else {
         const centering: Rect.Natural = dvui.currentWindow().subwindows.current_rect;
         self.wd.rect.x = centering.x + (centering.w - self.wd.rect.w) / 2;
         self.wd.rect.y = centering.y + (centering.h - self.wd.rect.h) / 2;
-        self.wd.rect = .cast(dvui.placeOnScreen(screens.screenFor(centering).insetAll(screen_margin), .{}, .none, .cast(self.data().rect)));
+        self.wd.rect = .cast(dvui.placeOnScreen(screens.menuScreenFor(centering).insetAll(screen_margin), .{}, .none, .cast(self.data().rect)));
     }
 
     if (dvui.snapToPixels()) {
@@ -188,11 +189,13 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
         self.render_ftb.initReset();
         self.prev_windowInfo = dvui.subwindowCurrentSet(self.data().id, null);
         dvui.subwindowAdd(self.data().id, self.data().rect, rs.r, self.style == .popup, null, true);
+        // A window of its own, where menus are (`core.screens.publishMenus`).
+        screens.markMenu(self.data().id);
         dvui.captureMouseMaintain(.{ .id = self.data().id, .rect = rs.r, .subwindow_id = self.data().id });
         self.prevClip = dvui.clipGet();
         // Break out of whatever clipping we were in — onto its screen (`core.screens`): clipped to
         // the main window, a menu in a float that is out drew nothing.
-        dvui.clipSet(screens.pixelsFor(.cast(self.data().rect)));
+        dvui.clipSet(screens.menuPixelsFor(.cast(self.data().rect)));
         self.prev_scroll = dvui.ScrollContainerWidget.scrollSet(null);
     }
 
@@ -222,7 +225,10 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
     // what is under the panel: a shadow painted after it would lay its black over the glass,
     // where a shadow drawn first survives only outside the panel, which is where it belongs.
     // The fill then goes over the frost as `color_fill`, translucent, so the blur reads through.
-    if (init_opts.frost) |frost| {
+    // In a window of its own (`core.screens.nativeMenus`) the window wears the OS's material and
+    // shadow: none of either here, and no fill.
+    const native = screens.nativeMenus();
+    if (if (native) null else init_opts.frost) |frost| {
         const brs = self.data().borderRectScale();
         // Finalized before scaling: a `CornerRect` carries the theme's corner *kind* at a size,
         // and `WidgetData.init` is what normally resolves it. An unresolved corner draws square
@@ -238,10 +244,11 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
     // we are using scroll to do border/background but floating windows
     // don't have margin, so turn that off
     var scroll_opts = options.override(.{ .margin = .{}, .expand = .both });
-    if (init_opts.frost != null) {
+    if (init_opts.frost != null or native) {
         // The shadow is already down; drawing it again from the scroll area would double it.
         scroll_opts.box_shadow = null;
     }
+    if (native) scroll_opts.background = false;
     // No scrollbar while it slides open: shorter than its rows for those frames, it would show
     // one for a list that fits. A menu too long for the window still gets one once it is open.
     self.scroll.init(@src(), .{ .horizontal = .none, .vertical_bar = if (self.revealing) .hide else .auto }, scroll_opts);
@@ -367,6 +374,13 @@ pub fn deinit(self: *FloatingMenu) void {
 
         // only the last popup can do the check, you can't query the focus
         // status of children, only parents
+        self.menu.close_chain(.unintentional);
+        dvui.refresh(null, @src(), self.data().id);
+    }
+
+    // In a window of its own over every window, a menu closes when the app is left, as an OS
+    // menu does (`core.screens.menusDismissed`): left open, it stood over the other app.
+    if (screens.menusDismissed()) {
         self.menu.close_chain(.unintentional);
         dvui.refresh(null, @src(), self.data().id);
     }

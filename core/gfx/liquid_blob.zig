@@ -179,8 +179,61 @@ pub fn draw(tex: dvui.Texture, tex_bounds: dvui.Rect.Physical, discs: []const Di
 
 const ColorCtx = struct { c: dvui.Color, x: f32 = 0, y: f32 = 1, z: f32 = 0, w: f32 = 0, dark: bool = false };
 
-/// The whole shape, inside and fringe, untextured, each vertex coloured by `color`.
+/// The most discs `fill` takes.
+pub const max_fill_discs = 48;
+
+/// The union of `discs` (bridging over `k`, physical) as a flat `color`, and each disc lit by its
+/// `lit` toward `lit_toward` by `lit_amount`, running across the union as the glass's light does —
+/// no frost, no refraction, no rim: what stands on glass something else draws, in its shape (the
+/// window's base over the OS's Liquid Glass, `core.native_glass`). Each group of discs that run
+/// together is meshed on its own, so discs far apart do not share one coarse grid.
+pub fn fill(discs: []const Disc, k: f32, scale: f32, color: dvui.Color, lit_amount: f32, lit_toward: dvui.Color) void {
+    const n = @min(discs.len, max_fill_discs);
+    if (n == 0) return;
+    const arena = dvui.currentWindow().arena();
+    // Groups: discs whose edges come within `k` of each other, transitively.
+    var group: [max_fill_discs]usize = undefined;
+    for (0..n) |i| group[i] = i;
+    for (0..n) |i| for (i + 1..n) |j| {
+        const dx = discs[i].c.x - discs[j].c.x;
+        const dy = discs[i].c.y - discs[j].c.y;
+        if (@sqrt(dx * dx + dy * dy) - discs[i].r - discs[j].r >= k) continue;
+        const gi = group[i];
+        const gj = group[j];
+        if (gi == gj) continue;
+        for (0..n) |m| if (group[m] == gj) {
+            group[m] = gi;
+        };
+    };
+    var done: [max_fill_discs]bool = @splat(false);
+    var members: [max_fill_discs]Disc = undefined;
+    for (0..n) |i| {
+        if (done[i]) continue;
+        var count: usize = 0;
+        for (i..n) |m| if (group[m] == group[i]) {
+            members[count] = discs[m];
+            count += 1;
+            done[m] = true;
+        };
+        var mesh = build(arena, members[0..count], @max(k, 0.5), scale) orelse continue;
+        defer mesh.deinit(arena);
+        if (color.a > 0) paint(arena, &mesh, struct {
+            fn paintColor(v: Vert, ctx: ColorCtx) dvui.Color {
+                return ctx.c.opacity(@as(f32, @floatFromInt(ctx.c.a)) / 255 * v.a);
+            }
+        }.paintColor, .{ .c = color });
+        if (lit_amount > 0) paint(arena, &mesh, struct {
+            fn paintColor(v: Vert, ctx: ColorCtx) dvui.Color {
+                return ctx.c.opacity(std.math.clamp(ctx.x * v.s.lit * v.a, 0, 1));
+            }
+        }.paintColor, .{ .c = lit_toward, .x = lit_amount });
+    }
+}
+
+/// The whole shape, inside and fringe, untextured, each vertex coloured by `color`. Nothing for a
+/// mesh with no triangle in it — discs shrunk to nothing as they come and go.
 fn paint(arena: std.mem.Allocator, mesh: *const Mesh, comptime color: fn (Vert, ColorCtx) dvui.Color, ctx: ColorCtx) void {
+    if (mesh.verts.items.len < 3 or mesh.inner.items.len + mesh.fringe.items.len == 0) return;
     var b = dvui.Triangles.Builder.init(arena, mesh.verts.items.len, mesh.inner.items.len + mesh.fringe.items.len) catch return;
     defer b.deinit(arena);
     for (mesh.verts.items) |v| b.appendVertex(.{ .pos = v.p, .col = dvui.Color.PMA.fromColor(color(v, ctx)) });

@@ -136,7 +136,8 @@ const edge_gutter: f32 = 10;
 
 fn placeCard(editor: *fizzy.Editor, extra: dvui.Options) dvui.Options {
     var fill = dvui.themeGet().color(.window, .fill);
-    if (editor.app.host.appliesNativeWindowOpacity() and !editor.app.host.isMaximized()) {
+    // Opaque while the window covers the desktop: `contentOpacity` eases there with the window.
+    if (editor.app.host.appliesNativeWindowOpacity()) {
         fill = fill.opacity(editor.app.host.contentOpacity());
     }
     var opts = extra;

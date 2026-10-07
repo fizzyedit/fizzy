@@ -192,10 +192,14 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
 - **Moving and stacking.** A float moves by its header and resizes from its edges, no smaller than
   160×96. A press anywhere in it brings it to the front, as on an OS window.
 - **Back again.** Dragged out by its corner button, a view lands like any other, and a float its
-  last view leaves closes behind it. Closed from its header (or the picker's Remove), a float
-  sends each view home — into the list of the place it floated out of when the user had arranged
-  that place, otherwise let go for its keywords to place, which never freezes a place its keywords
-  fill. Every place a split of it made goes with it.
+  last view leaves closes behind it. Closed from its header, its window's close button (or the
+  picker's Remove), a float moves everything it holds back into the main window and loses
+  nothing (`float_rules.goHome`): each view into the list of the place it floated out of when the
+  user had arranged that place; let go where its keywords show it, which never freezes a place
+  its keywords fill; and a view they would show nowhere — one merged in from elsewhere, a
+  plugin's tools beside Files — into that place's list all the same, as a drop there writes it,
+  or the first place of the main window's that shows several where that place is gone or holds
+  something else. Every place a split of it made goes with it.
 - **Remembered.** `layout.zon` keeps each float's window, its place in the stack and its home. One
   with nothing left to show is not brought back, and one saved on a bigger window comes back onto
   the window it opens in. A float remembers only where the user put it: a window that shrinks shows

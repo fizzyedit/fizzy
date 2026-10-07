@@ -272,9 +272,5 @@ pub const UpdateInstallError = error{
     InstallLayoutUnsupported,
     CheckFailed,
     DownloadFailed,
-    /// `vpkc_wait_exit_then_apply_updates` returned false — the helper rejected
-    /// the asset (commonly: code-signing mismatch, channel mismatch, or the helper
-    /// binary couldn't be spawned). See `vpkc_get_last_error` in the logs.
-    ApplyFailed,
     OutOfMemory,
 };

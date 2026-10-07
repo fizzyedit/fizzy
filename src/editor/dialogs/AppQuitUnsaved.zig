@@ -23,7 +23,9 @@ pub fn request() void {
         .resizeable = false,
         .default = .cancel,
         .hide_footer = true,
-        .max_size = .{ .w = 520, .h = 280 },
+        // Its width only, its height its body's: a capped height cut off the buttons, the last row of
+        // the body, whenever the text above them ran longer (the About dialog did).
+        .max_size = .width(520),
         .header_kind = .err,
     });
     mutex.mutex.unlock(dvui.io);
