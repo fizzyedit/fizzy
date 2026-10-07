@@ -47,9 +47,11 @@ pub const Style = extern struct {
     /// How much a modal window dims what is behind it, 0 (none) to 1. 1 is a little past
     /// dvui's default scrim (60/255 dark, 80/255 light), which sits at about 0.8 here.
     modal_dim: f32 = 0.8,
-    /// How much of a dialog is its own colour rather than the frost behind it, 0…1.
+    /// How much of a dialog is its own colour rather than the glass behind it, 0…1: the window's
+    /// opacity (`glass_look`).
     opacity: f32 = 0.3,
-    /// The frost's blur radius (`FloatingWindowWidget.Frost.radius`); 0 turns the frost off.
+    /// The frost's blur radius (`FloatingWindowWidget.Frost.radius`), the window's roughness
+    /// (`glass_look.frosted`); under `BlurBackdrop.min_blur` the glass is clear.
     blur: f32 = 20,
     /// What a bare stretch of the app's chrome is on screen — the window base (the content
     /// fill at window opacity, over the OS material). A fully opaque dialog is drawn as
@@ -58,12 +60,12 @@ pub const Style = extern struct {
     /// so nothing here names a colour of its own.
     chrome: [4]u8 = .{ 0, 0, 0, 0 },
     has_chrome: bool = false,
-    /// A light lift over the whole pane, 0…1: white added on top of frost and tint, the way a
-    /// glass material is brighter than what is behind it. Dark content blurs dark; this is
-    /// what keeps a dialog over a dark pane from reading as a black slab. 1 adds ~15% white.
+    /// A light lift over the whole pane, 0…1: white added on top of frost and tint. 1 adds ~15%
+    /// white. The host writes 0 — the window's two sliders are the glass now — and keeps the field
+    /// for the layout plugins were built against.
     lift: f32 = 0.3,
-    /// How much of what is behind the frost stays readable, 0…1 (`BlurBackdrop.detail`).
-    /// Last, so a plugin built against the layout before it still reads every field it knows.
+    /// Unused: once how much of what is behind the frost stayed readable. The host writes 0; the
+    /// field stays for the layout plugins were built against.
     detail: f32 = 0.3,
 
     pub fn chromeColor(self: Style) dvui.Color {
@@ -87,11 +89,16 @@ pub fn publishStyle(s: Style) void {
 }
 
 /// The frost a dialog asks its floating window for: the style's blur, tinted with the chrome
-/// colour, mixed by its opacity. Null when the blur is off — the caller then paints
+/// colour, mixed by its opacity. Under the least blur a pane draws, clear glass (`clearFrost`)
+/// where the glass program is there to draw it; null where it is not — the caller then paints
 /// `dialogFill()` as an ordinary background.
 pub fn dialogFrost() ?widgets.FloatingWindowWidget.Frost {
     const s = style();
-    if (s.blur < 1) return null;
+    if (s.blur < widgets.BlurBackdrop.min_blur) {
+        if (!widgets.LiquidField.ready()) return null;
+        const c = clearFrost();
+        return .{ .radius = c.radius, .refresh_ms = c.refresh_ms, .tint = c.tint, .mix = c.mix, .lift = c.lift, .refraction = c.refraction, .clear = true };
+    }
     return .{
         .radius = s.blur,
         // Every frame, so what moves behind the glass moves in it — the welcome logo following
@@ -102,7 +109,6 @@ pub fn dialogFrost() ?widgets.FloatingWindowWidget.Frost {
         .tint = s.chromeColor(),
         .mix = std.math.clamp(s.opacity, 0, 1),
         .lift = std.math.clamp(s.lift, 0, 1) * lift_max,
-        .detail = std.math.clamp(s.detail, 0, 1),
         .refraction = refraction(),
     };
 }
@@ -111,7 +117,8 @@ pub fn dialogFrost() ?widgets.FloatingWindowWidget.Frost {
 /// plugin built before it existed reads the style it knows and simply never asks for this.
 const refraction_key = "fizzy_dialog_refraction";
 
-/// Host only, each frame: the dialog refraction setting, 0 to 1 (0.5 as designed).
+/// Host only, each frame: how far the glass's edge refracts, 0 to 1 (0.5 as designed) — the
+/// window's roughness (`glass_look.frosted`).
 pub fn publishRefraction(setting: f32) void {
     const cw = dvui.currentWindow();
     dvui.dataSet(null, cw.data().id, refraction_key, std.math.clamp(setting, 0, 1));
@@ -141,8 +148,8 @@ pub fn frostPane(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect
         .tint = f.tint,
         .mix = f.mix,
         .lift = f.lift,
-        .detail = f.detail,
         .refraction = f.refraction,
+        .clear = f.clear,
     });
     return true;
 }
@@ -158,8 +165,8 @@ pub fn frostPaneKept(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.Corner
         .tint = f.tint,
         .mix = f.mix,
         .lift = f.lift,
-        .detail = f.detail,
         .refraction = f.refraction,
+        .clear = f.clear,
         .witness = witness,
     });
     return true;
@@ -379,8 +386,8 @@ fn tooltipGlass(wd: *dvui.WidgetData, r: dvui.Rect.Physical, scale: f32, t: f32,
         .tint = f.tint,
         .mix = f.mix,
         .lift = f.lift,
-        .detail = f.detail,
         .refraction = f.refraction,
+        .clear = f.clear,
         .form = t,
     });
 }

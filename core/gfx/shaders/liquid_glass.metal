@@ -155,7 +155,7 @@ fragment main0_out main0(
     frost = float4(frost.rgb / max(frost.a, 1e-4), 1.0);
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
-    float mixv = g4.z > 0.5 ? g4.x * (inward ? 1.0 : b) : 0.0;
+    float mixv = g4.z > 0.5 ? g4.x : 0.0;
     float4 c = mix(sharp, frost, b) * (1.0 - mixv);
     float a = clamp(g2.y * lens * (inward ? t : steepR * steepR) * (1.0 - mixv), 0.0, 1.0);
     c = sharp * a + c * (1.0 - sharp.a * a);
@@ -170,7 +170,7 @@ fragment main0_out main0(
     float spec = 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + (inward ? 0.15 : 0.06);
     float line = exp(-max(0.0, -D) / g2.z);
     float lit = line * spec + (inward ? 0.0 : 0.04 * steepL * toward);
-    float lift = (g4.z > 0.5 ? g4.y * (inward ? 1.0 : b) : 0.0) + mat.z;
+    float lift = (g4.z > 0.5 ? g4.y : 0.0) + mat.z;
     c += float4(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
     if (inward) c.rgb += g6.z * lens * t * facing;
     c = clamp(c, 0.0, 1.0);

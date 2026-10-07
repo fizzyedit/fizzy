@@ -104,14 +104,6 @@ pub const Light = struct {
     }
 };
 
-/// How much of the glass's edge a frost of blur `radius` has: none on an unblurred pane, all of
-/// it by `full_at_blur`. A drop is thick glass; a barely-frosted pane is a thin sheet, and
-/// switching the whole rim on at the first step of blur made it pop.
-pub fn blurRamp(radius: f32) f32 {
-    return std.math.clamp(radius / full_at_blur, 0, 1);
-}
-pub const full_at_blur: f32 = 20;
-
 /// How much of the rim's geometry a pane `r` has room for, its curve `depth_px` deep (`depthPx`):
 /// all of it once its shorter half is `room` depths across — the curve has flattened into the
 /// face by then — and on anything smaller that fraction, by which the curve, its reach and its

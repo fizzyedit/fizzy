@@ -1075,12 +1075,13 @@ int fizzy_macos_window_has_liquid_glass(void *nswindow) {
 /*
  * One of fizzy's titled windows — the main window, a float's — as a window of Liquid Glass (macOS
  * 26): beside SDL's view in the window's frame view, under it, the window's colour all over, which
- * comes in only at the top of the slider; the clear lens over it; and over the lens the body —
+ * comes in only near full opacity; the clear lens over it; and over the lens the body —
  * frost, the plain blur behind the window, the colour again — fading out across the window's
  * clearing bevel, so its edge stays the lens bending the desktop.
- * `fizzy_macos_window_liquid_glass_look` sets them each frame from the one slider. The window clear but
- * for them, and a compact toolbar's corners — what macOS 26 rounds a window by is whether it has a
- * toolbar: none, 16 points; compact, 20 (and a 40-point title bar for 32); unified, 27 (and 66).
+ * `fizzy_macos_window_liquid_glass_look` sets them each frame from the window's two sliders. The
+ * window clear but for them, and a compact toolbar's corners — what macOS 26 rounds a window by is
+ * whether it has a toolbar: none, 16 points; compact, 20 (and a 40-point title bar for 32);
+ * unified, 27 (and 66).
  * Any vibrancy beside SDL's view (a float's) goes. Once per window; 1 where it is (or was already)
  * Liquid Glass, 0 where the OS has none.
  */

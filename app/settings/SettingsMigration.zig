@@ -4,6 +4,9 @@
 //!    into the merged `.plugins.<id>` field (R10).
 //! 2. `migrateToPerPluginEnabled` — pre-R12 flat `.plugins.<id> = .{ <author fields> }` + top-level
 //!    `disabled_plugins` into nested `.{ .enabled = …, .settings = .{ … } }` (R12).
+//! 3. `windowGlass` — the dialogs' own glass settings (`dialog_opacity`, `dialog_blur`, …) into the
+//!    window's two sliders, opacity and roughness, which every glass now reads.
+const builtin = @import("builtin");
 const std = @import("std");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
@@ -232,4 +235,46 @@ fn overlayHas(overlay: []const SettingsPluginsZon.Entry, id: []const u8) bool {
         if (std.mem.eql(u8, e.id, id)) return true;
     }
     return false;
+}
+
+/// The dialogs' glass settings from before the window's two sliders took them over, and those
+/// sliders' roughness — present, the file is already the new layout.
+const LegacyGlass = struct {
+    dialog_opacity: ?f32 = null,
+    dialog_blur: ?f32 = null,
+    dialog_lift: ?f32 = null,
+    dialog_detail: ?f32 = null,
+    dialog_refraction: ?f32 = null,
+    window_roughness_dark: ?f32 = null,
+    window_roughness_light: ?f32 = null,
+};
+
+/// Called from `Settings.parseOnly`, on every platform the web included: the window's glass read
+/// from settings written before it had a roughness — those with any of the dialogs' own glass
+/// settings in them, which the next write drops (unknown to `Settings`), so this runs until then
+/// and never after. Where the window is the glass on macOS, the roughness is what the one slider
+/// made of the window (`glass_look.roughnessFromOneSlider`); on Windows, where the window's material
+/// is the OS's own, and where the window is opaque, it is the dialogs' blur
+/// (`glass_look.roughnessFromBlur`) — and where the window is opaque the opacity is the dialogs'
+/// too, the window's own having been only the window's.
+pub fn windowGlass(allocator: std.mem.Allocator, data: [:0]const u8, settings: *Settings) void {
+    @setEvalBranchQuota(10_000);
+    const legacy = std.zon.parse.fromSliceAlloc(LegacyGlass, allocator, data, null, .{ .ignore_unknown_fields = true }) catch return;
+    defer std.zon.parse.free(allocator, legacy);
+    if (legacy.window_roughness_dark != null or legacy.window_roughness_light != null) return;
+    if (legacy.dialog_opacity == null and legacy.dialog_blur == null and legacy.dialog_lift == null and
+        legacy.dialog_detail == null and legacy.dialog_refraction == null) return;
+    const glass_look = core.glass_look;
+    const opaque_window = comptime builtin.target.cpu.arch == .wasm32 or (builtin.os.tag != .macos and builtin.os.tag != .windows);
+    if (comptime builtin.os.tag == .macos and builtin.target.cpu.arch != .wasm32) {
+        settings.window_roughness_dark = glass_look.roughnessFromOneSlider(settings.window_opacity_dark);
+        settings.window_roughness_light = glass_look.roughnessFromOneSlider(settings.window_opacity_light);
+    } else if (legacy.dialog_blur) |blur| {
+        settings.window_roughness_dark = glass_look.roughnessFromBlur(blur);
+        settings.window_roughness_light = glass_look.roughnessFromBlur(blur);
+    }
+    if (opaque_window) if (legacy.dialog_opacity) |o| {
+        settings.window_opacity_dark = std.math.clamp(o, 0, 1);
+        settings.window_opacity_light = std.math.clamp(o, 0, 1);
+    };
 }

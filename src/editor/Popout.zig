@@ -514,7 +514,7 @@ fn overlayFrame(state: *State) void {
         };
         n += 1;
     }
-    const look = glassLook(std.math.clamp(fizzy.editor().window_opacity, 0, 1));
+    const look = glassLook(std.math.clamp(fizzy.editor().window_opacity, 0, 1), fizzy.editor().window_roughness);
     const window_colour = base(false);
     const lit_toward = if (dvui.themeGet().dark) dvui.Color.white else dvui.Color.black;
     const spacing = overlaySpacing(s);
@@ -615,8 +615,8 @@ fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Phys
     fizzy.core.liquid_blob.fill(discs[0..nd], spacing * s, s, color, 0, .white);
 }
 
-/// What the OS's glass is at the window's opacity (`Editor.window_opacity`): the one mapping every
-/// glass reads (`core.glass_look`), the app's own glass on the same breakpoints.
+/// What the OS's glass is at the window's opacity and roughness (`Editor.window_opacity`): the one
+/// mapping every glass reads (`core.glass_look`), the app's own glass on the same curves.
 const glassLook = fizzy.core.glass_look.native;
 
 /// Points in from the OS's glass's edge the window's base stops (`glassBase`): its bent, lit rim.
@@ -803,7 +803,7 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
                 // Frosted over as the glass grows round it, and clear again as the window comes in —
                 // the view itself, there (the user: it then unblurs).
                 const frosted = smoothstep(std.math.clamp(Floats.landingFraction(land) / frost_share, 0, 1));
-                const look = glassLook(std.math.clamp(fizzy.editor().window_opacity, 0, 1));
+                const look = glassLook(std.math.clamp(fizzy.editor().window_opacity, 0, 1), fizzy.editor().window_roughness);
                 grow_photo = .{
                     .rect = rect,
                     .radius = radius,
@@ -958,7 +958,7 @@ fn easeOutBack(u: f32) f32 {
 fn windowShade() f32 {
     const op = std.math.clamp(fizzy.editor().window_opacity, 0, 1);
     if (!viewports.liquidGlass()) return op;
-    const w = fizzy.core.glass_look.window(op);
+    const w = fizzy.core.glass_look.window(op, fizzy.editor().window_roughness);
     return 1 - (1 - w.fill) * (1 - w.top_fill);
 }
 
@@ -1115,7 +1115,7 @@ fn windowFrame(state: *State, o: *Out) void {
     Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), viewports.enteringSpace(o.viewport), viewports.spaceFullness(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
     // A window of Liquid Glass (macOS 26) stands on its glass, its colour under it on the one
     // slider, as the main window does (`Editor.windowGlassLook`): no base of its own in the frame.
-    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value, .{ .w = shown.w / s, .h = shown.h / s })))
+    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value, fizzy.editor().window_roughness, .{ .w = shown.w / s, .h = shown.h / s })))
         backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity.value);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
@@ -1269,10 +1269,10 @@ fn menuFrame() void {
         viewports.mainOffset(m.viewport, .{ .x = frame.x - place.x, .y = frame.y - place.y });
         const placed = viewports.placeRiding(m.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, .{ .x = key.x, .y = key.y, .w = key.w, .h = key.h });
         const shown: dvui.Rect.Physical = .{ .x = frame.x + (placed.x - place.x), .y = frame.y + (placed.y - place.y), .w = placed.w, .h = placed.h };
-        // Its material: Liquid Glass on the slider, no lighter than a menu's text needs; vibrancy
+        // Its material: Liquid Glass on the sliders, no lighter than a menu's text needs; vibrancy
         // before macOS 26, or Acrylic on Windows, with the window's colour drawn under the menu.
         const op = @max(std.math.clamp(fizzy.editor().window_opacity, 0, 1), menu_opacity_floor);
-        var look = Editor.windowGlassLook(op, .{ .w = shown.w / s, .h = shown.h / s });
+        var look = Editor.windowGlassLook(op, fizzy.editor().window_roughness, .{ .w = shown.w / s, .h = shown.h / s });
         look.radius = corner;
         m.glass = viewports.windowGlass(m.viewport, look);
         const w: u32 = @intFromFloat(@max(1, @round(shown.w)));

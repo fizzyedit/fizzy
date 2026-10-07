@@ -83,12 +83,6 @@ mode: Mode = .replay,
 /// under it. Off, the pyramid serves every radius (the cheap default — dialogs, menus, the
 /// palette).
 stable: bool = false,
-/// Fizzy addition: how much definition the frost keeps, 0…1. On the way back up the pyramid,
-/// each doubling mixes in the downsample level of its size by this much — a blur with a
-/// sharper core and the same soft reach, so shapes behind read through the frost instead of
-/// washing out. 0 is the plain dual-Kawase blur. Never the unblurred source: at most it
-/// softens toward the first halving, so there is no sharp double image.
-detail: f32 = 0,
 /// Fizzy addition: how formed the frost is, 0 (the scene, sharp) to 1 (the full blur). The
 /// pyramid is always built for `radius_px`, so its levels keep their sizes and are reused; on the
 /// way back up, the doubling at the blur forming has reached takes that downsample level in place
@@ -512,7 +506,7 @@ pub fn blurred(tex: Texture, radius_px: f32) ?Texture {
 fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: usize, source_coarse: u32) ?usize {
     if (self.stable) return self.runFine(source, restore_target, first, source_coarse);
     var cur = source;
-    // The downsample levels as they are made, for `detail` to mix back in on the way up.
+    // The downsample levels as they are made, for a forming blur to take on the way up (`form`).
     var downs: [max_levels]Texture = undefined;
     var n_downs: usize = 0;
     var slot = first;
@@ -604,8 +598,6 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
         }
     }
 
-    const detail = std.math.clamp(self.detail, 0, 0.9);
-
     // Forming (`form`): octaves are counted down from the source. The blur has reached `reach`
     // of the pyramid's `full`; a doubling that ends at or above it is the downsample level of its
     // size outright, and the one that crosses it mixes that level in by how far past it the
@@ -674,45 +666,9 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
                 .{ .x = -2 * ou_x, .y = 0, .w = 1 },
                 .{ .x = -ou_x, .y = ou_y, .w = 2 },
             };
-            // `detail`: the two downsample levels either side of this doubling in scale — the
-            // finer (wider) one and the coarser — blended by where the doubling falls between
-            // them (in octaves), stretched to fit, and mixed in as extra taps weighted so they are
-            // `detail` of the result (against the kernel's 12). The way down halves from the
-            // source and the way up doubles from `size / radius`, so the doublings drift between
-            // the down levels as the radius moves; a single nearest level drifted up to half an
-            // octave finer then snapped coarser (38 blurrier than 42). Weighted by position, the
-            // mixed-in scale tracks the doubling's own and the blur changes smoothly with radius.
-            // The unblurred source is never a candidate, so near the top its share is dropped
-            // and detail fades out rather than sharpening into a double image.
-            var finer: ?Texture = null;
-            var coarser: ?Texture = null;
-            if (detail > 0.001) {
-                for (downs[0..n_downs]) |d| {
-                    if (d.width >= next_w) {
-                        if (finer == null or d.width < finer.?.width) finer = d;
-                    } else {
-                        if (coarser == null or d.width > coarser.?.width) coarser = d;
-                    }
-                }
-            }
-            const nw: f32 = @floatFromInt(next_w);
-            // Octaves from the finer level (or, with none, from the source a level above) down
-            // to this doubling, over the octaves to the coarser level.
-            const frac: f32 = blk: {
-                const hi_w: f32 = if (finer) |f| @floatFromInt(f.width) else @floatFromInt(source.width);
-                const lo_w: f32 = if (coarser) |c| @floatFromInt(c.width) else nw;
-                const span = @log2(hi_w / lo_w);
-                break :blk if (span > 0.001) std.math.clamp(@log2(hi_w / nw) / span, 0, 1) else 0;
-            };
-            const d_fine: f32 = if (finer != null) detail * (1 - frac) else 0;
-            const d_coarse: f32 = if (coarser != null) detail * frac else 0;
-            const d_tot = d_fine + d_coarse;
-            const skip_tot: f32 = if (d_tot > 0.001) 12 * d_tot / (1 - d_tot) else 0;
-            const w_fine: f32 = if (d_tot > 0.001) skip_tot * d_fine / d_tot else 0;
-            const w_coarse: f32 = if (d_tot > 0.001) skip_tot * d_coarse / d_tot else 0;
             // Forming: the level of this size, as `take` of the result.
-            const w_level: f32 = if (level_tex != null) (12 + skip_tot) * take / (1 - take) else 0;
-            const total: f32 = 12 + skip_tot + w_level;
+            const w_level: f32 = if (level_tex != null) 12 * take / (1 - take) else 0;
+            const total: f32 = 12 + w_level;
 
             const add = tapsBegin(cur, step_target);
             defer tapsEnd(cur, add);
@@ -729,23 +685,16 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
                 }) catch {};
                 if (add and i == 0) _ = tapsBlend(cur, .add);
             }
-            const extras = [3]struct { tex: ?Texture, w: f32 }{
-                .{ .tex = finer, .w = w_fine },
-                .{ .tex = coarser, .w = w_coarse },
-                .{ .tex = level_tex, .w = w_level },
-            };
-            for (extras) |e| {
-                const d = e.tex orelse continue;
-                if (e.w <= 0.001) continue;
+            if (level_tex) |d| if (w_level > 0.001) {
                 const mod = if (add)
-                    tapWeight(cum_w, e.w, total)
+                    tapWeight(cum_w, w_level, total)
                 else
-                    dvui.Color.white.opacity(e.w / (cum_w + e.w));
-                cum_w += e.w;
+                    dvui.Color.white.opacity(w_level / (cum_w + w_level));
+                cum_w += w_level;
                 const d_add = add and tapsBlend(d, .add);
                 defer tapsEnd(d, d_add);
                 dvui.renderTexture(d, .{ .r = dest_r }, .{ .colormod = mod }) catch {};
-            }
+            };
         }
 
         cur = dvui.Texture.fromTargetTemp(step_target) catch break;
@@ -984,8 +933,6 @@ pub const Pane = struct {
     mix: f32 = 0.5,
     /// White added over the whole pane after the mix, 0…1 — a glass material's lift.
     lift: f32 = 0,
-    /// How much definition the frost keeps, 0…1 (`BlurBackdrop.detail`).
-    detail: f32 = 0,
     /// How far the pane's bevelled edge refracts what it shows, 0 (none) to 2
     /// (`liquid_glass.Look.refraction`).
     refraction: f32 = 1,
@@ -1067,16 +1014,15 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     const edge = @max(0, motion.swell(form));
     backdrop.mode = .readback;
     backdrop.radius_px = radius;
-    backdrop.detail = pane.detail;
     backdrop.form = 1;
 
     // The glass's edge shows what lies just beyond it (`liquid_glass`), so the capture reaches
     // that far past the pane; flat glass needs none. As far as the whole edge reaches, however
     // much of it has formed: a capture growing with it was a new size, and new targets, a frame.
-    // Clear glass has the whole edge: it is thick glass that happens not to be frosted.
-    const ramp = if (pane.clear) 1 else liquid_glass.blurRamp(pane.radius);
-    // The whole edge on every pane, whatever its size: the rim fits the pane (`liquid_glass.fit`).
-    const lens_full = motion.liquid() * ramp;
+    // The whole edge on every pane, whatever its blur — clear glass is thick glass that happens
+    // not to be frosted, and how far the edge bends is the roughness's (`Pane.refraction`) — and
+    // whatever its size: the rim fits the pane (`liquid_glass.fit`).
+    const lens_full = motion.liquid();
     const lens = lens_full * edge;
     const margin = liquid_glass.margin(.{ .lens = lens_full * (1 + motion.overshoot_max * motion.swell_gain), .refraction = pane.refraction }, scale);
     // A size it keeps while it can (`captureSize`): a pane that changes size — a menu sliding
@@ -1234,8 +1180,8 @@ const FrostJob = struct {
             .mix = self.mix,
             .lift = self.lift,
             .refraction = self.refraction,
-            // A pane is a dialog's, a menu's, a popover's: it carries text, and keeps some frost
-            // over a clear lens to read (`glass_look.forText`).
+            // A pane is a dialog's, a menu's, a popover's: it carries text, and takes the window's
+            // colour as the opacity has it (`glass_look.forText`).
             .text = true,
         };
         field.add(.{

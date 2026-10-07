@@ -173,7 +173,10 @@ loading_jobs: std.StringHashMapUnmanaged(*FileLoadJob) = .empty,
 /// loads only auto-focus the most recently requested one.
 last_load_request_path: ?[]const u8 = null,
 
+/// The window's glass as the user set it for this theme (`Settings.window_opacity_dark`, …): its
+/// opacity, and its roughness (`core.glass_look`).
 window_opacity: f32 = 1.0,
+window_roughness: f32 = 1.0,
 
 /// The window's opacity as drawn (`easeWindowOpacity`): toward the windowed target (translucent,
 /// the glass or vibrancy showing through) or opaque while it covers the desktop, fading with the
@@ -3191,13 +3194,10 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.font_mono_size = parsed.font_mono_size;
     editor.app.settings.window_opacity_dark = parsed.window_opacity_dark;
     editor.app.settings.window_opacity_light = parsed.window_opacity_light;
+    editor.app.settings.window_roughness_dark = parsed.window_roughness_dark;
+    editor.app.settings.window_roughness_light = parsed.window_roughness_light;
     editor.app.settings.content_opacity = parsed.content_opacity;
     editor.app.settings.modal_dim = parsed.modal_dim;
-    editor.app.settings.dialog_opacity = parsed.dialog_opacity;
-    editor.app.settings.dialog_blur = parsed.dialog_blur;
-    editor.app.settings.dialog_lift = parsed.dialog_lift;
-    editor.app.settings.dialog_detail = parsed.dialog_detail;
-    editor.app.settings.dialog_refraction = parsed.dialog_refraction;
     editor.app.settings.corner_roundness = parsed.corner_roundness;
     editor.app.settings.motion = parsed.motion;
     editor.app.settings.motion_speed = parsed.motion_speed;
@@ -3578,13 +3578,13 @@ pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, fullness: 
     }
 }
 
-/// A window of Liquid Glass at `opacity` (`backend.windowGlass`), `size` points: the glass
-/// `core.glass_look.window` makes of it, in the content fill as the window's colour, its clearing
-/// bevel the one every glass has for its size (`core.glass_look.band`). The main window's and
-/// every float's own window's alike.
-pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.WindowGlassLook {
+/// A window of Liquid Glass at `opacity` and `roughness` (`backend.windowGlass`), `size` points:
+/// the glass `core.glass_look.window` makes of them, in the content fill as the window's colour, its
+/// clearing bevel the one every glass has for its size (`core.glass_look.band`). The main window's
+/// and every float's own window's alike.
+pub fn windowGlassLook(opacity: f32, roughness: f32, size: dvui.Size.Natural) fizzy.backend.WindowGlassLook {
     const glass_look = fizzy.core.glass_look;
-    const look = glass_look.window(opacity);
+    const look = glass_look.window(opacity, roughness);
     const band = glass_look.band(@min(size.w, size.h) / 2);
     return .{
         .under_variant = look.under.variant,
@@ -3635,24 +3635,30 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
         const fill: dvui.Color = dvui.themeGet().color(.content, .fill);
         const chrome = fill;
+        const dark = dvui.themeGet().dark;
+        const opacity = if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
+        const roughness = if (dark) editor.app.settings.window_roughness_dark else editor.app.settings.window_roughness_light;
+        const glass_look = fizzy.core.glass_look;
+        // Every glass the app draws is the window's, on its two sliders as the user set them — not
+        // as the window eases to opaque when maximized (`core.glass_look`). On macOS, with the
+        // glass program, Apple's lens (`inApp`), as the OS's Liquid Glass beside it is: its frost
+        // over a blur at the full roughness, and its own colour and bend. Elsewhere — the web,
+        // Linux, Windows, where there is no OS glass to match — the app's frosted pane
+        // (`frosted`): the clear liquid glass the web has always had, the roughness its blur.
+        const lens = builtin.os.tag == .macos and editor.app.settings.glass_shader;
+        const pane = glass_look.frosted(opacity, roughness);
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
-            .opacity = editor.app.settings.dialog_opacity,
-            .blur = editor.app.settings.dialog_blur,
-            .lift = editor.app.settings.dialog_lift,
-            .detail = editor.app.settings.dialog_detail,
+            .opacity = pane.mix,
+            .blur = if (lens) glass_look.max_blur else pane.blur,
+            .lift = 0,
+            .detail = 0,
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
             .has_chrome = true,
         });
-        fizzy.core.dialogs.publishRefraction(editor.app.settings.dialog_refraction);
-        // Every glass the app draws, on the one slider — the window opacity as the user set it,
-        // not as it eases to opaque when maximized (`core.glass_look`): Apple's lens, frosting
-        // and taking the window's colour up the slider, as the OS's Liquid Glass beside it does.
-        // Not on the web, where there is no OS glass to match: there the glass stays the clear
-        // liquid glass it was, each field's own tint, lift and blur (the user: it lost its glassy
-        // look, and the lens's bright rim read as a border).
-        const slider = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
-        fizzy.core.LiquidField.publishLook(if (comptime builtin.target.cpu.arch == .wasm32) null else fizzy.core.glass_look.inApp(slider));
+        // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
+        fizzy.core.dialogs.publishRefraction(if (lens) 1 else pane.refraction);
+        fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity, roughness) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
@@ -3676,6 +3682,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.promoteEditedPreviews();
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
+    editor.window_roughness = if (dvui.themeGet().dark) editor.app.settings.window_roughness_dark else editor.app.settings.window_roughness_light;
 
     // The draw uses `window_opacity_anim`.
     const covers = fizzy.backend.coversDesktop(dvui.currentWindow());
@@ -3876,9 +3883,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
         // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
-        // (macOS 26, `backend.windowGlass`) the base is the glass's, on the one slider
+        // (macOS 26, `backend.windowGlass`) the base is the glass's, on the two sliders
         // (`core.glass_look.window`), and the frame draws none of its own.
-        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size()));
+        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, editor.window_roughness, dvui.windowRect().size()));
         const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is

@@ -175,12 +175,12 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
             // what the query is really matching against (`settings.Search`).
             const s = if (item.search) |sr| sr.score(query) orelse continue else blk: {
                 const path = std.fmt.allocPrint(arena, "{s}/{s}/{s}", .{ fizzy_branch_title, group.title, item.label }) catch item.label;
-                break :blk scoreLeaf(query, path, item.label, item.key, item.keywords) orelse continue;
+                break :blk scoreLeaf(query, path, item.label, item.keyNow(), item.keywords) orelse continue;
             };
             child.leaves.append(arena, .{
                 .index = ii,
                 .label = item.label,
-                .key = item.key,
+                .key = item.keyNow(),
                 .description = item.description,
                 .score = s,
                 .tie = ii,

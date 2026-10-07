@@ -964,8 +964,8 @@ pub fn deinit(self: *Dockspace) void {
                 .radius = frost.radius,
                 .tint = highlight.opacity(0.6),
                 .mix = 0.35,
-                .detail = frost.detail,
                 .refraction = frost.refraction,
+                .clear = frost.clear,
             });
         } else {
             self.hover_rect.fill(.all(8 * s), .{ .color = .{ .color = highlight.opacity(0.5) } });

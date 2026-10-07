@@ -91,8 +91,8 @@ pub const Frost = struct {
     /// White added over the whole pane after the mix, 0…1 — a glass material's lift above
     /// whatever is behind it. Only with `tint`.
     lift: f32 = 0,
-    /// How much of what is behind stays readable through the blur, 0…1 (`BlurBackdrop.detail`).
-    detail: f32 = 0,
+    /// Clear glass, unblurred (`BlurBackdrop.Pane.clear`): the glass at no roughness.
+    clear: bool = false,
     /// How far the glass's bevelled edge refracts, 0 (none) to 2 (`BlurBackdrop.Pane.refraction`).
     refraction: f32 = 1,
     /// How formed the glass is while the window is not closing, 0…1. Null lets it form by itself
@@ -664,8 +664,8 @@ fn drawFrost(self: *FloatingWindowWidget, frost: Frost) void {
         .tint = frost.tint,
         .mix = frost.mix,
         .lift = frost.lift,
-        .detail = frost.detail,
         .refraction = frost.refraction,
+        .clear = frost.clear,
         .form = self.closingForm() orelse frost.form,
         .reach = frost.reach,
     });

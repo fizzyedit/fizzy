@@ -71,9 +71,10 @@ tint: ?dvui.Color = null,
 mix: f32 = 0,
 /// White over the whole of it after the mix, where it has a tint.
 lift: f32 = 0,
-/// The user's dialog refraction, 0 (none) to 2 (`liquid_glass.Look.refraction`).
+/// How far the edge refracts, 0 (none) to 2 (`liquid_glass.Look.refraction`): the window's
+/// roughness (`core.dialogs.refraction`).
 refraction: f32 = 1,
-/// It carries text — a dialog, a menu — and keeps some frost over a clear lens to read
+/// It carries text — a dialog, a menu — and takes the window's colour as the opacity has it
 /// (`glass_look.forText`).
 text: bool = false,
 /// It is a lens over a picture of the caller's own (`drawPicture`): its middle the picture as it
@@ -273,12 +274,13 @@ fn opaqueWindow() bool {
     return dvui.dataGet(null, enabled_id, "_liquid_opaque_window", bool) orelse false;
 }
 
-/// The app's glass at the window opacity this frame (`glass_look.inApp`), published by the app
-/// before anything draws: every field — dialogs, menus, drops — is drawn as it says, Apple's lens
-/// on the one slider. Null (nothing published: the web, a plugin's own window): the earlier glass,
-/// as each field's own tint, lift and blur say. Every form of the program draws the lens — the
-/// GLSL, the Metal, and the SPIR-V and DXIL compiled from the HLSL — as long as the last two are
-/// compiled again whenever the HLSL changes (the commands are at its top).
+/// The app's glass at the window's opacity and roughness this frame (`glass_look.inApp`), published
+/// by the app before anything draws where there is OS glass beside it to match (macOS): every
+/// field — dialogs, menus, drops — is drawn as it says, Apple's lens on the two sliders. Null
+/// (nothing published: the web, a plugin's own window): the earlier glass, as each field's own
+/// tint, lift and blur say. Every form of the program draws the lens — the GLSL, the Metal, and the
+/// SPIR-V and DXIL compiled from the HLSL — as long as the last two are compiled again whenever the
+/// HLSL changes (the commands are at its top).
 pub fn publishLook(slider_look: ?glass_look.InApp) void {
     if (dvui.current_window == null) return;
     if (slider_look) |l| dvui.dataSet(null, enabled_id, "_liquid_look", l) else dvui.dataRemove(null, enabled_id, "_liquid_look");
@@ -289,8 +291,8 @@ fn publishedLook() ?glass_look.InApp {
 }
 
 /// `look` into what the program reads: the lens's own uniforms, and the tint, lift, clarity, rim
-/// light and frost the slider sets in place of the field's own. The bend follows the user's
-/// refraction setting (`refraction`, 2 the default).
+/// light and frost the sliders set in place of the field's own. The bend follows the field's
+/// `refraction` (2, the whole of it, where the look is published).
 fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
     const bend_scale = std.math.clamp(self.refraction / 2, 0, 1);
     u.dither[1] = @max(l.bevel, 0.0001);
@@ -328,7 +330,7 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
     // The window behind the glass, published for this frame.
     u.backdrop[0] = if (opaqueWindow()) 1 else 0;
-    // And the glass the slider makes of it this frame (`publishLook`).
+    // And the glass the sliders make of it this frame (`publishLook`).
     if (publishedLook()) |l| self.applyLook(&u, if (self.lens) glass_look.forLens(l) else if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;

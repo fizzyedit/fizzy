@@ -851,7 +851,8 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
         return false;
     };
     const job = dvui.dataGetPtrDefault(null, id, "_drop_zones_job", LayerJob, .{});
-    const lens_full = motion.liquid() * (if (base.clear) 1 else liquid_glass.blurRamp(base.radius));
+    // The whole edge whatever the blur, as every pane has (`BlurBackdrop.queuePane`).
+    const lens_full = motion.liquid();
     job.* = .{
         .backdrop = job.backdrop,
         .scale = scale,
@@ -890,7 +891,6 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
     dvui.dataSetDeinitFunction(null, id, "_drop_zones_frost", &BlurBackdrop.releaseTexture);
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
-    backdrop.detail = job.pane.detail;
     backdrop.form = 1;
     // Read every frame, as the dialogs' glass is: what moves under the drop — a logo following the
     // pointer — moves in it at the frame rate.

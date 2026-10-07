@@ -624,8 +624,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
         .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
-        // One material on one slider: what every glass is at the window opacity, the OS's form
-        // and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout` apply it.
+        // One material on two sliders: what every glass is at the window's opacity and roughness,
+        // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
+        // apply it.
         .{ "fizzy-glass-look-tests", "core/gfx/glass_look.zig" },
         // Demo automation's std-only core (`sdk/tape/`): the tape format and its codecs, the
         // sequencer that replays it deterministically, and the script builder. The dvui half

@@ -6,7 +6,7 @@
 //! so a seek shows exactly what live play showed at that moment, and there is nothing to rewind.
 //!
 //! The cards are the app's floating surface — a menu's, a tooltip's: frosted at the dialog style
-//! (blur, opacity, lift, detail, refraction), cut with its corners, shadowed with its ring, and
+//! (blur, opacity, refraction), cut with its corners, shadowed with its ring, and
 //! opening and closing on its curves (`Reveal`). With the blur off, the plain dialog fill.
 //!
 //! Each part is a subwindow that takes no input (events fall through to the app; the bar is
@@ -176,8 +176,8 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
             .tint = f.tint,
             .mix = f.mix,
             .lift = f.lift,
-            .detail = f.detail,
             .refraction = f.refraction,
+            .clear = f.clear,
             .form = r.form,
         });
     } else {
