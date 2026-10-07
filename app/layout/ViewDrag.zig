@@ -80,6 +80,12 @@ shape_radius: f32 = 0,
 morph_rect: dvui.Rect.Physical = .{},
 morph_radius: f32 = 0,
 card_start_ns: i128 = 0,
+/// A loose drag's hold on what it lifted: the middle of what was grabbed, from the pointer, when it
+/// was lifted (`beginLoose`). The card keeps it while it is under the pointer — the face of a row
+/// lifted out of a list stays where it was in the row — and is brought in under the pointer where
+/// it is not (`drawFloat`). dvui's own drag offset is the list's, from a press the lift may have
+/// come long after, and of a rect the card is not.
+grab: dvui.Point.Physical = .{},
 /// The view carried as a drop of glass (`dropShapes`), where the glass program draws: its head
 /// following the pointer, eased — critically damped, never swinging past — and a trail of smaller
 /// drops laid behind it by the hand's
@@ -637,6 +643,8 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.name = loose_source;
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
+    const mouse = dvui.currentWindow().mouse_pt;
+    d.grab = .{ .x = from.x + from.w / 2 - mouse.x, .y = from.y + from.h / 2 - mouse.y };
     liftShape(d, from);
     d.moved_id = moved;
     d.texture = texture;
@@ -1701,7 +1709,19 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     // pointer, just inside its top left, as the drop did — kept at the grab point, a place grabbed
     // far from its corner hung up and left of the pointer, anchored at its bottom right (the user).
     const inset = 8 * scale;
-    const tl: dvui.Point.Physical = if (d.been_drop) .{ .x = mouse.x - inset, .y = mouse.y - inset } else .{
+    const tl: dvui.Point.Physical = if (d.been_drop) .{ .x = mouse.x - inset, .y = mouse.y - inset } else if (d.loose()) blk: {
+        // Lifted out of a list — a row of a file tree, a card of the picker — it keeps its middle
+        // where the middle of what was grabbed was, so a row's name stays where it was in the row
+        // as the row narrows to it. Grabbed off what it shows — out along the row past its name,
+        // rows lifted together far from the one under the pointer — it is brought in under the
+        // pointer as it grows into itself (`morphProgress`), the pointer kept off its very end: a
+        // pill's, the middle of its round end.
+        const keep_x = if (show_photo) inset else @min(target.h, target.w) / 2;
+        const keep_y = @min(inset, target.h / 2);
+        const cx = mouse.x + std.math.clamp(d.grab.x, -@max(0, target.w / 2 - keep_x), @max(0, target.w / 2 - keep_x));
+        const cy = mouse.y + std.math.clamp(d.grab.y, -@max(0, target.h / 2 - keep_y), @max(0, target.h / 2 - keep_y));
+        break :blk .{ .x = cx - target.w / 2, .y = cy - target.h / 2 };
+    } else .{
         .x = mouse.x + std.math.clamp(off.x, -@max(0, target.w - inset), 0),
         .y = mouse.y + std.math.clamp(off.y, -@max(0, target.h - inset), 0),
     };
@@ -1785,9 +1805,6 @@ fn draggedDoc(l: *Layout, d: ViewDrag) ?struct { path: []const u8, dirty: bool }
 }
 
 /// A card with no photograph: the tab's face in glass, tab-sized.
-/// Points: the widest a carried tab keeps the width it was lifted at (`pillSize`).
-const max_lifted_w: f32 = 480;
-
 fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Physical {
     const text = dvui.Font.theme(.body).textSize(title);
     const doc = draggedDoc(l, d);
@@ -1797,11 +1814,8 @@ fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Ph
         w += face_gap + face_dot;
     };
     const h = @max(face_icon, text.h) + 2 * face_pad_y;
-    // As wide as what it was lifted from, when that was wider than what it shows — an explorer row
-    // runs on past its name: it is held where it was grabbed (`drawFloat`), and narrowed to its
-    // name, a row grabbed toward its end was carried off to the side of the pointer. A loose drag
-    // only: one lifted from a place is that place's size, not a tab's.
-    if (d.loose()) w = @max(w, @min(d.from.w / scale, max_lifted_w));
+    // Only what it shows, whatever it was lifted from: a row lifted out of a file tree narrows to
+    // its icon and its name, and rows lifted together run into the one (`drawFloat`).
     // Tab-sized, with no card padding round it: the same as a tab carried along its strip, which
     // is the tab itself in glass.
     return .{ .w = w * scale, .h = h * scale };

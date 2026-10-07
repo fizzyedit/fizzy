@@ -15,7 +15,9 @@ pub var selected_id: ?usize = null;
 pub var edit_id: ?usize = null;
 
 /// The tree's own drag, a row moved among the others. A name of its own, so nothing else takes
-/// it: a file carried out of the tree is handed to the app's view drag first (`carryOut`).
+/// it. A file is the app's view drag from the moment it is lifted (`carryOut`), moved among the
+/// rows or carried out of them alike; the tree's own drag is for what the view drag cannot carry —
+/// a folder, a file nothing opens.
 const tree_drag = "workbench.file_row";
 /// What of the tree is on screen this frame, and the window it is drawn in: a file carried past
 /// either has left the tree (`leftTree`).
@@ -25,6 +27,11 @@ var tree_window: dvui.Id = .zero;
 /// id it is carried by. While that drag lasts, the file brought back over the tree is a row again
 /// (`carryBack`). Heap-owned (`runtime.allocator`); null when nothing is carried out.
 var carried: ?struct { path: []u8, id: []u8 } = null;
+/// The selected rows' icons and names together, as drawn this frame and the last (`rowContent`):
+/// rows lifted with the one under the pointer run into its glass from where they all were. Last
+/// frame's, because the rows below the one lifted are not drawn yet when it is.
+var selection_rect: ?dvui.Rect.Physical = null;
+var selection_rect_last: ?dvui.Rect.Physical = null;
 
 /// Multi-selection for the file tree. Maps `id_extra` (hash of absolute path) to the heap-owned
 /// absolute path string. The primary `selected_id` is always a key here when set. Paths are
@@ -83,6 +90,8 @@ pub const Extension = enum {
 };
 
 pub fn draw() !void {
+    selection_rect_last = selection_rect;
+    selection_rect = null;
     var tree = core.widgets.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = tree_drag }, .{ .background = false, .expand = .both });
     defer tree.deinit();
     tree_rect = tree.data().borderRectScale().r.intersect(dvui.clipGet());
@@ -955,13 +964,6 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                 if (branch.floating()) {
                     if (dvui.dataGetSlice(null, inner_unique_id, "removed_path", []u8) == null)
                         dvui.dataSetSlice(null, inner_unique_id, "removed_path", abs_path);
-
-                    // Out of the tree, a file is carried as a document tab is off its strip.
-                    if (entry.kind == .file and tree.id_branch == inner_id_extra.*) {
-                        // From the row as it floats, its glass just laid, so the carried
-                        // glass grows out of it rather than out of the row's slot in the tree.
-                        if (leftTree(dvui.currentWindow().mouse_pt)) carryOut(tree, abs_path, branch.floatingRect() orelse branch.data().borderRectScale().r);
-                    }
                 }
 
                 if (branch.insertBefore()) {
@@ -1015,11 +1017,13 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                         // filesystem icons when no plugin claims it. A plugin's icon is arbitrary
                         // art at an arbitrary aspect ratio, so it is boxed to the shared row-glyph
                         // size like every other glyph rather than being trusted to behave.
+                        var file_icon: dvui.RectScale = .{};
                         {
                             const prof_icon = core.profile.section("row icon");
                             defer prof_icon.end();
                             var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
                             defer icon_slot.deinit();
+                            file_icon = icon_slot.data().borderRectScale();
 
                             if (!runtime.host().drawFileIcon(std.fs.path.extension(entry.name), abs_path, icon_color)) {
                                 const icon = switch (ext) {
@@ -1050,6 +1054,13 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                         ) catch {
                             dvui.log.err("Failed to draw editable label", .{});
                         };
+
+                        const content = rowContent(branch, file_icon, file_label);
+                        if (selected) selection_rect = unionRect(selection_rect, content);
+                        // Lifted, a file is carried as a document tab is off its strip, the
+                        // same glass over the tree and off it: out of its icon and its name.
+                        if (liftedHere(tree, branch, inner_id_extra.*))
+                            carryOut(tree, abs_path, if (tree.drag_branch_ids != null) unionRect(selection_rect_last, content).? else content);
 
                         if (doc) |d| {
                             if (d.owner.showsSaveStatusIndicator(d)) {
@@ -1090,6 +1101,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                             {
                                 var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
                                 defer icon_slot.deinit();
+                                if (selected and root == null) selection_rect = unionRect(selection_rect, rowContent(branch, icon_slot.data().borderRectScale(), folder_name));
                                 _ = core.icon.icon(
                                     @src(),
                                     "FolderIcon",
@@ -1452,6 +1464,27 @@ fn selectionBranchIdsForMultiDrag(arena: std.mem.Allocator) ![]const usize {
     return out;
 }
 
+/// The tree's own drag of row `id` began this frame: the row is still in its place, drawn there
+/// as it was, not floating yet (`TreeWidget.Branch.floating`) — and not carried back over the tree.
+fn liftedHere(tree: *core.widgets.TreeWidget, branch: *core.widgets.TreeWidget.Branch, id: usize) bool {
+    if (tree.carried or tree.drag_ending or branch.floating()) return false;
+    return tree.drag_point != null and tree.id_branch == id;
+}
+
+/// A row's icon and name, where they are drawn: what a row lifted out of the tree narrows to.
+/// `icon` is the row's glyph slot; the name runs on from it as `editableLabel` lays it out — past
+/// the slot's margin, inside the label's padding — and stops at the row's end.
+fn rowContent(branch: *core.widgets.TreeWidget.Branch, icon: dvui.RectScale, label: []const u8) dvui.Rect.Physical {
+    const row = branch.button.data().borderRectScale().r;
+    const text = dvui.Font.theme(.body).textSize(label).w;
+    const right = @min(icon.r.x + icon.r.w + (2 + 3 + text + 3) * icon.s, row.x + row.w);
+    return .{ .x = icon.r.x, .y = row.y, .w = @max(icon.r.w, right - icon.r.x), .h = row.h };
+}
+
+fn unionRect(a: ?dvui.Rect.Physical, b: dvui.Rect.Physical) ?dvui.Rect.Physical {
+    return if (a) |r| r.unionWith(b) else b;
+}
+
 /// Whether a row carried to `p` has left the tree: past what of it is on screen, or over a window
 /// that lies over it there — a float — which is not the tree's to take a drop for.
 fn leftTree(p: dvui.Point.Physical) bool {
@@ -1463,8 +1496,9 @@ fn leftTree(p: dvui.Point.Physical) bool {
 /// over a strip, landing through the pane's drop (`Workspace.paneDrop`). Open, it is its document
 /// — the pane showing it photographs it for the drag. Not open, it is the id its document will
 /// have, from the plugin that will open it (`Host.pluginForExtension`): carried as its file's
-/// icon, and opened where it is let go. `from` is the row as it floats under the pointer, which
-/// the drag grows out of. A file nothing can open stays a row being moved in the tree.
+/// icon, and opened where it is let go. `from` is what the drag grows out of: the row's icon and
+/// name where they were when it was lifted (`rowContent`), the selected rows' together when it is
+/// lifted with them. A file nothing can open stays a row being moved in the tree.
 ///
 /// The tree's own drag is put down, not ended (`TreeWidget.cancelDrag`): ended, the tree would
 /// drop the row next frame on whatever row was last under the pointer. Brought back over the tree

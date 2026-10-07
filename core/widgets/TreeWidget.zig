@@ -474,13 +474,6 @@ pub const Branch = struct {
         return self.floating_widget != null;
     }
 
-    /// Where the row floats under the pointer while it is dragged, its glass included: what a
-    /// drag carrying it on out of the tree grows out of. Null when it is not floating.
-    pub fn floatingRect(self: *Branch) ?dvui.Rect.Physical {
-        if (!self.floating()) return null;
-        return self.floating_widget.?.data().borderRectScale().r;
-    }
-
     pub fn install(self: *Branch) void {
         self.installed = true;
         var check_button_hovered: bool = false;
@@ -512,8 +505,9 @@ pub const Branch = struct {
                 npt.y += @as(f32, @floatFromInt(stack_i)) * (drag_min.h + row_gap);
 
                 // Carried, a row is glass, as a tab carried along its strip is
-                // (`dialogs.carriedGlass`): the look a file keeps when it is carried out of the
-                // tree as the app's view drag. As big as the row was when it was lifted: it is
+                // (`dialogs.carriedGlass`). (A list whose rows another drag can carry hands them
+                // to it as they are lifted, and reads them back with `carriedOver`: fizzy's file
+                // tree, a file to the app's view drag.) As big as the row was when it was lifted: it is
                 // held where it was grabbed (`dragOffset`), and sized to its name instead, a short
                 // name grabbed toward the row's right end floated off to the left of the pointer.
                 // Its rect, not a minimum: given no size, a floating widget takes its children's,
