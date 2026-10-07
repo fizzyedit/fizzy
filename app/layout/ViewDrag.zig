@@ -2432,6 +2432,8 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     const carried = d.active() and std.mem.eql(u8, d.name, source) and d.shape_rect.w > 0;
     // Carried with its picture, it opens as its place was, there (`float_rules.asTaken`): the
     // picture growing with it out of the drop lands on the view as the float shows it.
+    // The window the place's size, its view inside it below its header (the user: a window no
+    // larger than the place it came out of).
     if (carried and d.texture != null and out_of == null) rect = float_rules.asTaken(Floats.toRules(src.toNatural()), window);
     // Let go over no window of the app's (`floatAway`): its size, out there — not held on the main
     // window — its top left where the carried glass's was, which rode below and right of the
