@@ -477,6 +477,8 @@ pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
         const w = pic.texture.width;
         const h = pic.texture.height;
         self.photo_box = contentBox(px, w, h);
+        // What the drop shows of it, closer where it is too wide to read shrunk into the drop.
+        self.photo_box = focusBox(dvui.currentWindow().arena(), px, w, h, self.photo_box, 2 * drop_r * dvui.currentWindow().natural_scale * std.math.sqrt1_2);
         if (core.dialogs.carry_windows and px.len >= @as(usize, w) * h) {
             if (std.heap.page_allocator.dupe(dvui.Color.PMA, px[0 .. @as(usize, w) * h])) |kept| {
                 self.photo_pixels = kept;
@@ -541,6 +543,69 @@ fn contentBox(px: []const dvui.Color.PMA, w_: u32, h_: u32) dvui.Rect {
     const x1: f32 = @floatFromInt(@min(w, hi_x + step));
     const y1: f32 = @floatFromInt(@min(h, hi_y + step));
     return .{ .x = x0 / fw, .y = y0 / fh, .w = (x1 - x0) / fw, .h = (y1 - y0) / fh };
+}
+
+/// The least a drop shrinks the carried view's picture by, picture pixels to the drop's: past it,
+/// its text could not be read, and what was dragged could not be told (the user).
+const photo_zoom_least: f32 = 0.6;
+
+/// What of the carried view's picture its drop shows (`photoFit`), as shares of the picture: what
+/// the view shows (`box`, `contentBox`), where that is narrow enough to read shrunk into the square
+/// inside the round drop (`side`, physical) — and where it is not, the square of it that reads at
+/// `photo_zoom_least` with the most drawn in it: of those with nearly the most, the highest and
+/// then the furthest left, as a view reads — its heading and first rows, an editor's first lines,
+/// the middle of a canvas, rather than the whole of it too small to make out. Graded once, at
+/// lift, on a coarse grid of how much each part of the picture draws.
+fn focusBox(arena: std.mem.Allocator, px: []const dvui.Color.PMA, w_: u32, h_: u32, box: dvui.Rect, side: f32) dvui.Rect {
+    const w: usize = w_;
+    const h: usize = h_;
+    if (w == 0 or h == 0 or px.len < w * h or side <= 0) return box;
+    const fw: f32 = @floatFromInt(w);
+    const fh: f32 = @floatFromInt(h);
+    const reach = side / photo_zoom_least;
+    if (box.w * fw <= reach) return box;
+    // Cells about a twenty-fourth of the square across, summed so any square's count is four reads.
+    const cell: usize = @max(4, @as(usize, @intFromFloat(@ceil(reach / 24))));
+    const gw = (w + cell - 1) / cell;
+    const gh = (h + cell - 1) / cell;
+    const sums = arena.alloc(u32, (gw + 1) * (gh + 1)) catch return box;
+    @memset(sums, 0);
+    const step = @max(1, cell / 4);
+    for (0..gh) |gy| for (0..gw) |gx| {
+        var n: u32 = 0;
+        var y = gy * cell;
+        while (y < @min(h, (gy + 1) * cell)) : (y += step) {
+            var x = gx * cell;
+            while (x < @min(w, (gx + 1) * cell)) : (x += step) {
+                if (px[y * w + x].a >= 24) n += 1;
+            }
+        }
+        sums[(gy + 1) * (gw + 1) + gx + 1] = n + sums[gy * (gw + 1) + gx + 1] + sums[(gy + 1) * (gw + 1) + gx] - sums[gy * (gw + 1) + gx];
+    };
+    const span = @min(@max(1, @as(usize, @intFromFloat(@round(reach / @as(f32, @floatFromInt(cell)))))), @min(gw, gh));
+    // Within what the view shows.
+    const x0: usize = @min(gw - span, @as(usize, @intFromFloat(box.x * fw)) / cell);
+    const y0: usize = @min(gh - span, @as(usize, @intFromFloat(box.y * fh)) / cell);
+    const x1: usize = @max(x0, @min(gw - span, @as(usize, @intFromFloat((box.x + box.w) * fw)) / cell -| span + 1));
+    const y1: usize = @max(y0, @min(gh - span, @as(usize, @intFromFloat((box.y + box.h) * fh)) / cell -| span + 1));
+    const Sum = struct {
+        fn at(t: []const u32, stride: usize, gx: usize, gy: usize, n: usize) u32 {
+            return t[(gy + n) * stride + gx + n] + t[gy * stride + gx] - t[gy * stride + gx + n] - t[(gy + n) * stride + gx];
+        }
+    };
+    var most: u32 = 0;
+    for (y0..y1 + 1) |gy| for (x0..x1 + 1) |gx| {
+        most = @max(most, Sum.at(sums, gw + 1, gx, gy, span));
+    };
+    if (most == 0) return box;
+    const enough = most - most / 5;
+    for (y0..y1 + 1) |gy| for (x0..x1 + 1) |gx| {
+        if (Sum.at(sums, gw + 1, gx, gy, span) < enough) continue;
+        const c: f32 = @floatFromInt(cell);
+        const n: f32 = @floatFromInt(span);
+        return .{ .x = @as(f32, @floatFromInt(gx)) * c / fw, .y = @as(f32, @floatFromInt(gy)) * c / fh, .w = n * c / fw, .h = n * c / fh };
+    };
+    return box;
 }
 
 /// Where the whole of the carried view's picture lies for a drop's head `r` (physical): what it
@@ -2206,6 +2271,9 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     // was carried (the picker, a test).
     const d = &state.view_drag;
     const carried = d.active() and std.mem.eql(u8, d.name, source) and d.shape_rect.w > 0;
+    // Carried with its picture, it opens as its place was, there (`float_rules.asTaken`): the
+    // picture growing with it out of the drop lands on the view as the float shows it.
+    if (carried and d.texture != null and out_of == null) rect = float_rules.asTaken(Floats.toRules(src.toNatural()), window);
     // Let go over no window of the app's (`floatAway`): its size, out there — not held on the main
     // window — its top left where the carried glass's was, which rode below and right of the
     // pointer: the glass grows into it right and down from where it was let go, rather than out

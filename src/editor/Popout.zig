@@ -790,9 +790,14 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
                 const sz = land.photo_size;
                 const body: dvui.Rect.Physical = .{ .x = b.x, .y = b.y, .w = sz.w, .h = sz.h };
                 const k = std.math.clamp(t, 0, 1);
+                // Frosted over as the glass grows round it, and clear again as the window comes in —
+                // the view itself, there (the user: it then unblurs).
+                const frosted = smoothstep(std.math.clamp(Floats.landingFraction(land) / frost_share, 0, 1));
+                const look = glassLook(std.math.clamp(fizzy.editor().window_opacity, 0, 1));
                 grow_photo = .{
                     .rect = rect,
                     .radius = radius,
+                    .blur = look.blur * frosted * keep,
                     .image = .{ .x = std.math.lerp(pf.x, body.x, k), .y = std.math.lerp(pf.y, body.y, k), .w = std.math.lerp(pf.w, body.w, k), .h = std.math.lerp(pf.h, body.h, k) },
                     .alpha = keep,
                 };
@@ -846,13 +851,13 @@ fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui
         // own — the glass's frost under it is the drop's, as a bubble's is (the user).
         .fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .alpha = p.alpha,
-        .blur = 0,
+        .blur = p.blur,
     });
 }
 
 /// Where the carried view's picture is on the drag's glass this frame (`overlayPhoto`), physical:
 /// the glass it is in, its corners, where the whole picture lies, and how much of it shows.
-const PhotoPlace = struct { rect: dvui.Rect.Physical, radius: f32, image: dvui.Rect.Physical, alpha: f32 };
+const PhotoPlace = struct { rect: dvui.Rect.Physical, radius: f32, image: dvui.Rect.Physical, alpha: f32, blur: f32 = 0 };
 
 /// The picture growing with a float out of the drop it was let go as (`growFrame`), this frame —
 /// for the overlay's pass after the windows' (`overlayPhoto`). Null when none is.
@@ -944,6 +949,10 @@ fn windowShade() f32 {
     const w = fizzy.core.glass_look.window(op);
     return 1 - (1 - w.fill) * (1 - w.top_fill);
 }
+
+/// The share of a float's growth out of the drop over which the drop's picture, growing with it,
+/// frosts over (`growFrame`), before it clears as the window comes in.
+const frost_share: f32 = 0.3;
 
 /// The share of a float's growth out of the carried glass over which its picture takes over from
 /// the carried photograph (`growFrame`).

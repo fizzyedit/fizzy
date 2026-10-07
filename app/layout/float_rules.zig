@@ -59,6 +59,21 @@ pub fn initialRect(source: Rect, window: Rect) Rect {
     return inside(.{ .x = source.centerX() - w / 2, .y = source.centerY() - h / 2, .w = w, .h = h }, window);
 }
 
+/// Where a float opens for a view carried out of `source` and let go as a drop with its picture:
+/// the place itself, its size and where it was, kept inside the window and no smaller than a float
+/// may be resized to — so the picture it grows with lands on the view as the float shows it (the
+/// user: the size the popped out region was, aligned with its snapshot).
+pub fn asTaken(source: Rect, window: Rect) Rect {
+    const cap_w = @max(0, window.w - 2 * margin);
+    const cap_h = @max(0, window.h - 2 * margin);
+    return inside(.{
+        .x = source.x,
+        .y = source.y,
+        .w = @min(@max(source.w, resize_min_w), cap_w),
+        .h = @min(@max(source.h, resize_min_h), cap_h),
+    }, window);
+}
+
 /// A float opened from the float `from`: the same size, a step down and right, kept inside.
 pub fn nudged(from: Rect, window: Rect) Rect {
     return inside(.{ .x = from.x + nudge, .y = from.y + nudge, .w = from.w, .h = from.h }, window);
@@ -218,6 +233,22 @@ test "a float opens at a share of its place, centred on it" {
     try std.testing.expectApproxEqAbs(@as(f32, 480), r.h, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 900), r.x + r.w / 2, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 500), r.y + r.h / 2, 0.01);
+}
+
+test "a float let go with its picture opens as its place was, kept on the window" {
+    const r = asTaken(.{ .x = 400, .y = 100, .w = 1000, .h = 800 }, test_window);
+    try std.testing.expectEqual(@as(f32, 400), r.x);
+    try std.testing.expectEqual(@as(f32, 100), r.y);
+    try std.testing.expectEqual(@as(f32, 1000), r.w);
+    try std.testing.expectEqual(@as(f32, 800), r.h);
+    // A sidebar's narrow place keeps its width, above what a float may be resized to.
+    const side = asTaken(.{ .x = 0, .y = 40, .w = 240, .h = 900 }, test_window);
+    try std.testing.expectEqual(@as(f32, 240), side.w);
+    try std.testing.expect(side.x >= margin and side.y + side.h <= test_window.h - margin);
+    // Nothing smaller than that.
+    const tiny = asTaken(.{ .x = 300, .y = 300, .w = 50, .h = 40 }, test_window);
+    try std.testing.expectEqual(resize_min_w, tiny.w);
+    try std.testing.expectEqual(resize_min_h, tiny.h);
 }
 
 test "a float out of a small place opens at the minimum" {
