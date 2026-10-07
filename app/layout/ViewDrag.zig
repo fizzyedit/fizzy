@@ -95,9 +95,19 @@ grab: dvui.Point.Physical = .{},
 /// Where the hand holds the drop (`holdHand`): the pointer, kept still through a tremble of it.
 /// What the drop rides off and aims with, while it is carried as one; null when it is not.
 hand: ?dvui.Point.Physical = null,
-/// The middle of the bubble the drop is drawn toward (`drop_pull`), eased onto a bubble newly
-/// aimed at — by time, not by the hand; null once it is joined to none.
+/// The middle of the bubble the drop is drawn toward (`drop_pull`) — moving onto a bubble newly
+/// aimed at from `aim_from` to `aim_to`, `aim_move` of the way there (`pour`), by time, not by the
+/// hand; null once it is joined to none.
 aim_at: ?dvui.Point.Physical = null,
+aim_from: dvui.Point.Physical = .{},
+aim_to: ?dvui.Point.Physical = null,
+aim_move: f32 = 1,
+/// How far the drop is drawn into the bubble it is aimed at, 0…1 and past 1 as it pours in
+/// (`drop_pull` of the way at 1): from `pull_from` toward `pull_to`, `pull_move` of the way there.
+pull: f32 = 0,
+pull_from: f32 = 0,
+pull_to: f32 = 0,
+pull_move: f32 = 1,
 /// Where the pointer was last frame, for a jump from one window's part of the frame to another's
 /// (`followAcross`).
 last_mouse: ?dvui.Point.Physical = null,
@@ -633,6 +643,10 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     var d = &l.state.view_drag;
     d.hand = null;
     d.aim_at = null;
+    d.aim_to = null;
+    d.pull = 0;
+    d.pull_to = 0;
+    d.pull_move = 1;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -676,6 +690,10 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     var d = &l.state.view_drag;
     d.hand = null;
     d.aim_at = null;
+    d.aim_to = null;
+    d.pull = 0;
+    d.pull_to = 0;
+    d.pull_move = 1;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -1396,6 +1414,10 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         d.drop_ns = 0;
         d.hand = null;
         d.aim_at = null;
+        d.aim_to = null;
+        d.pull = 0;
+        d.pull_to = 0;
+        d.pull_move = 1;
         d.drop_aim = 0;
         return d.drop_shapes[0..0];
     }
@@ -1427,19 +1449,47 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     }
     const ease = std.math.clamp(dt / aim_s, 0, 1);
     var moving = false;
+    // Drawn into a bubble newly aimed at, and over to another, as one motion from where it was —
+    // past the bubble and back where motion is playful, as it pours in (`pour`) — and let go
+    // smoothly: by time, so a hand held still sets nothing going (the user: as strong and snappy
+    // as the app's own glass).
+    const pull_want: f32 = if (aimed != null) 1 else 0;
+    if (pull_want != d.pull_to) {
+        d.pull_from = d.pull;
+        d.pull_to = pull_want;
+        d.pull_move = 0;
+    }
+    if (d.pull_move < 1) {
+        d.pull_move = @min(1, d.pull_move + joinStep(dt));
+        moving = true;
+    }
+    const pk = if (d.pull_to > d.pull_from) pour(d.pull_move) else smooth(d.pull_move);
+    d.pull = std.math.lerp(d.pull_from, d.pull_to, pk);
     if (aimed) |c| {
-        if (d.aim_at) |*a| {
-            a.x += (c.x - a.x) * ease;
-            a.y += (c.y - a.y) * ease;
-            if (@abs(c.x - a.x) < 0.5 and @abs(c.y - a.y) < 0.5) a.* = c else moving = true;
-        } else d.aim_at = c;
+        const new = if (d.aim_to) |to| @abs(to.x - c.x) > 1 or @abs(to.y - c.y) > 1 else true;
+        if (new) {
+            d.aim_from = d.aim_at orelse c;
+            d.aim_move = if (d.aim_at == null) 1 else 0;
+            d.aim_to = c;
+        }
+    }
+    if (d.aim_to) |to| {
+        if (d.aim_move < 1) {
+            d.aim_move = @min(1, d.aim_move + joinStep(dt));
+            moving = true;
+        }
+        const k = pour(d.aim_move);
+        d.aim_at = .{ .x = std.math.lerp(d.aim_from.x, to.x, k), .y = std.math.lerp(d.aim_from.y, to.y, k) };
     }
     // Joined to a bubble, its photograph fades (`aim_fade`), eased in and out.
     const aim_want: f32 = if (aimed != null) 1 else 0;
     d.drop_aim += (aim_want - d.drop_aim) * ease;
     if (@abs(aim_want - d.drop_aim) < 0.01) d.drop_aim = aim_want;
     if (d.drop_aim != aim_want) moving = true;
-    if (d.drop_aim == 0) d.aim_at = null;
+    if (d.pull_to == 0 and d.pull_move >= 1) {
+        d.aim_at = null;
+        d.aim_to = null;
+    }
     if (moving) dvui.refresh(null, @src(), null);
     // Leaning toward the nearest bubble as it comes near (`drop_lean`), as much less as it is joined
     // to one; and drawn toward the one it is joined to as much as it is (`drop_pull`).
@@ -1465,7 +1515,7 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         const k = drop_lean * lean * lean * (3 - 2 * lean) * (1 - d.drop_aim);
         centre = .{ .x = at.x + (t.x - at.x) * k, .y = at.y + (t.y - at.y) * k };
     }
-    const pull = drop_pull * d.drop_aim;
+    const pull = drop_pull * d.pull;
     if (d.aim_at) |a| centre = .{ .x = centre.x + (a.x - centre.x) * pull, .y = centre.y + (a.y - centre.y) * pull };
 
     // From the shape it was last drawn as — what was grabbed at the lift, the tab it was over a
@@ -1596,10 +1646,14 @@ const drop_label_drop: f32 = 0.42;
 /// width with an ellipsis. `shown` fades it in with the drop's content.
 fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
     const d = &l.state.view_drag;
-    const title = dropTitle(l, d.*) orelse return;
-    if (title.len == 0 or shown <= 0.01) return;
+    const title_raw = dropTitle(l, d.*) orelse return;
+    if (title_raw.len == 0 or shown <= 0.01) return;
     const hn = head.toNatural();
-    const font = dvui.Font.theme(.body).larger(-2);
+    // As the explorer's headings are (`Chooser.label`): uppercase, in the heading font — in the
+    // window's text colour, not the heading's highlight (the user).
+    var upper: [128]u8 = undefined;
+    const title = if (title_raw.len <= upper.len) std.ascii.upperString(&upper, title_raw) else title_raw;
+    const font = dvui.Font.theme(.heading);
     const line_h = font.lineHeight();
     const max_w = hn.w * 0.72;
     if (max_w < 16) return;
@@ -1782,8 +1836,33 @@ const aim_fade: f32 = 0.75;
 /// little — the bubble's glass bends and blurs it where the drop runs into it, and it reads through
 /// that (the user) — only enough that the bubble's icon reads over it.
 const aim_fade_under: f32 = 0.3;
-/// Seconds the drop takes to join a bubble — drawn to it, its photograph fading — and to come back.
+/// Seconds the drop's photograph takes to fade as it joins a bubble, and to come back.
 const aim_s: f32 = 0.09;
+
+/// Milliseconds the drop takes to be drawn into a bubble, over to another, or let go of one
+/// (`pour`), as written: at the motion speed the user set (`core.motion.durationMs`).
+const join_ms: f32 = 240;
+
+/// How much of a join `dt` seconds is: all of it where motion is off.
+fn joinStep(dt: f32) f32 {
+    const ms = core.motion.durationMs(join_ms);
+    return if (ms <= 0) 1 else dt * 1000 / ms;
+}
+
+/// How far through being drawn into a bubble the drop is at `u` of `join_ms`: quick, then past it
+/// and back, as water pours in, as far past as motion is playful (`core.motion`) — none at the low
+/// end, an ease out only. Time alone moves it.
+fn pour(u: f32) f32 {
+    const play = std.math.clamp((core.motion.level() - 0.5) * 2, 0, 1);
+    const k: f32 = 1.8 * play;
+    const v = std.math.clamp(u, 0, 1) - 1;
+    return 1 + (k + 1) * v * v * v + k * v * v;
+}
+
+fn smooth(u: f32) f32 {
+    const x = std.math.clamp(u, 0, 1);
+    return x * x * (3 - 2 * x);
+}
 
 /// Points: the tab face on a card with no photograph — a file icon, the title and, when there
 /// are unsaved changes, the dirty dot — and the gaps between them.
