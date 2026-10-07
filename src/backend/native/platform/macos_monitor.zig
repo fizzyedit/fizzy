@@ -144,8 +144,22 @@ fn macosSyncSizes(w: *Watched) void {
 
 fn macosLiveResizeUpdate(window: *c.SDL_Window) void {
     if (macos_in_live_resize) return;
+    // From inside a frame — AppKit calls back at once from what a frame asks of it, as
+    // `toggleFullScreen:` asked from a command did — a frame run here would nest in that one, and
+    // dvui's state does not survive it: every later frame began on the nested one's, and the app
+    // slept through the rest of the transition. Wake the loop instead; the next frame follows.
+    if (comptime @hasDecl(Backend, "appFrameOpen")) {
+        if (Backend.appFrameOpen()) {
+            var ue = std.mem.zeroes(c.SDL_Event);
+            ue.type = c.SDL_EVENT_USER;
+            _ = c.SDL_PushEvent(&ue);
+            return;
+        }
+    }
     macos_in_live_resize = true;
     defer macos_in_live_resize = false;
+    if (comptime @hasDecl(Backend, "callbackFrames")) Backend.callbackFrames(true);
+    defer if (comptime @hasDecl(Backend, "callbackFrames")) Backend.callbackFrames(false);
     SDL_OnWindowLiveResizeUpdate(window);
 }
 
@@ -171,8 +185,9 @@ export fn fizzy_macos_window_pump_sync(cocoa: ?*anyopaque) void {
 }
 
 /// Called from the monitor's 60Hz NSTimer once a tick while any window animates — same approach
-/// SDL itself uses for live resize: one frame of the app, which draws every window. Runs outside
-/// appIterate, so SDL_OnWindowLiveResizeUpdate is safe here.
+/// SDL itself uses for live resize: one frame of the app, which draws every window. The timer runs
+/// it between frames; a transition's stage, run from inside one, only wakes the loop
+/// (`macosLiveResizeUpdate`).
 export fn fizzy_macos_window_pump_render() void {
     if (comptime builtin.os.tag == .macos) {
         if (!macos_pump_ready) return;

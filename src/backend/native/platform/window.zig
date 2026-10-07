@@ -3,7 +3,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const c = @import("backend").c;
+const Backend = @import("backend");
+const c = Backend.c;
 const objc = @import("objc");
 const titlebar = @import("titlebar.zig");
 const win32_titlebar = @import("win32_titlebar.zig");
@@ -151,7 +152,17 @@ pub fn coversDesktop(win: *dvui.Window) bool {
 /// the way out was two see-through pictures, a double window, and the window itself, already
 /// see-through, popped in at the end (the user).
 pub fn windowCovers(window: *c.SDL_Window) bool {
-    return windowMaximized(window) or windowEnteringSpace(window);
+    return windowMaximized(window) or windowInSpaceTransition(window);
+}
+
+/// Whether `window` is on its way into a fullscreen Space or out of one. AppKit takes the window
+/// out of its full screen style already at will-exit, so on the way out only the monitor's word
+/// (`space_transition`, until did-exit) says it is still in the transition: by the style alone it
+/// faded while AppKit showed opaque pictures of it, and popped in see-through as they went.
+fn windowInSpaceTransition(window: *c.SDL_Window) bool {
+    if (builtin.os.tag != .macos) return false;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    return fizzy_macos_window_space_transition_active(raw_ptr) != 0;
 }
 
 /// Whether `window` is on its way into a fullscreen Space: it goes opaque at once
@@ -415,8 +426,20 @@ fn wrapContentViewWithVibrancy(window: objc.Object) void {
 pub fn toggleFullscreen() void {
     const w = main() orelse return;
     if (builtin.os.tag == .macos) {
-        const ns = cocoaWindowOf(w) orelse return;
-        objc.Object.fromId(ns).msgSend(void, "toggleFullScreen:", .{@as(?*anyopaque, null)});
+        const ns = objc.Object.fromId(cocoaWindowOf(w) orelse return);
+        // From the run loop, as the green button asks, never from inside a frame (a command, a
+        // key): AppKit pictures the window as it will be in full screen from inside
+        // `toggleFullScreen:`, and the monitor draws the frame it pictures from there. With a
+        // frame open none could be drawn, so AppKit pictured the last one — laid out at the
+        // window's old size in the corner of the new one — and grew that to the screen, the real
+        // window popping in at the end.
+        if (comptime @hasDecl(Backend, "appFrameOpen")) {
+            if (Backend.appFrameOpen()) {
+                ns.msgSend(void, "performSelector:withObject:afterDelay:", .{ objc.sel("toggleFullScreen:").value, @as(?*anyopaque, null), @as(f64, 0) });
+                return;
+            }
+        }
+        ns.msgSend(void, "toggleFullScreen:", .{@as(?*anyopaque, null)});
         return;
     }
     const on = (c.SDL_GetWindowFlags(w) & c.SDL_WINDOW_FULLSCREEN) != 0;

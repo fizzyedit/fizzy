@@ -2968,6 +2968,30 @@ const CallbackState = struct {
 /// used when doing sdl callbacks
 var appState: CallbackState = .{ .win = undefined, .back = undefined, .gpa = undefined, .io = undefined };
 
+/// A frame of the app is being built or presented (`appIterate`, from `Window.begin` to its
+/// present). AppKit calls back into the app at once from what a frame asks of it —
+/// `toggleFullScreen:` posts its will-enter before it returns — and a frame run from such a
+/// callback would nest in this one: dvui's frame state is not reentrant. The waiting after the present is
+/// outside it, where SDL itself runs frames from callbacks (`appIterate`'s `no_wait`).
+var app_frame_open = false;
+
+/// Whether a frame is open now (`app_frame_open`): a caller that would run a frame from a
+/// callback wakes the loop instead (`refresh`), and the frame follows this one.
+pub fn appFrameOpen() bool {
+    return app_frame_open;
+}
+
+/// A frame is being run from inside an OS callback (`callbackFrames`), not by SDL's loop.
+var app_callback_frames = false;
+
+/// Frames run from here on are run from inside an OS callback — the macOS window monitor's pump,
+/// from AppKit's timers and notifications through a transition — until `on` is false. Such a
+/// frame never waits for events after it presents: the wait would be an event loop nested in
+/// AppKit's callback, holding up the transition that called it (`appIterate`).
+pub fn callbackFrames(on: bool) void {
+    app_callback_frames = on;
+}
+
 // sdl3 callback
 fn appInit(appstate: ?*?*anyopaque, argc: c_int, argv: ?[*:null]?[*:0]u8) callconv(.c) c.SDL_AppResult {
     _ = appstate;
@@ -3110,6 +3134,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // beginWait coordinates with waitTime below to run frames only when needed
     const nstime = appState.win.beginWait(appState.interrupted or appState.no_wait);
 
+    app_frame_open = true;
     // marks the beginning of a frame for dvui, can call dvui functions after this
     appState.win.begin(nstime) catch |err| {
         log.err("dvui.Window.begin failed: {any}", .{err});
@@ -3135,6 +3160,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     appState.back.setCursor(appState.win.cursorRequested());
     appState.back.textInputRect(appState.win.textInputRequested());
     appState.back.renderPresent();
+    app_frame_open = false;
 
     if (res != .ok) return c.SDL_APP_SUCCESS;
 
@@ -3158,8 +3184,11 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // say so, and a wait there takes the tracking loop's own mouse events.
     // NOTE: on iOS, SDL_WaitEventTimeout stalls in UITrackingRunLoopMode during a
     // touch, so we throttle via ios_next_frame_ns above instead of waiting here.
-    if (appState.no_wait or appState.have_resize or in_live_resize or builtin.target.os.tag == .ios) {
+    if (appState.no_wait or appState.have_resize or in_live_resize or app_callback_frames or builtin.target.os.tag == .ios) {
         appState.have_resize = false;
+        // Run from a callback, it may sit inside SDL's own wait for events, which knows nothing of
+        // the frame this one asked for: wake that wait, so SDL's loop runs it.
+        if (app_callback_frames and wait_event_micros != std.math.maxInt(u32)) appState.back.refresh();
         if (builtin.target.os.tag == .ios) {
             appState.ios_next_frame_ns = appState.win.backend.nanoTime() + @as(i128, wait_event_micros) * 1000;
         }
