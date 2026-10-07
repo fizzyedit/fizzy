@@ -53,9 +53,15 @@ from: dvui.Size.Physical = .{},
 texture: ?dvui.Texture = null,
 /// Where it was taken.
 texture_rect: dvui.Rect.Physical = .{},
-/// Where in it what the view shows is, as shares of its width and height (`contentFocus`): the
-/// drop crops its picture round it (`drawDrop`).
-photo_focus: dvui.Point = .{ .x = 0.5, .y = 0.5 },
+/// Where in it what the view shows is, as shares of its width and height (`contentBox`): the drop
+/// fits its picture to it (`drawDrop`).
+photo_box: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
+/// Its pixels, premultiplied RGBA rows of `photo_size`, kept where the app shows the picture under
+/// the OS's glass (`core.dialogs.carry_windows`) — handed over once, as an image (`photo_gen` new
+/// with each picture) — and freed with the drag (`discard`). Null elsewhere.
+photo_pixels: ?[]dvui.Color.PMA = null,
+photo_size: [2]u32 = .{ 0, 0 },
+photo_gen: u32 = 0,
 /// The drop's picture this frame, handed to the app to draw beneath the OS's glass rather than over
 /// it (`core.native_glass.under`): null when it is drawn here, or not at all.
 photo_under: ?PhotoUnder = null,
@@ -439,6 +445,7 @@ pub fn discard(self: *ViewDrag) void {
     // Destroyed with a frame, and only in one: discarded at teardown (quitting mid-drag) there is
     // no window, and the GPU goes with the process.
     if (self.texture) |tex| if (dvui.current_window != null) dvui.Texture.destroyLater(tex);
+    self.forgetPixels();
     // The drops still showing outlive the drag: they run back together where they were drawn
     // (`drawOverlay`), whatever the drop has just done to their places.
     const finishing = self.last_pending;
@@ -450,33 +457,52 @@ pub fn discard(self: *ViewDrag) void {
 
 pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
     pic.stop();
-    self.photo_focus = contentFocus(pic.texture);
+    self.photo_box = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    self.forgetPixels();
+    if (dvui.Texture.readTarget(dvui.currentWindow().arena(), pic.texture)) |px| {
+        const w = pic.texture.width;
+        const h = pic.texture.height;
+        self.photo_box = contentBox(px, w, h);
+        if (core.dialogs.carry_windows and px.len >= @as(usize, w) * h) {
+            if (std.heap.page_allocator.dupe(dvui.Color.PMA, px[0 .. @as(usize, w) * h])) |kept| {
+                self.photo_pixels = kept;
+                self.photo_size = .{ w, h };
+                self.photo_gen +%= 1;
+                if (self.photo_gen == 0) self.photo_gen = 1;
+            } else |_| {}
+        }
+    } else |_| {}
     const tex = dvui.textureFromTarget(pic.texture) catch return;
     if (self.texture) |old| dvui.Texture.destroyLater(old);
     self.texture = tex;
     self.texture_rect = pic.r;
 }
 
+fn forgetPixels(self: *ViewDrag) void {
+    if (self.photo_pixels) |px| std.heap.page_allocator.free(px);
+    self.photo_pixels = null;
+}
+
 /// The carried view's picture under the OS's glass (`ViewDrag.photo_under`): where its head is in
-/// the frame, its corners, how much of it shows, and the part of the picture it shows.
+/// the frame, its corners, how much of it shows, and where the whole picture lies (`photoFit`),
+/// physical — past the head, cut off there.
 pub const PhotoUnder = struct {
     rect: dvui.Rect.Physical,
     radius: f32,
     alpha: f32,
-    uv: dvui.Rect,
+    image: dvui.Rect.Physical,
 };
 
 /// Where in the captured view what it shows is, as shares of the picture's width and height: the
-/// middle of everything it drew, read once from the capture's pixels at lift — a capture of the view
-/// alone is clear wherever it draws nothing. A drop shows the middle of its picture, and Files,
-/// whose rows are at its top, showed nothing (the user). The middle where nothing could be read.
-fn contentFocus(target: dvui.Texture.Target) dvui.Point {
-    const middle: dvui.Point = .{ .x = 0.5, .y = 0.5 };
-    const w: usize = target.width;
-    const h: usize = target.height;
-    if (w == 0 or h == 0) return middle;
-    const px = dvui.Texture.readTarget(dvui.currentWindow().arena(), target) catch return middle;
-    if (px.len < w * h) return middle;
+/// box round everything it drew, read once from the capture's pixels at lift — a capture of the
+/// view alone is clear wherever it draws nothing. A drop showed the middle of its picture, and
+/// Files, whose rows are at its top, showed nothing (the user). The whole where nothing could be
+/// read.
+fn contentBox(px: []const dvui.Color.PMA, w_: u32, h_: u32) dvui.Rect {
+    const whole: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    const w: usize = w_;
+    const h: usize = h_;
+    if (w == 0 or h == 0 or px.len < w * h) return whole;
     const step = @max(1, @min(w, h) / 160);
     var lo_x = w;
     var lo_y = h;
@@ -493,10 +519,30 @@ fn contentFocus(target: dvui.Texture.Target) dvui.Point {
             hi_y = @max(hi_y, y);
         }
     }
-    if (hi_x < lo_x or hi_y < lo_y) return middle;
+    if (hi_x < lo_x or hi_y < lo_y) return whole;
     const fw: f32 = @floatFromInt(w);
     const fh: f32 = @floatFromInt(h);
-    return .{ .x = @as(f32, @floatFromInt(lo_x + hi_x)) / 2 / fw, .y = @as(f32, @floatFromInt(lo_y + hi_y)) / 2 / fh };
+    const x0: f32 = @floatFromInt(lo_x);
+    const y0: f32 = @floatFromInt(lo_y);
+    const x1: f32 = @floatFromInt(@min(w, hi_x + step));
+    const y1: f32 = @floatFromInt(@min(h, hi_y + step));
+    return .{ .x = x0 / fw, .y = y0 / fh, .w = (x1 - x0) / fw, .h = (y1 - y0) / fh };
+}
+
+/// Where the whole of the carried view's picture lies for a drop's head `r` (physical): what it
+/// shows (`photo_box`) as wide as the square inside the round head, its top at that square's top
+/// and its middle on the head's — Files' rows across the head from its top rather than a strip of
+/// them lost in its middle (the user). Never larger than it was taken. Past the head, it is cut
+/// off there.
+fn photoFit(d: ViewDrag, r: dvui.Rect.Physical) dvui.Rect.Physical {
+    const tw = d.texture_rect.w;
+    const th = d.texture_rect.h;
+    const box = d.photo_box;
+    const side = @min(r.w, r.h) * std.math.sqrt1_2;
+    const scale = @min(1, side / @max(1, box.w * tw));
+    const w = tw * scale;
+    const h = th * scale;
+    return .{ .x = r.x + r.w / 2 - (box.x + box.w / 2) * w, .y = r.y + (r.h - side) / 2 - box.y * h, .w = w, .h = h };
 }
 
 /// What photograph this place owes the drag this frame.
@@ -1476,7 +1522,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const r = head.insetAll(pad);
     if (r.w < 2 or r.h < 2) return;
     // Cover: as much of the photograph as keeps its proportions in the head, round what the view
-    // shows (`photo_focus`) rather than its middle.
+    // shows (`photo_box`) rather than its middle.
     const pw = d.texture_rect.w;
     const ph = d.texture_rect.h;
     var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
@@ -1484,14 +1530,15 @@ fn drawDrop(l: *Layout, taken: bool) void {
         const a_img = pw / ph;
         const a_box = r.w / r.h;
         if (a_img > a_box) uv.w = a_box / a_img else uv.h = a_img / a_box;
-        uv.x = std.math.clamp(d.photo_focus.x - uv.w / 2, 0, 1 - uv.w);
-        uv.y = std.math.clamp(d.photo_focus.y - uv.h / 2, 0, 1 - uv.h);
+        uv.x = std.math.clamp(d.photo_box.x + d.photo_box.w / 2 - uv.w / 2, 0, 1 - uv.w);
+        uv.y = std.math.clamp(d.photo_box.y + d.photo_box.h / 2 - uv.h / 2, 0, 1 - uv.h);
     }
     const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
-    // Beneath the OS's glass, where the app draws it (`core.native_glass.under`): whole and on the
-    // window's colour, the head's lens bending it — clear what is carried (the user).
-    if (own_window and core.native_glass.on() and core.native_glass.under()) {
-        d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade * d.drop_aim), .uv = uv };
+    // Beneath the OS's glass, where the app draws it (`core.native_glass.under`) and has its pixels
+    // to hand over: whole and on the window's colour, fitted to what it shows (`photoFit`), the
+    // head's lens bending it — clear what is carried (the user).
+    if (own_window and core.native_glass.on() and core.native_glass.under() and d.photo_pixels != null) {
+        d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade * d.drop_aim), .image = photoFit(d.*, head) };
         drawDropLabel(l, head, shown);
         return;
     }

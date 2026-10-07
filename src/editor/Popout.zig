@@ -451,34 +451,37 @@ fn overlaySpacing(s: f32) f32 {
     return m / s;
 }
 
-/// A view drag's glass as the OS's (`nativeGlass`): an overlay window over the main window's display
-/// (`viewports.openOverlay`) holds a piece of Liquid Glass for each piece the frame declared in
-/// place of drawing it (`core.native_glass`) — the drop zones' bubbles, the carried drop's head and
-/// tail, or its card — which the OS runs together where they come close, as it refracts what is
-/// under them. The carried view's own layer (`core.screens.markCarried`), its photograph, is taken
-/// into the overlay over its glass. Glass and picture change in one transaction. It goes when the
+/// A view drag's glass as the OS's (`nativeGlass`): an overlay window round the glass, on the main
+/// window's display (`viewports.openOverlay`, `overlayArea`), holds a piece of Liquid Glass for each
+/// piece the frame declared in place of drawing it (`core.native_glass`) — the drop zones' bubbles,
+/// the carried drop, or its card — which the OS runs together where they come close, as it refracts
+/// what is under them. The carried view's photograph lies under its drop's glass (`overlayPhoto`);
+/// what goes over the glass — the drop's name, the bubbles' icons (`core.screens.markCarried`) — is
+/// taken into the overlay's picture. Glass and pictures change in one transaction. It goes when the
 /// drag does; a float the drop opens grows out of a carry window of its own (`growFrame`).
 fn overlayFrame(state: *State) void {
     const d = &state.view_drag;
-    defer if (overlay) |*ov| photoFrame(state, ov) else releasePhoto();
     // Kept past the drag while its drops still go, and gone once there is no glass left.
     if (!d.active() and fizzy.core.native_glass.shapes().len == 0) {
         if (overlay) |*o| releaseCarry(o);
         overlay = null;
+        photo_sent = 0;
+        overlay_area = null;
         return;
     }
     const cw = dvui.currentWindow();
     const display = viewports.displayInMain();
     if (display.w <= 0 or display.h <= 0) return;
+    const main_px = dvui.windowRectPixels();
+    const s = dvui.windowNaturalScale();
+    const area = overlayArea(display, main_px, s) orelse return;
     if (overlay == null) {
-        const vp = viewports.openOverlay(display) orelse return;
+        const vp = viewports.openOverlay(.{ .x = area.x, .y = area.y, .w = area.w, .h = area.h }) orelse return;
         overlay = .{ .viewport = vp };
     }
     const o = &overlay.?;
-    const placed = viewports.placeMain(o.viewport, display);
+    const placed = viewports.placeMain(o.viewport, .{ .x = area.x, .y = area.y, .w = area.w, .h = area.h });
     const shown: dvui.Rect.Physical = .{ .x = placed.x, .y = placed.y, .w = placed.w, .h = placed.h };
-    const main_px = dvui.windowRectPixels();
-    const s = dvui.windowNaturalScale();
 
     // The glass, in the overlay window's points — and where it lies over the main window's frame,
     // for the base over it.
@@ -519,6 +522,7 @@ fn overlayFrame(state: *State) void {
         .bevel_cap = fizzy.core.glass_look.bevel_cap,
         .bevel_clear = fizzy.core.glass_look.bevel_clear,
     });
+    overlayPhoto(o, d, shown, main_px, s, look.blur);
 
     // The picture: what goes over the glass — the carried view, the drops' icons — each layer of it
     // (`core.screens.markCarried`) taken from the frame and replayed at the main window's part of it
@@ -614,6 +618,42 @@ const glass_lit: f32 = 0.12;
 /// `r` (physical, in the frame) where it lies over the main window's frame: as it is, or — drawn in
 /// the band of a float's window, past the main window — where that part of the band lies, by the
 /// window it overlaps most (`covers`). Null in a band no window shows.
+/// What of the display the drag's overlay covers, in the main window's frame: round all its glass
+/// (`core.native_glass.shapes`) — and the picture over it, which lies inside the glass — with room to
+/// spare, on the display. Not the whole display: its picture is presented every frame of a drag, and
+/// one the display's size, cleared and drawn and composited each frame, held a drag to half the
+/// display's rate (60 frames a second where it could have 120). With the room to spare it moves
+/// only when the glass reaches past it, or it is far bigger than the glass needs, rather than
+/// every frame the drop moves. Null with no glass to cover.
+fn overlayArea(display: anytype, main_px: dvui.Rect.Physical, s: f32) ?dvui.Rect.Physical {
+    var glass: ?dvui.Rect.Physical = null;
+    for (fizzy.core.native_glass.shapes()) |sh| {
+        const r = inMainFrame(sh.rect, main_px) orelse continue;
+        glass = if (glass) |g| g.unionWith(r) else r;
+    }
+    const need_core = glass orelse return overlay_area;
+    const disp: dvui.Rect.Physical = .{ .x = display.x, .y = display.y, .w = display.w, .h = display.h };
+    // Past the glass itself: its rim's light and the shadow it casts.
+    const need = need_core.outsetAll(overlay_margin * s).intersect(disp);
+    if (overlay_area) |a| {
+        const inside = need.x >= a.x and need.y >= a.y and need.x + need.w <= a.x + a.w and need.y + need.h <= a.y + a.h;
+        if (inside and a.w * a.h <= overlay_most * need.w * need.h) return a;
+    }
+    const room = @max(overlay_room * s, @max(need.w, need.h) * 0.25);
+    const a = need.outsetAll(room).intersect(disp);
+    overlay_area = a;
+    return a;
+}
+
+/// Points round the glass the overlay covers (`overlayArea`), for what the glass draws past its
+/// edge; and the room to spare it is given past that, at least; and how many times the area the
+/// glass needs it may cover before it is made smaller.
+const overlay_margin: f32 = 32;
+const overlay_room: f32 = 160;
+const overlay_most: f32 = 6;
+
+var overlay_area: ?dvui.Rect.Physical = null;
+
 fn inMainFrame(r: dvui.Rect.Physical, main_px: dvui.Rect.Physical) ?dvui.Rect.Physical {
     if (r.x <= main_px.x + main_px.w + 40000) return r;
     var best: ?Cover = null;
@@ -762,46 +802,40 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
 }
 
 /// The carried view's picture beneath the drag's glass (`core.native_glass.publishUnder`,
-/// `ViewDrag.photo_under`): a window of its own just under the overlay, the picture in it on the
-/// window's colour, opaque, rounded to the drop's head, so the head's lens bends it as glass over a
-/// picture does. Drawn over the glass, faint over a clear lens, it was hard to tell what was carried
-/// (the user).
-var under_photo: ?Carry = null;
-
-fn photoFrame(state: *State, ov: *Carry) void {
-    const d = &state.view_drag;
-    const pu = (if (d.active()) d.photo_under else null) orelse return releasePhoto();
-    const tex = d.texture orelse return releasePhoto();
-    if (pu.alpha <= 0.01) return releasePhoto();
-    const place = inMainFrame(pu.rect, dvui.windowRectPixels()) orelse return releasePhoto();
-    if (under_photo == null) {
-        const vp = viewports.openCarry(.{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }) orelse return;
-        // The picture alone: no material of its own under the glass, no shadow round it.
-        viewports.carryBare(vp);
-        under_photo = .{ .viewport = vp };
+/// `ViewDrag.photo_under`): in the overlay, under its glass, so the drop's lens bends it as glass
+/// over a picture does — on the window's colour, opaque, fitted to what the view shows, and as
+/// frosted as the view would be under a bubble's glass. Its image goes over once a drag (`photo_gen`); after
+/// that it only moves, in the glass's transaction. A window of its own for it, presented every
+/// frame, cost the compositor a third window a frame (the user saw 40 fps).
+fn overlayPhoto(o: *Carry, d: *const @FieldType(State, "view_drag"), shown: dvui.Rect.Physical, main_px: dvui.Rect.Physical, s: f32, blur: f32) void {
+    const px = d.photo_pixels orelse return hidePhoto(o);
+    const pu = (if (d.active()) d.photo_under else null) orelse return hidePhoto(o);
+    const r = inMainFrame(pu.rect, main_px) orelse return hidePhoto(o);
+    if (photo_sent != d.photo_gen) {
+        viewports.overlayPhotoImage(o.viewport, std.mem.sliceAsBytes(px), d.photo_size[0], d.photo_size[1]);
+        photo_sent = d.photo_gen;
     }
-    const c = &under_photo.?;
-    viewports.orderAbove(ov.viewport, c.viewport);
-    const drawing = carryBegin(c, place, pu.rect, pu.radius, 1, 0) orelse return;
-    defer carryEnd(c, drawing);
-    const cw = dvui.currentWindow();
-    const prev_clip = dvui.clipGet();
-    defer dvui.clipSet(prev_clip);
-    dvui.clipSet(drawing.shown);
-    const prev_alpha = cw.alpha;
-    dvui.alphaSet(1);
-    defer dvui.alphaSet(prev_alpha);
-    const s = dvui.windowNaturalScale();
-    var fill = dvui.themeGet().color(.content, .fill);
-    fill.a = @intFromFloat(@round(255 * std.math.clamp(pu.alpha, 0, 1)));
-    pu.rect.fill(dvui.CornerRect.Physical.all(pu.radius), .{ .color = .{ .color = fill }, .fade = 0 });
-    dvui.renderTexture(tex, .{ .r = pu.rect, .s = s }, .{ .corners = .round(pu.radius / s), .colormod = dvui.Color.white.opacity(pu.alpha), .uv = pu.uv }) catch {};
+    viewports.overlayPhoto(o.viewport, .{
+        .rect = .{ .x = (r.x - shown.x) / s, .y = (r.y - shown.y) / s, .w = r.w / s, .h = r.h / s },
+        .radius = pu.radius / s,
+        .image = .{ .x = (pu.image.x - pu.rect.x) / s, .y = (pu.image.y - pu.rect.y) / s, .w = pu.image.w / s, .h = pu.image.h / s },
+        .fill = dvui.themeGet().color(.content, .fill),
+        .alpha = pu.alpha,
+        // As blurred as the view itself would be under a bubble, whatever it is shrunk to here:
+        // the bubbles' blur on the view at its own size.
+        .blur = blur * pu.image.w / @max(1, d.texture_rect.w),
+    });
 }
 
-fn releasePhoto() void {
-    if (under_photo) |*p| releaseCarry(p);
-    under_photo = null;
+fn hidePhoto(o: *Carry) void {
+    viewports.overlayPhoto(o.viewport, null);
+    // The image is let go with the drag that took it.
+    if (photo_sent != 0) viewports.overlayPhotoImage(o.viewport, null, 0, 0);
+    photo_sent = 0;
 }
+
+/// The picture whose image the overlay holds (`ViewDrag.photo_gen`); 0, none.
+var photo_sent: u32 = 0;
 
 /// A float's window born of a drop, over the drag's overlay (`overlayFrame`): under it, the glass
 /// still in the overlay — the window growing out of it, the drop zones it was let go over going, in

@@ -178,6 +178,10 @@ pub const Viewport = struct {
     glass_spacing: f32 = 0,
     glass_look: GlassLook = .{},
     glass_dirty: bool = false,
+    /// The carried view's picture under the overlay's glass (`viewportOverlayPhoto`) as last asked,
+    /// applied with the glass; null, none.
+    photo: ?OverlayPhoto = null,
+    photo_dirty: bool = false,
     /// A menu's window (`viewportOpenMenu`): placed in the main window's frame, and the pointer
     /// over it read there too, plus `main_offset` — where the menu is drawn in the frame from where
     /// its window lies over the main one: nothing for a menu of the main window's, the way to its
@@ -216,6 +220,22 @@ pub const GlassShape = extern struct {
 
 /// The most pieces of glass an overlay holds.
 pub const max_glass = 48;
+
+/// The carried view's picture under an overlay's glass (`viewportOverlayPhoto`): in a rounded rect
+/// (`x`…`radius`, points from the window's top left) on `fill`, its image laid at `image` (points
+/// from that rect's top left; it may reach past it, cut off there), `blur` points of plain blur on
+/// it, `alpha` opaque. As `fizzy_macos_viewport_overlay_photo` reads it.
+pub const OverlayPhoto = extern struct {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    radius: f64,
+    image: [4]f64,
+    fill: [4]f64,
+    alpha: f64,
+    blur: f64,
+};
 
 /// What an overlay's glass is (`viewportOverlayGlass`): two layers of the same pieces, each its own
 /// Liquid Glass variant and style, crossfaded by `over_share`. As
@@ -994,6 +1014,28 @@ pub fn viewportOverlayGlass(_: *SDLBackend, vp: *Viewport, shapes: []const Glass
     vp.glass_dirty = true;
 }
 
+/// The image of the carried view's picture in overlay `vp` (`viewportOverlayPhoto`): premultiplied
+/// RGBA rows, `w` by `h`, copied; null, none. Once a drag: its place each frame is cheap, as an
+/// image under the glass rather than a window of its own presented every frame.
+pub fn viewportOverlayPhotoImage(_: *SDLBackend, vp: *Viewport, rgba: ?[]const u8, w: u32, h: u32) void {
+    if (comptime builtin.os.tag != .macos) return;
+    const px = rgba orelse {
+        fizzy_macos_viewport_overlay_photo_image(cocoaWindow(vp.window), null, 0, 0);
+        return;
+    };
+    if (px.len < @as(usize, w) * h * 4) return;
+    fizzy_macos_viewport_overlay_photo_image(cocoaWindow(vp.window), px.ptr, w, h);
+}
+
+/// Where the carried view's picture is under overlay `vp`'s glass this frame, or null: none.
+/// Applied with the glass, in the same transaction.
+pub fn viewportOverlayPhoto(_: *SDLBackend, vp: *Viewport, photo: ?OverlayPhoto) void {
+    if (vp.photo == null and photo == null) return;
+    if (vp.photo != null and photo != null and std.meta.eql(vp.photo.?, photo.?)) return;
+    vp.photo = photo;
+    vp.photo_dirty = true;
+}
+
 /// Points a piece of an overlay's glass moves or grows before the OS is handed it
 /// (`viewportOverlayGlass`).
 const glass_still: f64 = 0.5;
@@ -1096,13 +1138,6 @@ pub fn viewportCarryShape(_: *SDLBackend, vp: *Viewport, radius: ?f32, alpha: f3
 pub fn viewportCarryLens(_: *SDLBackend, vp: *Viewport, lens: bool) void {
     if (comptime builtin.os.tag != .macos) return;
     fizzy_macos_viewport_carry_lens(cocoaWindow(vp.window), @intFromBool(lens));
-}
-
-/// A carry window with nothing of its own but its picture (`viewportOpenCarry`): no material, no
-/// shadow. macOS; nothing elsewhere.
-pub fn viewportCarryBare(_: *SDLBackend, vp: *Viewport) void {
-    if (comptime builtin.os.tag != .macos) return;
-    fizzy_macos_viewport_carry_bare(cocoaWindow(vp.window));
 }
 
 /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar: the traffic
@@ -1381,10 +1416,11 @@ extern fn fizzy_macos_viewport_settle(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
 extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64, w: f64, h: f64, alpha: f64) void;
 extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) void;
-extern fn fizzy_macos_viewport_carry_bare(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_window_buttons_width(nswindow: ?*anyopaque) f64;
 extern fn fizzy_macos_liquid_glass_available() c_int;
 extern fn fizzy_macos_viewport_overlay(nswindow: ?*anyopaque, main: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_overlay_photo_image(nswindow: ?*anyopaque, rgba: ?[*]const u8, w: c_long, h: c_long) void;
+extern fn fizzy_macos_viewport_overlay_photo(nswindow: ?*anyopaque, photo: ?*const OverlayPhoto) void;
 extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]const GlassShape, n: c_long, spacing: f64, look: *const GlassLook) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
@@ -1762,7 +1798,7 @@ pub fn renderPresent(self: *SDLBackend) void {
             const vp = if (slot.*) |*v| v else continue;
             const first = !vp.shown and vp.pending != null;
             const reshaped = vp.passive and !vp.overlay and (vp.carry_radius != vp.carry_radius_shown or vp.carry_alpha != vp.carry_alpha_shown or vp.carry_size_shown[0] != vp.screen.w or vp.carry_size_shown[1] != vp.screen.h);
-            const reglassed = vp.overlay and vp.glass_dirty;
+            const reglassed = vp.overlay and (vp.glass_dirty or vp.photo_dirty);
             if (!vp.frame_pending and !first and !reshaped and !reglassed) continue;
             if (!any) fizzy_native_transaction_begin();
             any = true;
@@ -1780,8 +1816,10 @@ pub fn renderPresent(self: *SDLBackend) void {
                 fizzy_macos_viewport_carry_shape(ns, vp.carry_radius, @floatFromInt(vp.screen.w), @floatFromInt(vp.screen.h), vp.carry_alpha);
             }
             if (reglassed) {
+                if (vp.glass_dirty) fizzy_macos_viewport_overlay_glass(ns, &vp.glass, @intCast(vp.glass_n), vp.glass_spacing, &vp.glass_look);
+                if (vp.photo_dirty) fizzy_macos_viewport_overlay_photo(ns, if (vp.photo) |*p| p else null);
                 vp.glass_dirty = false;
-                fizzy_macos_viewport_overlay_glass(ns, &vp.glass, @intCast(vp.glass_n), vp.glass_spacing, &vp.glass_look);
+                vp.photo_dirty = false;
             }
         }
     }

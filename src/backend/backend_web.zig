@@ -169,7 +169,6 @@ pub const viewports = struct {
     }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
     pub fn carryLens(_: *Viewport, _: bool) void {}
-    pub fn carryBare(_: *Viewport) void {}
     pub fn windowGlass(_: *Viewport, _: WindowGlassLook) bool {
         return false;
     }
@@ -220,6 +219,9 @@ pub const viewports = struct {
         blur: f32 = 0,
     };
     pub fn overlayGlass(_: *Viewport, _: []const GlassShape, _: f32, _: GlassLook) void {}
+    pub const OverlayPhoto = struct { rect: Rect, radius: f32, image: Rect, fill: dvui.Color, alpha: f32 = 1, blur: f32 = 0 };
+    pub fn overlayPhotoImage(_: *Viewport, _: ?[]const u8, _: u32, _: u32) void {}
+    pub fn overlayPhoto(_: *Viewport, _: ?OverlayPhoto) void {}
     pub fn displayInMain() Rect {
         return .{};
     }

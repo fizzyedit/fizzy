@@ -406,25 +406,6 @@ void fizzy_macos_viewport_carry_lens(void *nswindow, int lens) {
 }
 
 /*
- * A carry window that is its picture alone (`SDLBackend.viewportCarryBare`): its material taken
- * out — Liquid Glass or the vibrancy view — and no shadow, so other glass can lie over it and bend
- * what it shows, as the drag's lens does the carried view's picture.
- */
-void fizzy_macos_viewport_carry_bare(void *nswindow) {
-    @autoreleasepool {
-        NSWindow *window = (__bridge NSWindow *)nswindow;
-        if (window == nil) return;
-        NSView *frame = [[window contentView] superview];
-        NSMutableArray<NSView *> *gone = [NSMutableArray array];
-        for (NSView *v in [frame subviews]) {
-            if ([v isKindOfClass:[FizzyViewportGlassView class]] || [[v identifier] isEqualToString:carry_glass_id]) [gone addObject:v];
-        }
-        for (NSView *v in gone) [v removeFromSuperview];
-        [window setHasShadow:NO];
-    }
-}
-
-/*
  * The drag's glass as one overlay of Liquid Glass (macOS 26): a window over a whole display
  * (`SDLBackend.viewportOpenOverlay`) holding an `NSGlassEffectContainerView`, its pieces of glass
  * one view each, which the container runs together where they come within its spacing — the
@@ -450,6 +431,7 @@ void fizzy_macos_viewport_carry_bare(void *nswindow) {
 static NSString *const overlay_glass_ids[2] = {@"fizzy.overlay.glass.under", @"fizzy.overlay.glass.over"};
 static NSString *const overlay_fill_id = @"fizzy.overlay.fill";
 static NSString *const overlay_blur_id = @"fizzy.overlay.blur";
+static NSString *const overlay_photo_id = @"fizzy.overlay.photo";
 
 /*
  * A plain blur of what is behind the window: Core Animation's backdrop layer, which the OS's own
@@ -501,6 +483,18 @@ void fizzy_macos_viewport_overlay(void *nswindow, void *main_nswindow) {
         NSView *content = [window contentView];
         NSView *frame = [content superview];
         Class container_class = NSClassFromString(@"NSGlassEffectContainerView");
+        /* Under everything, the carried view's picture (`fizzy_macos_viewport_overlay_photo`): the
+         * lens over it bends it. */
+        if (content != nil && frame != nil) {
+            FizzyOverlayGlassHolder *photo = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
+            [photo setIdentifier:overlay_photo_id];
+            [photo setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [photo setWantsLayer:YES];
+            [frame addSubview:photo positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+            [photo release];
+#endif
+        }
         /* From the bottom, each added directly under SDL's view so over the one before: the lens,
          * frost — two layers of the same glass, crossfaded to blend two of its materials — and the
          * window's colour over them (`fizzy_macos_viewport_overlay_glass`). */
@@ -796,6 +790,130 @@ static void overlayBevelMask(NSView *view, const FizzyGlassShape *shapes, long n
  * the window's picture is presented in (`SDLBackend.renderPresent`), with implicit animations off,
  * so glass and picture change together.
  */
+/* The carried view's picture under the overlay's glass, as `SDLBackend.OverlayPhoto` lays it out. */
+typedef struct {
+    double x, y, w, h, radius;
+    double image[4];
+    double fill[4];
+    double alpha, blur;
+} FizzyOverlayPhoto;
+
+static NSView *overlayPart(NSWindow *window, NSString *ident) {
+    NSView *frame = [[window contentView] superview];
+    for (NSView *v in [frame subviews]) {
+        if ([[v identifier] isEqualToString:ident]) return v;
+    }
+    return nil;
+}
+
+/* The photo's two layers in its holder: the rounded rect it shows in, and the image in that. */
+static CALayer *overlayPhotoLayers(NSView *holder, CALayer **image) {
+    CALayer *root = [holder layer];
+    if (root == nil) return nil;
+    [root setGeometryFlipped:YES];
+    CALayer *shape = [[root sublayers] firstObject];
+    if (shape == nil) {
+        shape = [CALayer layer];
+        [shape setMasksToBounds:YES];
+        [shape setHidden:YES];
+        CALayer *pic = [CALayer layer];
+        [pic setContentsGravity:kCAGravityResize];
+        [shape addSublayer:pic];
+        [root addSublayer:shape];
+    }
+    *image = [[shape sublayers] firstObject];
+    return shape;
+}
+
+/*
+ * The image of the carried view's picture under overlay `nswindow`'s glass: premultiplied RGBA rows,
+ * `w` by `h`, copied into an image the layer keeps; NULL clears it. Set once a drag — after that
+ * the picture only moves (`fizzy_macos_viewport_overlay_photo`), nothing presented for it.
+ */
+void fizzy_macos_viewport_overlay_photo_image(void *nswindow, const unsigned char *rgba, long w, long h) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *holder = overlayPart(window, overlay_photo_id);
+        if (holder == nil) return;
+        CALayer *image = nil;
+        if (overlayPhotoLayers(holder, &image) == nil || image == nil) return;
+        [CATransaction setDisableActions:YES];
+        if (rgba == NULL || w <= 0 || h <= 0) {
+            [image setContents:nil];
+            return;
+        }
+        CFDataRef data = CFDataCreate(NULL, rgba, (CFIndex)(w * h * 4));
+        CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+        CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGImageRef made = CGImageCreate((size_t)w, (size_t)h, 8, 32, (size_t)w * 4, srgb,
+                                        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrderDefault, provider, NULL, false,
+                                        kCGRenderingIntentDefault);
+        [image setContents:(__bridge id)made];
+        if (made != NULL) CGImageRelease(made);
+        CGColorSpaceRelease(srgb);
+        CGDataProviderRelease(provider);
+        CFRelease(data);
+    }
+}
+
+/*
+ * Where the carried view's picture is under overlay `nswindow`'s glass this frame: in a rounded rect
+ * on its fill, its image laid where it is told — fitted to what it shows, so it may reach past the
+ * rect, cut off there — blurred as the bubbles' glass blurs what is under them, as opaque as it is
+ * told. NULL hides it. Under the lens, in the same window: the lens bends it, and it moves with the
+ * glass in one transaction, as a window of its own presented every frame did not.
+ */
+void fizzy_macos_viewport_overlay_photo(void *nswindow, const FizzyOverlayPhoto *p) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *holder = overlayPart(window, overlay_photo_id);
+        if (holder == nil) return;
+        CALayer *image = nil;
+        CALayer *shape = overlayPhotoLayers(holder, &image);
+        if (shape == nil || image == nil) return;
+        [CATransaction setDisableActions:YES];
+        if (p == NULL || p->alpha <= 0.01) {
+            [shape setHidden:YES];
+            return;
+        }
+        [shape setHidden:NO];
+        [shape setFrame:CGRectMake(p->x, p->y, p->w, p->h)];
+        [shape setCornerRadius:fmin(fmax(p->radius, 0), fmin(p->w, p->h) / 2)];
+        [shape setOpacity:(float)fmin(p->alpha, 1)];
+        CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        const CGFloat comps[4] = {(CGFloat)p->fill[0], (CGFloat)p->fill[1], (CGFloat)p->fill[2], (CGFloat)p->fill[3]};
+        CGColorRef fill = CGColorCreate(srgb, comps);
+        [shape setBackgroundColor:fill];
+        CGColorRelease(fill);
+        CGColorSpaceRelease(srgb);
+        [image setFrame:CGRectMake(p->image[0], p->image[1], p->image[2], p->image[3])];
+        /* Blurred as the bubbles' glass blurs (`overlayBlurLayer`'s filter, on the picture itself):
+         * a plain blur, none of a material's grey — `blur` points of the image as it lies here. */
+        const double radius = fmax(p->blur, 0);
+        @try {
+            if (radius <= 0.01) {
+                if ([[image filters] count] > 0) [image setFilters:nil];
+            } else {
+                if ([[image filters] count] == 0) {
+                    Class filter = NSClassFromString(@"CAFilter");
+                    const SEL make = sel_registerName("filterWithType:");
+                    id blur = (filter != nil && [filter respondsToSelector:make]) ? ((id (*)(id, SEL, id))objc_msgSend)(filter, make, @"gaussianBlur") : nil;
+                    /* Not normalised at its edges, as the backdrop's is: over a picture mostly clear —
+                     * a view captured alone — that turned everything clear in it black. */
+                    if (blur != nil) [image setFilters:@[ blur ]];
+                }
+                NSNumber *was = [image valueForKeyPath:@"filters.gaussianBlur.inputRadius"];
+                if ([[image filters] count] > 0 && (was == nil || fabs([was doubleValue] - radius) > 0.01))
+                    [image setValue:@(radius) forKeyPath:@"filters.gaussianBlur.inputRadius"];
+            }
+        } @catch (NSException *e) {
+            (void)e;
+        }
+    }
+}
+
 /*
  * The plain blur in the overlay's glass (`overlayBlurLayer`): one view over every piece that takes
  * frost, as big as they are together — the blur is of all it covers, every frame — `radius` points,
@@ -1327,12 +1445,11 @@ void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, d
                                     }];
             [effect setMaskImage:mask];
             [effect displayIfNeeded];
-        }
-        /* And the picture, SDL's view — all a bare window has (`fizzy_macos_viewport_carry_bare`):
-         * what is carried fills the window only to its shape, but a glass's frost writes the rect it
-         * reads, a little past the shape — over the app, in the main window, that is the app again;
-         * here, the blur of the window's own base, a square round the orb. The window is the shape,
-         * all of it. */
+        } else return;
+        /* And the picture, SDL's view: what is carried fills the window only to its shape, but a
+         * glass's frost writes the rect it reads, a little past the shape — over the app, in the main
+         * window, that is the app again; here, the blur of the window's own base, a square round the
+         * orb. The window is the shape, all of it. */
         NSView *content = [window contentView];
         if (content != nil) {
             [content setWantsLayer:YES];

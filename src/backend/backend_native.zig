@@ -303,6 +303,45 @@ pub const viewports = struct {
         });
     }
 
+    /// The carried view's picture under an overlay's glass (`overlayPhoto`).
+    pub const OverlayPhoto = struct {
+        /// The rounded rect it shows in, points from the overlay window's top left.
+        rect: Rect,
+        radius: f32,
+        /// Where its image lies, points from `rect`'s top left: it may reach past it.
+        image: Rect,
+        fill: dvui.Color,
+        alpha: f32 = 1,
+        /// Points of plain blur on it.
+        blur: f32 = 0,
+    };
+
+    /// Overlay `vp`'s image of the carried view's picture: premultiplied RGBA rows, `w` by `h`,
+    /// copied; null, none. Once a drag (`overlayPhoto` places it).
+    pub fn overlayPhotoImage(vp: *Viewport, rgba: ?[]const u8, w: u32, h: u32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportOverlayPhotoImage(vp, rgba, w, h);
+    }
+
+    /// Where overlay `vp` shows the carried view's picture this frame, under its glass, so the
+    /// glass over it bends it; null, nowhere. Applied with the glass.
+    pub fn overlayPhoto(vp: *Viewport, photo: ?OverlayPhoto) void {
+        if (comptime !supported) return;
+        const p = photo orelse return dvui.currentWindow().backend.impl.viewportOverlayPhoto(vp, null);
+        const f = p.fill;
+        dvui.currentWindow().backend.impl.viewportOverlayPhoto(vp, .{
+            .x = p.rect.x,
+            .y = p.rect.y,
+            .w = p.rect.w,
+            .h = p.rect.h,
+            .radius = p.radius,
+            .image = .{ p.image.x, p.image.y, p.image.w, p.image.h },
+            .fill = .{ @as(f64, @floatFromInt(f.r)) / 255, @as(f64, @floatFromInt(f.g)) / 255, @as(f64, @floatFromInt(f.b)) / 255, @as(f64, @floatFromInt(f.a)) / 255 },
+            .alpha = p.alpha,
+            .blur = p.blur,
+        });
+    }
+
     /// The display the main window is on, in its frame (physical pixels from its top left).
     pub fn displayInMain() Rect {
         if (comptime !supported) return .{};
@@ -341,13 +380,6 @@ pub const viewports = struct {
     pub fn carryLens(vp: *Viewport, lens: bool) void {
         if (comptime !supported) return;
         dvui.currentWindow().backend.impl.viewportCarryLens(vp, lens);
-    }
-
-    /// A carry window that is its picture alone, in its shape (`carryShape`): none of the OS's
-    /// material under it and no shadow round it — a picture other glass lies over. For good.
-    pub fn carryBare(vp: *Viewport) void {
-        if (comptime !supported) return;
-        dvui.currentWindow().backend.impl.viewportCarryBare(vp);
     }
 
     /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar (macOS's
