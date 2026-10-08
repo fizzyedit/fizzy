@@ -2097,7 +2097,27 @@ pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     self.arena = arena;
     if (self.begin_hook) |hook| hook(self);
     self.gpu.beginFrame();
+    self.gpu.window_held = self.mainHeld();
     self.manage_backend_tracking.reset_begin();
+}
+
+/// Whether the main window keeps its last picture this frame (`GpuRenderer.window_held`): while it
+/// is covered — a float's window full screen in a Space of its own over it — and while a float's
+/// window moves itself into or out of full screen and the main window does not. Metal can hold a
+/// covered window's drawable back for up to a second, and AppKit hands one back slowly to a window
+/// a Space transition is taking off screen: waiting on the main window's every frame, a float's
+/// way into or out of full screen ran choppy and stood still partway for moments at a time (the
+/// user). The floats keep theirs the same way while the main window moves (`renderPresent`).
+fn mainHeld(self: *SDLBackend) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    // Its own way into or out of full screen is drawn whatever AppKit says of it on the way.
+    if (platform.window.windowMovingItself(self.window)) return false;
+    if (c.SDL_GetWindowFlags(self.window) & c.SDL_WINDOW_OCCLUDED != 0) return true;
+    for (&self.viewports) |*slot| {
+        const vp = if (slot.*) |*v| v else continue;
+        if (vp.shown and platform.window.windowMovingItself(vp.window)) return true;
+    }
+    return false;
 }
 
 /// The window is cleared by the renderer's first window pass of the frame (see

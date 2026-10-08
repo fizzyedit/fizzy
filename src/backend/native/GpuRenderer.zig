@@ -180,6 +180,10 @@ swapchain: ?*c.SDL_GPUTexture = null,
 swapchain_w: u32 = 0,
 swapchain_h: u32 = 0,
 swapchain_state: enum { none, acquired, unavailable } = .none,
+/// The window keeps its last picture this frame (`SDLBackend.begin`): no drawable is waited for,
+/// and nothing is drawn to it, as when it is minimized. Its offscreen targets — a float window's
+/// picture among them — are drawn as ever.
+window_held: bool = false,
 /// Whether this frame's drawable has been cleared (by the window's first pass).
 window_cleared: bool = false,
 
@@ -544,6 +548,10 @@ fn acquireSwapchain(self: *GpuRenderer) !bool {
         .acquired => return true,
         .unavailable => return false,
         .none => {},
+    }
+    if (self.window_held) {
+        self.swapchain_state = .unavailable;
+        return false;
     }
     const cmd = try self.ensureCmd();
     var tex: ?*c.SDL_GPUTexture = null;
