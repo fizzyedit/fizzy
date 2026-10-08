@@ -261,21 +261,6 @@ pub fn forText(look: InApp) InApp {
     return l;
 }
 
-/// `look` for a lens over a picture of the caller's own — a magnifier's zoom, a loupe — rather than
-/// over what is behind it (`LiquidField.drawPicture`): the picture is what it shows, as it is, so
-/// its middle takes no frost, none of the window's colour and no lift, at any point on the slider
-/// — a colour picked through it is the colour under it. Only the band along its edge is glass,
-/// bending the picture toward its rim and lit there, and that follows the slider as every glass
-/// does: a clear lens at the bottom, its shine going at the top.
-pub fn forLens(look: InApp) InApp {
-    var l = look;
-    l.frost = 0;
-    l.mix = 0;
-    l.text_mix = 0;
-    l.lift = 0;
-    return l;
-}
-
 fn smoothstep(x: f32) f32 {
     return x * x * (3 - 2 * x);
 }
@@ -338,22 +323,6 @@ test "the glass grows rough before the colour comes in" {
 test "a surface carrying text keeps some frost over a clear lens, none once it is opaque" {
     try std.testing.expectApproxEqAbs(text_frost, forText(inApp(0)).frost, 1e-6);
     try std.testing.expectEqual(inApp(1).frost, forText(inApp(1)).frost);
-}
-
-test "a lens over a picture leaves its middle as it is, everywhere on the slider" {
-    var i: usize = 0;
-    while (i <= 20) : (i += 1) {
-        const t = @as(f32, @floatFromInt(i)) / 20;
-        const l = forLens(inApp(t));
-        try std.testing.expectEqual(@as(f32, 0), l.frost);
-        try std.testing.expectEqual(@as(f32, 0), l.mix);
-        try std.testing.expectEqual(@as(f32, 0), l.lift);
-        // Its edge is the slider's glass all the same.
-        try std.testing.expectEqual(inApp(t).bend, l.bend);
-        try std.testing.expectEqual(inApp(t).rim, l.rim);
-    }
-    // A clear lens at the bottom, folding at its rim as Apple's does.
-    try std.testing.expect(forLens(inApp(0)).bend > 1);
 }
 
 test "a drop's plain blur is light, growing with the glass's roughness" {
