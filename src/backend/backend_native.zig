@@ -75,6 +75,12 @@ pub fn frameInsets(win: *dvui.Window) dvui.Rect {
     const in = platform.linux_titlebar.frameInsets(win.backend.impl.window);
     return .{ .x = in.left, .y = in.top, .w = in.right, .h = in.bottom };
 }
+/// Linux: the desktop's blur behind the window's frame this frame — inside its shadow's margin,
+/// its corners rounded by `radius` points — or none (null). Whether the compositor blurs behind
+/// windows at all (`platform.linux_titlebar.blurBehind`); false elsewhere.
+pub fn blurBehind(win: *dvui.Window, radius: ?f32) bool {
+    return platform.linux_titlebar.blurBehind(win.backend.impl.window, radius);
+}
 const getWin32Hwnd = platform.win32_titlebar.getWin32Hwnd;
 
 /// Files the OS asks fizzy to open while it runs go to the single-instance queue, which opens

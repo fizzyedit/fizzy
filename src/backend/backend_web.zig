@@ -60,6 +60,10 @@ pub fn frameInsets(_: *dvui.Window) dvui.Rect {
     return .{};
 }
 
+pub fn blurBehind(_: *dvui.Window, _: ?f32) bool {
+    return false;
+}
+
 pub fn getHoveredTitleBarButton() ?TitleBarButton {
     return null;
 }

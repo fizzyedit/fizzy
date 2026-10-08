@@ -368,7 +368,20 @@ Each step is useful by itself, and the spikes come before anything that depends 
    thing on Windows to the OS's own UI.
 4. **Linux: the window material** through `ext-background-effect-v1` (GNOME 51, Plasma 6.7, niri),
    and **Wayland popups** for menus and dialogs. A protocol binding on SDL's `wl_display`, and the
-   region set before the present.
+   region set before the present. *The material is built, behind `FIZZY_BLUR_BEHIND=1`, not yet
+   seen on a real desktop:* `platform/wayland_blur.zig` binds either protocol on SDL's display
+   (libwayland-client opened at runtime, its own event queue), `blur_region.zig` steps the rounded
+   frame into rows (unit tested), and the Editor asks for it while the window is translucent and
+   draws the base translucent where the compositor blurs. Run against a stub compositor speaking
+   both protocols: the region is applied with the surface commit, sent only when it changes,
+   cleared when the window goes opaque, and not asked for where the compositor reports no blur.
+   Run in fizzy on Ubuntu 26.04's GNOME 50, which has neither protocol: the probe binds once on a
+   queue of its own, logs what it found (`wayland_blur`), asks for nothing, and the window stays
+   opaque. KWin through Plasma 6.6 blurs a whole window whose blur object has an empty region
+   (`plugins/blur/blur.cpp`), so on KDE's protocol "no blur" is the object unset and released.
+   One trap: wayland-protocols 1.45, the release that added the protocol, numbered the `blur`
+   capability 0; later releases made it the bit 1. fizzy follows the current definition, so a
+   compositor built against 1.45 reads as having no blur. The Wayland popups are not built.
 5. **Windows spikes**, in a scratch app before fizzy, on a hardware GPU and on WARP, Windows 11
    23H2 and 24H2:
    1. a Windows.UI.Composition target that is not topmost, under SDL's topmost DirectComposition
