@@ -1,20 +1,17 @@
 name: CI
 
-# PR / manual: three native test jobs (no skipped rows). Push to main: Linux-only (fast).
+# PR / merge queue / manual: three native test jobs (no skipped rows). Push to main: Linux-only
+# (fast).
+#
+# `ci-ok` is the one check `main`'s ruleset requires (`.github/rulesets/main.json`), so the
+# workflow runs for every change. A workflow-level `paths-ignore` would never start for a
+# Markdown-only PR, leaving its required check waiting for good; `changes` works out instead
+# whether anything besides docs changed, and the builds skip themselves when nothing did.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "doc/**"
-      - "README.md"
-      - "**.md"
-      - "LICENSE**"
   pull_request:
-    paths-ignore:
-      - "doc/**"
-      - "README.md"
-      - "**.md"
-      - "LICENSE**"
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -25,8 +22,53 @@ env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      # A pull request checks out its merge commit, whose first parent is the base: depth 2
+      # holds both.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Anything besides docs?
+        id: filter
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base=HEAD^1 ;;
+            merge_group) base=$QUEUE_BASE ;;
+            push) base=$PUSH_BEFORE ;;
+            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          # A base that can't be fetched (a force push's old tip) builds everything.
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null && ! git fetch --depth=1 origin "$base"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Assigned first, so a failing diff fails the job (and `ci-ok`) rather than reading as
+          # "nothing changed".
+          files=$(git diff --name-only "$base" HEAD)
+          code=false
+          while IFS= read -r f; do
+            case "$f" in
+              "" | *.md | doc/* | LICENSE*) ;;
+              *) code=true; echo "builds: $f changed" ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
     name: Tests (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -115,7 +157,8 @@ jobs:
   # builds do). It shows the app compiles and links, not that it runs.
   windows-fizzy-backend:
     name: Windows build (fizzy backend, cross-compiled)
-    if: github.event_name != 'push'
+    needs: changes
+    if: github.event_name != 'push' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,3 +172,25 @@ jobs:
         run: bash scripts/ci-retry.sh zig build --fetch
       - name: Build for x86_64-windows-gnu with -Dnative-backend=fizzy
         run: bash scripts/ci-retry.sh zig build -Dtarget=x86_64-windows-gnu -Dnative-backend=fizzy -Dno-emit --summary all
+
+  # The required check. Passes when every job above passed or was skipped (a docs-only change
+  # skips the builds); fails on any failure or cancellation, `changes` included. A job added to
+  # this workflow joins the gate by being added to `needs`.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, test, windows-fizzy-backend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was skipped
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success | skipped) ;;
+              *) exit 1 ;;
+            esac
+          done

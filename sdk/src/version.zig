@@ -1,15 +1,16 @@
 //! SDK version and ABI fingerprint lock.
 //!
-//! `sdk_version` is bumped when the plugin ABI boundary changes. `recorded_sdk_shape_fingerprint`
-//! must be updated in the same commit — CI fails at compile time if the live shape fingerprint
-//! drifts from the recorded literal without an intentional version bump.
+//! `recorded_sdk_shape_fingerprint` is updated by the change that moves the plugin ABI boundary —
+//! CI fails at compile time if the live shape fingerprint drifts from the recorded literal.
+//! `sdk_version` is bumped separately, by the SDK release that ships the change: one release PR
+//! per batch of boundary changes (fizzy's `CONTRIBUTING.md`, "Changing the SDK").
 //!
 //! **Two fingerprints, one shape.** Both derive from the same target/mode-invariant declared
 //! shape (`fingerprint.hashAllShape`: field names/order, integer bit-width, enum tags, pointer
 //! kind, fn signatures — never a byte offset or size) of the Fizzy-owned boundary:
 //!
 //!   * `dylib.sdk_shape_fingerprint` — the bare shape hash, checked below against a single
-//!     recorded literal. The "did you forget to bump `sdk_version`" guard. Invariant, so it needs
+//!     recorded literal. The "did the boundary just move" guard. Invariant, so it needs
 //!     no per-(arch, os, mode) table and no cross-compiling: `zig build test-sdk-version` on any
 //!     target reports the value to record.
 //!   * `dylib.abi_fingerprint` — the runtime dlopen-time load key: the shape hash folded with the
@@ -20,11 +21,12 @@
 //!     store match one fingerprint per release across every `os-arch` binary.
 //!
 //! Because the load key is shape-based, a plugin breaks *only* when the boundary shape actually
-//! changes (→ you bump `sdk_version`) or the optimize-mode class differs (a genuinely unloadable
-//! combination). A cosmetic dvui/toolchain update that leaves the boundary shape untouched keeps
-//! every installed plugin loading. The one thing this no longer catches — pure codegen/padding
-//! drift within a single `sdk_version` — only happens on a deliberate, pinned zig/dvui bump that
-//! is a coordinated re-release anyway. See `fingerprint.hashAllShape` for the full rationale.
+//! changes (→ the next SDK release bumps `sdk_version`) or the optimize-mode class differs (a
+//! genuinely unloadable combination). A cosmetic dvui/toolchain update that leaves the boundary
+//! shape untouched keeps every installed plugin loading. The one thing this no longer catches —
+//! pure codegen/padding drift within a single `sdk_version` — only happens on a deliberate,
+//! pinned zig/dvui bump that is a coordinated re-release anyway. See `fingerprint.hashAllShape`
+//! for the full rationale.
 //!
 //! **Cadence policy (decoupled from the app version).** The app version (`VERSION` /
 //! `build.zig.zon`) ships often and is *not* an input to either fingerprint or to `sdk_version`.
@@ -32,7 +34,7 @@
 //! types included, reached transitively where they cross the boundary) — it only moves when one of
 //! those *shapes* changes. `dvui` and the Zig toolchain are pinned (see the `dvui` dependency in
 //! `build.zig.zon` and `ZIG_VERSION` in CI) and bumped deliberately/batched; a bump that
-//! restructures a boundary-reachable dvui type moves the shape fingerprint (→ bump `sdk_version`),
+//! restructures a boundary-reachable dvui type moves the shape fingerprint (→ an SDK release),
 //! while a cosmetic one does not. A Fizzy release that leaves the boundary shape untouched keeps
 //! the same fingerprint, so the store's installed plugins keep loading. The store matches plugin
 //! binaries on `abi_fingerprint` (see `docs/PLUGINS.md` § Compatibility).
@@ -46,7 +48,9 @@ pub const VersionTriplet = dylib.VersionTriplet;
 /// (major, minor, patch) compare with no semver "0.x is special" carve-out, so each field's
 /// meaning is a convention this project enforces by discipline, not by the type system:
 ///
-///   * **patch** — bump on every `recorded_sdk_shape_fingerprint` change that ships.
+///   * **patch** — bumped by each SDK release that ships `recorded_sdk_shape_fingerprint`
+///     changes (or `core/` changes plugins build in). Between releases the fingerprint moves
+///     freely under the current version.
 ///   * **minor** — a compatibility *epoch*: a deliberate, announced hard break. 0.2.0 is the
 ///     first release of the library-shaped SDK (`core/`, `sdk/`, `app/`; regions and surfaces);
 ///     0.1.x plugins do not load against it and are rebuilt, not migrated. While 0.2.0 is
@@ -69,8 +73,8 @@ pub const sdk_version = @import("sdk_version").sdk_version;
 
 /// Recorded `dylib.sdk_shape_fingerprint` — see the module doc above for what this hashes and
 /// why it is a single target/mode-invariant literal rather than a per-target table. Update this
-/// value (from the `@compileError` it triggers) and bump `sdk_version` in the same commit
-/// whenever it changes.
+/// value from the `@compileError` it triggers whenever it changes; leave `sdk_version` to the
+/// next SDK release.
 pub const recorded_sdk_shape_fingerprint: u64 = 0x86445a7bc5734576;
 
 comptime {
