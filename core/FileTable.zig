@@ -1411,10 +1411,11 @@ test "a move across mounts copies the tree and removes the source" {
     // The fixture's `src/` (with main.zig) goes onto the mount.
     var sink: DoneSink = .{};
     try table.rename(try fx.join(arena, "src"), "mem://box/src", DoneSink.onDone, &sink);
-    var frames: usize = 0;
-    // A local read now lands from the `Io`'s pool (see `LocalFs.readFile`), so this is frames
-    // of pumping with a yield between, not a fixed count of synchronous turns.
-    while (sink.calls == 0 and frames < 100_000) : (frames += 1) {
+    // A local read now lands from the `Io`'s pool (see `LocalFs.readFile`), so this pumps with a
+    // yield between until the clock gives up, not for a count of turns: 100,000 yields is about
+    // 20 ms on an idle machine, and a slow CI disk outlasts it.
+    const give_up = std.Io.Clock.boot.now(t.io).nanoseconds + 10 * std.time.ns_per_s;
+    while (sink.calls == 0 and std.Io.Clock.boot.now(t.io).nanoseconds < give_up) {
         table.pump();
         std.Thread.yield() catch {};
     }
@@ -1428,7 +1429,7 @@ test "a move across mounts copies the tree and removes the source" {
     try mem.put("/src/back.txt", "home");
     sink = .{};
     try table.rename("mem://box/src/back.txt", try fx.join(arena, "back.txt"), DoneSink.onDone, &sink);
-    frames = 0;
+    var frames: usize = 0;
     while (sink.calls == 0 and frames < 64) : (frames += 1) table.pump();
     try t.expect(sink.err == null);
     const got = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try fx.join(arena, "back.txt"), arena, .limited(64));
