@@ -1101,7 +1101,12 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                             {
                                 var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
                                 defer icon_slot.deinit();
-                                if (selected and root == null) selection_rect = unionRect(selection_rect, rowContent(branch, icon_slot.data().borderRectScale(), folder_name));
+                                const content = rowContent(branch, icon_slot.data().borderRectScale(), folder_name);
+                                if (selected and root == null) selection_rect = unionRect(selection_rect, content);
+                                // Lifted, a folder is carried in the same glass as a file, as its
+                                // icon and its name — though only the tree takes it (`carryOut`).
+                                if (root == null and liftedHere(tree, branch, inner_id_extra.*))
+                                    carryOut(tree, abs_path, if (tree.drag_branch_ids != null) unionRect(selection_rect_last, content).? else content);
                                 _ = core.icon.icon(
                                     @src(),
                                     "FolderIcon",
@@ -1491,30 +1496,42 @@ fn leftTree(p: dvui.Point.Physical) bool {
     return !tree_rect.contains(p) or dvui.currentWindow().subwindows.windowFor(p) != tree_window;
 }
 
-/// Hand the file at `path`, carried out of the tree, to the app's view drag, as a document tab is
-/// handed off its strip: the same drop over every document pane, the same bubble, the same tab
-/// over a strip, landing through the pane's drop (`Workspace.paneDrop`). Open, it is its document
-/// — the pane showing it photographs it for the drag. Not open, it is the id its document will
-/// have, from the plugin that will open it (`Host.pluginForExtension`): carried as its file's
-/// icon, and opened where it is let go. `from` is what the drag grows out of: the row's icon and
-/// name where they were when it was lifted (`rowContent`), the selected rows' together when it is
-/// lifted with them. A file nothing can open stays a row being moved in the tree.
+/// Hand the row at `path`, lifted out of the tree, to the app's view drag, as a document tab is
+/// handed off its strip: the same glass over the tree and off it. A file is carried as a document
+/// — the same drop over every document pane, the same bubble, the same tab over a strip, landing
+/// through the pane's drop (`Workspace.paneDrop`). Open, it is its document — the pane showing it
+/// photographs it for the drag. Not open, it is the id its document will have, from the plugin
+/// that will open it (`Host.pluginForExtension`): carried as its file's icon, and opened where it
+/// is let go. Lifted with the rest of a selection, they are carried together, it first, and land
+/// together (`Host.beginViewDragMany`). A folder, or a file nothing opens, is carried as its row —
+/// its icon and name — and no place takes it: only the tree does (`carryBack`). `from` is what the
+/// drag grows out of: the row's icon and name where they were when it was lifted (`rowContent`),
+/// the selected rows' together when it is lifted with them.
 ///
 /// The tree's own drag is put down, not ended (`TreeWidget.cancelDrag`): ended, the tree would
 /// drop the row next frame on whatever row was last under the pointer. Brought back over the tree
-/// while the view drag lasts, the file is a row again (`carryBack`).
+/// while the view drag lasts, the rows are rows again (`carryBack`).
 fn carryOut(tree: *core.widgets.TreeWidget, path: []const u8, from: dvui.Rect.Physical) void {
     const host = runtime.host();
     if (host.viewDragSurface() != null) return;
     const arena = host.arena();
-    const id = if (host.docFromPath(path)) |doc|
-        sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc)) catch return
-    else if (host.pluginForExtension(std.fs.path.extension(path))) |owner|
-        sdk.document.surfaceId(arena, owner.id, path) catch return
-    else
-        return;
+    // The rest of the selection it was lifted with, in the order a move takes them
+    // (`selectionPathsSorted`) — read before the tree's drag, which says it was lifted with them,
+    // is put down.
+    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
+    paths.append(arena, path) catch return;
+    if (tree.drag_branch_ids != null) {
+        const rest = selectionPathsSorted(arena) catch &.{};
+        for (rest) |p| if (!std.mem.eql(u8, p, path)) paths.append(arena, p) catch return;
+    }
     tree.cancelDrag();
-    host.beginViewDrag(id, from);
+    if (paths.items.len == 1 and !pathIsDirAbsolute(path)) {
+        if (carriedId(arena, path)) |id| host.beginViewDrag(id, from) else host.beginViewDragMany(&.{carriedItem(arena, path)}, from);
+    } else {
+        const items = arena.alloc(sdk.EditorAPI.Carried, paths.items.len) catch return;
+        for (paths.items, items) |p, *it| it.* = carriedItem(arena, p);
+        host.beginViewDragMany(items, from);
+    }
     const live = host.viewDragSurface() orelse return;
     forgetCarried();
     const gpa = runtime.allocator();
@@ -1524,6 +1541,24 @@ fn carryOut(tree: *core.widgets.TreeWidget, path: []const u8, from: dvui.Rect.Ph
         return;
     };
     carried = .{ .path = kept_path, .id = kept_id };
+}
+
+/// The id the document of the file at `path` has, or will have once the plugin that opens it does
+/// (`Host.pluginForExtension`); null for a file nothing opens.
+fn carriedId(arena: std.mem.Allocator, path: []const u8) ?[]const u8 {
+    const host = runtime.host();
+    if (host.docFromPath(path)) |doc| return sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc)) catch null;
+    if (host.pluginForExtension(std.fs.path.extension(path))) |owner| return sdk.document.surfaceId(arena, owner.id, path) catch null;
+    return null;
+}
+
+/// The row at `path` as the view drag carries it (`carryOut`): a file as its document, a folder or
+/// a file nothing opens as its name, which no place takes.
+fn carriedItem(arena: std.mem.Allocator, path: []const u8) sdk.EditorAPI.Carried {
+    const label = std.fs.path.basename(path);
+    if (pathIsDirAbsolute(path)) return .{ .label = label, .folder = true };
+    if (carriedId(arena, path)) |id| return .{ .id = id };
+    return .{ .label = label };
 }
 
 /// The file `carryOut` handed to the app's view drag, brought back over the tree: while it is over

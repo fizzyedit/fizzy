@@ -72,6 +72,16 @@ photo_last: ?dvui.Rect.Physical = null,
 start_ns: i128 = 0,
 /// Surface lifted from the source: what the card under the pointer shows, and what lands.
 moved_id: []const u8 = "",
+/// Everything lifted together with it (`beginLooseMany`) — a selection out of a file tree — in the
+/// order it was, the one in hand first: carried in the one glass, which shows them all, and landing
+/// together (`sdk.RegionSpec.Drop.others`). Empty for one view carried alone. Ids and labels are
+/// interned (`State.internName`).
+with: [max_with]Carried = undefined,
+with_n: usize = 0,
+/// Something no place takes is carried (`sdk.EditorAPI.Carried.id` empty): a folder lifted out of a
+/// file tree. Nothing lands it: no place is mapped for it, so no zones show, and only the plugin
+/// that lifted it takes it back, reading the drag as its own while it is over it (`held_id`).
+held: bool = false,
 /// What the view is carried as this frame (`modeAt`), and what it was before its last change.
 mode: Mode = .preview,
 morph_from_mode: Mode = .preview,
@@ -388,6 +398,20 @@ pub fn ghosted(l: *Layout, name: []const u8) bool {
 /// Past this the drag simply cannot aim at the newest places, which is a far
 /// better failure than a map that shifts while you are reading it.
 pub const max_targets = 64;
+
+/// One thing carried with others (`with`).
+pub const Carried = struct {
+    id: []const u8 = "",
+    label: []const u8 = "",
+    folder: bool = false,
+};
+
+/// The most things one drag carries together: a selection past it leaves the rest where they are.
+pub const max_with = 128;
+
+/// What the drag reports it is carrying while it carries something no place takes (`held`):
+/// no surface's id, and the same for as long as it lasts.
+pub const held_id = "\x00held";
 
 pub fn active(self: ViewDrag) bool {
     return self.name.len > 0;
@@ -756,6 +780,34 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
 /// float starts at the card that was grabbed and shows the picture the card showed, which the
 /// caller hands over (`State.stealSnapshot`) and the drag destroys.
 pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
+    // A surface's id is its registry's; a document not open yet has only the plugin's, which is
+    // its frame's, so it is interned to outlive the drag.
+    const moved = if (l.host.surfaceById(id)) |s| s.id else if (unopened(l, id)) l.state.internName(l.gpa, id) else return;
+    beginLooseAs(l, moved, from, texture);
+}
+
+/// Begin carrying several things lifted together out of a plugin's own list
+/// (`Host.beginViewDragMany`) — a selection out of a file tree — the first the one in hand: a
+/// loose drag of it (`beginLoose`), carrying the rest with it (`with`). With anything among them no
+/// place takes — a folder, by no id — it is carried by `held_id` and lands nowhere (`held`).
+pub fn beginLooseMany(l: *Layout, items: []const sdk.EditorAPI.Carried, from: dvui.Rect.Physical) void {
+    if (items.len == 0) return;
+    var held = false;
+    for (items) |it| {
+        if (it.id.len == 0 or (l.host.surfaceById(it.id) == null and !unopened(l, it.id))) held = true;
+    }
+    if (held) beginLooseAs(l, held_id, from, null) else beginLoose(l, items[0].id, from, null);
+    const d = &l.state.view_drag;
+    if (!d.active()) return;
+    d.held = held;
+    for (items[0..@min(items.len, max_with)], 0..) |it, i| {
+        const id = if (i == 0 and !held) d.moved_id else if (it.id.len == 0) "" else if (l.host.surfaceById(it.id)) |s| s.id else l.state.internName(l.gpa, it.id);
+        d.with[i] = .{ .id = id, .label = if (it.label.len == 0) "" else l.state.internName(l.gpa, it.label), .folder = it.folder };
+        d.with_n = i + 1;
+    }
+}
+
+fn beginLooseAs(l: *Layout, moved: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
     var d = &l.state.view_drag;
     d.hand = null;
     d.aim_at = null;
@@ -767,9 +819,8 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
-    // A surface's id is its registry's; a document not open yet has only the plugin's, which is
-    // its frame's, so it is interned to outlive the drag.
-    const moved = if (l.host.surfaceById(id)) |s| s.id else if (unopened(l, id)) l.state.internName(l.gpa, id) else return;
+    d.with_n = 0;
+    d.held = false;
     d.name = loose_source;
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
@@ -792,6 +843,10 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
 /// and the drag is as steady as your hand.
 fn mapTargets(l: *Layout, d: *ViewDrag) void {
     d.target_count = 0;
+    defer mapOccluders(l, d);
+    // Carried by an id no place knows (`held`): no place takes it — not even a shape place, which
+    // takes any view — so none shows its zones.
+    if (std.mem.eql(u8, d.moved_id, held_id)) return;
     const surface_kw = draggedKeywords(l);
     // A tab's content goes to a slot made for it, never a plain place (`Layout.slotted`).
     const slotted = slottedId(l, d.moved_id);
@@ -814,7 +869,6 @@ fn mapTargets(l: *Layout, d: *ViewDrag) void {
         };
         d.target_count += 1;
     }
-    mapOccluders(l, d);
 }
 
 /// Photograph the floats with the places: each one's window and header, with the layer its places
@@ -1709,6 +1763,9 @@ fn drawDrop(l: *Layout, taken: bool) void {
 /// What the drop is carrying, named: a photograph of a view is not always enough to tell one
 /// from another, and an icon alone says only what kind of file it is.
 fn dropTitle(l: *Layout, d: ViewDrag) ?[]const u8 {
+    // Carried with others: the one in hand, and how many more.
+    if (d.with_n > 1) return std.fmt.allocPrint(l.arena, "{s} +{d}", .{ carriedTitle(l, d), d.with_n - 1 }) catch carriedTitle(l, d);
+    if (d.with_n == 1) return carriedTitle(l, d);
     if (l.host.surfaceById(d.moved_id)) |s| return s.title;
     const doc = draggedDoc(l, d) orelse return null;
     return std.fs.path.basename(doc.path);
@@ -1816,7 +1873,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     // photograph, a tab grows into its document's (or, with none, into a pill of its own).
     const scale = dvui.currentWindow().natural_scale;
     const pad = card_padding * scale;
-    const title = titleOf(l, d.moved_id);
+    const title = carriedTitle(l, d.*);
     const show_photo = d.texture != null and !as_tab;
     const target: dvui.Size.Physical = if (show_photo) blk: {
         const f = floatTarget(d.texture_rect.size(), scale);
@@ -1958,6 +2015,7 @@ fn draggedDoc(l: *Layout, d: ViewDrag) ?struct { path: []const u8, dirty: bool }
 
 /// A card with no photograph: the tab's face in glass, tab-sized.
 fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Physical {
+    if (asRows(d)) return rowsSize(l, &d, scale);
     const text = dvui.Font.theme(.body).textSize(title);
     const doc = draggedDoc(l, d);
     var w = text.w + 2 * face_pad_x;
@@ -1982,6 +2040,7 @@ fn drawTabFace(l: *Layout, d: ViewDrag, title: []const u8) void {
     const theme = dvui.themeGet();
     const icon_color = theme.color(.control, .text);
     const color = theme.color(.window, .text);
+    if (asRows(d)) return drawRows(l, &d, icon_color, color);
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5, .gravity_y = 0.5 });
     defer row.deinit();
     const doc = draggedDoc(l, d);
@@ -2007,6 +2066,91 @@ fn drawTabFace(l: *Layout, d: ViewDrag, title: []const u8) void {
         dot.drawBackground();
         dot.deinit();
     };
+}
+
+/// What the carried thing is called on its glass: the view's title, a document's file name — or
+/// what the first of several lifted together, or something no place takes, was lifted as.
+fn carriedTitle(l: *Layout, d: ViewDrag) []const u8 {
+    if (d.with_n > 0) return itemTitle(l, d.with[0]);
+    return titleOf(l, d.moved_id);
+}
+
+fn itemTitle(l: *Layout, it: Carried) []const u8 {
+    if (it.label.len > 0) return it.label;
+    return titleOf(l, it.id);
+}
+
+/// Carried as the rows it was lifted as rather than one tab's face: several lifted together, or
+/// something no place takes — a folder, by its name and a folder's icon.
+fn asRows(d: ViewDrag) bool {
+    return d.with_n > 1 or d.held;
+}
+
+/// The most rows the card shows; past them the last says how many more there are.
+const face_rows_max = 6;
+/// Points between two rows.
+const face_row_gap: f32 = 2;
+
+/// The rows shown (`face_rows_max`), and how many more are carried past them.
+fn shownRows(d: *const ViewDrag) struct { items: []const Carried, more: usize } {
+    const n = d.with_n;
+    if (n <= face_rows_max) return .{ .items = d.with[0..n], .more = 0 };
+    return .{ .items = d.with[0 .. face_rows_max - 1], .more = n - (face_rows_max - 1) };
+}
+
+/// The card carried as rows (`asRows`): each row's icon and name, as the rows were in the list,
+/// one under the other.
+fn rowsSize(l: *Layout, d: *const ViewDrag, scale: f32) dvui.Size.Physical {
+    const font = dvui.Font.theme(.body);
+    const rows = shownRows(d);
+    var w: f32 = 0;
+    var line: f32 = face_icon;
+    for (rows.items) |it| {
+        const text = font.textSize(itemTitle(l, it));
+        w = @max(w, face_icon + face_gap + text.w);
+        line = @max(line, text.h);
+    }
+    var count = rows.items.len;
+    if (rows.more > 0) {
+        const more = std.fmt.allocPrint(l.arena, "+{d} more", .{rows.more}) catch "";
+        w = @max(w, face_icon + face_gap + font.textSize(more).w);
+        count += 1;
+    }
+    const n: f32 = @floatFromInt(count);
+    return .{ .w = (w + 2 * face_pad_x) * scale, .h = (n * line + (n - 1) * face_row_gap + 2 * face_pad_y) * scale };
+}
+
+fn drawRows(l: *Layout, d: *const ViewDrag, icon_color: dvui.Color, color: dvui.Color) void {
+    var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_x = 0.5, .gravity_y = 0.5 });
+    defer col.deinit();
+    const rows = shownRows(d);
+    for (rows.items, 0..) |it, i| {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .margin = .{ .y = if (i == 0) 0 else face_row_gap } });
+        defer row.deinit();
+        {
+            var slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .w = face_gap } });
+            defer slot.deinit();
+            const path = sdk.document.pathOfSurfaceId(it.id);
+            if (it.folder) {
+                core.icon.icon(@src(), "folder_icon", icons.tvg.entypo.folder, .{
+                    .fill_color = .{ .color = icon_color },
+                    .stroke_color = .{ .color = icon_color },
+                }, core.widgets.treeRowIconOptions(.{}));
+            } else if (path == null or !l.host.drawFileIcon(std.fs.path.extension(path.?), path.?, icon_color)) {
+                core.icon.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
+                    .stroke_color = .{ .color = icon_color },
+                }, core.widgets.treeRowIconOptions(.{}));
+            }
+        }
+        dvui.labelNoFmt(@src(), itemTitle(l, it), .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = color }, .padding = .{} });
+    }
+    if (rows.more > 0) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = .{ .y = face_row_gap } });
+        defer row.deinit();
+        var slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .w = face_gap } });
+        slot.deinit();
+        dvui.label(@src(), "+{d} more", .{rows.more}, .{ .gravity_y = 0.5, .color_text = .{ .color = color.opacity(0.7) }, .padding = .{} });
+    }
 }
 
 /// Whether surface `id`'s draw this frame should photograph it for the card: a loose drag (a
@@ -2035,6 +2179,8 @@ fn floatTarget(from: dvui.Size.Physical, scale: f32) dvui.Size.Physical {
 /// Release at `mouse`. Does nothing unless the pointer is somewhere a drop
 /// means something, so letting go over the window frame cancels.
 pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
+    // Nothing lands what no place takes: the plugin that lifted it has read the release itself.
+    if (l.state.view_drag.held) return;
     // Let go over no window of the app's, where floats are OS windows of their own: a float opens
     // there, in a window of its own, with the view in it — as a tab torn off onto the desktop opens
     // a window where it lands.
@@ -2070,7 +2216,7 @@ fn dropOnPluginChooser(l: *Layout, source: []const u8, dest: []const u8, mouse: 
     const on_drop = r.on_drop orelse return false;
     const moved = ownId(l.arena, movedFrom(l, source) orelse return true) orelse return true;
     if (!accepts(r.*, keywordsOf(l, moved))) return true;
-    if (on_drop(r.drop_ctx, .{ .surface_id = moved, .zone = .center, .point = mouse, .on_chooser = true })) {
+    if (on_drop(r.drop_ctx, .{ .surface_id = moved, .zone = .center, .point = mouse, .on_chooser = true, .others = others(l, r.*) })) {
         l.state.markDirty();
         dvui.refresh(null, @src(), null);
     }
@@ -2122,6 +2268,19 @@ pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) 
     }
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
+}
+
+/// What was carried with the view in hand that region `r` takes too (`with`), for its drop
+/// (`sdk.RegionSpec.Drop.others`): the rest of a selection lifted together, in its order.
+fn others(l: *Layout, r: Region) []const []const u8 {
+    const d = &l.state.view_drag;
+    if (!d.active() or d.with_n <= 1) return &.{};
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (d.with[1..d.with_n]) |it| {
+        if (it.id.len == 0 or !accepts(r, keywordsOf(l, it.id))) continue;
+        ids.append(l.arena, it.id) catch break;
+    }
+    return ids.items;
 }
 
 fn indexOfId(ids: []const []const u8, id: []const u8) ?usize {
@@ -2176,7 +2335,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
                     .bottom => .bottom,
                 } },
             };
-            if (on_drop(r.drop_ctx, .{ .surface_id = moved, .zone = zone })) {
+            if (on_drop(r.drop_ctx, .{ .surface_id = moved, .zone = zone, .others = others(l, r.*) })) {
                 l.state.markDirty();
                 dvui.refresh(null, @src(), null);
                 return;

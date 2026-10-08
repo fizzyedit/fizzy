@@ -1205,6 +1205,18 @@ pub fn beginViewDrag(f: *Layout, id: []const u8, from: dvui.Rect.Physical) void 
     dvui.refresh(null, @src(), null);
 }
 
+/// `beginViewDrag` for several things lifted together — a selection out of a file tree, a folder —
+/// the first the one in hand (`ViewDrag.beginLooseMany`): what a plugin's `Host.beginViewDragMany`
+/// reaches.
+pub fn beginViewDragMany(f: *Layout, items: []const sdk.EditorAPI.Carried, from: dvui.Rect.Physical) void {
+    if (f.state.view_drag.active()) return;
+    ViewDrag.beginLooseMany(f, items, from);
+    if (!f.state.view_drag.active()) return;
+    f.state.picker.lifted = true;
+    dvui.captureMouseCustom(Picker.looseCapture(), dvui.currentWindow().event_num);
+    dvui.refresh(null, @src(), null);
+}
+
 /// Tab strip for one place: a horizontal `Chooser` with the stock `label` look. `tabs` is this
 /// keyed by keywords; a by-name place (a minted split leaf) must not share another place's
 /// selection. Nothing is drawn for a place with one view or none — a single Output is just Output.

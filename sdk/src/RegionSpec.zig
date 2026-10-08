@@ -55,6 +55,11 @@ pub const Drop = struct {
     /// dropped back on its own strip, it is being reordered.
     on_chooser: bool = false,
 
+    /// What was carried with `surface_id`, in the order it was — a selection lifted together
+    /// (`Host.beginViewDragMany`) — for the region to take as it takes `surface_id`, after it:
+    /// surfaces, or documents not open yet. `surface_id` stays the one shown.
+    others: []const []const u8 = &.{},
+
     pub const Zone = union(enum) {
         /// Into the region itself.
         center,

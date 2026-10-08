@@ -106,6 +106,20 @@ pub const WebSaveKind = enum { save, save_as };
 /// trackpad: scroll pans, ctrl/cmd+scroll zooms). Matches `core.widgets.CanvasWidget.PanZoomScheme`.
 pub const PanZoomScheme = enum { mouse, trackpad };
 
+/// One of the things carried together in the app's view drag (`beginViewDragMany`): a row of a
+/// selection lifted out of a file tree.
+pub const Carried = struct {
+    /// A surface, or a document not open yet by the id it will have (`document.surfaceId`), as
+    /// `beginViewDrag` takes one. Empty for something no place takes — a folder, a file nothing
+    /// opens — which only the plugin that lifted it takes back.
+    id: []const u8 = "",
+    /// What it is called on the glass. Empty for a surface or a document, which is called by its
+    /// title or its file name.
+    label: []const u8 = "",
+    /// Shown with a folder's icon, not a file's.
+    folder: bool = false,
+};
+
 ctx: *anyopaque,
 vtable: *const VTable,
 /// Names an error fizzy returned, by fizzy's own table — see `Plugin.error_name`, which this
@@ -257,6 +271,13 @@ pub const VTable = struct {
     /// carried as its file's icon, and only a region taking documents takes it — its `on_drop`
     /// gets the id, with no surface behind it, and opens the file.
     beginViewDrag: *const fn (ctx: *anyopaque, id: []const u8, from: dvui.Rect.Physical) void,
+    /// `beginViewDrag` for several things lifted together, from `from` (where they were — the
+    /// selected rows together): `items`, the first the one in hand, carried in the one glass, which
+    /// shows them all. Let go on a place, it takes them all (`RegionSpec.Drop.others`). With
+    /// anything in it no place takes (`Carried.id` empty), no place takes any of it: it is carried as the rest are, and only the plugin that
+    /// lifted it takes it back — reading the drag as its own while it is over it
+    /// (`viewDragSurface`); let go anywhere else, nothing moves. The items are copied.
+    beginViewDragMany: *const fn (ctx: *anyopaque, items: []const Carried, from: dvui.Rect.Physical) void,
     /// The region's own chooser — the tab strip a plugin draws for it — is at `bounds` this
     /// frame. While a view is carried it is chrome, not content: over it the drop is into the
     /// region (`RegionSpec.Drop.on_chooser`), the carried view shows as a tab rather than a
@@ -264,7 +285,9 @@ pub const VTable = struct {
     /// is over it — the plugin's cue to show where it would go in.
     offerRegionChooser: *const fn (ctx: *anyopaque, token: RegionSpec.Token, bounds: dvui.Rect.Physical) bool,
     /// The id of the surface the app's view drag is carrying, if one is — a tab strip leaves it
-    /// out while it is in the hand, as it would the tab it is reordering.
+    /// out while it is in the hand, as it would the tab it is reordering. Carrying several, the
+    /// one in hand; carrying something no place takes (`beginViewDragMany`), an id of the drag's
+    /// own, the same for as long as it lasts.
     viewDragSurface: *const fn (ctx: *anyopaque) ?[]const u8,
     regionSelect: *const fn (ctx: *anyopaque, token: RegionSpec.Token, id: []const u8) void,
     /// Set what a region shows, by the name it is declared under — the same list the picker
@@ -563,6 +586,10 @@ pub fn regionSelected(self: EditorAPI, token: RegionSpec.Token) ?*Surface {
 
 pub fn beginViewDrag(self: EditorAPI, id: []const u8, from: dvui.Rect.Physical) void {
     self.vtable.beginViewDrag(self.ctx, id, from);
+}
+
+pub fn beginViewDragMany(self: EditorAPI, items: []const Carried, from: dvui.Rect.Physical) void {
+    self.vtable.beginViewDragMany(self.ctx, items, from);
 }
 
 pub fn offerRegionChooser(self: EditorAPI, token: RegionSpec.Token, bounds: dvui.Rect.Physical) bool {
