@@ -893,6 +893,20 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     test_integration_step.dependOn(&b.addRunArtifact(integration_tests).step);
     check_integration_step.dependOn(&integration_tests.step);
 
+    // The `app` framework module's own tests — the split trees, seeds, drop plans and view drag
+    // under `app/layout/` (`Layout.zig`'s `test` block). `addTest` collects from its root module
+    // only, so the integration tests above, which import `app`, never ran them. Against dvui's
+    // testing backend, as the module those tests import is wired.
+    const app_tests = b.addTest(.{
+        .name = "fizzy-app-tests",
+        .root_module = app_module_test,
+        .filters = test_filters,
+    });
+    if (target.result.os.tag == .windows) app_tests.root_module.linkSystemLibrary("comctl32", .{});
+    app_tests.root_module.link_libcpp = !target_is_windows_msvc;
+    test_integration_step.dependOn(&b.addRunArtifact(app_tests).step);
+    check_integration_step.dependOn(&app_tests.step);
+
     // `zig build bench-text` — text editor frame-cost benchmark. Its own step, never wired into
     // `test`/`test-all`: it prints timings instead of asserting, and the numbers are
     // machine-dependent. Same headless harness as the integration tests, so it measures the
