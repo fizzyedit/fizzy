@@ -145,6 +145,9 @@ pub const Viewport = struct {
     /// What its float says of a press on it, which SDL's hit test answers the OS from
     /// (`viewportHitTest`): the OS moves and resizes the window itself, as any window.
     hints: viewport_map.Hints = .{},
+    /// Its window was in full screen, or on its way there or back, when its hints were last set:
+    /// it had no drag area then (`viewportHints`).
+    hints_full: bool = false,
     /// The OS moved or resized it since the app last asked (`viewportOsPlaced`).
     os_placed: bool = false,
     /// The OS is moving or resizing it under a held press (where there is no move loop to say so:
@@ -1425,6 +1428,21 @@ pub fn viewportHints(_: *SDLBackend, vp: *Viewport, hints: ?struct { drag: viewp
         }
     };
     const maximized = c.SDL_GetWindowFlags(vp.window) & c.SDL_WINDOW_MAXIMIZED != 0;
+    // In full screen, or on its own way there or back, a window moves nowhere: no part of it is the
+    // OS's to drag. SDL drops a left press it reads as in a drag area — or the first one after the
+    // pointer left one, which SDL undoes the drag by — and a float's header strip is crossed on the
+    // way to everything near the top of the window: in full screen, clicks went nowhere while
+    // hover worked (the user). Set again when that changes, so SDL reads where the pointer is now
+    // and lets go of a drag area it was still holding (`SDL_SetWindowHitTest`).
+    const full = c.SDL_GetWindowFlags(vp.window) & c.SDL_WINDOW_FULLSCREEN != 0 or platform.window.windowMovingItself(vp.window);
+    defer if (full != vp.hints_full) {
+        vp.hints_full = full;
+        _ = c.SDL_SetWindowHitTest(vp.window, viewportHitTest, vp);
+    };
+    if (full) {
+        vp.hints = .{};
+        return;
+    }
     vp.hints = .{
         .drag = win.of(h.drag, o, d),
         .keep = win.of(h.keep, o, d),
