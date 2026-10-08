@@ -4,6 +4,11 @@ Cross-platform, open-source general editor written in Zig, UI via [DVUI](https:/
 
 **Read this file first, then go deeper via the links below — don't re-derive the architecture from scratch.**
 
+**How we work** — one plan step per PR, claiming work before building it, jj, verifying, the SDK
+release train — is [`CONTRIBUTING.md`](CONTRIBUTING.md), imported here so every session reads it:
+
+@CONTRIBUTING.md
+
 ## The core idea: fizzy + plugins
 
 Fizzy the app is itself a near-empty host (window, frame loop, layout shape, document model) that owns **no editing features**. Everything the user sees — pixel-art editing, the file explorer/tabs/splits, text editing — is contributed by **plugins** that register against a stable SDK. Plugins never import each other; they meet only at the SDK.
@@ -41,7 +46,7 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 5. User-invoked actions are **`Command`s** — `"<active_owner_id>.<action>"`.
 6. `zig build install` drops `{id}/{id}.dylib` (its own directory) into the fizzy plugins dir (no sidecar `.zon`).
 7. Memory: `host.allocator` vs `host.arena()`; never touch `dvui.currentWindow().gpa` directly.
-8. ABI: structural fingerprint at `dlopen` (`fizzy_plugin_abi_fingerprint`). The SDK is at 0.2.0, unreleased: the fingerprint may move freely under it (update `recorded_sdk_shape_fingerprint`), the version does not until it ships.
+8. ABI: structural fingerprint at `dlopen` (`fizzy_plugin_abi_fingerprint`). A change that moves the boundary's shape records the new `recorded_sdk_shape_fingerprint` and leaves `sdk_version` alone; only an SDK release PR bumps the version (`CONTRIBUTING.md`, "Changing the SDK").
 
 Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)**.
 
@@ -131,8 +136,9 @@ one directory — that is why the `app` module root is `app/root.zig`, not `app/
 ```sh
 zig build              # native exe
 zig build check-web    # wasm
-zig build test         # unit/integration tests
-zig build test-sdk-version  # CI lock: ABI fingerprint bump must bump sdk_version too
+zig build test         # unit tests
+zig build test-integration  # headless integration tests (not run by CI: run it yourself)
+zig build test-sdk-version  # CI lock: the recorded fingerprint matches the live plugin boundary
 ```
 
 Run all of these after touching the SDK boundary (`sdk/src/**`) or a plugin's vtable usage.
@@ -145,7 +151,7 @@ Pattern:
 
 - **Plugins** (built-in + third-party): `.fizzy = .{ .path = ".../sdk" }` locally, or the `fizzy-sdk-v*` **release asset** URL from the matching `sdk-v*` tag (not the git archive — that is the monorepo root zon with Velopack). Call `fizzy.plugin.create` / `.install` as before; `b.dependency("fizzy", .{ .plugin_sdk = true })` still works (the option is accepted and ignored — `sdk/` always exports modules). Packing: `scripts/pack-sdk.sh` / `.github/workflows/sdk-tag.yml`.
 - **App**: repo-root `zig build` as usual. The app **consumes `sdk/` as a dependency** (`.fizzy_sdk = .{ .path = "sdk/" }`), so build scripts reach `plugin`/`core_module`/`sdk_version` through `@import("fizzy_sdk")` and never by relative path into `sdk/` — a file may belong to only one module, so a path import claims it for the root build module and breaks the dependency outright. The same applies in reverse: nothing under `src/` may relative-import an `sdk/` file. Velopack stays `.lazy = true` in the root zon; never `@import("velopack_zig")` — the helper surface is vendored in `build/velopack.zig` and resolved only in `build/app.zig` via `lazyDependency`.
-- **dvui is pinned in exactly one place — `sdk/build.zig.zon` — and is deliberately absent from the root zon.** The app borrows it via `build/sdk.zig`'s `dvuiDependency` (which forwards backend/target/optimize normally), and build scripts get dvui's build API from `@import("fizzy_sdk").dvui`. Do **not** "fix" the missing root dep by re-adding `.dvui`: two pins that drift make `recorded_sdk_shape_fingerprint` unsatisfiable by *both* the app and plugin-SDK builds at once, and the resulting error tells you to bump `sdk_version`, which cannot help. Bump or swap to a local checkout in `sdk/build.zig.zon` only.
+- **dvui is pinned in exactly one place — `sdk/build.zig.zon` — and is deliberately absent from the root zon.** The app borrows it via `build/sdk.zig`'s `dvuiDependency` (which forwards backend/target/optimize normally), and build scripts get dvui's build API from `@import("fizzy_sdk").dvui`. Do **not** "fix" the missing root dep by re-adding `.dvui`: two pins that drift make `recorded_sdk_shape_fingerprint` unsatisfiable by *both* the app and plugin-SDK builds at once, and the resulting error asks for a new recorded fingerprint, which cannot satisfy both. Bump or swap to a local checkout in `sdk/build.zig.zon` only.
 - Shared `core` import wiring lives in `sdk/core_module.zig` and is called from the app build *and* `sdk/plugin_sdk.zig`'s `exportModules` so the import set can't drift. Note the `with_tui = false` on the zf dependency: without it, zf's standalone terminal binary drags `libvaxis` into every plugin build.
 
 Acceptance test after any build-graph change:
@@ -159,8 +165,9 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 
 ## When you need more than this file
 
-- **Resuming the library/framework work (bookmark `fizzy-lib`)** → [`docs/LIB_CHECKPOINT.md`](docs/LIB_CHECKPOINT.md):
-  ground rules, what is done, the verification workflow, and the agreed next steps.
+- **The library/framework work (merged from bookmark `fizzy-lib` in #194)** → [`docs/LIB_CHECKPOINT.md`](docs/LIB_CHECKPOINT.md):
+  what was done and the agreed next steps. Its ground rules predate `CONTRIBUTING.md`, which wins
+  where they differ.
 
 - Demos that play the real app (tapes, the player, rewind, writing a demo, the anchors widgets
   publish) → [`docs/AUTOMATION.md`](docs/AUTOMATION.md); where it is going (recording, seeking,
