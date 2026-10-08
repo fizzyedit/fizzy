@@ -15,8 +15,9 @@
 //! code can't import it. Keeping the triplet here means reading the version can never trigger,
 //! or depend on, the runtime ABI fingerprint check.
 //!
-//! See `sdk/src/version.zig`'s doc comment for what each field means and when to bump it;
-//! `zig build test-sdk-version` is the CI lock tying a fingerprint change to a bump here.
+//! See `sdk/src/version.zig`'s doc comment for what each field means and when to bump it. A
+//! bump here merged to fizzy's `main` is an SDK release (`sdk-tag.yml` tags and publishes it),
+//! so it happens only in a release PR (fizzy's `CONTRIBUTING.md`, "Changing the SDK").
 const std = @import("std");
 
 pub const sdk_version = std.SemanticVersion{

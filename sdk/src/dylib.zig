@@ -261,7 +261,7 @@ pub const abi_fingerprint: u64 = blk: {
 
 /// Target- and optimize-mode-*invariant* hash of the Fizzy-owned boundary's declared shape (see
 /// `fingerprint.hashAllShape` for what that means and why). Two jobs:
-///   * `version.zig`'s "did you forget to bump `sdk_version`" guard checks it against a single
+///   * `version.zig`'s "did the boundary just move" guard checks it against a single
 ///     recorded literal — invariant, so that guard needs no per-target table and no
 ///     cross-compiling to populate; and
 ///   * `abi_fingerprint` above is this value folded with the optimize-mode class, i.e. the runtime

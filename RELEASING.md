@@ -57,13 +57,19 @@ The release script handles all three for all six channels (18 files total).
 
 ### Bump VERSION and tag
 
+`main` moves only by a merged PR (`CONTRIBUTING.md`), so the bump is a PR of its own:
+
+1. **SDK first.** If `recorded_sdk_shape_fingerprint` moved since the last `sdk-v*` tag, merge
+   an SDK release PR before this one — an app must never ship a plugin boundary no released SDK
+   matches, or no store plugin loads in it.
+2. On a branch of its own, edit `VERSION` (e.g. 0.0.3 -> 0.0.4) and open a PR titled
+   `release: 0.0.4`.
+3. Once it is merged, tag the merge commit:
+
 ```sh
-# Edit VERSION (e.g. 0.0.3 -> 0.0.4)
-$EDITOR VERSION
-git add VERSION
-git commit -m "release: 0.0.4"
-git tag v0.0.4
-git push origin main
+git fetch origin
+git log -1 --oneline origin/main   # must be the `release: 0.0.4` commit
+git tag v0.0.4 origin/main
 git push origin v0.0.4
 ```
 

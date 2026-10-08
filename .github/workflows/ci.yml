@@ -1,20 +1,25 @@
 name: CI
 
-# PR / manual: three native test jobs (no skipped rows). Push to main: Linux-only (fast).
+# Every run, a push to main included: three native test jobs (no skipped rows) and the Windows
+# cross-build.
+#
+# `ci-ok` is the one check `main`'s ruleset requires (`.github/rulesets/main.json`), so the
+# workflow runs for every change. A workflow-level `paths-ignore` would never start for a
+# Markdown-only PR, leaving its required check waiting for good; `changes` works out instead
+# whether anything besides docs changed, and the builds skip themselves when nothing did.
+#
+# A push to main runs the full matrix because main's runs are the only ones whose Zig caches
+# every pull request can restore: a cache a pull request saves is visible to that pull request
+# alone (see the test job's "Restore Zig cache"). Pushes used to run only the Linux jobs, so main
+# held no macOS, Windows or cross-build cache and every pull request's first run built those
+# three cold. Now the merge that changes a dependency saves the new caches, a cache GitHub
+# evicted after a quiet week comes back on the next merge, and every merge is tested on all
+# three platforms. Nothing waits on a main run, and a cache hit makes the extra jobs short.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "doc/**"
-      - "README.md"
-      - "**.md"
-      - "LICENSE**"
   pull_request:
-    paths-ignore:
-      - "doc/**"
-      - "README.md"
-      - "**.md"
-      - "LICENSE**"
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -25,40 +30,97 @@ env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      # A pull request checks out its merge commit, whose first parent is the base: depth 2
+      # holds both.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Anything besides docs?
+        id: filter
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base=HEAD^1 ;;
+            merge_group) base=$QUEUE_BASE ;;
+            push) base=$PUSH_BEFORE ;;
+            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          # A base that can't be fetched (a force push's old tip) builds everything.
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null && ! git fetch --depth=1 origin "$base"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Assigned first, so a failing diff fails the job (and `ci-ok`) rather than reading as
+          # "nothing changed".
+          files=$(git diff --name-only "$base" HEAD)
+          code=false
+          while IFS= read -r f; do
+            case "$f" in
+              "" | *.md | doc/* | LICENSE*) ;;
+              *) code=true; echo "builds: $f changed" ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
     name: Tests (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ github.event_name == 'push' && fromJSON('[{"os":"ubuntu-latest","name":"Linux"}]') || fromJSON('[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-14","name":"macOS"}]') }}
+        include:
+          - { os: ubuntu-latest, name: Linux }
+          - { os: windows-latest, name: Windows }
+          - { os: macos-14, name: macOS }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # The cache key, worked out once, here, before anything is unpacked. setup-zig reads its
-      # `cache-key` input twice — to restore at the start and to save in its post step — and
-      # GitHub evaluates the expression afresh each time. By the post step the build has
-      # unpacked every dependency into zig-pkg/, each with its own build.zig.zon, so a
-      # `hashFiles('**/build.zig.zon')` in the input saved under a hash no restore ever asked
-      # for: every run missed. A step output is fixed once set.
+      # The Zig cache's key, worked out once, here, before anything is unpacked. The fetch below
+      # unpacks every dependency into zig-pkg/, each with its own build.zig.zon, so a
+      # `hashFiles('**/build.zig.zon')` evaluated after it names a hash no restore ever asked
+      # for. A step output is fixed once set.
       - name: Zig cache key
         id: zig-cache-key
         shell: bash
-        run: echo "key=${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-          cache-key: ${{ steps.zig-cache-key.outputs.key }}
-          # MiB. Past it setup-zig clears the cache and saves it empty. A Linux run's cache
-          # is ~3.5 GB (the tests, the wasm build and four example apps, each compiling its
-          # own SDL3), so the default 2 GiB threw it away every run.
-          cache-size-limit: 5120
-      # setup-zig exports ZIG_GLOBAL_CACHE_DIR / ZIG_LOCAL_CACHE_DIR and caches that
-      # directory across runs. Do NOT override those vars: pointing them elsewhere
-      # leaves the action's cache empty, so every run re-downloads every dependency
-      # from codeload.github.com — which is where `HttpConnectionClosing` comes from.
-      # (Zig 0.16 caches the downloaded *tarballs* under $ZIG_GLOBAL_CACHE_DIR/p and
-      # unpacks them into the project-local zig-pkg/; only the tarballs are cached,
-      # so a cache hit still costs an unpack but no network.)
+          # The Zig cache is restored and saved by this job's own steps; see below.
+          use-cache: false
+      # setup-zig points ZIG_GLOBAL_CACHE_DIR and ZIG_LOCAL_CACHE_DIR at `.zig-cache`, the
+      # directory cached here. Do NOT override those vars: pointing them elsewhere leaves the
+      # cache empty, so every run re-downloads every dependency from codeload.github.com —
+      # which is where `HttpConnectionClosing` comes from. (Zig 0.16 caches the downloaded
+      # *tarballs* under $ZIG_GLOBAL_CACHE_DIR/p and unpacks them into the project-local
+      # zig-pkg/; a cache hit still costs an unpack but no network.)
+      #
+      # A job's cache is one cold build, saved once; every later run with the same
+      # dependencies, Zig and OS starts from it. setup-zig's own caching saved every run under
+      # a new key and restored the newest, so a warm run saved what it restored plus everything
+      # it rebuilt: Linux's grew from 3.7 GB to 6-7 GB in one run, passed the size limit, and
+      # was cleared and saved empty, and the run after it started cold. Every other run on
+      # main built from nothing, and the near-duplicates filled the repo's 10 GB. Here the key
+      # is fixed and a key can't be overwritten, so only a run that missed saves, and only if
+      # it succeeded: a run cancelled or failed mid-build never leaves a partial cache behind.
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
       - name: Pre-create Zig cache tmp/
         shell: bash
         run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
@@ -109,23 +171,121 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build test-sdk-version --summary all
 
+      - name: Save Zig cache
+        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+
+  # The headless integration tests: real widgets, layouts and drags driven on dvui's testing
+  # backend (no window, no GPU), plus the SDK, sizing and plugin-loader suites. The suite most
+  # likely to catch a layout or drag regression, and until this job nothing ran it. Linux only:
+  # the code under test is the same on every OS, and on Windows it needs MSVC (`build/app.zig`).
+  # A job of its own beside the matrix, so it adds a compile to the run but not to its length.
+  #
+  # A test that logs a warning makes the build print `failed command: …fizzy-integration-tests`
+  # while still passing (the demo-replay test always does): the exit code is the verdict, and the
+  # Build Summary's `N/N steps succeeded` says the same.
+  integration:
+    name: Integration tests (Linux)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The Zig cache as in the test job: a fixed key, one cold build saved once.
+      - name: Zig cache key
+        id: zig-cache-key
+        shell: bash
+        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+      - name: Pre-create Zig cache tmp/
+        shell: bash
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch dependencies (with retries)
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Run integration tests
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build test-integration --summary all
+
+      - name: Save Zig cache
+        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+
   # Fizzy's own backend on Windows — the default there too now (`build/exe.zig`'s
   # `defaultNativeBackend`) — which nothing else here builds: the consumer apps above run on Linux only.
   # Cross-compiled from Linux for the GNU ABI, which needs no MSVC SDK (release.yml's msvc
   # builds do). It shows the app compiles and links, not that it runs.
   windows-fizzy-backend:
     name: Windows build (fizzy backend, cross-compiled)
-    if: github.event_name != 'push'
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The Zig cache as in the test job. This job's key used to be worked out inline, so
+      # setup-zig saved under a hash taken after the fetch had unpacked zig-pkg/ and every
+      # restore missed.
+      - name: Zig cache key
+        id: zig-cache-key
+        shell: bash
+        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-          cache-key: ${{ hashFiles('**/build.zig.zon') }}
+          use-cache: false
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
       - name: Pre-create Zig cache tmp/
         run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
       - name: Fetch dependencies (with retries)
         run: bash scripts/ci-retry.sh zig build --fetch
       - name: Build for x86_64-windows-gnu with -Dnative-backend=fizzy
         run: bash scripts/ci-retry.sh zig build -Dtarget=x86_64-windows-gnu -Dnative-backend=fizzy -Dno-emit --summary all
+
+      - name: Save Zig cache
+        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+
+  # The required check. Passes when every job above passed or was skipped (a docs-only change
+  # skips the builds); fails on any failure or cancellation, `changes` included. A job added to
+  # this workflow joins the gate by being added to `needs`.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, test, integration, windows-fizzy-backend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was skipped
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success | skipped) ;;
+              *) exit 1 ;;
+            esac
+          done

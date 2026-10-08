@@ -1420,15 +1420,18 @@ rare and deliberate, not something that breaks on every release:
   signal for authors to rebuild; until they do, the store shows "needs a rebuild for Fizzy SDK
   x.y" instead of offering an incompatible binary.
 
-CI enforces the pairing on the fizzy side: `zig build test-sdk-version` fails at compile time if
-the live shape fingerprint (`dylib.sdk_shape_fingerprint`) drifts from the recorded literal
-(`recorded_sdk_shape_fingerprint` in `sdk/src/version.zig`) without an accompanying `sdk_version`
-bump.
+CI keeps the recorded literal honest on the fizzy side: `zig build test-sdk-version` fails at
+compile time if the live shape fingerprint (`dylib.sdk_shape_fingerprint`) drifts from
+`recorded_sdk_shape_fingerprint` in `sdk/src/version.zig`. The change that moves the boundary
+records the new value; `sdk_version` moves only in an SDK release PR, which ships every boundary
+change since the last `sdk-v*` tag at once (`CONTRIBUTING.md`, "Changing the SDK").
 
 The three fields of `sdk_version` are a convention, not semver's — `sdkVersionSatisfies` is a
 plain lexicographic compare with no "0.x is special" carve-out:
 
-- **patch** — bumped on every `recorded_sdk_shape_fingerprint` change that ships.
+- **patch** — bumped by each SDK release that ships `recorded_sdk_shape_fingerprint` changes (or
+  `core/` changes plugins build in). Between releases the fingerprint moves freely under the
+  current version.
 - **minor** — a compatibility *epoch*: a deliberate, announced hard break. **0.2.0** is the first
   release of the library-shaped SDK (`core/`, `sdk/`, `app/`; regions and surfaces); 0.1.x plugins
   do not load against it and are rebuilt, not migrated. **While 0.2.0 is unreleased the

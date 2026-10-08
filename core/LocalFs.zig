@@ -375,20 +375,24 @@ test "a read lands through pump" {
     var local = LocalFs.init(t.allocator, io);
     defer local.deinit();
     const Sink = struct {
-        got: ?[]u8 = null,
+        /// The read's answer, error included, so a failure says which of the two it was.
+        landed: ?(vfs.Error![]u8) = null,
         fn onRead(ctx: ?*anyopaque, answer: vfs.Result(vfs.Read)) void {
-            const result = answer.get();
             const self: *@This() = @ptrCast(@alignCast(ctx.?));
-            self.got = (result catch return).bytes;
+            self.landed = if (answer.get()) |read| read.bytes else |err| err;
         }
     };
     var sink: Sink = .{};
     _ = try local.fs().readFile(t.allocator, abs, Sink.onRead, &sink);
-    var spins: usize = 0;
-    while (sink.got == null and spins < 200_000) : (spins += 1) {
+    // The read runs on the `Io`'s pool, so this waits on the clock. It used to give up after
+    // 200,000 yields, which is about 20 ms on an idle machine: a macOS CI runner whose disk was
+    // slow to answer failed it as "never landed".
+    const give_up = std.Io.Clock.boot.now(io).nanoseconds + 10 * std.time.ns_per_s;
+    while (sink.landed == null and std.Io.Clock.boot.now(io).nanoseconds < give_up) {
         local.fs().pump();
         std.Thread.yield() catch {};
     }
-    defer if (sink.got) |g| t.allocator.free(g);
-    try t.expectEqualStrings("hello", sink.got orelse return error.NeverLanded);
+    const bytes = try (sink.landed orelse return error.NeverLanded);
+    defer t.allocator.free(bytes);
+    try t.expectEqualStrings("hello", bytes);
 }

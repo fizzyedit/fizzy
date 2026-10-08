@@ -142,13 +142,17 @@ pub fn restartPending() bool {
 /// rules then. For testing and sandboxes, over the settings.
 fn envSwitch(comptime name: [:0]const u8) ?bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    // One cache per variable: the struct names `name`, so each switch gets a type of its own.
+    // Without it Zig makes one type for every switch, and the first one read answered for all
+    // (`FIZZY_NATIVE_GLASS=0` read as whatever `FIZZY_POPOUT` was).
     const Cache = struct {
+        const variable = name;
         var read = false;
         var value: ?bool = null;
     };
     if (!Cache.read) {
         Cache.read = true;
-        Cache.value = if (std.c.getenv(name)) |v| !std.mem.eql(u8, std.mem.span(v), "0") else null;
+        Cache.value = if (std.c.getenv(Cache.variable)) |v| !std.mem.eql(u8, std.mem.span(v), "0") else null;
     }
     return Cache.value;
 }
