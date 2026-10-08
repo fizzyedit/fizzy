@@ -91,9 +91,11 @@ The open PR list is the board of who is working on what.
 The plugin boundary has two numbers. `recorded_sdk_shape_fingerprint` (`sdk/src/version.zig`)
 must match the boundary's live shape, or the build fails. `sdk_version` (`sdk/sdk_version.zig`)
 is what plugins pin, and **a new `sdk_version` merged to `main` is a release**: `sdk-tag.yml`
-tags `sdk-v*` and publishes the tarball, and every store plugin is repinned to load against it.
-A merge that leaves the version alone publishes nothing: a released tarball is pinned by hash,
-so it is never replaced.
+tags `sdk-v*` and publishes the tarball, then asks each `fizzyedit` store plugin to repin. Each
+builds against the new SDK and opens a `sdk: repin to fizzy SDK <version>` PR in its own repo
+when it needs a release (its fingerprint moved, or it no longer builds, as a draft); merge it and
+tag the version it names. A merge that leaves the version alone publishes nothing: a released
+tarball is pinned by hash, so it is never replaced.
 
 - **A feature PR records the fingerprint and leaves `sdk_version` alone.** When the shape moves,
   the build fails with the new value; record it, label the PR `sdk`, and say in the template's

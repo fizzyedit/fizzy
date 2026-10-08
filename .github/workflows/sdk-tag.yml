@@ -205,3 +205,47 @@ jobs:
 
           echo "Published $asset on $tag"
           gh release view "$tag" --json assets --jq '.assets[].name'
+
+      # Each fizzyedit plugin in the store registry (fizzyedit/plugins, by its homepage) repins
+      # itself: its sdk-repin.yml runs plugin-build-action's repin.yml, which builds it against
+      # this SDK and opens a PR when the plugin needs a release (its fingerprint moved, or it no
+      # longer builds). Nothing here tags a plugin.
+      #
+      # `repository_dispatch` needs PLUGIN_DISPATCH_TOKEN: a fine-grained token on the fizzyedit
+      # organization with Contents read/write on the plugin repos. Without it this warns, and a
+      # plugin can still be repinned by hand (`gh workflow run sdk-repin.yml --repo fizzyedit/<id>`).
+      - name: Ask the store plugins to repin
+        if: steps.tag.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PLUGIN_DISPATCH_TOKEN }}
+          READ_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::PLUGIN_DISPATCH_TOKEN is not set: no plugin was asked to repin to $VERSION"
+            exit 0
+          fi
+          # The registry is public: read it with this run's own token.
+          if ! names=$(GH_TOKEN="$READ_TOKEN" gh api repos/fizzyedit/plugins/contents/registry \
+              --jq '.[] | select(.name | endswith(".json")) | .name'); then
+            echo "::warning::could not read fizzyedit/plugins' registry: no plugin was asked to repin to $VERSION"
+            exit 0
+          fi
+          repos=""
+          for name in $names; do
+            homepage=$(GH_TOKEN="$READ_TOKEN" gh api "repos/fizzyedit/plugins/contents/registry/$name" \
+              --jq '.content | @base64d | fromjson | .homepage // ""')
+            case "$homepage" in
+              https://github.com/fizzyedit/*) repo=${homepage#https://github.com/fizzyedit/}; repos="$repos ${repo%/}" ;;
+            esac
+          done
+          for repo in $repos; do
+            if gh api "repos/fizzyedit/$repo/dispatches" -f event_type=fizzy-sdk-release \
+                -f "client_payload[version]=$VERSION" >/dev/null; then
+              echo "asked fizzyedit/$repo to repin to $VERSION"
+            else
+              echo "::warning::could not ask fizzyedit/$repo to repin (is sdk-repin.yml there, and the token scoped to it?)"
+            fi
+          done
