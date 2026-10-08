@@ -1162,8 +1162,9 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, opacity: f32)
     bounds.fill(corners, .{ .color = .{ .color = Editor.windowBase(opacity) } });
 }
 
-/// Whether menus are windows of their own (`menuFrame`): where the OS can show them (macOS), with
-/// floats as windows, as the setting says (`Settings.native_menus`, `FIZZY_NATIVE_MENUS` over it).
+/// Whether menus are windows of their own (`menuFrame`): where the OS can show them (macOS; Windows,
+/// as Acrylic popups), with floats as windows, as the setting says (`Settings.native_menus`,
+/// `FIZZY_NATIVE_MENUS` over it).
 fn nativeMenus() bool {
     if (comptime !viewports.menus) return false;
     if (!viewports.available()) return false;
@@ -1269,7 +1270,7 @@ fn menuFrame() void {
         const placed = viewports.placeRiding(m.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h }, .{ .x = key.x, .y = key.y, .w = key.w, .h = key.h });
         const shown: dvui.Rect.Physical = .{ .x = frame.x + (placed.x - place.x), .y = frame.y + (placed.y - place.y), .w = placed.w, .h = placed.h };
         // Its material: Liquid Glass on the slider, no lighter than a menu's text needs; vibrancy
-        // before macOS 26, with the window's colour drawn under the menu.
+        // before macOS 26, or Acrylic on Windows, with the window's colour drawn under the menu.
         const op = @max(std.math.clamp(fizzy.editor().window_opacity, 0, 1), menu_opacity_floor);
         var look = Editor.windowGlassLook(op, .{ .w = shown.w / s, .h = shown.h / s });
         look.radius = corner;
