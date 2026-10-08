@@ -5,7 +5,8 @@
 //! app reconciles the OS's glass with it at the end of the frame; nothing of it is drawn by the app.
 //!
 //! In dvui's data, as `screens` is, so whatever draws the glass — fizzy, a plugin's drop zones —
-//! declares it the same way, with no SDK between them.
+//! declares it the same way, with no SDK between them. Outside a drag, glass a plugin declares
+//! shows in the same overlay wherever the OS offers it (`offered`).
 const std = @import("std");
 const dvui = @import("dvui");
 
@@ -50,6 +51,21 @@ fn current() *Frame {
 /// Whether the OS draws a view drag's glass this frame, set by the app before anything draws.
 pub fn publishOn(on_: bool) void {
     current().on = on_;
+}
+
+/// Whether the OS can draw glass declared outside a view drag this frame (a plugin's own, such as
+/// pixi's dropper magnifier), set by the app before anything draws. While it can, glass declared
+/// with `add` shows in the app's overlay of the OS's glass whatever else is on, and the layers
+/// marked to go over it (`core.screens.markCarried`) are taken into the overlay's picture. The
+/// app's own windows draw none of either. Where it cannot, draw the app's own glass.
+pub fn publishOffered(on_: bool) void {
+    dvui.dataSet(null, key_id, "_offered", on_);
+}
+
+/// Whether the OS draws glass declared this frame outside a view drag (`publishOffered`): declare
+/// it (`add`) and draw none.
+pub fn offered() bool {
+    return dvui.dataGet(null, key_id, "_offered", bool) orelse false;
 }
 
 /// Whether the carried view's picture goes under the OS's glass this frame, in a window of its own
