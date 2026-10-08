@@ -351,7 +351,11 @@ Each step is useful by itself, and the spikes come before anything that depends 
    `win32_titlebar` state, minimize and close with the main window, and the look checked on a
    hardware GPU. This is what lets `float_windows` default to on for Windows, as it does on macOS.
 3. **Windows: menus and dialogs as Acrylic popups** (`viewportOpenMenu`). Small, and the closest
-   thing on Windows to the OS's own UI.
+   thing on Windows to the OS's own UI. *Built, not yet run on Windows:*
+   `win32_titlebar.viewportMenuChrome` dresses the menu's window (Acrylic, DWM's corners and shadow,
+   no system menu, no transitions), owned by the window it opens from, and keeps it looking active
+   to DWM, which otherwise draws a never-activated window's backdrop as its solid fallback
+   **(check)**. On with floats as windows (`FIZZY_POPOUT=1`), as on macOS.
 4. **Linux: the window material** through `ext-background-effect-v1` (GNOME 51, Plasma 6.7, niri),
    and **Wayland popups** for menus and dialogs. A protocol binding on SDL's `wl_display`, and the
    region set before the present. *The material is built, behind `FIZZY_BLUR_BEHIND=1`, not yet

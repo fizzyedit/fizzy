@@ -213,8 +213,9 @@ pub const viewports = struct {
         return Impl.appActive();
     }
 
-    /// Whether menus can be windows of their own (`openMenu`): macOS, where viewports are.
-    pub const menus = supported and builtin.os.tag == .macos;
+    /// Whether menus can be windows of their own (`openMenu`): macOS, and Windows (Acrylic popups),
+    /// where viewports are.
+    pub const menus = supported and (builtin.os.tag == .macos or builtin.os.tag == .windows);
 
     /// A window for a menu (`Popout`'s menus): borderless, above every window, never focused, the
     /// OS's material in it — rounded by `radius` points — and the pointer over it read in the main
