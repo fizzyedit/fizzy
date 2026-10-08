@@ -261,14 +261,16 @@ test "thread mode: the same task runs to completion on a worker, parking while w
     var c: Counter = .{ .goal = 1000, .wait_at = 500 };
     var r = Runner.init(std.testing.allocator, std.testing.io, testNow, null);
     try r.start(c.task(), .thread);
-    // Let it reach the wait, release, wake it.
-    var spins: usize = 0;
-    while (@atomicLoad(u32, &c.n, .acquire) < 500 and spins < 100_000) : (spins += 1) std.Thread.yield() catch {};
+    // Let it reach the wait, release, wake it. The task is on a worker thread, so both waits are
+    // on the clock: a count of 100,000 yields was about 10 ms on an idle machine.
+    const io = std.testing.io;
+    const give_up = std.Io.Clock.boot.now(io).nanoseconds + 10 * std.time.ns_per_s;
+    while (@atomicLoad(u32, &c.n, .acquire) < 500 and std.Io.Clock.boot.now(io).nanoseconds < give_up)
+        std.Thread.yield() catch {};
     try std.testing.expectEqual(@as(u32, 500), @atomicLoad(u32, &c.n, .acquire));
     @atomicStore(bool, &c.released, true, .release);
     r.notify();
-    spins = 0;
-    while (r.running() and spins < 100_000) : (spins += 1) std.Thread.yield() catch {};
+    while (r.running() and std.Io.Clock.boot.now(io).nanoseconds < give_up) std.Thread.yield() catch {};
     try std.testing.expect(r.reap());
     try std.testing.expectEqual(@as(u32, 1000), c.n);
     try std.testing.expect(!c.cancelled);
@@ -279,8 +281,10 @@ test "stop cancels a task that was waiting" {
     var c: Counter = .{ .goal = 10, .wait_at = 3 };
     var r = Runner.init(std.testing.allocator, std.testing.io, testNow, null);
     try r.start(c.task(), .thread);
-    var spins: usize = 0;
-    while (@atomicLoad(u32, &c.n, .acquire) < 3 and spins < 100_000) : (spins += 1) std.Thread.yield() catch {};
+    const io = std.testing.io;
+    const give_up = std.Io.Clock.boot.now(io).nanoseconds + 10 * std.time.ns_per_s;
+    while (@atomicLoad(u32, &c.n, .acquire) < 3 and std.Io.Clock.boot.now(io).nanoseconds < give_up)
+        std.Thread.yield() catch {};
     r.stop();
     try std.testing.expect(c.cancelled);
     try std.testing.expect(!r.running());
