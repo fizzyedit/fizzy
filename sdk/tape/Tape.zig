@@ -77,16 +77,29 @@ pub const Action = union(enum) {
     /// Type text over `Op.ms`, as a person would: `\n` presses Enter and `\t` presses Tab, so
     /// an editor's auto-indent and auto-close behave as they do under a person's hands.
     type: []const u8,
-    /// Run a command by id — what its shortcut or menu row would run. The keystroke display shows
-    /// the chord bound to it, so a viewer learns the shortcut while the demo stays independent of
-    /// how anyone has their keys bound.
-    command: []const u8,
+    /// Run a command — what its shortcut or menu row would run, or with arguments what the
+    /// palette would after asking for them. The keystroke display shows the chord bound to it, so
+    /// a viewer learns the shortcut while the demo stays independent of how anyone has their keys
+    /// bound.
+    command: Command,
     /// Hold demo time until a condition holds. Waits are how a tape stays deterministic over an
     /// app that does things on its own time (loading a file, animating a pane open).
     wait: Wait,
 };
 
 pub const Button = enum { left, right, middle };
+
+/// A command to run, and what to run it with.
+pub const Command = struct {
+    /// The command's id: `"fizzy.toggleExplorer"`, `"text.goToLine"`.
+    id: []const u8,
+    /// Its arguments as ZON, keyed by the command's parameters — `".{ .line = 12 }"`, the text
+    /// the app's command registry takes (fizzy's `Host.callCommand`). Empty runs it as a menu row
+    /// or a shortcut would, with nothing: a command that needs arguments then asks for them, as
+    /// it would ask a person. Carried as text, never parsed here: what the arguments mean, and
+    /// whether they fit, is the command's to say when it runs.
+    args: []const u8 = "",
+};
 
 pub const Scroll = struct {
     x: f32 = 0,
@@ -517,7 +530,7 @@ test "the keys shown are those pressed lately, since the cut, oldest first" {
     const ops = [_]Op{
         .{ .at = 0, .do = .{ .keyframe = 0 } },
         .{ .at = 100, .do = .{ .key = "enter" } },
-        .{ .at = 1000, .do = .{ .command = "a.b" } },
+        .{ .at = 1000, .do = .{ .command = .{ .id = "a.b" } } },
         .{ .at = 1500, .ms = 300, .do = .{ .type = "x" } },
         .{ .at = 2000, .do = .{ .key = "escape" } },
         .{ .at = 3000, .do = .{ .keyframe = 0 } },

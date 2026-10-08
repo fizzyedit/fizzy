@@ -526,7 +526,7 @@ fn keysLabel(player: *Player, op: Tape.Op) ?struct { stroke: ?chord.Stroke, titl
     const platform: chord.Platform = if (core.platform.isMacOS()) .mac else .other;
     const stroke: ?chord.Stroke, const title: ?[]const u8 = switch (op.do) {
         .key => |k| .{ chord.parseKeys(k, platform) catch null, null },
-        .command => |id| .{ player.stage.chordFor(id), player.stage.commandTitle(id) },
+        .command => |c| .{ player.stage.chordFor(c.id), player.stage.commandTitle(c.id) },
         else => return null,
     };
     if (stroke == null and title == null) return null;

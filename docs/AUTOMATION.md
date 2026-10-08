@@ -253,7 +253,8 @@ one.
         .{ .at = 5570, .do = .{ .release = .left } },
         .{ .at = 6000, .ms = 3600, .do = .{ .type = "\n- written by a tape\n" } },
         .{ .at = 10400, .do = .{ .key = "mod+a" } },    // the keymap's spelling; mod is ⌘ or Ctrl
-        .{ .at = 11000, .do = .{ .command = "fizzy.toggleExplorer" } },
+        .{ .at = 11000, .do = .{ .command = .{ .id = "fizzy.toggleExplorer" } } },
+        .{ .at = 11200, .do = .{ .command = .{ .id = "text.goToLine", .args = ".{ .line = 1 }" } } },
         .{ .at = 11500, .do = .{ .scroll = .{ .y = -3 } } },
     },
 }
@@ -267,7 +268,7 @@ one.
 | `scroll: .{ .x, .y }` | Wheel ticks at the pointer; positive scrolls up / right. |
 | `key: "chord"` | Press and release a chord (`enter`, `escape`, `mod+s`, `mod+k mod+c`). |
 | `type: "text"` | Type over `ms`; `\n` is Enter, `\t` is Tab. |
-| `command: "id"` | Run a command, as its menu row or shortcut would. |
+| `command: .{ .id, .args }` | Run a command: with no `args`, as its menu row or shortcut would (one that needs arguments asks for them); with `args`, ZON keyed by its parameters (`".{ .line = 1 }"`), as the palette does once they are given. A script writes `s.command(id)` or `s.commandWith(id, .{ .line = 1 })`. |
 | `wait: .{ .until, .timeout }` | Hold demo time until `.idle`, `.shown = "tag"` or `.gone = "tag"`; give up after `timeout` ms of wall time. |
 
 Key chords are the app's spelling: the `tape` library carries them as text, and a `Tape.Check`

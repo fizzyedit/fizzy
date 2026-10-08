@@ -472,8 +472,23 @@ fn idle(ctx: *anyopaque) bool {
         !(if (self.mem) |mem| mem.busy() else false);
 }
 
-fn command(ctx: *anyopaque, id: []const u8) void {
-    from(ctx).editor.app.host.runCommand(id) catch |err| dvui.log.warn("demo: command {s} failed: {t}", .{ id, err });
+/// With no arguments, as a menu row or a shortcut runs it — a command that needs some opens the
+/// palette to ask, as it would for a person. With arguments, through `Host.callCommand`, as the
+/// palette does once they are given; what it returns is not the demo's business.
+fn command(ctx: *anyopaque, id: []const u8, args: []const u8) void {
+    const host = &from(ctx).editor.app.host;
+    if (args.len == 0) {
+        host.runCommand(id) catch |err| dvui.log.warn("demo: command {s} failed: {t}", .{ id, err });
+        return;
+    }
+    var arena: std.heap.ArenaAllocator = .init(from(ctx).editor.app.gpa);
+    defer arena.deinit();
+    switch (host.callCommand(id, args, arena.allocator())) {
+        .ok => {},
+        .unknown => dvui.log.warn("demo: no command {s}", .{id}),
+        .disabled => dvui.log.warn("demo: command {s} is disabled", .{id}),
+        .bad_args, .failed => |msg| dvui.log.warn("demo: command {s} {s} failed: {s}", .{ id, args, msg }),
+    }
 }
 
 fn chordFor(ctx: *anyopaque, id: []const u8) ?@import("app").keymap.chord.Stroke {
