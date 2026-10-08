@@ -1529,6 +1529,8 @@ extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_window_backing_scale(nswindow: ?*anyopaque) f64;
 extern fn fizzy_macos_viewport_over_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_watch_first_activation() void;
+extern fn fizzy_macos_took_first_activation() c_int;
 extern fn fizzy_macos_viewport_under_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
 
@@ -2045,8 +2047,13 @@ pub fn renderPresent(self: *SDLBackend) void {
         vp.over_main = true;
     }
     // Over the main window as it first shows: SDL showed it below the key window. Once
-    // (`noteMainForward`): from there it stacks as any window does.
+    // (`noteMainForward`): from there it stacks as any window does. And once more as the app first
+    // activates, which brings the main window in front of them (`fizzy_macos_watch_first_activation`).
     if (comptime builtin.os.tag == .macos) {
+        fizzy_macos_watch_first_activation();
+        if (fizzy_macos_took_first_activation() != 0) for (&self.viewports) |*slot| if (slot.*) |*v| {
+            v.over_main = true;
+        };
         const main_ns = cocoaWindow(self.window);
         for (&self.viewports) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
