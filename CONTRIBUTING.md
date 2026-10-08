@@ -61,11 +61,11 @@ The open PR list is the board of who is working on what.
   `jj git push --bookmark <area>/<slug>`. Pushing `main` publishes (the web app at
   fizzyed.it/app, and an SDK release when the version moved), so `main` moves only by a merged
   PR.
-- **After the merge, drop your stack.** A squash merge leaves the branch's changes behind
-  locally, and the next agent's `jj log` can't tell landed work from live work. After
-  `jj git fetch`, check that `jj log -r '::<area>/<slug> ~ ::main@origin'` lists only your PR's
-  changes, then `jj abandon` that revset. Never abandon a change that is some workspace's
-  working copy (`jj workspace list`).
+- **When your PR has merged, forget its workspace, then fetch.** `jj workspace forget <task>`,
+  then `jj git fetch`. GitHub deletes a merged branch, and the fetch abandons the changes only
+  that branch held, so landed work doesn't linger in the next agent's `jj log` looking live.
+  Forget the workspace first: a change still checked out somewhere is kept. Never abandon a
+  change that is some workspace's working copy (`jj workspace list`).
 
 ## Verify, and say how
 
