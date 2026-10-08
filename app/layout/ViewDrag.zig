@@ -1519,10 +1519,19 @@ fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
         h.x += dx;
         h.y += dy;
     }
+    // The pull toward a bubble is worked out again each frame from where it set out and where it
+    // goes (`dropShapes`): left in the window it had left, the drop was pulled back across the band
+    // toward it, off screen and back to the hand as the pull let go (the user).
     if (d.aim_at) |*a| {
         a.x += dx;
         a.y += dy;
     }
+    if (d.aim_to) |*a| {
+        a.x += dx;
+        a.y += dy;
+    }
+    d.aim_from.x += dx;
+    d.aim_from.y += dy;
     d.morph_rect.x += dx;
     d.morph_rect.y += dy;
     d.shape_rect.x += dx;
