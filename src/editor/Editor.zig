@@ -3669,6 +3669,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // A demo replaying to a seek wants every frame to land where it is going: no motion.
     fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast);
     fizzy.core.programs.publishHost();
+    // Where the main window's title bar takes presses, not the app (macOS): floating windows,
+    // menus and tooltips are kept below it (`core.screens.mainScreen`).
+    fizzy.core.screens.publishMainTop(if (builtin.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
