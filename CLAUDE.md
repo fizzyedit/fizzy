@@ -181,4 +181,7 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
   [`docs/POPOUT_WINDOWS_PLAN.md`](docs/POPOUT_WINDOWS_PLAN.md).
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - The forks fizzy builds on (dvui-dev, SDL, sdl_zig): what each patches, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
+- Native windows and glass: what Liquid Glass can do (measured), the drag's glass as one native
+  overlay on macOS 26, and fizzy's backend owning its windows while taking SDL's releases →
+  [`docs/NATIVE_WINDOWS_PLAN.md`](docs/NATIVE_WINDOWS_PLAN.md)
 - Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)
