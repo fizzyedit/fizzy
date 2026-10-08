@@ -118,8 +118,9 @@ every replay types the same bytes on the same frames.
 
 **Ops aim at anchors, never at pixels.** A target is a `dvui.tag` name plus a point in its rect
 (fractions, then an offset in natural pixels). Widgets publish names through `core.anchor.mark`,
-which costs nothing unless a demo is loaded (`Player.frame` publishes whether anchors are wanted
-each frame). dvui keeps tags on the shared window, so a plugin dylib's anchors are visible to the app.
+which costs nothing unless someone asked for anchors this frame (`core.anchor.want`: the player
+while a demo is loaded, the live driver while a live tape plays). dvui keeps tags on the shared
+window, so a plugin dylib's anchors are visible to the app.
 
 **The overlay is a function of time.** The synthetic pointer and its click ripple (none until the
 tape first uses it after a keyframe; it goes away while the tape types, as a desktop's does, and
@@ -292,6 +293,38 @@ compare (`zig build bench-tape -Doptimize=ReleaseFast`; recording-shaped tapes, 
 | 200 (a scripted demo) | 31 KB | 0.34 ms | 8 KB | 0.012 ms |
 | 10,000 (about ten minutes recorded) | 1.5 MB | 17 ms | 353 KB | 0.29 ms |
 | 100,000 | 15 MB | 179 ms | 3.4 MB | 3.9 ms |
+
+## Live tapes
+
+A demo cuts to a keyframe and plays at its authored pace. A **live tape** plays on the app as it
+is, a step at a time: a plugin's test, a macro, a scripted tutorial, anything that drives fizzy
+the way a person does. `automation.LiveDriver` plays one, beside the `Player` and sharing its
+dvui input (`automation.Input`):
+
+```zig
+var s: automation.Script = .init(gpa, "rename", "");
+s.check = automation.Input.check;
+s.check.live = true;                                   // no keyframe, anywhere
+try s.click(.{ .tag = "workbench.file:/work/notes.md" }, .{});   // waits for it to be drawn
+try s.waitFor("text.editor:/work/notes.md", .{});
+try s.commandWith("text.goToLine", .{ .line = 12 });
+try s.typeText("// here\n", .{});
+try editor.demo.playLive(try s.finish());               // fizzy: refused while a demo is loaded
+```
+
+- **Pacing:** authored times are ignored. Each op is applied once the stage is idle, and the
+  sequencer still yields after anything the app must draw before the next op lands.
+- **Waits** hold as in a demo. One that gives up **stops** the tape, with
+  `outcome = .{ .timed_out = <op> }`: a live tape that has lost its place is stopped, not
+  carried on blind.
+- **A person's input** (click, tap, scroll, key, text) stops it,
+  `outcome = .{ .interrupted = <first op not applied> }`, and goes on to do what they meant.
+- **Going back** is not the driver's: there are no keyframes or snapshots, so it is undo, through
+  the commands the tape ran.
+- A tape with a keyframe is refused (`error.KeyframeInLiveTape`), and so is a second tape while
+  one plays (`error.Busy`).
+
+The overlay does not draw a live tape's pointer yet.
 
 ## For apps built on fizzy
 

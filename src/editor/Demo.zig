@@ -42,6 +42,9 @@ pub const catalog = @import("demos/catalog.zig");
 
 editor: *Editor,
 player: automation.Player,
+/// Plays live tapes — input on the app as it is (`automation.LiveDriver`). One tape drives the app
+/// at a time: a live tape is refused while a demo is loaded, and a demo while a live tape plays.
+live: automation.LiveDriver,
 /// A seek is replaying: animation is off until it arrives.
 fast: bool = false,
 /// The user's session, set aside while a demo is loaded.
@@ -86,15 +89,17 @@ const Saved = struct {
 };
 
 /// Inert until `attach`: nothing loaded, so nothing in `tick` acts on it.
-pub const detached: Demo = .{ .editor = undefined, .player = .{ .gpa = undefined, .stage = undefined } };
+pub const detached: Demo = .{ .editor = undefined, .player = .{ .gpa = undefined, .stage = undefined }, .live = .{ .stage = undefined } };
 
 /// Point the player at this stage. `self` must not move afterwards (it is the stage's context).
 pub fn attach(self: *Demo, editor: *Editor) void {
-    self.* = .{ .editor = editor, .player = .init(editor.app.gpa, .{ .ctx = self, .vtable = &stage_vtable }) };
+    const stage: automation.Stage = .{ .ctx = self, .vtable = &stage_vtable };
+    self.* = .{ .editor = editor, .player = .init(editor.app.gpa, stage), .live = .init(stage) };
 }
 
 pub fn deinit(self: *Demo) void {
     self.quitting = true;
+    self.live.deinit();
     self.player.deinit();
     self.unmountFiles();
     if (self.pending) |p| p.free(self.editor.app.gpa);
@@ -130,6 +135,17 @@ pub fn playTape(self: *Demo, bytes: []const u8) !void {
     self.player.load(owned, .{});
 }
 
+/// Play a live tape: input on the app as it is, each step once the last has landed
+/// (`automation.LiveDriver`). Refused while a demo is loaded; `owned` is the driver's either way.
+pub fn playLive(self: *Demo, owned: automation.Tape.Owned) !void {
+    if (self.active()) {
+        var o = owned;
+        o.deinit();
+        return error.DemoLoaded;
+    }
+    try self.live.play(owned);
+}
+
 /// Start the bundled demo `name` on the next frame — for callers outside one.
 pub fn playSoon(self: *Demo, name: []const u8) void {
     const gpa = self.editor.app.gpa;
@@ -151,6 +167,10 @@ fn queue(self: *Demo, p: Pending) void {
 /// A demo replaces the open documents, so it waits for unsaved work to be saved or closed. A
 /// demo's own documents are not anyone's work: one demo may replace another.
 fn mayStart(self: *Demo) bool {
+    if (self.live.playing()) {
+        dvui.toast(@src(), .{ .message = "Something is driving fizzy right now — the demo can start once it has finished." });
+        return false;
+    }
     for (self.editor.app.open_files.values()) |doc| {
         if (!doc.owner.isDirty(doc)) continue;
         if (std.mem.startsWith(u8, doc.owner.documentPath(doc), "demo://")) continue;
@@ -187,6 +207,7 @@ pub fn frame(self: *Demo) void {
             },
         }
     }
+    self.live.frame();
     self.player.frame();
 }
 

@@ -157,7 +157,8 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
     const ops = self.tape.ops;
     if (self.holding) {
         const wait = ops[self.cursor].do.wait;
-        if (!sink.vtable.holds(sink.ctx, wait.until)) {
+        const gave_up = !sink.vtable.holds(sink.ctx, wait.until);
+        if (gave_up) {
             self.held_ms += wall_ms;
             if (self.held_ms < @as(f64, @floatFromInt(wait.timeout))) return .holding;
             sink.vtable.timedOut(sink.ctx, wait.until);
@@ -165,6 +166,9 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
         self.holding = false;
         self.held_ms = 0;
         self.cursor += 1;
+        // A wait that gave up yields: whoever plays the tape hears of it before anything after
+        // the wait lands, and may stop there (a live tape does) or carry on (a demo does).
+        if (gave_up) return .yielded;
     }
 
     while (true) {
@@ -656,8 +660,11 @@ test "a wait that never holds gives up after its timeout, in wall time" {
     _ = seq.advance(0, 16, log.sink());
     var frames: usize = 0;
     while (seq.advance(0, 30, log.sink()) == .holding) frames += 1;
-    // Entering the wait, then 30, 60 and 90 ms held; at 120 it gives up and the key lands.
+    // Entering the wait, then 30, 60 and 90 ms held; at 120 it gives up, and yields so whoever
+    // plays it hears before the key lands — which it does on the next call.
     try testing.expectEqual(@as(usize, 4), frames);
+    try testing.expectEqualStrings("keyframe demo://a\ntimeout\n", log.out.items);
+    _ = seq.advance(0, 30, log.sink());
     try testing.expectEqualStrings("keyframe demo://a\ntimeout\nkey mod+s\n", log.out.items);
 }
 

@@ -6286,3 +6286,137 @@ test "demo: fizzy's stage runs a command op's arguments through callCommand" {
     try std.testing.expectEqual(@as(u32, 4), got.line);
     try std.testing.expectEqual(PaletteArgs.Side.right, got.side);
 }
+
+// ── Live tapes ──────────────────────────────────────────────────────────────────────────────────
+// `automation.LiveDriver` over the same widgets and stage as the demo tests: input on the app as it
+// is, each step once the last has landed.
+
+var demo_live: automation.LiveDriver = undefined;
+
+fn liveFrame() !dvui.App.Result {
+    demo_live.frame();
+    var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer col.deinit();
+    if (dvui.button(@src(), "Count", .{}, .{ .tag = "demo.count" })) demo_clicks += 1;
+    var te: TextEntryWidget = undefined;
+    te.init(@src(), .{
+        .multiline = true,
+        .text = .{ .array_list = .{ .backing = &demo_text, .allocator = std.testing.allocator, .limit = 4096 } },
+    }, .{ .expand = .both, .tag = "demo.field" });
+    te.processEvents();
+    te.draw();
+    te.deinit();
+    return .ok;
+}
+
+fn liveCtx() !dvui.testing {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 800, .h = 600 } });
+    errdefer t.deinit();
+    demo_text = .empty;
+    try demo_text.appendSlice(std.testing.allocator, "> ");
+    demo_clicks = 0;
+    demo_commands = 0;
+    demo_stage = .{};
+    demo_live = .init(demo_stage.stage());
+    try dvui.testing.settle(liveFrame);
+    return t;
+}
+
+fn deinitLive(t: *dvui.testing) void {
+    demo_live.deinit();
+    t.deinit();
+    demo_text.deinit(std.testing.allocator);
+    demo_text = .empty;
+    demo_command_args.deinit(std.testing.allocator);
+    demo_command_args = .empty;
+}
+
+/// Frames until the live tape stops, or fail after `max`.
+fn stepLiveUntilDone(max: usize) !void {
+    for (0..max) |_| {
+        if (!demo_live.playing()) return;
+        _ = try dvui.testing.step(liveFrame);
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// Count, click into the field, type, ping with arguments — no keyframe: the app as it is.
+fn liveTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "live", "");
+    errdefer s.deinit();
+    s.check = automation.Input.check;
+    s.check.live = true;
+    try s.click(.{ .tag = "demo.count" }, .{});
+    try s.click(.{ .tag = "demo.field", .x = 0.9, .y = 0.5 }, .{});
+    try s.typeText("hi", .{});
+    try s.commandWith("demo.ping", .{ .n = 1 });
+    return s.finish();
+}
+
+test "live: a tape plays on the app as it is, each step once the last has landed" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+
+    try demo_live.play(try liveTape());
+    try stepLiveUntilDone(200);
+    try std.testing.expect(demo_live.outcome.? == .finished);
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expectEqualStrings("> hi", demo_text.items);
+    try std.testing.expectEqual(@as(usize, 1), demo_commands);
+    try std.testing.expectEqualStrings(".{ .n = 1 }", demo_command_args.items);
+    // Nothing of a demo's: no keyframe, no session set aside.
+    try std.testing.expectEqual(@as(usize, 0), demo_stage.keyframes);
+    try std.testing.expect(!demo_stage.begun);
+}
+
+test "live: a person's key stops it, before the op it had not reached" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+
+    try demo_live.play(try liveTape());
+    // A step in: the first click has been aimed, not the rest.
+    _ = try dvui.testing.step(liveFrame);
+    try dvui.testing.pressKey(.escape, .none);
+    try stepLiveUntilDone(10);
+    const stopped_before = demo_live.outcome.?.interrupted;
+    try std.testing.expect(stopped_before < 10);
+    try std.testing.expectEqual(@as(usize, 0), demo_commands);
+    try std.testing.expectEqualStrings("> ", demo_text.items);
+}
+
+test "live: a demo's tape, or a second tape, is refused" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+
+    // A keyframe is a demo's: a live tape never cuts.
+    try std.testing.expectError(error.KeyframeInLiveTape, demo_live.play(try demoTape()));
+    try std.testing.expect(!demo_live.playing());
+
+    try demo_live.play(try liveTape());
+    try std.testing.expectError(error.Busy, demo_live.play(try liveTape()));
+    demo_live.stop();
+    try std.testing.expect(demo_live.outcome.? == .stopped);
+}
+
+/// Count, then wait for something that never comes, then ping.
+fn lostTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "lost", "");
+    errdefer s.deinit();
+    s.check.live = true;
+    try s.click(.{ .tag = "demo.count" }, .{});
+    try s.waitFor("demo.nowhere", .{ .timeout = 300 });
+    try s.command("demo.ping");
+    return s.finish();
+}
+
+test "live: a wait that never holds stops the tape and says where" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+
+    try demo_live.play(try lostTape());
+    try stepLiveUntilDone(100);
+    const at = demo_live.outcome.?.timed_out;
+    try std.testing.expect(at > 0);
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expectEqual(@as(usize, 0), demo_commands);
+}
