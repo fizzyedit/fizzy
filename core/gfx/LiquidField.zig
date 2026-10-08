@@ -271,10 +271,10 @@ fn opaqueWindow() bool {
 
 /// The app's glass at the window opacity this frame (`glass_look.inApp`), published by the app
 /// before anything draws: every field — dialogs, menus, drops — is drawn as it says, Apple's lens
-/// on the one slider. Null (nothing published, a plugin's own window): the earlier glass, as each
-/// field's own tint, lift and blur say. The precompiled Vulkan and D3D12 programs draw the earlier
-/// glass whatever is published until they are compiled again from the HLSL (the commands are at
-/// its top); the GLSL (the web) and the Metal draw the lens.
+/// on the one slider. Null (nothing published: the web, a plugin's own window): the earlier glass,
+/// as each field's own tint, lift and blur say. Every form of the program draws the lens — the
+/// GLSL, the Metal, and the SPIR-V and DXIL compiled from the HLSL — as long as the last two are
+/// compiled again whenever the HLSL changes (the commands are at its top).
 pub fn publishLook(slider_look: ?glass_look.InApp) void {
     if (dvui.current_window == null) return;
     if (slider_look) |l| dvui.dataSet(null, enabled_id, "_liquid_look", l) else dvui.dataRemove(null, enabled_id, "_liquid_look");
