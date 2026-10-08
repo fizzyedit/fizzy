@@ -74,8 +74,8 @@ The open PR list is the board of who is working on what.
 ## Verify, and say how
 
 - **Gates:** `zig build`, `zig build test`, `zig build test-integration`, `zig build check-web`,
-  `zig build test-sdk-version`. CI runs all of them but `test-integration`, so run that one
-  yourself.
+  `zig build test-sdk-version`. CI runs all of them, `test-integration` on Linux only, but a
+  minute locally beats a ten-minute round trip: run them before you push.
 - **Read the Build Summary, not the test count.** `test-integration` prints `failed command:`
   whenever a test logs a warning, even on a pass, and can show `N/N tests passed` beside a failed
   step. Only `N/N steps succeeded` is a pass.

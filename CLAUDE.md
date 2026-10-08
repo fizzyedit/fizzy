@@ -137,7 +137,7 @@ one directory — that is why the `app` module root is `app/root.zig`, not `app/
 zig build              # native exe
 zig build check-web    # wasm
 zig build test         # unit tests
-zig build test-integration  # headless integration tests (not run by CI: run it yourself)
+zig build test-integration  # headless integration tests (CI runs them on Linux)
 zig build test-sdk-version  # CI lock: the recorded fingerprint matches the live plugin boundary
 ```
 
