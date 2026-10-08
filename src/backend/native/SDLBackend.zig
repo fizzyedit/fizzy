@@ -81,6 +81,8 @@ sdl_quit: bool = true,
 /// nothing worth keeping); this decides only whether a frame that draws nothing to the window
 /// still presents a cleared one.
 clear_window_on_begin: bool = false,
+/// See `mainPicture`.
+main_picture: ?viewport_map.Rect = null,
 /// Added to the wall clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
@@ -1532,6 +1534,7 @@ extern fn fizzy_macos_viewport_overlay_photo(nswindow: ?*anyopaque, photo: ?*con
 extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]const GlassShape, n: c_long, spacing: f64, look: *const GlassLook) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_window_backing_scale(nswindow: ?*anyopaque) f64;
 extern fn fizzy_macos_viewport_over_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_under_main(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
@@ -1606,12 +1609,23 @@ fn mainOnScreen(self: *SDLBackend) viewport_map.Point {
     var x: c_int = 0;
     var y: c_int = 0;
     _ = c.SDL_GetWindowPosition(self.window, &x, &y);
-    return .{ .x = @floatFromInt(x), .y = @floatFromInt(y) };
+    // Its frame's top left is its picture's, while it stands still on its way into or out of full
+    // screen (`main_picture`).
+    const at: viewport_map.Point = if (self.mainPicture()) |p| .{ .x = p.x, .y = p.y } else .{ .x = 0, .y = 0 };
+    return .{ .x = @as(f32, @floatFromInt(x)) + at.x, .y = @as(f32, @floatFromInt(y)) + at.y };
 }
 
 /// The main window's pixels per point: every viewport draws at its scale for now (one
 /// `natural_scale`, `docs/POPOUT_WINDOWS_PLAN.md` on DPI).
 fn density(self: *SDLBackend) f32 {
+    // The screen's, from AppKit: SDL's is its pixel size over its size, as it last heard of each,
+    // and the two arrive apart — the frames after a window jumps its size into or out of full screen
+    // read half or twice the density, the main window's picture laid out at the wrong scale in the
+    // corner and floats placed through it shrunk and moved (the user).
+    if (comptime builtin.os.tag == .macos) if (cocoaWindow(self.window)) |ns| {
+        const s = fizzy_macos_window_backing_scale(ns);
+        if (s > 0) return @floatCast(s);
+    };
     const d = c.SDL_GetWindowPixelDensity(self.window);
     return if (d > 0) d else 1;
 }
@@ -2127,6 +2141,8 @@ pub fn prefersReducedMotion(_: *@This()) bool {
 pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     self.arena = arena;
     if (self.begin_hook) |hook| hook(self);
+    // Its step for this frame taken (`begin_hook`): where the main window's picture is now.
+    self.main_picture = if (platform.window.windowSpacePicture(self.window)) |p| .{ .x = p.x, .y = p.y, .w = p.w, .h = p.h } else null;
     // A float's window standing still on its way into or out of full screen: its picture has
     // taken this frame's step (`begin_hook`), and the float follows it there — as it did the
     // window's moves — and back to the window as the way ends.
@@ -2138,6 +2154,35 @@ pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     self.gpu.beginFrame();
     self.gpu.window_held = self.mainHeld();
     self.manage_backend_tracking.reset_begin();
+}
+
+/// The main window's picture in it, points from its top left, while it stands still on its own way
+/// into or out of full screen (`platform.window.windowSpacePicture`): from the first step at its
+/// full-screen size, the app drawn growing or shrinking in it. dvui is told the window is the
+/// picture's size (`windowSize`, `pixelSize`), the frame is laid down where the picture is
+/// (`pictureInWindow`, `core.gfx.FrameTarget`) and the pointer is read against it (`mainOnScreen`,
+/// the main window's motion). Null on no such way.
+fn mainPicture(self: *const SDLBackend) ?viewport_map.Rect {
+    return self.main_picture;
+}
+
+/// Where the main window's frame is laid down in it this frame, physical, and all of it: its
+/// picture, while it stands still on its way into or out of full screen (`main_picture`). Null:
+/// the frame is the window.
+pub fn pictureInWindow(self: *SDLBackend) ?struct { at: dvui.Rect.Physical, all: dvui.Rect.Physical } {
+    if (comptime builtin.os.tag != .macos) return null;
+    const p = self.mainPicture() orelse return null;
+    // The drawable the frame goes into: the window's size the moment it jumps (the monitor keeps it
+    // so), where SDL's word on its pixel size comes a frame or more later.
+    var w: c_int = 0;
+    var h: c_int = 0;
+    const nswindow = cocoaWindow(self.window) orelse return null;
+    if (fizzy_native_metal_drawable_size(nswindow, &w, &h) == 0) _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
+    const d = self.density();
+    return .{
+        .at = .{ .x = p.x * d, .y = p.y * d, .w = p.w * d, .h = p.h * d },
+        .all = .{ .w = @floatFromInt(w), .h = @floatFromInt(h) },
+    };
 }
 
 /// Whether the main window keeps its last picture this frame (`GpuRenderer.window_held`): while it
@@ -2168,6 +2213,11 @@ pub fn end(_: *SDLBackend) !void {}
 /// The window's drawable size. On macOS the swapchain layer's own (what SDL's Metal renderer
 /// reported, and what fizzy's AppKit sync keeps current during animations); elsewhere SDL's.
 pub fn pixelSize(self: *SDLBackend) dvui.Size.Physical {
+    if (self.mainPicture()) |p| {
+        const d = self.density();
+        self.last_pixel_size = .{ .w = @round(p.w * d), .h = @round(p.h * d) };
+        return self.last_pixel_size;
+    }
     var w: c_int = 0;
     var h: c_int = 0;
     if (builtin.os.tag == .macos) {
@@ -2184,6 +2234,10 @@ pub fn pixelSize(self: *SDLBackend) dvui.Size.Physical {
 }
 
 pub fn windowSize(self: *SDLBackend) dvui.Size.Natural {
+    if (self.mainPicture()) |p| {
+        self.last_window_size = .{ .w = p.w, .h = p.h };
+        return self.last_window_size;
+    }
     var w: i32 = undefined;
     var h: i32 = undefined;
     toErr(c.SDL_GetWindowSize(self.window, &w, &h), "SDL_GetWindowSize in windowSize") catch return self.last_window_size;
@@ -2494,10 +2548,13 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             const scale = if (windowW == 0) 1.0 else (self.pixelSize().w / windowW);
 
             if (sdl3) {
+                // Read against the picture, where the window stands still on its way into or out
+                // of full screen (`main_picture`).
+                const at: viewport_map.Point = if (self.mainPicture()) |p| .{ .x = p.x, .y = p.y } else .{ .x = 0, .y = 0 };
                 return try win.addEventMouseMotion(.{
                     .pt = .{
-                        .x = event.motion.x * scale,
-                        .y = event.motion.y * scale,
+                        .x = (event.motion.x - at.x) * scale,
+                        .y = (event.motion.y - at.y) * scale,
                     },
                 });
             } else {

@@ -24,6 +24,7 @@ extern void fizzy_macos_window_request_clear_frames(void *nswindow, int frames);
 extern void fizzy_macos_window_commit_steady_state(void *nswindow);
 extern void fizzy_macos_window_glass_toolbar(void *nswindow, int on);
 extern void fizzy_macos_window_glass_follow(void *nswindow);
+extern int fizzy_macos_window_has_liquid_glass(void *nswindow);
 extern void fizzy_macos_window_live_resize_vsync(void *nswindow, int active);
 extern bool SDL_GetHintBoolean(const char *name, bool default_value);
 extern void fizzy_live_resize_trace_step(void *nswindow);
@@ -632,6 +633,13 @@ static NSArray *fizzy_custom_windows_for_space(NSWindow *window, BOOL entering) 
     m->anim_fullness = entering ? 0.0 : 1.0;
     m->anim_from = NSZeroRect;
     m->fullscreen_size = NSZeroSize;
+    /* A window of Liquid Glass stands still on its way too — the main window as a float's does:
+     * its glass parts follow its picture (`fizzy_macos_window_glass_follow`) and its frame is drawn
+     * where the picture is (`SDLBackend.main_picture`). Stepped a size a frame, the main window
+     * laid the whole app out at each size in a new drawable, and its way ran choppy where a float's
+     * standing still ran smooth (the user). Vibrancy wrapping SDL's view (before macOS 26) cannot
+     * follow a picture: that window keeps stepping. */
+    if (fizzy_macos_window_has_liquid_glass((__bridge void *)window)) m->still = YES;
     return @[ window ];
 }
 
@@ -1005,6 +1013,12 @@ int fizzy_macos_copy_screen_frames(double *out, int max) {
         n++;
     }
     return n;
+}
+
+/* `nswindow`'s pixels per point: its screen's, as AppKit has it. */
+double fizzy_macos_window_backing_scale(void *nswindow) {
+    if (!nswindow) return 0;
+    return ((__bridge NSWindow *)nswindow).backingScaleFactor;
 }
 
 void fizzy_macos_window_pixel_size(void *nswindow, int *out_w, int *out_h) {
