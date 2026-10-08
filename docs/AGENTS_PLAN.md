@@ -67,6 +67,65 @@ a plugin.
   (`core.lsp.Client` is the template). Edits shown as diffs in the `text` plugin; permission
   prompts as fizzy dialogs. Nothing in it asks the SDK for more than the rest does.
 
+## What an agent wants from it
+
+The plugin is for agents, so it is shaped by how an agent works: a turn is expensive, a token
+is expensive, it sees nothing it does not ask for, and it is often on a Linux machine with no
+display. Written from an agent's side, after a session spent working around each of these
+(screenshots by window id, input that moved the person's pointer, a demo loader that only takes
+bundled names, `HOME` and `TMPDIR` surgery, reading a 900-line file to learn what a panel does).
+In priority order:
+
+1. **A run with no display, and none of the person's things.** A sandbox instance from a profile
+   (milestone 2), with the plugins asked for, at a window size asked for, either headless (dvui's
+   testing backend or an offscreen video driver) or in a hidden window that never takes focus.
+   Several at once. A cloud agent has no screen at all, so without this, nothing below can be
+   used where most agent work happens.
+2. **Act, wait and observe in one call.** `ui.act` takes a step (click, type, key, scroll, aimed
+   at an anchor or a `role:label`), waits until the app has settled or a condition holds (an
+   anchor appears, a document is dirty, a log line matches) with a timeout, and returns what
+   changed. One turn per step rather than three. A failure says which part failed: the target
+   was not drawn, the wait timed out, a command was disabled.
+3. **Observation as text, diffed.** `ui.snapshot` returns the tree (anchors, roles, labels, rects,
+   focus, open popups and dialogs), filterable to a subtree, and on later calls only what changed
+   since the last one. Names stay stable between calls. Screenshots exist, but only on request, of
+   an anchor or a region, downscaled: a picture costs far more than the text that says the same.
+4. **The plugin loop as one tool.** `plugin.new` (from the template), then `plugin.build`: build,
+   install into the sandbox's profile, reload, and report. Compiler errors come back structured
+   (file, line, column, message), load failures by kind (fingerprint, missing symbol,
+   registration error, the plugin's own message), the reload's outcome (documents reopened,
+   state carried or dropped). Then `plugin.test` through the headless harness. This is what turns
+   "write a plugin" into a loop an agent can close on its own.
+5. **The registries, described.** `sdk.describe`: every command with its parameters, surfaces and
+   their keywords, regions, services with versions, settings schemas, file kinds, which plugin
+   owns what, the SDK version and fingerprint. Writing a plugin correctly starts with knowing
+   what is already there; today that means reading source.
+6. **Documents through commands.** Reading an open document's text or a range of it, the
+   selection, dirty state; editing through commands its owner offers (`text.replaceRange`,
+   `text.insert` — commands with arguments, so milestone 1 again). No back door, and every edit
+   lands in undo where a person can see it.
+7. **Logs as a stream with a cursor.** `log.tail(since)`, filtered by level and source; plugin
+   load and reload events; a panic's message and stack where there is one; frame times from the
+   profiler, so "did this make it slower" has an answer.
+8. **Time under the agent's control.** Motion off and the virtual clock ahead, so a wait for an
+   animation is free rather than 300 ms of wall time, and a run is deterministic.
+9. **A session becomes a tape.** Everything the agent did, written out as a tape: a reproduction
+   for a bug, a regression test for the integration suite, a demo for the site. Loading a tape
+   from a file rather than only bundled ones.
+10. **Small, stable output.** Compact by default, paged, with ids that do not change between
+    calls, and errors that say what to do next.
+
+Last, and for the person rather than the agent: a pane in fizzy showing what the agent is doing,
+diffs of its edits to review, and a way to stop it.
+
+**What building it exercises.** The plugin is also the most thorough test of the SDK there will
+be, and is meant to be: a dylib with background threads waking the host; commands with arguments
+called across plugins; every service above, versioned; dvui's shared state (anchors, tags, the
+frame dump) read from another image; frame capture through the render bridge; its own settings
+schema (permissions, socket, limits), a surface (the pane above), an infobar entry; and hot reload
+while connected. Each is something any plugin might do; this one does them all, so a break in any
+shows up here first.
+
 ## The seams
 
 Two kinds. A change to `Host`, `Plugin` or `Command` moves the ABI fingerprint and needs every
