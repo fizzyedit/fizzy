@@ -1,8 +1,8 @@
 # Native windows and glass on Windows and Linux
 
-Status: in progress. Research under `docs/NATIVE_WINDOWS_PLAN.md`. Steps 3 (Windows menus and
-dialogs as Acrylic popups) and 4 (the Linux window material) are built in PRs of their own, each
-behind a flag; nothing else here is.
+Status: in progress. Research under `docs/NATIVE_WINDOWS_PLAN.md`. Step 0 (the glass programs
+compiled again) is done (#242). Steps 3 (Windows menus and dialogs as Acrylic popups) and 4 (the
+Linux window material) are built in PRs of their own, each behind a flag; nothing else here is.
 
 An investigation, not yet a design anyone has agreed to. macOS has floats as OS windows by default,
 and on macOS 26 the OS draws a view drag's glass (`docs/POPOUT_WINDOWS_PLAN.md`, "P6";
@@ -80,14 +80,15 @@ Three things are lost against macOS 26:
 - **The outline is a frame late, or stepped.** On Windows the clip and the picture travel by
   different routes (below). On Wayland the region is in sync, but made of whole rectangles.
 
-## Step 0 (both platforms): the glass programs are out of date
+## Step 0 (both platforms): the glass programs compiled again — done (#242)
 
-`core/gfx/shaders/compiled/{spv,dxil}` were last compiled in #206 (2026-10-03).
-`liquid_glass.fragment.hlsl` changed in #227, and `LiquidField.publishLook` notes that the
-precompiled Vulkan and D3D12 programs still draw the earlier glass. Until they are recompiled with
-`shadercross` (the commands are at the top of the HLSL), Windows and Linux do not draw the lens or
-the one-slider look even in-window. Recompiling them is cheap, and every comparison below assumes
-it has been done.
+`core/gfx/shaders/compiled/{spv,dxil}` were last compiled in #206 (2026-10-03), and
+`liquid_glass.fragment.hlsl` changed in #227, so Windows and Linux drew the earlier glass even
+in-window: no lens, and not the one-slider look. #242 compiled them again with `shadercross` (the
+commands are at the top of the HLSL), with the DXC SDL_shadercross vendors (libsdl-org at
+2c84a1c5, built with clang: built with GCC 13 it corrupts its heap compiling DXIL). That DXC
+compiles #206's HLSL to #206's SPIR-V and DXIL byte for byte. Every comparison below assumes the
+programs are current.
 
 ## Windows
 
@@ -358,8 +359,8 @@ paths:
 
 Each step is useful by itself, and the spikes come before anything that depends on their answer.
 
-1. **Recompile the glass programs** (SPIR-V and DXIL; step 0). Windows and Linux then draw the
-   current lens and slider in-window.
+1. **Recompile the glass programs** (SPIR-V and DXIL; step 0). **Done (#242):** Windows and Linux
+   draw the current lens and slider in-window.
 2. **Windows: float chrome and lifecycle** (P4): caption buttons in the float header, per-HWND
    `win32_titlebar` state, minimize and close with the main window, and the look checked on a
    hardware GPU. This is what lets `float_windows` default to on for Windows, as it does on macOS.
