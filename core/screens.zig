@@ -39,12 +39,39 @@ pub fn clear() void {
     dvui.dataRemove(null, key_id, key);
 }
 
-/// The screen `r` (natural) is on: the published one its middle is in, else the main window's.
+/// The screen `r` (natural) is on: the published one its middle is in, else the main window's
+/// (`mainScreen`).
 pub fn screenFor(r: dvui.Rect.Natural) dvui.Rect.Natural {
-    const p = dvui.dataGetPtr(null, key_id, key, Published) orelse return dvui.windowRect();
+    const p = dvui.dataGetPtr(null, key_id, key, Published) orelse return mainScreen();
     const c = r.center();
     for (p.rects[0..p.n]) |s| if (s.contains(c)) return s;
-    return dvui.windowRect();
+    return mainScreen();
+}
+
+/// Whether `p`, natural, is on a screen of the app's besides the main window's: a float's window
+/// that is out. Not where `screenFor` falls back to, which is no rect of the main window's own.
+pub fn onScreen(p: dvui.Point.Natural) bool {
+    const s = dvui.dataGetPtr(null, key_id, key, Published) orelse return false;
+    for (s.rects[0..s.n]) |r| if (r.contains(p)) return true;
+    return false;
+}
+
+/// How far down the main window its screen starts, natural (`mainScreen`): the strip its title bar
+/// takes, where the OS and not the app takes a press — on macOS AppKit's title bar and toolbar, over
+/// SDL's view. The app's, each frame; 0 when it publishes none.
+pub fn publishMainTop(top: f32) void {
+    dvui.dataSet(null, key_id, "_main_top", @max(0, top));
+}
+
+/// The main window's screen: the window, below its title strip (`publishMainTop`). A dialog drawn
+/// in the window and dragged up over the strip took no press there, and could be neither clicked nor
+/// dragged back (the user); kept on this, it, a menu or a tooltip stays where the app takes presses.
+pub fn mainScreen() dvui.Rect.Natural {
+    var r = dvui.windowRect();
+    const top = @min(dvui.dataGet(null, key_id, "_main_top", f32) orelse 0, r.h);
+    r.y += top;
+    r.h -= top;
+    return r;
 }
 
 /// A floating thing drawn across every screen this frame — a view drag's layer, whose drops and
@@ -187,7 +214,7 @@ pub fn dialogScreenFor(r: dvui.Rect.Natural) dvui.Rect.Natural {
     const d = dvui.dataGet(null, key_id, "_dialogs", dvui.Rect.Natural) orelse return screenFor(r);
     if (d.contains(r.center())) return d;
     const s = screenFor(r);
-    if (s.equals(dvui.windowRect())) return s;
+    if (s.equals(mainScreen())) return s;
     const c = r.center();
     return .{ .x = c.x - d.w / 2, .y = c.y - d.h / 2, .w = d.w, .h = d.h };
 }
