@@ -1,12 +1,20 @@
 name: CI
 
-# PR / merge queue / manual: three native test jobs (no skipped rows). Push to main: Linux-only
-# (fast).
+# Every run, a push to main included: three native test jobs (no skipped rows) and the Windows
+# cross-build.
 #
 # `ci-ok` is the one check `main`'s ruleset requires (`.github/rulesets/main.json`), so the
 # workflow runs for every change. A workflow-level `paths-ignore` would never start for a
 # Markdown-only PR, leaving its required check waiting for good; `changes` works out instead
 # whether anything besides docs changed, and the builds skip themselves when nothing did.
+#
+# A push to main runs the full matrix because main's runs are the only ones whose Zig caches
+# every pull request can restore: a cache a pull request saves is visible to that pull request
+# alone (see the test job's "Restore Zig cache"). Pushes used to run only the Linux jobs, so main
+# held no macOS, Windows or cross-build cache and every pull request's first run built those
+# three cold. Now the merge that changes a dependency saves the new caches, a cache GitHub
+# evicted after a quiet week comes back on the next merge, and every merge is tested on all
+# three platforms. Nothing waits on a main run, and a cache hit makes the extra jobs short.
 on:
   push:
     branches: [main]
@@ -72,7 +80,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ github.event_name == 'push' && fromJSON('[{"os":"ubuntu-latest","name":"Linux"}]') || fromJSON('[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-14","name":"macOS"}]') }}
+        include:
+          - { os: ubuntu-latest, name: Linux }
+          - { os: windows-latest, name: Windows }
+          - { os: macos-14, name: macOS }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -222,7 +233,7 @@ jobs:
   windows-fizzy-backend:
     name: Windows build (fizzy backend, cross-compiled)
     needs: changes
-    if: github.event_name != 'push' && needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
