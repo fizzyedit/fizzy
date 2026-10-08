@@ -128,6 +128,15 @@ pub fn register(host: *sdk.Host) !void {
         .isEnabled = cmdFormatEnabled,
         .icon = icons.tvg.lucide.@"align-left",
     });
+    try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("text", "goToLine"),
+        .owner = &plugin,
+        .title = "Go to Line…",
+        .params = GoToLine.params,
+        .runWith = GoToLine.bind(cmdGoToLine),
+        .isEnabled = cmdGoToLineEnabled,
+        .icon = icons.tvg.lucide.@"arrow-down-to-line",
+    });
 
     // "Format Document" is only meaningful when a language plugin claims the active
     // document's extension (today, `zig` via zls) — inject it into fizzy's existing
@@ -426,6 +435,24 @@ fn cmdPaste(state: *anyopaque) anyerror!void {
 
 // ---- format command -------------------------------------------------------------
 
+const GoToLine = sdk.Command.Params(struct {
+    line: sdk.Command.Arg(u32, .{ .description = "The line to go to, counting from 1.", .min = 1 }),
+    column: sdk.Command.Arg(u32, .{ .description = "The column on that line, counting from 1.", .min = 1 }) = .init(1),
+});
+fn cmdGoToLineEnabled(state: *anyopaque) bool {
+    return activeTextDoc(state) != null;
+}
+/// Puts the caret at `line`:`column` of the active document, clamped to it, and returns where it
+/// landed (`.{ .line, .column }`, from 1).
+fn cmdGoToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) anyerror!void {
+    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    const offset = doc.byteOffsetForLineCharacter(args.line -| 1, args.column -| 1);
+    const at = doc.lineCharacterForByteOffset(offset);
+    doc.pending_sel = .collapsed(offset);
+    doc.pending_scroll_line = at.line;
+    doc.pending_preview_line = at.line;
+    try call.returns(.{ .line = at.line + 1, .column = at.character + 1 });
+}
 fn cmdFormatEnabled(state: *anyopaque) bool {
     const doc = activeTextDoc(state) orelse return false;
     return sdk.host().canFormatExt(std.fs.path.extension(doc.path));

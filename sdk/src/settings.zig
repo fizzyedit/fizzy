@@ -131,7 +131,8 @@ pub fn Value(comptime T: type, comptime opts: Options) type {
     };
 }
 
-fn isCell(comptime T: type) bool {
+/// Whether `T` is a `Value` cell. Shared with `Command.Params`, whose arguments are cells too.
+pub fn isCell(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .@"struct" => @hasDecl(T, "is_setting_cell"),
         else => false,
@@ -151,8 +152,8 @@ fn requireCell(comptime T: type, comptime field_name: []const u8, comptime owner
 
 /// `insert_spaces_on_tab` → `Insert spaces on tab`: underscores become spaces and the first letter
 /// is capitalized. Sentence case, not title case — a description follows it, and title-casing
-/// every word reads like a menu item rather than a setting name.
-fn deriveLabel(comptime key: []const u8) []const u8 {
+/// every word reads like a menu item rather than a setting name. A command parameter's label too.
+pub fn deriveLabel(comptime key: []const u8) []const u8 {
     comptime {
         var buf: [key.len]u8 = undefined;
         for (key, 0..) |c, i| buf[i] = if (c == '_') ' ' else c;
@@ -194,8 +195,9 @@ fn enumChoices(comptime EnumT: type) []const []const u8 {
 /// Derive a field's `Kind` from its payload type, refined by whatever bounds the cell declared.
 /// `int`/`enumeration` get bounds/choices for free from the type itself (bit-width, tag names);
 /// `float` has no such source (a bare `f32` carries no notion of range), so it falls back to
-/// `FloatKind`'s defaults (0..1, step 0.01) unless `Options` narrowed them.
-fn kindFor(comptime T: type, comptime opts: Options) Kind {
+/// `FloatKind`'s defaults (0..1, step 0.01) unless `Options` narrowed them. A command parameter's
+/// kind too (`Command.Params`), so whoever asks for one can offer the same control.
+pub fn kindFor(comptime T: type, comptime opts: Options) Kind {
     return switch (typeTagFor(T)) {
         .bool => .{ .bool = {} },
         .int => blk: {

@@ -6108,3 +6108,78 @@ test "a frost never captures more than the picture it reads" {
     const band: Rect = .{ .x = 100000, .y = 400, .w = 712, .h = 878 };
     try std.testing.expectEqual(@as(?Rect, null), within(.{ .x = 900, .y = 300, .w = 500, .h = 700 }, band));
 }
+
+// -- commands with arguments ---------------------------------------------------------------------
+
+// The palette asks for a command's required parameters in turn — free text checked against the
+// parameter, a list for an enum — and runs the command with what was given. This is the path a
+// menu row or a keybind reaches through `EditorAPI.askCommandArguments` too.
+const PaletteArgs = struct {
+    const Side = enum { left, right };
+    const Params = sdk.Command.Params(struct {
+        line: sdk.Command.Arg(u32, .{ .description = "The line.", .min = 1 }),
+        side: sdk.Command.Arg(Side, .{ .description = "Which side." }),
+        column: sdk.Command.Arg(u32, .{ .description = "The column." }) = .init(1),
+    });
+    var got: ?Params.Args = null;
+    var editor: *fizzy.Editor = undefined;
+
+    fn run(_: *anyopaque, args: Params.Args, _: *sdk.Command.Call) anyerror!void {
+        got = args;
+    }
+    fn frame() !dvui.App.Result {
+        editor.command_palette.draw(editor);
+        return .ok;
+    }
+};
+
+test "the palette asks for a command's required arguments, then runs it with them" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    PaletteArgs.editor = editor;
+    PaletteArgs.got = null;
+
+    const vtable = sdk.Plugin.VTable{};
+    var state: u8 = 0;
+    var plugin = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try editor.app.host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(PaletteArgs.run),
+    });
+
+    try std.testing.expect(editor.command_palette.ask(editor, "t.place"));
+    try dvui.testing.settle(PaletteArgs.frame);
+
+    // An answer that does not fit the parameter is refused where it was typed.
+    try dvui.testing.writeText("0");
+    try dvui.testing.settle(PaletteArgs.frame);
+    try dvui.testing.pressKey(.enter, .none);
+    try dvui.testing.settle(PaletteArgs.frame);
+    try std.testing.expectEqual(@as(usize, 0), editor.command_palette.asking.?.param);
+    try std.testing.expect(editor.command_palette.asking.?.problem_len > 0);
+    try std.testing.expect(PaletteArgs.got == null);
+
+    // A good one moves on to the next required parameter; the optional one is never asked.
+    try dvui.testing.pressKey(.backspace, .none);
+    try dvui.testing.writeText("12");
+    try dvui.testing.settle(PaletteArgs.frame);
+    try dvui.testing.pressKey(.enter, .none);
+    try dvui.testing.settle(PaletteArgs.frame);
+    try std.testing.expectEqual(@as(usize, 1), editor.command_palette.asking.?.param);
+
+    // An enum is a list, filtered by what is typed; Enter takes the row.
+    try dvui.testing.writeText("ri");
+    try dvui.testing.settle(PaletteArgs.frame);
+    try dvui.testing.pressKey(.enter, .none);
+    try dvui.testing.settle(PaletteArgs.frame);
+
+    const got = PaletteArgs.got orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 12), got.line);
+    try std.testing.expectEqual(PaletteArgs.Side.right, got.side);
+    try std.testing.expectEqual(@as(u32, 1), got.column);
+    try std.testing.expect(editor.command_palette.closing or !editor.command_palette.open);
+}
