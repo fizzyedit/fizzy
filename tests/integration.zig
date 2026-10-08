@@ -4454,6 +4454,25 @@ test "liquid field: groups are the shapes that touch, each drawn as its own quad
     try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
 }
 
+test "liquid field: a lens's picture reaches as far past its shapes as the earlier glass's rim pulls from" {
+    const LF = fizzy.core.LiquidField;
+    var f: LF = .{ .scale = 2, .refraction = 1 };
+    f.add(LF.Shape.circle(.{ .x = 100, .y = 100 }, 60));
+    // The earlier glass (the web's) pulls its rim from `liquid_glass.refraction` points out at full
+    // strength: a picture reaching that far past the shape has something there to show.
+    try std.testing.expect(f.pictureMargin() >= fizzy.core.liquid_glass.refraction * 2);
+    // Further at the strongest refraction setting.
+    var strong = f;
+    strong.refraction = 2;
+    try std.testing.expect(strong.pictureMargin() > f.pictureMargin());
+    // And further for a stronger lens on its shape.
+    var bent = f;
+    bent.shapes[0].lens = 1.5;
+    try std.testing.expect(bent.pictureMargin() > f.pictureMargin());
+    // Nothing in fizzy draws one (pixi's dropper magnifier does): compiled here all the same.
+    _ = &LF.drawPicture;
+}
+
 test "liquid glass: the rings of a pane run the way dvui's paths do" {
     const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
     var pts: [4 * 7 + 2 * (8 - 1) + 2 * (4 - 1)]dvui.Point.Physical = undefined;

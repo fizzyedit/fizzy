@@ -173,6 +173,10 @@ pub fn beginFrame(state: *State) void {
     // is on, and after it while its drops are still running back together (`ViewDrag.last_pending`)
     // — their going, as their coming, is the OS's glass too.
     fizzy.core.native_glass.publishOn(nativeGlass() and (state.view_drag.active() or state.view_drag.last_pending_count > 0));
+    // And glass declared outside a drag, such as a plugin's (pixi's dropper magnifier): the OS's
+    // wherever it has it, in the same overlay, which stays while any glass is declared
+    // (`overlayFrame`).
+    fizzy.core.native_glass.publishOffered(nativeGlass());
     // And the carried view's picture under that glass, in a window of its own (`photoFrame`).
     fizzy.core.native_glass.publishUnder(nativeGlass() and viewports.carries);
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
@@ -462,7 +466,9 @@ fn overlaySpacing(s: f32) f32 {
 /// what is under them. The carried view's photograph lies under its drop's glass (`overlayPhoto`);
 /// what goes over the glass — the drop's name, the bubbles' icons (`core.screens.markCarried`) — is
 /// taken into the overlay's picture. Glass and pictures change in one transaction. It goes when the
-/// drag does; a float the drop opens grows out of a carry window of its own (`growFrame`).
+/// drag does; a float the drop opens grows out of a carry window of its own (`growFrame`). Glass
+/// declared outside a drag (`core.native_glass.offered`: pixi's dropper magnifier) keeps it up the
+/// same way, with what is marked to go over it.
 fn overlayFrame(state: *State) void {
     const d = &state.view_drag;
     // Kept past the drag while its drops still go, and gone once there is no glass left.
