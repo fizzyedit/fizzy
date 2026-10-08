@@ -861,7 +861,10 @@ pub fn refresh(_: *SDLBackend) void {
 /// which is how fizzy runs on macOS.
 fn noteMainForward(self: *SDLBackend, target: ?*c.SDL_Window, event_type: u32) void {
     switch (event_type) {
-        c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_HIDDEN, c.SDL_EVENT_WINDOW_RESTORED, c.SDL_EVENT_WINDOW_MINIMIZED, c.SDL_EVENT_WINDOW_FOCUS_GAINED => self.stack_stale = true,
+        // Into or out of a fullscreen Space too: a window in one lies under no other
+        // (`fizzy_macos_viewport_under_main`), and one read as under the main window before it
+        // went kept that, its presses read over the main window (`heldPoint`).
+        c.SDL_EVENT_WINDOW_SHOWN, c.SDL_EVENT_WINDOW_HIDDEN, c.SDL_EVENT_WINDOW_RESTORED, c.SDL_EVENT_WINDOW_MINIMIZED, c.SDL_EVENT_WINDOW_FOCUS_GAINED, c.SDL_EVENT_WINDOW_ENTER_FULLSCREEN, c.SDL_EVENT_WINDOW_LEAVE_FULLSCREEN => self.stack_stale = true,
         else => {},
     }
     if (target == null or target != self.window) return;
@@ -1631,8 +1634,12 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     for (&self.viewports) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.passive or vp.see_through) continue;
-        if (vp.under_main and over_main) continue;
-        const s = vp.screen;
+        // In a fullscreen Space of its own, a window is where the OS put it, and under nothing:
+        // read as under the main window, or where it was before it went, every press and release
+        // in it landed over the main window — hovering worked, clicking did nothing (the user).
+        const full = c.SDL_GetWindowFlags(vp.window) & c.SDL_WINDOW_FULLSCREEN != 0;
+        if (vp.under_main and over_main and !full) continue;
+        const s = if (full) liveScreen(vp) else vp.screen;
         if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
             gx < @as(f32, @floatFromInt(s.x + s.w)) and gy < @as(f32, @floatFromInt(s.y + s.h)))
         {
@@ -1641,6 +1648,18 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     }
     const d = self.density();
     return .{ .x = (gx - origin.x) * d, .y = (gy - origin.y) * d };
+}
+
+/// Where `vp`'s window is on the desktop now, as SDL last heard: the OS's to say while it is in a
+/// fullscreen Space, where `Viewport.screen` — where the app put it — no longer is.
+fn liveScreen(vp: *const Viewport) viewport_map.ScreenRect {
+    var x: c_int = 0;
+    var y: c_int = 0;
+    var w: c_int = 0;
+    var h: c_int = 0;
+    _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
+    _ = c.SDL_GetWindowSize(vp.window, &w, &h);
+    return .{ .x = x, .y = y, .w = w, .h = h };
 }
 
 /// Where in the frame the pointer over `vp`'s window is: where it is on the desktop, through the
@@ -1690,7 +1709,9 @@ fn addViewportEvent(self: *SDLBackend, win: *dvui.Window, vp: *Viewport, event: 
             vp.close_requested = true;
             return false;
         },
-        c.SDL_EVENT_WINDOW_MOVED, c.SDL_EVENT_WINDOW_RESIZED => {
+        // Into or out of a fullscreen Space as well: where it is read again then, whatever moves
+        // and resizes the transition did or did not report.
+        c.SDL_EVENT_WINDOW_MOVED, c.SDL_EVENT_WINDOW_RESIZED, c.SDL_EVENT_WINDOW_ENTER_FULLSCREEN, c.SDL_EVENT_WINDOW_LEAVE_FULLSCREEN => {
             viewportFollowWindow(vp);
             return false;
         },
