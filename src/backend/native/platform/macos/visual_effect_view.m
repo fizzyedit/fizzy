@@ -243,6 +243,38 @@ void fizzy_macos_viewport_unglass(void *nswindow) {
  * float kept over the main window came back over it at every press there, and the part of the main
  * window under it could not be worked in.
  */
+/* The app's first activation, once it has come (`fizzy_macos_took_first_activation`). AppKit brings
+ * the key window — the main one — in front of the app's others as it activates, and at launch that
+ * comes after the floats restored with it were put over it: they came up under it (the user). SDL
+ * says nothing of it (its listener ignores the first activation), so it is watched for here. */
+static int g_first_activation_pending = 0;
+
+void fizzy_macos_watch_first_activation(void) {
+    static BOOL watching = NO;
+    if (watching) return;
+    watching = YES;
+    @autoreleasepool {
+        __block id token = nil;
+        token = [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidBecomeActiveNotification
+                                                                  object:nil
+                                                                   queue:[NSOperationQueue mainQueue]
+                                                              usingBlock:^(__unused NSNotification *note) {
+            g_first_activation_pending = 1;
+            [[NSNotificationCenter defaultCenter] removeObserver:token];
+        }];
+#if !__has_feature(objc_arc)
+        [token retain];
+#endif
+    }
+}
+
+/* Whether the app's first activation came since this was last asked (`fizzy_macos_watch_first_activation`). */
+int fizzy_macos_took_first_activation(void) {
+    const int was = g_first_activation_pending;
+    g_first_activation_pending = 0;
+    return was;
+}
+
 void fizzy_macos_viewport_over_main(void *nswindow, void *main_nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -252,7 +284,11 @@ void fizzy_macos_viewport_over_main(void *nswindow, void *main_nswindow) {
         /* Either in a fullscreen Space of its own: the two are on different Spaces, and ordering
          * one against the other would pull it across. */
         if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
-        if ([window orderedIndex] < [main orderedIndex]) return;
+        /* Whatever `orderedIndex` says: it lags the window server just after the stacking changes.
+         * At launch the app's activation brought the main window forward, the index still read the
+         * float as in front of it, and floats restored with the layout stayed under the main
+         * window (the user). Asked only when a float first shows and when the main window is shown
+         * or first focused, so ordering it there every time costs nothing. */
         [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
     }
 }
