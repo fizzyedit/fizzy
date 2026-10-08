@@ -94,8 +94,10 @@ const Out = struct {
     /// the next float's once it closes.
     serial: u64,
     viewport: *viewports.Viewport,
-    /// Its part of the frame, drawn every frame for its window.
+    /// Its part of the frame, drawn every frame for its window: `drawn` of it, from its top left —
+    /// the texture is kept larger through a fullscreen transition (`keepTarget`).
     target: ?dvui.Texture.Target = null,
+    drawn: [2]u32 = .{ 0, 0 },
     /// What its window is called now: the float's title, as its header says (`Floats.Float.titleText`).
     title_buf: [96]u8 = undefined,
     title_len: u8 = 0,
@@ -1006,13 +1008,14 @@ fn drawGrow(o: *Out, g: *Grow, rect: dvui.Rect.Physical, radius: f32, alpha: f32
         const scale = dvui.windowNaturalScale();
         // Its proportions kept, filling the glass from its top left — where the window grows from
         // (`ViewDrag.floatOut`): at the window's size, all of it.
-        var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
-        const tw: f32 = @floatFromInt(target.width);
-        const th: f32 = @floatFromInt(target.height);
+        // Of what of the texture was drawn (`Out.drawn`), from its top left.
+        const tw: f32 = @floatFromInt(o.drawn[0]);
+        const th: f32 = @floatFromInt(o.drawn[1]);
+        var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = tw / @as(f32, @floatFromInt(@max(1, target.width))), .h = th / @as(f32, @floatFromInt(@max(1, target.height))) };
         if (tw > 0 and th > 0 and rect.w > 0 and rect.h > 0) {
             const a_img = tw / th;
             const a_box = rect.w / rect.h;
-            if (a_img > a_box) uv.w = a_box / a_img else uv.h = a_img / a_box;
+            if (a_img > a_box) uv.w *= a_box / a_img else uv.h *= a_img / a_box;
         }
         dvui.renderTexture(tex, .{ .r = rect, .s = scale }, .{
             .corners = .round(radius / scale),
@@ -1105,12 +1108,7 @@ fn windowFrame(state: *State, o: *Out) void {
     }
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
-    if (o.target) |t| if (t.width != w or t.height != h) {
-        t.destroyLater();
-        o.target = null;
-    };
-    if (o.target == null) o.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
-    const target = o.target.?;
+    const target = keepTarget(o, w, h) orelse return;
 
     // Transparent where the float is not: past its corners.
     target.clear();
@@ -1197,6 +1195,37 @@ fn displayNatural() dvui.Rect.Natural {
     const s = dvui.windowNaturalScale();
     if (d.w <= 0 or d.h <= 0) return dvui.windowRect();
     return .{ .x = d.x / s, .y = d.y / s, .w = d.w / s, .h = d.h / s };
+}
+
+/// `o`'s texture for a frame `w` by `h` pixels, its picture drawn from the texture's top left
+/// (`Out.drawn`; its window takes that much of it, `viewports.present`). Made anew for a new size —
+/// except on the window's own way into or out of full screen, where a texture made every frame at
+/// a larger size than the last held each frame back: the way in ran choppy where the way out, the
+/// same sizes shrinking, did not (the user; measured 20–59 ms frames growing, 5–9 shrinking). There
+/// it is made once at the display's size, kept while the window fits in it, and let go for one its
+/// size once the window has settled.
+fn keepTarget(o: *Out, w: u32, h: u32) ?dvui.Texture.Target {
+    const moving = viewports.spaceFullness(o.viewport) != null;
+    if (o.target) |t| {
+        const fits = t.width >= w and t.height >= h;
+        const exact = t.width == w and t.height == h;
+        if (!fits or (!moving and !exact)) {
+            t.destroyLater();
+            o.target = null;
+        }
+    }
+    if (o.target == null) {
+        var tw = w;
+        var th = h;
+        if (moving) {
+            const d = viewports.displayInMain();
+            tw = @max(w, @as(u32, @intFromFloat(@max(0, @round(d.w)))));
+            th = @max(h, @as(u32, @intFromFloat(@max(0, @round(d.h)))));
+        }
+        o.target = dvui.textureCreateTarget(.{ .width = tw, .height = th, .interpolation = .nearest }) catch return null;
+    }
+    o.drawn = .{ w, h };
+    return o.target.?;
 }
 
 /// The least window opacity a menu's glass takes: a menu carries text, and over a clear window
