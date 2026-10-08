@@ -49,8 +49,12 @@ The open PR list is the board of who is working on what.
   `jj op restore` bring it back.
 - **Work in a workspace of your own.** The default checkout is shared: the desktop app moves it
   between sessions' branches, and other sessions edit in it. For anything longer than a quick
-  look, `jj workspace add --name <task> -r main@origin <dir>` and build, test and describe
-  there. A cloud session or a git worktree is already isolated.
+  look, `jj workspace add --name <task> -r main@origin ../fizzy-<task>` and build, test and
+  describe there. A cloud session or a git worktree is already isolated.
+- **Never put a workspace under `/tmp`** or a session scratchpad (`/private/tmp/…` on macOS).
+  The OS clears files there that go untouched for a few days, and jj's next snapshot records
+  the deletions into your change. It happened on 2026-10-08: `build.zig` and most of `src/`
+  vanished from a workspace mid-task. Put it beside the main checkout instead.
 - **`jj new` before the work, not after.** Start each change with
   `jj new -m "<what I'm about to do>"` and refine it with `jj describe` when done. Describing
   twice without a `jj new` between folds two changes into one and overwrites the first message.
