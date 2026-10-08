@@ -140,7 +140,7 @@ pub fn restartPending() bool {
 
 /// An environment switch, read once: `NAME=0` off, any other value on, unset null — the setting
 /// rules then. For testing and sandboxes, over the settings.
-fn envSwitch(comptime name: [:0]const u8) ?bool {
+pub fn envSwitch(comptime name: [:0]const u8) ?bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return null;
     // One cache per variable: the struct names `name`, so each switch gets a type of its own.
     // Without it Zig makes one type for every switch, and the first one read answered for all
