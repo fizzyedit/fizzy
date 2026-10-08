@@ -10,6 +10,12 @@ name: SDK tag
 # `sdk-v*` is a separate namespace from the app's `v*` release tags (release.yml triggers on
 # `tags: ["v*"]`, a glob on the ref's start — `sdk-v...` doesn't start with `v`, so this can
 # never fire the app build/package pipeline).
+#
+# A released tarball is never replaced. Plugins pin it by hash, so packing a later `main` into an
+# existing tag's release breaks every one of them on a clean fetch — which is what happened to
+# `sdk-v0.2.15`, repacked from #207's merge two days after it shipped. A push that leaves
+# `sdk_version` alone therefore publishes nothing. The one exception is a release whose tarball
+# is missing (a run that failed after pushing the tag): it is packed from the tag's own commit.
 
 on:
   push:
@@ -58,13 +64,24 @@ jobs:
           echo "Resolved sdk_version -> $tag"
 
       - name: Create tag if missing
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ steps.ver.outputs.tag }}"
+          asset="fizzy-sdk-v${{ steps.ver.outputs.version }}.tar.gz"
 
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "Tag $tag already exists."
+            if gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null | grep -qxF "$asset"; then
+              echo "Tag $tag and its $asset already exist: nothing to publish."
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Tag $tag exists without $asset: packing it from the tag's own commit."
+            git checkout -q "$tag"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -73,8 +90,10 @@ jobs:
           git tag -a "$tag" -m "SDK ${{ steps.ver.outputs.version }} (plugin pin + ABI fingerprint)"
           git push origin "$tag"
           echo "Pushed $tag"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
 
       - name: Build changelog since previous SDK tag
+        if: steps.tag.outputs.publish == 'true'
         id: changelog
         shell: bash
         run: |
@@ -118,6 +137,7 @@ jobs:
           cat "$out"
 
       - name: Pack SDK tarball
+        if: steps.tag.outputs.publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -126,6 +146,7 @@ jobs:
           ls -la zig-out/sdk/
 
       - name: Publish GitHub release asset
+        if: steps.tag.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -166,10 +187,10 @@ jobs:
           printf '\n---\n\n' >>"$notes_file"
           cat "${{ steps.changelog.outputs.file }}" >>"$notes_file"
 
-          # Idempotent: create the release if missing, else replace the sdk asset + notes.
+          # A release that exists here is one without its tarball (the tag step stops otherwise).
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag exists — uploading/replacing asset and refreshing notes."
-            gh release upload "$tag" "$asset" --clobber
+            echo "Release $tag exists without its tarball — uploading it and refreshing notes."
+            gh release upload "$tag" "$asset"
             gh release edit "$tag" --notes-file "$notes_file"
           else
             # Never GitHub's "latest": that is the app's newest `v*` release, and
