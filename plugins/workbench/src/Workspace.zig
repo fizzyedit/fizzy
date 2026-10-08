@@ -15,6 +15,7 @@ const core = @import("core");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
+const Workbench = @import("Workbench.zig");
 const icons = @import("icons");
 const math = core.math;
 
@@ -709,7 +710,8 @@ pub fn insertTab(self: *Workspace, id: []const u8, index: usize) void {
 /// middle takes it as a tab, an edge opens a pane on that side with it. Taking it here takes it
 /// out of the pane it was in — an assignment lives in one place. A file carried out of the tree
 /// that is not open yet comes by the id its document will have, with no surface behind it, and
-/// opens here (`openHere`).
+/// opens here (`openHere`). Carried with others — a selection out of the tree — they all come
+/// here after it, in order, and it is the one shown (`Drop.others`).
 pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
     const grouping: u64 = @as(u64, @intFromPtr(ctx orelse return false)) - 1;
     const wb = runtime.workbench();
@@ -721,22 +723,34 @@ pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
             break :blk g;
         },
     };
-    if (runtime.host().surfaceById(drop.surface_id) == null) {
-        const path = sdk.document.pathOfSurfaceId(drop.surface_id) orelse return false;
-        const pane = wb.pane(target) catch return false;
-        return pane.openHere(drop.surface_id, path, if (drop.on_chooser) pane.insertIndexAt(drop.point.x, pane.tabCount()) else null);
-    }
-    for (wb.workspaces.values()) |*other| {
-        if (other.grouping != target) other.removeTab(drop.surface_id);
-    }
-    const pane = wb.pane(target) catch return false;
     // Over the strip: where along it — between the tabs it was let go between, and back on its
     // own strip that is a reorder.
-    if (drop.on_chooser) {
-        pane.insertTab(drop.surface_id, pane.insertIndexAt(drop.point.x, pane.tabCount()));
-    } else {
-        pane.addTab(drop.surface_id, true);
+    const pane = wb.pane(target) catch return false;
+    const at: ?usize = if (drop.on_chooser) pane.insertIndexAt(drop.point.x, pane.tabCount()) else null;
+    if (drop.others.len == 0) return dropTab(wb, target, drop.surface_id, at);
+    // Carried with others: they go in after it, in order, and it goes in last at the front of
+    // them — a document opening shows as it lands, so the one in hand, opened last, is the one
+    // shown, as it would be carried alone.
+    const base = at orelse pane.tabCount();
+    var landed = false;
+    for (drop.others, 0..) |id, i| landed = dropTab(wb, target, id, base + 1 + i) or landed;
+    landed = dropTab(wb, target, drop.surface_id, base) or landed;
+    if (runtime.host().surfaceById(drop.surface_id) != null) pane.addTab(drop.surface_id, true);
+    return landed;
+}
+
+/// One document of a drop into pane `target` (`paneDrop`): at `at` along its strip, or at the end.
+fn dropTab(wb: *Workbench, target: u64, id: []const u8, at: ?usize) bool {
+    if (runtime.host().surfaceById(id) == null) {
+        const path = sdk.document.pathOfSurfaceId(id) orelse return false;
+        const pane = wb.pane(target) catch return false;
+        return pane.openHere(id, path, at);
     }
+    for (wb.workspaces.values()) |*other| {
+        if (other.grouping != target) other.removeTab(id);
+    }
+    const pane = wb.pane(target) catch return false;
+    if (at) |i| pane.insertTab(id, i) else pane.addTab(id, true);
     return true;
 }
 

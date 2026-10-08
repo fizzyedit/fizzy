@@ -604,8 +604,14 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   workbench calls it as soon as a document tab is dragged at all, so a tab moved along its own
   strip, carried to another pane's, or out over the places and back is one drag from lift to
   release, in one glass.
+- `host.beginViewDragMany(items, from_rect)` hands several things lifted together — a selection
+  out of a file tree — to the same drag, the first the one in hand, in one glass that shows them
+  all; a place lets go of them together (`Drop.others`). An item with no id (`Carried{ .label,
+  .folder }`) is something no place takes, a folder: no zones show, and only you take it back,
+  reading the drag as your own while it is over you (`host.viewDragSurface()`).
 - `RegionSpec.on_drop` (with `drop_ctx`) is asked what a drop on your region does:
-  `Drop{ .surface_id, .zone = .center | .{ .edge = side } }`. Return true when you handled it.
+  `Drop{ .surface_id, .zone = .center | .{ .edge = side }, .others }` — `others` the rest of a
+  selection carried with it, to take after it. Return true when you handled it.
   Unhandled, the middle takes the view by the app's default (added to what the region shows)
   and an edge does nothing — the app cannot split a region you laid out, so a new pane beside
   yours is yours to make (the workbench's `paneDrop`).

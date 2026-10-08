@@ -503,6 +503,12 @@ pub fn beginViewDrag(self: *Host, id: []const u8, from: dvui.Rect.Physical) void
     if (self.fizzy_api) |a| a.beginViewDrag(id, from);
 }
 
+/// Start the app's view drag for several things lifted together — a selection out of a file tree,
+/// a folder — from `from`: see `EditorAPI.beginViewDragMany`.
+pub fn beginViewDragMany(self: *Host, items: []const EditorAPI.Carried, from: dvui.Rect.Physical) void {
+    if (self.fizzy_api) |a| a.beginViewDragMany(items, from);
+}
+
 /// The id of the surface the app's view drag is carrying, or null. A tab strip leaves that tab
 /// out while it is in the hand.
 pub fn viewDragSurface(self: *Host) ?[]const u8 {
