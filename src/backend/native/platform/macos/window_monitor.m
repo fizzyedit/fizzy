@@ -8,7 +8,7 @@
  *
  * Green-button maximize uses a native fullscreen Space (menu bar hidden).
  * SDL3 ignores resize notifications while a Space transition animates, so a
- * 60Hz NSTimer pump renders live frames during the morph.  The Zig side
+ * pump at the display's pace keeps frames coming during the morph.  The Zig side
  * (src/backend/backend_native.zig) pushes live contentView bounds into SDL before each
  * frame so the Metal drawable and layout stay paired.
  *
@@ -49,12 +49,14 @@ typedef struct WindowMonitor {
     BOOL space_transition;
     BOOL space_entering;
     int transition_gen;
-    /* Frames the pump still renders for it. */
-    int pump_frames;
+    /* Until when the pump runs for it (`request_resize_pump`). A time, not a count of ticks: the
+     * pump keeps the display's pace (`start_pump`), and a count meant for 60 Hz ran out in half
+     * the time at 120. */
+    CFTimeInterval pump_until;
     /* Frames remaining in the post-fullscreen-exit settle during which the pre-fullscreen origin
      * is re-asserted every pump tick, so AppKit's menu-bar nudge never reaches the screen (see
      * pump_tick_inner). */
-    int exit_origin_guard;
+    CFTimeInterval exit_origin_until;
     NSRect exit_window_frame;
     BOOL exit_window_frame_valid;
     double windowed_titlebar_inset;
@@ -106,9 +108,30 @@ static WindowMonitor *monitor_of(void *nswindow) {
     return NULL;
 }
 
-/* One pump for every window: a 60Hz timer while any of them animates. */
+/* One pump for every window while any of them animates, at the display's pace (`start_pump`). */
 static BOOL g_in_pump = NO;
 static NSTimer *g_pump_timer = nil;
+static id g_pump_link = nil;
+/* Frames the app has presented (`fizzy_macos_window_frame_presented`), and as the last tick saw
+ * them: whether its own loop is drawing (`pump_tick_inner`). */
+static unsigned long g_frames_presented = 0;
+static unsigned long g_frames_seen = 0;
+
+void fizzy_macos_window_frame_presented(void) {
+    g_frames_presented++;
+}
+
+static void pump_tick(void);
+
+/* What a display link calls: a tick of the pump. */
+@interface FizzyPumpTarget : NSObject
+- (void)tick:(id)link;
+@end
+@implementation FizzyPumpTarget
+- (void)tick:(__unused id)link {
+    pump_tick();
+}
+@end
 
 
 /* Whether SDL draws this window's live resize itself, each step from AppKit's display of it and
@@ -128,7 +151,7 @@ int fizzy_macos_window_sdl_draws_live_resize(void *nswindow) {
 }
 
 static BOOL monitor_active(const WindowMonitor *m) {
-    return m && m->window && (m->space_transition || m->unzoom_animating || m->pump_frames > 0);
+    return m && m->window && (m->space_transition || m->unzoom_animating || m->pump_until > CACurrentMediaTime());
 }
 
 static BOOL any_monitor_active(void) {
@@ -232,6 +255,13 @@ static void stop_pump_if_idle(void) {
     if (any_monitor_active()) return;
     [g_pump_timer invalidate];
     g_pump_timer = nil;
+    if (g_pump_link) {
+        [g_pump_link invalidate];
+#if !__has_feature(objc_arc)
+        [g_pump_link release];
+#endif
+        g_pump_link = nil;
+    }
 }
 
 static void pump_tick_inner(void);
@@ -263,11 +293,11 @@ static void pump_tick_inner(void) {
         WindowMonitor *m = &g_monitors[i];
         if (!monitor_active(m)) continue;
         any = YES;
-        if (m->pump_frames > 0) {
-            m->pump_frames--;
+        if (m->pump_until > 0 && CACurrentMediaTime() >= m->pump_until) {
+            m->pump_until = 0;
             /* An un-zoom's animation is over with its frames, outside a Space transition: it
              * kept the pump (and every frame of the app) running for good once it ran out. */
-            if (m->pump_frames == 0 && !m->space_transition) m->unzoom_animating = NO;
+            if (!m->space_transition) m->unzoom_animating = NO;
         }
         // While settling after a fullscreen EXIT, re-assert the pre-fullscreen origin
         // BEFORE rendering each frame. AppKit's exit restore nudges a top-anchored
@@ -275,8 +305,7 @@ static void pump_tick_inner(void) {
         // one-shot async correction shows that nudged frame for a beat ("pop down then
         // up"). Correcting every tick means the nudge never reaches the screen. The
         // helper no-ops once the origin already matches, so it cannot fight AppKit.
-        if (m->exit_origin_guard > 0) {
-            m->exit_origin_guard--;
+        if (m->exit_origin_until > CACurrentMediaTime()) {
             restore_pre_fullscreen_origin_if_nudged((__bridge NSWindow *)m->window);
         }
         if (m->anim_active) step_space_animation(m);
@@ -296,27 +325,62 @@ static void pump_tick_inner(void) {
      * is drawn by the app's own frames, each taking its step (`fizzy_macos_window_space_step`) at
      * the display's rate: a frame of the pump's between them waited on the same drawables, and
      * halved it. The tick only keeps the app awake. */
-    if (own) {
+    /* Nor while the app's own loop is drawing — any frame presented since the last tick: a frame
+     * of the pump's between two of its own waited on the same drawables, and starved both. The
+     * pump draws only where nothing else does (an AppKit animation holding the loop). */
+    const BOOL drawing = g_frames_presented != g_frames_seen;
+    g_frames_seen = g_frames_presented;
+    if (own || drawing) {
         fizzy_macos_window_wake();
     } else if (!manual) {
         fizzy_macos_window_pump_render();
     }
 }
 
-static void request_resize_pump(void *nswindow, int frames) {
-    WindowMonitor *m = monitor_of(nswindow);
-    if (!m) return;
-    if (frames > m->pump_frames) m->pump_frames = frames;
-
-    if (g_pump_timer) return;
-
-    const NSTimeInterval interval = 1.0 / 60.0;
-    g_pump_timer = [NSTimer timerWithTimeInterval:interval
+/* The pump, once, ticking at the pace of the display `nswindow` is on — 120 Hz on a ProMotion one —
+ * by that display's link where there is one (macOS 14: the display's, not the window's, which a
+ * float's window closing would stop); a timer at that display's most frames a second before. A
+ * 60 Hz timer drew the animations it drives at half a 120 Hz display's rate (the user). */
+static void start_pump(void *nswindow) {
+    if (g_pump_timer || g_pump_link) return;
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    if (@available(macOS 14.0, *)) {
+        NSScreen *screen = window.screen ?: [NSScreen mainScreen];
+        if (screen != nil) {
+            static FizzyPumpTarget *target = nil;
+            if (target == nil) target = [[FizzyPumpTarget alloc] init];
+            CADisplayLink *link = [screen displayLinkWithTarget:target selector:@selector(tick:)];
+            if (link != nil) {
+#if !__has_feature(objc_arc)
+                [link retain];
+#endif
+                [link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+                g_pump_link = link;
+                return;
+            }
+        }
+    }
+    NSInteger fps = 60;
+    if (@available(macOS 12.0, *)) {
+        NSScreen *screen = window.screen ?: [NSScreen mainScreen];
+        if (screen.maximumFramesPerSecond > 0) fps = screen.maximumFramesPerSecond;
+    }
+    g_pump_timer = [NSTimer timerWithTimeInterval:1.0 / (double)fps
                                           repeats:YES
                                             block:^(__unused NSTimer *timer) {
         pump_tick();
     }];
     [[NSRunLoop mainRunLoop] addTimer:g_pump_timer forMode:NSRunLoopCommonModes];
+}
+
+/* Keep the pump running for `nswindow` for `frames` sixtieths of a second at least: what the
+ * callers ask for was always a time, counted in the 60 Hz ticks the pump once had. */
+static void request_resize_pump(void *nswindow, int frames) {
+    WindowMonitor *m = monitor_of(nswindow);
+    if (!m) return;
+    const CFTimeInterval until = CACurrentMediaTime() + (double)frames / 60.0;
+    if (until > m->pump_until) m->pump_until = until;
+    start_pump(nswindow);
 }
 
 /* Track green-button zoom (non-Space maximize). On un-zoom, drive the pump so
@@ -835,7 +899,7 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             // rendered and the "pop down then up" never reaches the screen. Origin
             // only — never size (forcing our captured full-size frame overshoots by
             // a titlebar; AppKit restores the correct size itself).
-            m->exit_origin_guard = 30;
+            m->exit_origin_until = CACurrentMediaTime() + 0.5;
             fizzy_macos_window_commit_steady_state(win);
             fizzy_macos_window_request_clear_frames(win, 5);
             request_resize_pump(win, 30);
@@ -1270,7 +1334,7 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
             // (not just on the next pump tick) so the nudged frame is never shown.
             // The helper no-ops once the origin matches, so the setFrameOrigin it
             // issues — which re-fires this notification — terminates immediately.
-            if (wm->exit_origin_guard > 0) {
+            if (wm->exit_origin_until > CACurrentMediaTime()) {
                 restore_pre_fullscreen_origin_if_nudged(w);
             }
             /* As a style change at the end of the way out re-frames it, before it is drawn so. */

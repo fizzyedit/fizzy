@@ -48,6 +48,7 @@ extern fn fizzy_macos_window_install_resize_observer(cocoa_window: ?*anyopaque) 
 extern fn fizzy_macos_window_sdl_draws_live_resize(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_step(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_space_moving(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_frame_presented() void;
 extern fn fizzy_native_transaction_begin() void;
 extern fn fizzy_native_transaction_commit() void;
 extern fn fizzy_native_viewport_transact(nswindow: ?*anyopaque) void;
@@ -226,6 +227,8 @@ var macos_frame_transaction = false;
 /// with `macosAppPreBeginSync`.
 fn macosAppPresented(back: *Backend.SDLBackend) void {
     _ = back;
+    // The app's own loop is drawing: the pump keeps from drawing between its frames.
+    fizzy_macos_window_frame_presented();
     if (!macos_frame_transaction) return;
     for (&watched) |*slot| {
         const w = if (slot.*) |*w| w else continue;
