@@ -292,6 +292,12 @@ startup: no `--prefix`, no manual copy:
 | Linux | `~/.config/fizzy/plugins/` |
 | Windows | `%LOCALAPPDATA%/fizzy/plugins/` |
 
+With `FIZZY_PROFILE=<dir>` set, it goes to `<dir>/plugins/` instead: the plugins directory of a
+fizzy started with that profile (`fizzy --profile <dir>`, or the same variable). A profile is one
+directory holding a run's whole config, plugins, lock and runtime files (`app/profile.zig`), so a
+build you are trying out never replaces the plugin you have installed, and the sandboxed fizzy
+never forwards to your everyday one.
+
 Relaunch Fizzy. Your plugin registers, but since it contributes no surface or menu yet,
 there's nothing to see — that's expected. Section 3 adds a visible surface.
 

@@ -16,6 +16,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const singleton_app = @import("singleton_app");
 const core = @import("core");
+const profile = @import("../profile.zig");
 
 const log = std.log.scoped(.singleton);
 
@@ -74,10 +75,35 @@ pub fn acquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !void {
     state.allocator = gpa;
 
     var socket_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const socket_dir = pickUnixSocketDir(&socket_dir_buf);
+    var socket_dir = pickUnixSocketDir(&socket_dir_buf);
+
+    // A profile has a lock of its own, named for it, and keeps its socket in its runtime
+    // directory — unless that path would not fit a socket address, when the temp directory
+    // holds it instead, still under the profile's own name.
+    var id: [:0]const u8 = app_id;
+    var profile_id: ?[:0]u8 = null;
+    defer if (profile_id) |p| gpa.free(p);
+    var run_dir: ?[]u8 = null;
+    defer if (run_dir) |r| gpa.free(r);
+    if (profile.root) |root| {
+        profile_id = try profile.lockId(gpa, app_id, root);
+        id = profile_id.?;
+        if (builtin.os.tag != .windows) {
+            run_dir = try profile.runtimeDir(gpa, root);
+            // `<dir>/<id>-<uid>.sock`, as `dvui-singleton-app` names it; a uid is at most 10 digits.
+            const socket_len = run_dir.?.len + 1 + id.len + 1 + 10 + ".sock".len;
+            if (socket_len <= std.Io.net.UnixAddress.max_len) {
+                std.Io.Dir.cwd().createDirPath(state.io, run_dir.?) catch |err|
+                    log.warn("profile: cannot create {s}: {t}", .{ run_dir.?, err });
+                socket_dir = run_dir.?;
+            } else {
+                log.info("profile: {s} is too deep for a socket address; the lock lives in {s}", .{ run_dir.?, socket_dir });
+            }
+        }
+    }
 
     state.instance = try singleton_app.SingletonApp.init(.{
-        .app_id = app_id,
+        .app_id = id,
         .allocator = gpa,
         .io = state.io,
         .unix_socket_dir = socket_dir,
@@ -113,6 +139,10 @@ pub fn deinit() void {
     if (state.resolved_argv) |argv| {
         freeResolvedArgv(state.allocator, argv);
         state.resolved_argv = null;
+    }
+    if (profile.root) |root| {
+        state.allocator.free(root);
+        profile.root = null;
     }
     state.window = null;
 }
@@ -268,20 +298,18 @@ fn dirHasProjectMarker(gpa: std.mem.Allocator, dir: []const u8) bool {
 /// to an absolute path so the singleton primary doesn't need to know the
 /// secondary's working directory. Resolution failures pass the original
 /// string through with a warning.
+///
+/// The profile (`--profile <dir>`, else `FIZZY_PROFILE`) is taken out here and becomes
+/// `profile.root`, absolute: it says where this run lives, not something to open.
 pub fn collectAndResolveArgv(
     gpa: std.mem.Allocator,
     main_init_opt: ?std.process.Init,
 ) ![]const []const u8 {
-    var out: std.ArrayListUnmanaged([]const u8) = .empty;
-    errdefer {
-        for (out.items) |s| gpa.free(s);
-        out.deinit(gpa);
-    }
-
     const main_init = main_init_opt orelse {
-        const exe = try gpa.dupe(u8, app_name);
-        try out.append(gpa, exe);
-        return out.toOwnedSlice(gpa);
+        const argv = try gpa.alloc([]const u8, 1);
+        errdefer gpa.free(argv);
+        argv[0] = try gpa.dupe(u8, app_name);
+        return argv;
     };
 
     var iter = try std.process.Args.Iterator.initAllocator(main_init.minimal.args, gpa);
@@ -293,10 +321,49 @@ pub fn collectAndResolveArgv(
     const cwd_len = std.process.currentPath(main_init.io, &cwd_buf) catch 0;
     const cwd: []const u8 = if (cwd_len > 0) cwd_buf[0..cwd_len] else &.{};
 
-    var first = true;
-    while (iter.next()) |arg| {
-        if (first) {
-            first = false;
+    var raw: std.ArrayList([]const u8) = .empty;
+    defer raw.deinit(gpa);
+    while (iter.next()) |arg| try raw.append(gpa, arg);
+
+    const env_profile: ?[]const u8 = if (std.c.getenv(profile.env_var)) |v| std.mem.span(v) else null;
+    const resolved = try resolveArgs(gpa, cwd, raw.items, env_profile);
+    if (resolved.profile) |root| {
+        if (profile.root) |old| gpa.free(old);
+        profile.root = root;
+        log.info("profile: {s}", .{root});
+    }
+    return resolved.argv;
+}
+
+/// `collectAndResolveArgv` once argv and the environment are read: the profile taken out of
+/// `raw` (or `env_profile` when argv names none) and made absolute against `cwd`, and the rest
+/// with every path made absolute. Both owned by `gpa` (`freeResolvedArgv` for `argv`).
+pub fn resolveArgs(
+    gpa: std.mem.Allocator,
+    cwd: []const u8,
+    raw: []const []const u8,
+    env_profile: ?[]const u8,
+) !struct { argv: []const []const u8, profile: ?[]u8 } {
+    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (out.items) |s| gpa.free(s);
+        out.deinit(gpa);
+    }
+
+    const extracted = try profile.extract(gpa, raw);
+    defer gpa.free(extracted.rest);
+
+    var root: ?[]u8 = null;
+    errdefer if (root) |r| gpa.free(r);
+    if (extracted.profile orelse env_profile) |p| {
+        if (p.len > 0) root = resolveAbsolute(gpa, cwd, p) catch |err| blk: {
+            log.err("profile '{s}' cannot be used: {t}; running without one", .{ p, err });
+            break :blk null;
+        };
+    }
+
+    for (extracted.rest, 0..) |arg, i| {
+        if (i == 0) {
             try out.append(gpa, try gpa.dupe(u8, arg));
             continue;
         }
@@ -311,7 +378,7 @@ pub fn collectAndResolveArgv(
         };
         try out.append(gpa, abs);
     }
-    return out.toOwnedSlice(gpa);
+    return .{ .argv = try out.toOwnedSlice(gpa), .profile = root };
 }
 
 pub fn freeResolvedArgv(gpa: std.mem.Allocator, argv: []const []const u8) void {
