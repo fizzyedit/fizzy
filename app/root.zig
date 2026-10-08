@@ -130,3 +130,13 @@ pub const store = struct {
         @import("store/PluginLoader.zig");
     pub const registry = @import("store/registry/store.zig");
 };
+
+// The root of `zig build test-integration`'s `fizzy-app-tests` (`build/app.zig`): the files here
+// whose tests no std-only test root of their own reaches. `Layout`'s own `test` block brings in
+// the split trees, seeds, regions, drop plans and view drag beside it.
+test {
+    _ = layout.Layout;
+    _ = layout.Shape;
+    _ = watch.FolderWatcher;
+    _ = store.Loader;
+}
