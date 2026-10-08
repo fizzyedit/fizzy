@@ -103,18 +103,25 @@ pub fn draw(
         // Left over from a surface that did scroll sideways; a pane that cannot scroll has
         // nowhere to be scrolled to.
         explorer.scroll_info.viewport.x = 0;
-        if (explorer.scroll_info.viewport.h > 0) {
-            explorer.scroll_info.virtual_size.h = explorer.scroll_info.viewport.h;
-        }
+        explorer.scroll_info.viewport.y = 0;
     } else {
         explorer.scroll_info.vertical = .auto;
         explorer.scroll_info.horizontal = .auto;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &explorer.scroll_info, .horizontal_bar = .auto_overlay, .vertical_bar = .auto_overlay }, .{
+    // No bars at all around a surface that scrolls itself, rather than bars decided against a size
+    // that only says there is nothing to scroll: the scroll area decides on its bars from the size
+    // it was last given, a frame old — while the window shrank, every frame of it, last frame's
+    // height overflowed this frame's, and a bar showed beside the pane's own until it stopped.
+    const bar: dvui.ScrollInfo.ScrollBarMode = if (self_scrolling) .hide else .auto_overlay;
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &explorer.scroll_info, .horizontal_bar = bar, .vertical_bar = bar }, .{
         .expand = .both,
         .background = false,
     });
+    // This frame's viewport, measured just now, before the surface lays out in it: given last
+    // frame's, it was a frame too tall as the window shrank (its foot clipped) and a frame too short
+    // as it grew.
+    if (self_scrolling) explorer.scroll_info.virtual_size = .{ .w = explorer.scroll_info.viewport.w, .h = explorer.scroll_info.viewport.h };
 
     // Through the layout, not `Host.selectedSurface`: the host remembers which
     // view was chosen here and hands it back whether or not this place still
@@ -143,10 +150,6 @@ pub fn draw(
     }
 
     scroll.deinit();
-
-    if (self_scrolling) {
-        explorer.scroll_info.virtual_size = .{ .w = explorer.scroll_info.viewport.w, .h = explorer.scroll_info.viewport.h };
-    }
 
     // Two calls rather than one: `pane_vbox` has to deinit between the vertical and horizontal
     // hints, since the horizontal ones are drawn over the outer `vbox` instead.

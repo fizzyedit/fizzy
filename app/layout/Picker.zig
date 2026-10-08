@@ -411,6 +411,8 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
     });
     defer bw.deinit();
     const id = bw.data().id;
+    // For demo tapes (`docs/AUTOMATION.md`): the card, to lift a view out of the picker by.
+    core.anchor.mark(bw.data(), "picker:{s}", .{s.id});
 
     // The tile's rect is remembered from last frame: the press that starts a
     // drag is read here, before the tile is laid out.

@@ -6,7 +6,9 @@ expensive part to re-derive.
 
 ## Where it stands
 
-**P6, floats are windows, is under way (2026-10-04), behind `FIZZY_POPOUT=1`.** After testing the
+**P6, floats are windows, is on by default on macOS (2026-10-05; `FIZZY_POPOUT=0` turns it off),
+and behind `FIZZY_POPOUT=1` elsewhere.** There, a view drag's glass is the OS's Liquid Glass where
+it exists (`docs/NATIVE_WINDOWS_PLAN.md`; `FIZZY_NATIVE_GLASS=0` turns it off). After testing the
 P3 gesture, the user's call: "we want native os windows where we can have them" — a float that is a
 window from the frame it is made in, as VS Code's floating windows are, rather than one that splits
 out at the main window's edge. Nearly everything that went wrong in P3's polish lived in that

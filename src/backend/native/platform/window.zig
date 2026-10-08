@@ -3,7 +3,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const c = @import("backend").c;
+const Backend = @import("backend");
+const c = Backend.c;
 const objc = @import("objc");
 const titlebar = @import("titlebar.zig");
 const win32_titlebar = @import("win32_titlebar.zig");
@@ -22,7 +23,54 @@ pub const ns_visual_effect_material: c_long = 15;
 extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_transition_active(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_entering(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_fullness(cocoa_window: ?*anyopaque) f64;
+extern fn fizzy_macos_window_space_moving(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_titlebar_hit_test_install(cocoa_window: ?*anyopaque, interactive_at: *const fn (f64, f64) callconv(.c) bool) void;
+extern fn fizzy_macos_window_liquid_glass(cocoa_window: ?*anyopaque, blur_material: c_long) c_int;
+extern fn fizzy_macos_window_has_liquid_glass(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_liquid_glass_look(cocoa_window: ?*anyopaque, look: *const WindowGlass) void;
+
+/// A window's Liquid Glass this frame (`liquidGlassLook`), as `fizzy_macos_window_liquid_glass_look`
+/// reads it (`core.glass_look.Window`): each glass layer's variant and style; the body's frost and
+/// plain blur; how much glass there is; the window's colour (0…1 each, its opacity in the body
+/// last) and its opacity over all of it; the window's corner radius, and its clearing bevel —
+/// clear, then the body coming in over the feather — in points.
+pub const WindowGlass = extern struct {
+    under_variant: c_long,
+    under_style: c_long,
+    over_variant: c_long,
+    over_style: c_long,
+    frost: f64,
+    blur: f64,
+    glass: f64,
+    fill: [4]f64,
+    top_fill: f64,
+    radius: f64,
+    clear: f64,
+    feather: f64,
+};
+
+/// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — over
+/// the clear lens a body of frost, the plain blur (the vibrancy it wore before,
+/// `ns_visual_effect_material`) and the window's colour, fading out across a clearing bevel along
+/// its edge, a compact toolbar's corners — where the OS has it (macOS 26). Once per window.
+/// Whether it is.
+pub fn liquidGlass(raw_ptr: *anyopaque) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    return fizzy_macos_window_liquid_glass(raw_ptr, ns_visual_effect_material) != 0;
+}
+
+/// `window`'s Liquid Glass this frame (`liquidGlass`). Whether it has any: false, and nothing set,
+/// where it stands on vibrancy instead.
+pub fn liquidGlassLook(window: *c.SDL_Window, look: WindowGlass) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    if (fizzy_macos_window_has_liquid_glass(ns) == 0) return false;
+    fizzy_macos_window_liquid_glass_look(ns, &look);
+    return true;
+}
 
 /// For AppKit's titlebar region: whether a press at this pixel is the app's (`titlebar.interactiveAt`).
 fn titlebarInteractiveAt(x: f64, y: f64) callconv(.c) bool {
@@ -93,6 +141,64 @@ pub fn windowMaximized(window: *c.SDL_Window) bool {
         return false;
     }
     return flags & c.SDL_WINDOW_FULLSCREEN != 0;
+}
+
+/// Whether `win` covers the desktop (`windowCovers`).
+pub fn coversDesktop(win: *dvui.Window) bool {
+    return windowCovers(win.backend.impl.window);
+}
+
+/// Whether `window` covers the desktop: maximized (`windowMaximized`), from the moment it sets out
+/// for a fullscreen Space and through the whole of its way back out of one. AppKit animates a
+/// window into and out of a Space as pictures of it, not the window: one fading to see-through on
+/// the way out was two see-through pictures, a double window, and the window itself, already
+/// see-through, popped in at the end (the user).
+pub fn windowCovers(window: *c.SDL_Window) bool {
+    return windowMaximized(window) or windowInSpaceTransition(window);
+}
+
+/// Whether `window` is on its way into a fullscreen Space or out of one. AppKit takes the window
+/// out of its full screen style already at will-exit, so on the way out only the monitor's word
+/// (`space_transition`, until did-exit) says it is still in the transition: by the style alone it
+/// faded while AppKit showed opaque pictures of it, and popped in see-through as they went.
+fn windowInSpaceTransition(window: *c.SDL_Window) bool {
+    if (builtin.os.tag != .macos) return false;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    return fizzy_macos_window_space_transition_active(raw_ptr) != 0;
+}
+
+/// Whether `window` is on its way into a fullscreen Space: it goes opaque at once
+/// (`Editor.easeWindowOpacity`), so the pictures AppKit animates it as are opaque too.
+pub fn windowEnteringSpace(window: *c.SDL_Window) bool {
+    if (builtin.os.tag != .macos) return false;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    return fizzy_macos_window_space_transition_active(raw_ptr) != 0 and fizzy_macos_window_space_entering(raw_ptr) != 0;
+}
+
+pub fn enteringSpace(win: *dvui.Window) bool {
+    return windowEnteringSpace(win.backend.impl.window);
+}
+
+/// How far `window` is into full screen, 0 to 1, while it moves itself into a fullscreen Space or
+/// out of one (`macos/window_monitor.m`'s own animation, where AppKit animates no pictures of it):
+/// its opacity follows this, the fade and the move one motion. Null otherwise.
+pub fn windowSpaceFullness(window: *c.SDL_Window) ?f32 {
+    if (builtin.os.tag != .macos) return null;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return null;
+    const f = fizzy_macos_window_space_fullness(raw_ptr);
+    return if (f < 0) null else @floatCast(std.math.clamp(f, 0, 1));
+}
+
+pub fn spaceFullness(win: *dvui.Window) ?f32 {
+    return windowSpaceFullness(win.backend.impl.window);
+}
+
+/// Whether `window` is moving itself into or out of a fullscreen Space this frame
+/// (`macos/window_monitor.m`'s own animation).
+pub fn windowMovingItself(window: *c.SDL_Window) bool {
+    if (builtin.os.tag != .macos) return false;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    return fizzy_macos_window_space_moving(raw_ptr) != 0;
 }
 
 /// True while the macOS window chrome (traffic lights / titlebar area) is hidden, i.e. while
@@ -216,8 +322,10 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
         @as(f64, @floatFromInt(color.b)) / 255.0,
         @as(f64, @floatFromInt(color.a)) / 255.0,
     });
-    // This sets both the titlebar and the window background color.
-    window.msgSend(void, "setBackgroundColor:", .{new_color.value});
+    // This sets both the titlebar and the window background color — clear on a window of Liquid
+    // Glass (`liquidGlass`), whose colour is under its glass.
+    const glass = fizzy_macos_window_has_liquid_glass(raw_ptr) != 0;
+    window.msgSend(void, "setBackgroundColor:", .{if (glass) NSColor.msgSend(objc.Object, "clearColor", .{}).value else new_color.value});
 
     // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
     if (objc.getClass("NSAppearance")) |NSAppearance| {
@@ -249,8 +357,9 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
 
             setStyle(win);
 
-            // Wrap content view in NSVisualEffectView once for vibrancy (blur behind window).
-            wrapContentViewWithVibrancy(window);
+            // Liquid Glass where the OS has it (macOS 26), beside SDL's view as a float's window
+            // is; else the content view wrapped in an NSVisualEffectView once, for vibrancy.
+            if (!liquidGlass(raw_ptr.?)) wrapContentViewWithVibrancy(window);
 
             skin(raw_ptr.?, color, dvui.themeGet().dark);
             // Every float's own window too, and each opened from now on (`SDLBackend.viewportGlass`):
@@ -341,8 +450,20 @@ fn wrapContentViewWithVibrancy(window: objc.Object) void {
 pub fn toggleFullscreen() void {
     const w = main() orelse return;
     if (builtin.os.tag == .macos) {
-        const ns = cocoaWindowOf(w) orelse return;
-        objc.Object.fromId(ns).msgSend(void, "toggleFullScreen:", .{@as(?*anyopaque, null)});
+        const ns = objc.Object.fromId(cocoaWindowOf(w) orelse return);
+        // From the run loop, as the green button asks, never from inside a frame (a command, a
+        // key): AppKit pictures the window as it will be in full screen from inside
+        // `toggleFullScreen:`, and the monitor draws the frame it pictures from there. With a
+        // frame open none could be drawn, so AppKit pictured the last one — laid out at the
+        // window's old size in the corner of the new one — and grew that to the screen, the real
+        // window popping in at the end.
+        if (comptime @hasDecl(Backend, "appFrameOpen")) {
+            if (Backend.appFrameOpen()) {
+                ns.msgSend(void, "performSelector:withObject:afterDelay:", .{ objc.sel("toggleFullScreen:").value, @as(?*anyopaque, null), @as(f64, 0) });
+                return;
+            }
+        }
+        ns.msgSend(void, "toggleFullScreen:", .{@as(?*anyopaque, null)});
         return;
     }
     const on = (c.SDL_GetWindowFlags(w) & c.SDL_WINDOW_FULLSCREEN) != 0;

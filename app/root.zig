@@ -91,6 +91,11 @@ pub const update = struct {
     pub const update_notify = @import("update/update_notify.zig");
 };
 
+/// Quitting the way the app always quits — unsaved documents asked about first — then starting
+/// again: for a setting the app takes only at launch, and for installing a downloaded `update`.
+/// The app asks with `request`, runs `tick` each frame and `relaunch` at the end of teardown.
+pub const restart = @import("restart.zig");
+
 /// Demos that drive the real app — a tape of timed input played into dvui, which a viewer can
 /// pause, take over, rewind and resume. `Tape` is the format, `Sequencer` the deterministic engine
 /// that replays it, `Script` the high-level way to write one, `Player` + `overlay` the dvui half

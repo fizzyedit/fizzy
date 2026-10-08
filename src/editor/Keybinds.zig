@@ -20,6 +20,7 @@ const icons = @import("icons");
 const sdk = @import("fizzy_sdk");
 const Keymap = @import("app").keymap.Keymap;
 const adapter = @import("app").keymap.dvui_adapter;
+const restart = @import("app").restart;
 
 pub const Keybinds = @This();
 
@@ -163,6 +164,7 @@ const fizzy_commands = [_]FizzyCommand{
     // `NativeMenuAction` switch arms — so they were unreachable from the palette and unbindable.
     .{ .id = "fizzy.debugToggleDvuiMenuOnMacOS", .title = "Show DVUI Menu (macOS)", .bind = null, .run = cmdToggleDvuiMenuOnMacOS },
     .{ .id = "fizzy.about", .title = "About Fizzy", .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.download },
+    .{ .id = "fizzy.restart", .title = "Restart Fizzy", .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.toggleProfiler", .title = "Toggle Profiler", .bind = null, .run = cmdToggleProfiler, .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
@@ -416,6 +418,16 @@ fn cmdToggleDvuiMenuOnMacOS(_: *anyopaque) anyerror!void {
 /// why Help → "Check for Updates…" is this same command.
 fn cmdAbout(_: *anyopaque) anyerror!void {
     Editor.Dialogs.AboutFizzy.request();
+}
+
+/// Quit and start again (`app.restart`) — for a setting taken only at launch, and installing an
+/// update that has downloaded.
+fn cmdRestart(_: *anyopaque) anyerror!void {
+    restart.request();
+}
+
+fn canRestart(_: *anyopaque) bool {
+    return restart.supported;
 }
 
 fn cmdToggleProfiler(_: *anyopaque) anyerror!void {

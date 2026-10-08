@@ -52,7 +52,9 @@ pub fn request() void {
         .resizeable = false,
         .default = .cancel,
         .hide_footer = true,
-        .max_size = .{ .w = 440, .h = 400 },
+        // Its width only: a height of 400 was less than the body grew to (the update line, the
+        // spinner's slot), and the dialog cut its own Close button in half.
+        .max_size = .width(440),
         .header_kind = .info,
     });
     mutex.mutex.unlock(dvui.io);

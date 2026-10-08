@@ -18,9 +18,11 @@
 extern void fizzy_macos_window_resize_cb(void *nswindow);
 extern void fizzy_macos_window_pump_sync(void *nswindow);
 extern void fizzy_macos_window_pump_render(void);
+extern void fizzy_macos_window_wake(void);
 extern void fizzy_macos_window_reset_sync_cache(void *nswindow);
 extern void fizzy_macos_window_request_clear_frames(void *nswindow, int frames);
 extern void fizzy_macos_window_commit_steady_state(void *nswindow);
+extern void fizzy_macos_window_glass_toolbar(void *nswindow, int on);
 extern void fizzy_macos_window_live_resize_vsync(void *nswindow, int active);
 extern bool SDL_GetHintBoolean(const char *name, bool default_value);
 extern void fizzy_live_resize_trace_step(void *nswindow);
@@ -54,6 +56,23 @@ typedef struct WindowMonitor {
     NSRect exit_window_frame;
     BOOL exit_window_frame_valid;
     double windowed_titlebar_inset;
+    /* The window's own way into or out of a fullscreen Space (`install_space_animation`): its frame
+     * from `anim_from` to `anim_to` over `anim_duration` seconds from `anim_start`, a step each pump
+     * tick. `anim_follow` from the moment AppKit asks for it until the transition ends, with
+     * `anim_fullness` how far the window is into full screen, 0 to 1: its opacity follows that. */
+    BOOL anim_follow;
+    BOOL anim_active;
+    BOOL anim_entering;
+    double anim_fullness;
+    NSRect anim_from;
+    NSRect anim_to;
+    CFTimeInterval anim_start;
+    CFTimeInterval anim_duration;
+    /* The content size AppKit proposes for the window in full screen
+     * (`window:willUseFullScreenContentSize:`), where the window's own way into it ends. */
+    NSSize fullscreen_size;
+    /* Until when the window is held where its way out of full screen landed (`hold_landing`). */
+    CFTimeInterval land_until;
     /* Its notification observers, retained, removed when it is forgotten. */
     id observers[12];
     int observer_count;
@@ -200,6 +219,8 @@ static void stop_pump_if_idle(void) {
 }
 
 static void pump_tick_inner(void);
+static void step_space_animation(WindowMonitor *m);
+static void hold_landing(WindowMonitor *m);
 
 static void pump_tick(void) {
     if (g_in_pump) return;
@@ -218,6 +239,7 @@ static void pump_tick_inner(void) {
     // already collapsed via space_entering, so there is no strip-gap to morph.
     BOOL any = NO;
     BOOL manual = NO;
+    BOOL own = NO;
     for (int i = 0; i < FIZZY_MAX_MONITORS; i++) {
         WindowMonitor *m = &g_monitors[i];
         if (!monitor_active(m)) continue;
@@ -238,9 +260,12 @@ static void pump_tick_inner(void) {
             m->exit_origin_guard--;
             restore_pre_fullscreen_origin_if_nudged((__bridge NSWindow *)m->window);
         }
+        if (m->anim_active) step_space_animation(m);
+        hold_landing(m);
         fizzy_macos_window_sync_content_views(m->window);
         fizzy_macos_window_pump_sync(m->window);
         if (m->manual_live_resize) manual = YES;
+        if (m->anim_follow) own = YES;
     }
     if (!any) {
         stop_pump_if_idle();
@@ -248,8 +273,15 @@ static void pump_tick_inner(void) {
     }
     /* One frame of the app a tick, whichever windows are animating: it draws them all. A manual
      * drag is already driven by SDL's own live-resize timer; a second frame per tick from here
-     * only blocks the tracking loop on present. */
-    if (!manual) fizzy_macos_window_pump_render();
+     * only blocks the tracking loop on present. A window moving itself into or out of full screen
+     * is drawn by the app's own frames, each taking its step (`fizzy_macos_window_space_step`) at
+     * the display's rate: a frame of the pump's between them waited on the same drawables, and
+     * halved it. The tick only keeps the app awake. */
+    if (own) {
+        fizzy_macos_window_wake();
+    } else if (!manual) {
+        fizzy_macos_window_pump_render();
+    }
 }
 
 static void request_resize_pump(void *nswindow, int frames) {
@@ -318,6 +350,225 @@ static void schedule_transition_watchdog(void *nswindow) {
     });
 }
 
+/* ---- The window's own way into and out of a fullscreen Space ----
+ *
+ * AppKit's own animation is of pictures: one of the window as it was and one as it will be, taken
+ * as the transition starts, cross-faded while they grow — not the window. The picture of the window
+ * as it was showed through the one growing (its edge above the full screen one until the end), and
+ * the window could not fade between translucent and opaque as it went: only the pictures moved. As
+ * the window's delegate asks for the animation (`customWindowsToEnterFullScreenForWindow:` and the
+ * rest, added to SDL's listener class), AppKit takes no pictures: the monitor's pump moves the window
+ * itself a step a tick, and the app draws each step live, at its size and its way to opaque. */
+
+/* The frame a fullscreen Space gives a window on `screen`: the screen, below its camera housing
+ * (`safeAreaInsets`), as AppKit places a full screen window that does not ask for that band. */
+static NSRect fullscreen_frame_on(NSScreen *screen) {
+    NSRect f = screen.frame;
+    if (@available(macOS 12.0, *)) {
+        const CGFloat inset = screen.safeAreaInsets.top;
+        if (inset > 0) {
+            /* Below the menu bar band beside the housing, a point taller than the inset (39 against
+             * 38 on a 14" panel): the visible frame's top while the menu bar shows, as it does as the
+             * window sets out. Under a menu bar that hides itself, the inset. */
+            CGFloat top = NSMaxY(f) - ceil(inset);
+            const CGFloat visible_top = NSMaxY(screen.visibleFrame);
+            if (visible_top < top && visible_top > NSMaxY(f) - inset - 4) top = visible_top;
+            f.size.height = top - f.origin.y;
+        }
+    }
+    return f;
+}
+
+/* AppKit's own size for the window in full screen, asked of the delegate as the transition starts:
+ * kept as the end of the window's way there (`fizzy_start_enter_animation`), and left as it is. */
+static NSSize fizzy_will_use_fullscreen_content_size(__unused id self, __unused SEL cmd, NSWindow *window, NSSize proposed) {
+    WindowMonitor *m = monitor_of((__bridge void *)window);
+    if (m) m->fullscreen_size = proposed;
+    return proposed;
+}
+
+static double space_ease(double t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    return t * t * (3.0 - 2.0 * t);
+}
+
+/* The traffic lights' own view: on the window's own way they fade with it — out as it grows into
+ * full screen, in as it shrinks back — rather than vanish and pop up at the ends. */
+static void set_traffic_lights_alpha(NSWindow *window, double alpha) {
+    NSView *lights = [window standardWindowButton:NSWindowCloseButton].superview;
+    if (lights) lights.alphaValue = alpha;
+}
+
+/* Seconds the window is held where its way out of full screen landed. AppKit and SDL finish the
+ * transition after it — SDL puts its own style back, fizzy's goes on again over it — and each style
+ * change keeps the content rect, not the frame: the window landed a title bar or a toolbar off
+ * where it set out from, a little more each time. */
+static const CFTimeInterval landing_hold_s = 0.5;
+
+static void hold_landing(WindowMonitor *m) {
+    if (m->land_until <= 0 || m->anim_active) return;
+    if (CACurrentMediaTime() > m->land_until || m->manual_live_resize) {
+        m->land_until = 0;
+        return;
+    }
+    NSWindow *window = (__bridge NSWindow *)m->window;
+    if (!NSEqualRects(window.frame, m->anim_to)) [window setFrame:m->anim_to display:NO];
+}
+
+static void step_space_animation(WindowMonitor *m) {
+    NSWindow *window = (__bridge NSWindow *)m->window;
+    double t = (CACurrentMediaTime() - m->anim_start) / m->anim_duration;
+    if (t >= 1.0) {
+        t = 1.0;
+        m->anim_active = NO;
+    }
+    const double k = space_ease(t);
+    m->anim_fullness = m->anim_entering ? k : 1.0 - k;
+    set_traffic_lights_alpha(window, 1.0 - m->anim_fullness);
+    if (!m->anim_active && !m->anim_entering) m->land_until = CACurrentMediaTime() + landing_hold_s;
+    NSRect r = NSMakeRect(m->anim_from.origin.x + (m->anim_to.origin.x - m->anim_from.origin.x) * k,
+                          m->anim_from.origin.y + (m->anim_to.origin.y - m->anim_from.origin.y) * k,
+                          m->anim_from.size.width + (m->anim_to.size.width - m->anim_from.size.width) * k,
+                          m->anim_from.size.height + (m->anim_to.size.height - m->anim_from.size.height) * k);
+    /* Whole points: a fractional size is a fractional drawable, scaled. */
+    r = NSMakeRect(round(r.origin.x), round(r.origin.y), round(r.size.width), round(r.size.height));
+    if (!NSEqualRects(window.frame, r)) [window setFrame:r display:NO];
+}
+
+/* Where the window lands, at did-enter or did-exit, however far the pump got. */
+static void finish_space_animation(WindowMonitor *m) {
+    if (!m || !m->anim_follow) return;
+    if (m->anim_active) {
+        m->anim_start = CACurrentMediaTime() - m->anim_duration;
+        step_space_animation(m);
+    }
+    /* Out: there. In: hidden with the title bar now, there for its reveal at the top of the screen. */
+    set_traffic_lights_alpha((__bridge NSWindow *)m->window, 1.0);
+    if (!m->anim_entering) {
+        m->land_until = CACurrentMediaTime() + landing_hold_s;
+        hold_landing(m);
+    }
+    m->anim_active = NO;
+    m->anim_follow = NO;
+}
+
+static void start_space_animation(NSWindow *window, NSRect to, NSTimeInterval duration, BOOL entering) {
+    WindowMonitor *m = monitor_of((__bridge void *)window);
+    if (!m) return;
+    m->anim_from = window.frame;
+    m->anim_to = to;
+    m->anim_start = CACurrentMediaTime();
+    m->anim_duration = duration > 0.05 ? duration : 0.05;
+    m->anim_entering = entering;
+    m->anim_fullness = entering ? 0.0 : 1.0;
+    m->anim_follow = YES;
+    m->anim_active = YES;
+    request_resize_pump((__bridge void *)window, 30);
+    pump_now();
+}
+
+static NSArray *fizzy_custom_windows_for_space(NSWindow *window, BOOL entering) {
+    WindowMonitor *m = monitor_of((__bridge void *)window);
+    if (!m) return nil;
+    /* The window as it is, before AppKit or SDL touch it for the transition: where its way in starts
+     * and its way out ends, and its title bar's height for the way back. */
+    if (entering) {
+        store_exit_target(window);
+        const double inset = titlebar_inset_for_window(window);
+        m->windowed_titlebar_inset = (inset > 0 && inset <= 100.0) ? inset : 0;
+    }
+    /* From here the window's opacity follows its own way (`fizzy_macos_window_space_fullness`), not
+     * the transition's start: it does not jump to opaque before it moves. */
+    m->anim_follow = YES;
+    m->anim_active = NO;
+    m->anim_entering = entering;
+    m->anim_fullness = entering ? 0.0 : 1.0;
+    m->anim_from = NSZeroRect;
+    m->fullscreen_size = NSZeroSize;
+    return @[ window ];
+}
+
+static NSArray *fizzy_custom_windows_to_enter(__unused id self, __unused SEL cmd, NSWindow *window) {
+    return fizzy_custom_windows_for_space(window, YES);
+}
+
+static NSArray *fizzy_custom_windows_to_exit(__unused id self, __unused SEL cmd, NSWindow *window) {
+    return fizzy_custom_windows_for_space(window, NO);
+}
+
+static void fizzy_start_enter_animation(__unused id self, __unused SEL cmd, NSWindow *window, NSTimeInterval duration) {
+    WindowMonitor *m = monitor_of((__bridge void *)window);
+    NSScreen *screen = window.screen ?: [NSScreen mainScreen];
+    NSRect to = fullscreen_frame_on(screen);
+    /* The size AppKit gave, from the screen's bottom left as AppKit places it. */
+    if (m && m->fullscreen_size.width >= 1.0 && m->fullscreen_size.height >= 1.0) {
+        to.size = m->fullscreen_size;
+    }
+    start_space_animation(window, to, duration, YES);
+}
+
+static void fizzy_start_exit_animation(__unused id self, __unused SEL cmd, NSWindow *window, NSTimeInterval duration) {
+    WindowMonitor *m = monitor_of((__bridge void *)window);
+    if (!m) return;
+    /* The window's own shape on its way back — its corners, its title bar with the traffic lights
+     * fading in — as Apple's own custom animation does it: AppKit leaves the full screen style on
+     * until the transition is over, and the window shrank square. */
+    [window setStyleMask:window.styleMask & ~NSWindowStyleMaskFullScreen];
+    /* Its toolbar back now too (hidden at will-enter): its corners on the way, and the title bar's
+     * height the content keeps clear of is the windowed one from the first step to the last. Given
+     * back at did-exit, the landing frame laid the content out under the bar without it, 4 pt
+     * higher, and the next one dropped it back. */
+    fizzy_macos_window_glass_toolbar((__bridge void *)window, 1);
+    set_traffic_lights_alpha(window, 0.0);
+    /* Back to the frame it had as it set out (kept at will-enter), as AppKit lets a window that is
+     * no longer full screen have it: a top above the menu bar comes down below it, and the window
+     * landed there at the end instead of on the way. */
+    NSRect to = m->exit_window_frame_valid ? m->exit_window_frame : window.frame;
+    NSScreen *screen = window.screen ?: [NSScreen mainScreen];
+    if (screen) to = [window constrainFrameRect:to toScreen:screen];
+    start_space_animation(window, to, duration, NO);
+}
+
+/* The window's delegate (SDL's listener) asks AppKit for the window's own animation into and out of
+ * a fullscreen Space. Added to the delegate's class once; a window the monitor does not follow
+ * answers nil there, and AppKit animates it as it would. */
+static void install_space_animation(NSWindow *window) {
+    id delegate = window.delegate;
+    if (!delegate) return;
+    Class cls = object_getClass(delegate);
+    class_addMethod(cls, @selector(customWindowsToEnterFullScreenForWindow:), (IMP)fizzy_custom_windows_to_enter, "@@:@");
+    class_addMethod(cls, @selector(customWindowsToExitFullScreenForWindow:), (IMP)fizzy_custom_windows_to_exit, "@@:@");
+    class_addMethod(cls, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:), (IMP)fizzy_start_enter_animation, "v@:@d");
+    class_addMethod(cls, @selector(window:startCustomAnimationToExitFullScreenWithDuration:), (IMP)fizzy_start_exit_animation, "v@:@d");
+    class_addMethod(cls, @selector(window:willUseFullScreenContentSize:), (IMP)fizzy_will_use_fullscreen_content_size, "{CGSize=dd}@:@{CGSize=dd}");
+}
+
+/* A step of `nswindow`'s own way into or out of full screen, now: from before each of the app's
+ * frames (`macos_monitor.zig`'s begin hook), so the window moves as often as the app draws — the
+ * pump's ticks alone moved it at 60 Hz under frames drawn at 120. */
+void fizzy_macos_window_space_step(void *nswindow) {
+    WindowMonitor *m = monitor_of(nswindow);
+    if (!m) return;
+    if (m->anim_active) step_space_animation(m);
+    hold_landing(m);
+}
+
+/* Whether `nswindow` is moving itself into or out of full screen: its step this frame goes in the
+ * transaction its picture is presented in (`macos_monitor.zig`). */
+int fizzy_macos_window_space_moving(void *nswindow) {
+    WindowMonitor *m = monitor_of(nswindow);
+    return m && m->anim_active ? 1 : 0;
+}
+
+/* How far `nswindow` is into full screen on its own way there or back, 0 to 1; below 0 when it is
+ * on no such way (`fizzy_macos_window_space_transition_active` then says whether it is in AppKit's). */
+double fizzy_macos_window_space_fullness(void *nswindow) {
+    WindowMonitor *m = monitor_of(nswindow);
+    if (!m || !m->anim_follow) return -1.0;
+    return m->anim_fullness;
+}
+
 void fizzy_macos_window_space_stage(int stage, void *nswindow) {
     WindowMonitor *m = monitor_of(nswindow);
     if (!m) return;
@@ -332,15 +583,32 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             schedule_transition_watchdog(win);
             {
                 NSWindow *w = (__bridge NSWindow *)win;
-                store_exit_target(w);
-                double inset = titlebar_inset_for_window(w);
-                m->windowed_titlebar_inset = (inset > 0 && inset <= 100.0) ? inset : 0;
+                if (m->anim_follow) {
+                    /* SDL's listener has just put its own style on (titled, the content not under the
+                     * title bar), and AppKit kept the content rect: the window grew by its title bar,
+                     * and kept as the frame to come back to, it came back that much taller every
+                     * time. Fizzy's style again, and the frame it had when AppKit asked for its own
+                     * way (`fizzy_custom_windows_for_space`), which is where that way starts. */
+                    if (!(w.styleMask & NSWindowStyleMaskFullSizeContentView)) {
+                        w.styleMask = w.styleMask | NSWindowStyleMaskFullSizeContentView;
+                    }
+                    if (m->exit_window_frame_valid && !NSEqualRects(w.frame, m->exit_window_frame)) {
+                        [w setFrame:m->exit_window_frame display:NO];
+                    }
+                } else {
+                    store_exit_target(w);
+                    double inset = titlebar_inset_for_window(w);
+                    m->windowed_titlebar_inset = (inset > 0 && inset <= 100.0) ? inset : 0;
+                }
             }
+            /* After the windowed title bar's height is kept for the way back. */
+            fizzy_macos_window_glass_toolbar(win, 0);
             fizzy_macos_window_reset_sync_cache(win);
             fizzy_macos_window_request_clear_frames(win, 5);
             request_resize_pump(win, 90);
             break;
         case 1: // didEnter
+            finish_space_animation(m);
             m->space_transition = NO;
             m->space_entering = NO;
             fizzy_macos_window_commit_steady_state(win);
@@ -357,6 +625,7 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             schedule_transition_watchdog(win);
             break;
         case 3: // didExit
+            finish_space_animation(m);
             m->space_transition = NO;
             m->space_entering = NO;
             m->unzoom_animating = NO;
@@ -373,9 +642,13 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
                 if (!monitor_of(win)) return;
                 NSWindow *exit_win = (__bridge NSWindow *)win;
                 restore_pre_fullscreen_origin_if_nudged(exit_win);
+                fizzy_macos_window_glass_toolbar(win, 1);
                 store_exit_target(exit_win);
                 fizzy_macos_window_commit_steady_state(win);
                 fizzy_macos_window_resize_cb(win);
+                /* Frames for the window's opacity to fade in once AppKit has settled it: drawn only
+                 * through the transition, the window sat opaque until the mouse moved. */
+                request_resize_pump(win, 40);
             });
             break;
         default:
@@ -657,6 +930,36 @@ static void install_constrain_override(NSWindow *window) {
     }
 }
 
+/* SDL puts its own style on the window at will-enter and did-exit of a fullscreen Space (titled,
+ * the content not under the title bar), and fizzy puts its own back the next frame (`styleTitled`).
+ * AppKit keeps the content rect across each change, so the window grew by its title bar and shrank
+ * back: kept at will-enter it came back from full screen a title bar taller each time, and at
+ * did-exit it jumped up a title bar and back down in a frame. A window the monitor follows keeps its
+ * content under the title bar through any style it is given. */
+static IMP g_nswindow_style_mask_imp = NULL;
+
+static void fizzy_set_style_mask(id self, SEL _cmd, NSWindowStyleMask mask) {
+    if (monitor_of((__bridge void *)self)) mask |= NSWindowStyleMaskFullSizeContentView;
+    ((void (*)(id, SEL, NSWindowStyleMask))g_nswindow_style_mask_imp)(self, _cmd, mask);
+}
+
+/* On the concrete (SDL) window class, as `install_constrain_override`. Idempotent. */
+static void install_style_mask_override(NSWindow *window) {
+    Class cls = object_getClass(window);
+    SEL sel = @selector(setStyleMask:);
+    if (class_getMethodImplementation(cls, sel) == (IMP)fizzy_set_style_mask) return;
+    Method base = class_getInstanceMethod([NSWindow class], sel);
+    if (!base) return;
+    g_nswindow_style_mask_imp = method_getImplementation(base);
+    if (!class_addMethod(cls, sel, (IMP)fizzy_set_style_mask, method_getTypeEncoding(base))) {
+        Method existing = class_getInstanceMethod(cls, sel);
+        if (existing) {
+            g_nswindow_style_mask_imp = method_getImplementation(existing);
+            method_setImplementation(existing, (IMP)fizzy_set_style_mask);
+        }
+    }
+}
+
 /* Keep `token`, an observer `m` added, to remove when the window is forgotten. */
 static void keep_observer(WindowMonitor *m, id token) {
     if (!m || !token || m->observer_count >= (int)(sizeof(m->observers) / sizeof(m->observers[0]))) return;
@@ -680,6 +983,8 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
     m->window = nswindow;
     NSWindow *window = (__bridge NSWindow *)nswindow;
     install_constrain_override(window);
+    install_style_mask_override(window);
+    install_space_animation(window);
     store_exit_target(window);
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
     NSOperationQueue *main = [NSOperationQueue mainQueue];
@@ -712,6 +1017,34 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
         fizzy_macos_window_space_stage(3, nswindow);
         fizzy_macos_window_resize_cb(nswindow);
     }]);
+    /* AppKit gave up on the transition (it posts these by name only, as SDL's listener hears them):
+     * the window goes back to where its own way set out from. */
+    for (NSString *name in @[ @"NSWindowDidFailToEnterFullScreenNotification", @"NSWindowDidFailToExitFullScreenNotification" ]) {
+        keep_observer(m, [center addObserverForName:name
+                                             object:window
+                                              queue:main
+                                         usingBlock:^(__unused NSNotification *note) {
+            WindowMonitor *wm = monitor_of(nswindow);
+            if (!wm) return;
+            const BOOL entering = wm->space_entering;
+            if (wm->anim_follow) {
+                const BOOL moved = wm->anim_active || !NSIsEmptyRect(wm->anim_from);
+                wm->anim_active = NO;
+                wm->anim_follow = NO;
+                if (moved) [(__bridge NSWindow *)nswindow setFrame:wm->anim_from display:NO];
+            }
+            /* As the watchdog would, three seconds on (it covered the desktop until then): the window
+             * as it is, its toolbar back if it never got in. */
+            wm->transition_gen++;
+            wm->space_transition = NO;
+            wm->space_entering = NO;
+            wm->unzoom_animating = NO;
+            if (entering) fizzy_macos_window_glass_toolbar(nswindow, 1);
+            fizzy_macos_window_commit_steady_state(nswindow);
+            request_resize_pump(nswindow, 30);
+            fizzy_macos_window_resize_cb(nswindow);
+        }]);
+    }
 
     for (NSString *name in @[
              NSWindowDidResizeNotification,
@@ -733,6 +1066,8 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
             if (wm->exit_origin_guard > 0) {
                 restore_pre_fullscreen_origin_if_nudged(w);
             }
+            /* As a style change at the end of the way out re-frames it, before it is drawn so. */
+            hold_landing(wm);
             if ([name isEqualToString:NSWindowDidResizeNotification]) fizzy_live_resize_trace_step(nswindow);
             if ([name isEqualToString:NSWindowWillStartLiveResizeNotification]) {
                 wm->manual_live_resize = YES;

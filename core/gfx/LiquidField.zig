@@ -28,6 +28,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const programs = @import("programs.zig");
 const liquid_glass = @import("liquid_glass.zig");
+const glass_look = @import("glass_look.zig");
 
 const LiquidField = @This();
 
@@ -71,6 +72,9 @@ mix: f32 = 0,
 lift: f32 = 0,
 /// The user's dialog refraction, 0 (none) to 2 (`liquid_glass.Look.refraction`).
 refraction: f32 = 1,
+/// It carries text — a dialog, a menu — and keeps some frost over a clear lens to read
+/// (`glass_look.forText`).
+text: bool = false,
 
 pub fn add(self: *LiquidField, shape: Shape) void {
     if (self.len >= max_shapes) return;
@@ -151,11 +155,14 @@ pub const Uniforms = extern struct {
     tint: [4]f32,
     /// Mix, lift, has a tint, has the sharp picture.
     face: [4]f32,
-    /// Dither amplitude.
+    /// Dither amplitude; then Apple's lens (`applyLook`): the bending band's share of the shape's
+    /// shorter half, how far it bends in bands, how much darker the folded band is. A band share of
+    /// 0 is the earlier glass, pulled from outside.
     dither: [4]f32,
     /// 1 where the window is opaque behind its content (`publishOpaqueWindow`): the glass is
     /// then opaque, whatever the alpha of the picture it covers. The window's, not the field's:
-    /// `draw` sets it, in the frame; `pack` leaves it 0.
+    /// `draw` sets it, in the frame; `pack` leaves it 0. Then Apple's lens: its colour fringe, the
+    /// light across its band, the band's widest (physical pixels).
     backdrop: [4]f32 = @splat(0),
     shapes: [max_shapes][shape_vec4s][4]f32,
 
@@ -262,6 +269,39 @@ fn opaqueWindow() bool {
     return dvui.dataGet(null, enabled_id, "_liquid_opaque_window", bool) orelse false;
 }
 
+/// The app's glass at the window opacity this frame (`glass_look.inApp`), published by the app
+/// before anything draws: every field — dialogs, menus, drops — is drawn as it says, Apple's lens
+/// on the one slider. Null (nothing published, a plugin's own window): the earlier glass, as each
+/// field's own tint, lift and blur say. The precompiled Vulkan and D3D12 programs draw the earlier
+/// glass whatever is published until they are compiled again from the HLSL (the commands are at
+/// its top); the GLSL (the web) and the Metal draw the lens.
+pub fn publishLook(slider_look: ?glass_look.InApp) void {
+    if (dvui.current_window == null) return;
+    if (slider_look) |l| dvui.dataSet(null, enabled_id, "_liquid_look", l) else dvui.dataRemove(null, enabled_id, "_liquid_look");
+}
+
+fn publishedLook() ?glass_look.InApp {
+    return dvui.dataGet(null, enabled_id, "_liquid_look", glass_look.InApp);
+}
+
+/// `look` into what the program reads: the lens's own uniforms, and the tint, lift, clarity, rim
+/// light and frost the slider sets in place of the field's own. The bend follows the user's
+/// refraction setting (`refraction`, 2 the default).
+fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
+    const bend_scale = std.math.clamp(self.refraction / 2, 0, 1);
+    u.dither[1] = @max(l.bevel, 0.0001);
+    u.dither[2] = l.bend * bend_scale;
+    u.dither[3] = l.shade;
+    u.backdrop[1] = l.dispersion;
+    u.backdrop[2] = l.bevel_light;
+    u.backdrop[3] = l.bevel_cap * self.scale;
+    u.rim[1] = l.clarity * bend_scale;
+    u.rim[3] = l.rim;
+    u.face[0] = std.math.clamp(l.mix, 0, 1);
+    u.face[1] = std.math.clamp(l.lift, 0, 1);
+    for (u.shapes[0..self.len]) |*sh| sh[2][0] *= l.frost;
+}
+
 /// Whether `draw` would draw now: programs here, switched on, compiled.
 pub fn ready() bool {
     if (!enabled()) return false;
@@ -284,6 +324,8 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
     // The window behind the glass, published for this frame.
     u.backdrop[0] = if (opaqueWindow()) 1 else 0;
+    // And the glass the slider makes of it this frame (`publishLook`).
+    if (publishedLook()) |l| self.applyLook(&u, if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();

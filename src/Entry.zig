@@ -16,6 +16,7 @@ const auto_update = @import("app").update.auto_update;
 const file_assoc = @import("backend/file_assoc.zig");
 const update_notify = @import("app").update.update_notify;
 const singleton = @import("app").single_instance;
+const restart = @import("app").restart;
 const automation = @import("app").automation;
 const paths = fizzy.core.paths;
 const Constants = @import("editor/Constants.zig");
@@ -367,6 +368,10 @@ pub fn AppInit(win: *dvui.Window) !void {
 
 // Run as app is shutting down before dvui.Window.deinit()
 pub fn AppDeinit(_: *dvui.Window) void {
+    // A restart asked for (the Restart command, a downloaded update): started again once
+    // everything is saved and the single-instance listener is down, so the new instance owns it
+    // rather than handing its launch to this one.
+    defer restart.relaunch(dvui.io, appAllocator());
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.entry().window);
     // `editor.deinit` runs each plugin's `deinit` first (pixi's persists its `.fizproject` and
@@ -404,7 +409,7 @@ fn frameOnce() !dvui.App.Result {
     // seen (see `app.automation.Player.frame`).
     fizzy.editor().demo.frame();
     // A float asked out of the main window, or back into it, goes before anything is drawn
-    // (`Editor.Popout`, behind `FIZZY_POPOUT`).
+    // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {

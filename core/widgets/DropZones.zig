@@ -38,6 +38,7 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const native_glass = @import("../native_glass.zig");
 const dialogs = @import("../dialogs.zig");
 const widgets = @import("../widgets.zig");
 const BlurBackdrop = @import("BlurBackdrop.zig");
@@ -130,21 +131,45 @@ pub const Wheel = struct {
 /// Every zone, in the order they are drawn and stored.
 pub const all = [_]Zone{ .center, .{ .edge = .left }, .{ .edge = .right }, .{ .edge = .top }, .{ .edge = .bottom }, .remove };
 
-/// Points: the bubbles' layout as a wheel — the middle, the four sides at `side_d` from it, the
-/// trash on the diagonal between the right and the bottom — about 300 across: big enough to aim at
-/// without looking, small enough to leave the place in view round it.
-const center_r: f32 = 52;
+/// Points: the bubbles' layout as a wheel — the middle, the four sides round it, the trash in the
+/// crook between the right and the bottom — about 345 across: big enough to aim at without
+/// looking, small enough to leave the place in view round it. Each bubble rests `gap` from the
+/// ones beside it.
+/// The middle a quarter bigger than it was (52): the drop reads as one glass round it, not a
+/// cross of equals (the user).
+const center_r: f32 = 65;
 const side_r: f32 = 40;
-const side_d: f32 = 108;
 const remove_r: f32 = 30;
-const remove_d: f32 = 88;
+/// Points between a bubble and the ones beside it, at rest: past where two run together (half of
+/// `merge`, for the glass's smooth union and the OS's container alike, measured), so each bubble is
+/// born inside the middle, pinches off it on its way out (`grow`) and rests a drop of its own —
+/// until the carried view is aimed at one, which swells (`join_swell`) until it runs into those
+/// beside it. Resting joined, they read as merged all the time; just past half the merge, they
+/// still reached for each other (the user).
+const gap: f32 = merge * 0.75;
+const side_d: f32 = center_r + side_r + gap;
+/// How much bigger the bubble the carried view is aimed at grows, as it lights: enough to close the
+/// gap to the bubbles beside it, so it runs into them — a side into the middle, the middle into
+/// every side — and into what is carried. The bubble alone, not the whole drop (the user).
+pub const join_swell: f32 = 0.3;
+/// Points the trash keeps from the others even while one beside it swells: a drop of its own,
+/// joining none.
+const remove_apart: f32 = merge / 2 + 1;
+/// The trash on the diagonal, `remove_apart` from the right and the bottom swollen —
+/// |(side_d − x, x)| is d = side_r·(1 + join_swell) + remove_r + remove_apart at
+/// x = (side_d + √(2·d² − side_d²)) / 2, the root out from the middle — and from the middle swollen.
+const remove_d: f32 = blk: {
+    const d = side_r * (1 + join_swell) + remove_r + remove_apart;
+    const from_sides = (side_d + @sqrt(2 * d * d - side_d * side_d)) / 2;
+    const from_middle = (center_r * (1 + join_swell) + remove_r + remove_apart) / std.math.sqrt2;
+    break :blk @max(from_sides, from_middle);
+};
 /// Points: as a strip, one line with the wheel's own gap between each bubble and the next — the
 /// two sides the place's ends are at `end_d`, the other two beside the middle at `side_d`, and the
-/// trash past the end on its side. Across a place: left, top, middle, bottom, right, trash; down
+/// trash apart past the end on its side. Across a place: left, top, middle, bottom, right, trash; down
 /// one: top, left, middle, right, bottom, trash. The icons say which edge each is.
-const gap: f32 = side_d - center_r - side_r;
 const end_d: f32 = side_d + 2 * side_r + gap;
-const strip_remove_d: f32 = end_d + side_r + gap + remove_r;
+const strip_remove_d: f32 = end_d + side_r * (1 + join_swell) + remove_apart + remove_r;
 /// Points: a bubble's icon, as a share of its radius.
 const bubble_icon: f32 = 0.6;
 /// How far the cluster may reach either side of the middle, as a share of the place's size that
@@ -158,6 +183,10 @@ pub const strip_gain: f32 = 1.15;
 /// How far past its edge a bubble still takes the pointer, as a share of its radius: a drop
 /// aimed at a bubble's rim is aimed at the bubble.
 const reach: f32 = 1.25;
+/// How near a drop takes a bubble, as a share of the two radii together between their middles: a
+/// little before they touch, so the drop reaches for the bubble rather than having to be pushed
+/// into it (the user: more attraction near the bubbles).
+const disc_reach: f32 = 1.2;
 
 /// Where the drop sits over `bounds`: in its middle, as a wheel — or, where a strip along the
 /// place would make the bubbles `strip_gain` bigger than a wheel fitted to it, as that strip.
@@ -367,13 +396,13 @@ pub fn at(w: Wheel, p: dvui.Point.Physical) ?Zone {
 }
 
 /// The zone a drop of radius `r` centred on `c` reads as — a carried drop of glass, aimed by
-/// where it is rather than by the finger beside it: of the bubbles it touches, the one it is most
-/// into (nearest for their sizes together), and nothing touching none. A point (`r` 0) reads as
-/// `at`.
+/// where it is rather than by the finger beside it: of the bubbles it touches or nearly does
+/// (`disc_reach`), the one it is most into (nearest for their sizes together), and nothing near
+/// none. A point (`r` 0) reads as `at`.
 pub fn atDisc(w: Wheel, c: dvui.Point.Physical, r: f32) ?Zone {
     if (r <= 0) return at(w, c);
     var best: ?Zone = null;
-    var best_d: f32 = 1;
+    var best_d: f32 = disc_reach;
     for (all) |z| {
         if (z == .remove and !w.remove) continue;
         const b = w.bubble(z);
@@ -564,7 +593,9 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
             const t = orbTime(st.shown, j, order.len);
             const k = grow(t);
             const b = drawn.bubble(all[zi]);
-            const r = b.r * k;
+            // The bubble the carried view is aimed at swells as it lights (`join_swell`) — the
+            // trash, a drop of its own, keeps its size.
+            const r = b.r * k * (if (all[zi] == .remove) 1 else 1 + join_swell * st.lit[zi]);
             if (r < 0.5) continue;
             // Out of the middle to where it settles, on the same curve as its size: each bubble
             // is born inside the drop and pinches off it on its way out (`merge`), past its place
@@ -577,7 +608,13 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
         }
         // Changing shape, what is read moves and grows with the bubbles: at a size kept while it
         // fits, as for the carried drop, so it is not new targets every frame of the change.
-        took = glassCarrying(id, panes[0..n], swingRect(drawn), g, scale, merge * drawn.unit, look.carried, reshaping or sliding);
+        // Where the OS draws a view drag's glass (`native_glass`), the bubbles are declared for it
+        // instead: its glass runs them together, and into the carried drop, itself.
+        took = if (native_glass.on()) native: {
+            for (panes[0..n]) |pane| native_glass.add(.{ .rect = pane.r, .radius = pane.r.w / 2, .lit = pane.lit, .alpha = g });
+            native_glass.mergeWithin(merge * drawn.unit);
+            break :native false;
+        } else glassCarrying(id, panes[0..n], swingRect(drawn), g, scale, merge * drawn.unit, look.carried, reshaping or sliding);
         st.icon_n = 0;
         st.icon_frame = now;
         for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {
@@ -620,11 +657,12 @@ fn orbTime(shown: f32, j: usize, n: usize) f32 {
     return std.math.clamp((shown - stagger * @as(f32, @floatFromInt(j))) / span, 0, 1);
 }
 
-/// Points: how far apart two bubbles still run together (`LiquidField.merge_px`) — about half a
-/// side bubble across, so one leaving the drop draws a neck out of it that thins and lets go well
-/// before it settles. A view carried as a drop is drawn at it too, over a place or between them
-/// (`ViewDrag`): a join's swell is part of a shape's size, so glass drawn at two merges is two sizes.
-pub const merge: f32 = 24;
+/// Points: how far apart two shapes of glass start to run together (`LiquidField.merge_px`; they
+/// join below half of it) — a side bubble's radius or so, so the carried drop reaches for a bubble
+/// from well off and one leaving the drop draws a long neck out of it. A view carried as a drop is
+/// drawn at it too, over a place or between them (`ViewDrag`): a join's swell is part of a shape's
+/// size, so glass drawn at two merges is two sizes.
+pub const merge: f32 = 36;
 
 /// How far behind the one before each orb starts, as a share of `shown`.
 const stagger: f32 = 0.06;

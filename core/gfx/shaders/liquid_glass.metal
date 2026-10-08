@@ -75,9 +75,12 @@ fragment main0_out main0(
     float4 g2 = uData[2];
     float4 g3 = uData[3];
     float4 g4 = uData[4];
-    float4 g5 = uData[5];
+    float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
+    float4 g6 = uData[6]; // opaque window; the lens: dispersion, bevel light, the band's cap
+    bool inward = g5.y > 0.0;
 
     float d1 = 1e9; float d2 = 1e9; float4 m1 = float4(0.0); float4 m2 = float4(0.0);
+    float h1 = 1e9; float h2 = 1e9;
     float f1 = 1e9; float f2 = 1e9; float2 o1 = float2(0.0); float2 o2 = float2(0.0);
     for (int i = first; i < first + count && i < MAX_SHAPES; i++) {
         float4 s0 = uData[G + 3 * i];
@@ -85,7 +88,8 @@ fragment main0_out main0(
         float4 s2 = uData[G + 3 * i + 2];
         float2 g;
         float d = sdRoundBox(p - s0.xy, s0.zw, min(s1, float4(min(s0.z, s0.w))), g);
-        if (d < d1) { d2 = d1; m2 = m1; d1 = d; m1 = s2; } else if (d < d2) { d2 = d; m2 = s2; }
+        float hs = min(s0.z, s0.w);
+        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; d1 = d; m1 = s2; h1 = hs; } else if (d < d2) { d2 = d; m2 = s2; h2 = hs; }
         float2 o;
         float f = d;
         if (s2.w < 0.5) {
@@ -114,9 +118,33 @@ fragment main0_out main0(
     float b = clamp(mat.x, 0.0, 1.0);
     float lens = mat.y;
 
-    float2 uv = clamp((p + outv * (g2.x * lens * steepR) - g0.xy) * g0.zw, 0.0, 1.0);
+    float t = 0.0;
+    float disp = 0.0;
+    float2 uv;
+    if (inward) {
+        float W = max(min(g5.y * mix(h1, h2, wm), g6.w), 1.0);
+        t = clamp(1.0 - soft / W, 0.0, 1.0);
+        disp = g5.z * W * lens * t * t;
+        uv = clamp((p - outv * disp - g0.xy) * g0.zw, 0.0, 1.0);
+    } else {
+        uv = clamp((p + outv * (g2.x * lens * steepR) - g0.xy) * g0.zw, 0.0, 1.0);
+    }
     float4 frost = Frost.sample(FrostSampler, uv);
     float4 sharp = g4.w > 0.5 ? Sharp.sample(SharpSampler, uv) : frost;
+    if (inward && g6.y > 0.0 && disp > 0.5) {
+        float2 du = outv * (disp * 0.04 * g6.y) * g0.zw;
+        float2 uvr = clamp(uv + du, 0.0, 1.0);
+        float2 uvb = clamp(uv - du, 0.0, 1.0);
+        frost.r = Frost.sample(FrostSampler, uvr).r;
+        frost.b = Frost.sample(FrostSampler, uvb).b;
+        if (g4.w > 0.5) {
+            sharp.r = Sharp.sample(SharpSampler, uvr).r;
+            sharp.b = Sharp.sample(SharpSampler, uvb).b;
+        } else {
+            sharp.r = frost.r;
+            sharp.b = frost.b;
+        }
+    }
     // Worked out over an opaque picture of what the glass covers, then made exactly as
     // see-through as that is (`under`): over a translucent window (vibrancy, Acrylic) the
     // desktop's material shows through the glass as much as through the window round it. Laid
@@ -127,22 +155,24 @@ fragment main0_out main0(
     frost = float4(frost.rgb / max(frost.a, 1e-4), 1.0);
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
-    float mixv = g4.z > 0.5 ? g4.x * b : 0.0;
+    float mixv = g4.z > 0.5 ? g4.x * (inward ? 1.0 : b) : 0.0;
     float4 c = mix(sharp, frost, b) * (1.0 - mixv);
-    float a = clamp(g2.y * lens * steepR * steepR * (1.0 - mixv), 0.0, 1.0);
+    float a = clamp(g2.y * lens * (inward ? t : steepR * steepR) * (1.0 - mixv), 0.0, 1.0);
     c = sharp * a + c * (1.0 - sharp.a * a);
     c += g3 * mixv;
     // A translucent tint lies over the frost, not over what is behind the window: the glass is
     // opaque here, and `under` alone says how much of the desktop's material shows through it.
     c += frost * (1.0 - c.a);
+    if (inward) c.rgb *= 1.0 - g5.w * t * t;
     float facing = dot(outv, float2(-0.70710678, -0.70710678));
     float toward = max(facing, 0.0);
     float away = max(-facing, 0.0);
-    float spec = 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + 0.06;
+    float spec = 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + (inward ? 0.15 : 0.06);
     float line = exp(-max(0.0, -D) / g2.z);
-    float lit = line * spec + 0.04 * steepL * toward;
-    float lift = (g4.z > 0.5 ? g4.y * b : 0.0) + mat.z;
+    float lit = line * spec + (inward ? 0.0 : 0.04 * steepL * toward);
+    float lift = (g4.z > 0.5 ? g4.y * (inward ? 1.0 : b) : 0.0) + mat.z;
     c += float4(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
+    if (inward) c.rgb += g6.z * lens * t * facing;
     c = clamp(c, 0.0, 1.0);
     c.rgb += (noise(frag.xy) - 0.5) * g5.x * c.a;
     out.color = clamp(c, 0.0, 1.0) * (under * cov);

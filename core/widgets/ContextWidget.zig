@@ -1,4 +1,4 @@
-//! dvui's `ContextWidget`, copied (like the menu chain beside it) for two differences:
+//! dvui's `ContextWidget`, copied (like the menu chain beside it) for these differences:
 //!
 //! - **A touch hold starts even when the press was already handled.** A context area is
 //!   declared *after* what it covers — it takes that widget's rect, and may not have children —
@@ -11,6 +11,9 @@
 //!   pause counted as a full hold on its first frame: the menu opened and ate the tap.
 //! - **It registers as the root of fizzy's menu chain** (`menu/Menu.zig`'s `Root`) as well as
 //!   dvui's, so choosing a row closes it whichever chain drew the menu it opened.
+//! - **Opening its menu focuses its window** (`openMenuAt`), as a left press would: dvui focuses a
+//!   subwindow only for a pointer button, and a menu whose window is not the focused one closes as
+//!   it opens — a right-click in a float other than the focused one did nothing.
 const std = @import("std");
 const dvui = @import("dvui");
 const Menu = @import("menu/Menu.zig");
@@ -126,6 +129,12 @@ pub fn minSizeForChild(self: *ContextWidget, s: Size) void {
 }
 
 fn openMenuAt(self: *ContextWidget, physical_pt: Point.Physical, event_num: u16) void {
+    // Its window focused too, as a left press focuses it: dvui focuses a subwindow only for a
+    // pointer button's press, and the menu opening here closes at once when its parent window is
+    // not the focused one (`FloatingMenu.chainFocused`) — a right-click on a float other than the
+    // focused one did nothing until a left click had focused it. Not raised: a right-click leaves
+    // a window where it is in the stacking, as on the OS.
+    dvui.focusSubwindow(self.winId, event_num);
     dvui.focusWidget(self.data().id, null, event_num);
     self.focused = true;
 

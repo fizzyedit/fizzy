@@ -30,6 +30,10 @@ pub const Landing = struct {
     photo: ?dvui.Texture = null,
     /// The size it was taken at, physical, for its proportions.
     photo_size: dvui.Size.Physical = .{},
+    /// Where the whole of it lay in the drop it was carried in, physical, where the app showed it
+    /// on the drag's glass (`ViewDrag.photo_last`): it grows from there to where the view lies in
+    /// the window (`Popout.growFrame`). Null where it was not shown so.
+    photo_from: ?dvui.Rect.Physical = null,
 };
 
 pub const Float = struct {
@@ -110,12 +114,18 @@ pub const Viewport = struct {
     /// Its OS window has the OS's own buttons for close, minimize and zoom (macOS's traffic lights):
     /// the float's header draws no close button of its own.
     os_buttons: bool = false,
+    /// Natural units from its window's left edge past the OS's own buttons (`os_buttons`), this
+    /// frame (`Popout`): the part of its header that is theirs, not the float's to be moved by.
+    buttons_w: f32 = 0,
     /// The OS asked to close its window (its close button, ⌘W): it closes as from its header.
     close_asked: bool = false,
     /// Physical: from where the float is drawn in its band to where its window is over the main
     /// window's frame, this frame (`Popout`) — for a drag to read the window where it lies over the
     /// main window's places (`ViewDrag.mapOccluders`).
     main_delta: dvui.Point.Physical = .{},
+    /// Its window lies under the main window in the OS's stacking (`Popout`): a float a window like
+    /// any other, clicked behind the main one. Over the main window it covers nothing there.
+    under_main: bool = false,
 };
 
 
@@ -428,8 +438,12 @@ const landing_ms: f32 = 300;
 /// How opaque the landing photograph is at its start — the carried card's own (`ViewDrag`).
 const photo_opacity: f32 = 0.8;
 
-/// How far a landing has got, on the arrival curve: 0 at the release, 1 in its window — past it
-/// and back on the way, when motion is playful.
+/// How far a landing has got in time: 0 at the release, 1 in its window.
+pub fn landingFraction(land: Landing) f32 {
+    return std.math.clamp(land.clock.fraction(core.motion.durationMs(landing_ms)), 0, 1);
+}
+
+/// `landingFraction` on the arrival curve, past 1 and back on the way when motion is playful.
 pub fn landedAt(land: Landing) f32 {
     const frac = land.clock.fraction(core.motion.durationMs(landing_ms));
     return if (frac >= 1) 1 else core.motion.enter(frac);
@@ -656,8 +670,11 @@ fn drawOne(l: *Layout, i: usize) bool {
     core.anchor.markRect(win_id, header, true, "float-header:{s}", .{first.name});
     if (header_close) |r| core.anchor.markRect(win_id, r, true, "float-close:{s}", .{first.name});
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
-    // the drop put it — nor while it is out of the way.
-    win.dragAreaSet(if (landing or aside > 0) .{} else header);
+    // the drop put it — nor while it is out of the way. Not over its OS window's own buttons
+    // either, which are theirs: the move cursor showed over the traffic lights.
+    const buttons_w = if (first.viewport) |vp| (if (vp.os_buttons) vp.buttons_w * scale else 0) else 0;
+    const drag_area: dvui.Rect.Physical = .{ .x = header.x + buttons_w, .y = header.y, .w = @max(0, header.w - buttons_w), .h = header.h };
+    win.dragAreaSet(if (landing or aside > 0) .{} else drag_area);
 
     if (!fresh) {
         // The view fades with the window round it: in over the photograph it grew out of as it

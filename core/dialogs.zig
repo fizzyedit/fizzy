@@ -19,6 +19,7 @@ const platform = @import("platform.zig");
 const widgets = @import("widgets.zig");
 const anim = @import("anim.zig");
 const draw = @import("draw.zig");
+const screens = @import("screens.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by
 /// fizzy so core stays decoupled from the editor. When a modal is open fizzy
@@ -176,6 +177,11 @@ pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
     }
     glassShadow(r, corners, scale, surfaceShadow(), 1);
 }
+
+/// Whether carried things are shown in windows of their own this run (fizzy's float windows on
+/// macOS): a carried view's photograph is taken without the place's background, its content over
+/// the window's material — set by the app before anything draws.
+pub var carry_windows: bool = false;
 
 /// `carriedGlass` for glass whose shapes run together (`LiquidField`) — the dragged view as a
 /// drop — frosted at the dialog style. False when the style has the blur off, or the glass program
@@ -639,6 +645,9 @@ pub fn dialog(src: std.builtin.SourceLocation, opts: DialogOptions) dvui.IdMutex
     const id = id_mutex.id;
 
     dvui.dataSet(opts.window, id, "_modal", opts.modal);
+    // Where dialogs are windows of their own, a dialog belongs to the window it was asked from — a
+    // float that is out, or the main window — and opens over it (`screens.screenFor`).
+    if (screens.nativeDialogs()) dvui.dataSet(opts.window, id, "_center_on", screens.screenFor((opts.window orelse dvui.currentWindow()).subwindows.current_rect));
     dvui.dataSetSlice(opts.window, id, "_title", opts.title);
     //dvui.dataSet(opts.window, id, "_center_on", (opts.window orelse dvui.currentWindow()).subwindows.current_rect);
     dvui.dataSetSlice(opts.window, id, "_ok_label", opts.ok_label);
@@ -668,14 +677,48 @@ pub fn closeFloatingDialogAnchored() void {
     dvui.dataSet(null, sub.id, "_close_rect", close_rect);
 }
 
+/// The dialogs `drawEarly` drew this frame, which dvui's own pass then finds drawn.
+var early: struct { frame: i128 = 0, n: u8 = 0, ids: [8]dvui.Id = undefined } = .{};
+var drawing_early = false;
+
+/// Draw this frame's dialogs now rather than where dvui draws them, at the very end of the frame
+/// (`Window.endRendering`): where dialogs are windows of their own (`screens.nativeDialogs`), the
+/// app takes each one's drawing into its window before that (`Popout`). Only the dialogs drawn by
+/// this file's frame (`dialogWindow`); dvui's pass skips each of them, and draws any other as ever.
+pub fn drawEarly() void {
+    const win = dvui.currentWindow();
+    early = .{ .frame = win.frame_time_ns };
+    drawing_early = true;
+    defer drawing_early = false;
+    var it = win.dialogs.iterator(null);
+    while (it.next()) |d| {
+        const ours = d.display == &dialogWindow or if (host_chrome) |h| d.display == h.dialog_window else false;
+        if (!ours or early.n >= early.ids.len) continue;
+        early.ids[early.n] = d.id;
+        early.n += 1;
+        d.display(d.id) catch |err| dvui.logError(@src(), err, "Dialog {x}", .{d.id});
+    }
+}
+
+/// Whether dialog `id` was drawn by `drawEarly` this frame.
+fn drawnEarly(id: dvui.Id) bool {
+    if (early.frame != dvui.currentWindow().frame_time_ns) return false;
+    for (early.ids[0..early.n]) |i| if (i == id) return true;
+    return false;
+}
+
 pub fn dialogWindow(id: dvui.Id) anyerror!void {
+    // Drawn already this frame (`drawEarly`): dvui's own pass, at the end of the frame.
+    if (!drawing_early and drawnEarly(id)) return;
     const modal = dvui.dataGet(null, id, "_modal", bool) orelse {
         dvui.log.err("dialogDisplay lost data for dialog {x}\n", .{id});
         dvui.dialogRemove(id);
         return;
     };
 
-    if (modal) {
+    // In a window of its own (`screens.nativeDialogs`), the main window is left as it is.
+    const native = screens.nativeDialogs();
+    if (modal and !native) {
         modal_dim_titlebar = true;
     }
 
@@ -693,7 +736,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
 
     const resizeable = dvui.dataGet(null, id, "_resizeable", bool) orelse false;
 
-    const center_on = dvui.currentWindow().subwindows.current_rect;
+    const center_on = dvui.dataGet(null, id, "_center_on", dvui.Rect.Natural) orelse dvui.currentWindow().subwindows.current_rect;
 
     const cancel_label = dvui.dataGetSlice(null, id, "_cancel_label", []u8);
     const default = dvui.dataGet(null, id, "_default", dvui.enums.DialogResponse);
@@ -712,6 +755,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         .process_events_in_deinit = true,
         .resize = if (resizeable) .all else .none,
         .frost = dialogFrost(),
+        .native = native,
     }, .{
         .id_extra = id.asUsize(),
         .color_text = .black,

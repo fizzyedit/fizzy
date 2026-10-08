@@ -45,6 +45,12 @@ extern fn fizzy_macos_copy_screen_frames(out: [*]f64, max: c_int) c_int;
 extern fn fizzy_macos_window_sync_content_views(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_install_resize_observer(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_sdl_draws_live_resize(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_step(cocoa_window: ?*anyopaque) void;
+extern fn fizzy_macos_window_space_moving(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_native_transaction_begin() void;
+extern fn fizzy_native_transaction_commit() void;
+extern fn fizzy_native_viewport_transact(nswindow: ?*anyopaque) void;
+extern fn fizzy_native_viewport_presented(nswindow: ?*anyopaque) void;
 
 // SDL internals (linked but not in public headers) — the same hooks SDL uses
 // for macOS live resize while the window frame is animating.
@@ -66,6 +72,8 @@ const Watched = struct {
     /// Its place is the app's to follow through an animation: a float's window, which its float
     /// follows (`SDLBackend.viewportFollowWindow` reads where SDL says it is).
     follow_position: bool,
+    /// Its picture this frame is presented in the frame's transaction (`macos_frame_transaction`).
+    transacted: bool = false,
     /// Last sizes, and place, pushed into SDL during an AppKit animation.
     last_point: [2]c_int = .{ 0, 0 },
     last_pixel: [2]c_int = .{ 0, 0 },
@@ -144,8 +152,22 @@ fn macosSyncSizes(w: *Watched) void {
 
 fn macosLiveResizeUpdate(window: *c.SDL_Window) void {
     if (macos_in_live_resize) return;
+    // From inside a frame — AppKit calls back at once from what a frame asks of it, as
+    // `toggleFullScreen:` asked from a command did — a frame run here would nest in that one, and
+    // dvui's state does not survive it: every later frame began on the nested one's, and the app
+    // slept through the rest of the transition. Wake the loop instead; the next frame follows.
+    if (comptime @hasDecl(Backend, "appFrameOpen")) {
+        if (Backend.appFrameOpen()) {
+            var ue = std.mem.zeroes(c.SDL_Event);
+            ue.type = c.SDL_EVENT_USER;
+            _ = c.SDL_PushEvent(&ue);
+            return;
+        }
+    }
     macos_in_live_resize = true;
     defer macos_in_live_resize = false;
+    if (comptime @hasDecl(Backend, "callbackFrames")) Backend.callbackFrames(true);
+    defer if (comptime @hasDecl(Backend, "callbackFrames")) Backend.callbackFrames(false);
     SDL_OnWindowLiveResizeUpdate(window);
 }
 
@@ -162,6 +184,14 @@ export fn fizzy_macos_window_resize_cb(cocoa: ?*anyopaque) void {
     _ = c.SDL_PushEvent(&ue);
 }
 
+/// Called from the monitor's 60Hz NSTimer while a window moves itself into or out of full screen:
+/// the app draws that from its own frames, and only needs keeping awake.
+export fn fizzy_macos_window_wake() void {
+    var ue = std.mem.zeroes(c.SDL_Event);
+    ue.type = c.SDL_EVENT_USER;
+    _ = c.SDL_PushEvent(&ue);
+}
+
 /// Called from the monitor's 60Hz NSTimer for each window animating: its live sizes into SDL.
 export fn fizzy_macos_window_pump_sync(cocoa: ?*anyopaque) void {
     if (comptime builtin.os.tag == .macos) {
@@ -171,14 +201,37 @@ export fn fizzy_macos_window_pump_sync(cocoa: ?*anyopaque) void {
 }
 
 /// Called from the monitor's 60Hz NSTimer once a tick while any window animates — same approach
-/// SDL itself uses for live resize: one frame of the app, which draws every window. Runs outside
-/// appIterate, so SDL_OnWindowLiveResizeUpdate is safe here.
+/// SDL itself uses for live resize: one frame of the app, which draws every window. The timer runs
+/// it between frames; a transition's stage, run from inside one, only wakes the loop
+/// (`macosLiveResizeUpdate`).
 export fn fizzy_macos_window_pump_render() void {
     if (comptime builtin.os.tag == .macos) {
         if (!macos_pump_ready) return;
         const window = macos_monitor_window orelse return;
         macosLiveResizeUpdate(window);
     }
+}
+
+/// A Core Animation transaction is open across this frame (`macosAppPreBeginSync` to
+/// `macosAppPresented`): a window moving itself into or out of full screen takes its step in it, and
+/// its picture is presented in it, so the window's new frame and the picture drawn for it reach the
+/// screen together. Apart, the frame went in with the run loop's own commit and the picture whenever
+/// the GPU had it: a window a step ahead of or behind what was drawn in it, every frame of the way.
+var macos_frame_transaction = false;
+
+/// Close this frame's transaction (`macos_frame_transaction`), its pictures presented. Registered
+/// with `macosAppPreBeginSync`.
+fn macosAppPresented(back: *Backend.SDLBackend) void {
+    _ = back;
+    if (!macos_frame_transaction) return;
+    for (&watched) |*slot| {
+        const w = if (slot.*) |*w| w else continue;
+        if (!w.transacted) continue;
+        w.transacted = false;
+        fizzy_native_viewport_presented(w.cocoa);
+    }
+    macos_frame_transaction = false;
+    fizzy_native_transaction_commit();
 }
 
 /// Sync AppKit → SDL before `Window.begin` during Space / zoom animations only, for every window
@@ -192,6 +245,17 @@ fn macosAppPreBeginSync(back: *Backend.SDLBackend) void {
     // (window.zon) and disabled in dvui, so there is nothing to toggle here.
     for (&watched) |*slot| {
         const w = if (slot.*) |*w| w else continue;
+        // A window moving itself into or out of full screen takes its step for this frame first,
+        // in the frame's transaction (`macos_frame_transaction`).
+        if (fizzy_macos_window_space_moving(w.cocoa) != 0) {
+            if (!macos_frame_transaction) {
+                fizzy_native_transaction_begin();
+                macos_frame_transaction = true;
+            }
+            fizzy_native_viewport_transact(w.cocoa);
+            w.transacted = true;
+        }
+        fizzy_macos_window_space_step(w.cocoa);
         if (!macosTransitionSyncActive(w)) continue;
         fizzy_macos_window_sync_content_views(w.cocoa);
         macosSyncRendererSize(w, true);
@@ -305,6 +369,7 @@ pub fn install(win: *dvui.Window) void {
     const cocoa = cocoaWindowOf(back.window) orelse return;
     macos_monitor_window = back.window;
     back.begin_hook = macosAppPreBeginSync;
+    back.present_hook = macosAppPresented;
     addWatched(.{ .window = back.window, .cocoa = cocoa, .follow_position = false });
     fizzy_macos_window_install_resize_observer(cocoa);
     // Draw each step of a live resize from inside it, presented with the Core Animation

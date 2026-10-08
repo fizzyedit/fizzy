@@ -4230,7 +4230,7 @@ test "drop: a place with room for the wheel keeps it" {
     // Small but not skinny: a strip would be smaller still.
     try std.testing.expectEqual(@as(f32, 0), DZ.wheel(.{ .x = 0, .y = 0, .w = 200, .h = 200 }, 1, true).strip);
     // Narrow, but a wheel there is all but as big as a strip would be.
-    const near = DZ.wheel(.{ .x = 0, .y = 0, .w = 310, .h = 1000 }, 1, true);
+    const near = DZ.wheel(.{ .x = 0, .y = 0, .w = 340, .h = 1000 }, 1, true);
     try std.testing.expectEqual(@as(f32, 0), near.strip);
     try std.testing.expect(near.shaped(1, .vertical).unit > near.unit);
 }
@@ -4336,9 +4336,10 @@ test "drop: a place's drop sits in the part of it no window lies over, where it 
 }
 
 test "drop: settled, as a wheel or a strip, no two bubbles are near enough to run together" {
-    // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum): at
-    // rest each zone is a bubble of its own, whichever the shape and the way it runs, with the
-    // trash and without. On the way from one shape to the other they may run together.
+    // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum, and the
+    // OS's glass container alike): at rest each zone is a bubble of its own, whichever the shape
+    // and the way it runs, with the trash and without. On the way from one shape to the other, and
+    // swollen while the carried view is aimed at one, they may run together.
     const room = DZ.wheel(.{ .x = 0, .y = 0, .w = 1e5, .h = 1e5 }, 1, true);
     try std.testing.expectEqual(@as(f32, 1), room.unit);
     for ([_]bool{ true, false }) |remove| for ([_]dvui.enums.Direction{ .horizontal, .vertical }) |dir| for ([_]f32{ 0, 1 }) |strip| {
@@ -4353,6 +4354,33 @@ test "drop: settled, as a wheel or a strip, no two bubbles are near enough to ru
             const d = @sqrt((p.c.x - q.c.x) * (p.c.x - q.c.x) + (p.c.y - q.c.y) * (p.c.y - q.c.y));
             try std.testing.expect(d - p.r - q.r > DZ.merge / 2);
         };
+    };
+}
+
+test "drop: aimed at, a bubble swells into one beside it, overlapping none, and the trash joins none" {
+    // The bubble the carried view is aimed at grows by `join_swell` — the trash keeps its size:
+    // swollen, it runs into at least one bubble beside it and overlaps none, and the trash stays a
+    // drop of its own.
+    const room = DZ.wheel(.{ .x = 0, .y = 0, .w = 1e5, .h = 1e5 }, 1, true);
+    for ([_]dvui.enums.Direction{ .horizontal, .vertical }) |dir| for ([_]f32{ 0, 1 }) |strip| {
+        const w = room.shaped(strip, dir);
+        for (DZ.all, 0..) |aimed, ai| {
+            if (aimed == .remove) continue;
+            var joins = false;
+            for (DZ.all, 0..) |a, i| for (DZ.all[i + 1 ..], i + 1..) |b, j| {
+                const p = w.bubble(a);
+                const q = w.bubble(b);
+                const pr = p.r * (if (i == ai) 1 + DZ.join_swell else 1);
+                const qr = q.r * (if (j == ai) 1 + DZ.join_swell else 1);
+                const d = @sqrt((p.c.x - q.c.x) * (p.c.x - q.c.x) + (p.c.y - q.c.y) * (p.c.y - q.c.y));
+                const gap = d - pr - qr;
+                try std.testing.expect(gap > 0);
+                if (a == .remove or b == .remove) {
+                    try std.testing.expect(gap > DZ.merge / 2);
+                } else if ((i == ai or j == ai) and gap < DZ.merge / 2) joins = true;
+            };
+            try std.testing.expect(joins);
+        }
     };
 }
 
@@ -5141,6 +5169,31 @@ test "float: closing it sends its view home" {
     try std.testing.expect(holds(case.shows("Panel"), "test.output"));
     try std.testing.expect(editor.app.layout.assignment("Panel") == null);
     try std.testing.expect(editor.app.layout.assignment("Float 1") == null);
+}
+
+test "float: closing it loses no view its keywords would show nowhere" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    // A view whose keywords no place answers — a plugin's tools, merged into a float that came out
+    // of the panel its keywords fill.
+    try editor.app.host.registerSurface(.{ .id = "test.tools", .title = "Tools", .keywords = &.{"tools"}, .draw = ManyPanelFrame.draw });
+    try case.place("Panel", "Panel", .swap);
+    try editor.app.layout.assign(editor.app.gpa, "Float 1", &.{ "test.output", "test.tools" });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 2), case.shows("Float 1").len);
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    layout.closeFloat("Float 1");
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+    // Both back in the main window: Output where its keywords show it, Tools beside it in the
+    // place the float came out of, rather than let go to be shown nowhere.
+    const panel = case.shows("Panel");
+    try std.testing.expect(holds(panel, "test.output"));
+    try std.testing.expect(holds(panel, "test.tools"));
 }
 
 test "float: the saved layout brings it back, and Reset Layout takes it away" {

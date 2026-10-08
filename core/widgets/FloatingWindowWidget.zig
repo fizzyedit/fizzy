@@ -139,6 +139,11 @@ pub const InitOptions = struct {
     /// Natural units a `detached` window draws past its own rect: its shadow's reach, which its OS
     /// window holds round it (a clear margin), so it is drawn as it is in the main window.
     detached_reach: f32 = 0,
+    /// Shown in an OS window of its own, where dialogs are (`core.screens.nativeDialogs`): marked
+    /// for the app to take its drawing there (`core.screens.markDialog`), and drawn with none of the
+    /// dimming, frost, shadow or fill a window inside the main one has — its OS window wears the
+    /// OS's material and shadow, and the main window stays as it is beside it.
+    native: bool = false,
     window_avoid: enum {
         none,
 
@@ -190,6 +195,8 @@ prev_rendering: bool = undefined,
 /// Window alpha before the close-flight fade replaced it, restored in `deinit`. Null while no
 /// close animation is running, which is every frame of a window's normal life.
 prev_alpha: ?f32 = null,
+/// How far a `native` window has faded along its close flight, for its OS window to fade with it.
+native_alpha: f32 = 1,
 wd: WidgetData,
 init_options: InitOptions,
 /// options is for our embedded BoxWidget
@@ -395,7 +402,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             self.auto_size_refresh_prev_value = dvui.currentWindow().extra_frames_needed;
             dvui.currentWindow().extra_frames_needed = 0;
 
-            const ms = Size.min(Size.max(min_size, self.options.min_sizeGet()), .cast(screens.screenFor(.cast(self.wd.rect)).size()));
+            const ms = Size.min(Size.max(min_size, self.options.min_sizeGet()), .cast(self.keptOn().size()));
 
             if (self.init_options.auto_size_axes.animatesWidth() and ms.w != self.wd.rect.w) {
                 if (dvui.animationGet(self.wd.id, "_auto_width")) |a| {
@@ -492,7 +499,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
         // always make sure we are on the screen — the one it is on (`core.screens`: the main
         // window's, or a popped-out float's), unless it has a window of its own
         if (!self.init_options.detached) {
-            var screen = screens.screenFor(.cast(self.wd.rect));
+            var screen = self.keptOn();
             // okay if we are off the left or right but still see some
             const offleft = self.wd.rect.w - 48;
             screen.x -= offleft;
@@ -571,6 +578,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             // opacity loss in the final moments and lands on zero exactly at the destination.
             const t = std.math.clamp((travelled - 0.55) / 0.45, 0, 1);
             self.prev_alpha = dvui.alpha(1 - t * t);
+            self.native_alpha = 1 - t * t;
         }
     }
 
@@ -583,10 +591,18 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
     }
 }
 
+/// The screen the window is kept on and sized to (`core.screens`): its window's own, for one in an
+/// OS window of its own (`native`, `screens.dialogScreenFor`).
+fn keptOn(self: *FloatingWindowWidget) dvui.Rect.Natural {
+    if (self.init_options.native) return screens.dialogScreenFor(.cast(self.wd.rect));
+    return screens.screenFor(.cast(self.wd.rect));
+}
+
 /// The OS window the window is drawn in, physical: the screen it is on (`core.screens`: the main
 /// window's, or a popped-out float's — a popover or dialog opened in it), or — `detached` — the
 /// window's own rect, which is all of its OS window there is.
 fn windowClip(self: *FloatingWindowWidget) Rect.Physical {
+    if (self.init_options.native) return screens.dialogPixelsFor(.cast(self.data().rect));
     if (self.init_options.detached) {
         const rs = self.data().rectScale();
         return rs.r.outsetAll(self.init_options.detached_reach * rs.s);
@@ -598,8 +614,10 @@ pub fn drawBackground(self: *FloatingWindowWidget) void {
     const rs = self.data().rectScale();
     dvui.subwindowAdd(self.data().id, self.data().rect, rs.r, self.init_options.modal, if (self.init_options.stay_above_parent_window) self.prev_windowInfo.id else null, true);
     dvui.captureMouseMaintain(.{ .id = self.data().id, .rect = rs.r, .subwindow_id = self.data().id });
+    const native = self.init_options.native;
+    if (native) screens.markDialog(self.data().id, self.options.cornersGet().finalize(self.options.themeGet()).tl.radius(), self.native_alpha);
 
-    if (self.init_options.modal and !dvui.firstFrame(self.data().id)) {
+    if (self.init_options.modal and !native and !dvui.firstFrame(self.data().id)) {
         // paint over everything below
         var col = self.options.color(.text).toColor();
         col.a = self.init_options.modal_alpha orelse (if (dvui.themeGet().dark) 60 else 80);
@@ -615,9 +633,10 @@ pub fn drawBackground(self: *FloatingWindowWidget) void {
     // window's own interior too; drawn after the frost (as `borderAndBackground` would) it laid
     // its black over the glass. The frost replaces what is under the window, so a shadow drawn
     // first survives only outside it — where a shadow belongs.
-    if (self.init_options.frost != null) box_opts.box_shadow = null;
+    if (self.init_options.frost != null or native) box_opts.box_shadow = null;
+    if (native) box_opts.background = false;
     self.layout.init(@src(), .{ .dir = .vertical }, box_opts);
-    if (self.init_options.frost) |frost| {
+    if (if (native) null else self.init_options.frost) |frost| {
         self.drawFrost(frost);
         // The shadow as a ring round the glass, after it, so the glass never blurs it in
         // (`core.dialogs.glassShadow`) — a box shadow under glass darkened its middle and ringed

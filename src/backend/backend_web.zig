@@ -68,6 +68,18 @@ pub fn isMaximized(_: *dvui.Window) bool {
     return true;
 }
 
+pub fn coversDesktop(_: *dvui.Window) bool {
+    return true;
+}
+
+pub fn enteringSpace(_: *dvui.Window) bool {
+    return false;
+}
+
+pub fn spaceFullness(_: *dvui.Window) ?f32 {
+    return null;
+}
+
 pub fn setWindowStyle(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: a browser tab cannot take focus for itself, and the OAuth
@@ -153,12 +165,75 @@ pub const viewports = struct {
     pub fn maximized(_: *const Viewport) bool {
         return false;
     }
+    pub fn coversDesktop(_: *const Viewport) bool {
+        return false;
+    }
+    pub fn enteringSpace(_: *const Viewport) bool {
+        return false;
+    }
+    pub fn spaceFullness(_: *const Viewport) ?f32 {
+        return null;
+    }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
+    pub fn carryLens(_: *Viewport, _: bool) void {}
+    pub fn windowGlass(_: *Viewport, _: WindowGlassLook) bool {
+        return false;
+    }
+    pub fn underMain(_: *Viewport) bool {
+        return false;
+    }
+    pub fn buttonsWidth(_: *Viewport) f32 {
+        return 0;
+    }
     pub fn windowRadius() f32 {
         return 0;
     }
     pub fn openCarry(_: Rect) ?*Viewport {
         return null;
+    }
+    pub const menus = false;
+    pub fn appActive() bool {
+        return true;
+    }
+    pub const Ride = union(enum) { none, main, viewport: *Viewport };
+    pub fn orderAbove(_: *Viewport, _: *Viewport) void {}
+    pub fn lift(_: *Viewport, _: *Viewport) void {}
+    pub fn settle(_: *Viewport) void {}
+    pub fn placeRiding(_: *Viewport, frame: Rect, _: Rect) Rect {
+        return frame;
+    }
+    pub fn openMenu(_: Rect, _: f32, _: Ride, _: bool) ?*Viewport {
+        return null;
+    }
+    pub fn mainOffset(_: *Viewport, _: dvui.Point.Physical) void {}
+    pub const GlassShape = extern struct { x: f64, y: f64, w: f64, h: f64, radius: f64, lit: f64, alpha: f64, frost: f64 };
+    pub fn liquidGlass() bool {
+        return false;
+    }
+    pub fn openOverlay(_: Rect) ?*Viewport {
+        return null;
+    }
+    pub const GlassMaterial = struct { variant: i32, style: i32 };
+    pub const GlassLook = struct {
+        under: GlassMaterial,
+        over: GlassMaterial,
+        over_share: f32,
+        glass: f32 = 1,
+        fill: dvui.Color = .black,
+        fill_opacity: f32 = 0,
+        lit_toward: dvui.Color = .white,
+        lit_amount: f32 = 0,
+        bevel: f32 = 0,
+        bevel_cap: f32 = 0,
+        bevel_clear: f32 = 0,
+        blur: f32 = 0,
+    };
+    pub fn overlayGlass(_: *Viewport, _: []const GlassShape, _: f32, _: GlassLook) void {}
+    pub const OverlayPhoto = struct { rect: Rect, radius: f32, image: Rect, fill: dvui.Color, alpha: f32 = 1, blur: f32 = 0 };
+    pub fn overlayPhotoImage(_: *Viewport, _: ?[]const u8, _: u32, _: u32) void {}
+    pub fn overlayPhoto(_: *Viewport, _: ?OverlayPhoto) void {}
+    pub fn displayInMain() Rect {
+        return .{};
     }
     pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32, app_side: f32 = 0, app_corner: f32 = 0 };
     pub fn hints(_: *Viewport, _: ?Hints) void {}
@@ -192,6 +267,25 @@ pub const viewports = struct {
         return false;
     }
 };
+
+pub const WindowGlassLook = struct {
+    under_variant: i32,
+    under_style: i32,
+    over_variant: i32,
+    over_style: i32,
+    frost: f32,
+    blur: f32,
+    glass: f32,
+    fill: dvui.Color,
+    fill_opacity: f32,
+    top_fill: f32,
+    radius: f32,
+    clear: f32,
+    feather: f32,
+};
+pub fn windowGlass(_: *dvui.Window, _: WindowGlassLook) bool {
+    return false;
+}
 
 pub fn titlebarStripHeight(_: *dvui.Window) f32 {
     return 0;

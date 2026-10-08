@@ -53,6 +53,22 @@ from: dvui.Size.Physical = .{},
 texture: ?dvui.Texture = null,
 /// Where it was taken.
 texture_rect: dvui.Rect.Physical = .{},
+/// Where in it what the view shows is, as shares of its width and height (`contentBox`): the drop
+/// fits its picture to it (`drawDrop`).
+photo_box: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
+/// Its pixels, premultiplied RGBA rows of `photo_size`, kept where the app shows the picture under
+/// the OS's glass (`core.dialogs.carry_windows`) — handed over once, as an image (`photo_gen` new
+/// with each picture) — and freed with the drag (`discard`). Null elsewhere.
+photo_pixels: ?[]dvui.Color.PMA = null,
+photo_size: [2]u32 = .{ 0, 0 },
+photo_gen: u32 = 0,
+/// The drop's picture this frame, handed to the app to draw beneath the OS's glass rather than over
+/// it (`core.native_glass.under`): null when it is drawn here, or not at all.
+photo_under: ?PhotoUnder = null,
+/// Where the whole of the drop's picture lay the last frame it was carried as a drop handed over
+/// (`PhotoUnder.image`), physical; null once it is carried as anything else. A float it is let go
+/// as grows its picture out of there (`Floats.Landing.photo_from`).
+photo_last: ?dvui.Rect.Physical = null,
 start_ns: i128 = 0,
 /// Surface lifted from the source: what the card under the pointer shows, and what lands.
 moved_id: []const u8 = "",
@@ -61,6 +77,9 @@ mode: Mode = .preview,
 morph_from_mode: Mode = .preview,
 /// Not carried as anything yet: what it is first carried as is what was grabbed (`noteMode`).
 lifting: bool = false,
+/// Carried as a drop at some point in this drag: the point it was grabbed by means nothing since,
+/// and a card or a tab after it hangs from the pointer's corner (`drawFloat`).
+been_drop: bool = false,
 /// The carried shape as last drawn, whatever it was drawn as: its rect and corner radius,
 /// physical. A change of what the view is carried as grows the new shape out of this one —
 /// position, size and corners — so the lift from what was grabbed, the tab over a strip and the
@@ -71,21 +90,43 @@ shape_radius: f32 = 0,
 morph_rect: dvui.Rect.Physical = .{},
 morph_radius: f32 = 0,
 card_start_ns: i128 = 0,
-/// The view carried as a drop of glass (`dropShapes`), where the glass program draws: its head
-/// following the pointer and its tail the head, each on a spring, so it stretches as it is
-/// dragged and swings when it stops. This frame's shapes, head then tail.
-drop_head: core.Spring = .{},
-drop_tail: core.Spring = .{},
+/// A loose drag's hold on what it lifted: the middle of what was grabbed, from the pointer, when it
+/// was lifted (`beginLoose`). The card keeps it while it is under the pointer — the face of a row
+/// lifted out of a list stays where it was in the row — and is brought in under the pointer where
+/// it is not (`drawFloat`). dvui's own drag offset is the list's, from a press the lift may have
+/// come long after, and of a rect the card is not.
+grab: dvui.Point.Physical = .{},
+/// Where the hand holds the drop (`holdHand`): the pointer, kept still through a tremble of it.
+/// What the drop rides off and aims with, while it is carried as one; null when it is not.
+hand: ?dvui.Point.Physical = null,
+/// The middle of the bubble the drop is drawn toward (`drop_pull`) — moving onto a bubble newly
+/// aimed at from `aim_from` to `aim_to`, `aim_move` of the way there (`pour`), by time, not by the
+/// hand; null once it is joined to none.
+aim_at: ?dvui.Point.Physical = null,
+aim_from: dvui.Point.Physical = .{},
+aim_to: ?dvui.Point.Physical = null,
+aim_move: f32 = 1,
+/// How far the drop is drawn into the bubble it is aimed at, 0…1 and past 1 as it pours in
+/// (`drop_pull` of the way at 1): from `pull_from` toward `pull_to`, `pull_move` of the way there.
+pull: f32 = 0,
+pull_from: f32 = 0,
+pull_to: f32 = 0,
+pull_move: f32 = 1,
 /// Where the pointer was last frame, for a jump from one window's part of the frame to another's
 /// (`followAcross`).
 last_mouse: ?dvui.Point.Physical = null,
 drop_ns: i128 = 0,
-drop_shapes: [2]core.LiquidField.Shape = undefined,
+/// The view carried as a drop of glass (`dropShapes`), where the glass program draws: one drop,
+/// where the hand holds it. This frame's shapes.
+drop_shapes: [1]core.LiquidField.Shape = undefined,
 drop_n: usize = 0,
 /// The head's corner radius this frame (physical), for the photograph inside it.
 drop_radius: f32 = 0,
 /// Carried by a finger: the drop rides up and left of it, where the finger does not cover it.
 drop_touch: bool = false,
+/// How far the drop is joined to the bubble it is aimed at, 0…1, eased: its photograph fades by
+/// `aim_fade` of it (`drawDrop`).
+drop_aim: f32 = 0,
 
 /// The places this drag can land on, and where they were, frozen at lift.
 targets: [max_targets]Target = undefined,
@@ -418,6 +459,7 @@ pub fn discard(self: *ViewDrag) void {
     // Destroyed with a frame, and only in one: discarded at teardown (quitting mid-drag) there is
     // no window, and the GPU goes with the process.
     if (self.texture) |tex| if (dvui.current_window != null) dvui.Texture.destroyLater(tex);
+    self.forgetPixels();
     // The drops still showing outlive the drag: they run back together where they were drawn
     // (`drawOverlay`), whatever the drop has just done to their places.
     const finishing = self.last_pending;
@@ -429,10 +471,157 @@ pub fn discard(self: *ViewDrag) void {
 
 pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
     pic.stop();
+    self.photo_box = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    self.forgetPixels();
+    if (dvui.Texture.readTarget(dvui.currentWindow().arena(), pic.texture)) |px| {
+        const w = pic.texture.width;
+        const h = pic.texture.height;
+        self.photo_box = contentBox(px, w, h);
+        // What the drop shows of it, closer where it is too wide to read shrunk into the drop.
+        self.photo_box = focusBox(dvui.currentWindow().arena(), px, w, h, self.photo_box, 2 * drop_r * dvui.currentWindow().natural_scale * std.math.sqrt1_2);
+        if (core.dialogs.carry_windows and px.len >= @as(usize, w) * h) {
+            if (std.heap.page_allocator.dupe(dvui.Color.PMA, px[0 .. @as(usize, w) * h])) |kept| {
+                self.photo_pixels = kept;
+                self.photo_size = .{ w, h };
+                self.photo_gen +%= 1;
+                if (self.photo_gen == 0) self.photo_gen = 1;
+            } else |_| {}
+        }
+    } else |_| {}
     const tex = dvui.textureFromTarget(pic.texture) catch return;
     if (self.texture) |old| dvui.Texture.destroyLater(old);
     self.texture = tex;
     self.texture_rect = pic.r;
+}
+
+fn forgetPixels(self: *ViewDrag) void {
+    if (self.photo_pixels) |px| std.heap.page_allocator.free(px);
+    self.photo_pixels = null;
+}
+
+/// The carried view's picture under the OS's glass (`ViewDrag.photo_under`): where its head is in
+/// the frame, its corners, how much of it shows, and where the whole picture lies (`photoFit`),
+/// physical — past the head, cut off there.
+pub const PhotoUnder = struct {
+    rect: dvui.Rect.Physical,
+    radius: f32,
+    alpha: f32,
+    image: dvui.Rect.Physical,
+};
+
+/// Where in the captured view what it shows is, as shares of the picture's width and height: the
+/// box round everything it drew, read once from the capture's pixels at lift — a capture of the
+/// view alone is clear wherever it draws nothing. A drop showed the middle of its picture, and
+/// Files, whose rows are at its top, showed nothing (the user). The whole where nothing could be
+/// read.
+fn contentBox(px: []const dvui.Color.PMA, w_: u32, h_: u32) dvui.Rect {
+    const whole: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    const w: usize = w_;
+    const h: usize = h_;
+    if (w == 0 or h == 0 or px.len < w * h) return whole;
+    const step = @max(1, @min(w, h) / 160);
+    var lo_x = w;
+    var lo_y = h;
+    var hi_x: usize = 0;
+    var hi_y: usize = 0;
+    var y: usize = 0;
+    while (y < h) : (y += step) {
+        var x: usize = 0;
+        while (x < w) : (x += step) {
+            if (px[y * w + x].a < 24) continue;
+            lo_x = @min(lo_x, x);
+            lo_y = @min(lo_y, y);
+            hi_x = @max(hi_x, x);
+            hi_y = @max(hi_y, y);
+        }
+    }
+    if (hi_x < lo_x or hi_y < lo_y) return whole;
+    const fw: f32 = @floatFromInt(w);
+    const fh: f32 = @floatFromInt(h);
+    const x0: f32 = @floatFromInt(lo_x);
+    const y0: f32 = @floatFromInt(lo_y);
+    const x1: f32 = @floatFromInt(@min(w, hi_x + step));
+    const y1: f32 = @floatFromInt(@min(h, hi_y + step));
+    return .{ .x = x0 / fw, .y = y0 / fh, .w = (x1 - x0) / fw, .h = (y1 - y0) / fh };
+}
+
+/// The least a drop shrinks the carried view's picture by, picture pixels to the drop's: past it,
+/// its text could not be read, and what was dragged could not be told (the user).
+const photo_zoom_least: f32 = 0.6;
+
+/// What of the carried view's picture its drop shows (`photoFit`), as shares of the picture: what
+/// the view shows (`box`, `contentBox`), where that is narrow enough to read shrunk into the square
+/// inside the round drop (`side`, physical) — and where it is not, the square of it that reads at
+/// `photo_zoom_least` with the most drawn in it: of those with nearly the most, the highest and
+/// then the furthest left, as a view reads — its heading and first rows, an editor's first lines,
+/// the middle of a canvas, rather than the whole of it too small to make out. Graded once, at
+/// lift, on a coarse grid of how much each part of the picture draws.
+fn focusBox(arena: std.mem.Allocator, px: []const dvui.Color.PMA, w_: u32, h_: u32, box: dvui.Rect, side: f32) dvui.Rect {
+    const w: usize = w_;
+    const h: usize = h_;
+    if (w == 0 or h == 0 or px.len < w * h or side <= 0) return box;
+    const fw: f32 = @floatFromInt(w);
+    const fh: f32 = @floatFromInt(h);
+    const reach = side / photo_zoom_least;
+    if (box.w * fw <= reach) return box;
+    // Cells about a twenty-fourth of the square across, summed so any square's count is four reads.
+    const cell: usize = @max(4, @as(usize, @intFromFloat(@ceil(reach / 24))));
+    const gw = (w + cell - 1) / cell;
+    const gh = (h + cell - 1) / cell;
+    const sums = arena.alloc(u32, (gw + 1) * (gh + 1)) catch return box;
+    @memset(sums, 0);
+    const step = @max(1, cell / 4);
+    for (0..gh) |gy| for (0..gw) |gx| {
+        var n: u32 = 0;
+        var y = gy * cell;
+        while (y < @min(h, (gy + 1) * cell)) : (y += step) {
+            var x = gx * cell;
+            while (x < @min(w, (gx + 1) * cell)) : (x += step) {
+                if (px[y * w + x].a >= 24) n += 1;
+            }
+        }
+        sums[(gy + 1) * (gw + 1) + gx + 1] = n + sums[gy * (gw + 1) + gx + 1] + sums[(gy + 1) * (gw + 1) + gx] - sums[gy * (gw + 1) + gx];
+    };
+    const span = @min(@max(1, @as(usize, @intFromFloat(@round(reach / @as(f32, @floatFromInt(cell)))))), @min(gw, gh));
+    // Within what the view shows.
+    const x0: usize = @min(gw - span, @as(usize, @intFromFloat(box.x * fw)) / cell);
+    const y0: usize = @min(gh - span, @as(usize, @intFromFloat(box.y * fh)) / cell);
+    const x1: usize = @max(x0, @min(gw - span, @as(usize, @intFromFloat((box.x + box.w) * fw)) / cell -| span + 1));
+    const y1: usize = @max(y0, @min(gh - span, @as(usize, @intFromFloat((box.y + box.h) * fh)) / cell -| span + 1));
+    const Sum = struct {
+        fn at(t: []const u32, stride: usize, gx: usize, gy: usize, n: usize) u32 {
+            return t[(gy + n) * stride + gx + n] + t[gy * stride + gx] - t[gy * stride + gx + n] - t[(gy + n) * stride + gx];
+        }
+    };
+    var most: u32 = 0;
+    for (y0..y1 + 1) |gy| for (x0..x1 + 1) |gx| {
+        most = @max(most, Sum.at(sums, gw + 1, gx, gy, span));
+    };
+    if (most == 0) return box;
+    const enough = most - most / 5;
+    for (y0..y1 + 1) |gy| for (x0..x1 + 1) |gx| {
+        if (Sum.at(sums, gw + 1, gx, gy, span) < enough) continue;
+        const c: f32 = @floatFromInt(cell);
+        const n: f32 = @floatFromInt(span);
+        return .{ .x = @as(f32, @floatFromInt(gx)) * c / fw, .y = @as(f32, @floatFromInt(gy)) * c / fh, .w = n * c / fw, .h = n * c / fh };
+    };
+    return box;
+}
+
+/// Where the whole of the carried view's picture lies for a drop's head `r` (physical): what it
+/// shows (`photo_box`) as wide as the square inside the round head, its top at that square's top
+/// and its middle on the head's — Files' rows across the head from its top rather than a strip of
+/// them lost in its middle (the user). Never larger than it was taken. Past the head, it is cut
+/// off there.
+fn photoFit(d: ViewDrag, r: dvui.Rect.Physical) dvui.Rect.Physical {
+    const tw = d.texture_rect.w;
+    const th = d.texture_rect.h;
+    const box = d.photo_box;
+    const side = @min(r.w, r.h) * std.math.sqrt1_2;
+    const scale = @min(1, side / @max(1, box.w * tw));
+    const w = tw * scale;
+    const h = th * scale;
+    return .{ .x = r.x + r.w / 2 - (box.x + box.w / 2) * w, .y = r.y + (r.h - side) / 2 - box.y * h, .w = w, .h = h };
 }
 
 /// What photograph this place owes the drag this frame.
@@ -464,8 +653,14 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     if (shot.card) {
         d.takePicture(pic);
         if (d.texture) |tex| {
-            core.anim.blit(tex, null, d.texture_rect, 0, 1);
-            d.texture = backed(tex, d.texture_rect);
+            // Over what the frame already has under the place, as its draw would have gone: the
+            // capture is clear where the place draws nothing — the window's base shows there — and
+            // put back as a dissolve (`blit`) it replaced that base with nothing, the window
+            // see-through under the place for the frame it was lifted on.
+            core.anim.blitOpaque(tex, null, d.texture_rect, 0, 1);
+            // Carried in a window of its own, it is the view's content over that window's
+            // material, which shows through between: not laid over an opaque fill.
+            if (!core.dialogs.carry_windows) d.texture = backed(tex, d.texture_rect);
         }
         return;
     }
@@ -478,6 +673,10 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
 /// place flashed dark for the frame it was lifted on. False where there is no last frame to copy
 /// (`FrameTarget.snapshot`: no targets, or a web frame nothing read); the caller captures then.
 pub fn photographFromFrame(l: *Layout, rect: dvui.Rect.Physical) bool {
+    // The frame as drawn has the place's background in it, and the window's under that: carried in
+    // a window of its own, the view is captured alone instead (`keepShot`), its content over that
+    // window's material. A frosted pane in it draws dark in that capture.
+    if (core.dialogs.carry_windows) return false;
     const d = &l.state.view_drag;
     const r = rect.intersect(dvui.windowRectPixels());
     const tex = core.FrameTarget.snapshot(r) orelse return false;
@@ -511,8 +710,12 @@ fn backed(tex: dvui.Texture, r: dvui.Rect.Physical) dvui.Texture {
 /// Begin carrying the view out of `name`. The place keeps drawing it throughout.
 pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dvui.Rect.Physical) void {
     var d = &l.state.view_drag;
-    d.drop_head = .{};
-    d.drop_tail = .{};
+    d.hand = null;
+    d.aim_at = null;
+    d.aim_to = null;
+    d.pull = 0;
+    d.pull_to = 0;
+    d.pull_move = 1;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -544,6 +747,7 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
     d.morph_radius = radius;
     d.card_start_ns = d.start_ns;
     d.lifting = true;
+    d.been_drop = false;
 }
 
 /// Begin carrying surface `id` from the picker, or from a plugin's own list (`Host.beginViewDrag`):
@@ -553,8 +757,12 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
 /// caller hands over (`State.stealSnapshot`) and the drag destroys.
 pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
     var d = &l.state.view_drag;
-    d.drop_head = .{};
-    d.drop_tail = .{};
+    d.hand = null;
+    d.aim_at = null;
+    d.aim_to = null;
+    d.pull = 0;
+    d.pull_to = 0;
+    d.pull_move = 1;
     d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
@@ -565,6 +773,8 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.name = loose_source;
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
+    const mouse = dvui.currentWindow().mouse_pt;
+    d.grab = .{ .x = from.x + from.w / 2 - mouse.x, .y = from.y + from.h / 2 - mouse.y };
     liftShape(d, from);
     d.moved_id = moved;
     d.texture = texture;
@@ -619,12 +829,17 @@ fn mapOccluders(l: *Layout, d: *ViewDrag) void {
         d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header, .source = carriedOutOf(l, f.name) };
         // In an OS window of its own: where that window lies over the main window's places, and
         // where the float is drawn in its band besides (`Occluder.band_bounds`).
+        // Under the main window in the OS's stacking (`Floats.Viewport.under_main`), it covers
+        // nothing of it: read there it is the main window's places, whole — where its window
+        // still shows, past the main window's edge, it is read in its band as ever. Taken as over
+        // it, a float clicked behind the main window cut its places' drops down to the strip
+        // beside it (the user).
         if (f.viewport) |vp| {
             const o = &d.occluders[d.occluder_count];
             o.band_bounds = f.bounds;
             o.band_header = f.header;
-            o.bounds = f.bounds.offsetPoint(vp.main_delta);
-            o.header = f.header.offsetPoint(vp.main_delta);
+            o.bounds = if (vp.under_main) .{} else f.bounds.offsetPoint(vp.main_delta);
+            o.header = if (vp.under_main) .{} else f.header.offsetPoint(vp.main_delta);
         }
         d.occluder_count += 1;
     }
@@ -673,15 +888,43 @@ pub fn aim(l: *Layout) Aim {
 
 /// `aim` for the pointer at `mouse` — a release's own point.
 pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
+    const d = &l.state.view_drag;
+    if (d.active() and carriedAsDrop(l.state, mouse)) _ = holdHand(d, mouse);
     return aimAt(l.state, mouse);
 }
 
+/// A drop aims from where the hand holds it (`holdHand`), so the bubble it is aimed at does not
+/// change under a trembling hand either.
 fn aimAt(state: *const Layout.State, mouse: dvui.Point.Physical) Aim {
     const d = &state.view_drag;
     const cw = dvui.currentWindow();
     if (!d.active() or !carriedAsDrop(state, mouse)) return .{ .p = mouse };
     const R = drop_r * cw.natural_scale;
-    return .{ .p = dropCenter(mouse, R, d.drop_touch), .r = R };
+    return .{ .p = dropCenter(d.hand orelse mouse, R, d.drop_touch), .r = R };
+}
+
+/// Points the pointer moves before the drop does (`holdHand`).
+const hand_still: f32 = 3;
+
+/// Where the hand holds the drop, the pointer at `mouse`: where it was, until the pointer is more
+/// than `hand_still` from it, and then dragged along behind the pointer at that distance. A hand
+/// holding a press still trembles, and the drop moved with each tremble: joined to a bubble, the
+/// OS re-formed the join each frame, and it shimmered (the user). Nothing eases or swings — it
+/// moves only as far as the hand does, and at once. Called as often as a frame likes: the same
+/// pointer leaves it where it is.
+fn holdHand(d: *ViewDrag, mouse: dvui.Point.Physical) dvui.Point.Physical {
+    const still = hand_still * dvui.currentWindow().natural_scale;
+    const h = d.hand orelse {
+        d.hand = mouse;
+        return mouse;
+    };
+    const dx = mouse.x - h.x;
+    const dy = mouse.y - h.y;
+    const dist = @sqrt(dx * dx + dy * dy);
+    if (dist <= still) return h;
+    const k = (dist - still) / dist;
+    d.hand = .{ .x = h.x + dx * k, .y = h.y + dy * k };
+    return d.hand.?;
 }
 
 /// Whether the view is carried as a drop of glass at `mouse`: where the glass program draws, with
@@ -783,8 +1026,10 @@ pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physi
 
 /// The least share of the size it would have with no ghost there that a drop shrinks to, to stay
 /// clear of the ghost of the float the view is carried out of (`zoneBounds`); any smaller, and it
-/// keeps that size, under the ghost.
-pub const ghost_min_share: f32 = 0.75;
+/// keeps that size, under the ghost. Two thirds or so: the drop's bubbles rest apart now, and the
+/// wider wheel shrinks further to fit beside a ghost — at three quarters, chosen for the narrower
+/// one, it sat under the ghost where it had fitted beside it.
+pub const ghost_min_share: f32 = 0.65;
 
 /// `zoneBounds` with the float the view is carried out of covering (`ghost`) or not.
 fn zoneBoundsAs(state: *const Layout.State, name: []const u8, ghost: bool) ?dvui.Rect.Physical {
@@ -1074,22 +1319,13 @@ pub fn drawOverlay(l: *Layout) void {
     // Nothing to lay over the window.
     if (n == 0 and !d.active()) return;
     var layer: dvui.FloatingWidget = undefined;
-    layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
+    layerOver(&layer, @src());
     defer layer.deinit();
-    // Over every float. A floating widget stays just above the window it was made in — this one
-    // the app's own, which every float is over, so the drops on a float's place and the view
-    // carried over a float were drawn under its glass — and is re-added as a window of its own
-    // and raised, as the demo overlay's layers are (`automation/overlay.zig`). It takes no pointer
-    // events: what is under it still takes them, the drag's hold on the pointer included.
-    const wd = layer.data();
-    dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
-    dvui.raiseSubwindow(wd.id);
     // On every screen (`core.screens`): a place in a float popped out into its own window has
     // its drop drawn here, at that window's part of the frame, and so does the carried view
     // when the pointer is there — clipped to the main window, both were dropped as they were
     // drawn, and the app copies this layer into every such window as well as the main one.
-    core.screens.markEverywhere(wd.id);
-    dvui.clipSet(core.screens.allPixels());
+    core.screens.markEverywhere(layer.data().id);
     // The drops, then the card over them: one layer, so their order is the order drawn — the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
     // pointer so the bubble under the pointer stays in view.
@@ -1104,23 +1340,64 @@ pub fn drawOverlay(l: *Layout) void {
     for (drops[0..n], 0..) |p, i| {
         var look = p.look;
         const over = p.look.target and p.clip.contains(mouse);
-        if (!taken and over) look.carried = carried;
+        // In a window of its own, the view is not the app's glass to run in with the drop's: the
+        // bubble it is aimed at lights, as one under a pointer does (`ownWindowLayer`).
+        if (!taken and over and !core.dialogs.carry_windows) look.carried = carried;
         // The icons go over the carried view, which is laid on the drop after it: the bubble it
-        // is about to be dropped in says what it does through it.
-        if (d.active()) look.icons = .later;
+        // is about to be dropped in says what it does through it. Where the OS draws the glass,
+        // over its glass too — after the drag as well, while the drops go (below).
+        if (d.active() or core.native_glass.on()) look.icons = .later;
         // Carrying the view, the drop is not held to its place: the carried drop reaches past it.
         clips[i] = if (look.carried.len > 0) prev_clip else p.clip;
         dvui.clipSet(clips[i]);
         if (DropZones.draw(p.key, p.wheel, scale, look) and look.carried.len > 0) taken = true;
     }
     dvui.clipSet(prev_clip);
-    if (!d.active()) return;
-    drawFloat(l, taken);
+    const native = core.native_glass.on();
+    if (!d.active() and !native) return;
+    if (d.active()) drawFloat(l, taken);
+    // Where the OS draws the glass (`core.native_glass`), its glass is over everything the app's
+    // windows draw: the icons go in a layer of their own that its overlay takes, over its glass, as
+    // it takes the carried view (`core.screens.markCarried`). Under it they were seen only
+    // through the glass, blurred.
+    var icon_layer: dvui.FloatingWidget = undefined;
+    if (native) {
+        layerOver(&icon_layer, @src());
+        core.screens.markCarried(icon_layer.data().id);
+    }
+    defer if (native) icon_layer.deinit();
     for (drops[0..n], clips[0..n]) |p, clip| {
         dvui.clipSet(clip);
         DropZones.drawIcons(p.key, scale);
     }
     dvui.clipSet(prev_clip);
+}
+
+/// A layer of the drag's over every float, drawn on every screen (`core.screens.allPixels`). A
+/// floating widget stays just above the window it was made in — this one the app's own, which every
+/// float is over, so the drops on a float's place and the view carried over a float were drawn under
+/// its glass — and is re-added as a window of its own and raised, as the demo overlay's layers are
+/// (`automation/overlay.zig`). It takes no pointer events: what is under it still takes them, the
+/// drag's hold on the pointer included.
+fn layerOver(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) void {
+    layer.init(src, .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
+    const wd = layer.data();
+    dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
+    dvui.raiseSubwindow(wd.id);
+    dvui.clipSet(core.screens.allPixels());
+}
+
+/// Where carried things are windows of their own (`core.dialogs.carry_windows`: fizzy's carry
+/// window), what is carried — a card, a tab, a drop — is drawn in a layer of its own that only its
+/// window draws (`core.screens.markCarried`): the window is all of it, the OS's material its
+/// glass, and nothing in the app's own windows follows it. A copy there — its glass, a drop's tail,
+/// the drop it ran into — was drawn at another moment than the window server moved the window, and
+/// trailed behind it. Whether it is; the layer is the caller's to `deinit` then.
+fn ownWindowLayer(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) bool {
+    if (!core.dialogs.carry_windows) return false;
+    layerOver(layer, src);
+    core.screens.markCarried(layer.data().id);
+    return true;
 }
 
 /// A drop coming in where another is going — the place the view is aimed at now lying under the
@@ -1153,13 +1430,21 @@ fn handOffDrops(drops: []PendingDrop) usize {
     return n;
 }
 
-/// Points: the radius of the view carried as a drop — the drop zones' middle bubble's, so what is
-/// carried reads as big as where it goes, and is still seen beside a finger — and its tail's share
-/// of it.
+/// Points: the radius of the view carried as a drop — near the drop zones' middle bubble's (a
+/// quarter under it), so what is carried reads about as big as where it goes, and is still seen
+/// beside a finger.
 const drop_r: f32 = 52;
-const drop_tail_share: f32 = 0.62;
+
 /// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
-const drop_pull: f32 = 0.45;
+const drop_pull: f32 = 0.55;
+
+/// Before it is aimed at one, the drop leans toward the nearest bubble of the place under the
+/// pointer as it comes within `lean_reach` points of it, edge to edge — up to `drop_lean` of the
+/// way there as they touch — so it is drawn in from a little way off rather than only once it is
+/// on the bubble (the user: more attraction near the bubbles). Where the hand holds it decides it
+/// (`holdHand`), nothing else: nothing eases or swings.
+const drop_lean: f32 = 0.22;
+const lean_reach: f32 = 56;
 
 /// The farthest the pointer moves in a frame within one window's part of the frame, physical
 /// pixels: past it, it went from one window to another — a float out of the main window is drawn
@@ -1167,8 +1452,8 @@ const drop_pull: f32 = 0.45;
 const across_jump: f32 = 30000;
 
 /// The pointer gone from one window's part of the frame to another's in one frame — out of a
-/// float's window over the main window, or back — the carried view goes with it as it is: its
-/// springs and the shape it is changing from move by the same jump. Left, they swept back across
+/// float's window over the main window, or back — the carried view goes with it as it is: where
+/// the hand holds it and the shape it is changing from move by the same jump. Left, they swept back across
 /// the band and the view showed for a frame or two in the window it had left.
 fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
     defer d.last_mouse = mouse;
@@ -1176,9 +1461,13 @@ fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
     const dx = mouse.x - was.x;
     const dy = mouse.y - was.y;
     if (@abs(dx) < across_jump and @abs(dy) < across_jump) return;
-    for ([_]*core.Spring{ &d.drop_head, &d.drop_tail }) |sp| {
-        sp.pos.x += dx;
-        sp.pos.y += dy;
+    if (d.hand) |*h| {
+        h.x += dx;
+        h.y += dy;
+    }
+    if (d.aim_at) |*a| {
+        a.x += dx;
+        a.y += dy;
     }
     d.morph_rect.x += dx;
     d.morph_rect.y += dy;
@@ -1186,7 +1475,7 @@ fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
     d.shape_rect.y += dy;
 }
 
-/// The view carried as a drop this frame — its head and tail, stepped on their springs — or none
+/// The view carried as a drop this frame, where the hand holds it (`holdHand`) — or none
 /// where it is carried as a card (`drawFloat`): no glass program, no photograph, or over a list.
 fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.Shape {
     const d = &l.state.view_drag;
@@ -1197,8 +1486,13 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     noteMode(d, modeAt(l, mouse), now);
     if (d.mode != .drop) {
         d.drop_ns = 0;
-        d.drop_head = .{};
-        d.drop_tail = .{};
+        d.hand = null;
+        d.aim_at = null;
+        d.aim_to = null;
+        d.pull = 0;
+        d.pull_to = 0;
+        d.pull_move = 1;
+        d.drop_aim = 0;
         return d.drop_shapes[0..0];
     }
     const scale = cw.natural_scale;
@@ -1214,45 +1508,101 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         },
         else => {},
     };
-    // Off the pointer, so the bubble under it stays in view — below and right of a mouse; up and
-    // left of a finger, the finger at the drop's bottom-right corner, where the hand holding it
-    // covers none of it — and drawn toward the bubble it is aimed at, far enough that the two
-    // run together.
-    var target = dropCenter(mouse, R, d.drop_touch);
+    // Off where the hand holds it (`holdHand`), so the bubble under the pointer stays in view —
+    // below and right of a mouse; up and left of a finger, the finger at the drop's bottom-right
+    // corner, where the hand holding it covers none of it.
+    const at = dropCenter(holdHand(d, mouse), R, d.drop_touch);
+    // And drawn toward the bubble it is aimed at, far enough that the two run together: by time,
+    // never by the hand — joined, it moves only as the hand does. A bubble newly aimed at is eased
+    // onto, without swinging past it.
+    var aimed: ?dvui.Point.Physical = null;
     for (drops) |p| {
         if (!p.look.target or !p.clip.contains(mouse)) continue;
         const z = p.look.hovered orelse continue;
-        const b = p.wheel.bubble(z);
-        target = .{ .x = target.x + (b.c.x - target.x) * drop_pull, .y = target.y + (b.c.y - target.y) * drop_pull };
+        aimed = p.wheel.bubble(z).c;
     }
-    var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = 0.55 });
-    moving = d.drop_tail.step(d.drop_head.pos, dt, .{ .hz = 4.5, .playful_damping = 0.4 }) or moving;
-    // The tail stays on the drop: pulled out a little way, not off it.
-    const tx = d.drop_tail.pos.x - d.drop_head.pos.x;
-    const ty = d.drop_tail.pos.y - d.drop_head.pos.y;
-    const reach = 1.1 * R;
-    const len = @sqrt(tx * tx + ty * ty);
-    if (len > reach) {
-        d.drop_tail.pos = .{ .x = d.drop_head.pos.x + tx / len * reach, .y = d.drop_head.pos.y + ty / len * reach };
+    const ease = std.math.clamp(dt / aim_s, 0, 1);
+    var moving = false;
+    // Drawn into a bubble newly aimed at, and over to another, as one motion from where it was —
+    // past the bubble and back where motion is playful, as it pours in (`pour`) — and let go
+    // smoothly: by time, so a hand held still sets nothing going (the user: as strong and snappy
+    // as the app's own glass).
+    const pull_want: f32 = if (aimed != null) 1 else 0;
+    if (pull_want != d.pull_to) {
+        d.pull_from = d.pull;
+        d.pull_to = pull_want;
+        d.pull_move = 0;
+    }
+    if (d.pull_move < 1) {
+        d.pull_move = @min(1, d.pull_move + joinStep(dt));
+        moving = true;
+    }
+    const pk = if (d.pull_to > d.pull_from) pour(d.pull_move) else smooth(d.pull_move);
+    d.pull = std.math.lerp(d.pull_from, d.pull_to, pk);
+    if (aimed) |c| {
+        const new = if (d.aim_to) |to| @abs(to.x - c.x) > 1 or @abs(to.y - c.y) > 1 else true;
+        if (new) {
+            d.aim_from = d.aim_at orelse c;
+            d.aim_move = if (d.aim_at == null) 1 else 0;
+            d.aim_to = c;
+        }
+    }
+    if (d.aim_to) |to| {
+        if (d.aim_move < 1) {
+            d.aim_move = @min(1, d.aim_move + joinStep(dt));
+            moving = true;
+        }
+        const k = pour(d.aim_move);
+        d.aim_at = .{ .x = std.math.lerp(d.aim_from.x, to.x, k), .y = std.math.lerp(d.aim_from.y, to.y, k) };
+    }
+    // Joined to a bubble, its photograph fades (`aim_fade`), eased in and out.
+    const aim_want: f32 = if (aimed != null) 1 else 0;
+    d.drop_aim += (aim_want - d.drop_aim) * ease;
+    if (@abs(aim_want - d.drop_aim) < 0.01) d.drop_aim = aim_want;
+    if (d.drop_aim != aim_want) moving = true;
+    if (d.pull_to == 0 and d.pull_move >= 1) {
+        d.aim_at = null;
+        d.aim_to = null;
     }
     if (moving) dvui.refresh(null, @src(), null);
+    // Leaning toward the nearest bubble as it comes near (`drop_lean`), as much less as it is joined
+    // to one; and drawn toward the one it is joined to as much as it is (`drop_pull`).
+    var lean_to: ?dvui.Point.Physical = null;
+    var lean: f32 = 0;
+    for (drops) |p| {
+        if (!p.look.target or !p.clip.contains(mouse)) continue;
+        for (DropZones.all) |z| {
+            if (z == .remove and !p.wheel.remove) continue;
+            const b = p.wheel.bubble(z);
+            const gx = b.c.x - at.x;
+            const gy = b.c.y - at.y;
+            const gap = @sqrt(gx * gx + gy * gy) - R - b.r;
+            const w = std.math.clamp(1 - gap / (lean_reach * scale), 0, 1);
+            if (w > lean) {
+                lean = w;
+                lean_to = b.c;
+            }
+        }
+    }
+    var centre = at;
+    if (lean_to) |t| {
+        const k = drop_lean * lean * lean * (3 - 2 * lean) * (1 - d.drop_aim);
+        centre = .{ .x = at.x + (t.x - at.x) * k, .y = at.y + (t.y - at.y) * k };
+    }
+    const pull = drop_pull * d.pull;
+    if (d.aim_at) |a| centre = .{ .x = centre.x + (a.x - centre.x) * pull, .y = centre.y + (a.y - centre.y) * pull };
 
     // From the shape it was last drawn as — what was grabbed at the lift, the tab it was over a
-    // strip — to the drop, on the card's own curve: that rounded rect closing into a circle round
-    // the head.
+    // strip — to the drop, on the card's own curve: that rounded rect closing into a circle.
     const t = morphProgress(d.*, now);
-    const to: dvui.Rect.Physical = .{ .x = d.drop_head.pos.x - R, .y = d.drop_head.pos.y - R, .w = 2 * R, .h = 2 * R };
+    const grown = std.math.clamp(t, 0, 1);
+    const to: dvui.Rect.Physical = .{ .x = centre.x - R, .y = centre.y - R, .w = 2 * R, .h = 2 * R };
     const head = lerpRect(d.morph_rect, to, t);
-    d.drop_radius = std.math.lerp(d.morph_radius, R, std.math.clamp(t, 0, 1));
+    d.drop_radius = std.math.lerp(d.morph_radius, R, grown);
     d.shape_rect = head;
     d.shape_radius = d.drop_radius;
     d.drop_shapes[0] = .{ .rect = head, .radii = @splat(d.drop_radius), .round = true };
     d.drop_n = 1;
-    const tr = R * drop_tail_share * std.math.clamp(t, 0, 1);
-    if (tr > 1) {
-        d.drop_shapes[1] = core.LiquidField.Shape.circle(d.drop_tail.pos, tr);
-        d.drop_n = 2;
-    }
     return d.drop_shapes[0..d.drop_n];
 }
 
@@ -1270,6 +1620,7 @@ fn modeAt(l: *Layout, mouse: dvui.Point.Physical) Mode {
 fn noteMode(d: *ViewDrag, mode: Mode, now: i128) void {
     const first = d.lifting;
     d.lifting = false;
+    if (mode == .drop) d.been_drop = true;
     if (mode == d.mode) return;
     d.morph_from_mode = if (first) mode else d.mode;
     d.mode = mode;
@@ -1303,11 +1654,21 @@ fn morphProgress(d: ViewDrag, now: i128) f32 {
 fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
-    if (!taken) {
-        // At the merge it is drawn at inside a place's drop (`DropZones.merge`). Its head and tail
-        // overlap, and the join between them swells the outline by up to a quarter of the merge:
-        // drawn alone at a wider one, between two places — over the sash between them — the drop
-        // grew by some 8% of its radius, and shrank back as the pointer reached either side.
+    // In a window of its own (`ownWindowLayer`), its photograph is all the app draws of it. Where
+    // the OS draws the drag's glass (`core.native_glass`), the drop is the OS's, run together with
+    // the bubble it is aimed at.
+    var own_layer: dvui.FloatingWidget = undefined;
+    const own_window = ownWindowLayer(&own_layer, @src());
+    defer if (own_window) own_layer.deinit();
+    if (own_window and core.native_glass.on()) {
+        // Frosted glass as the bubbles are, its picture over the frost (`photo_under`): the drop
+        // matches the bubbles it is carried among and runs into (the user).
+        for (d.drop_shapes[0..d.drop_n]) |sh| core.native_glass.add(.{ .rect = sh.rect, .radius = d.drop_radius });
+    }
+    if (!taken and !own_window) {
+        // At the merge it is drawn at inside a place's drop (`DropZones.merge`): drawn alone at a
+        // wider one, between two places — over the sash between them — the drop grew by some 8% of
+        // its radius, and shrank back as the pointer reached either side.
         var field: core.LiquidField = .{ .merge_px = DropZones.merge * scale };
         for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
         _ = core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
@@ -1317,24 +1678,31 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const pad = card_padding * scale * 0.5;
     const r = head.insetAll(pad);
     if (r.w < 2 or r.h < 2) return;
-    // Cover: the photograph's middle, as much of it as keeps its proportions in the head.
+    // Cover: as much of the photograph as keeps its proportions in the head, round what the view
+    // shows (`photo_box`) rather than its middle.
     const pw = d.texture_rect.w;
     const ph = d.texture_rect.h;
     var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
     if (pw > 0 and ph > 0) {
         const a_img = pw / ph;
         const a_box = r.w / r.h;
-        if (a_img > a_box) {
-            uv.w = a_box / a_img;
-            uv.x = (1 - uv.w) / 2;
-        } else {
-            uv.h = a_img / a_box;
-            uv.y = (1 - uv.h) / 2;
-        }
+        if (a_img > a_box) uv.w = a_box / a_img else uv.h = a_img / a_box;
+        uv.x = std.math.clamp(d.photo_box.x + d.photo_box.w / 2 - uv.w / 2, 0, 1 - uv.w);
+        uv.y = std.math.clamp(d.photo_box.y + d.photo_box.h / 2 - uv.h / 2, 0, 1 - uv.h);
+    }
+    const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
+    // On the OS's glass, where the app hands it over (`core.native_glass.under`) and has its pixels
+    // to: what the view shows, fitted to it (`photoFit`), over the drop's frost — clear what is
+    // carried, and the drop the bubbles' glass (the user).
+    if (own_window and core.native_glass.on() and core.native_glass.under() and d.photo_pixels != null) {
+        d.photo_under = .{ .rect = head, .radius = d.drop_radius, .alpha = shown * (1 - aim_fade_under * d.drop_aim), .image = photoFit(d.*, head) };
+        d.photo_last = d.photo_under.?.image;
+        drawDropLabel(l, head, shown);
+        return;
     }
     const radius = @max(0, d.drop_radius - pad) / scale;
-    const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
-    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity * shown), .uv = uv }) catch {};
+    const photo = photo_opacity * shown * (1 - aim_fade * d.drop_aim);
+    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo), .uv = uv }) catch {};
     drawDropLabel(l, head, shown);
 }
 
@@ -1354,10 +1722,14 @@ const drop_label_drop: f32 = 0.42;
 /// width with an ellipsis. `shown` fades it in with the drop's content.
 fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
     const d = &l.state.view_drag;
-    const title = dropTitle(l, d.*) orelse return;
-    if (title.len == 0 or shown <= 0.01) return;
+    const title_raw = dropTitle(l, d.*) orelse return;
+    if (title_raw.len == 0 or shown <= 0.01) return;
     const hn = head.toNatural();
-    const font = dvui.Font.theme(.body).larger(-2);
+    // As the explorer's headings are (`Chooser.label`): uppercase, in the heading font — in the
+    // window's text colour, not the heading's highlight (the user).
+    var upper: [128]u8 = undefined;
+    const title = if (title_raw.len <= upper.len) std.ascii.upperString(&upper, title_raw) else title_raw;
+    const font = dvui.Font.theme(.heading);
     const line_h = font.lineHeight();
     const max_w = hn.w * 0.72;
     if (max_w < 16) return;
@@ -1421,7 +1793,9 @@ pub fn zonesShowing(l: *Layout, name: []const u8, key: dvui.Id) bool {
 pub fn drawFloat(l: *Layout, taken: bool) void {
     tick(l);
     const d = &l.state.view_drag;
+    d.photo_under = null;
     if (!d.active()) return;
+    if (d.drop_n == 0) d.photo_last = null;
     if (d.drop_n > 0) {
         drawDrop(l, taken);
         // Frames while it is still turning from what was grabbed into the drop.
@@ -1454,8 +1828,23 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     // shows — so what the tab was held by is still under the pointer, and the card grows away
     // from the place it is aimed at rather than over it. Pulled in only as far as keeps the
     // pointer on the card: a place grabbed far from its corner shrinks to a card far smaller.
+    // Once it has been a drop, the grab point is long gone: the card hangs down and right from the
+    // pointer, just inside its top left, as the drop did — kept at the grab point, a place grabbed
+    // far from its corner hung up and left of the pointer, anchored at its bottom right (the user).
     const inset = 8 * scale;
-    const tl: dvui.Point.Physical = .{
+    const tl: dvui.Point.Physical = if (d.been_drop) .{ .x = mouse.x - inset, .y = mouse.y - inset } else if (d.loose()) blk: {
+        // Lifted out of a list — a row of a file tree, a card of the picker — it keeps its middle
+        // where the middle of what was grabbed was, so a row's name stays where it was in the row
+        // as the row narrows to it. Grabbed off what it shows — out along the row past its name,
+        // rows lifted together far from the one under the pointer — it is brought in under the
+        // pointer as it grows into itself (`morphProgress`), the pointer kept off its very end: a
+        // pill's, the middle of its round end.
+        const keep_x = if (show_photo) inset else @min(target.h, target.w) / 2;
+        const keep_y = @min(inset, target.h / 2);
+        const cx = mouse.x + std.math.clamp(d.grab.x, -@max(0, target.w / 2 - keep_x), @max(0, target.w / 2 - keep_x));
+        const cy = mouse.y + std.math.clamp(d.grab.y, -@max(0, target.h / 2 - keep_y), @max(0, target.h / 2 - keep_y));
+        break :blk .{ .x = cx - target.w / 2, .y = cy - target.h / 2 };
+    } else .{
         .x = mouse.x + std.math.clamp(off.x, -@max(0, target.w - inset), 0),
         .y = mouse.y + std.math.clamp(off.y, -@max(0, target.h - inset), 0),
     };
@@ -1466,8 +1855,11 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     d.shape_radius = radius;
     const nat = rect.toNatural();
 
-    // A box in the drag's own layer (`drawOverlay`), not a floating window of its own: the drops
-    // go over it in the same layer, drawn after it.
+    // In a window of its own (`ownWindowLayer`), or a box in the drag's own layer (`drawOverlay`):
+    // the drops' icons go over it in the same layer, drawn after it.
+    var own_layer: dvui.FloatingWidget = undefined;
+    const own_window = ownWindowLayer(&own_layer, @src());
+    defer if (own_window) own_layer.deinit();
     const fw = dvui.box(@src(), .{}, .{
         .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h },
         // The photograph sits inset in its glass; a tab is the glass.
@@ -1477,7 +1869,8 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
         .border = .all(0),
     });
     defer fw.deinit();
-    {
+    if (own_window and core.native_glass.on()) core.native_glass.add(.{ .rect = rect, .radius = radius });
+    if (!own_window) {
         // Glass, like every floating surface. Where the glass program draws it is the same glass
         // the drop is (`drawDrop`), under one id, so a tab becoming the drop and back is one
         // piece of glass changing shape; elsewhere the carried look (`core.dialogs.carriedGlass`),
@@ -1512,6 +1905,41 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
 const card_padding: f32 = 6;
 /// How opaque the card's photograph is over its glass.
 const photo_opacity: f32 = 0.8;
+/// How much of the drop's photograph goes while it is joined to the bubble it is aimed at: nearly
+/// opaque over the bubble it read as a disc under it, not glass running into glass (the user) — the
+/// bubble lights itself (`DropZones`).
+const aim_fade: f32 = 0.75;
+/// How much of the drop's photograph goes as it joins a bubble where it lies under the OS's glass:
+/// little — the bubble's glass bends and blurs it where the drop runs into it, and it reads through
+/// that (the user) — only enough that the bubble's icon reads over it.
+const aim_fade_under: f32 = 0.3;
+/// Seconds the drop's photograph takes to fade as it joins a bubble, and to come back.
+const aim_s: f32 = 0.09;
+
+/// Milliseconds the drop takes to be drawn into a bubble, over to another, or let go of one
+/// (`pour`), as written: at the motion speed the user set (`core.motion.durationMs`).
+const join_ms: f32 = 240;
+
+/// How much of a join `dt` seconds is: all of it where motion is off.
+fn joinStep(dt: f32) f32 {
+    const ms = core.motion.durationMs(join_ms);
+    return if (ms <= 0) 1 else dt * 1000 / ms;
+}
+
+/// How far through being drawn into a bubble the drop is at `u` of `join_ms`: quick, then past it
+/// and back, as water pours in, as far past as motion is playful (`core.motion`) — none at the low
+/// end, an ease out only. Time alone moves it.
+fn pour(u: f32) f32 {
+    const play = std.math.clamp((core.motion.level() - 0.5) * 2, 0, 1);
+    const k: f32 = 1.8 * play;
+    const v = std.math.clamp(u, 0, 1) - 1;
+    return 1 + (k + 1) * v * v * v + k * v * v;
+}
+
+fn smooth(u: f32) f32 {
+    const x = std.math.clamp(u, 0, 1);
+    return x * x * (3 - 2 * x);
+}
 
 /// Points: the tab face on a card with no photograph — a file icon, the title and, when there
 /// are unsaved changes, the dirty dot — and the gaps between them.
@@ -1529,9 +1957,6 @@ fn draggedDoc(l: *Layout, d: ViewDrag) ?struct { path: []const u8, dirty: bool }
 }
 
 /// A card with no photograph: the tab's face in glass, tab-sized.
-/// Points: the widest a carried tab keeps the width it was lifted at (`pillSize`).
-const max_lifted_w: f32 = 480;
-
 fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Physical {
     const text = dvui.Font.theme(.body).textSize(title);
     const doc = draggedDoc(l, d);
@@ -1541,11 +1966,8 @@ fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Ph
         w += face_gap + face_dot;
     };
     const h = @max(face_icon, text.h) + 2 * face_pad_y;
-    // As wide as what it was lifted from, when that was wider than what it shows — an explorer row
-    // runs on past its name: it is held where it was grabbed (`drawFloat`), and narrowed to its
-    // name, a row grabbed toward its end was carried off to the side of the pointer. A loose drag
-    // only: one lifted from a place is that place's size, not a tab's.
-    if (d.loose()) w = @max(w, @min(d.from.w / scale, max_lifted_w));
+    // Only what it shows, whatever it was lifted from: a row lifted out of a file tree narrows to
+    // its icon and its name, and rows lifted together run into the one (`drawFloat`).
     // Tab-sized, with no card padding round it: the same as a tab carried along its strip, which
     // is the tab itself in glass.
     return .{ .w = w * scale, .h = h * scale };
@@ -1804,12 +2226,15 @@ fn overNoWindow(mouse: dvui.Point.Physical) bool {
 /// its own. Any view that may float — a view alone in a float's window too: its window closes, and
 /// one opens where it was let go.
 fn floatAway(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
-    if (std.mem.eql(u8, source, loose_source)) return;
-    const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
+    // Out of the picker too (a loose drag): the view it carries, wherever it is now.
+    const from_picker = std.mem.eql(u8, source, loose_source);
+    const carried = if (from_picker) l.state.view_drag.moved_id else movedFrom(l, source) orelse return;
+    const moved = ownId(l.arena, carried) orelse return;
     const s = l.host.surfaceById(moved) orelse return;
     if (!float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = false })) return;
+    const left = if (from_picker) holderOf(l, moved) else source;
     floatOut(l, source, moved, mouse);
-    shutIfEmptied(l, source);
+    if (left) |name| shutIfEmptied(l, name);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
 }
@@ -1833,25 +2258,38 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     var buf: [32]u8 = undefined;
     const name = state.internName(l.gpa, float_rules.nextName(&buf, state.floats.names(l.arena)));
     const window = Floats.toRules(dvui.windowRect());
-    const src = placeBounds(state, source) orelse dvui.windowRectPixels();
-    const out_of: ?usize = if (state.floats.rootOf(source)) |root| state.floats.find(root) else null;
+    // Carried out of the picker (a loose drag), it floats out of whichever place holds it now —
+    // its home when the float closes — or, held nowhere, out of none: its keywords take it home.
+    const holder: ?[]const u8 = if (std.mem.eql(u8, source, loose_source)) holderOf(l, moved) else source;
+    const src = (if (holder) |h| placeBounds(state, h) else null) orelse dvui.windowRectPixels();
+    const out_of: ?usize = if (holder) |h| (if (state.floats.rootOf(h)) |root| state.floats.find(root) else null) else null;
     var rect = if (out_of) |i|
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
         float_rules.initialRect(Floats.toRules(src.toNatural()), window);
-    // Let go over no window of the app's (`floatAway`): its size, round where it was let go, out
-    // there — not held on the main window.
-    if (at) |p| {
-        rect.x = p.x / scale - rect.w / 2;
-        rect.y = p.y / scale - rect.h / 2;
-    }
-    // Out of a float, home is still where that float came from: the place it opened over is a
-    // float's, and goes with it.
-    const home = if (out_of) |i| state.floats.items.items[i].home else state.internName(l.gpa, source);
     // The glass it was carried in, when a drag let go of it here; the place itself, when nothing
     // was carried (the picker, a test).
     const d = &state.view_drag;
     const carried = d.active() and std.mem.eql(u8, d.name, source) and d.shape_rect.w > 0;
+    // Carried with its picture, it opens as its place was, there (`float_rules.asTaken`): the
+    // picture growing with it out of the drop lands on the view as the float shows it.
+    if (carried and d.texture != null and out_of == null) rect = float_rules.asTaken(Floats.toRules(src.toNatural()), window);
+    // Let go over no window of the app's (`floatAway`): its size, out there — not held on the main
+    // window — its top left where the carried glass's was, which rode below and right of the
+    // pointer: the glass grows into it right and down from where it was let go, rather than out
+    // round the pointer. With nothing carried, round where it was let go.
+    if (at) |p| {
+        if (carried) {
+            rect.x = d.shape_rect.x / scale;
+            rect.y = d.shape_rect.y / scale;
+        } else {
+            rect.x = p.x / scale - rect.w / 2;
+            rect.y = p.y / scale - rect.h / 2;
+        }
+    }
+    // Out of a float, home is still where that float came from: the place it opened over is a
+    // float's, and goes with it.
+    const home = if (out_of) |i| state.floats.items.items[i].home else if (holder) |h| state.internName(l.gpa, h) else "";
     var landing: Floats.Landing = .{
         .from = if (carried) d.shape_rect else src,
         .radius = if (carried) d.shape_radius else core.corners.scaled(core.corners.card) * scale,
@@ -1860,6 +2298,7 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
         // The float has the photograph now; the drag's discard must not destroy it.
         landing.photo = d.texture;
         landing.photo_size = d.texture_rect.size();
+        landing.photo_from = d.photo_last;
         d.texture = null;
     }
     _ = state.floats.add(l.gpa, .{
@@ -1873,37 +2312,89 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     };
     state.assign(l.gpa, name, &.{moved}) catch {};
     selectNamed(l, name, moved);
-    takeOut(l, source, moved, null);
+    takeOut(l, holder orelse source, moved, null);
 }
 
-/// Send the views of a closing float's places (`leaves`) back to `home`, the place the float came
-/// out of (`float_rules.goHome`): into its list when the user had arranged it, otherwise let go,
-/// for its keywords to place — which, for a place its keywords fill, is home again. Each is
-/// selected there, so the view the user had in front of them is in front of them again.
-pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
-    const state = l.state;
-    // No home (a saved float whose home was lost): every view is let go. Not looked up — an
-    // unnamed place would answer to "".
-    const r = if (home.len > 0) regionNamed(state, home) else null;
-    for (leaves) |leaf| {
-        // A copy: assigning a view home takes it out of the leaf's list, freeing the one read.
-        const ids = l.arena.dupe([]const u8, state.assignment(leaf) orelse continue) catch continue;
-        for (ids) |raw| {
-            const id = ownId(l.arena, raw) orelse continue;
-            const held = holding(l, home);
-            switch (float_rules.goHome(.{
-                .declared = r != null,
-                .assigned = state.assignment(home) != null,
-                .shows_many = if (r) |x| x.shows == .many else false,
-                .empty = held.len == 0,
-            })) {
-                .add => state.assign(l.gpa, home, idsWith(l.arena, held, id)) catch {},
-                .put => state.assign(l.gpa, home, &.{id}) catch {},
-                .keywords => {},
-            }
-            if (r != null) selectNamed(l, home, id);
+/// The declared place showing `id` now, if one is: where a view carried out of the picker comes
+/// from (`floatOut`).
+fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
+    for (l.state.regions.items) |r| {
+        for (holding(l, r.name)) |held| {
+            if (std.mem.eql(u8, held, id)) return r.name;
         }
     }
+    return null;
+}
+
+/// Send the views of a closing float's places (`leaves`) back into the main window
+/// (`float_rules.goHome`): into the list of `home`, the place the float came out of, when the user
+/// had arranged it; let go where their keywords show them, which for a place its keywords fill is
+/// home again; and any other view into home's list all the same, or another place where home
+/// cannot take it — a view merged into the float from elsewhere may have keywords no place
+/// answers, and let go it would be shown nowhere. Each is selected where it lands, so the view
+/// the user had in front of them is in front of them again.
+pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
+    const state = l.state;
+    // No home (a saved float whose home was lost). Not looked up — an unnamed place would answer
+    // to "".
+    const r = if (home.len > 0) regionNamed(state, home) else null;
+    // Every view out of the float's places first, so what a place's keywords show is read with
+    // them all free: a view written into a place its keywords fill takes the rest of what they
+    // show there with it, and would leave behind one of the float's still held by it.
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (leaves) |leaf| {
+        for (state.assignment(leaf) orelse continue) |raw| {
+            ids.append(l.arena, ownId(l.arena, raw) orelse continue) catch {};
+        }
+        state.unassign(l.gpa, leaf);
+    }
+    for (ids.items) |id| {
+        const held = holding(l, home);
+        var landed: ?[]const u8 = if (r != null) home else null;
+        switch (float_rules.goHome(.{
+            .declared = r != null,
+            .assigned = state.assignment(home) != null,
+            .shows_many = if (r) |x| x.shows == .many else false,
+            .empty = held.len == 0,
+            .keywords_place = keywordsPlace(l, id),
+        })) {
+            .add => state.assign(l.gpa, home, idsWith(l.arena, held, id)) catch {},
+            .put => state.assign(l.gpa, home, &.{id}) catch {},
+            .keywords => {},
+            .elsewhere => {
+                landed = null;
+                if (mainPlaceFor(l, id)) |other| {
+                    state.assign(l.gpa, other.name, idsWith(l.arena, holding(l, other.name), id)) catch {};
+                    landed = other.name;
+                }
+            },
+        }
+        if (landed) |name| selectNamed(l, name, id);
+    }
+}
+
+/// Whether a place's keywords would show `id`, held by no place's list, of their own accord: a
+/// place left to its keywords that accepts it.
+fn keywordsPlace(l: *Layout, id: []const u8) bool {
+    const s = l.host.surfaceById(id) orelse return false;
+    if (s.keywords.len == 0) return false;
+    for (l.state.regions.items) |*r| {
+        if (l.state.assignment(r.name) != null) continue;
+        if (l.offers(r, s) and sdk.keywords.accepts(r.keywords, s.keywords)) return true;
+    }
+    return false;
+}
+
+/// Where a closing float's view goes that its home cannot take and its keywords show nowhere
+/// (`sendHome`): the first place of the main window's, in the shape's order, that shows several
+/// views and may show it.
+fn mainPlaceFor(l: *Layout, id: []const u8) ?*const Region {
+    const s = l.host.surfaceById(id) orelse return null;
+    for (l.state.regions.items) |*r| {
+        if (r.shows != .many or l.state.floatRoot(r.name) != null) continue;
+        if (l.offers(r, s)) return r;
+    }
+    return null;
 }
 
 /// An empty place carried somewhere — the place itself is what moves, there being nothing in it.
