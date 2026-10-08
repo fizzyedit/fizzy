@@ -151,6 +151,42 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build test-sdk-version --summary all
 
+  # The headless integration tests: real widgets, layouts and drags driven on dvui's testing
+  # backend (no window, no GPU), plus the SDK, sizing and plugin-loader suites. The suite most
+  # likely to catch a layout or drag regression, and until this job nothing ran it. Linux only:
+  # the code under test is the same on every OS, and on Windows it needs MSVC (`build/app.zig`).
+  # A job of its own beside the matrix, so it adds a compile to the run but not to its length.
+  #
+  # A test that logs a warning makes the build print `failed command: …fizzy-integration-tests`
+  # while still passing (the demo-replay test always does): the exit code is the verdict, and the
+  # Build Summary's `N/N steps succeeded` says the same.
+  integration:
+    name: Integration tests (Linux)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # See the test job: the key is fixed before anything is unpacked.
+      - name: Zig cache key
+        id: zig-cache-key
+        shell: bash
+        run: echo "key=${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          cache-key: ${{ steps.zig-cache-key.outputs.key }}
+          cache-size-limit: 5120
+      - name: Pre-create Zig cache tmp/
+        shell: bash
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch dependencies (with retries)
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Run integration tests
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build test-integration --summary all
+
   # Fizzy's own backend on Windows — the default there too now (`build/exe.zig`'s
   # `defaultNativeBackend`) — which nothing else here builds: the consumer apps above run on Linux only.
   # Cross-compiled from Linux for the GNU ABI, which needs no MSVC SDK (release.yml's msvc
@@ -179,7 +215,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, test, windows-fizzy-backend]
+    needs: [changes, test, integration, windows-fizzy-backend]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped
