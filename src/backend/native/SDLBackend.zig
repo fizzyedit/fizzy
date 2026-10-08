@@ -924,20 +924,39 @@ const ViewportKind = enum { window, carry, overlay, menu };
 /// A menu in a window of its own (`Popout`'s menus): borderless, kept above every window by its
 /// level, in no window list, never made key — the window it opened from keeps the keyboard, and
 /// its first click acts. Placed in the main window's frame (`viewportPlaceMain`), the pointer over it
-/// read there (`viewportMainOffset`). Its material is the OS's (`viewportLiquidGlass`, vibrancy
-/// before macOS 26). macOS.
+/// read there (`viewportMainOffset`). Its material is the OS's: on macOS Liquid Glass
+/// (`viewportLiquidGlass`, vibrancy before macOS 26), on Windows Acrylic
+/// (`win32_titlebar.viewportMenuChrome`), with the window's base drawn under the menu.
 /// `radius`, points: the menu's corners, which vibrancy is masked to (Liquid Glass takes them from
-/// its look each frame). `ride`: the window it moves with (`Viewport.ride`) — none for a menu opened
-/// in a float that is out. `dialog`: a dialog's window (`Viewport.dialog`).
+/// its look each frame; DWM rounds as near it as it rounds). `ride`: the window it moves with
+/// (`Viewport.ride`) — none for a menu opened in a float that is out. `dialog`: a dialog's window
+/// (`Viewport.dialog`).
 pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, ride: Ride, dialog: bool) ?*Viewport {
-    if (comptime builtin.os.tag != .macos) return null;
+    if (comptime builtin.os.tag != .macos and builtin.os.tag != .windows) return null;
     const vp = self.openViewport(at, "", .menu) orelse return null;
-    _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
-    vp.ride = switch (ride) {
-        .none => null,
-        .main => self.window,
-        .viewport => |parent| parent.window,
-    };
+    switch (comptime builtin.os.tag) {
+        .macos => {
+            _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
+            vp.ride = switch (ride) {
+                .none => null,
+                .main => self.window,
+                .viewport => |parent| parent.window,
+            };
+        },
+        .windows => {
+            // Owned by the window it opens from, as `openViewport` makes every viewport the main
+            // window's: over it, hidden and minimized with it. An owned window is not carried
+            // when its owner moves, so it rides on nothing (`viewportPlaceRiding` places it each
+            // frame).
+            switch (ride) {
+                .none, .main => {},
+                .viewport => |parent| _ = c.SDL_SetWindowParent(vp.window, parent.window),
+            }
+            if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd|
+                _ = platform.win32_titlebar.viewportMenuChrome(hwnd, dvui.themeGet().dark, radius);
+        },
+        else => unreachable,
+    }
     vp.dialog = dialog;
     return vp;
 }

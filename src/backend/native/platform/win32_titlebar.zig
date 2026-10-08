@@ -417,6 +417,72 @@ pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radi
 const viewport_ws_sysmenu: isize = 0x00080000;
 const viewport_ws_ex_appwindow: isize = 0x00040000;
 
+const menu_subclass_id: usize = 0x50584933; // "PXI3"
+
+/// Dress a menu's or a dialog's window (`SDLBackend.viewportOpenMenu`): Acrylic behind it, the
+/// material of Windows 11's own menus and flyouts, in the app's light or dark (`dark`); its corners
+/// rounded by DWM as near `radius_pt` (points) as DWM rounds; DWM's shadow, no border, no DWM
+/// animation. It is never activated, and DWM draws an inactive window's backdrop as a solid
+/// fallback, so it is kept looking active (`menuSubclassProc`). True when DWM gives it the
+/// backdrop (Windows 11 22H2 on).
+pub fn viewportMenuChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
+    if (builtin.os.tag != .windows) return false;
+    const h: win32.foundation.HWND = @ptrCast(hwnd);
+    const dwm = win32.graphics.dwm;
+    const wm = win32.ui.windows_and_messaging;
+    const corner: u32 = if (radius_pt < 1) DWMWCP_DONOTROUND else if (radius_pt < 6) DWMWCP_ROUNDSMALL else DWMWCP_ROUND;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    const none: u32 = dwm.DWMWA_COLOR_NONE;
+    _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
+    const dark_value: u32 = @intFromBool(dark);
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
+    const no_transitions: u32 = 1;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_TRANSITIONS_FORCEDISABLED), &no_transitions, @sizeOf(u32));
+    _ = win32.ui.shell.SetWindowSubclass(h, menuSubclassProc, menu_subclass_id, 0);
+    // No system menu, whose caption buttons DWM would draw over the menu with the frame extended
+    // (as for a float's window, `viewportChrome`); SDL's caption style stays, collapsed by its
+    // `WM_NCCALCSIZE`, for DWM to treat the window as framed and give it a backdrop at all.
+    const style = wm.GetWindowLongPtrW(h, wm.GWL_STYLE);
+    if (style & viewport_ws_sysmenu != 0) {
+        _ = wm.SetWindowLongPtrW(h, wm.GWL_STYLE, style & ~viewport_ws_sysmenu);
+        const SWP_NOSIZE: u32 = 0x0001;
+        const SWP_NOMOVE: u32 = 0x0002;
+        const SWP_NOZORDER: u32 = 0x0004;
+        const SWP_NOACTIVATE: u32 = 0x0010;
+        const SWP_FRAMECHANGED: u32 = 0x0020;
+        _ = wm.SetWindowPos(h, null, 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED));
+    }
+    const ok = applyViewportBackdrop(h);
+    // Drawn active from the start: it will never be sent an activation of its own.
+    _ = wm.SendMessageW(h, wm.WM_NCACTIVATE, 1, 0);
+    return ok;
+}
+
+fn menuSubclassProc(
+    hWnd: ?win32.foundation.HWND,
+    uMsg: u32,
+    wParam: win32.foundation.WPARAM,
+    lParam: win32.foundation.LPARAM,
+    uIdSubclass: usize,
+    dwRefData: usize,
+) callconv(.winapi) win32.foundation.LRESULT {
+    _ = uIdSubclass;
+    _ = dwRefData;
+    const wm = win32.ui.windows_and_messaging;
+    // Always active to DWM, so its backdrop stays Acrylic rather than the inactive fallback.
+    if (uMsg == wm.WM_NCACTIVATE) return win32.ui.shell.DefSubclassProc(hWnd, uMsg, 1, lParam);
+    // SDL sets the window's style again as it likes: never the system menu.
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
+        const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        ss.styleNew &= ~@as(u32, @intCast(viewport_ws_sysmenu));
+    }
+    if (uMsg == wm.WM_DWMCOMPOSITIONCHANGED) if (hWnd) |h| {
+        _ = applyViewportBackdrop(h);
+    };
+    if (uMsg == wm.WM_NCDESTROY) _ = win32.ui.shell.RemoveWindowSubclass(hWnd, menuSubclassProc, menu_subclass_id);
+    return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 /// The backdrop, and the frame extended over the whole window for it to show through — again on
 /// every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
 fn applyViewportBackdrop(h: win32.foundation.HWND) bool {
