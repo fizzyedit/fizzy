@@ -115,7 +115,7 @@ pub fn play(self: *Demo, name: []const u8) !void {
     if (!self.mayStart()) return;
     var script: automation.Script = .init(self.editor.app.gpa, entry.name, entry.title);
     errdefer script.deinit();
-    script.check = automation.Player.check;
+    script.check = automation.Input.check;
     try entry.build(&script);
     self.player.load(try script.finish(), .{});
 }
@@ -123,7 +123,7 @@ pub fn play(self: *Demo, name: []const u8) !void {
 /// Play a tape — a fetched `.zon` or `.tape`, or a recording. Either form; the bytes say which.
 pub fn playTape(self: *Demo, bytes: []const u8) !void {
     if (!self.mayStart()) return;
-    const owned = automation.Tape.load(self.editor.app.gpa, bytes, automation.Player.check) catch |err| {
+    const owned = automation.Tape.load(self.editor.app.gpa, bytes, automation.Input.check) catch |err| {
         dvui.log.err("demo: could not read the tape: {t}", .{err});
         return err;
     };

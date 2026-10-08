@@ -17,6 +17,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const Player = @import("Player.zig");
+const Input = @import("Input.zig");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
 const chord = @import("../keymap/chord.zig");
@@ -461,7 +462,7 @@ fn nearRect(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect)
     const aim = tape.aimedAt(c, player.seq.cursor) orelse return null;
     const r = (if (aim.tag.len > 0) tagRect(aim.tag) else null) orelse return pointRect(player.seq.pointer);
     if (small(r, win)) return r;
-    return pointRect(Player.targetPoint(aim) orelse player.seq.pointer);
+    return pointRect(Input.targetPoint(aim) orelse player.seq.pointer);
 }
 
 /// A point (physical) as a small rect around it, natural.
@@ -885,7 +886,7 @@ fn drawPointer(player: *Player) void {
     const prev_alpha = dvui.alpha(shown);
     defer dvui.alphaSet(prev_alpha);
 
-    const pressed = player.held.count() > 0;
+    const pressed = player.input.held.count() > 0;
     const k: f32 = if (pressed) 0.88 else 1;
     inline for (.{ true, false }) |shadow| {
         var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());

@@ -273,7 +273,7 @@ one.
 
 Key chords are the app's spelling: the `tape` library carries them as text, and a `Tape.Check`
 the app passes to `parse`, `load` and `Script` says which it accepts (fizzy's is
-`automation.Player.check`, the keymap's parser).
+`automation.Input.check`, the keymap's parser).
 
 ### The binary form (`.tape`)
 

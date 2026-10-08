@@ -1,9 +1,11 @@
 //! Plays a `Tape` into the running app — the dvui half of automation.
 //!
 //! The player is the `Sequencer`'s sink: a glide becomes mouse motion, a press a button event, a
-//! key a key down and up, all added to dvui's event list exactly where a backend adds the real
-//! ones, so every widget, keybind and plugin handles them as it handles a person. Nothing in the
-//! app is told a demo is playing; that is the point — the demo shows the real app doing real work.
+//! key a key down and up (`Input`, which a live tape's driver shares), all added to dvui's event
+//! list exactly where a backend adds the real ones, so every widget, keybind and plugin handles
+//! them as it handles a person; commands, keyframes and waits on the app go to its `Stage`. Nothing
+//! in the app is told a demo is playing; that is the point — the demo shows the real app doing
+//! real work.
 //!
 //! An app calls `frame` once at the very start of its frame, before anything reads
 //! `dvui.events()` (it also tells widgets whether to publish their anchors, `core.anchor`, and the
@@ -53,8 +55,7 @@ const core = @import("core");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
 const Stage = @import("Stage.zig");
-const chord = @import("../keymap/chord.zig");
-const dvui_adapter = @import("../keymap/dvui_adapter.zig");
+const Input = @import("Input.zig");
 
 const log = std.log.scoped(.automation);
 
@@ -115,9 +116,9 @@ mismatches: u32 = 0,
 scrub_after: After = .pause,
 /// The demo time the scrubber last sought to while held.
 scrubbed_to: ?f64 = null,
-/// Buttons the tape is holding down — released before a rewind or a pause, so a drag cut short
-/// does not leave a widget holding the mouse.
-held: std.EnumSet(Tape.Button) = .initEmpty(),
+/// The tape's input as dvui events, and the buttons it is holding down — released before a
+/// rewind or a pause, so a drag cut short does not leave a widget holding the mouse.
+input: Input = .{},
 /// The last press the tape made, for the overlay's ripple.
 last_press: ?Press = null,
 transport: Transport = .{},
@@ -279,7 +280,7 @@ pub fn close(self: *Player) void {
 /// Stop and let go of the demo; the stage gives the user their session back.
 pub fn unload(self: *Player) void {
     if (self.owned == null) return;
-    self.releaseHeld();
+    self.input.releaseHeld();
     if (self.state == .seeking) self.stage.fastForward(false);
     self.dropSnapshots();
     self.stage.end();
@@ -309,8 +310,8 @@ pub fn pause(self: *Player) void {
         .playing => {
             self.state = .paused;
             // A drag cut short is dropped where it is — which the tape did not do.
-            if (self.held.count() > 0) {
-                self.releaseHeld();
+            if (self.input.held.count() > 0) {
+                self.input.releaseHeld();
                 self.diverged = true;
             }
         },
@@ -400,7 +401,7 @@ fn arrive(self: *Player) void {
 
 /// Back to the keyframe op `kf`, to replay from there.
 fn rewind(self: *Player, kf: usize) void {
-    self.releaseHeld();
+    self.input.releaseHeld();
     self.seq.rewind(kf);
     self.last_press = null;
     self.diverged = false;
@@ -411,7 +412,7 @@ fn rewind(self: *Player, kf: usize) void {
 /// from where the app is now.
 fn restoreSnapshot(self: *Player, i: usize) bool {
     const s = self.snapshots.items[i];
-    self.releaseHeld();
+    self.input.releaseHeld();
     if (!self.stage.restore(s.state)) return false;
     self.seq.restoreTo(s.cursor, s.at, s.pointer);
     self.last_press = null;
@@ -460,7 +461,7 @@ fn nearestSnapshot(self: *const Player, t: f64, kf: usize) ?usize {
 fn keepSnapshot(self: *Player) void {
     if (!self.stage.snapshots()) return;
     const t = self.tape() orelse return;
-    if (self.seq.cursor == 0 or !self.seq.calm() or self.held.count() > 0) return;
+    if (self.seq.cursor == 0 or !self.seq.calm() or self.input.held.count() > 0) return;
     if (!self.stage.idle()) return;
     const cursor = self.seq.cursor;
     var at: usize = self.snapshots.items.len;
@@ -565,12 +566,12 @@ pub fn frame(self: *Player) void {
     if (!self.catching_up) self.live = self.state == .playing or self.state == .seeking;
     switch (self.state) {
         .playing => {
-            self.holdPointer();
+            Input.holdPointer(self.seq.pointer);
             _ = self.seq.advance(self.seq.now + wall_ms * self.rate, wall_ms, self.sink());
             if (self.seq.done() and self.seq.now >= @as(f64, @floatFromInt(self.duration()))) self.state = .ended;
         },
         .seeking => {
-            self.holdPointer();
+            Input.holdPointer(self.seq.pointer);
             if (self.seq.advance(self.seek_target, wall_ms, self.sink()) == .reached) self.arrive();
         },
         .paused, .ended, .idle => return,
@@ -792,27 +793,7 @@ fn claimCursor(self: *Player) void {
     if (self.state == .playing or self.state == .seeking) dvui.cursorSet(.arrow);
 }
 
-/// Put dvui's pointer back where the tape has it, if anything real moved it.
-fn holdPointer(self: *Player) void {
-    const cw = dvui.currentWindow();
-    const p = self.seq.pointer;
-    if (cw.mouse_pt.x == p.x and cw.mouse_pt.y == p.y) return;
-    _ = cw.addEventMouseMotion(.{ .pt = .{ .x = p.x, .y = p.y } }) catch {};
-}
-
-fn releaseHeld(self: *Player) void {
-    // At teardown (quitting while a tape holds a button) there is no window to send them to, and
-    // nothing left to release them in.
-    if (dvui.current_window) |cw| {
-        var it = self.held.iterator();
-        while (it.next()) |b| {
-            _ = cw.addEventMouseButton(dvuiButton(b), .release) catch {};
-        }
-    }
-    self.held = .initEmpty();
-}
-
-// ---- the sink: tape input as dvui events ---------------------------------------------------
+// ---- the sink: tape input as dvui events (`Input`), the rest from the stage --------------------
 
 fn sink(self: *Player) Sequencer.Sink {
     return .{ .ctx = self, .vtable = &sink_vtable };
@@ -835,97 +816,30 @@ fn from(ctx: *anyopaque) *Player {
     return @ptrCast(@alignCast(ctx));
 }
 
-/// A target's point in physical pixels: a fraction of the tagged rect (or the window), nudged by
-/// natural pixels. Only a visible tag has a point.
-pub fn targetPoint(target: Tape.Target) ?Sequencer.Point {
-    const r: dvui.Rect.Physical = if (target.tag.len == 0) dvui.windowRectPixels() else blk: {
-        const td = dvui.tagGet(target.tag) orelse return null;
-        if (!td.visible) return null;
-        break :blk td.rect;
-    };
-    const scale = dvui.windowNaturalScale();
-    return .{ .x = r.x + r.w * target.x + target.dx * scale, .y = r.y + r.h * target.y + target.dy * scale };
-}
-
 fn locate(_: *anyopaque, target: Tape.Target) ?Sequencer.Point {
-    return targetPoint(target);
+    return Input.targetPoint(target);
 }
 
 fn moveTo(_: *anyopaque, pt: Sequencer.Point) void {
-    _ = dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = pt.x, .y = pt.y } }) catch {};
-}
-
-fn dvuiButton(b: Tape.Button) dvui.enums.Button {
-    return switch (b) {
-        .left => .left,
-        .right => .right,
-        .middle => .middle,
-    };
+    Input.moveTo(pt);
 }
 
 fn button(ctx: *anyopaque, b: Tape.Button, down: bool) void {
     const self = from(ctx);
-    _ = dvui.currentWindow().addEventMouseButton(dvuiButton(b), if (down) .press else .release) catch {};
-    if (down) {
-        self.held.insert(b);
-        self.last_press = .{ .at = self.seq.now, .pt = self.seq.pointer };
-    } else {
-        self.held.remove(b);
-    }
+    self.input.button(b, down);
+    if (down) self.last_press = .{ .at = self.seq.now, .pt = self.seq.pointer };
 }
 
 fn scroll(_: *anyopaque, by: Tape.Scroll) void {
-    const cw = dvui.currentWindow();
-    if (by.y != 0) _ = cw.addEventMouseWheel(by.y, .vertical, .mouse) catch {};
-    if (by.x != 0) _ = cw.addEventMouseWheel(by.x, .horizontal, .mouse) catch {};
+    Input.scroll(by);
 }
 
-fn dvuiMod(m: chord.Mods) dvui.enums.Mod {
-    var bits: u16 = 0;
-    if (m.ctrl) bits |= @intFromEnum(dvui.enums.Mod.lcontrol);
-    if (m.shift) bits |= @intFromEnum(dvui.enums.Mod.lshift);
-    if (m.alt) bits |= @intFromEnum(dvui.enums.Mod.lalt);
-    if (m.command) bits |= @intFromEnum(dvui.enums.Mod.lcommand);
-    return @enumFromInt(bits);
-}
-
-/// The tape's spelling of a chord is the keymap's (`check`): `mod` is ⌘ on a Mac and Ctrl
-/// elsewhere, and a two-stroke chord is pressed a stroke at a time.
 fn key(_: *anyopaque, spelled: []const u8) void {
-    // `check` passed it at load; a tape that skipped that loses the key.
-    const stroke = chord.parseKeys(spelled, platform()) catch return;
-    pressChord(stroke.first);
-    if (stroke.second) |second| pressChord(second);
-}
-
-fn platform() chord.Platform {
-    return if (core.platform.isMacOS()) .mac else .other;
-}
-
-/// What the player checks a tape against (`Tape.Check`): its key chords in the keymap's spelling.
-pub const check: Tape.Check = .{ .key = struct {
-    fn ok(spelled: []const u8) bool {
-        _ = chord.parseKeys(spelled, .other) catch return false;
-        return true;
-    }
-}.ok };
-
-fn pressChord(c: chord.Chord) void {
-    const cw = dvui.currentWindow();
-    const code = dvui_adapter.toDvuiKey(c.key);
-    const mod = dvuiMod(c.mods);
-    _ = cw.addEventKey(.{ .code = code, .mod = mod, .action = .down }) catch {};
-    _ = cw.addEventKey(.{ .code = code, .mod = mod, .action = .up }) catch {};
-    // dvui keeps the last key event's modifiers as the window's, and every pointer event after
-    // carries them: let go of the modifier, as a hand does, or the next click is a Ctrl-click.
-    if (mod != .none) {
-        const modifier: dvui.enums.Key = if (c.mods.command) .left_command else if (c.mods.ctrl) .left_control else if (c.mods.alt) .left_alt else .left_shift;
-        _ = cw.addEventKey(.{ .code = modifier, .mod = .none, .action = .up }) catch {};
-    }
+    Input.key(spelled);
 }
 
 fn text(_: *anyopaque, bytes: []const u8) void {
-    _ = dvui.currentWindow().addEventText(.{ .text = bytes }) catch {};
+    Input.text(bytes);
 }
 
 fn command(ctx: *anyopaque, cmd: Tape.Command) void {
@@ -934,17 +848,13 @@ fn command(ctx: *anyopaque, cmd: Tape.Command) void {
 
 fn keyframe(ctx: *anyopaque, kf: *const Tape.Keyframe) void {
     const self = from(ctx);
-    self.releaseHeld();
+    self.input.releaseHeld();
     self.last_press = null;
     self.stage.keyframe(kf);
 }
 
 fn holds(ctx: *anyopaque, until: Tape.Until) bool {
-    return switch (until) {
-        .idle => from(ctx).stage.idle(),
-        .shown => |tag| if (dvui.tagGet(tag)) |td| td.visible else false,
-        .gone => |tag| if (dvui.tagGet(tag)) |td| !td.visible else true,
-    };
+    return Input.tagHolds(until) orelse from(ctx).stage.idle();
 }
 
 fn timedOut(ctx: *anyopaque, until: Tape.Until) void {

@@ -107,6 +107,8 @@ pub const automation = struct {
     pub const binary = @import("tape").binary;
     pub const Stage = @import("automation/Stage.zig");
     pub const Player = @import("automation/Player.zig");
+    /// Tape input as dvui events: the half of a sequencer's sink every player of tapes shares.
+    pub const Input = @import("automation/Input.zig");
     pub const overlay = @import("automation/overlay.zig");
 };
 
