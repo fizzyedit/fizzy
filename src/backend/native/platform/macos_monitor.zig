@@ -26,6 +26,7 @@ extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_saved_titlebar_inset(cocoa_window: ?*anyopaque) f64;
 extern fn fizzy_macos_window_prefer_fullscreen_space(cocoa_window: ?*anyopaque) void;
+extern fn fizzy_macos_window_space_still(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_titlebar_strip_collapsed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_resize_pump_active() c_int;
@@ -106,7 +107,9 @@ fn macosTransitionSyncActive(w: *const Watched) bool {
 }
 
 fn macosSpaceSyncAllowed(w: *const Watched) bool {
-    return macosTransitionSyncActive(w) or fizzy_macos_window_space_has_target(w.cocoa) != 0;
+    // Moving itself as well: a window standing still on its way jumps its size at the first step
+    // and the last, and SDL hears of it only from here (`fizzy_macos_window_space_still`).
+    return macosTransitionSyncActive(w) or fizzy_macos_window_space_has_target(w.cocoa) != 0 or fizzy_macos_window_space_moving(w.cocoa) != 0;
 }
 
 /// Push AppKit's live sizes into SDL — SDL doesn't emit resize events during
@@ -404,6 +407,8 @@ pub fn watch(window: *c.SDL_Window) void {
     addWatched(.{ .window = window, .cocoa = cocoa, .follow_position = true });
     fizzy_macos_window_install_resize_observer(cocoa);
     fizzy_macos_window_prefer_fullscreen_space(cocoa);
+    // Still through full screen, only the float moving in it (`SDLBackend.Viewport.picture_at`).
+    fizzy_macos_window_space_still(cocoa);
 }
 
 /// Stop following a float's window (`watch`), as it closes.

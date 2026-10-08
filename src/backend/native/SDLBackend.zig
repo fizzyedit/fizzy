@@ -132,6 +132,11 @@ pub const Viewport = struct {
     screen: viewport_map.ScreenRect,
     /// The part of the frame it shows, physical pixels (`viewport_map.place`).
     frame: viewport_map.Rect,
+    /// Where in its window that part is drawn, physical pixels from its top left: nothing but on
+    /// its own way into or out of full screen, where the window stands still at its full-screen
+    /// size and its float grows or shrinks in it (`platform.window.windowSpacePicture`) — `screen`
+    /// and `frame` then where the picture is, not the window.
+    picture_at: [2]u32 = .{ 0, 0 },
     /// Created hidden and shown once a frame has been presented into it, so it never shows
     /// empty: `shown` once it is on screen with a frame in it.
     shown: bool = false,
@@ -1747,6 +1752,25 @@ fn viewportFollowWindow(vp: *Viewport) void {
     var h: c_int = 0;
     _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
     _ = c.SDL_GetWindowSize(vp.window, &w, &h);
+    // Standing still on its way into or out of full screen: its float goes where the picture is.
+    if (platform.window.windowSpacePicture(vp.window)) |p| {
+        const at: viewport_map.ScreenRect = .{
+            .x = x + @as(c_int, @intFromFloat(@round(p.x))),
+            .y = y + @as(c_int, @intFromFloat(@round(p.y))),
+            .w = @intFromFloat(@round(p.w)),
+            .h = @intFromFloat(@round(p.h)),
+        };
+        vp.picture_at = .{
+            @intFromFloat(@max(0, @round(p.x * vp.density))),
+            @intFromFloat(@max(0, @round(p.y * vp.density))),
+        };
+        if (std.meta.eql(at, vp.screen)) return;
+        vp.screen = at;
+        vp.frame = viewport_map.frameOfScreen(vp.band, vp.anchor, vp.density, at);
+        vp.os_placed = true;
+        return;
+    }
+    vp.picture_at = .{ 0, 0 };
     const now: viewport_map.ScreenRect = .{ .x = x, .y = y, .w = w, .h = h };
     // Where the app put it: its own doing, reported back.
     if (std.meta.eql(now, vp.screen)) return;
@@ -1972,7 +1996,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         // then by its own account).
         if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
         if (vp.shown and main_moving and !platform.window.windowMovingItself(vp.window)) continue;
-        const presented = self.gpu.presentInto(vp.window, target);
+        const presented = self.gpu.presentInto(vp.window, target, vp.picture_at);
         if (vp.shown) continue;
         if (presented) {
             first_frame[i] = true;
@@ -2096,6 +2120,14 @@ pub fn prefersReducedMotion(_: *@This()) bool {
 pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     self.arena = arena;
     if (self.begin_hook) |hook| hook(self);
+    // A float's window standing still on its way into or out of full screen: its picture has
+    // taken this frame's step (`begin_hook`), and the float follows it there — as it did the
+    // window's moves — and back to the window as the way ends.
+    if (comptime builtin.os.tag == .macos) for (&self.viewports) |*slot| {
+        const vp = if (slot.*) |*v| v else continue;
+        if (vp.picture_at[0] != 0 or vp.picture_at[1] != 0 or platform.window.windowSpacePicture(vp.window) != null)
+            viewportFollowWindow(vp);
+    };
     self.gpu.beginFrame();
     self.gpu.window_held = self.mainHeld();
     self.manage_backend_tracking.reset_begin();

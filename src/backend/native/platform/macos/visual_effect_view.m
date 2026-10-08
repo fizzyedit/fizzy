@@ -1350,6 +1350,47 @@ static void windowFeatherMask(CALayer *layer, CGImageRef image, double edge, dou
     if (!CGRectEqualToRect([mask frame], [layer bounds])) [mask setFrame:[layer bounds]];
 }
 
+extern int fizzy_macos_window_space_picture_in_window(void *nswindow, NSRect *rect, double *fullness);
+
+/* Where a float's window standing still on its way into or out of full screen has its picture
+ * (`fizzy_macos_window_space_still`), in its frame view, and how far it is into full screen. NO
+ * when it is on no such way. */
+static BOOL windowGlassPicture(NSWindow *window, NSRect *in_frame_view, double *fullness) {
+    NSRect r;
+    if (!fizzy_macos_window_space_picture_in_window((__bridge void *)window, &r, fullness)) return NO;
+    NSView *frame = [[window contentView] superview];
+    if (frame == nil) return NO;
+    *in_frame_view = [frame convertRect:r fromView:nil];
+    return YES;
+}
+
+/* The glass behind a float's window — its vibrancy, or its Liquid Glass — where the float is drawn:
+ * only where its picture is while the window stands still on its way into or out of full screen,
+ * all of the window otherwise. Each step of the way, and as it ends. */
+void fizzy_macos_window_glass_follow(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSView *content = [window contentView];
+        NSView *frame = [content superview];
+        if (content == nil || frame == nil) return;
+        NSRect picture;
+        const BOOL still = windowGlassPicture(window, &picture, NULL);
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        for (NSView *v in [frame subviews]) {
+            if (![v isKindOfClass:[FizzyViewportGlassView class]]) continue;
+            const NSRect want = still ? picture : [content frame];
+            if (!NSEqualRects([v frame], want)) [v setFrame:want];
+        }
+        for (int k = 0; k < window_glass_parts; k++) {
+            NSView *part = windowGlassPart(window, k);
+            const NSRect want = still ? picture : [frame bounds];
+            if (part != nil && !NSEqualRects([part frame], want)) [part setFrame:want];
+        }
+        [CATransaction commit];
+    }
+}
+
 /*
  * `nswindow`'s Liquid Glass this frame (`fizzy_macos_window_liquid_glass`): the colour all over at
  * the top of the slider, the lens over it, and the body over that — frost, the plain blur, the
@@ -1369,9 +1410,19 @@ void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         /* All of the window: in full screen SDL's view stops short of its top. Square there. */
-        const NSRect content = [[[window contentView] superview] bounds];
+        NSRect content = [[[window contentView] superview] bounds];
         const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
-        const double radius = full ? 0 : g->radius;
+        double radius = full ? 0 : g->radius;
+        /* A float's window standing still on its way into or out of full screen: the glass only
+         * where the float is drawn, its corners squaring off as it goes, on half points so the
+         * bevel is drawn again only as often as that shows. */
+        NSRect picture;
+        double fullness = 0;
+        const BOOL still = windowGlassPicture(window, &picture, &fullness);
+        if (still) {
+            content = picture;
+            radius = round(g->radius * (1 - fullness) * 2) / 2;
+        }
         BOOL moved = NO;
         for (int k = 0; k < window_glass_parts; k++) {
             if (!NSEqualRects([parts[k] frame], content)) {
@@ -1391,7 +1442,8 @@ void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass
                 moved = YES;
             }
         }
-        if (moved) [window invalidateShadow];
+        /* Not each step of a still window's way: its shadow is its frame's, which stands still. */
+        if (moved && !still) [window invalidateShadow];
         CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         const double fills[2] = {g->fill[3], g->top_fill};
         NSView *colored[2] = {parts[window_glass_fill], parts[window_glass_top]};

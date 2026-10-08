@@ -27,6 +27,7 @@ extern fn fizzy_macos_window_space_transition_active(cocoa_window: ?*anyopaque) 
 extern fn fizzy_macos_window_space_entering(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_fullness(cocoa_window: ?*anyopaque) f64;
 extern fn fizzy_macos_window_space_moving(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_space_picture(cocoa_window: ?*anyopaque, x: *f64, y: *f64, w: *f64, h: *f64) c_int;
 extern fn fizzy_macos_titlebar_hit_test_install(cocoa_window: ?*anyopaque, interactive_at: *const fn (f64, f64) callconv(.c) bool) void;
 extern fn fizzy_macos_window_liquid_glass(cocoa_window: ?*anyopaque, blur_material: c_long) c_int;
 extern fn fizzy_macos_window_has_liquid_glass(cocoa_window: ?*anyopaque) c_int;
@@ -191,6 +192,20 @@ pub fn windowSpaceFullness(window: *c.SDL_Window) ?f32 {
 
 pub fn spaceFullness(win: *dvui.Window) ?f32 {
     return windowSpaceFullness(win.backend.impl.window);
+}
+
+/// Where a float's window, standing still on its own way into or out of a fullscreen Space, has its
+/// picture this frame: points from the window's top left — where the window would have been, were
+/// it moved a step a frame (`fizzy_macos_window_space_still`). Null on no such way.
+pub fn windowSpacePicture(window: *c.SDL_Window) ?struct { x: f32, y: f32, w: f32, h: f32 } {
+    if (builtin.os.tag != .macos) return null;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return null;
+    var x: f64 = 0;
+    var y: f64 = 0;
+    var w: f64 = 0;
+    var h: f64 = 0;
+    if (fizzy_macos_window_space_picture(raw_ptr, &x, &y, &w, &h) == 0) return null;
+    return .{ .x = @floatCast(x), .y = @floatCast(y), .w = @floatCast(w), .h = @floatCast(h) };
 }
 
 /// Whether `window` is moving itself into or out of a fullscreen Space this frame
