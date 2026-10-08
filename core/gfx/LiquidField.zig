@@ -20,7 +20,8 @@
 //!
 //! **Drawing.** Inside a layer's `dvui.deferRender` job, after its capture: `draw` with the
 //! frost and what it covers. False where the backend has no programs (`core.gfx.programs`) or the
-//! program is not ready yet, and the caller draws its meshes instead, without the joins.
+//! program is not ready yet, and the caller draws its meshes instead, without the joins. A lens
+//! over a picture of the caller's own (a magnifier) needs no capture: `drawPicture` queues itself.
 //!
 //! Layers do not join each other: a dialog over a drop is two layers, the dialog's capture taken
 //! with the drop already on the frame.
@@ -75,6 +76,9 @@ refraction: f32 = 1,
 /// It carries text — a dialog, a menu — and keeps some frost over a clear lens to read
 /// (`glass_look.forText`).
 text: bool = false,
+/// It is a lens over a picture of the caller's own (`drawPicture`): its middle the picture as it
+/// is, only the band along its edge glass (`glass_look.forLens`).
+lens: bool = false,
 
 pub fn add(self: *LiquidField, shape: Shape) void {
     if (self.len >= max_shapes) return;
@@ -325,7 +329,7 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     // The window behind the glass, published for this frame.
     u.backdrop[0] = if (opaqueWindow()) 1 else 0;
     // And the glass the slider makes of it this frame (`publishLook`).
-    if (publishedLook()) |l| self.applyLook(&u, if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
+    if (publishedLook()) |l| self.applyLook(&u, if (self.lens) glass_look.forLens(l) else if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();
@@ -335,6 +339,54 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     }
     return true;
 }
+
+/// The shapes as a lens over a picture of the caller's own — a magnifier's zoom, a loupe — rather
+/// than over what is behind them. `picture` is a picture of `covered` (physical pixels, window
+/// coordinates), reaching `pictureMargin` past the shapes. Its middle is the picture as it is,
+/// unblurred, untinted and unlit, so a colour picked through it is the colour under it; only the
+/// band along its edge is glass (`lens`, `glass_look.forLens`). Where the app publishes no look
+/// (the web), it is the earlier glass, its rim pulling from just outside the shape, which is what
+/// the margin is for. Nothing under it is read, so it costs no capture.
+///
+/// Queued in order with the frame (`dvui.deferRender`), as every glass is, and drawn at full
+/// alpha: glass replaces what it covers, and at part alpha it left a hole. `picture` must live
+/// until the frame ends. False, having queued nothing, where there is no glass program (`ready`):
+/// draw the picture some other way.
+pub fn drawPicture(self: *const LiquidField, picture: dvui.Texture, covered: dvui.Rect.Physical) bool {
+    if (self.len == 0) return true;
+    if (!ready()) return false;
+    const job = dvui.currentWindow().arena().create(PictureJob) catch return false;
+    job.* = .{ .field = self.*, .picture = picture, .covered = covered };
+    job.field.lens = true;
+    job.field.tint = null;
+    job.field.mix = 0;
+    job.field.lift = 0;
+    for (job.field.shapes[0..job.field.len]) |*sh| sh.blur = 0;
+    dvui.deferRender(job, PictureJob.run);
+    return true;
+}
+
+/// Physical pixels the picture `drawPicture` lays the glass over should reach past the shapes: as
+/// far as the earlier glass's rim reaches out (`liquid_glass.margin`). Apple's lens pulls only
+/// from inside the shape and needs none of it.
+pub fn pictureMargin(self: *const LiquidField) f32 {
+    return liquid_glass.margin(self.look(), self.scale);
+}
+
+/// What `drawPicture` hands to the replay, in the frame's arena.
+const PictureJob = struct {
+    field: LiquidField,
+    picture: dvui.Texture,
+    covered: dvui.Rect.Physical,
+
+    fn run(ctx: ?*anyopaque) void {
+        const self: *PictureJob = @ptrCast(@alignCast(ctx orelse return));
+        const prev_alpha = dvui.currentWindow().alpha;
+        dvui.alphaSet(1);
+        defer dvui.alphaSet(prev_alpha);
+        _ = self.field.draw(self.picture, self.covered, null);
+    }
+};
 
 /// One quad per group, its vertex colour telling the program which pass and which shapes.
 fn quads(self: *const LiquidField, groups: Clusters, glass: bool, frost: dvui.Texture) void {
