@@ -767,11 +767,13 @@ pub fn menuKeybindFor(editor: *Editor, command_id: []const u8) dvui.enums.Keybin
     return adapter.toKeybind(stroke.first);
 }
 
-/// Highest-precedence binding for `command` (user > plugin > profile > dvui), or null.
+/// Highest-precedence binding for `command` (user > plugin > profile > dvui), or null. One that
+/// carries arguments is a use of the command rather than its shortcut, and is never it.
 fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
     var best: ?Keymap.Binding = null;
     for (editor.app.keymap.bindings.items) |b| {
         const cmd = b.command orelse continue;
+        if (b.args.len > 0) continue;
         if (!std.mem.eql(u8, cmd, command)) continue;
         if (best) |cur| {
             if (@intFromEnum(b.source) >= @intFromEnum(cur.source)) best = b;
@@ -952,6 +954,8 @@ fn projectUserOverrides(editor: *Editor) void {
     for (editor.app.keymap.bindings.items) |b| {
         if (b.source != .user) continue;
         const command = b.command orelse continue;
+        // A built-in bind takes no arguments, and a command's own chord is the one without.
+        if (b.args.len > 0) continue;
 
         const name = if (std.mem.startsWith(u8, command, bind_override_prefix))
             command[bind_override_prefix.len..]
@@ -1042,7 +1046,7 @@ pub fn webKeyBound(key_len: usize, mods_bits: u32) bool {
     return switch (editor.app.keymap.peek(.{ .key = key, .mods = mods }, currentContext(editor), activeOwnerId(editor))) {
         .none, .unbound => false,
         .pending => true,
-        .command => |id| !(std.mem.endsWith(u8, id, ".copy") or std.mem.endsWith(u8, id, ".cut") or std.mem.endsWith(u8, id, ".paste")),
+        .command => |c| !(std.mem.endsWith(u8, c.id, ".copy") or std.mem.endsWith(u8, c.id, ".cut") or std.mem.endsWith(u8, c.id, ".paste")),
     };
 }
 
@@ -1085,7 +1089,8 @@ pub fn tick() !void {
                     // identical to the if-chain it replaced, which never marked events handled
                     // either. Revisit when chords or user unbinds actually land (step C/D).
                     .pending, .unbound => {},
-                    .command => |id| {
+                    .command => |invoked| {
+                        const id = invoked.id;
                         // macOS delivers these twice — once as an NSMenu key equivalent (which
                         // already ran the action) and once as an SDL key event. Let the native
                         // menu own them there.
@@ -1102,14 +1107,33 @@ pub fn tick() !void {
                         // commands need to know that, or they synthesize a second one.
                         running_from_key_event = true;
                         defer running_from_key_event = false;
-                        editor.app.host.runCommand(id) catch |err| {
-                            dvui.log.err("command '{s}' failed: {s}", .{ id, @errorName(err) });
-                        };
+                        runInvocation(editor, invoked);
                     },
                 }
             },
             else => {},
         }
+    }
+}
+
+/// Run what a key resolved to: with no arguments as a menu row does (a command that needs some
+/// opens the palette to ask), with the binding's arguments through `Host.callCommand`.
+fn runInvocation(editor: *Editor, invoked: Keymap.Invocation) void {
+    const host = &editor.app.host;
+    if (invoked.args.len == 0) {
+        host.runCommand(invoked.id) catch |err| {
+            dvui.log.err("command '{s}' failed: {s}", .{ invoked.id, @errorName(err) });
+        };
+        return;
+    }
+    var arena: std.heap.ArenaAllocator = .init(host.allocator);
+    defer arena.deinit();
+    switch (host.callCommand(invoked.id, invoked.args, arena.allocator())) {
+        // A disabled command does nothing from a key, as from its menu row.
+        .ok, .disabled => {},
+        .unknown => dvui.log.err("keybinds.zon: no command '{s}'", .{invoked.id}),
+        .bad_args => |msg| dvui.log.err("keybinds.zon: '{s}' {s}: {s}", .{ invoked.id, invoked.args, msg }),
+        .failed => |msg| dvui.log.err("command '{s}' failed: {s}", .{ invoked.id, msg }),
     }
 }
 
@@ -1157,6 +1181,7 @@ fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayLi
                 .keys = try gpa.dupe(u8, b.keys),
                 .stroke = b.stroke,
                 .command = if (b.command) |c| try gpa.dupe(u8, c) else null,
+                .args = if (b.args) |a| try gpa.dupe(u8, a) else null,
                 .when = b.when,
                 .when_text = if (b.when_text) |w| try gpa.dupe(u8, w) else null,
                 .owner_id = if (b.owner_id) |o| try gpa.dupe(u8, o) else null,
@@ -1164,6 +1189,14 @@ fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayLi
         }
     }
     return out;
+}
+
+/// Whether override `b` is `command`'s own shortcut (or its unbind) — what the Keyboard
+/// Shortcuts pane sets and clears. One that runs it with arguments is a binding of its own and
+/// is left alone.
+fn isShortcutFor(b: Keymap.zon.OwnedBinding, command: []const u8) bool {
+    const c = b.command orelse return false;
+    return b.args == null and std.mem.eql(u8, c, command);
 }
 
 /// Set (or replace) the user override for `command`. `keys` is VSCode grammar (`mod+p`).
@@ -1181,12 +1214,10 @@ pub fn setUserBinding(editor: *Editor, command: []const u8, keys: []const u8) !v
     // Drop any prior override for this command (including unbinds).
     var i: usize = 0;
     while (i < list.items.len) {
-        if (list.items[i].command) |c| {
-            if (std.mem.eql(u8, c, command)) {
-                var removed = list.orderedRemove(i);
-                removed.deinit(gpa);
-                continue;
-            }
+        if (isShortcutFor(list.items[i], command)) {
+            var removed = list.orderedRemove(i);
+            removed.deinit(gpa);
+            continue;
         }
         i += 1;
     }
@@ -1215,13 +1246,11 @@ pub fn clearUserBinding(editor: *Editor, command: []const u8) !void {
     var i: usize = 0;
     var changed = false;
     while (i < list.items.len) {
-        if (list.items[i].command) |c| {
-            if (std.mem.eql(u8, c, command)) {
-                var removed = list.orderedRemove(i);
-                removed.deinit(gpa);
-                changed = true;
-                continue;
-            }
+        if (isShortcutFor(list.items[i], command)) {
+            var removed = list.orderedRemove(i);
+            removed.deinit(gpa);
+            changed = true;
+            continue;
         }
         i += 1;
     }
@@ -1232,7 +1261,7 @@ pub fn clearUserBinding(editor: *Editor, command: []const u8) !void {
 /// True when `command` has a user-layer override in the live keymap.
 pub fn hasUserOverride(editor: *Editor, command: []const u8) bool {
     for (editor.app.keymap.bindings.items) |b| {
-        if (b.source != .user) continue;
+        if (b.source != .user or b.args.len > 0) continue;
         const c = b.command orelse continue;
         if (std.mem.eql(u8, c, command)) return true;
     }

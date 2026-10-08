@@ -128,6 +128,11 @@ pub const Binding = struct {
     /// Command id to run, or null to *unbind* this chord — how a user turns off a default
     /// without having to know what it was bound to.
     command: ?[]const u8,
+    /// The command's arguments as ZON, keyed by its parameters (`.{ .line = 1 }`), or empty to
+    /// run it with none, as a menu row does. A binding with arguments is a use of the command,
+    /// not its shortcut: the menus and the palette advertise only the bindings without
+    /// (`bindingsFor`), and the Keyboard Shortcuts pane edits only those.
+    args: []const u8 = "",
     when: When = .{},
     source: Source = .profile,
     /// Owning plugin id, for grouping in the UI and for dropping a plugin's binds on unload.
@@ -139,11 +144,22 @@ pub const Resolution = union(enum) {
     none,
     /// First half of a chord matched — swallow the key and wait for the second stroke.
     pending,
-    command: []const u8,
+    command: Invocation,
     /// An explicit unbind matched. Distinct from `.none` because the key *was* claimed: the
     /// point of unbinding is to stop a lower layer from firing, not to fall through to it.
     unbound,
 };
+
+/// What a key runs: a command, and the arguments its binding carries (empty for none).
+pub const Invocation = struct {
+    id: []const u8,
+    args: []const u8 = "",
+};
+
+fn invocation(b: Binding) Resolution {
+    const id = b.command orelse return .unbound;
+    return .{ .command = .{ .id = id, .args = b.args } };
+}
 
 pub const Conflict = struct {
     stroke: Stroke,
@@ -230,7 +246,7 @@ pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Re
         self.pending = null;
         const full: Stroke = .{ .first = first, .second = c };
         if (self.best(full, ctx, active_owner)) |b| {
-            return if (b.command) |cmd| .{ .command = cmd } else .unbound;
+            return invocation(b);
         }
         // A chord was started but the second stroke matched nothing: swallow it rather than
         // letting a half-typed `ctrl+k x` fire whatever `x` happens to be bound to.
@@ -245,7 +261,7 @@ pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Re
     if (self.opensChord(c, ctx, active_owner)) {
         if (single_match) |b| {
             if (b.source == .user) {
-                return if (b.command) |cmd| .{ .command = cmd } else .unbound;
+                return invocation(b);
             }
         }
         self.pending = c;
@@ -253,7 +269,7 @@ pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Re
     }
 
     if (single_match) |b| {
-        return if (b.command) |cmd| .{ .command = cmd } else .unbound;
+        return invocation(b);
     }
     return .none;
 }
@@ -265,13 +281,15 @@ pub fn peek(self: Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Resolu
     return copy.resolve(c, ctx, active_owner);
 }
 
-/// Every binding currently mapped to `command` — for rendering shortcut hints and the
-/// Keyboard Shortcuts pane.
+/// Every binding currently mapped to `command` with no arguments — its shortcuts, for rendering
+/// hints and the Keyboard Shortcuts pane. A binding that carries arguments runs something a menu
+/// row does not, so it is not one.
 pub fn bindingsFor(self: Keymap, gpa: Allocator, command: []const u8) ![]Binding {
     var out: std.ArrayList(Binding) = .empty;
     errdefer out.deinit(gpa);
     for (self.bindings.items) |b| {
         const cmd = b.command orelse continue;
+        if (b.args.len > 0) continue;
         if (std.mem.eql(u8, cmd, command)) try out.append(gpa, b);
     }
     return out.toOwnedSlice(gpa);
@@ -293,6 +311,7 @@ pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
         stroke: Stroke,
         when: When,
         command: []const u8,
+        args: []const u8,
         owner_id: ?[]const u8,
         rank: u16,
         index: usize,
@@ -306,7 +325,7 @@ pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
         const rank: u16 = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
         for (claims.items) |*c| {
             if (!c.stroke.eql(b.stroke) or !c.when.eql(b.when)) continue;
-            if (!std.mem.eql(u8, c.command, cmd)) continue;
+            if (!std.mem.eql(u8, c.command, cmd) or !std.mem.eql(u8, c.args, b.args)) continue;
             // Later equal-rank wins — same tie-break `best()` uses.
             if (rank >= c.rank) {
                 c.rank = rank;
@@ -319,6 +338,7 @@ pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
                 .stroke = b.stroke,
                 .when = b.when,
                 .command = cmd,
+                .args = b.args,
                 .owner_id = b.owner_id,
                 .rank = rank,
                 .index = i,
@@ -444,7 +464,7 @@ test "single-stroke resolves to its command" {
     defer k.deinit(a);
 
     const r = k.resolve(keys("ctrl+s").first, .{}, null);
-    try t.expectEqualStrings("fizzy.save", r.command);
+    try t.expectEqualStrings("fizzy.save", r.command.id);
     try t.expect(k.resolve(keys("ctrl+q").first, .{}, null) == .none);
 }
 
@@ -457,7 +477,7 @@ test "chord needs both strokes" {
 
     try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
     const r = k.resolve(keys("ctrl+c").first, .{}, null);
-    try t.expectEqualStrings("text.addLineComment", r.command);
+    try t.expectEqualStrings("text.addLineComment", r.command.id);
     try t.expectEqual(@as(?Chord, null), k.pending);
 }
 
@@ -471,7 +491,7 @@ test "peeking at a key does not feed the chord" {
     try t.expect(k.peek(keys("ctrl+k").first, .{}, null) == .pending);
     try t.expectEqual(@as(?Chord, null), k.pending);
     try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
-    try t.expectEqualStrings("text.addLineComment", k.peek(keys("ctrl+c").first, .{}, null).command);
+    try t.expectEqualStrings("text.addLineComment", k.peek(keys("ctrl+c").first, .{}, null).command.id);
     try t.expect(k.pending != null);
 }
 
@@ -487,7 +507,7 @@ test "an unmatched second stroke is swallowed, not misfired" {
     // `ctrl+x` must NOT run cut here — it was typed as the tail of an abandoned chord.
     try t.expect(k.resolve(keys("ctrl+x").first, .{}, null) == .unbound);
     // ...and afterwards it works normally again.
-    try t.expectEqualStrings("fizzy.cut", k.resolve(keys("ctrl+x").first, .{}, null).command);
+    try t.expectEqualStrings("fizzy.cut", k.resolve(keys("ctrl+x").first, .{}, null).command.id);
 }
 
 test "pressing a modifier does not cancel a pending chord" {
@@ -500,7 +520,7 @@ test "pressing a modifier does not cancel a pending chord" {
     try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
     try t.expect(k.resolve(.{ .key = .left_control }, .{}, null) == .none);
     try t.expect(k.pending != null);
-    try t.expectEqualStrings("text.addLineComment", k.resolve(keys("ctrl+c").first, .{}, null).command);
+    try t.expectEqualStrings("text.addLineComment", k.resolve(keys("ctrl+c").first, .{}, null).command.id);
 }
 
 test "user layer overrides profile layer" {
@@ -510,7 +530,7 @@ test "user layer overrides profile layer" {
         .{ .stroke = keys("ctrl+b"), .command = "text.buildProject", .source = .user },
     });
     defer k.deinit(a);
-    try t.expectEqualStrings("text.buildProject", k.resolve(keys("ctrl+b").first, .{}, null).command);
+    try t.expectEqualStrings("text.buildProject", k.resolve(keys("ctrl+b").first, .{}, null).command.id);
 }
 
 test "null command unbinds and claims the key" {
@@ -532,10 +552,10 @@ test "more specific when wins at equal source" {
     });
     defer k.deinit(a);
 
-    try t.expectEqualStrings("fizzy.cancel", k.resolve(keys("escape").first, .{}, null).command);
+    try t.expectEqualStrings("fizzy.cancel", k.resolve(keys("escape").first, .{}, null).command.id);
     try t.expectEqualStrings(
         "text.dismissCompletion",
-        k.resolve(keys("escape").first, .{ .completion_visible = true }, null).command,
+        k.resolve(keys("escape").first, .{ .completion_visible = true }, null).command.id,
     );
 }
 
@@ -548,7 +568,7 @@ test "a binding whose context is unmet does not match" {
     try t.expect(k.resolve(keys("ctrl+/").first, .{}, null) == .none);
     try t.expectEqualStrings(
         "text.toggleLineComment",
-        k.resolve(keys("ctrl+/").first, .{ .editor_focused = true }, null).command,
+        k.resolve(keys("ctrl+/").first, .{ .editor_focused = true }, null).command.id,
     );
 }
 
@@ -562,7 +582,7 @@ test "cancelPending drops a half-entered chord" {
 
     try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
     k.cancelPending();
-    try t.expectEqualStrings("fizzy.copy", k.resolve(keys("ctrl+c").first, .{}, null).command);
+    try t.expectEqualStrings("fizzy.copy", k.resolve(keys("ctrl+c").first, .{}, null).command.id);
 }
 
 test "a user single-stroke binding beats a profile chord on the same opening key" {
@@ -572,7 +592,7 @@ test "a user single-stroke binding beats a profile chord on the same opening key
         .{ .stroke = keys("ctrl+k"), .command = "fizzy.killLine", .source = .user },
     });
     defer k.deinit(a);
-    try t.expectEqualStrings("fizzy.killLine", k.resolve(keys("ctrl+k").first, .{}, null).command);
+    try t.expectEqualStrings("fizzy.killLine", k.resolve(keys("ctrl+k").first, .{}, null).command.id);
 }
 
 test "when parsing accepts camelCase and snake_case, and reports unknowns" {
@@ -585,6 +605,32 @@ test "when parsing accepts camelCase and snake_case, and reports unknowns" {
     try t.expect(!w.panel_focused);
     try t.expectEqual(@as(usize, 1), unknown.items.len);
     try t.expectEqualStrings("someFutureThing", unknown.items[0]);
+}
+
+test "a binding carries its arguments, and is not the command's shortcut" {
+    const a = t.allocator;
+    var k: Keymap = .{};
+    defer k.deinit(a);
+    try k.add(a, .{ .stroke = keys("ctrl+g"), .command = "text.goToLine" });
+    try k.add(a, .{ .stroke = keys("ctrl+1"), .command = "text.goToLine", .args = ".{ .line = 1 }", .source = .user });
+    try k.add(a, .{ .stroke = keys("ctrl+2"), .command = "text.goToLine", .args = ".{ .line = 2 }", .source = .user });
+
+    const one = k.resolve(keys("ctrl+1").first, .{}, null).command;
+    try t.expectEqualStrings("text.goToLine", one.id);
+    try t.expectEqualStrings(".{ .line = 1 }", one.args);
+    try t.expectEqualStrings("", k.resolve(keys("ctrl+g").first, .{}, null).command.args);
+
+    // Its shortcut is the binding that runs it as a menu row does.
+    const found = try k.bindingsFor(a, "text.goToLine");
+    defer a.free(found);
+    try t.expectEqual(@as(usize, 1), found.len);
+    try t.expect(found[0].stroke.eql(keys("ctrl+g")));
+
+    // Two bindings that run it with different arguments on one chord are two claims on it.
+    try k.add(a, .{ .stroke = keys("ctrl+1"), .command = "text.goToLine", .args = ".{ .line = 9 }", .source = .user });
+    const cs = try k.conflicts(a);
+    defer a.free(cs);
+    try t.expectEqual(@as(usize, 1), cs.len);
 }
 
 test "bindingsFor lists every chord for a command" {
@@ -664,9 +710,9 @@ test "owner-scoped binding only fires when that owner is active" {
     });
     defer k.deinit(a);
 
-    try t.expectEqualStrings("fizzy.quickOpen", k.resolve(keys("ctrl+p").first, .{}, null).command);
-    try t.expectEqualStrings("pixi.export", k.resolve(keys("ctrl+p").first, .{}, "pixi").command);
-    try t.expectEqualStrings("fizzy.quickOpen", k.resolve(keys("ctrl+p").first, .{}, "text").command);
+    try t.expectEqualStrings("fizzy.quickOpen", k.resolve(keys("ctrl+p").first, .{}, null).command.id);
+    try t.expectEqualStrings("pixi.export", k.resolve(keys("ctrl+p").first, .{}, "pixi").command.id);
+    try t.expectEqualStrings("fizzy.quickOpen", k.resolve(keys("ctrl+p").first, .{}, "text").command.id);
 
     const c = try k.conflicts(a);
     defer a.free(c);

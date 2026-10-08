@@ -924,6 +924,12 @@ fn goToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) any
   them. Treat arguments as input from outside: check them as you would a user's.
 - **Listing.** `host.commandCount()` / `host.commandAt(i)` walk the registry, `params` included,
   for anything that offers commands to someone else.
+- **From a key.** A person can bind a command with arguments in `keybinds.zon`:
+  `.{ .keys = "ctrl+1", .command = "text.goToLine", .args = .{ .line = 1 } }`. The arguments are
+  kept as written and handed to `callCommand` when the key is pressed, so a mistake shows up then,
+  in the log, with your message. Such a binding is a use of the command, not its shortcut: menus
+  and the palette show only the binding without arguments, and the Keyboard Shortcuts pane edits
+  only that one.
 
 ### 3.4.1 Context menus
 

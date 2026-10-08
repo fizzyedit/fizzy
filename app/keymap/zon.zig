@@ -15,6 +15,7 @@
 //!             .{ .keys = "ctrl+k ctrl+c", .command = "text.addLineComment" },
 //!             .{ .keys = "escape", .command = "text.dismissCompletion",
 //!                .when = "completionVisible" },
+//!             .{ .keys = "ctrl+1", .command = "text.goToLine", .args = .{ .line = 1 } },
 //!         },
 //!     },
 //! }
@@ -23,6 +24,10 @@
 //! Parsing goes through `std.zig.Ast` + `Zoir` rather than `std.zon.parse`, for the same reason
 //! `SettingsPluginsZon.zig` does: the plugin ids under `.plugins` are **dynamic field names**,
 //! which a typed parse can't express.
+//!
+//! `.args` are the command's arguments (`Host.callCommand`), written as ZON in place and kept as
+//! the text they were written as: what they mean, and whether they fit, is the command's to say
+//! when the key is pressed, so a binding for a plugin that is not loaded yet still round-trips.
 //!
 //! **Parsing never fails on bad content.** A malformed entry produces a `Diagnostic` (with a
 //! line/column) and is skipped, so one typo can't cost a user every other binding they have. The
@@ -44,6 +49,8 @@ pub const OwnedBinding = struct {
     stroke: Stroke,
     /// null = an explicit unbind.
     command: ?[]u8,
+    /// The command's arguments as ZON source, verbatim (`.{ .line = 1 }`). Null runs it with none.
+    args: ?[]u8 = null,
     when: When = .{},
     when_text: ?[]u8 = null,
     /// Plugin id, or null for the `.fizzy` block.
@@ -52,6 +59,7 @@ pub const OwnedBinding = struct {
     pub fn deinit(self: *OwnedBinding, gpa: Allocator) void {
         gpa.free(self.keys);
         if (self.command) |c| gpa.free(c);
+        if (self.args) |a| gpa.free(a);
         if (self.when_text) |w| gpa.free(w);
         if (self.owner_id) |o| gpa.free(o);
         self.* = undefined;
@@ -90,6 +98,7 @@ pub const File = struct {
             o.* = .{
                 .stroke = b.stroke,
                 .command = b.command,
+                .args = b.args orelse "",
                 .when = b.when,
                 .source = source,
                 .owner_id = b.owner_id,
@@ -232,6 +241,23 @@ fn collectBlock(
             }
         }
 
+        // `.args`, when given, is a struct literal of the command's arguments, kept as written.
+        var args_text: ?[]const u8 = null;
+        if (findField(zoir, entry, "args")) |args_node| {
+            switch (args_node.get(zoir)) {
+                .struct_literal => args_text = ast.getNodeSource(args_node.getAstNode(zoir)),
+                .empty_literal => {},
+                else => {
+                    c.diag(loc.line, loc.column, "`.args` must be a struct of the command's arguments, e.g. .{{ .line = 1 }}", .{});
+                    continue;
+                },
+            }
+            if (command == null and args_text != null) {
+                c.diag(loc.line, loc.column, "an unbind (`.command = null`) takes no `.args`", .{});
+                continue;
+            }
+        }
+
         var when: When = .{};
         var when_text: ?[]u8 = null;
         errdefer if (when_text) |w| c.gpa.free(w);
@@ -256,6 +282,8 @@ fn collectBlock(
         errdefer c.gpa.free(keys_copy);
         const command_copy: ?[]u8 = if (command) |cmd| try c.gpa.dupe(u8, cmd) else null;
         errdefer if (command_copy) |cc| c.gpa.free(cc);
+        const args_copy: ?[]u8 = if (args_text) |a| try c.gpa.dupe(u8, a) else null;
+        errdefer if (args_copy) |ac| c.gpa.free(ac);
         const owner_copy: ?[]u8 = if (owner_id) |o| try c.gpa.dupe(u8, o) else null;
         errdefer if (owner_copy) |oc| c.gpa.free(oc);
 
@@ -263,6 +291,7 @@ fn collectBlock(
             .keys = keys_copy,
             .stroke = stroke,
             .command = command_copy,
+            .args = args_copy,
             .when = when,
             .when_text = when_text,
             .owner_id = owner_copy,
@@ -345,6 +374,7 @@ fn writeBinding(w: *std.Io.Writer, b: OwnedBinding, indent: []const u8) !void {
     } else {
         try w.writeAll(".command = null");
     }
+    if (b.args) |a| try w.print(", .args = {s}", .{a});
     if (b.when_text) |wt| {
         if (wt.len > 0) try w.print(", .when = \"{f}\"", .{std.zig.fmtString(wt)});
     }
@@ -537,6 +567,7 @@ test "format round-trips through parse" {
         \\        .text = .{
         \\            .{ .keys = "ctrl+k ctrl+c", .command = "text.addLineComment" },
         \\            .{ .keys = "escape", .command = "text.dismiss", .when = "completionVisible" },
+        \\            .{ .keys = "ctrl+1", .command = "text.goToLine", .args = .{ .line = 1, .note = "a \\"b\\"" } },
         \\        },
         \\    },
         \\}
@@ -559,8 +590,37 @@ test "format round-trips through parse" {
         try t.expect(x.stroke.eql(y.stroke));
         try t.expect(x.when.eql(y.when));
         if (x.command) |xc| try t.expectEqualStrings(xc, y.command.?) else try t.expect(y.command == null);
+        if (x.args) |xa| try t.expectEqualStrings(xa, y.args.?) else try t.expect(y.args == null);
         if (x.owner_id) |xo| try t.expectEqualStrings(xo, y.owner_id.?) else try t.expect(y.owner_id == null);
     }
+}
+
+test "a binding's arguments are kept as written, and fed to the keymap" {
+    const a = t.allocator;
+    const src =
+        \\.{ .plugins = .{ .text = .{
+        \\    .{ .keys = "ctrl+1", .command = "text.goToLine", .args = .{ .line = 1 } },
+        \\    .{ .keys = "ctrl+2", .command = "text.goToLine", .args = .{} },
+        \\    .{ .keys = "ctrl+3", .command = "text.goToLine", .args = 3 },
+        \\    .{ .keys = "ctrl+4", .command = null, .args = .{ .line = 4 } },
+        \\} } }
+    ;
+    var f = try parse(a, src, .other);
+    defer f.deinit(a);
+    try t.expectEqual(@as(usize, 2), f.bindings.len);
+    try t.expectEqualStrings(".{ .line = 1 }", f.bindings[0].args.?);
+    // Empty arguments are none.
+    try t.expectEqual(@as(?[]u8, null), f.bindings[1].args);
+    // Not a struct, and arguments to an unbind: each said, and skipped.
+    try t.expectEqual(@as(usize, 2), f.diagnostics.len);
+
+    const view = try f.toBindings(a, .user);
+    defer a.free(view);
+    var k: Keymap = .{};
+    defer k.deinit(a);
+    for (view) |b| try k.add(a, b);
+    const r = k.resolve((try chord_mod.parseKeys("ctrl+1", .other)).first, .{}, "text");
+    try t.expectEqualStrings(".{ .line = 1 }", r.command.args);
 }
 
 test "backslash keys survive a write/read cycle" {
@@ -599,6 +659,6 @@ test "toBindings feeds a Keymap" {
     for (view) |b| try k.add(a, b);
 
     const r = k.resolve((try chord_mod.parseKeys("ctrl+s", .other)).first, .{}, null);
-    try t.expectEqualStrings("fizzy.save", r.command);
+    try t.expectEqualStrings("fizzy.save", r.command.id);
     try t.expectEqual(Keymap.Source.user, view[0].source);
 }

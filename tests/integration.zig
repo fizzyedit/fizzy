@@ -6183,3 +6183,55 @@ test "the palette asks for a command's required arguments, then runs it with the
     try std.testing.expectEqual(@as(u32, 1), got.column);
     try std.testing.expect(editor.command_palette.closing or !editor.command_palette.open);
 }
+
+fn keybindArgsFrame() !dvui.App.Result {
+    try fizzy.Editor.Keybinds.tick();
+    return .ok;
+}
+
+test "a key bound with arguments runs its command with them, and is not its shortcut" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = editor.app.host.allocator;
+    defer editor.app.keymap.deinit(gpa);
+    PaletteArgs.got = null;
+    // `tick` reads which context the keys land in; the shim's editor has no explorer of its own.
+    var explorer: fizzy.Editor.Explorer = undefined;
+    @memset(std.mem.asBytes(&explorer), 0);
+    explorer.closed = true;
+    editor.explorer = &explorer;
+
+    const vtable = sdk.Plugin.VTable{};
+    var state: u8 = 0;
+    var plugin = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try editor.app.host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(PaletteArgs.run),
+    });
+
+    // As `keybinds.zon` would give them: the command's shortcut, and a key that runs it with
+    // arguments.
+    const parseKeys = @import("app").keymap.Keymap.parseKeys;
+    try editor.app.keymap.add(gpa, .{ .stroke = try parseKeys("ctrl+g", .other), .command = "t.place", .source = .user });
+    try editor.app.keymap.add(gpa, .{
+        .stroke = try parseKeys("ctrl+1", .other),
+        .command = "t.place",
+        .args = ".{ .line = 3, .side = .left }",
+        .source = .user,
+    });
+
+    try dvui.testing.pressKey(.one, .lcontrol);
+    try dvui.testing.settle(keybindArgsFrame);
+    const got = PaletteArgs.got orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 3), got.line);
+    try std.testing.expectEqual(PaletteArgs.Side.left, got.side);
+    try std.testing.expectEqual(@as(u32, 1), got.column);
+
+    // The menu row shows the shortcut, never the key that carries arguments.
+    const kb = fizzy.Editor.Keybinds.menuKeybindFor(editor, "t.place");
+    try std.testing.expectEqual(dvui.enums.Key.g, kb.key.?);
+}
