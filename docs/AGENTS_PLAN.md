@@ -225,6 +225,65 @@ These decide where plugins come from, so a plugin cannot provide them.
   CI. Of everything here this is the largest piece, and the one that most changes what writing
   a plugin is like.
 
+## Running with no display (spike)
+
+Can fizzy run on Linux with no display: a CI runner, a server, a remote agent's machine? Two
+ways were open:
+SDL with a video driver that needs no display, or fizzy hosted over dvui's testing backend, the
+way `tests/integration.zig` already draws pieces of it.
+
+**Over the testing backend: yes, the whole app.** `tests/integration.zig`, "headless: …", brings
+fizzy up exactly as `Entry.AppInit` does: real `Editor.init` and `postInit`, the bundled plugins
+registered, frames through `Entry.AppFrame` (demo player, frame target, editor). Then it opens a
+`.md` from a project folder, plays the bundled tour to its end, and tears down. The profile is a
+fresh temp directory (#255), so nothing of anyone's config comes in. In a Debug build: up in
+about 130 ms, the document open in about 50 ms, the tour in 714 frames and about 2 s. The testing backend's clock moves 100 ms a step, so a minute of demo runs about
+33 times faster than it plays. That is wishlist item 8 (time under the agent's control) for free.
+
+- **Plugin dylibs load into it.** `plugins/archive` built with `FIZZY_PROFILE=<dir> zig build`
+  (#255) was picked up by the ordinary user-plugin scan and registered beside the bundled ones.
+  The dvui context injection and the fingerprint check hold against a testing-backend host.
+- **A dropped-in plugin is undecided until someone says yes.** It loaded only once the
+  profile's `settings.zon` said `.plugins.archive = .{ .enabled = true }`. That is the person's
+  consent, and a sandbox recipe has to write it ahead of time. Kept as it is: an agent's
+  `plugin.build` writes it into the sandbox profile it owns, never into the person's.
+- **A reused profile restores its last session.** A second run in the same profile reopened the
+  first run's documents, from a temp project that no longer existed, and logged the failure.
+  That is session restore working as it should. A sandbox wants a fresh profile per run, or a way
+  to start without restoring. That is a wish below, not a bug.
+- **What it does not have: pixels.** The testing backend draws nothing (`drawClippedTriangles`
+  is empty, `textureCreateTarget` fails, so the frame target draws straight through), and
+  `dvui.Picture` is unsupported. Nor are there OS dialogs, native menus or pop-out windows: those
+  are backend calls with nothing behind them. The clipboard is in memory.
+- **Input is dvui events**: `dvui.testing`'s, or the `Player`'s sink. The same path a live tape
+  takes (milestone 3), so the `LiveDriver` works in it unchanged.
+
+**SDL with no display: not tried yet.** What it would take: SDL3's `offscreen` video driver (EGL
+pbuffers) or `dummy`. Fizzy's default renderer is its own SDL_GPU backend (Vulkan on Linux), so
+it would need a software Vulkan driver such as Mesa's lavapipe. Alternatively,
+`-Dnative-backend=sdl3` with `SDL_RENDER_DRIVER=software` on the `dummy` driver draws into
+memory, and `SDL_RenderReadPixels` reads the frame back. Either one gives pixels; either one
+costs system packages, real-time pacing and a renderer that is not the one people see.
+
+**So:** the headless host is fizzy over the testing backend. It is the path the integration
+tests already exercise, it needs nothing installed, it is deterministic, and it runs at the
+speed of its own clock. It becomes milestone 6's harness and the agent's sandbox. Pixels are a
+separate, later question with a named seam: the `frames` service answers "unsupported" under the
+headless host until a renderer exists. That renderer is either a software dvui render backend
+(`dvui.enums.RenderBackend` already has the slot) or the SDL software route above.
+
+The test build has a `bundled_plugins` module for it, so `Editor.postInit` has its plugins
+(`build/app.zig`). What a product needs besides: an entry
+point that runs this loop outside a test (a `fizzy-headless` executable, or a mode of the
+harness), and tapes loaded from a file.
+
+Wishes from it, for "What an agent wants" (#252):
+
+- **Start without restoring the session**, for a reused sandbox profile: a flag or a profile
+  setting.
+- **Approve a plugin in a sandbox profile in one step**, rather than editing its
+  `settings.zon` by hand.
+
 ## The SDK tarball
 
 `fizzy-sdk-v*.tar.gz` ships an `AGENTS.md` — the four-file shape, the rules that bite, how to
@@ -267,7 +326,8 @@ Each lands on its own and is useful without the next.
 4. **`state`, `frames`, `log`, `plugins`.**
 5. **`fizzyedit/agent` and `fizzy-mcp`**, desktop. Everything it needs exists by now; if it
    needs anything else, that is a missing seam to add here, not a reach into fizzy.
-6. **The headless plugin-test harness**, and `AGENTS.md` in the tarball.
+6. **The headless plugin-test harness**, and `AGENTS.md` in the tarball. Over dvui's testing
+   backend ("Running with no display"): the whole editor already runs there.
 7. **A chat surface**, if wanted.
 
 ## Decisions
