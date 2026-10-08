@@ -553,6 +553,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-window-layout-tests", "src/backend/native/platform/window_layout.zig" },
         // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
         .{ "fizzy-titlebar-tests", "src/backend/native/platform/titlebar.zig" },
+        // The rounded frame Linux's blur behind the window is stepped into (`wayland_blur`).
+        .{ "fizzy-blur-region-tests", "src/backend/native/platform/blur_region.zig" },
         // Where a viewport's OS window is on the desktop and where its part of the frame lies.
         // std-only (see viewport_map.zig); `SDLBackend` applies it.
         .{ "fizzy-viewport-map-tests", "src/backend/native/viewport_map.zig" },

@@ -18,6 +18,7 @@ const dvui = @import("dvui");
 const backend = @import("backend");
 const c = backend.c;
 const titlebar = @import("titlebar.zig");
+const wayland_blur = @import("wayland_blur.zig");
 
 /// The margins round the frame for its shadow, in window coordinates (points).
 pub const Insets = struct { left: f32 = 0, top: f32 = 0, right: f32 = 0, bottom: f32 = 0 };
@@ -61,6 +62,38 @@ pub fn frameInsets(window: *c.SDL_Window) Insets {
         };
     }
     return .{};
+}
+
+/// The desktop's blur behind the window's frame (`wayland_blur`), inside the margin its shadow is
+/// drawn in (`frameInsets`), its corners rounded by `radius` points — or none, null. Whether the
+/// compositor blurs behind windows at all: Wayland with `ext-background-effect-v1` (GNOME 51,
+/// Plasma 6.7, niri) or KDE's older `org_kde_kwin_blur`. Not X11, nor a compositor without either.
+/// Cheap to call every frame; it is sent to the compositor only when it changes, and taken with
+/// the frame presented next.
+pub fn blurBehind(window: *c.SDL_Window, radius: ?f32) bool {
+    if (comptime builtin.os.tag != .linux) return false;
+    const props = c.SDL_GetWindowProperties(window);
+    const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null) orelse return false;
+    const surface = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null) orelse return false;
+    const want: ?wayland_blur.Want = if (radius) |r| want: {
+        // The surface is the window SDL reports (points), the frame and its shadow's margin.
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSize(window, &w, &h);
+        const in = frameInsets(window);
+        const left: i32 = @intFromFloat(@round(in.left));
+        const top: i32 = @intFromFloat(@round(in.top));
+        break :want .{
+            .frame = .{
+                .x = left,
+                .y = top,
+                .w = w - left - @as(i32, @intFromFloat(@round(in.right))),
+                .h = h - top - @as(i32, @intFromFloat(@round(in.bottom))),
+            },
+            .radius = r,
+        };
+    } else null;
+    return wayland_blur.behind(display, surface, want);
 }
 
 /// The window whose chrome is in place.

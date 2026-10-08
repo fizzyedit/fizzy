@@ -180,6 +180,9 @@ window_opacity: f32 = 1.0,
 /// OS's fullscreen transitions instead of snapping. Snaps to its target on the first frame, so
 /// there is no fade at launch.
 window_opacity_anim: WindowOpacity = .{},
+/// Linux: the compositor blurs behind the window (`backend.blurBehind`), so the window's base is
+/// translucent over it, as over macOS's vibrancy and Windows' Acrylic (`windowBase`).
+blurred_behind: bool = false,
 /// The window's chrome hidden last frame — a fullscreen Space its end state — and until when, on the
 /// way back out, frames keep coming for its opacity to fade (`tick`).
 chrome_was_hidden: bool = false,
@@ -3586,15 +3589,17 @@ pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.Wind
 }
 
 /// A window's base at `opacity`: the theme's content fill over the OS's material where the window
-/// has one (macOS, Windows), lightened as it goes see-through so the material behind reads as the
+/// has one (macOS, Windows; Linux where the compositor blurs behind it), lightened as it goes see-through so the material behind reads as the
 /// same tone; opaque where there is none. Every window fizzy draws stands on it — the main window,
 /// a float's own window, the carry window (`Popout.base`) — so side by side they are one colour.
 pub fn windowBase(opacity: f32) dvui.Color {
     const fill = dvui.themeGet().color(.content, .fill);
-    return switch (builtin.os.tag) {
-        .macos, .windows => fill.opacity(opacity).lighten((1.0 - opacity) * 4.0),
-        else => fill,
+    const material = switch (builtin.os.tag) {
+        .macos, .windows => true,
+        .linux => fizzy.editor().blurred_behind,
+        else => false,
     };
+    return if (material) fill.opacity(opacity).lighten((1.0 - opacity) * 4.0) else fill;
 }
 
 /// Whether a setting the app takes only at launch has been changed since (`Popout.restartPending`):
@@ -3640,9 +3645,6 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast);
     fizzy.core.programs.publishHost();
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
-    // Translucent over the desktop's material on macOS and Windows; opaque elsewhere, where the
-    // window's alpha is only its shape (`LiquidField.publishOpaqueWindow`).
-    fizzy.core.LiquidField.publishOpaqueWindow(builtin.os.tag != .macos and builtin.os.tag != .windows);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();
@@ -3663,6 +3665,19 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // The draw uses `window_opacity_anim`.
     const covers = fizzy.backend.coversDesktop(dvui.currentWindow());
     easeWindowOpacity(&editor.window_opacity_anim, covers, fizzy.backend.enteringSpace(dvui.currentWindow()), fizzy.backend.spaceFullness(dvui.currentWindow()), editor.window_opacity);
+    // Linux: the desktop's blur behind the window's frame, where the compositor has one
+    // (`backend.blurBehind`), asked for while the window is translucent at all, its corners the
+    // frame's (square maximized, as `draw` draws it). Behind `FIZZY_BLUR_BEHIND=1` until it has been
+    // seen on GNOME and KDE (`docs/WINDOWS_LINUX_GLASS_PLAN.md`).
+    if (builtin.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
+        const win = dvui.currentWindow();
+        const radius: f32 = if (fizzy.backend.isMaximized(win)) 0 else Constants.linux_window_radius;
+        editor.blurred_behind = fizzy.backend.blurBehind(win, if (editor.window_opacity_anim.value < 1) radius else null);
+    }
+    // Translucent over the desktop's material on macOS and Windows, and on Linux where the
+    // compositor blurs behind the window; opaque elsewhere, where the window's alpha is only its
+    // shape (`LiquidField.publishOpaqueWindow`).
+    fizzy.core.LiquidField.publishOpaqueWindow(builtin.os.tag != .macos and builtin.os.tag != .windows and !editor.blurred_behind);
     // Out of a fullscreen Space, the window stops covering the desktop on AppKit's and SDL's own
     // time, after the transition, and nothing wakes a frame for it: it sat opaque until the mouse
     // moved (the user). From the moment it sets out of the Space, frames keep coming until it no
