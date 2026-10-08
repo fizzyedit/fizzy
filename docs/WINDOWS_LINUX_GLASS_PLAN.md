@@ -7,6 +7,15 @@ OS gives fizzy to build it from, and in what order to build it. The facts about 
 gathered in October 2026, with sources linked. Anything marked **(spike)** was not run, and is the
 first thing to check.
 
+**The plan this works under is `docs/NATIVE_WINDOWS_PLAN.md`** (on the `claude/native-windows-plan`
+branch, not yet merged, though `Popout.zig` and `glass_look.zig` already cite it). Its decisions
+stand: on Windows, the slider runs along DWM's backdrop types as Windows Terminal maps its opacity
+(no backdrop, then Acrylic, then Mica), fizzy's windows act as one activation group, a carry
+window is DWM Acrylic, and the drop zones stay the app's glass, with no merging. Per-shape glass
+over the desktop through Windows.UI.Composition is its "Phase 2, only with a go-ahead". This file
+is the research for that phase (the overlay below) and for the Linux blur region, which its
+"Linux — the compositor's blur" already designs and which is now built.
+
 ## What macOS does, taken apart
 
 The macOS work is one experience, but it rests on several separate things the OS provides. Each one
@@ -278,7 +287,9 @@ rounded corners are stepped rectangles a pixel high along each corner's arc, whi
 The region is surface state, so the request goes out before the frame's present (whose Vulkan WSI
 makes the `wl_surface.commit`, on the same connection). A resize then changes the blur and the
 picture in the same commit. Where no compositor offers it (sway, GNOME before 51), nothing changes:
-the window stays opaque.
+the window stays opaque. At the top of the slider the window sends an empty region rather than
+none, so a compositor that blurs translucent windows by default (Hyprland) does not; on KDE's own
+protocol, where an empty region blurs the whole window, it unsets the blur instead.
 
 **Wayland: popups yes, floats not yet.** A Wayland client still can't place a toplevel, so floats
 stay in the main window, as decided. Menus, dialogs and tooltips, though, can leave the main
@@ -378,7 +389,8 @@ Each step is useful by itself, and the spikes come before anything that depends 
    4. the overlay's click-through and z-order with a drag in flight, and `WS_EX_LAYERED` on a
       window with a composition swapchain and a DWM backdrop.
 6. **Windows: the overlay** (`viewports.carries`, the `os_backdrop` glass), if spikes 1 and 2
-   hold. If they don't, the fallback is the overlay with the app's glass and no OS blur under it.
+   hold, and with the go-ahead `NATIVE_WINDOWS_PLAN.md` asks for (its Phase 2). If they don't, the
+   fallback is the overlay with the app's glass and no OS blur under it.
    That still carries a view past every window, which is the part users will notice most.
 7. **Optional: real refraction on Windows** through capture, behind a flag, if the clear lens over
    other apps turns out to matter.
@@ -387,15 +399,14 @@ Each step is useful by itself, and the spikes come before anything that depends 
 
 ## Still open
 
-- **What "native" should mean on Windows.** Windows 11's design language is Mica for long-lived
-  windows and Acrylic for transient surfaces. Fizzy uses Acrylic everywhere because the window
-  opacity slider needs a clear material. Floats could take Mica Alt, the material Windows 11 uses
-  for tabbed windows; menus, carries and the overlay stay Acrylic.
+- **What "native" should mean on Windows** is settled in `NATIVE_WINDOWS_PLAN.md`: Mica for
+  long-lived windows at the top of the slider (Windows Terminal's mapping), Acrylic for transient
+  surfaces (menus, carries, and the overlay if Phase 2 goes ahead).
 - **The slider where the OS owns the blur.** On Windows and Wayland the frost's strength is fixed,
   so the lower half of `glass_look`'s slider (clear lens to whole frost) needs its own mapping
   there, or a decision that those platforms start at frost.
 - **Mixed DPI.** Every viewport uses the main window's density (`POPOUT_WINDOWS_PLAN.md`, P5). A
   per-display overlay makes this matter sooner, as soon as one spans a second display.
-- **`docs/NATIVE_WINDOWS_PLAN.md`** is referenced from `Popout.zig`, `glass_look.zig` and
-  `POPOUT_WINDOWS_PLAN.md` ("One material, one slider"), but it is not in the repository. This
-  file does not try to replace it.
+- **`docs/NATIVE_WINDOWS_PLAN.md` is not on `main`.** `Popout.zig`, `glass_look.zig` and
+  `POPOUT_WINDOWS_PLAN.md` cite it, but it lives only on `claude/native-windows-plan`. Merging that
+  branch fixes the dangling references.
