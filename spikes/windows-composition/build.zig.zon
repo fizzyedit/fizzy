@@ -1,0 +1,24 @@
+.{
+    .name = .windows_composition_spike,
+    .version = "0.0.0",
+    .fingerprint = 0x28d1b8a12c4276b6,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "README.md",
+        "src",
+    },
+    // The same pins as fizzy's root `build.zig.zon`: fizzyedit/SDL (through sdl_zig), whose D3D12
+    // presents a transparent window through a topmost DirectComposition target, and zigwin32.
+    .dependencies = .{
+        .sdl = .{
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/58abe388d4200b0f66701c0701acc6d1910bc55f.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0c0KqgB_riMOO7mEHunTksg6ofuVCDPkOoYd3A4I",
+        },
+        .zigwin32 = .{
+            .url = "https://github.com/marlersoft/zigwin32/archive/ec98bb4d9eea532320a8551720a9e3ec6de64994.tar.gz",
+            .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
+        },
+    },
+}

@@ -2,7 +2,8 @@
 
 Status: in progress. Research under `docs/NATIVE_WINDOWS_PLAN.md`. Step 0 (the glass programs
 compiled again) is done (#242). Steps 3 (Windows menus and dialogs as Acrylic popups) and 4 (the
-Linux window material) are built in PRs of their own, each behind a flag; nothing else here is.
+Linux window material) are built in PRs of their own, each behind a flag, and step 5's spikes are
+run (`spikes/windows-composition/`); nothing else here is.
 
 An investigation, not yet a design anyone has agreed to. macOS has floats as OS windows by default,
 and on macOS 26 the OS draws a view drag's glass (`docs/POPOUT_WINDOWS_PLAN.md`, "P6";
@@ -378,9 +379,22 @@ Each step is useful by itself, and the spikes come before anything that depends 
    3. a host backdrop masked through an effect graph by a swapchain the app presents;
    4. the overlay's click-through and z-order with a drag in flight, and `WS_EX_LAYERED` on a
       window with a composition swapchain and a DWM backdrop.
+
+   *Run on WARP in the Windows 11 ARM VM* (`spikes/windows-composition/`; its README has the
+   numbers). All four hold:
+   1. The two targets share the HWND, aligned to the pixel.
+   2. The path clip is antialiased. It **leads** SDL's VSYNC present by its queue (2 frames), and
+      lands exactly with a 2-frame delay or with a present that doesn't wait.
+   3. AlphaMask takes a presented swapchain as its mask.
+   4. Only `WS_EX_TRANSPARENT | WS_EX_LAYERED` passes clicks to other processes, the tree still
+      showing; a drag keeps its capture, and `WS_EX_LAYERED` leaves both trees drawing.
+
+   Still to see on a hardware GPU: the blur itself (the VM draws the host backdrop black) and the
+   present queue's depth at real refresh rates.
 6. **Windows: the overlay** (`viewports.carries`, the `os_backdrop` glass), if spikes 1 and 2
-   hold, and with the go-ahead `NATIVE_WINDOWS_PLAN.md` asks for (its Phase 2). If they don't, the
-   fallback is the overlay with the app's glass and no OS blur under it.
+   hold (they do on WARP, the clip delayed by the present queue's depth), and with the go-ahead
+   `NATIVE_WINDOWS_PLAN.md` asks for (its Phase 2). If they don't, the fallback is the overlay
+   with the app's glass and no OS blur under it.
    That still carries a view past every window, which is the part users will notice most.
 7. **Optional: real refraction on Windows** through capture, behind a flag, if the clear lens over
    other apps turns out to matter.
