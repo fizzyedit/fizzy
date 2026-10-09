@@ -205,7 +205,8 @@ fn platformModule(
 
 pub fn addFizzyExecutableForTarget(
     b: *std.Build,
-    vz: velopack.Dep,
+    /// Null on the configure pass that fetches Velopack (`app.readConfig`).
+    vz: ?velopack.Dep,
     resolved_target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
@@ -522,9 +523,9 @@ pub fn addFizzyExecutableForTarget(
     const exe_is_windows_msvc = resolved_target.result.os.tag == .windows and
         resolved_target.result.abi == .msvc;
     exe.root_module.link_libcpp = !exe_is_windows_msvc;
-    if (velopack_enabled) {
-        try velopack.linkVelopack(b, vz, exe, .{ .target = resolved_target, .optimize = optimize, .include_modules = &.{app_module} });
-    }
+    if (velopack_enabled) if (vz) |v| {
+        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .include_modules = &.{app_module} });
+    };
 
     return .{
         .exe = exe,
