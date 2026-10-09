@@ -2384,9 +2384,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
 fn overNoWindow(mouse: dvui.Point.Physical) bool {
     if (dvui.windowRectPixels().contains(mouse)) return false;
     const s = dvui.windowNaturalScale();
-    const screen = core.screens.screenFor(.{ .x = mouse.x / s, .y = mouse.y / s });
-    const main = dvui.windowRect();
-    return screen.x == main.x and screen.y == main.y and screen.w == main.w and screen.h == main.h;
+    return !core.screens.onScreen(.{ .x = mouse.x / s, .y = mouse.y / s });
 }
 
 /// The view carried out of `source`, let go over no window of the app's (`apply`): a float of its
