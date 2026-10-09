@@ -1,0 +1,41 @@
+info: Fizzy version 0.2.0 (Debug)
+info(singleton): profile: /Users/foxnne/dev/fizzy-output-scroll/.sb
+info(SDLBackend): version: 3.4.16 callbacks
+info(SDL_SYSTEM): App name: Fizzy
+info(SDL_SYSTEM): App version: 0.2.0
+info(SDL_SYSTEM): App ID: com.foxnne.fizzy
+info(SDL_SYSTEM): SDL revision: https://github.com/allyourcodebase/SDL 1.0.3+3.4.16
+debug(SDL_SYSTEM): SDL chose video backend 'cocoa'
+info(SDLBackend): SDL3 backend scale 1
+debug(SDL_SYSTEM): SDL chose gpu backend 'metal'
+info(SDL_GPU): SDL_GPU Driver: Metal
+info(SDL_GPU): Metal Device: Apple M5 Pro
+info(GpuRenderer): GPU driver: metal
+debug(dvui): adding embedded font Vera Sans
+debug(dvui): adding embedded font Vera Sans Bold
+debug(dvui): adding embedded font Vera Sans Italic
+debug(dvui): adding embedded font Vera Sans Bold Italic
+debug(dvui): adding embedded font Vera Sans Mono
+debug(dvui): adding embedded font Vera Sans Mono Bold
+debug(dvui): adding embedded font Vera Sans Mono Italic
+debug(dvui): adding embedded font Vera Sans Mono Bold Italic
+debug(dvui): adding embedded font Vera Serif
+debug(dvui): adding embedded font Vera Serif Bold
+info(dvui): window logical Size.Natural{ 1200 800 } pixels Size.Physical{ 2400 1600 } pixel scale 2 initial content scale 1 snap_to_pixels true accesskit false
+
+info(macos_monitor): live resize: SDL draws each step in its transaction (fizzy's SDL patches)
+debug(dvui): adding embedded font CozetteVector
+debug(dvui): adding embedded font CozetteVector Bold
+debug(dvui): adding embedded font Comfortaa
+debug(dvui): adding embedded font Comfortaa Bold
+debug(dvui): adding embedded font Nunito
+debug(dvui): adding embedded font Nunito Bold
+debug(dvui): adding embedded font Nunito Italic
+debug(dvui): adding embedded font Nunito Bold Italic
+debug(dvui): adding embedded font PlusJakartaSans
+debug(dvui): adding embedded font PlusJakartaSans Bold
+debug(dvui): adding embedded font PlusJakartaSans Italic
+debug(dvui): adding embedded font PlusJakartaSans Bold Italic
+info(dvui): layout: fizzy
+debug(menu): menu bar: 4 menus, 20 items, 1 lists
+debug(menu): menu bar extras: 0 menus, 1 items

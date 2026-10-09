@@ -6779,3 +6779,44 @@ test "the output panel settles at its tail with a line wider than it anywhere in
         };
     }
 }
+
+var output_sweep_height: f32 = 120;
+
+fn outputSweepFrame() anyerror!dvui.App.Result {
+    var box = dvui.box(@src(), .{}, .{
+        .min_size_content = .{ .w = 500, .h = output_sweep_height },
+        .max_size_content = .{ .w = 500, .h = output_sweep_height },
+    });
+    defer box.deinit();
+    return fizzy.OutputPanel.draw(null);
+}
+
+// Output arriving two lines at a time (a plugin reload's pair), long and short lines mixed, in
+// panes of every height from a few rows to a dozen: the panel settles after each pair. Near the
+// height where the log first outgrows the pane the scrollbars come and go, which is where a
+// panel whose bars or text height fed back into its range fought itself.
+test "the output panel settles as lines arrive, in panes of every height" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 800, .h = 600 } });
+    defer t.deinit();
+    defer fizzy.OutputLog.clear();
+
+    var h: f32 = 60;
+    while (h <= 220) : (h += 3) {
+        output_sweep_height = h;
+        fizzy.OutputLog.clear();
+        var total: usize = 0;
+        while (total < 30) {
+            for (0..2) |_| {
+                total += 1;
+                fizzy.OutputLog.appendLine(.info, "fizzy", if (total % 3 == 0)
+                    "plugin 'text': rebuilt binary found, reloading /Users/somebody/Library/Application Support/fizzy/plugins/text/text.dylib"
+                else
+                    "plugin 'text': reloaded");
+            }
+            dvui.testing.settle(outputSweepFrame) catch |err| {
+                std.debug.print("pane {d} tall, {d} lines: {s}\n", .{ h, total, @errorName(err) });
+                return err;
+            };
+        }
+    }
+}

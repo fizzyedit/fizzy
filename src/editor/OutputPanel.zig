@@ -17,6 +17,19 @@ var follow = true;
 /// viewport moves, so the estimate drifted, the spacers changed height, the viewport clamped,
 /// the visible range moved, and the panel oscillated for as long as the log overflowed it.
 var line_pitch: f32 = 0;
+
+// Nothing the panel lays out in one frame may move what it lays out in the next. The range of
+// lines it lays out follows from the log's length and the view's height alone, and both stay put
+// while it draws:
+// - the content is `rows × line_pitch` plus `bottom_strip`, whatever text is in view: the text
+//   block is held to its rows' height (a laid-out block is a few points short of it, its last line
+//   only as tall as its glyphs, so its height changed as the range did);
+// - the horizontal bar overlays the content (`.auto_overlay`) rather than taking a row's height off
+//   the view; it showed only while a line wider than the view was in view, and the vertical bar,
+//   taking the view's width, could tip a long line into needing it;
+// - `bottom_strip` keeps the last line clear of that bar.
+// Before, each fed back: the view lost or gained a row, the range moved, the bar or the height
+// came or went, and the panel scrolled itself every frame with no input.
 /// The widest line laid out so far, natural units: the width the panel scrolls sideways over.
 /// Only the lines in view are laid out, so their width alone came and went as the view moved,
 /// and the horizontal bar with it, which takes a row's height off the view. Following the tail,
@@ -96,7 +109,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
             // Following the tail: the viewport is about to be at the bottom, so cut the
             // range there rather than where last frame's offset was.
             const vp_y = if (follow)
-                @max(0, @as(f32, @floatFromInt(shown_total)) * line_pitch - scroll_info.viewport.h)
+                @max(0, @as(f32, @floatFromInt(shown_total)) * line_pitch + bottomStrip() - scroll_info.viewport.h)
             else
                 scroll_info.viewport.y;
             first = @min(shown_total, @as(usize, @intFromFloat(@max(0, @floor(vp_y / line_pitch)))));
@@ -123,7 +136,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     if (follow) scroll_info.scrollToFraction(.vertical, 1.0);
     const asked_y = scroll_info.viewport.y;
 
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &scroll_info }, .{ .expand = .both, .background = false });
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &scroll_info, .horizontal_bar = .auto_overlay }, .{ .expand = .both, .background = false });
     if (first > 0) {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(first)) * line_pitch }, .expand = .horizontal });
     }
@@ -136,7 +149,8 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // lines instead of stopping dead at each line's own boundary.
     var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = widest },
+        .min_size_content = .{ .w = widest, .h = @as(f32, @floatFromInt(lines.len)) * line_pitch },
+        .max_size_content = .{ .w = dvui.max_float_safe, .h = @as(f32, @floatFromInt(lines.len)) * line_pitch },
         .background = false,
         .margin = .{},
         .padding = .{},
@@ -163,6 +177,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     if (after > 0) {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(after)) * line_pitch }, .expand = .horizontal });
     }
+    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = bottomStrip() }, .expand = .horizontal });
     @import("core").widgets.scrollShadows(scroll);
     scroll.deinit();
 
@@ -176,6 +191,12 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         follow = scroll_info.offsetFromMax(.vertical) < 1.0;
     }
     return .ok;
+}
+
+/// Room under the last line for the horizontal bar, which overlays the content: always there, so
+/// the content's height never depends on whether the bar shows.
+fn bottomStrip() f32 {
+    return dvui.ScrollBarWidget.defaults.min_sizeGet().h;
 }
 
 /// Narrow vertical strip of tab buttons: "All" first, then one per distinct scope in

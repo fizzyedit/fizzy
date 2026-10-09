@@ -1,0 +1,6 @@
+.{
+    .last_save_folder = "",
+    .last_open_folder = "",
+    .folders = .{},
+    .commands = .{},
+}
