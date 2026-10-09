@@ -10,6 +10,8 @@ const std = @import("std");
 // dvui instead of pinning its own — see `build/sdk.zig`'s `dvuiDependency`.
 pub const plugin = @import("plugin_sdk.zig");
 pub const core_module = @import("core_module.zig");
+/// `tape` and `replay` built against any dvui module — for a dvui app that is not fizzy.
+pub const replay = @import("replay_module.zig");
 /// dvui's *build* API (`AccesskitOptions` and friends), re-exported because this package owns the
 /// only dvui pin in the repo, so the app cannot `@import("dvui")` on its own.
 pub const dvui = @import("dvui");

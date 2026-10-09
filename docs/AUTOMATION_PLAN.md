@@ -195,7 +195,15 @@ Each lands on its own and leaves the demos working.
 4. **Transitions:** visible fast-forward for chapter jumps, the crossfade back.
 5. **The recorder**, with accessible-name anchors; Record / Stop in fizzy, saving ZON or binary.
 6. **Plugin demos** (`registerDemo`, chapters with `requires`) and the first pixi demo.
-7. **Standalone packages** for any dvui app, with a minimal example app.
+7. **Standalone packages** for any dvui app, with a minimal example app. In progress: `replay`
+   is dvui and `tape` only (`sdk/replay/`, guarded by `fizzy-replay-tests`); any dvui app builds
+   the pair against its own dvui with `replay.modules` from the SDK package
+   (`sdk/replay_module.zig`); `replay.overlay` is the plain overlay (the pointer and its clicks),
+   which fizzy's glass one draws its pointer with; a `Stage` for live tapes needs only `idle` and
+   `command`; and `examples/replay-app` is a plain dvui app on dvui's own SDL3 backend that plays
+   a live tape into its window and prints its snapshot. Left: `replay` and `tape` as packages of
+   their own (their own `build.zig.zon`, outside the SDK tarball), and the plain overlay's
+   captions and keys.
 
 ## Decisions
 

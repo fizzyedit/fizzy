@@ -34,21 +34,10 @@ pub fn addImports(
     mod.addImport("zf", zfModule(b, target, optimize));
 
     // Demos and recordings: `tape` is the format and its engine (std-only), `replay` drives a
-    // dvui window with it (dvui and `tape`, nothing else).
-    const tape = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = sdk_pkg.path("tape/root.zig"),
-    });
-    const replay = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = sdk_pkg.path("replay/root.zig"),
-    });
-    replay.addImport("dvui", dvui_mod);
-    replay.addImport("tape", tape);
-    mod.addImport("tape", tape);
-    mod.addImport("replay", replay);
+    // dvui window with it (dvui and `tape`, nothing else) — the same pair any dvui app builds.
+    const automation = @import("replay_module.zig").modules(b, sdk_pkg, dvui_mod, target, optimize);
+    mod.addImport("tape", automation.tape);
+    mod.addImport("replay", automation.replay);
 
     if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
         const icons = dep.module("icons");

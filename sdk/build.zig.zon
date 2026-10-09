@@ -10,6 +10,7 @@
         "build.zig.zon",
         "plugin_sdk.zig",
         "core_module.zig",
+        "replay_module.zig",
         "plugin_sdk_meta.zig",
         "plugin_sdk_check.zig",
         "sdk_version.zig",
