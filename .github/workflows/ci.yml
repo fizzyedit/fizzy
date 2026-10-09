@@ -159,7 +159,7 @@ jobs:
       - name: Build external consumer apps (fizzy as a library)
         if: matrix.name == 'Linux'
         run: |
-          for app in examples/hello-plugin examples/minimal-app examples/studio-app examples/endless-app; do
+          for app in examples/hello-plugin examples/minimal-app examples/studio-app examples/endless-app examples/replay-app; do
             echo "::group::$app"
             # Each example is its own package and fetches its own copy of the tree, so each one
             # is another handful of chances to meet a closed connection.

@@ -14,8 +14,11 @@ ship these as selectable presets — they show things fizzy itself does not do.
 | `endless-app` | Center is the workspace; split from the corner menu | `endlessapp`, "Endless App" |
 | `hello-plugin` | not an app: the smallest third-party-shaped plugin, one sidebar surface | id `hello` |
 | `shader-plugin` | not an app: a plugin drawing with its own GPU program (`core.programs`) — liquid metaballs that follow the pointer | id `shader` |
+| `replay-app` | not fizzy at all: a plain dvui app (dvui's own SDL3 backend) with tape playback from `sdk/replay/` — it plays a live tape into its window at launch, draws the tape's pointer, and prints a snapshot of its screen | `replay-app` |
 
-All three apps load the identical `workbench` / `text` / `image` / `markdown` plugins,
+`replay-app` depends only on the SDK package (`sdk/`), and builds `tape` and `replay` against its
+own dvui with `@import("fizzy_sdk").replay.modules(…)` — the whole of what any dvui app needs for
+tape playback. The other three apps load the identical `workbench` / `text` / `image` / `markdown` plugins,
 **unchanged**; `minimal-app` additionally bundles `hello-plugin` from its own `build.zig.zon`.
 
 ## What a consumer writes
