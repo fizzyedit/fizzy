@@ -958,6 +958,34 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     test_integration_step.dependOn(&b.addRunArtifact(integration_tests).step);
     check_integration_step.dependOn(&integration_tests.step);
 
+    // Every bundled demo played through fizzy's own stage in the whole editor (`tests/demos.zig`).
+    // A process of its own: the editor going down leaves module state behind in the plugins it
+    // links, so one process brings the whole editor up once, and `tests/integration.zig` already
+    // does ("headless: …").
+    {
+        const demos_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/demos.zig"),
+        });
+        demos_module.addImport("fizzy", fizzy_test_module);
+        demos_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        demos_module.addImport("app", app_module_test);
+        demos_module.addImport("workbench", workbench_module_test);
+        const demo_tests = b.addTest(.{
+            .name = "fizzy-demo-tests",
+            .root_module = demos_module,
+            .filters = test_filters,
+        });
+        if (target.result.os.tag == .windows) demo_tests.root_module.linkSystemLibrary("comctl32", .{});
+        demo_tests.root_module.link_libcpp = !target_is_windows_msvc;
+        if (velopack_enabled) {
+            try velopack.linkVelopack(b, vz, demo_tests, .{ .target = target, .optimize = optimize });
+        }
+        test_integration_step.dependOn(&b.addRunArtifact(demo_tests).step);
+        check_integration_step.dependOn(&demo_tests.step);
+    }
+
     // The `app` framework module's own tests — the split trees, seeds, drop plans and view drag
     // under `app/layout/` (`Layout.zig`'s `test` block). `addTest` collects from its root module
     // only, so the integration tests above, which import `app`, never ran them. Against dvui's

@@ -269,8 +269,12 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
         if (active_id == doc.id) active_path = copy else docs.append(gpa, copy) catch gpa.free(copy);
     }
     if (active_path) |p| docs.append(gpa, p) catch gpa.free(p);
+    // Nor is a demo's folder: one demo straight after another finds the last one's folder still
+    // open — giving the user theirs back by closing it is deferred to the next frame
+    // (`App.closeProjectFolder`) — and must not give it to them at its end.
+    const folder = editor.app.folder orelse "";
     self.saved = .{
-        .folder = if (editor.app.folder) |f| gpa.dupe(u8, f) catch null else null,
+        .folder = if (folder.len > 0 and !std.mem.startsWith(u8, folder, "demo://")) gpa.dupe(u8, folder) catch null else null,
         .docs = docs.toOwnedSlice(gpa) catch &.{},
     };
 }

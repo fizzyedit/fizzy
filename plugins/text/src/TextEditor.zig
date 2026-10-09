@@ -356,6 +356,11 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         te.text_changed = true;
     }
 
+    if (doc.pending_focus) {
+        doc.pending_focus = false;
+        dvui.focusWidget(te.data().id, null, null);
+    }
+
     if (doc.pending_sel) |r| {
         const len = doc.text.items.len;
         const head = @min(r.head, len);
