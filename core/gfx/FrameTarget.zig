@@ -38,6 +38,9 @@ fresh: [2]bool = .{ false, false },
 unread: u32 = 0,
 /// This frame's target (`targets[index]`), bound between `begin` and `end`.
 target: ?dvui.Texture.Target = null,
+/// How much of it this frame draws, from its top left: all of it but while it is kept larger than
+/// the frame (`begin`).
+drawn: [2]u32 = .{ 0, 0 },
 bound: bool = false,
 
 /// The frame target in use, for `snapshot`. One per image: set by the host's `begin`, so a
@@ -127,17 +130,30 @@ pub fn begin(self: *FrameTarget) void {
     const win = dvui.windowRectPixels();
     const w: u32 = @intFromFloat(@max(1, @round(win.w)));
     const h: u32 = @intFromFloat(@max(1, @round(win.h)));
-    // A resize makes both stale: last frame's is the wrong size to be read as this one's.
+    // A window standing still on its way into or out of full screen (macOS, `SDLBackend`): its
+    // frame — its picture — is a new size every frame, up to all of the window. The targets are
+    // made once at the window's size and kept while the frame fits in them, drawn from their top
+    // left (`drawn`): made anew at each size, both full-window targets were destroyed and created
+    // every frame of the way. Otherwise a resize makes both stale.
+    const keep: ?[2]u32 = blk: {
+        const impl = dvui.currentWindow().backend.impl;
+        if (comptime @hasDecl(@TypeOf(impl.*), "pictureInWindow")) if (impl.pictureInWindow()) |p|
+            break :blk .{ @intFromFloat(@max(1, @round(p.all.w))), @intFromFloat(@max(1, @round(p.all.h))) };
+        break :blk null;
+    };
     for (&self.targets) |*slot| if (slot.*) |t| {
-        if (t.width != w or t.height != h) {
+        const fits = t.width >= w and t.height >= h;
+        if (!fits or (keep == null and (t.width != w or t.height != h))) {
             t.destroyLater();
             slot.* = null;
         }
     };
     self.index +%= 1;
     if (self.targets[self.index] == null) {
-        self.targets[self.index] = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
+        const size: [2]u32 = if (keep) |k| .{ @max(w, k[0]), @max(h, k[1]) } else .{ w, h };
+        self.targets[self.index] = dvui.textureCreateTarget(.{ .width = size[0], .height = size[1], .interpolation = .nearest }) catch return;
     }
+    self.drawn = .{ w, h };
     self.target = self.targets[self.index];
     self.fresh[self.index] = true;
     current = self;
@@ -188,7 +204,17 @@ pub fn end(self: *FrameTarget) void {
     defer _ = dvui.renderingSet(prev_rendering);
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);
-    dvui.clipSet(dvui.windowRectPixels());
+    // Where the frame goes in the window: all of it, or — a window standing still on its way into
+    // or out of full screen, the app drawn growing or shrinking in it (macOS, `SDLBackend`) — its
+    // picture, the rest of the window cleared by the frame's first pass into it.
+    var at = dvui.windowRectPixels();
+    var all = at;
+    const impl = cw.backend.impl;
+    if (comptime @hasDecl(@TypeOf(impl.*), "pictureInWindow")) if (impl.pictureInWindow()) |p| {
+        at = p.at;
+        all = p.all;
+    };
+    dvui.clipSet(all);
     const prev_alpha = dvui.alpha(1);
     defer dvui.alphaSet(prev_alpha);
     // Written, not blended: the window was not cleared (see above), so the frame's own alpha
@@ -199,7 +225,11 @@ pub fn end(self: *FrameTarget) void {
         break :blk true;
     } else false;
     defer if (copy) cw.backend.textureBlend(tex, .over) catch {};
-    dvui.renderTexture(tex, .{ .r = dvui.windowRectPixels(), .s = 1 }, .{}) catch {};
+    // Only what the frame drew, where the target is kept larger than it (`begin`).
+    const tw: f32 = @floatFromInt(tex.width);
+    const th: f32 = @floatFromInt(tex.height);
+    const uv: dvui.Rect = .{ .w = @as(f32, @floatFromInt(self.drawn[0])) / tw, .h = @as(f32, @floatFromInt(self.drawn[1])) / th };
+    dvui.renderTexture(tex, .{ .r = at, .s = 1 }, .{ .uv = uv }) catch {};
 }
 
 /// Drop the targets. Only valid between `Window.begin` and `Window.end`.

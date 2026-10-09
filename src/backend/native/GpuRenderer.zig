@@ -180,6 +180,10 @@ swapchain: ?*c.SDL_GPUTexture = null,
 swapchain_w: u32 = 0,
 swapchain_h: u32 = 0,
 swapchain_state: enum { none, acquired, unavailable } = .none,
+/// The window keeps its last picture this frame (`SDLBackend.begin`): no drawable is waited for,
+/// and nothing is drawn to it, as when it is minimized. Its offscreen targets — a float window's
+/// picture among them — are drawn as ever.
+window_held: bool = false,
 /// Whether this frame's drawable has been cleared (by the window's first pass).
 window_cleared: bool = false,
 
@@ -545,6 +549,10 @@ fn acquireSwapchain(self: *GpuRenderer) !bool {
         .unavailable => return false,
         .none => {},
     }
+    if (self.window_held) {
+        self.swapchain_state = .unavailable;
+        return false;
+    }
     const cmd = try self.ensureCmd();
     var tex: ?*c.SDL_GPUTexture = null;
     var w: u32 = 0;
@@ -606,10 +614,11 @@ pub fn releaseViewport(self: *GpuRenderer, window: *c.SDL_Window) void {
 }
 
 /// Copy `target` into `window`'s next drawable — a viewport's part of the frame, drawn there
-/// already — presented with this frame's submission (`present`). Transparent wherever the target
-/// is. Never waits: a drawable not ready (minimized, occluded, or its last frame still in flight)
-/// skips this frame for that window. True when there was one.
-pub fn presentInto(self: *GpuRenderer, window: *c.SDL_Window, target: dvui.TextureTarget) bool {
+/// already — `at` pixels in from its top left, presented with this frame's submission (`present`).
+/// Transparent wherever the target is, and round it. Never waits: a drawable not ready (minimized,
+/// occluded, or its last frame still in flight) skips this frame for that window. True when there
+/// was one.
+pub fn presentInto(self: *GpuRenderer, window: *c.SDL_Window, target: dvui.TextureTarget, at: [2]u32) bool {
     const tex: *Tex = @ptrCast(@alignCast(target.ptr));
     const cmd = self.ensureCmd() catch return false;
     self.endCopy();
@@ -625,14 +634,17 @@ pub fn presentInto(self: *GpuRenderer, window: *c.SDL_Window, target: dvui.Textu
     const dest = swap orelse return false;
     // The window and its part of the frame are the same size but for a resize in flight; the
     // overlap is copied as it is, never scaled.
-    const bw = @min(w, tex.width);
-    const bh = @min(h, tex.height);
+    if (at[0] >= w or at[1] >= h) return false;
+    const bw = @min(w - at[0], tex.width);
+    const bh = @min(h - at[1], tex.height);
     if (bw == 0 or bh == 0) return false;
     var info = std.mem.zeroes(c.SDL_GPUBlitInfo);
     info.source.texture = tex.texture;
     info.source.w = bw;
     info.source.h = bh;
     info.destination.texture = dest;
+    info.destination.x = at[0];
+    info.destination.y = at[1];
     info.destination.w = bw;
     info.destination.h = bh;
     info.load_op = c.SDL_GPU_LOADOP_CLEAR;

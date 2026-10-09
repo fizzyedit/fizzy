@@ -23,6 +23,8 @@ extern void fizzy_macos_window_reset_sync_cache(void *nswindow);
 extern void fizzy_macos_window_request_clear_frames(void *nswindow, int frames);
 extern void fizzy_macos_window_commit_steady_state(void *nswindow);
 extern void fizzy_macos_window_glass_toolbar(void *nswindow, int on);
+extern void fizzy_macos_window_glass_follow(void *nswindow);
+extern int fizzy_macos_window_has_liquid_glass(void *nswindow);
 extern void fizzy_macos_window_live_resize_vsync(void *nswindow, int active);
 extern bool SDL_GetHintBoolean(const char *name, bool default_value);
 extern void fizzy_live_resize_trace_step(void *nswindow);
@@ -68,6 +70,20 @@ typedef struct WindowMonitor {
     NSRect anim_to;
     CFTimeInterval anim_start;
     CFTimeInterval anim_duration;
+    /* A float's window (`fizzy_macos_window_space_still`): on its own way it stands still — at the
+     * full screen frame from the first step going in, at it until the last going out — and the
+     * app draws the float at `anim_rect` in it, where the window would have been this step, from
+     * the screen's bottom left (`fizzy_macos_window_space_picture`). */
+    BOOL still;
+    NSRect anim_rect;
+    /* The frame a still window jumps to, asked for and not yet taken (`request_jump`): it is taken
+     * only in a frame of the app's, inside the transaction its picture is presented in
+     * (`apply_jump`) — never from AppKit's callbacks or the pump's ticks, which run outside one. */
+    BOOL jump_pending;
+    NSRect jump_to;
+    /* Whether it had the OS's shadow before a still way in took it off (`still_frame_square`). */
+    BOOL had_shadow;
+    BOOL shadow_off;
     /* The content size AppKit proposes for the window in full screen
      * (`window:willUseFullScreenContentSize:`), where the window's own way into it ends. */
     NSSize fullscreen_size;
@@ -221,6 +237,9 @@ static void stop_pump_if_idle(void) {
 static void pump_tick_inner(void);
 static void step_space_animation(WindowMonitor *m);
 static void hold_landing(WindowMonitor *m);
+static void fit_content_view(NSWindow *window);
+static void fit_drawable(NSWindow *window);
+static void request_jump(WindowMonitor *m, NSRect to);
 
 static void pump_tick(void) {
     if (g_in_pump) return;
@@ -413,6 +432,10 @@ static void hold_landing(WindowMonitor *m) {
         return;
     }
     NSWindow *window = (__bridge NSWindow *)m->window;
+    if (m->still) {
+        request_jump(m, m->anim_to);
+        return;
+    }
     if (!NSEqualRects(window.frame, m->anim_to)) [window setFrame:m->anim_to display:NO];
 }
 
@@ -430,6 +453,92 @@ static void fit_content_view(NSWindow *window) {
     if (!NSEqualRects([content frame], want)) [content setFrame:want];
 }
 
+/* `window`'s Metal drawable at its view's size, now. SDL sets it only as it hears of a new pixel
+ * size, from the view's bounds as they are then; a window standing still on its way into or out of
+ * full screen is resized by fizzy in one jump — to the full screen as the way in sets out, back as
+ * the way out lands — and held there after (`hold_landing`), and its drawable lagged the jump: the
+ * frame went in drawn at the window's old size and stretched over the full screen, the top left of
+ * it, and a float came out with a drawable the size of something it had been, squeezed into the
+ * window it shrank to (the user). Whoever moves the frame keeps the drawable with it. */
+static void fit_drawable(NSWindow *window) {
+    NSMutableArray<NSView *> *stack = [NSMutableArray arrayWithObject:[window contentView]];
+    while (stack.count > 0) {
+        NSView *v = stack.lastObject;
+        [stack removeLastObject];
+        if ([v.layer isKindOfClass:[CAMetalLayer class]]) {
+            CAMetalLayer *metal = (CAMetalLayer *)v.layer;
+            const NSSize want = [v convertSizeToBacking:v.bounds.size];
+            if (want.width >= 1 && want.height >= 1 && !CGSizeEqualToSize(metal.drawableSize, NSSizeToCGSize(want))) {
+                metal.drawableSize = NSSizeToCGSize(want);
+            }
+            return;
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
+}
+
+/* A still window's OS frame square, or back as it was. Standing at its full-screen size from the
+ * first step in, its shadow — and the hairline outline the OS draws with it round a titled window
+ * — and its rounded corners sat at the screen's edge round the picture growing in it; AppKit gives
+ * it the full-screen style only as the way ends, and squares its frame view's corners at its next
+ * layout, which nothing of Metal's asked for: rounded corners and a border showed for a second or
+ * two once the picture had filled the screen (the user). Off from the way in to the landing out. */
+static void still_frame_square(WindowMonitor *m, BOOL square) {
+    NSWindow *window = (__bridge NSWindow *)m->window;
+    if (square && !m->shadow_off) {
+        m->had_shadow = window.hasShadow;
+        m->shadow_off = YES;
+        if (window.hasShadow) [window setHasShadow:NO];
+    } else if (!square && m->shadow_off) {
+        m->shadow_off = NO;
+        if (m->had_shadow) [window setHasShadow:YES];
+        [window invalidateShadow];
+    }
+}
+
+/* `window`'s frame view laid out and drawn again now — its corners, its title bar, its traffic
+ * lights — where nothing else of AppKit's would ask: content drawn by Metal. */
+static void relayout_frame(NSWindow *window) {
+    NSView *frame = [[window contentView] superview];
+    if (frame == nil) return;
+    [frame setNeedsLayout:YES];
+    [frame layoutSubtreeIfNeeded];
+    [frame setNeedsDisplay:YES];
+    [frame displayIfNeeded];
+}
+
+/* A still window's jump to `to` (`WindowMonitor.jump_pending`), for the app's next frame. */
+static void request_jump(WindowMonitor *m, NSRect to) {
+    m->jump_to = to;
+    m->jump_pending = !NSEqualRects(((__bridge NSWindow *)m->window).frame, to);
+}
+
+/* The jump asked for, taken now — from a frame of the app's (`fizzy_macos_window_space_step`), in
+ * the transaction its picture goes in: the window's new size and the picture drawn at it reach the
+ * screen together. Taken from AppKit's callback as the way set out, or from the pump between
+ * frames, the window was its new size a refresh or two before any picture was: the last one,
+ * stretched over the full screen, flashed as it went in and out (the user). Its drawable and SDL
+ * go with it (`fit_drawable`, `fizzy_macos_window_resize_cb`), and its glass. */
+static void apply_jump(WindowMonitor *m) {
+    if (!m->jump_pending) return;
+    NSWindow *window = (__bridge NSWindow *)m->window;
+    if (!NSEqualRects(window.frame, m->jump_to)) [window setFrame:m->jump_to display:NO];
+    fit_content_view(window);
+    fit_drawable(window);
+    fizzy_macos_window_resize_cb(m->window);
+    m->jump_pending = NO;
+    fizzy_macos_window_glass_follow(m->window);
+    /* Its title bar laid out for the size it jumped to, now: moved with no display of AppKit's and
+     * drawn by Metal, nothing else asked for it, and the traffic lights came back after the way out
+     * only when something did — a while later, or at the next move of the pointer (the user). Back
+     * from its way, they show, and its frame is its own again (`still_frame_square`). */
+    if (!m->anim_active) {
+        if (!m->anim_entering) still_frame_square(m, NO);
+        set_traffic_lights_alpha(window, 1.0);
+    }
+    relayout_frame(window);
+}
+
 static void step_space_animation(WindowMonitor *m) {
     NSWindow *window = (__bridge NSWindow *)m->window;
     double t = (CACurrentMediaTime() - m->anim_start) / m->anim_duration;
@@ -439,7 +548,9 @@ static void step_space_animation(WindowMonitor *m) {
     }
     const double k = space_ease(t);
     m->anim_fullness = m->anim_entering ? k : 1.0 - k;
-    set_traffic_lights_alpha(window, 1.0 - m->anim_fullness);
+    /* A window standing still has its traffic lights in the screen's corner, not the float's:
+     * hidden until it lands (`finish_space_animation`). */
+    set_traffic_lights_alpha(window, m->still && (m->anim_active || m->jump_pending) ? 0.0 : 1.0 - m->anim_fullness);
     if (!m->anim_active && !m->anim_entering) m->land_until = CACurrentMediaTime() + landing_hold_s;
     NSRect r = NSMakeRect(m->anim_from.origin.x + (m->anim_to.origin.x - m->anim_from.origin.x) * k,
                           m->anim_from.origin.y + (m->anim_to.origin.y - m->anim_from.origin.y) * k,
@@ -447,8 +558,16 @@ static void step_space_animation(WindowMonitor *m) {
                           m->anim_from.size.height + (m->anim_to.size.height - m->anim_from.size.height) * k);
     /* Whole points: a fractional size is a fractional drawable, scaled. */
     r = NSMakeRect(round(r.origin.x), round(r.origin.y), round(r.size.width), round(r.size.height));
-    if (!NSEqualRects(window.frame, r)) [window setFrame:r display:NO];
+    if (m->still) {
+        /* Only the picture moves: the window is resized once, at the end of the way out. */
+        m->anim_rect = r;
+        if (!m->anim_active) request_jump(m, m->anim_to);
+        fizzy_macos_window_glass_follow(m->window);
+    } else if (!NSEqualRects(window.frame, r)) {
+        [window setFrame:r display:NO];
+    }
     fit_content_view(window);
+    if (m->still) fit_drawable(window);
 }
 
 /* Where the window lands, at did-enter or did-exit, however far the pump got. */
@@ -467,6 +586,10 @@ static void finish_space_animation(WindowMonitor *m) {
     m->anim_active = NO;
     m->anim_follow = NO;
     fit_content_view((__bridge NSWindow *)m->window);
+    if (m->still) {
+        fit_drawable((__bridge NSWindow *)m->window);
+        fizzy_macos_window_glass_follow(m->window);
+    }
 }
 
 static void start_space_animation(NSWindow *window, NSRect to, NSTimeInterval duration, BOOL entering) {
@@ -480,6 +603,14 @@ static void start_space_animation(NSWindow *window, NSRect to, NSTimeInterval du
     m->anim_fullness = entering ? 0.0 : 1.0;
     m->anim_follow = YES;
     m->anim_active = YES;
+    if (m->still) {
+        /* Its picture sets out where the window is; the window goes in to full screen at once. */
+        m->anim_rect = m->anim_from;
+        if (entering) request_jump(m, to);
+        still_frame_square(m, YES);
+        set_traffic_lights_alpha(window, 0.0);
+        fizzy_macos_window_glass_follow((__bridge void *)window);
+    }
     request_resize_pump((__bridge void *)window, 30);
     pump_now();
 }
@@ -502,6 +633,13 @@ static NSArray *fizzy_custom_windows_for_space(NSWindow *window, BOOL entering) 
     m->anim_fullness = entering ? 0.0 : 1.0;
     m->anim_from = NSZeroRect;
     m->fullscreen_size = NSZeroSize;
+    /* A window of Liquid Glass stands still on its way too — the main window as a float's does:
+     * its glass parts follow its picture (`fizzy_macos_window_glass_follow`) and its frame is drawn
+     * where the picture is (`SDLBackend.main_picture`). Stepped a size a frame, the main window
+     * laid the whole app out at each size in a new drawable, and its way ran choppy where a float's
+     * standing still ran smooth (the user). Vibrancy wrapping SDL's view (before macOS 26) cannot
+     * follow a picture: that window keeps stepping. */
+    if (fizzy_macos_window_has_liquid_glass((__bridge void *)window)) m->still = YES;
     return @[ window ];
 }
 
@@ -568,13 +706,15 @@ void fizzy_macos_window_space_step(void *nswindow) {
     if (!m) return;
     if (m->anim_active) step_space_animation(m);
     hold_landing(m);
+    apply_jump(m);
 }
 
-/* Whether `nswindow` is moving itself into or out of full screen: its step this frame goes in the
- * transaction its picture is presented in (`macos_monitor.zig`). */
+/* Whether `nswindow` is moving itself into or out of full screen — or has a jump of its own way to
+ * take: its step this frame goes in the transaction its picture is presented in
+ * (`macos_monitor.zig`). */
 int fizzy_macos_window_space_moving(void *nswindow) {
     WindowMonitor *m = monitor_of(nswindow);
-    return m && m->anim_active ? 1 : 0;
+    return m && (m->anim_active || m->jump_pending) ? 1 : 0;
 }
 
 /* How far `nswindow` is into full screen on its own way there or back, 0 to 1; below 0 when it is
@@ -583,6 +723,48 @@ double fizzy_macos_window_space_fullness(void *nswindow) {
     WindowMonitor *m = monitor_of(nswindow);
     if (!m || !m->anim_follow) return -1.0;
     return m->anim_fullness;
+}
+
+/* `nswindow` — a float's — stands still on its own way into and out of full screen, and only its
+ * picture moves (`WindowMonitor.still`). Resized a step a frame, as the main window is, each step was
+ * a new drawable at a new size and the float laid out again in it: the way ran at 5–15 ms a frame
+ * with stalls of 50 (the user: "choppy, not 120 fps"). AppKit pictures the main window instead,
+ * which a float's glass could not be. Once its monitor is installed. */
+void fizzy_macos_window_space_still(void *nswindow) {
+    WindowMonitor *m = monitor_of(nswindow);
+    if (m) m->still = YES;
+}
+
+/* Where `nswindow`'s picture is this step of its still way (`WindowMonitor.still`), in window
+ * coordinates (points from its bottom left), and how far it is into full screen. 0 when it is on no
+ * such way: the picture is all of the window. */
+int fizzy_macos_window_space_picture_in_window(void *nswindow, NSRect *rect, double *fullness) {
+    WindowMonitor *m = monitor_of(nswindow);
+    if (!m || !m->still) return 0;
+    /* Its way over but its jump still to take (`apply_jump`): the picture is already where the jump
+     * puts the window. Read as the whole window from the last step to the jump, the glass covered
+     * all of the full-screen window it still was, and the traffic lights came back in its corner —
+     * a frame of a window much larger at the end of the way out (the user). */
+    NSRect at;
+    if (m->anim_active) at = m->anim_rect;
+    else if (m->jump_pending) at = m->jump_to;
+    else return 0;
+    const NSRect f = ((__bridge NSWindow *)nswindow).frame;
+    if (rect) *rect = NSMakeRect(at.origin.x - f.origin.x, at.origin.y - f.origin.y, at.size.width, at.size.height);
+    if (fullness) *fullness = m->anim_fullness;
+    return 1;
+}
+
+/* The same, points from the window's top left, for the app (`platform.window.windowSpacePicture`). */
+int fizzy_macos_window_space_picture(void *nswindow, double *x, double *y, double *w, double *h) {
+    NSRect r;
+    if (!fizzy_macos_window_space_picture_in_window(nswindow, &r, NULL)) return 0;
+    const NSRect f = ((__bridge NSWindow *)nswindow).frame;
+    *x = r.origin.x;
+    *y = f.size.height - NSMaxY(r);
+    *w = r.size.width;
+    *h = r.size.height;
+    return 1;
 }
 
 void fizzy_macos_window_space_stage(int stage, void *nswindow) {
@@ -625,6 +807,9 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             break;
         case 1: // didEnter
             finish_space_animation(m);
+            /* Full screen in AppKit's eyes from here: its frame view square now, not at whatever
+             * next asks for a layout (`still_frame_square`). */
+            if (m->still) relayout_frame((__bridge NSWindow *)win);
             m->space_transition = NO;
             m->space_entering = NO;
             fizzy_macos_window_commit_steady_state(win);
@@ -828,6 +1013,12 @@ int fizzy_macos_copy_screen_frames(double *out, int max) {
         n++;
     }
     return n;
+}
+
+/* `nswindow`'s pixels per point: its screen's, as AppKit has it. */
+double fizzy_macos_window_backing_scale(void *nswindow) {
+    if (!nswindow) return 0;
+    return ((__bridge NSWindow *)nswindow).backingScaleFactor;
 }
 
 void fizzy_macos_window_pixel_size(void *nswindow, int *out_w, int *out_h) {
