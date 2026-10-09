@@ -6703,6 +6703,53 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     editor.demo.player.unload();
     try dvui.testing.settle(headlessFrame);
 
+    // The text commands, as a snippet keybind, a tape or an agent calls them: each one
+    // undoable edit to the active document.
+    {
+        const host = &editor.app.host;
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/main.zig", .data = "const a = 1;\nconst b = 2;\n" });
+        const main_zig = try std.fs.path.join(gpa, &.{ project, "main.zig" });
+        defer gpa.free(main_zig);
+        _ = try editor.openFilePath(main_zig, editor.workbench.currentGroupingID());
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (std.mem.eql(u8, d.owner.documentPath(d), main_zig)) break;
+        }
+        try dvui.testing.settle(headlessFrame);
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const Read = struct { path: []const u8, lines: usize, text: []const u8 };
+        const read = struct {
+            fn read(h: *sdk.Host, args: []const u8) !Read {
+                const out = h.callCommand("text.read", args, h.arena());
+                const zon = switch (out) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                return std.zon.parse.fromSliceAlloc(Read, h.arena(), try h.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+            }
+        }.read;
+
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"// top\\n\", .line = 1 }", host.arena()) == .ok);
+        try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 2;\n", (try read(host, "")).text);
+
+        // One occurrence replaced; an ambiguous or missing one refused, saying so.
+        try std.testing.expect(host.callCommand("text.replace", ".{ .find = \"const\", .with = \"var\" }", host.arena()) == .failed);
+        try std.testing.expect(host.callCommand("text.replace", ".{ .find = \"nothing\", .with = \"x\" }", host.arena()) == .failed);
+        try std.testing.expect(host.callCommand("text.replace", ".{ .find = \"b = 2\", .with = \"b = 3\" }", host.arena()) == .ok);
+        try std.testing.expect(host.callCommand("text.replace", ".{ .find = \"const\", .with = \"var\", .all = true }", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        const now = try read(host, ".{ .from_line = 2, .to_line = 2 }");
+        try std.testing.expectEqualStrings("var a = 1;\n", now.text);
+        try std.testing.expectEqual(@as(usize, 4), now.lines);
+        try std.testing.expectEqualStrings(main_zig, now.path);
+        try std.testing.expect(doc.owner.isDirty(doc));
+
+        // Every replacement at once was one edit: one undo puts them all back.
+        try editor.undo();
+        try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
+    }
+
     try editor.deinit();
 }
 
