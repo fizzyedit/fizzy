@@ -330,12 +330,13 @@ pub fn endFrame(state: *State) void {
     for (&outs) |*slot| {
         if (slot.*) |*o| windowFrame(state, o);
     }
-    // The dialogs drawn now, for `menuFrame` to take them into windows of their own: dvui draws
-    // them later, at the very end of the frame. After the floats have their places for this frame
-    // (`covers`), which a dialog opened in one goes along with (`dialogsRide`).
+    // The dialogs drawn now (`Window.drawRetained`), for `menuFrame` to take them into windows of
+    // their own: left to dvui, they are drawn in its replay into the main window. After the floats
+    // have their places for this frame (`covers`), which a dialog opened in one goes along with
+    // (`dialogsRide`).
     if (nativeDialogs()) {
         dialogsRide();
-        fizzy.core.dialogs.drawEarly();
+        dvui.currentWindow().drawRetained(.{});
     }
     carryFrame(state);
     menuFrame();

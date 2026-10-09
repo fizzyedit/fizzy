@@ -59,9 +59,27 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    once fizzy's snapshot uses it. Test: dvui's `zig build test -Dbackend=testing`, "dumpFrame
    records tag, role, label and a label's text".
 
+5. **Window: drawRetained, so an app can see dialogs before they are drawn** (`e1c6ef1`).
+   `endRendering` drew dialogs and toasts and then replayed every subwindow, with nothing between.
+   `drawRetained` is the first half on its own, called by `endRendering` if the app did not.
+   Popout calls it before taking subwindows into their OS windows, so a dialog exists by then
+   (`docs/WINDOWING_FOUNDATION_PLAN.md`). Upstream: branch `window-draw-retained`, to propose.
+   Test: dvui's `zig build test`, "drawRetained draws dialogs once".
+6. **screensSet: floating widgets can be kept on screens besides the window** (`a90bc70`).
+   `dvui.screensSet(rects)` lists areas besides the window that are screens of their own;
+   floating windows, menus and tooltips place, clip and dim against `dvui.screenFor` (the one
+   holding their middle, else `windowRect`). Not yet used by fizzy, whose `core.screens` and
+   widget forks do the same. Upstream: branch `screens-set`, to propose. Test: "a floating window
+   on another screen (dvui.screensSet) stays on it".
+
+Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
+`screens-set`), from which the upstream PR is opened.
+
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
-`f8b32db`, what `sdk/build.zig.zon` pins now.
+`f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70`, what `sdk/build.zig.zon` pins now (0.2.19 was not
+released yet, and a tag never moves, so the second pin of one version takes a suffix, as the SDL
+fork's tags do).
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`src/backend/native/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`

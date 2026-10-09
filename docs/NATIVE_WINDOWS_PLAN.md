@@ -176,9 +176,8 @@ bar's dropdowns and tooltips: its own OS window, never focused (the main window 
 dvui routes keys to the dialog), the pointer read in the main window's frame, its window the main
 window's child, at the main window's level rather than a popup's, other apps' windows going over
 both. It draws no dim, frost, shadow or fill of its own, the main window is left undimmed, and its
-window fades as it flies shut. dvui draws dialogs at the very end of the frame, after the app takes
-subwindows into their windows, so `core.dialogs.drawEarly` draws fizzy's dialogs first and
-`dialogWindow` skips any it drew when dvui's pass reaches it. A setting, "Native dialogs", beside
+window fades as it flies shut. dvui draws dialogs at the end of the frame, so Popout asks for them
+first (`Window.drawRetained`, on the dvui fork) and then takes them into their windows. A setting, "Native dialogs", beside
 "Native menus".
 
 **A dialog belongs to the window it opened in (the user, 2026-10-06).** It is stacked with that
