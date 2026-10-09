@@ -861,7 +861,7 @@ pub fn processEventsAfter(self: *FloatingWindowWidget) void {
                             // capture and start drag
                             dvui.captureMouse(self.data(), e.num);
                             self.drag_part = dp;
-                            dvui.dragPreStart(e.evt.mouse.button, e.evt.mouse.p, .{ .cursor = self.drag_part.?.cursor() });
+                            dvui.dragPreStart(e.evt.mouse.button, e.evt.mouse.p, .{ .cursor = self.cursorFor(dp) });
                         }
                     },
                     .release => {
@@ -890,7 +890,7 @@ pub fn processEventsAfter(self: *FloatingWindowWidget) void {
                         } else {
                             if (self.init_options.resize == .none) continue;
                         }
-                        dvui.cursorSet(dp.cursor());
+                        dvui.cursorSet(self.cursorFor(dp));
                     },
                     else => {},
                 }
@@ -975,6 +975,15 @@ pub fn screenRectScale(self: *FloatingWindowWidget, rect: Rect) RectScale {
 
 pub fn minSizeForChild(self: *FloatingWindowWidget, s: Size) void {
     self.data().minSizeMax(self.data().options.padSize(s));
+}
+
+/// The pointer over `dp`: its drag part's cursor — but the arrow over the drag area of a window that
+/// is one of its own (`detached`), which its OS moves by it as by a title bar, and a title bar shows
+/// the arrow. The move cursor there showed even over the OS's own buttons beside it (the user): the
+/// pointer over them sends no motion, so the last place, in the drag area, held.
+fn cursorFor(self: *const FloatingWindowWidget, dp: DragPart) dvui.enums.Cursor {
+    if (dp == .middle and self.init_options.detached) return .arrow;
+    return dp.cursor();
 }
 
 pub fn deinit(self: *FloatingWindowWidget) void {

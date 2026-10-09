@@ -124,16 +124,23 @@ fn fizzyNativeDvui(
 
     // SDL3 from fizzy's own pin, not dvui's: the backend is fizzy's, and so are the SDL patches it
     // needs (docs/DEPENDENCIES.md). The wrapper already builds without GameInput.
+    //
+    // Optimized in a Debug app too: Zig builds C in Debug unoptimized and with its undefined-
+    // behaviour checks on every call, and SDL is on every frame's path — event pumping, the GPU
+    // device, every window's present. A Debug frame spent much of itself there (`sample`), and a
+    // window's way into full screen ran at half the display's rate in Debug alone (the user).
+    // Fizzy's own code stays Debug; stepping into SDL's C is what a Debug app gives up.
+    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseFast else optimize;
     const sdl_dep = if (macos_sdl_paths) |p|
         b.lazyDependency("sdl", .{
             .target = target,
-            .optimize = optimize,
+            .optimize = sdl_optimize,
             .include_path = p.include,
             .framework_path = p.framework,
             .library_path = p.lib,
         })
     else
-        b.lazyDependency("sdl", .{ .target = target, .optimize = optimize });
+        b.lazyDependency("sdl", .{ .target = target, .optimize = sdl_optimize });
 
     const sdl_translate_c = b.addTranslateC(.{
         .root_source_file = b.path("src/backend/native/sdl3-c.h"),
