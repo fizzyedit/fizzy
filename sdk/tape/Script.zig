@@ -297,9 +297,20 @@ pub fn key(self: *Script, keys: []const u8) !void {
     self.t += self.pace.beat_ms;
 }
 
-/// Run a command by id; the keystroke display shows its shortcut.
+/// Run a command by id, with nothing — as its shortcut or menu row would. The keystroke display
+/// shows its shortcut.
 pub fn command(self: *Script, id: []const u8) !void {
-    try self.push(.{ .at = self.t, .do = .{ .command = try self.dupe(id) } });
+    try self.push(.{ .at = self.t, .do = .{ .command = .{ .id = try self.dupe(id) } } });
+    self.t += self.pace.beat_ms;
+}
+
+/// Run a command with arguments: `args` is any value `std.zon.stringify` can write, keyed by the
+/// command's parameters — `try s.commandWith("text.goToLine", .{ .line = 12 })`. Whether they fit
+/// is the command's to say when it runs, as it is for a person's.
+pub fn commandWith(self: *Script, id: []const u8, args: anytype) !void {
+    var out: std.Io.Writer.Allocating = .init(self.arena.allocator());
+    std.zon.stringify.serialize(args, .{}, &out.writer) catch return error.OutOfMemory;
+    try self.push(.{ .at = self.t, .do = .{ .command = .{ .id = try self.dupe(id), .args = out.written() } } });
     self.t += self.pace.beat_ms;
 }
 
@@ -374,6 +385,19 @@ test "captions at home stack; one before a callout ends as the callout begins" {
     // The third is a callout: both end where it begins.
     try testing.expectEqual(c[2].at, c[0].at + c[0].ms);
     try testing.expectEqual(c[2].at, c[1].at + c[1].ms);
+}
+
+test "a command's arguments are written as ZON" {
+    var s: Script = .init(testing.allocator, "t", "");
+    try s.keyframe(.{ .root = "demo://t" });
+    try s.command("x.plain");
+    try s.commandWith("text.goToLine", .{ .line = 12, .note = "a \"b\"" });
+    var owned = try s.finish();
+    defer owned.deinit();
+    try testing.expectEqualStrings("", owned.tape.ops[2].do.command.args);
+    const go = owned.tape.ops[3].do.command;
+    try testing.expectEqualStrings("text.goToLine", go.id);
+    try testing.expectEqualStrings(".{ .line = 12, .note = \"a \\\"b\\\"\" }", go.args);
 }
 
 test "a mistyped chord is caught when the script is written" {

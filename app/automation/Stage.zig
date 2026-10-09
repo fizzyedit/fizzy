@@ -32,8 +32,10 @@ pub const VTable = struct {
     keyframe: *const fn (ctx: *anyopaque, kf: *const Tape.Keyframe) void,
     /// Nothing the stage or the app started is still in flight.
     idle: *const fn (ctx: *anyopaque) bool,
-    /// Run a command by id, as its menu row or shortcut would.
-    command: *const fn (ctx: *anyopaque, id: []const u8) void,
+    /// Run a command by id. `args` empty, as its menu row or shortcut would; otherwise with
+    /// `args`, ZON keyed by its parameters (`Tape.Command`), as the palette would once a person
+    /// had given them.
+    command: *const fn (ctx: *anyopaque, id: []const u8, args: []const u8) void,
     /// The chord bound to a command, for the keystroke display. Null when unbound.
     chordFor: *const fn (ctx: *anyopaque, id: []const u8) ?chord.Stroke,
     /// What a person would call a command ("Format Document"), for the keystroke display.
@@ -70,8 +72,8 @@ pub fn keyframe(self: Stage, kf: *const Tape.Keyframe) void {
 pub fn idle(self: Stage) bool {
     return self.vtable.idle(self.ctx);
 }
-pub fn command(self: Stage, id: []const u8) void {
-    self.vtable.command(self.ctx, id);
+pub fn command(self: Stage, id: []const u8, args: []const u8) void {
+    self.vtable.command(self.ctx, id, args);
 }
 pub fn chordFor(self: Stage, id: []const u8) ?chord.Stroke {
     return self.vtable.chordFor(self.ctx, id);

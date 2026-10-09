@@ -4603,8 +4603,10 @@ const DemoStage = struct {
     fn idle(_: *anyopaque) bool {
         return true;
     }
-    fn command(ctx: *anyopaque, id: []const u8) void {
+    fn command(ctx: *anyopaque, id: []const u8, args: []const u8) void {
         if (std.mem.eql(u8, id, "demo.ping")) demo_commands += 1;
+        demo_command_args.clearRetainingCapacity();
+        demo_command_args.appendSlice(std.testing.allocator, args) catch unreachable;
         from(ctx).commands += 1;
     }
     fn chordFor(_: *anyopaque, _: []const u8) ?@import("app").keymap.chord.Stroke {
@@ -4654,6 +4656,8 @@ const DemoStage = struct {
 var demo_text: std.ArrayListUnmanaged(u8) = .empty;
 var demo_clicks: usize = 0;
 var demo_commands: usize = 0;
+/// The arguments the latest command op carried, as the stage was handed them.
+var demo_command_args: std.ArrayList(u8) = .empty;
 var demo_stage: DemoStage = .{};
 var demo_player: automation.Player = undefined;
 /// What the harness hands `Player.frames` as the backend's clock: the testing backend has none of
@@ -6234,4 +6238,51 @@ test "a key bound with arguments runs its command with them, and is not its shor
     // The menu row shows the shortcut, never the key that carries arguments.
     const kb = fizzy.Editor.Keybinds.menuKeybindFor(editor, "t.place");
     try std.testing.expectEqual(dvui.enums.Key.g, kb.key.?);
+}
+
+test "demo: a command op hands its arguments to the stage" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    defer {
+        demo_command_args.deinit(std.testing.allocator);
+        demo_command_args = .empty;
+    }
+
+    var s: automation.Script = .init(std.testing.allocator, "args", "Args");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://args" });
+    try s.commandWith("demo.ping", .{ .times = 2 });
+    demo_player.load(try s.finish(), .{});
+    try stepDemoUntil(.ended, 200);
+
+    try std.testing.expectEqual(@as(usize, 1), demo_commands);
+    try std.testing.expectEqualStrings(".{ .times = 2 }", demo_command_args.items);
+}
+
+test "demo: fizzy's stage runs a command op's arguments through callCommand" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    PaletteArgs.got = null;
+
+    const vtable = sdk.Plugin.VTable{};
+    var state: u8 = 0;
+    var plugin = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try editor.app.host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(PaletteArgs.run),
+    });
+
+    var demo: fizzy.Editor.Demo = .detached;
+    demo.attach(editor);
+    defer demo.deinit();
+    demo.player.stage.command("t.place", ".{ .line = 4, .side = .right }");
+
+    const got = PaletteArgs.got orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 4), got.line);
+    try std.testing.expectEqual(PaletteArgs.Side.right, got.side);
 }

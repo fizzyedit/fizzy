@@ -22,12 +22,16 @@
 //! per string. A truncated or tampered file is an error, never a crash or a read out of bounds.
 //!
 //! **Versions.** `version` is bumped for any change a reader of the old one would misread; a
-//! reader refuses a version it does not know (`error.UnsupportedVersion`) rather than guess.
+//! reader refuses a version it does not know (`error.UnsupportedVersion`) rather than guess, and
+//! reads every older one it does. 2 gave a `command` op its arguments, in the record's second
+//! string; a version-1 command has none.
 const std = @import("std");
 const Tape = @import("Tape.zig");
 
 pub const magic = "FZTP".*;
-pub const version: u16 = 1;
+pub const version: u16 = 2;
+/// The oldest version `read` still reads.
+pub const oldest_version: u16 = 1;
 
 /// Whether `bytes` are a binary tape (rather than ZON, say).
 pub fn sniff(bytes: []const u8) bool {
@@ -80,7 +84,11 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
     const home = try table.intern(gpa, tape.home);
     for (tape.ops) |op| switch (op.do) {
         .move => |m| _ = try table.intern(gpa, m.tag),
-        .key, .type, .command => |s| _ = try table.intern(gpa, s),
+        .key, .type => |s| _ = try table.intern(gpa, s),
+        .command => |c| {
+            _ = try table.intern(gpa, c.id);
+            _ = try table.intern(gpa, c.args);
+        },
         .wait => |wt| switch (wt.until) {
             .shown, .gone => |s| _ = try table.intern(gpa, s),
             .idle => {},
@@ -177,9 +185,10 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
                 kind = .type;
                 a = table.index(s);
             },
-            .command => |s| {
+            .command => |c| {
                 kind = .command;
-                a = table.index(s);
+                a = table.index(c.id);
+                b = table.index(c.args);
             },
             .wait => |wt| {
                 kind = .wait;
@@ -319,7 +328,8 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
     var r: Reader = .{ .bytes = own };
 
     _ = try r.take(magic.len);
-    if (try r.int(u16) != version) return error.UnsupportedVersion;
+    const tape_version = try r.int(u16);
+    if (tape_version < oldest_version or tape_version > version) return error.UnsupportedVersion;
     _ = try r.int(u16); // flags: none yet
     var h: Header = undefined;
     inline for (std.meta.fields(Header)) |f| @field(h, f.name) = try r.int(u32);
@@ -360,7 +370,10 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
             .scroll => .{ .scroll = .{ .x = xy[0], .y = xy[1] } },
             .key => .{ .key = try strings.get(ia) },
             .type => .{ .type = try strings.get(ia) },
-            .command => .{ .command = try strings.get(ia) },
+            .command => .{ .command = .{
+                .id = try strings.get(ia),
+                .args = if (tape_version >= 2) try strings.get(ib) else "",
+            } },
             .wait => .{ .wait = .{ .timeout = ib, .until = switch (std.enums.fromInt(UntilKind, small) orelse return error.Corrupt) {
                 .idle => .idle,
                 .shown => .{ .shown = try strings.get(ia) },
@@ -533,7 +546,8 @@ fn everything() Tape {
             .{ .at = 600, .do = .{ .scroll = .{ .x = 1, .y = -3 } } },
             .{ .at = 700, .ms = 300, .do = .{ .type = "héllo\n\tworld" } },
             .{ .at = 1100, .do = .{ .key = "mod+k mod+c" } },
-            .{ .at = 1200, .do = .{ .command = "fizzy.toggleExplorer" } },
+            .{ .at = 1200, .do = .{ .command = .{ .id = "fizzy.toggleExplorer" } } },
+            .{ .at = 1250, .do = .{ .command = .{ .id = "text.goToLine", .args = ".{ .line = 12, .column = 3 }" } } },
             .{ .at = 1300, .do = .{ .wait = .{ .until = .{ .gone = "fizzy.palette" } } } },
             .{ .at = 1400, .do = .{ .keyframe = 1 } },
             .{ .at = 1500, .ms = 200, .do = .{ .move = .{} } },
@@ -655,6 +669,20 @@ test "flipped bytes are an error, never a crash" {
             o.deinit();
         } else |_| {}
     }
+}
+
+test "a version-1 tape still reads, its commands without arguments" {
+    const bytes = try encode(testing.allocator, everything());
+    defer testing.allocator.free(bytes);
+    std.mem.writeInt(u16, bytes[4..6], 1, .little);
+    var owned = try read(testing.allocator, bytes, .{});
+    defer owned.deinit();
+    const go = owned.tape.ops[10].do.command;
+    try testing.expectEqualStrings("text.goToLine", go.id);
+    try testing.expectEqualStrings("", go.args);
+
+    std.mem.writeInt(u16, bytes[4..6], 0, .little);
+    try testing.expectError(error.UnsupportedVersion, read(testing.allocator, bytes, .{}));
 }
 
 test "a recording's key chords are checked against the app's spelling, as in ZON" {

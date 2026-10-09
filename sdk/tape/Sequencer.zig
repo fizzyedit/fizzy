@@ -82,7 +82,8 @@ pub const Sink = struct {
         key: *const fn (ctx: *anyopaque, chord: []const u8) void,
         /// Text typed; never contains `\n` or `\t` (those arrive as `key`).
         text: *const fn (ctx: *anyopaque, bytes: []const u8) void,
-        command: *const fn (ctx: *anyopaque, id: []const u8) void,
+        /// Run a command, with its arguments as ZON (empty for none).
+        command: *const fn (ctx: *anyopaque, cmd: Tape.Command) void,
         keyframe: *const fn (ctx: *anyopaque, kf: *const Tape.Keyframe) void,
         holds: *const fn (ctx: *anyopaque, until: Tape.Until) bool,
         /// A wait gave up. The sink says so where a person will see it.
@@ -220,9 +221,9 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 sink.vtable.key(sink.ctx, k);
                 return .yielded;
             },
-            .command => |id| {
+            .command => |cmd| {
                 self.cursor += 1;
-                sink.vtable.command(sink.ctx, id);
+                sink.vtable.command(sink.ctx, cmd);
                 return .yielded;
             },
         }
@@ -442,8 +443,9 @@ const Log = struct {
     fn text(ctx: *anyopaque, bytes: []const u8) void {
         from(ctx).print("text {s}", .{bytes});
     }
-    fn command(ctx: *anyopaque, id: []const u8) void {
-        from(ctx).print("command {s}", .{id});
+    fn command(ctx: *anyopaque, cmd: Tape.Command) void {
+        if (cmd.args.len == 0) return from(ctx).print("command {s}", .{cmd.id});
+        from(ctx).print("command {s} {s}", .{ cmd.id, cmd.args });
     }
     fn keyframe(ctx: *anyopaque, kf: *const Tape.Keyframe) void {
         from(ctx).print("keyframe {s}", .{kf.root});
@@ -622,7 +624,8 @@ test "a wait holds demo time until it holds, then carries on in the same frame" 
     const ops = [_]Tape.Op{
         .{ .at = 0, .do = .{ .keyframe = 0 } },
         .{ .at = 10, .do = .{ .wait = .{ .until = .idle } } },
-        .{ .at = 10, .do = .{ .command = "x.go" } },
+        .{ .at = 10, .do = .{ .command = .{ .id = "x.go" } } },
+        .{ .at = 10, .do = .{ .command = .{ .id = "x.to", .args = ".{ .line = 3 }" } } },
     };
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
     var log: Log = .{ .idle = false };
@@ -635,6 +638,9 @@ test "a wait holds demo time until it holds, then carries on in the same frame" 
     log.idle = true;
     try testing.expectEqual(Progress.yielded, seq.advance(100, 16, log.sink()));
     try testing.expectEqualStrings("keyframe demo://a\ncommand x.go\n", log.out.items);
+    // A command's arguments reach the sink as written, a frame after the command before it.
+    try testing.expectEqual(Progress.yielded, seq.advance(100, 16, log.sink()));
+    try testing.expectEqualStrings("keyframe demo://a\ncommand x.go\ncommand x.to .{ .line = 3 }\n", log.out.items);
 }
 
 test "a wait that never holds gives up after its timeout, in wall time" {

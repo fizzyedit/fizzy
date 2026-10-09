@@ -928,8 +928,8 @@ fn text(_: *anyopaque, bytes: []const u8) void {
     _ = dvui.currentWindow().addEventText(.{ .text = bytes }) catch {};
 }
 
-fn command(ctx: *anyopaque, id: []const u8) void {
-    from(ctx).stage.command(id);
+fn command(ctx: *anyopaque, cmd: Tape.Command) void {
+    from(ctx).stage.command(cmd.id, cmd.args);
 }
 
 fn keyframe(ctx: *anyopaque, kf: *const Tape.Keyframe) void {
