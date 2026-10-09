@@ -1,5 +1,7 @@
 .{
     .paths = .{
+        "VERSION",
+        "app",
         "src",
         "core",
         "plugins",
@@ -10,6 +12,7 @@
         "sdk",
         "assets",
         "libs",
+        "web",
     },
     .fingerprint = 0x3311781b569a8e73,
     .name = .fizzy,
