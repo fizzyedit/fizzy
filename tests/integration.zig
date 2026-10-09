@@ -6474,6 +6474,70 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     _ = &si.acquireLock;
 }
 
+// ── Accessible names ──────────────────────────────────────────────────────────────────────────
+// dvui's frame dump (`dvui.debug.captureFrame`) records each widget's role, label and the text a
+// label shows. A button's name is its `label` option, or the text of the label widget it names or
+// holds — how dvui names `dvui.button("Save")` — so an icon-only button needs a `label` of its own.
+
+/// The name a captured widget goes by, or null when it has none.
+fn widgetName(widgets: []const dvui.Debug.CapturedWidget, i: usize) ?[]const u8 {
+    const w = &widgets[i];
+    if (w.label) |l| switch (l) {
+        .text => |t| return t,
+        .by_id => |id| for (widgets) |*o| {
+            if (o.id == id) return o.text;
+        },
+        // The label widget just before or after it in the tree.
+        .label_widget => |dir| {
+            var j = i;
+            while (if (dir == .next) j + 1 < widgets.len else j > 0) {
+                j = if (dir == .next) j + 1 else j - 1;
+                if (widgets[j].role == .label) return widgets[j].text;
+            }
+        },
+        .for_id => {},
+    };
+    // Named by a label inside it: any descendant's text.
+    var stack: [64]dvui.Id = undefined;
+    stack[0] = w.id;
+    var n: usize = 1;
+    for (widgets[i + 1 ..]) |*o| {
+        const inside = for (stack[0..n]) |id| {
+            if (o.parent_id == id) break true;
+        } else false;
+        if (!inside) continue;
+        if (o.role == .label) if (o.text) |t| if (t.len > 0) return t;
+        if (n < stack.len) {
+            stack[n] = o.id;
+            n += 1;
+        }
+    }
+    return null;
+}
+
+/// Capture one frame of `frame` and fail, naming each one, when something on screen a person clicks
+/// (a button, tab, checkbox, radio, link or menu item) has no name.
+fn expectButtonsNamed(frame: fn () anyerror!dvui.App.Result) !void {
+    dvui.debug.captureFrame();
+    // `captureFrame` starts at the next `Window.begin`: the second step is the captured one.
+    _ = try dvui.testing.step(frame);
+    _ = try dvui.testing.step(frame);
+    const widgets = (dvui.debug.lastCapture() orelse return error.TestUnexpectedResult).widgets.items;
+    var unnamed: usize = 0;
+    for (widgets, 0..) |*w, i| {
+        const clickable = w.role != null and switch (w.role.?) {
+            .button, .tab, .check_box, .radio_button, .link, .menu_item => true,
+            else => false,
+        };
+        if (!clickable or !w.visible) continue;
+        if (widgetName(widgets, i) != null) continue;
+        unnamed += 1;
+        std.debug.print("unnamed {s}: {s}:{d} ({s}){s}{s}\n", .{ @tagName(w.role.?), w.src_file, w.src_line, w.src_fn, if (w.tag != null) " tag=" else "", w.tag orelse "" });
+    }
+    dvui.debug.clearCaptures(dvui.currentWindow().gpa);
+    try std.testing.expectEqual(@as(usize, 0), unnamed);
+}
+
 // ── Headless ────────────────────────────────────────────────────────────────────────────────────
 // The spike in docs/AGENTS_PLAN.md ("Running with no display"): the whole editor, as `Entry`
 // brings it up, over dvui's testing backend in a profile of its own.
@@ -6530,6 +6594,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     }
     try dvui.testing.settle(headlessFrame);
     try std.testing.expect(editor.activeDoc() != null);
+    // Every button on screen has a name a person, a screen reader or a script could use.
+    try expectButtonsNamed(headlessFrame);
 
     // The tour, every frame of it, on the testing backend's clock (100 ms a step): about a
     // minute of demo in a few hundred frames.
@@ -6539,6 +6605,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         _ = try dvui.testing.step(headlessFrame);
     }
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
+    // The tour leaves the explorer, the panel and the rest of the window open: their buttons too.
+    try expectButtonsNamed(headlessFrame);
     editor.demo.player.unload();
     try dvui.testing.settle(headlessFrame);
 

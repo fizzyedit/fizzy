@@ -209,6 +209,7 @@ fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
 
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{
+        .label = .{ .text = "Collapse Explorer" },
         .expand = .both,
         .corners = dvui.CornerRect.all(btn_radius),
         .background = true,

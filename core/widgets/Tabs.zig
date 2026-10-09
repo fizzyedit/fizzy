@@ -17,7 +17,7 @@
 //! defer strip.deinit();
 //! for (items, 0..) |item, i| {
 //!     if (i == slot_at) strip.gap(@src(), carried_len, i);
-//!     var t = strip.tab(@src(), keyOf(item), i == active_index);
+//!     var t = strip.tab(@src(), keyOf(item), i == active_index, item.title);
 //!     defer t.deinit();
 //!     // draw whatever a tab looks like here
 //!     if (t.lifted()) carry(item);
@@ -208,9 +208,13 @@ pub const Tab = struct {
     }
 };
 
-pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, key: usize, selected: bool) Tab {
+/// One tab, keyed by `key`. `name` is what it is called — the view's title — for a screen reader
+/// or a script, which a rail of icons does not otherwise show; it must outlive the frame.
+pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, key: usize, selected: bool, name: []const u8) Tab {
     const box = dvui.widgetAlloc(dvui.BoxWidget);
     box.init(src, .{ .dir = .horizontal }, .{
+        .role = .tab,
+        .label = .{ .text = name },
         // A rail's cell is its full width, so the whole row is the hit area.
         .expand = if (self.opts.dir == .vertical) .horizontal else .none,
         .border = dvui.Rect.all(0),

@@ -1864,6 +1864,8 @@ fn newDocumentChooserButton(host: *Host, candidate: Candidate, index: usize) boo
 
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{
+        // Named by the caption drawn below it, outside the button.
+        .label = .{ .text = if (candidate.kind) |k| k.title else plugin.display_name },
         .id_extra = index,
         .min_size_content = .{ .w = size, .h = size },
         .padding = .all(10),

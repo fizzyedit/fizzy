@@ -962,6 +962,8 @@ pub fn windowHeaderCloseInnerSide() f32 {
 /// Base `Options` for the dialog header close button. Tabs pass `.override(.{ .expand = .none, .min_size_content = …, .id_extra = … })`.
 pub fn windowHeaderCloseButtonOptions(over: dvui.Options) dvui.Options {
     const base: dvui.Options = .{
+        // Its only content is an X: the name a screen reader or a script reads instead.
+        .label = .{ .text = "Close" },
         .font = .theme(.heading),
         .corners = dvui.CornerRect.all(1000),
         .padding = dvui.Rect.all(0),

@@ -37,7 +37,7 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     // The same cell as every other rail icon (`Sidebar.drawOption`): a button the icon's
     // height, the glyph in it, nothing else. Click toggles the flyout.
     var bw: dvui.ButtonWidget = undefined;
-    bw.init(@src(), .{}, .{ .min_size_content = .{ .h = size } });
+    bw.init(@src(), .{}, .{ .label = .{ .text = "Accounts" }, .min_size_content = .{ .h = size } });
     defer bw.deinit();
     bw.processEvents();
     const color = if (bw.hovered() or open) theme.color(.window, .text) else theme.color(.window, .fill);

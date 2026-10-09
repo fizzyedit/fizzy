@@ -426,7 +426,8 @@ pub const tab_status_inset = dvui.Rect{ .x = 4, .y = 2, .w = 4, .h = 2 };
 
 /// Workspace tab close control: fixed size, no margin/shadow (unlike dialog header close).
 pub fn tabCloseButtonOptions(over: dvui.Options) dvui.Options {
-    return dialogs.windowHeaderCloseButtonOptions(over.override(.{
+    const named = (dvui.Options{ .label = .{ .text = "Close Tab" } }).override(over);
+    return dialogs.windowHeaderCloseButtonOptions(named.override(.{
         .margin = dvui.Rect.all(0),
         .padding = dvui.Rect.all(0),
         .border = dvui.Rect.all(0),

@@ -172,7 +172,7 @@ pub fn item(self: *Chooser, src: std.builtin.SourceLocation, view: *const Layout
         // Keyed by the view, not its place in the list: an item lifted out of it, or a slot
         // opening in it, moves the rest along, and keyed by index each would take on another's
         // size for a frame.
-        .tab = self.strip.tab(src, @truncate(std.hash.Wyhash.hash(0, view.id)), selected),
+        .tab = self.strip.tab(src, @truncate(std.hash.Wyhash.hash(0, view.id)), selected, view.title),
         .selected = selected,
         .opts = opts,
         .index = index,
