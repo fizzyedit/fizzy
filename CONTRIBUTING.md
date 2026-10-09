@@ -58,6 +58,12 @@ The open PR list is the board of who is working on what.
 - **`jj new` before the work, not after.** Start each change with
   `jj new -m "<what I'm about to do>"` and refine it with `jj describe` when done. Describing
   twice without a `jj new` between folds two changes into one and overwrites the first message.
+- **A workspace stacked on another's change goes stale when that change is rewritten.** Amend
+  the bottom of a stack in one workspace, and every workspace above it is stale. Run
+  `jj workspace update-stale` there before editing again. If it reports a fresh commit, check
+  `jj log` for a divergent twin of your change (`??` after the id): keep the one that holds your
+  edits (`jj edit <commit>`) and abandon the empty one. Edits made in the stale workspace
+  before the update are in the twin, not lost.
 - **Backticks in messages:** write the message to a file through a quoted heredoc (`<<'MSG'`),
   then `jj describe --stdin < file` or `gh pr create --body-file file`. With `-m "…"` or an
   unquoted heredoc, zsh runs every backticked name as a command.

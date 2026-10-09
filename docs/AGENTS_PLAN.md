@@ -1,6 +1,6 @@
 # Agents — the plan
 
-Status: in progress, #250. Milestone 1 (command parameters and results) is #251, with #253 (keybinds) and #254 (tapes); milestone 2 (profiles) is #255.
+Status: in progress, #250. Milestone 1 (command parameters and results) is #251, with #253 (keybinds) and #254 (tapes); milestone 2 (profiles) is #255; milestone 3 has begun, #257 and #258.
 
 How fizzy becomes something an agent can drive, build plugins for and check its own work in —
 **without fizzy, or any app built on it, carrying anything agent-shaped.** Agent support is an
@@ -105,6 +105,10 @@ What `app/automation` already does, offered to plugins. Registered by an app tha
 
 - **`wantAnchors()`** — anyone may ask for anchors this frame; `core.anchor.publish` becomes
   "someone asked", not "a demo is loaded". Consumers: the recorder, plugin demos, plugin tests.
+  *Built in #258 as `core.anchor.want()`, and not a service call:* `core.anchor` already agrees
+  across dylibs through the window's data, so a plugin asks the same way the player does. The
+  service need not wrap it, and the frame's named rects are dvui's tags, which a plugin can read
+  as directly. The service keeps what only the app can do: `play`, and `settled`.
 - **`anchors(arena)`** — the frame's named rects (name, rect, visible), and accessible
   `role:label` names (below). Consumers: the recorder, plugin tests.
 - **`play(tape, opts)`** — play tape bytes (ZON or binary, `Tape.load`) **live**: no keyframe,
@@ -114,7 +118,14 @@ What `app/automation` already does, offered to plugins. Registered by an app tha
   `registerDemo`, AUTOMATION_PLAN milestone 6.) How a live tape is driven is below.
 - **`settled()`** — `Stage.idle`, and nothing asked dvui for another frame, and nothing animating.
   With a callback form, so a caller can wait without polling. Consumers: demos, tests, a plugin
-  that acts once a load has landed.
+  that acts once a load has landed. *Open:* "nothing asked dvui for another
+  frame" is not observable at the start of the next frame through dvui's public API. `refresh`
+  sets `Window.extra_frames_needed`, which `Window.begin` counts back down, and running
+  animations sit in `Window.animations`. Either the app notes it at the end of its own frame
+  function, reading those fields (a reach into dvui's state, which CONTRIBUTING asks against), or
+  dvui says it: an accessor beside the frame-dump fields, in the same fizzy-dev patch. The second
+  is the right one. Until then the live driver paces on `Stage.idle` and the sequencer's yields
+  alone, which the tests show is enough for input to land.
 
 #### Driving a live tape: its own driver, not the `Player`
 
@@ -322,7 +333,12 @@ Each lands on its own and is useful without the next.
    factored out of the `Player` first, then the `LiveDriver` on it. Role, label and tag in dvui's
    frame dump (a fizzy-dev patch), the snapshot over it, and a pass labelling fizzy's icon-only
    buttons. First consumers: plugin tests, and plugin demos
-   (AUTOMATION_PLAN milestone 6) through the same anchors.
+   (AUTOMATION_PLAN milestone 6) through the same anchors. So far: the sink as
+   `automation.Input` (#257); the `LiveDriver`, and anchors on request as `core.anchor.want`
+   (#258). Next: the service itself (`play`, `stop`, `outcome`, `settled`), and the overlay
+   drawing a live tape's pointer. **On the dvui fork:** the frame-dump fields, and the "another
+   frame?" accessor `settled` wants. Both are a patch on `foxnne/dvui-dev`'s `fizzy-dev` stack,
+   then a tag and a repin, not yet made.
 4. **`state`, `frames`, `log`, `plugins`.**
 5. **`fizzyedit/agent` and `fizzy-mcp`**, desktop. Everything it needs exists by now; if it
    needs anything else, that is a missing seam to add here, not a reach into fizzy.
@@ -347,6 +363,23 @@ Each lands on its own and is useful without the next.
   `label`, so the snapshot (and a screen reader) can name it.
 - **No back door.** Agents change the model only through commands, and the UI only through
   input.
+- **Arguments travel as ZON text wherever a command is named** (#253, #254): a tape's
+  `command` op is `.{ .id, .args }`, with `args` the text `Host.callCommand` takes, and a
+  keybind's `.args` is ZON written in place and kept verbatim. Neither the tape library nor the
+  keymap parses them; the command says whether they fit, when it runs.
+- **A binding with arguments is a use of a command, not its shortcut** (#253): menus, the
+  palette and the Keyboard Shortcuts pane show and edit only the binding without.
+- **A profile's root is its config folder** (#255), not a folder holding one: every path fizzy
+  keeps was already relative to the config folder, and a profile made from an existing one just
+  works. The lock is named for the profile, so it is its own on every OS.
+- **The headless host is fizzy over dvui's testing backend** (#256), not SDL without a display:
+  no system packages, deterministic, and its own clock. Pixels come later, behind `frames`.
+- **A live tape that loses its place stops** (#258): a wait that gives up, or a person's input,
+  ends it and says before which op. A demo carries on, and that difference is why they are two
+  drivers.
+- **Anchors are asked for, a frame at a time, by anyone** (`core.anchor.want`, #258), through
+  `core` rather than a service call: the request already crosses dylibs through the window's
+  data.
 
 ## Open
 
