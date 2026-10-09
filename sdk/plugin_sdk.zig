@@ -551,6 +551,12 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
     });
     lib.linker_allow_shlib_undefined = true;
     lib.root_module.export_symbol_names = &dylib_exports;
+    // `FIZZY_PLUGIN_USE_LLVM=1` / `=0` forces the code generator for a plugin build; unset, Zig
+    // chooses its default for the target. For measuring the rebuild
+    // loop per backend (`scripts/plugin-loop/bench.py --backend`, `.github/workflows/plugin-loop.yml`):
+    // an environment variable rather than a `-D` option, because fizzy's own build creates several
+    // plugins on one builder, and an option may be declared only once.
+    if (b.graph.environ_map.get("FIZZY_PLUGIN_USE_LLVM")) |v| lib.use_llvm = !std.mem.eql(u8, v, "0");
     if (is_wasm) {
         // A wasm *side module* (Emscripten's term): position-independent, no entry, no
         // threads, loaded into the web host's memory and function table at runtime — the
