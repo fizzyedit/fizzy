@@ -18,6 +18,8 @@ pub const main_area = sdk.keywords.ide.main;
 
 pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
+    // The card Main and Panel wear, and every float's places with them (`Layout.card`).
+    f.card = placeCard(editor);
     // The blur harness: a frosted card above the shape, declared last so it floats over it.
     defer blurDemo(editor);
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
@@ -89,7 +91,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     defer content.deinit();
 
     {
-        var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area, .pane_cards = true }, placeCard(editor, .{ .expand = .both }));
+        var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area, .card = true, .pane_cards = true }, .{ .expand = .both });
         defer main.deinit();
     }
 
@@ -105,11 +107,12 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
             .resize = true,
             .collapsible = true,
             .hide_when_empty = true,
+            .card = true,
             .pane_cards = true,
-        }, placeCard(editor, .{
+        }, .{
             .min_size_content = .{ .h = 220 },
             .expand = .horizontal,
-        }));
+        });
         defer panel.deinit();
     }
 
@@ -134,22 +137,20 @@ const place_padding: f32 = 8;
 /// split, and a sash gap is a packed split.
 const edge_gutter: f32 = 10;
 
-fn placeCard(editor: *fizzy.Editor, extra: dvui.Options) dvui.Options {
+fn placeCard(editor: *fizzy.Editor) dvui.Options {
     var fill = dvui.themeGet().color(.window, .fill);
     // Opaque while the window covers the desktop: `contentOpacity` eases there with the window.
     if (editor.app.host.appliesNativeWindowOpacity()) {
         fill = fill.opacity(editor.app.host.contentOpacity());
     }
-    var opts = extra;
-    opts.background = true;
-    opts.color_fill = .{ .color = fill };
-    const radius = fizzy.core.corners.scaled(place_radius);
-    opts.corners = dvui.CornerRect.round(radius);
-    // Inset the plugin surface inside the card. A sash is a packed split,
-    // not this padding — this only shrinks the content rect.
-    if (opts.padding == null) opts.padding = .all(place_padding);
-    if (opts.margin == null) opts.margin = .{};
-    return opts;
+    return .{
+        .background = true,
+        .color_fill = .{ .color = fill },
+        .corners = dvui.CornerRect.round(fizzy.core.corners.scaled(place_radius)),
+        // Inset the plugin surface inside the card. A sash is a packed split,
+        // not this padding — this only shrinks the content rect.
+        .padding = .all(place_padding),
+    };
 }
 
 fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.App.Result {

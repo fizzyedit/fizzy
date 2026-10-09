@@ -5535,8 +5535,9 @@ test "float: the float a view is carried out of is a ghost while the view is aim
     try std.testing.expect(holds(case.shows("Float 1"), "test.output"));
 
     // Carried back over it — every drop beneath clear of it — itself again at once, and what the
-    // view aims at.
-    const body: dvui.Point.Physical = .{ .x = bounds.x + 12, .y = bounds.y + bounds.h - 12 };
+    // view aims at. On its place's card, inside the glass that frames it: the frame, as the
+    // window's own between its cards, is no place.
+    const body: dvui.Point.Physical = .{ .x = bounds.x + 32, .y = bounds.y + bounds.h - 32 };
     try pointTo(body, ManyPanelFrame.frame, 1);
     try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
     try restOn(editor, body, ManyPanelFrame.frame);

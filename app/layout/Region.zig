@@ -318,6 +318,11 @@ pub const InitOptions = struct {
     /// reads as one. A region showing one pane, or none, keeps its card. Decided from the last
     /// frame's panes, so a second pane opening wears its card a frame after it appears.
     pane_cards: bool = false,
+    /// Wear the layout's card (`Layout.card`) — under whatever of its fill, corners and padding
+    /// the region's own `dvui.Options` set. A float's place asks for it; so can a place the shape
+    /// draws, rather than spelling the card out. The places a split makes of it wear it too, and
+    /// with `pane_cards` the panes its view opens.
+    card: bool = false,
 };
 
 /// Declare a region: an area that hosts matching surfaces, holds other regions, or both.
@@ -338,7 +343,8 @@ pub const InitOptions = struct {
 /// }
 /// f.split(@src(), .{});
 /// ```
-pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: dvui.Options) anyerror!Region {
+pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptions, opts_given: dvui.Options) anyerror!Region {
+    const opts = withCard(self, init_opts, opts_given);
     if (self.depth >= Layout.max_nesting) {
         dvui.log.err("layout nests deeper than {d} regions; \"{s}\" ignored", .{ Layout.max_nesting, init_opts.name });
         return .{};
@@ -1155,6 +1161,19 @@ fn foldedPadding(p: dvui.Rect, extent: f32, axis: dvui.enums.Direction) dvui.Rec
         .horizontal => .{ .x = p.x * f, .y = p.y, .w = p.w * f, .h = p.h },
         .vertical => .{ .x = p.x, .y = p.y * f, .w = p.w, .h = p.h * f },
     };
+}
+
+/// `given`, wearing the layout's card where the region asks for it (`InitOptions.card`) and does not
+/// set that part of it itself.
+fn withCard(self: *const Layout, init_opts: InitOptions, given: dvui.Options) dvui.Options {
+    if (!init_opts.card) return given;
+    const card = self.card orelse return given;
+    var o = given;
+    if (o.background == null) o.background = card.background;
+    if (o.color_fill == null) o.color_fill = card.color_fill;
+    if (o.corners == null) o.corners = card.corners;
+    if (o.padding == null) o.padding = card.padding;
+    return o;
 }
 
 fn placeVisual(opts: dvui.Options) dvui.Options {
