@@ -17,6 +17,15 @@ var follow = true;
 /// viewport moves, so the estimate drifted, the spacers changed height, the viewport clamped,
 /// the visible range moved, and the panel oscillated for as long as the log overflowed it.
 var line_pitch: f32 = 0;
+/// The widest line laid out so far, natural units: the width the panel scrolls sideways over.
+/// Only the lines in view are laid out, so their width alone came and went as the view moved,
+/// and the horizontal bar with it, which takes a row's height off the view. Following the tail,
+/// the view then lost its top row and the wide line with it, the bar went, the row came back, and
+/// the panel jittered every frame with no input. Never narrower than a line already seen; starts
+/// over when the tab or the log does.
+var widest: f32 = 0;
+/// `OutputLog.clears` when `widest` was last started over.
+var widest_clears: u32 = 0;
 
 /// Selected tab, persisted as a bounded copy rather than a slice into `OutputLog`'s ring
 /// buffer — a scope string there can be freed on eviction or plugin unload between frames.
@@ -60,6 +69,10 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         OutputLog.lock();
         defer OutputLog.unlock();
         const src = OutputLog.items();
+        if (OutputLog.clears() != widest_clears) {
+            widest_clears = OutputLog.clears();
+            widest = 0;
+        }
         // Distinct scopes seen so far, in first-seen order — small (one per active plugin), so
         // a linear scan per line is cheap. Counted here too: the range below needs the total.
         const shown_idx = arena.alloc(u32, src.len) catch return .ok;
@@ -123,10 +136,12 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // lines instead of stopping dead at each line's own boundary.
     var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
         .expand = .horizontal,
+        .min_size_content = .{ .w = widest },
         .background = false,
         .margin = .{},
         .padding = .{},
     });
+    const tl_id = tl.data().id;
 
     var shown: usize = 0;
     for (lines) |line| {
@@ -143,6 +158,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     }
 
     tl.deinit();
+    if (dvui.minSizeGet(tl_id)) |size| widest = @max(widest, size.w);
     const after = shown_total - first - lines.len;
     if (after > 0) {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(after)) * line_pitch }, .expand = .horizontal });
@@ -191,6 +207,7 @@ fn drawTab(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize, 
         .padding = .all(1),
     });
     if (clicked) {
+        widest = 0;
         if (id_extra == 0) {
             selected_scope_len = 0;
         } else {

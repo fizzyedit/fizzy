@@ -20,6 +20,7 @@ pub const Explorer = @import("editor/explorer/Explorer.zig");
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 pub const OutputLog = @import("editor/OutputLog.zig");
+pub const OutputPanel = @import("editor/OutputPanel.zig");
 
 // The process-wide entry / application-state instances.
 //

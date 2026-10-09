@@ -6742,3 +6742,40 @@ test "automation service: settled waits for dvui to go quiet, and wakes the app 
     try std.testing.expect(!svc.frameEnded(null));
     try std.testing.expect(api.settled());
 }
+
+// -- output panel --------------------------------------------------------------------------------
+// The panel lays out only the lines in view, so the width it scrolls sideways over was only theirs:
+// a line wider than the panel in view put up the horizontal bar, the bar took a row's height off
+// the view, the view following the tail dropped its top row, and with it the wide line; the bar
+// went, the row came back, and the panel jittered every frame with no input.
+
+const output_panel_size: dvui.Size = .{ .w = 300, .h = 120 };
+
+fn outputPanelFrame() anyerror!dvui.App.Result {
+    var box = dvui.box(@src(), .{}, .{
+        .min_size_content = output_panel_size,
+        .max_size_content = .{ .w = output_panel_size.w, .h = output_panel_size.h },
+    });
+    defer box.deinit();
+    return fizzy.OutputPanel.draw(null);
+}
+
+test "the output panel settles at its tail with a line wider than it anywhere in view" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    defer fizzy.OutputLog.clear();
+
+    const wide = "a line far wider than the panel " ** 12;
+    const rows = 40;
+    // The wide line at each of the last rows in turn, wherever the top of the view falls.
+    for (0..20) |from_tail| {
+        fizzy.OutputLog.clear();
+        for (0..rows) |i| {
+            fizzy.OutputLog.appendLine(.info, "test", if (i == rows - 1 - from_tail) wide else "short");
+        }
+        dvui.testing.settle(outputPanelFrame) catch |err| {
+            std.debug.print("wide line {d} rows from the tail: {s}\n", .{ from_tail, @errorName(err) });
+            return err;
+        };
+    }
+}
