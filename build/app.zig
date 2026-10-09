@@ -646,6 +646,20 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         }));
     }
 
+    // The single-instance listener (`libs/dvui-singleton-app`): its shutdown wakes the thread
+    // waiting in `accept`, which closing the socket does not on Linux. It talks to its socket
+    // through libc.
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-singleton-unix-tests",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("libs/dvui-singleton-app/src/unix_impl.zig"),
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    }));
+
     // Keybinding parse/resolve core. Deliberately dvui-free (see Keymap.zig) — dvui's keybind map
     // can't express chords and is keyed by bind name, not command. Its key spelling is `tape`'s
     // (`sdk/tape/chord.zig`), the one dependency it has.
