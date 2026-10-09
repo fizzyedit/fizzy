@@ -684,39 +684,7 @@ pub fn closeFloatingDialogAnchored() void {
     dvui.dataSet(null, sub.id, "_close_rect", close_rect);
 }
 
-/// The dialogs `drawEarly` drew this frame, which dvui's own pass then finds drawn.
-var early: struct { frame: i128 = 0, n: u8 = 0, ids: [8]dvui.Id = undefined } = .{};
-var drawing_early = false;
-
-/// Draw this frame's dialogs now rather than where dvui draws them, at the very end of the frame
-/// (`Window.endRendering`): where dialogs are windows of their own (`screens.nativeDialogs`), the
-/// app takes each one's drawing into its window before that (`Popout`). Only the dialogs drawn by
-/// this file's frame (`dialogWindow`); dvui's pass skips each of them, and draws any other as ever.
-pub fn drawEarly() void {
-    const win = dvui.currentWindow();
-    early = .{ .frame = win.frame_time_ns };
-    drawing_early = true;
-    defer drawing_early = false;
-    var it = win.dialogs.iterator(null);
-    while (it.next()) |d| {
-        const ours = d.display == &dialogWindow or if (host_chrome) |h| d.display == h.dialog_window else false;
-        if (!ours or early.n >= early.ids.len) continue;
-        early.ids[early.n] = d.id;
-        early.n += 1;
-        d.display(d.id) catch |err| dvui.logError(@src(), err, "Dialog {x}", .{d.id});
-    }
-}
-
-/// Whether dialog `id` was drawn by `drawEarly` this frame.
-fn drawnEarly(id: dvui.Id) bool {
-    if (early.frame != dvui.currentWindow().frame_time_ns) return false;
-    for (early.ids[0..early.n]) |i| if (i == id) return true;
-    return false;
-}
-
 pub fn dialogWindow(id: dvui.Id) anyerror!void {
-    // Drawn already this frame (`drawEarly`): dvui's own pass, at the end of the frame.
-    if (!drawing_early and drawnEarly(id)) return;
     const modal = dvui.dataGet(null, id, "_modal", bool) orelse {
         dvui.log.err("dialogDisplay lost data for dialog {x}\n", .{id});
         dvui.dialogRemove(id);

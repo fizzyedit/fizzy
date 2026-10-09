@@ -266,36 +266,39 @@ floating windows and menus as OS windows.
 
 **On dvui's side, smallest and most valuable first.** Each change goes to the fork
 (`DEPENDENCIES.md`) and is proposed upstream:
-1. **Redirecting a subwindow's render target in `Window.endRendering`'s replay.** A target and
-   offset per subwindow, or a callback that returns one.
-   - It replaces Popout emptying `render_cmds` by hand.
-   - Because the redirect happens inside the replay, after dialogs and toasts are drawn, it also
-     removes `core.dialogs.drawEarly`.
-   - `POPOUT_WINDOWS_PLAN.md` already proposes it.
-2. **A screens hook.** `dvui.screenFor(rect)` and its pixel form, defaulting to the window's rect.
-   - The floating widgets' `placeOnScreen` and `clipSet(windowRectPixels())` call it instead of
-     using the window's rect.
-   - `FloatingWindowWidget` gets an option to skip the clamp.
-   - It removes fizzy's forks of `FloatingWindowWidget`, `FloatingMenu`, `FloatingTooltipWidget`
-     and `Popover`, which exist only because the stock ones pull a float drawn in a band back onto
-     the main window.
-3. **A kind and parent on each subwindow, recorded at `subwindowAdd`.** `FloatingMenu` passes the
-   subwindow it opened from. A backend can then send a float's menus and tooltips to the float's
-   OS window, replacing "is its middle inside the band" and the `screens.markMenu` tagging.
-4. **Input per OS window** (optional while bands work). Tag events with the OS window they came
-   from, and make `.leave` per window. Today a viewport's leave sets `mouse_pt` to (-1, -1) for
-   every window.
-5. **Frame hooks for `dvui.App` backends:** at begin, and before the replay. The backend can then
-   run its windows itself, rather than fizzy wrapping its frame function in `Entry`.
-6. **A policy flag.** `os_window` on `FloatingWindowWidget`, menus and dialogs, saying which
-   subwindows become OS windows.
+1. **`Window.drawRetained` (done, on `fizzy-dev`; upstream branch `window-draw-retained`).**
+   `endRendering` drew dialogs and toasts and then replayed the subwindows, with no point between
+   the two for an app to act. `drawRetained` is that first half on its own; `endRendering` calls it
+   if the app did not. Popout calls it before taking subwindows into their windows, which removed
+   `core.dialogs.drawEarly`.
+   - A render target per subwindow, first proposed here, was dropped: it cannot express a layer
+     drawn into every window (a view drag's drops), and taking a subwindow's commands with the
+     public `render_cmds` and `renderCommands` already works once the dialogs exist.
+2. **`dvui.screensSet` and `dvui.screenFor` (done, on `fizzy-dev`; upstream branch `screens-set`).**
+   The app lists, each frame, the areas besides the window that are screens of their own (the
+   bands). The floating widgets place, size, clip and dim against the screen holding their
+   middle, where they used `windowRect`. Without a call nothing changes.
+   - Not yet adopted: fizzy's `core.screens` still publishes into dvui data, and its forks of the
+     floating widgets stay, for their looks. Adopting it is what lets a stock dvui menu work in a
+     band.
+   - The option to skip the clamp was dropped: a float whose band is its screen is already on it.
+
+Dropped after review (2026-10-09), for now:
+3. **A kind and parent per subwindow.** Fizzy's own menus pass no parent either; the band holding
+   a subwindow's middle already says which window it belongs to.
+4. **Input per OS window.** Sending `.leave` only when the pointer leaves every window of the app
+   is the backend's job, not dvui's.
+5. **Frame hooks for `dvui.App` backends.** A backend with its own `main` runs `begin`, the frame
+   and `end` itself, so it can call `drawRetained` and take subwindows with no hook.
+6. **An `os_window` policy flag.** Which subwindows become OS windows is the app's policy; nothing
+   in dvui needs to know.
 
 Later: a natural scale per subwindow (mixed-DPI displays), and an AccessKit tree per OS window.
 
 **The case to make upstream.** dvui's only multi-window model today is `OsWindowWidget`: one
 `dvui.Window` per OS window, at most five. A drag across windows needs one frame and one layout,
-which is what bands give. The two patches fizzy carries on dvui today (`deferRender` and precise
-targets) are for glass, not windowing.
+which is what bands give. Of the patches fizzy carries on dvui, `deferRender` and precise targets
+are for glass; `drawRetained` and `screensSet` are the windowing ones.
 
 ## Steps
 
