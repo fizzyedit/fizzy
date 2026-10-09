@@ -4093,8 +4093,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // out and removes itself when the timer expires.
     editor.drawSaveToasts();
 
-    // Over everything the frame drew: a demo's pointer, keystrokes, captions and transport bar.
+    // Over everything the frame drew: a demo's pointer, keystrokes, captions and transport bar,
+    // or a live tape's pointer.
     @import("app").automation.overlay.draw(&editor.demo.player);
+    @import("app").automation.overlay.drawLive(&editor.demo.live);
 
     // Every widget has drawn by now, so this is the frame's final answer about who holds
     // keyboard focus. Read next frame by the clipboard commands.

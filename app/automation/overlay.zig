@@ -17,6 +17,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const Player = @import("Player.zig");
+const LiveDriver = @import("LiveDriver.zig");
 const Input = @import("Input.zig");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
@@ -51,6 +52,28 @@ pub fn draw(player: *Player) void {
         defer fw.deinit();
         drawPointer(player);
     }
+}
+
+/// Draw the pointer of the live tape `driver` is playing, if any, and the ripple where it last
+/// clicked: with real pointer motion held off while it plays, this is how a person sees what is
+/// being pointed at. A live tape has no captions, keys or bar — it is not something to watch,
+/// only to see. Call once a frame, after everything else in the frame has drawn.
+pub fn drawLive(driver: *LiveDriver) void {
+    if (!driver.playing()) return;
+    const win: dvui.Rect = .cast(dvui.windowRect());
+    const fw = layer(@src(), .{ .rect = win, .name = "LivePointer" }, .{});
+    defer fw.deinit();
+
+    const now = dvui.frameTimeNS();
+    const hand = driver.hand;
+    const ripple: ?Ripple = if (hand.press) |press| .{
+        .pt = press.pt,
+        .age_ms = @floatFromInt(@divTrunc(now - press.ns, std.time.ns_per_ms)),
+    } else null;
+    const since_ms: f32 = @floatFromInt(@divTrunc(now - hand.since_ns, std.time.ns_per_ms));
+    const fade_ms = motion.durationMs(pointer_fade_ms);
+    const in: f32 = if (fade_ms <= 0) 1 else std.math.clamp(since_ms / fade_ms, 0, 1);
+    paintPointer(driver.seq.pointer, ripple, if (hand.typing) 1 - in else in, driver.input.held.count() > 0);
 }
 
 /// A floating widget that takes no input, raised to the top. A floating widget otherwise stays
@@ -861,12 +884,22 @@ const arrow = [_][2]f32{
 };
 
 fn drawPointer(player: *Player) void {
-    const p = player.seq.pointer;
+    const ripple: ?Ripple = if (player.last_press) |press| .{ .pt = press.pt, .age_ms = player.seq.now - press.at } else null;
+    // Out of the way of the words while the tape types, as a desktop's pointer is.
+    const shown = player.pointerShown(motion.durationMs(pointer_fade_ms));
+    paintPointer(player.seq.pointer, ripple, shown, player.input.held.count() > 0);
+}
+
+/// Where the last click landed, and how long ago.
+const Ripple = struct { pt: Sequencer.Point, age_ms: f64 };
+
+/// The pointer at `p`, `shown` of it, pressed in while a button is held; the ripple spreading
+/// and fading from the last click.
+fn paintPointer(p: Sequencer.Point, ripple: ?Ripple, shown: f32, pressed: bool) void {
     const s = dvui.windowNaturalScale() * 1.1;
 
-    // The ripple where the last click landed, spreading and fading.
-    if (player.last_press) |press| {
-        const age = player.seq.now - press.at;
+    if (ripple) |press| {
+        const age = press.age_ms;
         if (age >= 0 and age < 450) {
             const f: f32 = @floatCast(age / 450);
             var ring: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
@@ -880,13 +913,10 @@ fn drawPointer(player: *Player) void {
         }
     }
 
-    // Out of the way of the words while the tape types, as a desktop's pointer is.
-    const shown = player.pointerShown(motion.durationMs(pointer_fade_ms));
     if (shown <= 0) return;
     const prev_alpha = dvui.alpha(shown);
     defer dvui.alphaSet(prev_alpha);
 
-    const pressed = player.input.held.count() > 0;
     const k: f32 = if (pressed) 0.88 else 1;
     inline for (.{ true, false }) |shadow| {
         var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
