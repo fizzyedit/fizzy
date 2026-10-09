@@ -151,8 +151,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.newFile", .title = "New File…", .bind = "new_file", .run = cmdNewFile, .icon = icons.tvg.lucide.@"file-plus" },
     .{ .id = "fizzy.save", .title = "Save", .bind = "save", .run = cmdSave, .icon = icons.tvg.lucide.save },
     .{ .id = "fizzy.saveAs", .title = "Save As…", .bind = "save_as", .run = cmdSaveAs, .params = SaveAsPath.params, .runWith = SaveAsPath.bind(cmdSaveAsPath), .icon = icons.tvg.lucide.@"file-down" },
-    // No default key yet: on macOS AppKit's own Window ▸ Close holds ⌘W, and in a browser the
-    // tab does. Anyone can bind it (`keybinds.zon`).
+    // No dvui bind name: its default comes from the profile table (`close_defaults`).
     .{ .id = "fizzy.close", .title = "Close", .bind = null, .run = cmdClose, .isEnabled = anyDocOpen, .params = ClosePath.params, .runWith = ClosePath.bind(cmdClosePath), .icon = icons.tvg.lucide.x },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll, .icon = icons.tvg.lucide.@"save-all" },
     .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = cmdUndoEnabled, .icon = icons.tvg.lucide.undo },
@@ -578,12 +577,19 @@ const vscode_defaults = [_]DefaultBind{
     .{ .command = "fizzy.commandPalette", .keys = "mod+shift+p" },
     // The platform's own: F11 in VSCode and browsers, ⌃⌘F in every macOS app.
     .{ .command = "fizzy.toggleFullScreen", .keys = "f11", .keys_mac = "ctrl+cmd+f" },
-} ++ open_folder_defaults;
+} ++ open_folder_defaults ++ close_defaults;
 
 /// The web has no folder to open — a page cannot read a directory tree — so Open Folder does not
 /// exist there at all, and neither does its key: ⌘F stays the browser's Find.
 const open_folder_defaults = if (is_web) [_]DefaultBind{} else [_]DefaultBind{
     .{ .command = "fizzy.openFolder", .keys = "mod+f" },
+};
+
+/// ⌘W/Ctrl+W closes the document, as in every editor; on macOS the window moves to ⇧⌘W
+/// (`platform.menu.install`). In a browser the key closes the tab before a page hears of it, so
+/// Close has no key there.
+const close_defaults = if (is_web) [_]DefaultBind{} else [_]DefaultBind{
+    .{ .command = "fizzy.close", .keys = "mod+w" },
 };
 
 /// C2-lite bridge: owner-scoped plugin defaults that still can't live on `Command.default_keys`

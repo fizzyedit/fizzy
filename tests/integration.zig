@@ -6674,6 +6674,12 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         defer gpa.free(written);
         try std.testing.expectEqualStrings("alpha\n", written);
 
+        // Close is ⌘W/Ctrl+W, the document's key in every editor (the window's is ⇧⌘W).
+        const close_key = fizzy.Editor.Keybinds.menuKeybindFor(editor, "fizzy.close");
+        try std.testing.expectEqual(dvui.enums.Key.w, close_key.key.?);
+        try std.testing.expect((close_key.command orelse false) or (close_key.control orelse false));
+        try std.testing.expect(!(close_key.shift orelse false));
+
         // Close, by path: that document goes, the notes stay.
         const before = editor.app.open_files.count();
         try std.testing.expect(call(host, "fizzy.close", ".{ .path = \"/no/such/file.txt\" }") == .failed);
