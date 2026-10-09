@@ -1939,9 +1939,14 @@ pub fn postInit(editor: *Editor) !void {
     sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
 
     editor.demo.attach(editor);
-    // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made.
+    // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made — and
+    // `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape, read before the app moved its working directory.
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
+        if (Demo.env_tape) |bytes| {
+            Demo.env_tape = null;
+            defer editor.app.gpa.free(bytes);
+            editor.demo.playTapeSoon(bytes);
+        } else if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
             defer editor.app.gpa.free(name);
             editor.demo.playSoon(name);
         } else |_| {}
@@ -6073,7 +6078,6 @@ pub fn pluginManager(editor: *Editor) PluginManager {
         .vtable = &plugin_manager_vtable,
     };
 }
-
 
 /// A surface's draw, timed in the frame profiler under its owner and id (`core.profile`).
 fn profiledSurfaceDraw(s: *sdk.Surface) anyerror!dvui.App.Result {

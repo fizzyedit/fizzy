@@ -153,13 +153,49 @@ pub fn play(self: *Demo, name: []const u8) !void {
 }
 
 /// Play a tape — a fetched `.zon` or `.tape`, or a recording. Either form; the bytes say which.
+/// One that opens on no keyframe is a live tape, played on the app as it is (`live`).
 pub fn playTape(self: *Demo, bytes: []const u8) !void {
-    if (!self.mayStart()) return;
-    const owned = automation.Tape.load(self.editor.app.gpa, bytes, automation.Input.check) catch |err| {
-        dvui.log.err("demo: could not read the tape: {t}", .{err});
-        return err;
+    const gpa = self.editor.app.gpa;
+    var check = automation.Input.check;
+    var owned = automation.Tape.load(gpa, bytes, check) catch |err| switch (err) {
+        error.NoKeyframeAtStart => {
+            check.live = true;
+            const live = automation.Tape.load(gpa, bytes, check) catch |e| {
+                dvui.log.err("demo: could not read the live tape: {t}", .{e});
+                return e;
+            };
+            if (self.active()) {
+                var refused = live;
+                refused.deinit();
+                dvui.log.warn("demo: a live tape cannot play while a demo is loaded", .{});
+                return error.Busy;
+            }
+            return self.live.play(live);
+        },
+        else => {
+            dvui.log.err("demo: could not read the tape: {t}", .{err});
+            return err;
+        },
     };
+    if (!self.mayStart()) return owned.deinit();
     self.player.load(owned, .{});
+}
+
+/// `FIZZY_DEMO` naming a tape file (`.zon` or `.tape`) rather than a bundled demo: read in the
+/// app's `main`, while the working directory is still the one it was launched from, and played
+/// once the editor is up (`Editor.postInit`). Owned by the allocator it was read with.
+pub var env_tape: ?[]u8 = null;
+
+/// Read `FIZZY_DEMO`'s tape, if it names one (`env_tape`). Natively; before anything changes the
+/// working directory.
+pub fn readEnvTape(gpa: std.mem.Allocator, io: std.Io) void {
+    const raw = std.c.getenv("FIZZY_DEMO") orelse return;
+    const name = std.mem.span(raw);
+    if (!std.mem.endsWith(u8, name, ".zon") and !std.mem.endsWith(u8, name, ".tape")) return;
+    env_tape = std.Io.Dir.cwd().readFileAlloc(io, name, gpa, .limited(64 << 20)) catch |err| {
+        std.log.err("FIZZY_DEMO: could not read {s}: {t}", .{ name, err });
+        return;
+    };
 }
 
 /// Start the bundled demo `name` on the next frame — for callers outside one.
