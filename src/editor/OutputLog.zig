@@ -27,6 +27,8 @@ const allocator = std.heap.page_allocator;
 // writes from a log call, one read per panel draw.
 var spin: std.atomic.Mutex = .unlocked;
 var lines: std.ArrayListUnmanaged(Line) = .empty;
+/// How many times the log has been cleared (`clears`).
+var clear_count: u32 = 0;
 
 /// Matches `std.Options.logFn`'s signature so it can be assigned directly as (or called
 /// from) a `logFn` wrapper. Used for fizzy's own (comptime-scoped) `std.log` calls —
@@ -109,4 +111,11 @@ pub fn clear() void {
         allocator.free(line.scope);
     }
     lines.clearRetainingCapacity();
+    clear_count +%= 1;
+}
+
+/// How many times the log has been cleared: a reader that remembers it knows when to start over.
+/// Only valid while holding the lock (see `lock`/`unlock`).
+pub fn clears() u32 {
+    return clear_count;
 }

@@ -6742,3 +6742,81 @@ test "automation service: settled waits for dvui to go quiet, and wakes the app 
     try std.testing.expect(!svc.frameEnded(null));
     try std.testing.expect(api.settled());
 }
+
+// -- output panel --------------------------------------------------------------------------------
+// The panel lays out only the lines in view, so the width it scrolls sideways over was only theirs:
+// a line wider than the panel in view put up the horizontal bar, the bar took a row's height off
+// the view, the view following the tail dropped its top row, and with it the wide line; the bar
+// went, the row came back, and the panel jittered every frame with no input.
+
+const output_panel_size: dvui.Size = .{ .w = 300, .h = 120 };
+
+fn outputPanelFrame() anyerror!dvui.App.Result {
+    var box = dvui.box(@src(), .{}, .{
+        .min_size_content = output_panel_size,
+        .max_size_content = .{ .w = output_panel_size.w, .h = output_panel_size.h },
+    });
+    defer box.deinit();
+    return fizzy.OutputPanel.draw(null);
+}
+
+test "the output panel settles at its tail with a line wider than it anywhere in view" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    defer fizzy.OutputLog.clear();
+
+    const wide = "a line far wider than the panel " ** 12;
+    const rows = 40;
+    // The wide line at each of the last rows in turn, wherever the top of the view falls.
+    for (0..20) |from_tail| {
+        fizzy.OutputLog.clear();
+        for (0..rows) |i| {
+            fizzy.OutputLog.appendLine(.info, "test", if (i == rows - 1 - from_tail) wide else "short");
+        }
+        dvui.testing.settle(outputPanelFrame) catch |err| {
+            std.debug.print("wide line {d} rows from the tail: {s}\n", .{ from_tail, @errorName(err) });
+            return err;
+        };
+    }
+}
+
+var output_sweep_height: f32 = 120;
+
+fn outputSweepFrame() anyerror!dvui.App.Result {
+    var box = dvui.box(@src(), .{}, .{
+        .min_size_content = .{ .w = 500, .h = output_sweep_height },
+        .max_size_content = .{ .w = 500, .h = output_sweep_height },
+    });
+    defer box.deinit();
+    return fizzy.OutputPanel.draw(null);
+}
+
+// Output arriving two lines at a time (a plugin reload's pair), long and short lines mixed, in
+// panes of every height from a few rows to a dozen: the panel settles after each pair. Near the
+// height where the log first outgrows the pane the scrollbars come and go, which is where a
+// panel whose bars or text height fed back into its range fought itself.
+test "the output panel settles as lines arrive, in panes of every height" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 800, .h = 600 } });
+    defer t.deinit();
+    defer fizzy.OutputLog.clear();
+
+    var h: f32 = 60;
+    while (h <= 220) : (h += 3) {
+        output_sweep_height = h;
+        fizzy.OutputLog.clear();
+        var total: usize = 0;
+        while (total < 30) {
+            for (0..2) |_| {
+                total += 1;
+                fizzy.OutputLog.appendLine(.info, "fizzy", if (total % 3 == 0)
+                    "plugin 'text': rebuilt binary found, reloading /Users/somebody/Library/Application Support/fizzy/plugins/text/text.dylib"
+                else
+                    "plugin 'text': reloaded");
+            }
+            dvui.testing.settle(outputSweepFrame) catch |err| {
+                std.debug.print("pane {d} tall, {d} lines: {s}\n", .{ h, total, @errorName(err) });
+                return err;
+            };
+        }
+    }
+}

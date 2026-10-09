@@ -18,6 +18,28 @@ var follow = true;
 /// the visible range moved, and the panel oscillated for as long as the log overflowed it.
 var line_pitch: f32 = 0;
 
+// Nothing the panel lays out in one frame may move what it lays out in the next. The range of
+// lines it lays out follows from the log's length and the view's height alone, and both stay put
+// while it draws:
+// - the content is `rows × line_pitch` plus `bottom_strip`, whatever text is in view: the text
+//   block is held to its rows' height (a laid-out block is a few points short of it, its last line
+//   only as tall as its glyphs, so its height changed as the range did);
+// - the horizontal bar overlays the content (`.auto_overlay`) rather than taking a row's height off
+//   the view; it showed only while a line wider than the view was in view, and the vertical bar,
+//   taking the view's width, could tip a long line into needing it;
+// - `bottom_strip` keeps the last line clear of that bar.
+// Before, each fed back: the view lost or gained a row, the range moved, the bar or the height
+// came or went, and the panel scrolled itself every frame with no input.
+/// The widest line laid out so far, natural units: the width the panel scrolls sideways over.
+/// Only the lines in view are laid out, so their width alone came and went as the view moved,
+/// and the horizontal bar with it, which takes a row's height off the view. Following the tail,
+/// the view then lost its top row and the wide line with it, the bar went, the row came back, and
+/// the panel jittered every frame with no input. Never narrower than a line already seen; starts
+/// over when the tab or the log does.
+var widest: f32 = 0;
+/// `OutputLog.clears` when `widest` was last started over.
+var widest_clears: u32 = 0;
+
 /// Selected tab, persisted as a bounded copy rather than a slice into `OutputLog`'s ring
 /// buffer — a scope string there can be freed on eviction or plugin unload between frames.
 /// Zero length means the "All" tab.
@@ -60,6 +82,10 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         OutputLog.lock();
         defer OutputLog.unlock();
         const src = OutputLog.items();
+        if (OutputLog.clears() != widest_clears) {
+            widest_clears = OutputLog.clears();
+            widest = 0;
+        }
         // Distinct scopes seen so far, in first-seen order — small (one per active plugin), so
         // a linear scan per line is cheap. Counted here too: the range below needs the total.
         const shown_idx = arena.alloc(u32, src.len) catch return .ok;
@@ -83,7 +109,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
             // Following the tail: the viewport is about to be at the bottom, so cut the
             // range there rather than where last frame's offset was.
             const vp_y = if (follow)
-                @max(0, @as(f32, @floatFromInt(shown_total)) * line_pitch - scroll_info.viewport.h)
+                @max(0, @as(f32, @floatFromInt(shown_total)) * line_pitch + bottomStrip() - scroll_info.viewport.h)
             else
                 scroll_info.viewport.y;
             first = @min(shown_total, @as(usize, @intFromFloat(@max(0, @floor(vp_y / line_pitch)))));
@@ -110,7 +136,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     if (follow) scroll_info.scrollToFraction(.vertical, 1.0);
     const asked_y = scroll_info.viewport.y;
 
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &scroll_info }, .{ .expand = .both, .background = false });
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &scroll_info, .horizontal_bar = .auto_overlay }, .{ .expand = .both, .background = false });
     if (first > 0) {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(first)) * line_pitch }, .expand = .horizontal });
     }
@@ -123,10 +149,13 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // lines instead of stopping dead at each line's own boundary.
     var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
         .expand = .horizontal,
+        .min_size_content = .{ .w = widest, .h = @as(f32, @floatFromInt(lines.len)) * line_pitch },
+        .max_size_content = .{ .w = dvui.max_float_safe, .h = @as(f32, @floatFromInt(lines.len)) * line_pitch },
         .background = false,
         .margin = .{},
         .padding = .{},
     });
+    const tl_id = tl.data().id;
 
     var shown: usize = 0;
     for (lines) |line| {
@@ -143,10 +172,12 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     }
 
     tl.deinit();
+    if (dvui.minSizeGet(tl_id)) |size| widest = @max(widest, size.w);
     const after = shown_total - first - lines.len;
     if (after > 0) {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(after)) * line_pitch }, .expand = .horizontal });
     }
+    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = bottomStrip() }, .expand = .horizontal });
     @import("core").widgets.scrollShadows(scroll);
     scroll.deinit();
 
@@ -160,6 +191,12 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         follow = scroll_info.offsetFromMax(.vertical) < 1.0;
     }
     return .ok;
+}
+
+/// Room under the last line for the horizontal bar, which overlays the content: always there, so
+/// the content's height never depends on whether the bar shows.
+fn bottomStrip() f32 {
+    return dvui.ScrollBarWidget.defaults.min_sizeGet().h;
 }
 
 /// Narrow vertical strip of tab buttons: "All" first, then one per distinct scope in
@@ -191,6 +228,7 @@ fn drawTab(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize, 
         .padding = .all(1),
     });
     if (clicked) {
+        widest = 0;
         if (id_extra == 0) {
             selected_scope_len = 0;
         } else {
