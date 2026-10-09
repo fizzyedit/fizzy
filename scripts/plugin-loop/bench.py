@@ -11,7 +11,8 @@ plugin, depending only on `sdk/`):
            each with Zig's per-step times (compile, install).
   reload   with `--app <fizzy>`: a sandbox fizzy runs on that profile, and each edit and rebuild is
            picked up by its plugin watcher. fizzy logs how long after the binary was written it
-           noticed, and how long the swap took (unload, load) — `Editor.updatePlugin`.
+           noticed, how long the new binary took to open off the UI thread, and how long the swap
+           on the UI thread took (unload, register) — `PluginReloads`.
 
 The plugin is copied to `zig-out/plugin-loop/` first, so the repo's copy is never edited, and it
 installs into a scratch profile, never the real plugins directory. With `--app`, a fizzy window
@@ -114,10 +115,10 @@ def bench_reload(plugin_dir: str, optimize: str, profile: str, app: str, edits: 
                 sys.exit(f"fizzy never reloaded the rebuild — see {log_path}")
             total = (time.monotonic() - start) * 1000
             noticed = last(log_path, r"noticed ([\d.]+)ms after it was written")
-            swap = last(log_path, r"swapped in ([\d.]+)ms \(unload ([\d.]+)ms, load ([\d.]+)ms\)")
+            swap = last(log_path, r"swapped in ([\d.]+)ms on the UI thread \(unload ([\d.]+)ms, register ([\d.]+)ms\), opened off it in ([\d.]+)ms")
             print(f"  edit {n}: build {fmt(wall)} (compile {fmt(steps.get('compile', 0))}), "
-                  f"noticed {noticed[0]} ms after written, swap {swap[0]} ms "
-                  f"(unload {swap[1]}, load {swap[2]}) — {fmt(total)} from the edit to running")
+                  f"noticed {noticed[0]} ms after written, opened off the UI thread in {swap[3]} ms, "
+                  f"swap on it {swap[0]} ms (unload {swap[1]}, register {swap[2]}) — {fmt(total)} from the edit to running")
     finally:
         proc.send_signal(signal.SIGKILL)
         proc.wait()
@@ -143,7 +144,7 @@ def last(path: str, pattern: str) -> tuple:
     with open(path, errors="replace") as f:
         found = re.findall(pattern, f.read())
     if not found:
-        return ("?", "?", "?")
+        return ("?", "?", "?", "?")
     return found[-1] if isinstance(found[-1], tuple) else (found[-1],)
 
 
