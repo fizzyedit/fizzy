@@ -4,7 +4,7 @@
 //!
 //! **What this is for.** A shape is ordinary code over `Layout` because shapes branch: fizzy's
 //! own asks the platform whether to draw a menu bar and the window whether it is maximised;
-//! `examples/endless-app`'s *loops*, making a new edge tray each time the user drags one open.
+//! the endless shape's (fizzyedit/example-app) *loops*, making a new edge tray each time the user drags one open.
 //! Data cannot answer those without becoming a language, and the interpreter for that language
 //! would be the configurable layout engine fizzy deliberately does not have. So this covers only
 //! the static case — a fixed arrangement of named places — and says so rather than growing

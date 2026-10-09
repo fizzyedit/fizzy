@@ -318,5 +318,5 @@ Dialogs routed to the window asking (above) don't depend on any of these, and ca
 
 - **The picker** lists a workspace by its selected document's title, as a float's title does.
 - **Documents in two workspaces:** allowed, as two views of one document (above).
-- **App shapes with no workspace place** (`examples/`) have no default workspace. It is placed only
+- **App shapes with no workspace place** (fizzyedit/example-app's) have no default workspace. It is placed only
   where a place's keywords match a workspace's.

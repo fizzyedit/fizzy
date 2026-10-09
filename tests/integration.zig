@@ -2488,8 +2488,8 @@ test "a takeover surface appears only while its trigger is selected, and then an
 }
 
 // -- endless layout ------------------------------------------------------------------------------
-// The example's own layout, not a shipped fizzy preset. Wired as `endless_layout` in
-// `build/app.zig` from `examples/endless-app/src/layout.zig`.
+// The endless shape, not a shipped fizzy preset: a copy of fizzyedit/example-app's
+// `shapes/endless.zig`, wired as `endless_layout` in `build/app.zig` from `tests/shapes/endless.zig`.
 
 const endless = @import("endless_layout");
 
