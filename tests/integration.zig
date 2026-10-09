@@ -6288,6 +6288,29 @@ test "demo: fizzy's stage runs a command op's arguments through callCommand" {
     try std.testing.expectEqual(PaletteArgs.Side.right, got.side);
 }
 
+test "a failed open is not a load in flight: settled and live tapes go on" {
+    const gpa = std.testing.allocator;
+    const Openings = @FieldType(fizzy.Editor, "openings");
+    var openings: Openings = .init(gpa);
+    defer openings.deinit();
+    try std.testing.expect(!openings.loading());
+
+    const o = try gpa.create(Openings.Opening);
+    o.* = .{
+        .editor = undefined,
+        .path = try gpa.dupe(u8, "/p/untitled-1"),
+        .surface_id = try gpa.dupe(u8, "fizzy.loading:/p/untitled-1"),
+        .grouping = 0,
+        .preview = false,
+    };
+    try openings.entries.put(gpa, o.path, o);
+    try std.testing.expect(openings.loading());
+
+    // Its placeholder stays, saying why, until its tab is closed; nothing is on its way.
+    o.failed = try gpa.dupe(u8, "Its plugin could not read it.");
+    try std.testing.expect(!openings.loading());
+}
+
 // ── Live tapes ──────────────────────────────────────────────────────────────────────────────────
 // `automation.LiveDriver` over the same widgets and stage as the demo tests: input on the app as it
 // is, each step once the last has landed.

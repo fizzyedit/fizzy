@@ -62,6 +62,14 @@ fn free(self: *Openings, o: *Opening) void {
     self.gpa.destroy(o);
 }
 
+/// Whether a document is still being read. A failed load's placeholder stays until its tab is
+/// closed, and is waiting on nothing: anyone asking whether the app has settled (a live tape, an
+/// agent) would otherwise wait on it forever.
+pub fn loading(self: *const Openings) bool {
+    for (self.entries.values()) |o| if (o.failed == null) return true;
+    return false;
+}
+
 /// The load of `path` has started: put its placeholder in front of the user. `owner` is the
 /// plugin the document will belong to (the tab slot a restored session kept for it is named by
 /// its surface id); `take_slot_of` is a tab whose place it takes — the preview it replaces.

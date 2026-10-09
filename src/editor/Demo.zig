@@ -503,7 +503,7 @@ fn idle(ctx: *anyopaque) bool {
     const self = from(ctx);
     const editor = self.editor;
     return editor.loading_jobs.count() == 0 and
-        editor.openings.entries.count() == 0 and
+        !editor.openings.loading() and
         editor.doc_io.loads.count() == 0 and
         // The demo's files answer from `pump`: a folder listed and not yet delivered is the
         // explorer still filling in.
