@@ -6452,3 +6452,71 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     // twice; it is compiled here, so a mistake in it fails this build rather than only the app's.
     _ = &si.acquireLock;
 }
+
+// ── Headless ────────────────────────────────────────────────────────────────────────────────────
+// The spike in docs/AGENTS_PLAN.md ("Running with no display"): the whole editor, as `Entry`
+// brings it up, over dvui's testing backend in a profile of its own.
+
+/// The app's frame as `Entry` runs it: the demo player, the frame target, the editor.
+fn headlessFrame() !dvui.App.Result {
+    return fizzy.Entry.AppFrame();
+}
+
+test "headless: the whole editor comes up, opens a file, plays the tour and goes down" {
+    // Not the testing allocator: this is the app's own lifetime, whose exit leaks by design
+    // (`Editor.unloadPluginLibs`), and what is measured here is that it runs.
+    const gpa = std.heap.smp_allocator;
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 1280, .h = 800 } });
+    defer t.deinit();
+
+    // A fresh profile, so nothing of anyone's config — or of an earlier run — comes in.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    const app = @import("app");
+    app.profile.root = root;
+    defer app.profile.root = null;
+
+    // As `Entry.AppInit` brings it up.
+    const entry = try gpa.create(fizzy.Entry);
+    defer gpa.destroy(entry);
+    entry.* = .{ .allocator = gpa, .window = t.window, .root_path = "." };
+    const editor = try gpa.create(fizzy.Editor);
+    defer gpa.destroy(editor);
+    fizzy.setInstances(entry, editor);
+    editor.* = try fizzy.Editor.init(entry);
+    workbench.runtime.setWorkbench(&editor.workbench);
+    try editor.postInit();
+    try dvui.testing.settle(headlessFrame);
+    try std.testing.expectEqualStrings(root, editor.app.config_folder);
+
+    // A project and a document in it, as `fizzy <dir>` and a click would open them.
+    try tmp.dir.createDirPath(dvui.io, "project");
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/notes.md", .data = "# Notes\n\nwritten headless\n" });
+    const project = try std.fs.path.join(gpa, &.{ root, "project" });
+    defer gpa.free(project);
+    const notes = try std.fs.path.join(gpa, &.{ project, "notes.md" });
+    defer gpa.free(notes);
+    try editor.setProjectFolder(project);
+    _ = try editor.openFilePath(notes, editor.workbench.currentGroupingID());
+    for (0..200) |_| {
+        if (editor.activeDoc() != null) break;
+        _ = try dvui.testing.step(headlessFrame);
+    }
+    try dvui.testing.settle(headlessFrame);
+    try std.testing.expect(editor.activeDoc() != null);
+
+    // The tour, every frame of it, on the testing backend's clock (100 ms a step): about a
+    // minute of demo in a few hundred frames.
+    try editor.demo.play("tour");
+    var frames: usize = 0;
+    while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
+        _ = try dvui.testing.step(headlessFrame);
+    }
+    try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
+    editor.demo.player.unload();
+    try dvui.testing.settle(headlessFrame);
+
+    try editor.deinit();
+}

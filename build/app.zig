@@ -807,11 +807,19 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // is not built (`tests/integration.zig`, "profile").
     const singleton_test_dep = b.dependency("dvui_singleton_app", .{ .target = target, .optimize = optimize });
     const app_module_test = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_test_dep.module("singleton_app"), fizzy_test_module);
-    _ = image_plugin.addStaticModule(b, target, optimize, .{
+    const image_module_test = image_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
+    // What the test build bundles, as the exe's does (`build/exe.zig`), so a test can bring up
+    // the whole editor — `Editor.postInit` registers whatever is listed here.
+    fizzy_test_module.addImport("bundled_plugins", sdk.bundledPluginsModule(b, target, optimize, &.{
+        .{ .name = "workbench", .module = workbench_module_test },
+        .{ .name = "text", .module = text_module_test },
+        .{ .name = "image", .module = image_module_test },
+        .{ .name = "markdown", .module = markdown_module_test },
+    }));
 
     if (target.result.os.tag == .macos) {
         if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
