@@ -6584,12 +6584,25 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
     // The tour, every frame of it, on the testing backend's clock (100 ms a step): about a
     // minute of demo in a few hundred frames.
+    // Measured while it plays, with no profiler window open: what each plugin cost, by name.
+    fizzy.core.profile.want(60_000);
     try editor.demo.play("tour");
     var frames: usize = 0;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
         _ = try dvui.testing.step(headlessFrame);
     }
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
+    {
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        try fizzy.core.profile.report(fizzy.core.profile.host(), &out.writer, .{ .min_ms = 0 });
+        const profiled = out.written();
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".frame = .{ .fps = ") != null);
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"fizzy\"") != null);
+        // The plugins drawing the tour, each under its own name.
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"workbench\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"text\"") != null);
+    }
     // The tour leaves the explorer, the panel and the rest of the window open: their buttons too.
     try expectButtonsNamed(headlessFrame);
     editor.demo.player.unload();
