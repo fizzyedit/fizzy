@@ -88,6 +88,10 @@ sel_cursor: usize = 0,
 /// document that isn't drawn this frame (background tab) keeps its last value, which is
 /// correct: it can't be the active document *and* undrawn.
 editor_focused: bool = false,
+/// The next `TextEditor.draw` focuses the editor: a demo's snapshot put the document back as it
+/// was while its editor had focus (`restoreState`), and the editor drawing it now may not be the
+/// widget that had it.
+pending_focus: bool = false,
 /// Selection the next `TextEditor.draw` should install, set by Paste/Undo/Redo (which all
 /// edit `text` from outside the widget's own frame) and consumed once. A full range rather
 /// than a bare offset so undo can restore what *was* selected — undoing "type over a
@@ -448,6 +452,7 @@ pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
         .anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start,
         .head = self.sel_cursor,
         .dirty = self.isDirty(),
+        .focused = self.editor_focused,
         .preview_mode = @intFromEnum(self.preview_mode),
         .scroll_y = self.scroll_y,
         .split = self.preview_split_ratio_user,
@@ -488,6 +493,7 @@ pub fn restoreState(self: *Document, bytes: []const u8) !void {
     self.pending_scroll_y = st.scroll_y;
     self.preview_mode = mode;
     self.preview_split_ratio_user = st.split;
+    self.pending_focus = st.focused;
     self.followed_caret = null;
     self.clearCompletionItems();
     self.completion_anchor = null;

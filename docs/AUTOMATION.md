@@ -370,6 +370,11 @@ to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
   differs is caught, a person's click pauses it and is undone on resume, real motion cannot move
   the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
   round-trips.
+- `zig build test-integration` — `fizzy-demo-tests` (`tests/demos.zig`): every bundled demo, in
+  the whole editor through fizzy's own stage. It plays to the end with no wait giving up and no
+  replay mismatched, then seeks to seeded random moments and to each chapter, and each lands on
+  the fingerprint straight play reached there — a property test of every document owner's
+  snapshot state and of putting it back.
 - `zig build test` — `fizzy-text-doc-state-tests` (`plugins/text/src/doc_state.zig`): a text
   document's snapshot state round-trips, a backwards selection with it, and damaged state is
   refused.
