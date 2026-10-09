@@ -335,7 +335,7 @@ fn recordingDot() void {
 }
 
 fn drawConflicts(editor: *fizzy.Editor, theme: dvui.Theme) void {
-    const conflicts = editor.app.keybind_conflicts orelse return;
+    const conflicts = Keybinds.conflicts(editor) orelse return;
     if (conflicts.len == 0) return;
 
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{

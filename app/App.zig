@@ -163,7 +163,8 @@ keymap: Keymap = .{},
 /// it must outlive the keymap and is replaced wholesale on every rebuild.
 keybinds_overrides: ?Keymap.zon.File = null,
 
-/// Cached `Keymap.conflicts()` result from the last rebuild — owned, freed on next rebuild.
+/// `Keymap.conflicts()` for the current keymap, worked out when first asked for (fizzy's
+/// `Keybinds.conflicts`) — owned, dropped on the next rebuild. Null: not asked for since.
 keybind_conflicts: ?[]Keymap.Conflict = null,
 
 /// User plugins that failed to load this session, so the UI can tell the author what

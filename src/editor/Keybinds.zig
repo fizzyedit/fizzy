@@ -872,11 +872,21 @@ pub fn buildKeymap(editor: *Editor) !void {
     // their commands, so a rebind that doesn't reach them takes effect nowhere.
     syncNativeMenuShortcuts(editor);
 
-    // Cache conflicts for the Keyboard Shortcuts settings pane.
-    editor.app.keybind_conflicts = editor.app.keymap.conflicts(gpa) catch |err| blk: {
+    // Conflicts are worked out when the Keyboard Shortcuts pane asks (`conflicts`), not here: a
+    // pass over every pair of bindings, ~3 ms in Debug, which every rebuild — each plugin load
+    // and reload, on the UI thread — paid whether or not anyone was looking at that pane.
+}
+
+/// The keymap's conflicts, for the Keyboard Shortcuts settings pane: worked out on the first ask
+/// after the keymap changed (`buildKeymap` drops the last answer), and kept until it changes
+/// again. Null when they could not be worked out.
+pub fn conflicts(editor: *Editor) ?[]const Keymap.Conflict {
+    if (editor.app.keybind_conflicts) |c| return c;
+    editor.app.keybind_conflicts = editor.app.keymap.conflicts(editor.app.host.allocator) catch |err| {
         dvui.log.err("keybind conflicts() failed: {s}", .{@errorName(err)});
-        break :blk null;
+        return null;
     };
+    return editor.app.keybind_conflicts;
 }
 
 /// Read and apply `<config>/keybinds.zon`. A missing file is the normal case — defaults are
