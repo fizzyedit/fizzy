@@ -152,18 +152,30 @@ fn kindOffset(c: u8) u8 {
 ///
 /// Quote characters themselves are skipped (which `"` closes which needs a lexer). Brackets
 /// *inside* strings still get coloured — same lexical tradeoff as `matchAt`.
+///
+/// Linear in the range: a line's indent is read once, at its first bracket. Asking
+/// `indentLevelAt` per bracket walked back to the line start each time, which on long
+/// bracket-dense lines (a binary file opened as text) was most of the frame.
 pub fn nestMarks(text: []const u8, range_start: usize, range_end: usize, tab_size: u8, out: []NestMark) usize {
     if (range_start >= range_end or range_start > text.len) return 0;
     const end = @min(range_end, text.len);
 
     var n: usize = 0;
+    // Indent of the line `i` is on; null until a bracket on it needs it.
+    var indent: ?u8 = null;
     var i = range_start;
     while (i < end and n < out.len) : (i += 1) {
         const c = text[i];
-        const is_bracket = if (forOpen(c)) |p| !p.is_quote else if (forClose(c)) |p| !p.is_quote else false;
-        if (!is_bracket) continue;
-        out[n] = .{ .byte = i, .depth = indentLevelAt(text, i, tab_size) +% kindOffset(c) };
-        n += 1;
+        switch (c) {
+            '\n' => indent = null,
+            '{', '}', '(', ')', '[', ']' => {
+                const level = indent orelse indentLevelAt(text, i, tab_size);
+                indent = level;
+                out[n] = .{ .byte = i, .depth = level +% kindOffset(c) };
+                n += 1;
+            },
+            else => {},
+        }
     }
     return n;
 }
@@ -439,6 +451,26 @@ test "nestMarks skips quote characters themselves" {
     try testing.expectEqual(@as(usize, 2), n);
     try testing.expectEqual(@as(usize, 1), out[0].byte);
     try testing.expectEqual(@as(usize, 2), out[1].byte);
+}
+
+test "nestMarks gives each bracket its own line's indent, from any range" {
+    // Brackets on lines of mixed indent, blank lines, tabs, and lines that start with one.
+    const text = "{\n    ( [\n\n\t{ }\n  )\n]\n        (x) {\n}";
+    const brackets = "{}()[]";
+    for (0..text.len + 1) |start| {
+        for (start..text.len + 1) |end| {
+            var out: [32]NestMark = undefined;
+            const n = nestMarks(text, start, end, 4, &out);
+            var k: usize = 0;
+            for (start..end) |i| {
+                if (std.mem.indexOfScalar(u8, brackets, text[i]) == null) continue;
+                try testing.expectEqual(i, out[k].byte);
+                try testing.expectEqual(indentLevelAt(text, i, 4) +% kindOffset(text[i]), out[k].depth);
+                k += 1;
+            }
+            try testing.expectEqual(k, n);
+        }
+    }
 }
 
 test "deletesPair only between an empty pair" {
