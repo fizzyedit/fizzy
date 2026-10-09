@@ -16,7 +16,7 @@
 const Stage = @This();
 
 const Tape = @import("tape").Tape;
-const chord = @import("../keymap/chord.zig");
+const chord = @import("tape").chord;
 
 ctx: *anyopaque,
 vtable: *const VTable,

@@ -614,7 +614,7 @@ pub fn exportModules(
         .root_source_file = repoPath(b, "core/core.zig"),
         .link_libc = !is_wasm,
     });
-    _ = core_module.addImports(b, core_mod, dvui_proxy_mod, target, optimize);
+    _ = core_module.addImports(b, core_mod, dvui_proxy_mod, b, target, optimize);
 
     const sdk_mod = b.addModule("fizzy_sdk", .{
         .target = target,
@@ -634,11 +634,9 @@ pub fn exportModules(
     }));
 
     // Demos and recordings as data (`tape/`): std-only, so a plugin can write a demo of itself.
-    _ = b.addModule("tape", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("tape/root.zig"),
-    });
+    // And `replay/`, which plays one into a dvui window. Both are `core`'s own instances.
+    b.modules.put(b.graph.arena, b.dupe("tape"), core_mod.import_table.get("tape").?) catch @panic("OOM");
+    b.modules.put(b.graph.arena, b.dupe("replay"), core_mod.import_table.get("replay").?) catch @panic("OOM");
 
     b.modules.put(b.graph.arena, b.dupe("dvui"), dvui_proxy_mod) catch @panic("OOM");
     b.modules.put(b.graph.arena, b.dupe("proxy_bridge"), proxy_bridge_mod) catch @panic("OOM");

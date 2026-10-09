@@ -17,6 +17,7 @@
         "paths.zig",
         "src",
         "tape",
+        "replay",
     },
     .dependencies = .{
         .icons = .{

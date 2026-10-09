@@ -15,9 +15,9 @@
 
 const std = @import("std");
 
-pub const Key = @import("key.zig").Key;
-pub const keyIsModifier = @import("key.zig").isModifier;
-const chord_mod = @import("chord.zig");
+pub const Key = @import("tape").key.Key;
+pub const keyIsModifier = @import("tape").key.isModifier;
+const chord_mod = @import("tape").chord;
 pub const zon = @import("zon.zig");
 
 pub const Platform = chord_mod.Platform;
@@ -722,7 +722,7 @@ test "owner-scoped binding only fires when that owner is active" {
 }
 
 test {
-    _ = @import("key.zig");
+    _ = @import("tape").key;
     _ = chord_mod;
     _ = zon;
 }

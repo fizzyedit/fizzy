@@ -94,7 +94,8 @@ core/      the shared floor both an app and a plugin dylib draw with — widgets
            math, fuzzy, lsp
 sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside it are its
            build surface (this directory ships standalone as `fizzy-sdk-v*.tar.gz`);
-           `sdk/tape/` is the std-only demo-tape library shipped with it
+           `sdk/tape/` is the std-only demo-tape library shipped with it, `sdk/replay/` the
+           dvui half that plays tapes into a window (dvui and `tape` only)
 app/       the framework an application switches on — layout, store, update, watch, window,
            single_instance, automation (demos); never compiled into a dylib
 plugins/   the bundled plugins, in the exact shape a third-party plugin has
@@ -172,9 +173,10 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 - Demos that play the real app (tapes, the player, rewind, writing a demo, the anchors widgets
   publish) → [`docs/AUTOMATION.md`](docs/AUTOMATION.md); where it is going (recording, seeking,
   libraries) → [`docs/AUTOMATION_PLAN.md`](docs/AUTOMATION_PLAN.md). The tape, sequencer and
-  script are the `tape` library in `sdk/tape/` (std-only); the player and overlay in
-  `app/automation/`; fizzy's stage and bundled demos in `src/editor/Demo.zig` +
-  `src/editor/demos/`.
+  script are the `tape` library in `sdk/tape/` (std-only); the players, their input and anchors
+  the `replay` library in `sdk/replay/` (dvui and `tape` only, for any dvui app); fizzy's overlay
+  and plugin service in `app/automation/`; fizzy's stage and bundled demos in
+  `src/editor/Demo.zig` + `src/editor/demos/`.
 - Floating views (a view dropped on its own place's middle floats into a glass window: the rule,
   occlusion, close-home, persistence) → `app/layout/SPLITS.md` "Floating a view"; taking floats out
   into OS windows (ImGui-style viewports, per-OS dressing, the dvui-dev replay hook) →

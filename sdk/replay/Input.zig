@@ -11,11 +11,9 @@ const Input = @This();
 
 const std = @import("std");
 const dvui = @import("dvui");
-const core = @import("core");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
-const chord = @import("../keymap/chord.zig");
-const dvui_adapter = @import("../keymap/dvui_adapter.zig");
+const chord = @import("tape").chord;
 
 /// The buttons this input has pressed and not let go of.
 held: std.EnumSet(Tape.Button) = .initEmpty(),
@@ -99,8 +97,11 @@ pub const check: Tape.Check = .{ .key = struct {
     }
 }.ok };
 
+/// Which key `mod` is: dvui's own answer (its `ctrl/cmd` keybind), right on the web too, where the
+/// browser says which platform it runs on.
 fn platform() chord.Platform {
-    return if (core.platform.isMacOS()) .mac else .other;
+    const kb = dvui.currentWindow().keybinds.get("ctrl/cmd") orelse return .other;
+    return if (kb.command orelse false) .mac else .other;
 }
 
 fn dvuiButton(b: Tape.Button) dvui.enums.Button {
@@ -122,7 +123,10 @@ fn dvuiMod(m: chord.Mods) dvui.enums.Mod {
 
 fn pressChord(c: chord.Chord) void {
     const cw = dvui.currentWindow();
-    const code = dvui_adapter.toDvuiKey(c.key);
+    // `chord.Key`'s tags are spelled as `dvui.enums.Key`'s.
+    const code = switch (c.key) {
+        inline else => |tag| @field(dvui.enums.Key, @tagName(tag)),
+    };
     const mod = dvuiMod(c.mods);
     _ = cw.addEventKey(.{ .code = code, .mod = mod, .action = .down }) catch {};
     _ = cw.addEventKey(.{ .code = code, .mod = mod, .action = .up }) catch {};

@@ -579,9 +579,6 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-textcore-tests", "plugins/text/src/textcore/textcore.zig" },
         // A text document's state as bytes, for a demo's snapshot. std-only (see doc_state.zig).
         .{ "fizzy-text-doc-state-tests", "plugins/text/src/doc_state.zig" },
-        // Keybinding parse/resolve core. Deliberately dvui-free (see keymap.zig) — dvui's
-        // keybind map can't express chords and is keyed by bind name, not command.
-        .{ "fizzy-keymap-tests", "app/keymap/Keymap.zig" },
         // Profiles: taking `--profile` out of argv, and each profile's own lock name. std-only;
         // where a profile's folders go is `single_instance` and the editor's, run by hand.
         .{ "fizzy-profile-tests", "app/profile.zig" },
@@ -629,8 +626,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // apply it.
         .{ "fizzy-glass-look-tests", "core/gfx/glass_look.zig" },
         // Demo automation's std-only core (`sdk/tape/`): the tape format and its codecs, the
-        // sequencer that replays it deterministically, and the script builder. The dvui half
-        // (`app/automation/Player.zig`) is covered by `tests/integration.zig`.
+        // sequencer that replays it deterministically, the script builder and key spelling. The
+        // dvui half (`sdk/replay/`) compiles on its own below, and is covered by
+        // `tests/integration.zig`.
         .{ "fizzy-tape-tests", "sdk/tape/root.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
@@ -640,6 +638,27 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
                 .optimize = optimize,
                 .root_source_file = b.path(entry[1]),
             }),
+            .filters = test_filters,
+        }));
+    }
+
+    // Keybinding parse/resolve core. Deliberately dvui-free (see Keymap.zig) — dvui's keybind map
+    // can't express chords and is keyed by bind name, not command. Its key spelling is `tape`'s
+    // (`sdk/tape/chord.zig`), the one dependency it has.
+    {
+        const keymap_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("app/keymap/Keymap.zig"),
+        });
+        keymap_module.addImport("tape", b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("sdk/tape/root.zig"),
+        }));
+        try unit_test_artifacts.append(b.allocator, b.addTest(.{
+            .name = "fizzy-keymap-tests",
+            .root_module = keymap_module,
             .filters = test_filters,
         }));
     }
@@ -771,9 +790,33 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), target, optimize);
+    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), b.dependency("fizzy_sdk", .{}).builder, target, optimize);
     fizzy_test_module.addImport("core", core_module_test);
     if (icons_test) |icons| fizzy_test_module.addImport("icons", icons);
+
+    // `replay` (`sdk/replay/`) on its own: dvui and `tape`, nothing of fizzy's. A reach into
+    // `core` or `app` fails to compile here, which is what keeps it a library any dvui app can
+    // take (`docs/AUTOMATION_PLAN.md`, "The libraries").
+    {
+        const replay_only = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("sdk/replay/root.zig"),
+        });
+        replay_only.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        replay_only.addImport("tape", b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("sdk/tape/root.zig"),
+        }));
+        const replay_tests = b.addTest(.{
+            .name = "fizzy-replay-tests",
+            .root_module = replay_only,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(replay_tests).step);
+        check_integration_step.dependOn(&replay_tests.step);
+    }
     // See `exe.zig` for why macOS needs the FSEvents backend.
     const nightwatch_test_dep = if (target.result.os.tag == .macos)
         b.lazyDependency("nightwatch", .{ .target = target, .optimize = optimize, .macos_fsevents = true })
@@ -1074,6 +1117,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         });
         split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
+        // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
+        split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
 
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },

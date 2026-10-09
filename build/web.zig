@@ -159,7 +159,7 @@ pub fn addSteps(
         .link_libc = false,
         .single_threaded = true,
     });
-    const icons_web = core_mod.addImports(b, core_module_web, dvui_web, web_target, optimize);
+    const icons_web = core_mod.addImports(b, core_module_web, dvui_web, b.dependency("fizzy_sdk", .{}).builder, web_target, optimize);
     web_exe.root_module.addImport("core", core_module_web);
     if (icons_web) |icons| web_exe.root_module.addImport("icons", icons);
     const sdk_module_web = sdk.wireSdkModule(b, web_target, optimize, dvui_web, dvui_web_proxy_bridge, core_module_web, web_exe.root_module);

@@ -14,10 +14,16 @@ pub const Tape = @import("Tape.zig");
 pub const Sequencer = @import("Sequencer.zig");
 pub const Script = @import("Script.zig");
 pub const binary = @import("binary.zig");
+/// How a tape spells a key and a chord (`"mod+shift+p"`, `"cmd+k cmd+s"`) — the keymap's spelling
+/// too, which takes it from here.
+pub const chord = @import("chord.zig");
+pub const key = @import("key.zig");
 
 test {
     _ = Tape;
     _ = Sequencer;
     _ = Script;
     _ = binary;
+    _ = chord;
+    _ = key;
 }
