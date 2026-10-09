@@ -6490,6 +6490,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
     try std.testing.expectEqualStrings(root, editor.app.config_folder);
+    // The app offers its plugins the `automation` service, and nothing is in flight.
+    const automation_api = editor.app.host.getServiceTyped(sdk.services.automation.Api) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(automation_api.settled());
 
     // A project and a document in it, as `fizzy <dir>` and a click would open them.
     try tmp.dir.createDirPath(dvui.io, "project");
@@ -6519,4 +6522,149 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try dvui.testing.settle(headlessFrame);
 
     try editor.deinit();
+}
+
+// ── The automation service ──────────────────────────────────────────────────────────────────────
+// `automation.Service` over the live driver above: what a plugin sees — tape bytes in, a ticket
+// back, and the outcome asked for by ticket.
+
+const AutomationApi = sdk.services.automation.Api;
+
+var service_demo_loaded = false;
+
+fn serviceOther(_: *anyopaque) bool {
+    return service_demo_loaded;
+}
+
+fn liveService() automation.Service {
+    service_demo_loaded = false;
+    return .{
+        .gpa = std.testing.allocator,
+        .driver = &demo_live,
+        .other = .{ .ctx = &service_demo_loaded, .driving = serviceOther },
+    };
+}
+
+/// A tape as a plugin hands it over: ZON text.
+fn tapeZon(owned: automation.Tape.Owned) ![]u8 {
+    var o = owned;
+    defer o.deinit();
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer out.deinit();
+    try o.tape.write(&out.writer);
+    return out.toOwnedSlice();
+}
+
+fn started(p: AutomationApi.Play) !AutomationApi.Ticket {
+    return switch (p) {
+        .started => |t| t,
+        else => error.TestUnexpectedResult,
+    };
+}
+
+test "automation service: tape bytes in, a ticket back, the outcome by ticket" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+    var svc = liveService();
+    svc.bind();
+    const api = svc.api;
+
+    try std.testing.expect(api.settled());
+    const bytes = try tapeZon(try liveTape());
+    defer std.testing.allocator.free(bytes);
+    const ticket = try started(api.play(bytes));
+    try std.testing.expect(api.outcome(ticket) == .playing);
+    try std.testing.expect(!api.settled());
+
+    try stepLiveUntilDone(200);
+    try std.testing.expect(api.outcome(ticket) == .finished);
+    try std.testing.expect(api.settled());
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expectEqualStrings("> hi", demo_text.items);
+    try std.testing.expectEqualStrings(".{ .n = 1 }", demo_command_args.items);
+
+    // The binary form plays the same; the first tape's outcome is still there to ask for.
+    var owned = try liveTape();
+    defer owned.deinit();
+    const encoded = try automation.binary.encode(std.testing.allocator, owned.tape);
+    defer std.testing.allocator.free(encoded);
+    const second = try started(api.play(encoded));
+    try std.testing.expect(second != ticket);
+    try stepLiveUntilDone(200);
+    try std.testing.expect(api.outcome(second) == .finished);
+    try std.testing.expect(api.outcome(ticket) == .finished);
+    try std.testing.expectEqual(@as(usize, 2), demo_clicks);
+}
+
+test "automation service: refused while something drives the app, or for a demo's tape" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+    var svc = liveService();
+    svc.bind();
+    const api = svc.api;
+
+    const live = try tapeZon(try liveTape());
+    defer std.testing.allocator.free(live);
+    const demo = try tapeZon(try demoTape());
+    defer std.testing.allocator.free(demo);
+
+    // A demo's tape opens on a keyframe; garbage is no tape at all. Both say why.
+    try std.testing.expectEqualStrings("KeyframeInLiveTape", api.play(demo).invalid);
+    try std.testing.expect(api.play("not a tape") == .invalid);
+    try std.testing.expect(api.outcome(@enumFromInt(12345)) == .unknown);
+
+    // A demo loaded: refused, and nothing is settled while it plays.
+    service_demo_loaded = true;
+    try std.testing.expect(api.play(live) == .busy);
+    try std.testing.expect(!api.settled());
+    service_demo_loaded = false;
+
+    // One tape at a time, and only its own ticket stops it.
+    const ticket = try started(api.play(live));
+    try std.testing.expect(api.play(live) == .busy);
+    api.stop(@enumFromInt(@intFromEnum(ticket) + 1));
+    try std.testing.expect(api.outcome(ticket) == .playing);
+    api.stop(ticket);
+    try std.testing.expect(api.outcome(ticket) == .stopped);
+    try std.testing.expect(api.settled());
+}
+
+test "automation service: a person's input stops the tape, and the outcome says before which op" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+    var svc = liveService();
+    svc.bind();
+    const api = svc.api;
+
+    const bytes = try tapeZon(try liveTape());
+    defer std.testing.allocator.free(bytes);
+    const ticket = try started(api.play(bytes));
+    _ = try dvui.testing.step(liveFrame);
+    try dvui.testing.pressKey(.escape, .none);
+    try stepLiveUntilDone(10);
+    const before = api.outcome(ticket).interrupted;
+    try std.testing.expect(before < 10);
+    try std.testing.expectEqual(@as(usize, 0), demo_commands);
+}
+
+test "automation service: settled waits for dvui to go quiet, and wakes the app once to say so" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+    var svc = liveService();
+    svc.bind();
+    const api = svc.api;
+
+    // A frame ended with dvui wanting the next one now (a refresh, or an animation running).
+    try std.testing.expect(!svc.frameEnded(0));
+    try std.testing.expect(!api.settled());
+    // An animation due later is still something in flight.
+    try std.testing.expect(!svc.frameEnded(16_000));
+    try std.testing.expect(!api.settled());
+    // dvui goes quiet: whoever was told "not yet" gets one more frame to see it change.
+    try std.testing.expect(svc.frameEnded(null));
+    try std.testing.expect(api.settled());
+    // Asked and answered yes: no frame is run for nobody.
+    try std.testing.expect(!svc.frameEnded(null));
+    try std.testing.expect(!svc.frameEnded(null));
+    try std.testing.expect(api.settled());
 }

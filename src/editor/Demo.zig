@@ -45,6 +45,9 @@ player: automation.Player,
 /// Plays live tapes — input on the app as it is (`automation.LiveDriver`). One tape drives the app
 /// at a time: a live tape is refused while a demo is loaded, and a demo while a live tape plays.
 live: automation.LiveDriver,
+/// The `automation` service plugins play live tapes through, over `live`. The only way a live
+/// tape starts.
+service: automation.Service,
 /// A seek is replaying: animation is off until it arrives.
 fast: bool = false,
 /// The user's session, set aside while a demo is loaded.
@@ -89,12 +92,29 @@ const Saved = struct {
 };
 
 /// Inert until `attach`: nothing loaded, so nothing in `tick` acts on it.
-pub const detached: Demo = .{ .editor = undefined, .player = .{ .gpa = undefined, .stage = undefined }, .live = .{ .stage = undefined } };
+pub const detached: Demo = .{
+    .editor = undefined,
+    .player = .{ .gpa = undefined, .stage = undefined },
+    .live = .{ .stage = undefined },
+    .service = .{ .gpa = undefined, .driver = undefined },
+};
 
-/// Point the player at this stage. `self` must not move afterwards (it is the stage's context).
+/// Point the player and the live driver at this stage. `self` must not move afterwards (it is
+/// the stage's context, and the service's).
 pub fn attach(self: *Demo, editor: *Editor) void {
+    const gpa = editor.app.gpa;
     const stage: automation.Stage = .{ .ctx = self, .vtable = &stage_vtable };
-    self.* = .{ .editor = editor, .player = .init(editor.app.gpa, stage), .live = .init(stage) };
+    self.* = .{
+        .editor = editor,
+        .player = .init(gpa, stage),
+        .live = .init(stage),
+        .service = .{ .gpa = gpa, .driver = &self.live, .other = .{ .ctx = self, .driving = demoLoaded } },
+    };
+    self.service.bind();
+}
+
+fn demoLoaded(ctx: *anyopaque) bool {
+    return from(ctx).active();
 }
 
 pub fn deinit(self: *Demo) void {
@@ -133,17 +153,6 @@ pub fn playTape(self: *Demo, bytes: []const u8) !void {
         return err;
     };
     self.player.load(owned, .{});
-}
-
-/// Play a live tape: input on the app as it is, each step once the last has landed
-/// (`automation.LiveDriver`). Refused while a demo is loaded; `owned` is the driver's either way.
-pub fn playLive(self: *Demo, owned: automation.Tape.Owned) !void {
-    if (self.active()) {
-        var o = owned;
-        o.deinit();
-        return error.DemoLoaded;
-    }
-    try self.live.play(owned);
 }
 
 /// Start the bundled demo `name` on the next frame — for callers outside one.

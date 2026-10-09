@@ -111,6 +111,8 @@ pub const automation = struct {
     pub const Input = @import("automation/Input.zig");
     /// Plays a live tape — input on the app as it is, a step at a time — beside the `Player`.
     pub const LiveDriver = @import("automation/LiveDriver.zig");
+    /// The `automation` service a plugin plays live tapes through, over a `LiveDriver`.
+    pub const Service = @import("automation/Service.zig");
     pub const overlay = @import("automation/overlay.zig");
 };
 

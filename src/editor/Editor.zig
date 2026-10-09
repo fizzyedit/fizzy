@@ -2076,6 +2076,10 @@ pub fn postInit(editor: *Editor) !void {
         try editor.app.host.registerService(sdk.services.files.Api, &editor.app.files_service, null);
     }
 
+    // The `automation` service: plugins play live tapes on the app as it is (`automation.Service`).
+    // `editor.demo` was attached above, at its final address.
+    try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
+
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in docs/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
     // nightwatch retains `&editor.app.settings_watcher.handler`, so `editor` has to already be at

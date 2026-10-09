@@ -69,6 +69,13 @@ fn wasmFree(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ret_addr: us
 /// from inside it (`core.profile.hostFrameBegin`).
 pub var last_submit_ns: u64 = 0;
 
+/// Called right after each frame's `Window.end` with what it returned: null when dvui would sleep,
+/// 0 when it wants the next frame now, the wait for a later animation otherwise. True runs one more
+/// frame now whatever `end` said. fizzy's `automation` service uses it: it notes whether dvui
+/// went quiet (`settled`), and runs one more frame when a caller was told "not yet", so the caller
+/// sees the answer change without asking for frames itself.
+pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
+
 pub var win: dvui.Window = undefined;
 pub var win_ok = false;
 var arena: std.mem.Allocator = undefined;
@@ -1407,7 +1414,10 @@ fn update() !i32 {
     const res = try app.frameFn();
 
     const submit_start = wasm.wasm_now();
-    const end_micros = try win.end(.{});
+    var end_micros = try win.end(.{});
+    if (frame_ended_hook) |hook| if (hook(end_micros)) {
+        end_micros = 0;
+    };
     window_ended = true;
     last_submit_ns = @intFromFloat(@max(0, wasm.wasm_now() - submit_start) * std.time.ns_per_ms);
 

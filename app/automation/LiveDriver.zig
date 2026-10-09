@@ -10,12 +10,12 @@
 //! | going back            | seek: snapshots, keyframes          | none — undo, through commands     |
 //!
 //! Consumers: a plugin's tests, a macro, a scripted tutorial, anything driving fizzy the way a
-//! person does — the `automation` service will hand plugins this (milestone 3).
+//! person does. Plugins reach it through the `automation` service (`Service`).
 //!
 //! The input is `Input`'s, shared with the `Player`; of the `Stage` it reads only what a live
 //! tape needs — `idle` and `command` — and never `begin`, `end`, `keyframe` or snapshots. Its
-//! owner arbitrates with the `Player`: one tape drives the app at a time (fizzy's `Demo` refuses a
-//! live tape while a demo is loaded, and the reverse).
+//! owner arbitrates with the `Player`: one tape drives the app at a time (the service refuses a
+//! live tape while a demo is loaded, and fizzy's `Demo` a demo while a live tape plays).
 //!
 //! **Pacing.** Authored times are ignored: each frame the driver asks the sequencer for the next
 //! moment anything happens (`Sequencer.nextAt`) and applies it, and goes on only while the stage
