@@ -263,16 +263,13 @@ pub fn contextMenu(src: std.builtin.SourceLocation, at: dvui.Point.Natural, opts
 /// `BlurBackdrop.Pane`. Null when the style has the blur off; the panel's fill then stands alone.
 pub fn menuFrost() ?BlurBackdrop.Pane {
     const f = dialogs.dialogFrost() orelse return null;
-    return .{ .radius = f.radius, .refresh_ms = f.refresh_ms, .tint = f.tint, .mix = f.mix, .lift = f.lift, .detail = f.detail, .refraction = f.refraction };
+    return .{ .radius = f.radius, .refresh_ms = f.refresh_ms, .tint = f.tint, .mix = f.mix, .lift = f.lift, .refraction = f.refraction, .clear = f.clear };
 }
 
-/// The glass liquid shapes are made of (`LiquidField`): `menuFrost`, or — the blur off, and the
-/// glass program there to draw it — clear glass of the same tint and edge
-/// (`BlurBackdrop.Pane.clear`), so shapes that run together still do. Null where neither is.
+/// The glass liquid shapes are made of (`LiquidField`): `menuFrost`, clear glass at no roughness
+/// where the glass program is there to draw it (`dialogs.dialogFrost`). Null where neither is.
 pub fn liquidFrost() ?BlurBackdrop.Pane {
-    if (menuFrost()) |p| return p;
-    if (!LiquidField.ready()) return null;
-    return dialogs.clearFrost();
+    return menuFrost();
 }
 
 /// A menu popup's surface: `core.dialogs`' fill, corners, padding and shadow, no border — the

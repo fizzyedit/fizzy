@@ -49,6 +49,10 @@ pub const Item = struct {
     /// sync with `Editor.Settings` by hand; `search` items that aren't a single field name it
     /// after the section they configure.
     key: []const u8,
+    /// The field's name while the theme is light, for a setting remembered for dark and light
+    /// themes apart (`key` the dark one's): the row names the one its control sets now
+    /// (`keyNow`).
+    key_light: ?[]const u8 = null,
     /// What the setting does. Required, exactly as it is for plugin settings.
     description: []const u8,
     /// Extra search terms that never appear on screen — synonyms and the words a user is likely
@@ -60,6 +64,13 @@ pub const Item = struct {
     /// Set for a control small enough to share the description's line rather than take a full
     /// width of its own — checkboxes, and nothing else so far.
     inline_control: bool = false,
+
+    /// The field this row's control sets in the theme in use: `key_light` in a light one where it
+    /// has one, `key` otherwise.
+    pub fn keyNow(self: Item) []const u8 {
+        if (!dvui.themeGet().dark) if (self.key_light) |k| return k;
+        return self.key;
+    }
 };
 
 /// A category branch under "Fizzy".
@@ -112,80 +123,6 @@ pub const groups = [_]Group{
                 .draw = drawMonoFontSize,
             },
             .{
-                .label = "Window opacity",
-                .key = "window_opacity_dark",
-                .description = "How opaque the window background is behind the interface. " ++
-                    "Dark and light themes are remembered separately.",
-                .keywords = "transparency alpha blur",
-                .draw = drawWindowOpacity,
-            },
-            .{
-                .label = "Content opacity",
-                .key = "content_opacity",
-                .description = "How opaque panels drawn over the window background are.",
-                .keywords = "transparency alpha",
-                .draw = drawContentOpacity,
-            },
-            .{
-                .label = "Modal dim",
-                .key = "modal_dim",
-                .description = "How much a dialog or the command palette darkens everything " ++
-                    "behind it while it is open.",
-                .keywords = "dialog palette scrim dark shade overlay",
-                .draw = drawModalDim,
-            },
-            .{
-                .label = "Dialog opacity",
-                .key = "dialog_opacity",
-                .description = "How much of a dialog or the command palette is its own colour " ++
-                    "rather than the frosted view behind it. At 1 it matches a plain panel " ++
-                    "like the explorer; lower shows more of the blur.",
-                .keywords = "dialog palette transparency alpha glass frost",
-                .draw = drawDialogOpacity,
-            },
-            .{
-                .label = "Dialog blur",
-                .key = "dialog_blur",
-                .description = "How strongly the frosted backdrop under dialogs and the command " ++
-                    "palette blurs what is behind it. 0 turns the frost off.",
-                .keywords = "dialog palette blur frost glass radius",
-                .draw = drawDialogBlur,
-            },
-            .{
-                .label = "Dialog blur detail",
-                .key = "dialog_detail",
-                .description = "How much of what is behind a dialog or the command palette " ++
-                    "stays readable through its blur. 0 is a plain frost; higher keeps shapes " ++
-                    "and edges visible under the same softness.",
-                .keywords = "dialog palette blur frost glass detail definition clarity",
-                .draw = drawDialogDetail,
-            },
-            .{
-                .label = "Dialog brightness",
-                .key = "dialog_lift",
-                .description = "How much lighter a dialog or the command palette is than what " ++
-                    "is behind it — the lift a glass material has. 0 is none.",
-                .keywords = "dialog palette light bright glass frost lift",
-                .draw = drawDialogLift,
-            },
-            .{
-                .label = "Dialog refraction",
-                .key = "dialog_refraction",
-                .description = "How far the bevelled edge of frosted glass — dialogs, menus, " ++
-                    "the command palette, drop zones — bends what is behind it. 0 is a flat " ++
-                    "edge; the middle is as designed.",
-                .keywords = "dialog palette glass frost refraction bevel edge lens liquid",
-                .draw = drawDialogRefraction,
-            },
-            .{
-                .label = "Corner roundness",
-                .key = "corner_roundness",
-                .description = "How round the corners of windows, panels, dialogs and buttons " ++
-                    "are, from square to twice as round. The middle is as designed.",
-                .keywords = "corner radius rounding round square shape theme",
-                .draw = drawCornerRoundness,
-            },
-            .{
                 .label = "Motion",
                 .key = "motion",
                 .description = "How the interface moves. 0 is off — nothing animates. Up to " ++
@@ -206,50 +143,9 @@ pub const groups = [_]Group{
         },
     },
     .{
-        .title = "Windows",
+        .title = "Window",
         .icon = icons.tvg.lucide.@"app-window",
-        .items = &.{
-            .{
-                .label = "Floats in their own windows",
-                .key = "float_windows",
-                .description = "A view floated out of its place can leave the main window into a " ++
-                    "window of its own, and a view carried past the main window opens one there. " ++
-                    "Takes effect after a restart.",
-                .keywords = "float popout pop out window detach tear off native restart",
-                .draw = drawFloatWindows,
-                .inline_control = true,
-            },
-            .{
-                .label = "Native glass",
-                .key = "native_glass",
-                .description = "A dragged view and the drop zones are the system's own glass " ++
-                    "(Liquid Glass on macOS 26) rather than fizzy's, where floats have windows " ++
-                    "of their own.",
-                .keywords = "glass liquid native drag drop zones blur material",
-                .draw = drawNativeGlass,
-                .inline_control = true,
-            },
-            .{
-                .label = "Native menus",
-                .key = "native_menus",
-                .description = "Menus open in windows of their own — the system's material, " ++
-                    "shadow and corners, over every window and past the window's edge — rather " ++
-                    "than drawn inside the window, where floats have windows of their own.",
-                .keywords = "menu context native window popup material",
-                .draw = drawNativeMenus,
-                .inline_control = true,
-            },
-            .{
-                .label = "Native dialogs",
-                .key = "native_dialogs",
-                .description = "Dialogs open in windows of their own — the system's material, " ++
-                    "shadow and corners, moving with the main window — rather than drawn inside " ++
-                    "it, where floats have windows of their own.",
-                .keywords = "dialog modal alert native window material",
-                .draw = drawNativeDialogs,
-                .inline_control = true,
-            },
-        },
+        .items = &window_items,
     },
     .{
         .title = "Input",
@@ -361,6 +257,97 @@ pub const groups = [_]Group{
     },
 };
 
+/// The window's group: its glass — every glass the app draws is the window's — and, where there
+/// are OS windows to put things in, which things get one.
+const window_items = [_]Item{
+    .{
+        .label = "Window opacity",
+        .key = "window_opacity_dark",
+        .key_light = "window_opacity_light",
+        .description = "How much of the window's colour lies over its glass — the window's own " ++
+            "where it is glass, and every dialog's, menu's and drop zone's. 0 is clear glass; 1 " ++
+            "is the window's colour, opaque. Dark and light themes are remembered separately.",
+        .keywords = "transparency alpha glass tint colour color translucent clear",
+        .draw = drawWindowOpacity,
+    },
+    .{
+        .label = "Window roughness",
+        .key = "window_roughness_dark",
+        .key_light = "window_roughness_light",
+        .description = "How rough the window's glass is, and every dialog's, menu's and drop " ++
+            "zone's. 0 is clear, shiny glass bending what is behind it; 1 blurs what is behind " ++
+            "it away. Its edge bends less as it roughens. Dark and light themes are remembered " ++
+            "separately.",
+        .keywords = "blur frost glass refraction bevel edge lens liquid rough smooth",
+        .draw = drawWindowRoughness,
+    },
+    .{
+        .label = "Content opacity",
+        .key = "content_opacity",
+        .description = "How opaque panels drawn over the window background are.",
+        .keywords = "transparency alpha",
+        .draw = drawContentOpacity,
+    },
+    .{
+        .label = "Modal dim",
+        .key = "modal_dim",
+        .description = "How much a dialog or the command palette darkens everything " ++
+            "behind it while it is open.",
+        .keywords = "dialog palette scrim dark shade overlay",
+        .draw = drawModalDim,
+    },
+    .{
+        .label = "Corner roundness",
+        .key = "corner_roundness",
+        .description = "How round the corners of windows, panels, dialogs and buttons " ++
+            "are, from square to twice as round. The middle is as designed.",
+        .keywords = "corner radius rounding round square shape theme",
+        .draw = drawCornerRoundness,
+    },
+} ++ (if (builtin.target.cpu.arch == .wasm32) [_]Item{} else [_]Item{
+    .{
+        .label = "Floats in their own windows",
+        .key = "float_windows",
+        .description = "A view floated out of its place can leave the main window into a " ++
+            "window of its own, and a view carried past the main window opens one there. " ++
+            "Takes effect after a restart.",
+        .keywords = "float popout pop out window detach tear off native restart",
+        .draw = drawFloatWindows,
+        .inline_control = true,
+    },
+}) ++ (if (builtin.os.tag != .macos or builtin.target.cpu.arch == .wasm32) [_]Item{} else [_]Item{
+    .{
+        .label = "Native glass",
+        .key = "native_glass",
+        .description = "A dragged view and the drop zones are the system's own glass " ++
+            "(Liquid Glass on macOS 26) rather than fizzy's, where floats have windows " ++
+            "of their own.",
+        .keywords = "glass liquid native drag drop zones blur material",
+        .draw = drawNativeGlass,
+        .inline_control = true,
+    },
+    .{
+        .label = "Native menus",
+        .key = "native_menus",
+        .description = "Menus open in windows of their own — the system's material, " ++
+            "shadow and corners, over every window and past the window's edge — rather " ++
+            "than drawn inside the window, where floats have windows of their own.",
+        .keywords = "menu context native window popup material",
+        .draw = drawNativeMenus,
+        .inline_control = true,
+    },
+    .{
+        .label = "Native dialogs",
+        .key = "native_dialogs",
+        .description = "Dialogs open in windows of their own — the system's material, " ++
+            "shadow and corners, moving with the main window — rather than drawn inside " ++
+            "it, where floats have windows of their own.",
+        .keywords = "dialog modal alert native window material",
+        .draw = drawNativeDialogs,
+        .inline_control = true,
+    },
+});
+
 // ---- Appearance -------------------------------------------------------------------------
 
 fn drawTheme() void {
@@ -441,6 +428,30 @@ fn drawWindowOpacity() void {
         fizzy.editor().markSettingsDirty();
         dvui.refresh(null, @src(), null);
     }
+    sliderMarks(@src(), &.{ "Clear", "Opaque" }, &.{ 0, 1 });
+}
+
+fn drawWindowRoughness() void {
+    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
+        .value = &if (dvui.themeGet().dark) fizzy.editor().app.settings.window_roughness_dark else fizzy.editor().app.settings.window_roughness_light,
+        .interval = 0.01,
+        .max = 1.0,
+        .min = 0.0,
+    }, .{ .expand = .horizontal })) {
+        fizzy.editor().markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+    sliderMarks(@src(), &.{ "Clear", "Frosted" }, &.{ 0, 1 });
+}
+
+/// Names under a slider, each at its place along it (0 the left end, 1 the right).
+fn sliderMarks(src: std.builtin.SourceLocation, names: []const []const u8, at: []const f32) void {
+    var row = dvui.overlay(src, .{ .expand = .horizontal });
+    defer row.deinit();
+    const text = dvui.themeGet().color(.control, .text).opacity(0.6);
+    for (names, at, 0..) |name, x, i| {
+        dvui.labelNoFmt(@src(), name, .{}, .{ .id_extra = i, .gravity_x = x, .font = dvui.Font.theme(.body).larger(-1), .color_text = .{ .color = text }, .padding = .{} });
+    }
 }
 
 fn drawContentOpacity() void {
@@ -468,54 +479,6 @@ fn drawModalDim() void {
     }
 }
 
-fn drawDialogOpacity() void {
-    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().app.settings.dialog_opacity,
-        .interval = 0.01,
-        .max = 1.0,
-        .min = 0.0,
-    }, .{ .expand = .horizontal })) {
-        fizzy.editor().markSettingsDirty();
-        dvui.refresh(null, @src(), null);
-    }
-}
-
-fn drawDialogBlur() void {
-    if (dvui.sliderEntry(@src(), "{d:0.0}", .{
-        .value = &fizzy.editor().app.settings.dialog_blur,
-        .interval = 1,
-        .max = 48,
-        .min = 0,
-    }, .{ .expand = .horizontal })) {
-        fizzy.editor().markSettingsDirty();
-        dvui.refresh(null, @src(), null);
-    }
-}
-
-fn drawDialogDetail() void {
-    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().app.settings.dialog_detail,
-        .interval = 0.01,
-        .max = 0.9,
-        .min = 0.0,
-    }, .{ .expand = .horizontal })) {
-        fizzy.editor().markSettingsDirty();
-        dvui.refresh(null, @src(), null);
-    }
-}
-
-fn drawDialogLift() void {
-    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().app.settings.dialog_lift,
-        .interval = 0.01,
-        .max = 1.0,
-        .min = 0.0,
-    }, .{ .expand = .horizontal })) {
-        fizzy.editor().markSettingsDirty();
-        dvui.refresh(null, @src(), null);
-    }
-}
-
 fn drawCornerRoundness() void {
     const editor = fizzy.editor();
     if (dvui.sliderEntry(@src(), "{d:0.01}", .{
@@ -529,24 +492,7 @@ fn drawCornerRoundness() void {
         editor.markSettingsDirty();
         dvui.refresh(null, @src(), null);
     }
-    var row = dvui.overlay(@src(), .{ .expand = .horizontal });
-    defer row.deinit();
-    const text = dvui.themeGet().color(.control, .text).opacity(0.6);
-    for ([_][]const u8{ "Square", "As designed", "Round" }, [_]f32{ 0, 0.5, 1 }, 0..) |name, at, i| {
-        dvui.labelNoFmt(@src(), name, .{}, .{ .id_extra = i, .gravity_x = at, .font = dvui.Font.theme(.body).larger(-1), .color_text = .{ .color = text }, .padding = .{} });
-    }
-}
-
-fn drawDialogRefraction() void {
-    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().app.settings.dialog_refraction,
-        .interval = 0.01,
-        .max = 1.0,
-        .min = 0.0,
-    }, .{ .expand = .horizontal })) {
-        fizzy.editor().markSettingsDirty();
-        dvui.refresh(null, @src(), null);
-    }
+    sliderMarks(@src(), &.{ "Square", "As designed", "Round" }, &.{ 0, 0.5, 1 });
 }
 
 fn drawMotion() void {
@@ -709,7 +655,7 @@ fn drawPluginUpdateMode() void {
     }
 }
 
-// ---- Windows ----------------------------------------------------------------------------
+// ---- Window -----------------------------------------------------------------------------
 
 fn drawFloatWindows() void {
     const editor = fizzy.editor();

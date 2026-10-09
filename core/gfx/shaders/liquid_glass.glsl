@@ -157,9 +157,9 @@ void main() {
     frost = vec4(frost.rgb / max(frost.a, 1e-4), 1.0);
     sharp = vec4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
-    // The frost at its share of a frost / tint mix, the blur coming in from sharp. Apple's lens
-    // takes the window's colour whatever the blur: it comes in under clear glass too.
-    float mixv = g4.z > 0.5 ? g4.x * (inward ? 1.0 : b) : 0.0;
+    // The frost at its share of a frost / tint mix, the blur coming in from sharp. The window's
+    // colour comes in whatever the blur: the opacity is the colour, under clear glass too.
+    float mixv = g4.z > 0.5 ? g4.x : 0.0;
     vec4 c = mix(sharp, frost, b) * (1.0 - mixv);
     // The rim's clearer glass over it (`drawClear`): for Apple's lens, the band, so the rim stays
     // clear glass while the middle frosts.
@@ -180,7 +180,7 @@ void main() {
     float spec = 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + (inward ? 0.15 : 0.06);
     float line = exp(-max(0.0, -D) / g2.z);
     float lit = line * spec + (inward ? 0.0 : 0.04 * steepL * toward);
-    float lift = (g4.z > 0.5 ? g4.y * (inward ? 1.0 : b) : 0.0) + mat.z;
+    float lift = (g4.z > 0.5 ? g4.y : 0.0) + mat.z;
     c += vec4(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
     // Apple's lens: light across the band, lighter facing the top left and darker away — the
     // glass's bevel, which shows through a full tint.

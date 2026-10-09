@@ -48,10 +48,15 @@ font_title_size: f32 = 9,
 font_heading_size: f32 = 8,
 font_mono_size: f32 = 8,
 
-/// Opacity of the background window
-/// CURRENTLY ONLY SUPPORTED ON MACOS and Windows
-window_opacity_dark: f32 = 0.7,
-window_opacity_light: f32 = 0.3,
+/// The window's glass, per theme (`core.glass_look`): its opacity — the window's colour over the
+/// glass, 0 (none: clear) to 1 (the window's fill, opaque) — and its roughness — 0 clear, shiny
+/// glass to 1 wholly blurred. On macOS and Windows the window itself is that glass, and every glass
+/// the app draws (dialogs, menus, drops) is too; elsewhere, where the window is opaque, the glass
+/// the app draws.
+window_opacity_dark: f32 = default_glass.opacity_dark,
+window_opacity_light: f32 = default_glass.opacity_light,
+window_roughness_dark: f32 = default_glass.roughness_dark,
+window_roughness_light: f32 = default_glass.roughness_light,
 
 /// Opacity of the content area (also drives plugin panes that match fizzy chrome).
 content_opacity: f32 = 0.7,
@@ -59,28 +64,10 @@ content_opacity: f32 = 0.7,
 /// How much a modal dialog or the palette dims everything behind it, 0 (none) to 1.
 modal_dim: f32 = 0.0,
 
-/// How opaque a dialog's or the palette's own fill is over its frosted backdrop, 0 to 1. Low by
-/// default: the glass is mostly what is behind it.
-dialog_opacity: f32 = 0.2,
-
-/// Blur radius of the frosted backdrop under dialogs and the palette; 0 turns it off.
-dialog_blur: f32 = 30,
-
-/// How much lighter a dialog or the palette is than what is behind it, 0 to 1. None by default.
-dialog_lift: f32 = 0,
-
-/// How much of what is behind a dialog or the palette stays readable through its blur, 0 to 1.
-/// A plain frost by default.
-dialog_detail: f32 = 0,
-
 /// How round the app's corners are, 0 (square) to 1 (twice as round); 0.5 is as designed.
 /// Published each frame through `core.corners`, which every radius scales by, and applied to the
 /// theme's own corner. All the way round by default, on every platform.
 corner_roundness: f32 = 1.0,
-
-/// How far the bevelled edge of frosted glass — dialogs, menus, the palette, drop zones —
-/// refracts what is behind it, 0 (none) to 1; 0.5 is as designed, the default all the way up.
-dialog_refraction: f32 = 1,
 
 /// How the interface moves, 0 to 1: 0 is off (nothing animates), up to 0.5 (minimal) plain even
 /// motion, toward 1 (playful) an overshoot past the target and back, arriving on time throughout.
@@ -123,6 +110,16 @@ input_scheme: InputScheme = .auto,
 /// How updates found by `PluginStore`'s post-launch pass are applied — prompted, or silent.
 /// Only covers plugins that haven't individually opted out via `.plugins.<id>.auto_update`.
 plugin_update_mode: PluginUpdateMode = .prompt,
+
+/// The window's glass as it comes, per platform. Where the window is the glass (macOS, Windows), as
+/// fizzy's windows have been: mostly the window's colour in a dark theme, little in a light one,
+/// frosted. Where the window is opaque (the web, Linux), the glass the app draws over it: little
+/// colour, well frosted — the dialogs' glass as it was.
+pub const GlassDefaults = struct { opacity_dark: f32, opacity_light: f32, roughness_dark: f32, roughness_light: f32 };
+pub const default_glass: GlassDefaults = if (builtin.target.cpu.arch == .wasm32 or (builtin.os.tag != .macos and builtin.os.tag != .windows))
+    .{ .opacity_dark = 0.2, .opacity_light = 0.2, .roughness_dark = 0.75, .roughness_light = 0.75 }
+else
+    .{ .opacity_dark = 0.7, .opacity_light = 0.3, .roughness_dark = 1.0, .roughness_light = 0.45 };
 
 fn default(allocator: std.mem.Allocator) !Settings {
     return .{
@@ -203,7 +200,9 @@ pub fn freeParsed(allocator: std.mem.Allocator, parsed: Settings) void {
 /// which owns the live value's long-lived `theme`).
 pub fn parseOnly(allocator: std.mem.Allocator, data: [:0]const u8) !Settings {
     @setEvalBranchQuota(10_000);
-    return std.zon.parse.fromSliceAlloc(Settings, allocator, data, null, .{ .ignore_unknown_fields = true });
+    var parsed = try std.zon.parse.fromSliceAlloc(Settings, allocator, data, null, .{ .ignore_unknown_fields = true });
+    SettingsMigration.windowGlass(allocator, data, &parsed);
+    return parsed;
 }
 
 /// The value every field is diffed against by `serialize` — this struct's own declared defaults.

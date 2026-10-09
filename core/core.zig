@@ -54,7 +54,8 @@ pub const corners = @import("corners.zig");
 /// Frosted glass that bends what it shows — lens at the rim, ripples through it.
 pub const liquid_glass = @import("gfx/liquid_glass.zig");
 pub const liquid_blob = @import("gfx/liquid_blob.zig");
-/// One material on one slider: every glass at the window opacity, the OS's form and the app's.
+/// One material on two sliders: every glass at the window's opacity and roughness, the OS's form
+/// and the app's.
 pub const glass_look = @import("gfx/glass_look.zig");
 pub const LiquidField = @import("gfx/LiquidField.zig");
 pub const programs = @import("gfx/programs.zig");
