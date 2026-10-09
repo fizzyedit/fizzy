@@ -532,9 +532,9 @@ pub fn frame(self: *Player) void {
     // Whether this run is seen, once the seek it asks for (or lands) is known: a run while a seek
     // catches up draws nothing, but the one `frames` ends it with.
     defer self.run_unseen = core.FrameTarget.setUnseen((self.state == .seeking or self.catching_up) and !self.showing);
-    // Widgets name themselves for the tape only while one is loaded (`core.anchor`).
-    core.anchor.publish(self.owned != null);
     if (self.owned == null) return;
+    // Widgets name themselves for the tape while one is loaded (`core.anchor`).
+    core.anchor.want();
     // The bar has closed itself shut (`close`): the demo goes now.
     if (self.transport.shut) return self.unload();
     self.takeRealInput();

@@ -10,24 +10,32 @@
 //! `workbench.file:demo://tour/src/main.zig`, `text.editor:demo://tour/README.md`. The ones fizzy
 //! and its bundled plugins publish are listed in `docs/AUTOMATION.md`.
 //!
-//! Marking costs nothing while nobody is looking: the host publishes whether anyone wants anchors
-//! this frame (`publish`, while a demo is loaded), and `mark` returns at once otherwise. Shared
-//! through the window's data like `core.motion`, so a plugin dylib's copy of this file agrees.
+//! Marking costs nothing while nobody is looking: whoever wants anchors asks for them, a frame at
+//! a time (`want`), and `mark` returns at once in a frame nobody asked. Shared through the
+//! window's data like `core.motion`, so a plugin dylib's copy of this file agrees.
 const std = @import("std");
 const dvui = @import("dvui");
 
 const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_616e_6368); // "fizzanch"
-const publish_key = "_anchors";
+/// The frame anchors were last asked for in, by its `frame_time_ns`. Not the `_anchors` bool an
+/// older copy of this file reads: a plugin built against that one marks nothing until rebuilt,
+/// rather than reading a value of another type.
+const want_key = "_anchors_at";
 
-/// Host only, once a frame before anything draws: whether anchors are wanted this frame.
-pub fn publish(on: bool) void {
-    dvui.dataSet(null, publish_id, publish_key, on);
+/// Ask for anchors this frame, before anything draws: every widget that marks itself is named
+/// for whoever is looking. Anyone may ask — the demo player and the live driver while a tape
+/// plays (`app.automation`), a recorder, a plugin's test through the `automation` service — and
+/// asking twice is asking once. It lasts the frame: ask again in the next to keep them.
+pub fn want() void {
+    const cw = dvui.current_window orelse return;
+    dvui.dataSet(cw, publish_id, want_key, cw.frame_time_ns);
 }
 
-/// Whether anyone wants anchors this frame.
+/// Whether anyone asked for anchors this frame.
 pub fn wanted() bool {
-    if (dvui.current_window == null) return false;
-    return dvui.dataGet(null, publish_id, publish_key, bool) orelse false;
+    const cw = dvui.current_window orelse return false;
+    const at = dvui.dataGet(cw, publish_id, want_key, i128) orelse return false;
+    return at == cw.frame_time_ns;
 }
 
 /// Tag `wd` with the name `fmt` formats to, when anchors are wanted. The first widget to claim a

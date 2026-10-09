@@ -109,6 +109,8 @@ pub const automation = struct {
     pub const Player = @import("automation/Player.zig");
     /// Tape input as dvui events: the half of a sequencer's sink every player of tapes shares.
     pub const Input = @import("automation/Input.zig");
+    /// Plays a live tape — input on the app as it is, a step at a time — beside the `Player`.
+    pub const LiveDriver = @import("automation/LiveDriver.zig");
     pub const overlay = @import("automation/overlay.zig");
 };
 

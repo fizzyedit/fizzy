@@ -370,24 +370,33 @@ pub const Error = error{
     BadChord,
     /// Overlapping chapters or captions out of order would make `chapterAt` lie.
     ChaptersOutOfOrder,
+    /// A live tape (`Check.live`) plays on the app as it is, so it never cuts to a keyframe.
+    KeyframeInLiveTape,
 };
 
 /// What only the app can say about a tape: whether a key chord is spelled right, in its spelling.
 /// Left out, the format's own rules are checked and the rest is the app's at play time.
 pub const Check = struct {
     key: ?*const fn (chord: []const u8) bool = null,
+    /// The tape is a live one: played on the app as it is, by whoever is driving it — a plugin's
+    /// test, a macro, an automation client — rather than a demo that cuts to the state it
+    /// declares. It has no keyframe anywhere, where a demo opens on one.
+    live: bool = false,
 };
 
 /// Check what `Sequencer` relies on, once, at load — a tape that fails here would misplay rather
 /// than crash, which is worse to debug.
 pub fn validate(self: Tape, check: Check) Error!void {
-    if (self.ops.len == 0 or self.ops[0].at != 0 or self.ops[0].do != .keyframe) return error.NoKeyframeAtStart;
+    if (!check.live and (self.ops.len == 0 or self.ops[0].at != 0 or self.ops[0].do != .keyframe)) return error.NoKeyframeAtStart;
     var prev: u32 = 0;
     for (self.ops) |op| {
         if (op.at < prev) return error.OpsOutOfOrder;
         prev = op.at;
         switch (op.do) {
-            .keyframe => |i| if (i >= self.keyframes.len) return error.BadKeyframeIndex,
+            .keyframe => |i| {
+                if (check.live) return error.KeyframeInLiveTape;
+                if (i >= self.keyframes.len) return error.BadKeyframeIndex;
+            },
             .key => |k| if (check.key) |ok| {
                 if (!ok(k)) return error.BadChord;
             },
@@ -574,6 +583,18 @@ test "a tape must open on a keyframe, in order, with chords the app can spell" {
 
     const bad_index = [_]Op{.{ .at = 0, .do = .{ .keyframe = 3 } }};
     try testing.expectError(error.BadKeyframeIndex, (Tape{ .name = "x", .ops = &bad_index, .keyframes = &kf }).validate(.{}));
+}
+
+test "a live tape plays on the app as it is: no keyframe, anywhere" {
+    const kf = [_]Keyframe{.{ .root = "demo://x" }};
+    const ops = [_]Op{ .{ .at = 0, .do = .{ .key = "a" } }, .{ .at = 10, .do = .{ .command = .{ .id = "x.y" } } } };
+    const live = Tape{ .name = "x", .ops = &ops };
+    try live.validate(.{ .live = true });
+    try testing.expectError(error.NoKeyframeAtStart, live.validate(.{}));
+    try (Tape{ .name = "empty", .ops = &.{} }).validate(.{ .live = true });
+
+    const cut = [_]Op{ .{ .at = 0, .do = .{ .key = "a" } }, .{ .at = 10, .do = .{ .keyframe = 0 } } };
+    try testing.expectError(error.KeyframeInLiveTape, (Tape{ .name = "x", .ops = &cut, .keyframes = &kf }).validate(.{ .live = true }));
 }
 
 /// A spelling for tests: any chord whose last key is a single letter.
