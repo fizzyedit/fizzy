@@ -881,6 +881,50 @@ carries no accelerator. `drawMenuItem` is the only way to draw a row from a `reg
 callback — it goes through `EditorAPI` so the row is fizzy's own menu widget, chord and icon
 included.
 
+**Arguments and a result.** A command can declare parameters and return a value. Parameters are
+declared the way settings are (§3.1.1) — a struct of self-describing cells — and cross the
+boundary as ZON text, parsed back into your struct inside the plugin, so their layout is never
+part of the ABI:
+
+```zig
+const GoToLine = sdk.Command.Params(struct {
+    // No default: required. The palette asks for it; a call without it is refused.
+    line: sdk.Command.Arg(u32, .{ .description = "The line to go to, counting from 1.", .min = 1 }),
+    // A default: optional, and never asked for.
+    column: sdk.Command.Arg(u32, .{ .description = "The column, counting from 1.", .min = 1 }) = .init(1),
+});
+
+try host.registerCommand(.{
+    .id = sdk.Plugin.commandId("text", "goToLine"),
+    .owner = &plugin,
+    .title = "Go to Line…",
+    .params = GoToLine.params,              // the descriptors callers read
+    .runWith = GoToLine.bind(goToLine),     // parses, then calls you with `GoToLine.Args`
+});
+
+fn goToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) anyerror!void {
+    const doc = activeDoc(state) orelse return call.fail("no text document is active", .{});
+    …
+    try call.returns(.{ .line = landed_line, .column = landed_column }); // optional result, as ZON
+}
+```
+
+- **Invoking one.** `host.callCommand(id, ".{ .line = 12 }", arena)` runs it and answers with a
+  `Host.CommandOutcome`: `.ok` (the result as ZON, or null), `.unknown`, `.disabled`, `.bad_args`
+  or `.failed` — the last two carrying a message in words. `runCommand(id)` still works on any
+  command: with nothing required it runs `runWith` with the defaults; with something required,
+  fizzy opens the command palette on the command and asks for each required parameter in turn
+  (a list for an enum or bool, checked text otherwise — `sdk.Command.answer`).
+- **Failing.** Return `call.fail("…", .{})`. Your error's *name* cannot be read on fizzy's side
+  (errors are numbered per compilation), so the message is how the reason gets there.
+- **`run` and `runWith`.** A command needs at least one; `registerCommand` refuses one with
+  neither. Keep `run` alongside `runWith` only if invoking with no arguments should do something
+  of its own (open your own dialog, say) rather than ask.
+- **Who can call it.** Any plugin can run any command with arguments, as it already could without
+  them. Treat arguments as input from outside: check them as you would a user's.
+- **Listing.** `host.commandCount()` / `host.commandAt(i)` walk the registry, `params` included,
+  for anything that offers commands to someone else.
+
 ### 3.4.1 Context menus
 
 A context menu is a menu with an id, extended with the same `host.registerMenuSection` every

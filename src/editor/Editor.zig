@@ -2202,8 +2202,16 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .abortSaveAllQuit = fizzyAbortSaveAllQuit,
     .logLine = fizzyLogLine,
     .drawMenuItem = fizzyDrawMenuItem,
+    .askCommandArguments = fizzyAskCommandArguments,
     .loadPluginSettingsFile = fizzyLoadPluginSettingsFile,
 };
+
+/// The palette, opened on the command and asking for its required parameters
+/// (`CommandPalette.ask`).
+fn fizzyAskCommandArguments(ctx: *anyopaque, command_id: []const u8) bool {
+    const editor = fizzyCtx(ctx);
+    return editor.command_palette.ask(editor, command_id);
+}
 
 fn fizzyLogLine(ctx: *anyopaque, level: std.log.Level, scope: []const u8, message: []const u8) void {
     _ = ctx;

@@ -10,6 +10,13 @@
 //!
 //! Mode is derived from the text rather than held as state, so backspacing over the `>` slides
 //! straight back to file search, as it does in VSCode.
+//!
+//! **Asking for arguments.** A command whose `params` include a required one is not run on
+//! selection: the palette asks for each required parameter in turn (`ask`), in the same entry —
+//! a value list for an enum or a bool, free text otherwise, checked by `sdk.Command.answer` — and
+//! runs it through `Host.callCommand` once the last is given. Optional parameters keep their
+//! defaults. It is also what a menu row or a keybind gets for such a command
+//! (`EditorAPI.askCommandArguments`). Backspace on an empty entry goes back to the commands.
 
 const std = @import("std");
 const core = @import("core");
@@ -98,6 +105,10 @@ scroll_to_selected: bool = false,
 /// Query text. Owned here rather than left in dvui's internal store so opening in command mode
 /// can seed a `>` (dvui derives length from the first zero byte for a buffer-backed entry).
 text_buf: [256]u8 = @splat(0),
+/// Asking for a command's arguments, one required parameter at a time (`ask`). Null while the
+/// query is a file or command search. Cleared on the next `show` and when the outro ends, not on
+/// `close`, so the panel keeps its prompt while it animates away.
+asking: ?Asking = null,
 
 /// Absolute paths under the project folder, built on open. Owned.
 index: std.ArrayList([]u8) = .empty,
@@ -114,6 +125,53 @@ index_built: bool = false,
 file_hits: std.ArrayList(usize) = .empty,
 file_hits_query: [256]u8 = @splat(0),
 file_hits_valid: bool = false,
+
+/// A command being given its arguments. Fixed buffers: it lives on the palette between frames,
+/// and nothing in it needs an allocator's lifetime.
+const Asking = struct {
+    id_buf: [256]u8 = undefined,
+    id_len: usize = 0,
+    /// Index into the command's `params` of the parameter being asked for.
+    param: usize = 0,
+    /// The arguments given so far, as ZON fields (`.line = 12, `).
+    given_buf: [4096]u8 = undefined,
+    given_len: usize = 0,
+    /// Why the last answer was refused, shown under the entry until the next one.
+    problem_buf: [256]u8 = undefined,
+    problem_len: usize = 0,
+
+    fn id(self: *const Asking) []const u8 {
+        return self.id_buf[0..self.id_len];
+    }
+
+    fn given(self: *const Asking) []const u8 {
+        return self.given_buf[0..self.given_len];
+    }
+
+    fn problem(self: *const Asking) ?[]const u8 {
+        return if (self.problem_len == 0) null else self.problem_buf[0..self.problem_len];
+    }
+
+    fn setProblem(self: *Asking, msg: []const u8) void {
+        self.problem_len = @min(msg.len, self.problem_buf.len);
+        @memcpy(self.problem_buf[0..self.problem_len], msg[0..self.problem_len]);
+    }
+
+    /// Append `.key = zon, `; false when it does not fit.
+    fn add(self: *Asking, key: []const u8, zon: []const u8) bool {
+        const out = std.fmt.bufPrint(self.given_buf[self.given_len..], ".{f} = {s}, ", .{ std.zig.fmtId(key), zon }) catch return false;
+        self.given_len += out.len;
+        return true;
+    }
+};
+
+/// The first required parameter at or after `from`, or null when the rest are optional.
+fn nextRequired(params: []const sdk.Command.Param, from: usize) ?usize {
+    for (params[@min(from, params.len)..], from..) |p, i| {
+        if (p.required) return i;
+    }
+    return null;
+}
 
 pub fn deinit(self: *CommandPalette, gpa: std.mem.Allocator) void {
     self.freeIndex(gpa);
@@ -152,6 +210,7 @@ pub fn show(self: *CommandPalette, mode: Mode) void {
     self.tail_frames = 3;
     self.selected = 0;
     self.scroll_to_selected = true;
+    self.asking = null;
     self.setText(switch (mode) {
         .files => "",
         .commands => ">",
@@ -182,6 +241,7 @@ pub fn finishClose(self: *CommandPalette) void {
     self.closing = false;
     self.anim = 0;
     self.activated = null;
+    self.asking = null;
     self.list_content_h = 0;
     // The scrim fade and the widget's collapse are the same length but the collapse starts a
     // frame later, so it can still have a frame to run when the palette stops drawing. Reset the
@@ -195,8 +255,83 @@ pub fn toggle(self: *CommandPalette, mode: Mode) void {
     if (self.open and !self.closing) self.close() else self.show(mode);
 }
 
+/// Ask for the arguments of command `id`, opening the palette if it is not, and run the command
+/// once they are given. False — nothing opened — when `id` is unknown or requires nothing.
+pub fn ask(self: *CommandPalette, editor: *Editor, id: []const u8) bool {
+    const c = editor.app.host.command(id) orelse return false;
+    if (c.runWith == null) return false;
+    const first = nextRequired(c.params, 0) orelse return false;
+    var asking: Asking = .{ .param = first };
+    if (id.len > asking.id_buf.len) return false;
+    @memcpy(asking.id_buf[0..id.len], id);
+    asking.id_len = id.len;
+
+    if (!self.open or self.closing) {
+        self.show(.files);
+    } else {
+        self.selected = 0;
+        self.scroll_to_selected = true;
+        self.focus_frames = 3;
+        self.tail_frames = 1;
+    }
+    self.setText("");
+    self.asking = asking;
+    dvui.refresh(null, @src(), null);
+    return true;
+}
+
+/// Take `text` as the answer to the parameter being asked for: the next required one, or — the
+/// last given — run the command. A refused answer stays in the entry with the reason beneath.
+/// `row` is the value row it came from, kept pressed through the outro.
+fn answer(self: *CommandPalette, editor: *Editor, text: []const u8, row: ?usize) void {
+    const asking = if (self.asking) |*a| a else return;
+    const c = editor.app.host.command(asking.id()) orelse return self.close();
+    const param = c.params[asking.param];
+    const arena = dvui.currentWindow().arena();
+    switch (sdk.Command.answer(arena, param, text)) {
+        .problem => |p| return asking.setProblem(p),
+        .zon => |z| if (!asking.add(param.key, z)) return asking.setProblem("Too long"),
+    }
+    asking.problem_len = 0;
+    if (nextRequired(c.params, asking.param + 1)) |next| {
+        asking.param = next;
+        self.setText("");
+        self.selected = 0;
+        self.tail_frames = 1;
+        return;
+    }
+
+    const args = std.fmt.allocPrint(arena, ".{{ {s}}}", .{asking.given()}) catch return;
+    switch (editor.app.host.callCommand(asking.id(), args, arena)) {
+        .ok => {
+            self.activated = row;
+            self.close();
+        },
+        .unknown, .disabled => {
+            dvui.log.warn("palette: '{s}' can no longer run", .{asking.id()});
+            self.close();
+        },
+        .failed => |msg| {
+            self.activated = row;
+            self.close();
+            dvui.log.err("{s}: {s}", .{ asking.id(), msg });
+        },
+        // The palette checked each answer, so this is the command refusing their combination:
+        // start over from the first, saying why.
+        .bad_args => |msg| {
+            asking.given_len = 0;
+            asking.param = nextRequired(c.params, 0) orelse 0;
+            asking.setProblem(msg);
+            self.setText("");
+            self.selected = 0;
+        },
+    }
+}
+
+const Parsed = struct { mode: Mode, query: []const u8 };
+
 /// `>` selects command mode; everything after it is the query.
-fn modeAndQuery(text: []const u8) struct { mode: Mode, query: []const u8 } {
+fn modeAndQuery(text: []const u8) Parsed {
     if (text.len > 0 and text[0] == '>') {
         return .{ .mode = .commands, .query = std.mem.trimStart(u8, text[1..], " ") };
     }
@@ -266,8 +401,10 @@ pub fn invalidate(self: *CommandPalette) void {
 
 // ---- rows ---------------------------------------------------------------------------------
 
-const Row = union(Mode) {
+const Row = union(enum) {
     files: []const u8, // absolute path
+    /// One value of the enum or bool parameter being asked for.
+    choice: []const u8,
     commands: struct {
         id: []const u8,
         title: []const u8,
@@ -425,6 +562,23 @@ fn collectCommandRows(editor: *Editor, query: *const fuzzy.Query) []Row {
     return rows.items;
 }
 
+/// The values an enum or bool parameter can take, filtered by the query, in declaration order —
+/// empty for any other kind, which is answered as typed.
+fn collectChoiceRows(param: sdk.Command.Param, query: *const fuzzy.Query) []Row {
+    const choices: []const []const u8 = switch (param.kind) {
+        .enumeration => |k| k.choices,
+        .bool => &.{ "true", "false" },
+        else => return &.{},
+    };
+    const arena = dvui.currentWindow().arena();
+    var rows: std.ArrayListUnmanaged(Row) = .empty;
+    for (choices) |choice| {
+        if (!query.isEmpty() and fuzzy.score(choice, query, .{ .plain = true }) == null) continue;
+        rows.append(arena, .{ .choice = choice }) catch break;
+    }
+    return rows.items;
+}
+
 /// A command's first binding, or null when it has none.
 fn shortcutFor(editor: *Editor, id: []const u8) ?Keymap.Stroke {
     const arena = dvui.currentWindow().arena();
@@ -451,11 +605,14 @@ fn activate(self: *CommandPalette, editor: *Editor, rows: []const Row) void {
                 dvui.log.err("palette: failed to open {s}", .{abs});
             };
         },
+        .choice => |value| self.answer(editor, value, idx),
         .commands => |c| {
             if (!c.enabled) return;
+            editor.rememberPaletteCommand(c.id);
+            // A required parameter: ask for it here, in the palette, rather than closing.
+            if (self.ask(editor, c.id)) return;
             self.activated = idx;
             self.close();
-            editor.rememberPaletteCommand(c.id);
             editor.app.host.runCommand(c.id) catch |err| {
                 dvui.log.err("palette: command '{s}' failed: {s}", .{ c.id, @errorName(err) });
             };
@@ -565,11 +722,14 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
     // The query drives everything below, so it has to be read before the rows are built. It's
     // last frame's text at this point, which is exactly right: the entry hasn't processed this
     // frame's keystrokes yet, and rebuilding the list a frame later would lag the selection.
-    const parsed = modeAndQuery(self.queryText());
+    // While asking for an argument the whole entry is the answer, and the rows are the values it
+    // can take, if it has a list of them.
+    const asked = self.askedFor(editor);
+    const parsed: Parsed = if (asked != null) .{ .mode = .commands, .query = self.queryText() } else modeAndQuery(self.queryText());
     var query = fuzzy.Query.init(parsed.query);
 
-    if (parsed.mode == .files) self.ensureIndex(editor);
-    const rows = switch (parsed.mode) {
+    if (asked == null and parsed.mode == .files) self.ensureIndex(editor);
+    const rows = if (asked) |a| collectChoiceRows(a.param, &query) else switch (parsed.mode) {
         .files => self.collectFileRows(editor, &query, parsed.query),
         .commands => collectCommandRows(editor, &query),
     };
@@ -590,14 +750,24 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         _ = core.icon.icon(
             @src(),
             "palette-icon",
-            if (parsed.mode == .commands) icons.tvg.lucide.terminal else icons.tvg.lucide.search,
+            if (asked != null)
+                icons.tvg.lucide.@"text-cursor-input"
+            else if (parsed.mode == .commands)
+                icons.tvg.lucide.terminal
+            else
+                icons.tvg.lucide.search,
             .{ .stroke_color = .{ .color = text_color } },
             .{ .gravity_y = 0.5, .padding = dvui.Rect.all(4) },
         );
 
         var entry = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &self.text_buf },
-            .placeholder = if (parsed.mode == .commands) "Run a command…" else "Search files by name…",
+            .placeholder = if (asked) |a|
+                a.param.label
+            else if (parsed.mode == .commands)
+                "Run a command…"
+            else
+                "Search files by name…",
         }, .{
             .expand = .horizontal,
             .background = false,
@@ -622,13 +792,20 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         entry.deinit();
     }
 
+    if (asked) |a| self.drawAskedHint(a, text_color);
+
     if (rows.len == 0) {
         // No scroll area, so the label's own min size is the panel's — auto-size shrinks to it.
         self.list_content_h = 0;
-        dvui.label(@src(), "{s}", .{switch (parsed.mode) {
+        // Asking for free text has no rows by design, and the hint above says what to type.
+        const empty: ?[]const u8 = if (asked) |a| switch (a.param.kind) {
+            .enumeration, .bool => "No matching values",
+            else => null,
+        } else switch (parsed.mode) {
             .files => if (editor.app.folder == null) "No folder open" else "No matching files",
             .commands => "No matching commands",
-        }}, .{
+        };
+        if (empty) |msg| dvui.labelNoFmt(@src(), msg, .{}, .{
             .expand = .horizontal,
             .padding = dvui.Rect.all(8),
             .color_text = .{ .color = text_color.opacity(0.6) },
@@ -706,6 +883,47 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
     }
 }
 
+const Asked = struct { title: []const u8, param: sdk.Command.Param };
+
+/// The command and parameter being asked for, or null when not asking. A command gone since the
+/// asking began (its plugin unloaded) ends it, and the palette with it.
+fn askedFor(self: *CommandPalette, editor: *Editor) ?Asked {
+    const asking = if (self.asking) |*a| a else return null;
+    const c = editor.app.host.command(asking.id()) orelse {
+        self.asking = null;
+        self.close();
+        return null;
+    };
+    if (asking.param >= c.params.len) {
+        self.asking = null;
+        self.close();
+        return null;
+    }
+    return .{ .title = c.title, .param = c.params[asking.param] };
+}
+
+/// Under the entry while asking: which command and what the parameter means, and why the last
+/// answer was refused.
+fn drawAskedHint(self: *const CommandPalette, asked: Asked, text_color: dvui.Color) void {
+    var box = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 0, .w = 8, .h = 6 },
+    });
+    defer box.deinit();
+    dvui.label(@src(), "{s} — {s}", .{ asked.title, asked.param.description }, .{
+        .padding = dvui.Rect.all(0),
+        .margin = dvui.Rect.all(0),
+        .font = dvui.Font.theme(.body).larger(-1),
+        .color_text = .{ .color = text_color.opacity(0.6) },
+    });
+    if (self.asking.?.problem()) |problem| dvui.labelNoFmt(@src(), problem, .{}, .{
+        .padding = .{ .y = 2 },
+        .margin = dvui.Rect.all(0),
+        .font = dvui.Font.theme(.body).larger(-1),
+        .color_text = .{ .color = dvui.themeGet().color(.err, .fill) },
+    });
+}
+
 fn drawRow(
     self: *CommandPalette,
     editor: *Editor,
@@ -732,6 +950,7 @@ fn drawRow(
     switch (row) {
         .files => |abs| core.anchor.mark(rb.data(), "fizzy.palette.row:{s}", .{abs}),
         .commands => |c| core.anchor.mark(rb.data(), "fizzy.palette.row:{s}", .{c.id}),
+        .choice => |value| core.anchor.mark(rb.data(), "fizzy.palette.row:{s}", .{value}),
     }
 
     const row_r = rb.data().borderRectScale().r;
@@ -884,6 +1103,12 @@ fn drawRow(
                 });
             }
         },
+        .choice => |value| core.draw.labelHighlighted(@src(), value, query, true, .{
+            .gravity_y = 0.5,
+            .padding = .{ .x = 6, .w = 6 },
+            .color_text = .{ .color = text_color },
+            .expand = .none,
+        }),
     }
     _ = mode;
 }
@@ -907,8 +1132,20 @@ fn handleKeys(self: *CommandPalette, editor: *Editor, rows: []const Row, wd: *co
             self.scroll_to_selected = true;
         } else if (ke.code == .enter or ke.code == .kp_enter) {
             e.handle(@src(), wd);
-            self.activate(editor, rows);
+            // Free text has no rows: the entry is the answer.
+            if (self.asking != null and rows.len == 0) {
+                self.answer(editor, self.queryText(), null);
+            } else {
+                self.activate(editor, rows);
+            }
             return;
+        } else if (ke.code == .backspace and self.asking != null and self.queryText().len == 0) {
+            // Nothing left to delete: back out of the asking, to the commands.
+            e.handle(@src(), wd);
+            self.asking = null;
+            self.setText(">");
+            self.selected = 0;
+            self.tail_frames = 1;
         } else if (ke.code == .escape) {
             e.handle(@src(), wd);
             self.close();

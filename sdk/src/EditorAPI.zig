@@ -406,6 +406,12 @@ pub const VTable = struct {
     /// plain bool back, the same shape as every other fizzy-owned-context call on this vtable.
     drawMenuItem: *const fn (ctx: *anyopaque, title: []const u8, command_id: ?[]const u8) bool,
 
+    /// Ask the person for the arguments of command `command_id` — one whose `params` include a
+    /// required one, run with none (`Host.runCommand` from a menu row or a keybind) — and run it
+    /// with them once given. False when the app cannot ask (nothing to ask with), and the run
+    /// fails. Fizzy opens the command palette on the command, a parameter at a time.
+    askCommandArguments: *const fn (ctx: *anyopaque, command_id: []const u8) bool,
+
     /// Reads `<plugins_dir>/<id>.settings.zon`, or null if absent/unavailable. Caller-owned
     /// (free with the same allocator `Host` uses).
     ///
@@ -750,6 +756,10 @@ pub fn logLine(self: EditorAPI, level: std.log.Level, scope: []const u8, message
 
 pub fn drawMenuItem(self: EditorAPI, title: []const u8, command_id: ?[]const u8) bool {
     return self.vtable.drawMenuItem(self.ctx, title, command_id);
+}
+
+pub fn askCommandArguments(self: EditorAPI, command_id: []const u8) bool {
+    return self.vtable.askCommandArguments(self.ctx, command_id);
 }
 
 pub fn loadPluginSettingsFile(self: EditorAPI, id: []const u8) ?[]u8 {

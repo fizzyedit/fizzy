@@ -1349,8 +1349,22 @@ pub fn registerNativeMenuItem(self: *Host, item: NativeMenuItem) !void {
 // ---- commands --------------------------------------------------------------
 
 /// Register a plugin command. Ids should be plugin-namespaced (`"pixi.packProject"`).
+/// Refused when the command has neither `run` nor `runWith`, so nothing could invoke it.
 pub fn registerCommand(self: *Host, cmd: Command) !void {
+    if (cmd.run == null and cmd.runWith == null) return error.CommandCannotRun;
     try self.commands.append(self.allocator, cmd);
+}
+
+/// How many commands are registered — with `commandAt`, the way to list them without reaching
+/// into the registry's storage.
+pub fn commandCount(self: *Host) usize {
+    return self.commands.items.len;
+}
+
+/// The `index`th registered command, in registration order, or null past the end.
+pub fn commandAt(self: *Host, index: usize) ?*const Command {
+    if (index >= self.commands.items.len) return null;
+    return &self.commands.items[index];
 }
 
 /// The registered command with `id`, or null.
@@ -1374,13 +1388,78 @@ pub fn commandEnabled(self: *Host, id: []const u8) bool {
     return if (c.isEnabled) |f| f(owner.state) else true;
 }
 
-/// Run the command `id` (no-op when unknown). The owner's opaque `state` is passed to `run`.
+/// Run the command `id` with no arguments (no-op when unknown), as a menu row or a keybind
+/// does. The owner's opaque `state` is passed to `run`. A command with only `runWith` runs it
+/// with no arguments, unless a parameter is required: then the app is asked to collect them
+/// (`EditorAPI.askCommandArguments` — fizzy opens the palette on the command), and without an
+/// app that can, the run fails with `error.MissingArguments`.
 pub fn runCommand(self: *Host, id: []const u8) !void {
     const c = self.command(id) orelse return;
     const owner = c.owner orelse return;
+    if (c.run) |run| {
+        const prof = core.profile.begin(owner.id, c.id);
+        defer prof.end();
+        run(owner.state) catch |err| return owner.failed(c.id, err);
+        return;
+    }
+    if (Command.requiresArguments(c.params)) {
+        if (self.fizzy_api) |api| {
+            if (api.askCommandArguments(id)) return;
+        }
+        std.log.err("{s}: needs arguments, and nothing here can ask for them", .{id});
+        return error.MissingArguments;
+    }
+    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+    defer arena_state.deinit();
+    switch (self.callCommand(id, "", arena_state.allocator())) {
+        .ok, .unknown => {},
+        .disabled => return error.CommandDisabled,
+        .bad_args, .failed => |msg| {
+            std.log.err("{s}: {s}", .{ id, msg });
+            return error.PluginFailed;
+        },
+    }
+}
+
+/// What came of `callCommand`. Results and messages live in the arena the caller passed.
+pub const CommandOutcome = union(enum) {
+    /// It ran. Its result as ZON, or null when it returns nothing.
+    ok: ?[]const u8,
+    /// No command is registered by that id.
+    unknown,
+    /// It is registered and not enabled now (`Command.isEnabled`).
+    disabled,
+    /// The arguments did not fit its parameters — the message says where.
+    bad_args: []const u8,
+    /// It ran and failed — the message is the command's own, or its error's name.
+    failed: []const u8,
+};
+
+/// Run the command `id` with `args`, ZON keyed by its parameters (`.{ .line = 12 }`; empty for
+/// none), and get its result back. `results` is the caller's arena and holds everything
+/// returned. A
+/// command without `runWith` takes no arguments: it runs through `run` when `args` is empty, and
+/// is refused otherwise.
+pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.mem.Allocator) CommandOutcome {
+    const c = self.command(id) orelse return .unknown;
+    const owner = c.owner orelse return .unknown;
+    if (c.isEnabled) |enabled| {
+        if (!enabled(owner.state)) return .disabled;
+    }
     const prof = core.profile.begin(owner.id, c.id);
     defer prof.end();
-    c.run(owner.state) catch |err| return owner.failed(c.id, err);
+    const run_with = c.runWith orelse {
+        const trimmed = std.mem.trim(u8, args, " \t\r\n");
+        if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .bad_args = "this command takes no arguments" };
+        c.run.?(owner.state) catch |err| return .{ .failed = owner.errorName(err) };
+        return .{ .ok = null };
+    };
+    var call: Command.Call = .{ .args = args, .arena = results };
+    run_with(owner.state, &call) catch |err| {
+        const msg = call.message orelse owner.errorName(err);
+        return if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg };
+    };
+    return .{ .ok = call.result };
 }
 
 // ---- language support ------------------------------------------------------
@@ -2201,4 +2280,96 @@ test "new-document candidates expand a plugin's kinds, one entry each" {
     try testing.expectEqual(&text, third.plugin);
     try testing.expectEqual(@as(?Plugin.NewDocumentKind, null), third.kind);
     try testing.expectEqual(@as(?Host.Candidate, null), it.next());
+}
+
+test "commands with arguments: callCommand, runCommand's fallback, and listing" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+
+    const S = struct {
+        var moved_to: ?u32 = null;
+        var plain_runs: u32 = 0;
+        var asked: ?[]const u8 = null;
+        var enabled = true;
+
+        const GoTo = Command.Params(struct {
+            line: Command.Arg(u32, .{ .description = "The line." }),
+            column: Command.Arg(u32, .{ .description = "The column." }) = .init(1),
+        });
+        const Tidy = Command.Params(struct {
+            width: Command.Arg(u32, .{ .description = "How wide." }) = .init(80),
+        });
+
+        fn goTo(_: *anyopaque, args: GoTo.Args, call: *Command.Call) anyerror!void {
+            if (args.line == 0) return call.fail("lines count from 1", .{});
+            moved_to = args.line;
+            try call.returns(.{ .line = args.line, .column = args.column });
+        }
+        fn tidy(_: *anyopaque, args: Tidy.Args, _: *Command.Call) anyerror!void {
+            moved_to = args.width;
+        }
+        fn plain(_: *anyopaque) anyerror!void {
+            plain_runs += 1;
+        }
+        fn isEnabled(_: *anyopaque) bool {
+            return enabled;
+        }
+        fn ask(_: *anyopaque, id: []const u8) bool {
+            asked = id;
+            return true;
+        }
+    };
+
+    const vtable = Plugin.VTable{};
+    var state: u8 = 0;
+    var plugin = Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+
+    // A command that could never run is refused at registration.
+    try testing.expectError(error.CommandCannotRun, host.registerCommand(.{ .id = "t.none", .owner = &plugin, .title = "None" }));
+
+    try host.registerCommand(.{ .id = "t.goTo", .owner = &plugin, .title = "Go To", .params = S.GoTo.params, .runWith = S.GoTo.bind(S.goTo), .isEnabled = S.isEnabled });
+    try host.registerCommand(.{ .id = "t.tidy", .owner = &plugin, .title = "Tidy", .params = S.Tidy.params, .runWith = S.Tidy.bind(S.tidy) });
+    try host.registerCommand(.{ .id = "t.plain", .owner = &plugin, .title = "Plain", .run = S.plain });
+
+    try testing.expectEqual(@as(usize, 3), host.commandCount());
+    try testing.expectEqualStrings("t.tidy", host.commandAt(1).?.id);
+    try testing.expectEqual(@as(?*const Command, null), host.commandAt(3));
+
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const results = arena_state.allocator();
+
+    // Arguments in, result out.
+    const ok = host.callCommand("t.goTo", ".{ .line = 12 }", results);
+    try testing.expectEqualStrings(".{ .line = 12, .column = 1 }", ok.ok.?);
+    try testing.expectEqual(@as(?u32, 12), S.moved_to);
+
+    // Arguments that do not fit, and a command that refuses: each says why, in words.
+    const missing = host.callCommand("t.goTo", "", results);
+    try testing.expect(std.mem.indexOf(u8, missing.bad_args, "line") != null);
+    try testing.expectEqualStrings("lines count from 1", host.callCommand("t.goTo", ".{ .line = 0 }", results).failed);
+
+    // Disabled and unknown are their own answers, not failures.
+    S.enabled = false;
+    try testing.expect(host.callCommand("t.goTo", ".{ .line = 3 }", results) == .disabled);
+    S.enabled = true;
+    try testing.expect(host.callCommand("t.nope", "", results) == .unknown);
+
+    // A command without `runWith` takes no arguments.
+    try testing.expect(host.callCommand("t.plain", "", results).ok == null);
+    try testing.expectEqual(@as(u32, 1), S.plain_runs);
+    try testing.expect(host.callCommand("t.plain", ".{ .x = 1 }", results) == .bad_args);
+    try testing.expectEqual(@as(u32, 1), S.plain_runs);
+
+    // `runCommand` on a `runWith`-only command: nothing required runs it with its defaults...
+    try host.runCommand("t.tidy");
+    try testing.expectEqual(@as(?u32, 80), S.moved_to);
+
+    // ...and something required has the app ask for it.
+    var api_vt: EditorAPI.VTable = undefined;
+    api_vt.askCommandArguments = S.ask;
+    var ctx: u8 = 0;
+    host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
+    try host.runCommand("t.goTo");
+    try testing.expectEqualStrings("t.goTo", S.asked.?);
 }

@@ -105,6 +105,11 @@ const sdk_boundary_types = .{
     // struct. Same lesson as `CompletionItem` / `Setting`.
     menus.NativeMenuItem,
     Command,
+    // `Command.params` is a slice and `runWith` takes a `*Call` — both *data* pointers `hashType`
+    // never follows — so each needs its own entry, or a field added to either would change what
+    // a plugin and fizzy read without moving the fingerprint. Same lesson as `Setting`.
+    Command.Param,
+    Command.Call,
     language_mod.LanguageSupport,
     language_mod.LanguageSupport.VTable,
     language_mod.TreeSitterHighlight,
