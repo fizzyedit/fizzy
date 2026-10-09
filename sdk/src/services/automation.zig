@@ -1,5 +1,5 @@
-//! The `automation` service: play a live tape on the app as it is, and ask whether the app has
-//! settled.
+//! The `automation` service: play a live tape on the app as it is, ask whether the app has
+//! settled, and read what is on screen as text.
 //!
 //! A **live tape** is input — clicks aimed at named widgets, keys, text, commands with arguments
 //! — played on whatever the person has open, a step at a time, each once the last has landed. It
@@ -13,6 +13,11 @@
 //! way a person does, through the same widgets and commands. Widgets name themselves for a tape
 //! while one plays (`core.anchor`); a plugin wanting those names for itself asks with
 //! `core.anchor.want()`, not through here.
+//!
+//! **What is on screen** (`snapshot`, `snapshotText`): every visible widget a person acts on or a
+//! tape aims at, a line each, as ZON — its role, its name, its tag, its rect and what it sits in
+//! (`replay.Snapshot`). The names a person reads, so a caller can find "the Close Tab button" and
+//! aim a tape at its tag, or at its rect, without a picture.
 //!
 //! **One tape at a time.** A tape is refused (`busy`) while another plays or a demo is loaded. A
 //! person's click, key, scroll or typed text stops it (`interrupted`), and a wait in the tape that
@@ -32,7 +37,7 @@
 pub const Api = struct {
     /// Bump whenever this struct's layout changes: `getServiceTyped` refuses a provider whose
     /// version differs rather than reinterpreting one shape as another across `dlopen`.
-    pub const service_version: u32 = 1;
+    pub const service_version: u32 = 2;
     pub const service_name = "automation";
 
     ctx: *anyopaque,
@@ -73,7 +78,12 @@ pub const Api = struct {
         stop: *const fn (ctx: *anyopaque, ticket: Ticket) void,
         outcome: *const fn (ctx: *anyopaque, ticket: Ticket) Outcome,
         settled: *const fn (ctx: *anyopaque) bool,
+        snapshot: *const fn (ctx: *anyopaque) SnapshotTicket,
+        snapshotText: *const fn (ctx: *anyopaque, ticket: SnapshotTicket) ?[]const u8,
     };
+
+    /// Names one `snapshot`. Never reused within a run of the app.
+    pub const SnapshotTicket = enum(u32) { _ };
 
     /// Play the tape in `bytes`, ZON or binary. The bytes are read before this returns; the
     /// caller keeps them.
@@ -100,5 +110,17 @@ pub const Api = struct {
     /// someone was told "not yet", so the answer is seen.
     pub fn settled(self: Api) bool {
         return self.vtable.settled(self.ctx);
+    }
+
+    /// Ask what is on screen. It is taken over the next frame (the app wakes for it); asking
+    /// again before then returns the same ticket.
+    pub fn snapshot(self: Api) SnapshotTicket {
+        return self.vtable.snapshot(self.ctx);
+    }
+
+    /// The snapshot `ticket` names, as ZON, once it has been taken: null before, and null again
+    /// once a later one has been. The app's memory, valid until the next is taken: copy it.
+    pub fn snapshotText(self: Api, ticket: SnapshotTicket) ?[]const u8 {
+        return self.vtable.snapshotText(self.ctx, ticket);
     }
 };
