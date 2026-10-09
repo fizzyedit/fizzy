@@ -40,6 +40,10 @@ config_folder: []const u8,
 impl: if (have_impl) Impl else void = if (have_impl) .{} else {},
 /// Set by nightwatch's handler thread; consumed/extended by `tick` on the main thread.
 raw_dirty: std.atomic.Value(bool) = .init(false),
+/// A plugin binary arrived whole (`isPluginBinary`): reconciled on the next tick, with no
+/// coalesce — the install renamed a finished file into place, so there is nothing to wait for,
+/// and the 200 ms was most of how long a rebuilt plugin took to be noticed.
+binary_dirty: std.atomic.Value(bool) = .init(false),
 /// Main-thread coalesce deadline (`perf.nanoTimestamp()`); 0 = nothing pending.
 coalesce_deadline_ns: i128 = 0,
 
@@ -53,32 +57,70 @@ const Impl = if (have_impl) struct {
     /// Set in `start` once `SettingsWatcher` is at its final address — avoids a
     /// `@fieldParentPtr` alignment dance from the nested `impl` field.
     raw_dirty: ?*std.atomic.Value(bool) = null,
+    binary_dirty: ?*std.atomic.Value(bool) = null,
 
     const vtable = Handler.VTable{
         .change = onChange,
         .rename = onRename,
     };
 
-    fn note(h: *Handler) void {
+    fn note(h: *Handler, path: []const u8) void {
         const impl: *Impl = @fieldParentPtr("handler", h);
-        if (impl.raw_dirty) |flag| flag.store(true, .release);
+        const flag = switch (classify(path)) {
+            .ignored => return,
+            .binary => impl.binary_dirty,
+            .other => impl.raw_dirty,
+        };
+        if (flag) |f| f.store(true, .release);
         wake.now();
     }
 
     fn onChange(h: *Handler, path: []const u8, event_type: nightwatch.EventType, object_type: nightwatch.ObjectType) error{HandlerFailed}!void {
-        _ = path;
         _ = event_type;
         _ = object_type;
-        note(h);
+        note(h, path);
     }
 
     fn onRename(h: *Handler, src: []const u8, dst: []const u8, object_type: nightwatch.ObjectType) error{HandlerFailed}!void {
         _ = src;
-        _ = dst;
         _ = object_type;
-        note(h);
+        note(h, dst);
     }
 } else void;
+
+const Kind = enum { binary, ignored, other };
+
+/// What an event at `path` means for the tick. A plugin binary (`<config>/plugins/<id>/<id>.dylib`,
+/// `.so`, `.dll`) is complete when its event arrives: the plugin SDK's install writes
+/// `<file>.part` and renames it into place (`plugin_sdk.zig`, `DevInstall`), and the store does the
+/// same. The `.part` itself, and fizzy's own load copies (`.load-copy/`, `.load-tmp/`, written when
+/// it loads a plugin), say nothing new. Everything else — `settings.zon` above all, which an editor
+/// may write in several bursts — waits for the coalesce.
+fn classify(path: []const u8) Kind {
+    if (std.mem.indexOf(u8, path, ".load-copy") != null or std.mem.indexOf(u8, path, ".load-tmp") != null) return .ignored;
+    const ext = switch (builtin.os.tag) {
+        .windows => ".dll",
+        .macos => ".dylib",
+        else => ".so",
+    };
+    if (std.mem.endsWith(u8, path, ext ++ ".part")) return .ignored;
+    if (std.mem.endsWith(u8, path, ext)) return .binary;
+    return .other;
+}
+
+test classify {
+    const ext = switch (builtin.os.tag) {
+        .windows => ".dll",
+        .macos => ".dylib",
+        else => ".so",
+    };
+    try std.testing.expectEqual(Kind.binary, classify("/cfg/plugins/hello/hello" ++ ext));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg/plugins/hello/hello" ++ ext ++ ".part"));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg/plugins/hello/.load-copy/12-34-hello" ++ ext));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg/plugins/hello/.load-tmp/3-hello" ++ ext));
+    try std.testing.expectEqual(Kind.other, classify("/cfg/settings.zon"));
+    try std.testing.expectEqual(Kind.other, classify("/cfg/plugins/hello"));
+}
 
 /// Sets up bookkeeping but does **not** start nightwatch yet — see `start`'s doc comment.
 /// `config_folder` is copied; caller retains ownership of the passed slice.
@@ -101,6 +143,7 @@ pub fn start(self: *SettingsWatcher) !void {
     if (comptime have_impl) {
         const nightwatch = @import("nightwatch");
         self.impl.raw_dirty = &self.raw_dirty;
+        self.impl.binary_dirty = &self.binary_dirty;
         var nw = try nightwatch.Default.init(dvui.io, self.gpa, &self.impl.handler);
         errdefer nw.deinit();
         try nw.watch(self.config_folder);
@@ -134,11 +177,15 @@ pub const Sink = struct {
 };
 
 /// Call once per frame. Cheap no-op unless the watcher thread actually saw a change. Coalesces
-/// a burst of raw events (~200ms) on the main thread before reconciling.
+/// a burst of raw events (~200ms) on the main thread before reconciling — except a plugin binary
+/// arriving whole, which reconciles on this tick unless a coalesce is already under way.
 pub fn tick(self: *SettingsWatcher, sink: Sink) void {
     const now = core.perf.nanoTimestamp();
     if (self.raw_dirty.swap(false, .acquire)) {
         self.coalesce_deadline_ns = now + debounce_ns;
+    }
+    if (self.binary_dirty.swap(false, .acquire) and self.coalesce_deadline_ns == 0) {
+        self.coalesce_deadline_ns = now;
     }
     if (self.coalesce_deadline_ns == 0) return;
     if (now < self.coalesce_deadline_ns) {
