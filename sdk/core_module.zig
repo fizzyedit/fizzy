@@ -15,15 +15,40 @@ const std = @import("std");
 /// Add every import `core` needs to `mod`, and return the `icons` module when that lazy
 /// dependency is available — callers that also wire `icons` into a sibling module (the exe's own
 /// root, the proxy `core`) reuse the handle instead of resolving it twice.
+///
+/// `core` gets `tape` and `replay` here too, built against the same dvui, and anything that uses
+/// them beside `core` takes these from `mod.import_table` (the `app` module, the SDK's exports):
+/// a second `tape` would be a second `Tape` type, and a `replay` over another dvui flavour would
+/// not compile against this `core` at all. `sdk_pkg` is this package's builder, whose root holds
+/// `tape/` and `replay/` in both layouts: `b` from the SDK's own build, the `fizzy_sdk`
+/// dependency's builder from the repo root.
 pub fn addImports(
     b: *std.Build,
     mod: *std.Build.Module,
     dvui_mod: *std.Build.Module,
+    sdk_pkg: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) ?*std.Build.Module {
     mod.addImport("dvui", dvui_mod);
     mod.addImport("zf", zfModule(b, target, optimize));
+
+    // Demos and recordings: `tape` is the format and its engine (std-only), `replay` drives a
+    // dvui window with it (dvui and `tape`, nothing else).
+    const tape = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = sdk_pkg.path("tape/root.zig"),
+    });
+    const replay = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = sdk_pkg.path("replay/root.zig"),
+    });
+    replay.addImport("dvui", dvui_mod);
+    replay.addImport("tape", tape);
+    mod.addImport("tape", tape);
+    mod.addImport("replay", replay);
 
     if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
         const icons = dep.module("icons");

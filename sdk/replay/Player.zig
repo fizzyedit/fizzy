@@ -8,8 +8,8 @@
 //! real work.
 //!
 //! An app calls `frame` once at the very start of its frame, before anything reads
-//! `dvui.events()` (it also tells widgets whether to publish their anchors, `core.anchor`, and the
-//! frame whether it is seen, `core.FrameTarget.setUnseen`), and
+//! `dvui.events()` (it also tells widgets whether to publish their anchors, `anchor`, and the
+//! frame whether it is seen, `set_unseen`), and
 //! `overlay.draw` at the end, after everything else has drawn; and it runs its whole frame
 //! function through `frames`, which is what makes a seek silent. Between frames it drives the
 //! transport: `load`, `play`, `pause`, `seek`, `unload`.
@@ -20,7 +20,7 @@
 //! app's frame again and again inside one displayed frame, ending each unseen, until the seek
 //! arrives or a budget of wall time (`budget_ns`) is spent. A seek across a demo-sized tape lands
 //! in the frame it was asked for; a longer one carries on in the next. Where the backend can drop
-//! a frame's drawing (an `unseen` switch, `core.FrameTarget.setUnseen`) the silent frames draw
+//! a frame's drawing (an `unseen` switch, through the app's `set_unseen`) the silent frames draw
 //! nothing, and one more run, drawn, ends the displayed frame — on a phone, drawing each in full
 //! had the GPU doing many frames' work per frame shown.
 //!
@@ -51,16 +51,20 @@ const Player = @This();
 
 const std = @import("std");
 const dvui = @import("dvui");
-const core = @import("core");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
 const Stage = @import("Stage.zig");
 const Input = @import("Input.zig");
+const anchor = @import("anchor.zig");
 
 const log = std.log.scoped(.automation);
 
 stage: Stage,
 gpa: std.mem.Allocator,
+/// Mark the frame running as one nobody will see, or not, and say whether it is unseen now — for
+/// an app whose backend can drop what such a frame draws (fizzy's `core.FrameTarget.setUnseen`).
+/// Null: every frame draws, and a seek's silent frames draw over each other.
+set_unseen: ?*const fn (on: bool) bool = null,
 /// The loaded demo, owned. Null when nothing is loaded.
 owned: ?Tape.Owned = null,
 seq: Sequencer = undefined,
@@ -84,7 +88,7 @@ ahead_ns: i128 = 0,
 catching_up: bool = false,
 /// The run `frames` ends a catch-up with: drawn, though the seek may still be in flight.
 showing: bool = false,
-/// The run going now draws nothing (`frame`, `core.FrameTarget.setUnseen`): a seek is catching up
+/// The run going now draws nothing (`frame`, `set_unseen`): a seek is catching up
 /// in it, and a later run of the same displayed frame is the one shown. Never on a backend that
 /// draws every run.
 run_unseen: bool = false,
@@ -526,15 +530,15 @@ fn dropSnapshots(self: *Player) void {
 }
 
 /// Once a frame, before anything reads `dvui.events()` (and before anything that asks whether the
-/// frame is seen, `core.FrameTarget.unseen`): let the transport and the interrupt rule see real
+/// frame is seen, `set_unseen`): let the transport and the interrupt rule see real
 /// input, then advance the tape and add its input after the real.
 pub fn frame(self: *Player) void {
     // Whether this run is seen, once the seek it asks for (or lands) is known: a run while a seek
     // catches up draws nothing, but the one `frames` ends it with.
-    defer self.run_unseen = core.FrameTarget.setUnseen((self.state == .seeking or self.catching_up) and !self.showing);
+    defer self.run_unseen = if (self.set_unseen) |set| set((self.state == .seeking or self.catching_up) and !self.showing) else false;
     if (self.owned == null) return;
-    // Widgets name themselves for the tape while one is loaded (`core.anchor`).
-    core.anchor.want();
+    // Widgets name themselves for the tape while one is loaded (`anchor`).
+    anchor.want();
     // The bar has closed itself shut (`close`): the demo goes now.
     if (self.transport.shut) return self.unload();
     self.takeRealInput();
@@ -583,7 +587,7 @@ pub fn frame(self: *Player) void {
 /// a seek is catching up, again and again inside the same displayed frame, each run ended
 /// unseen (`Window.end` without presenting) and the next begun, until the seek arrives or
 /// `budget_ns` of wall time is spent. Where the backend has an `unseen` switch
-/// (`core.FrameTarget.setUnseen`), every run of the catch-up draws nothing — the first too, when
+/// (`set_unseen`), every run of the catch-up draws nothing — the first too, when
 /// the seek began in it (`frame`) — and one more run, drawn, is the one shown; elsewhere each
 /// draws over the last, and the last is shown.
 /// The app calls this from inside its frame function, in place of the frame itself: dvui has

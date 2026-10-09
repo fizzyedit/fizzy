@@ -16,8 +16,8 @@ const Service = @This();
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const Tape = @import("tape").Tape;
-const LiveDriver = @import("LiveDriver.zig");
-const Input = @import("Input.zig");
+const LiveDriver = @import("replay").LiveDriver;
+const Input = @import("replay").Input;
 
 const Api = sdk.services.automation.Api;
 

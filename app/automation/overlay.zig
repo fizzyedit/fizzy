@@ -16,12 +16,12 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const Player = @import("Player.zig");
-const LiveDriver = @import("LiveDriver.zig");
-const Input = @import("Input.zig");
+const Player = @import("replay").Player;
+const LiveDriver = @import("replay").LiveDriver;
+const Input = @import("replay").Input;
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
-const chord = @import("../keymap/chord.zig");
+const chord = @import("tape").chord;
 const icons = @import("icons");
 const motion = core.motion;
 

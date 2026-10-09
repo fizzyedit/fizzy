@@ -67,8 +67,9 @@ pub const draw = @import("draw.zig");
 /// How a keybind is drawn: glyphs and keycaps, in each platform's modifier order.
 pub const keycaps = @import("keycaps.zig");
 /// Names for what a demo points at — `dvui.tag` with a name built from data (a file's row, its
-/// editor), free unless a demo is loaded.
-pub const anchor = @import("anchor.zig");
+/// editor), free unless someone asked for them (`want`). It lives in `replay`, which any dvui app
+/// can take, and core re-exports it so a plugin marks its widgets as fizzy does.
+pub const anchor = @import("replay").anchor;
 /// The screens floating things are placed on: the main window's, and a popped-out float's.
 pub const screens = @import("screens.zig");
 /// Glass the OS draws in place of the app's: a view drag's, as Liquid Glass on macOS 26.

@@ -35,11 +35,11 @@ const LiveDriver = @This();
 
 const std = @import("std");
 const dvui = @import("dvui");
-const core = @import("core");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
 const Stage = @import("Stage.zig");
 const Input = @import("Input.zig");
+const anchor = @import("anchor.zig");
 
 stage: Stage,
 owned: ?Tape.Owned = null,
@@ -141,8 +141,8 @@ fn unload(self: *LiveDriver) void {
 /// Drive the tape for this frame. First thing in the app's frame.
 pub fn frame(self: *LiveDriver) void {
     if (self.owned == null) return;
-    // Widgets name themselves for the tape while it plays (`core.anchor`).
-    core.anchor.want();
+    // Widgets name themselves for the tape while it plays (`anchor`).
+    anchor.want();
     if (self.takeRealInput()) return;
     Input.holdPointer(self.seq.pointer);
     // Another frame either way: the next op, or another look at whether the app has settled.

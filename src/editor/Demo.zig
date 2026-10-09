@@ -111,6 +111,8 @@ pub fn attach(self: *Demo, editor: *Editor) void {
         .service = .{ .gpa = gpa, .driver = &self.live, .other = .{ .ctx = self, .driving = demoLoaded } },
     };
     self.service.bind();
+    // A seek's catch-up frames draw nothing where the backend can drop them (the web's).
+    self.player.set_unseen = core.FrameTarget.setUnseen;
 }
 
 fn demoLoaded(ctx: *anyopaque) bool {

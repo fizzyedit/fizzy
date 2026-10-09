@@ -38,8 +38,8 @@ pub const Recents = @import("Recents.zig");
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {
     pub const Keymap = @import("keymap/Keymap.zig");
-    pub const key = @import("keymap/key.zig");
-    pub const chord = @import("keymap/chord.zig");
+    pub const key = @import("tape").key;
+    pub const chord = @import("tape").chord;
     pub const zon = @import("keymap/zon.zig");
     pub const dvui_adapter = @import("keymap/dvui_adapter.zig");
 };
@@ -105,12 +105,12 @@ pub const automation = struct {
     pub const Sequencer = @import("tape").Sequencer;
     pub const Script = @import("tape").Script;
     pub const binary = @import("tape").binary;
-    pub const Stage = @import("automation/Stage.zig");
-    pub const Player = @import("automation/Player.zig");
+    pub const Stage = @import("replay").Stage;
+    pub const Player = @import("replay").Player;
     /// Tape input as dvui events: the half of a sequencer's sink every player of tapes shares.
-    pub const Input = @import("automation/Input.zig");
+    pub const Input = @import("replay").Input;
     /// Plays a live tape — input on the app as it is, a step at a time — beside the `Player`.
-    pub const LiveDriver = @import("automation/LiveDriver.zig");
+    pub const LiveDriver = @import("replay").LiveDriver;
     /// The `automation` service a plugin plays live tapes through, over a `LiveDriver`.
     pub const Service = @import("automation/Service.zig");
     pub const overlay = @import("automation/overlay.zig");

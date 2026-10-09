@@ -10,8 +10,10 @@ into it.
 ## What there is, and what it costs
 
 - The `tape` library (`sdk/tape/`, std-only): a `Tape` (keyframes, input ops aimed at anchors,
-  captions, chapters; ZON and binary), the `Sequencer`, the `Script` builder. In
-  `app/automation/`: a dvui `Player` and an overlay; in fizzy, its `Stage`.
+  captions, chapters; ZON and binary), the `Sequencer`, the `Script` builder, key spelling. The
+  `replay` library (`sdk/replay/`, dvui and `tape` only): the `Player`, the `LiveDriver`, their
+  dvui `Input`, the `Stage` seam, anchors. In `app/automation/`: fizzy's glass overlay and the
+  `automation` service; in fizzy, its `Stage`.
 - **Seeking replays silently, within a budget** (milestone 2), **from runtime snapshots**
   (milestone 3). A seek goes back to the nearest snapshot the player took while playing — a cut
   to the authored keyframe only when none will do — and replays the ops since, a frame each,
@@ -51,10 +53,13 @@ Three small packages, layered so each is usable without the next.
 | `replay` | `tape`, `dvui` | `Recorder`, `Player` (injection, interruption, the seek driver), `Anchors` (resolution and marking), the `Stage` seam, the virtual clock and silent-frame driver. |
 | `replay-ui` | `replay` | An optional plain overlay: pointer, keys, captions, transport. Fizzy keeps its own (the glass one in `app/automation/overlay.zig`) on the same hooks. |
 
-In fizzy: `tape` goes in `sdk/` (plugins author their own demos with `Script`, and a plugin
-contributes a demo as tape bytes — see the plugin-demo proposal), `replay` stays in `app/`
-(host only), anchors stay in `core` (plugins mark their widgets). Each is also a standalone dvui
-package.
+In fizzy: `tape` is in `sdk/tape/` (plugins author their own demos with `Script`, and a plugin
+contributes a demo as tape bytes — see the plugin-demo proposal). `replay` is in `sdk/replay/`
+beside it: it ships with the SDK because its anchors are how plugins mark their widgets
+(`core.anchor` re-exports `replay.anchor`), while the players are the host's to run. Its build
+check (`fizzy-replay-tests`, under `test-integration`) compiles it with nothing but dvui and
+`tape`, so it stays a library any dvui app can take. Each becomes a standalone package at
+milestone 7.
 
 ## Aiming without positions
 

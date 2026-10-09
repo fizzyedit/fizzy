@@ -1,6 +1,6 @@
 //! Names for the things a demo points at: `dvui.tag`, with a name built from data.
 //!
-//! A demo tape aims at widgets by name rather than by pixel (`app.automation.Tape.Target`), so it
+//! A demo tape aims at widgets by name rather than by pixel (`tape.Tape.Target`), so it
 //! plays at any window size. dvui already keeps such names — `Options.tag` registers a widget's
 //! rect under a string every frame, and `dvui.tagGet` reads it back — but only for a name known
 //! when the options are written. An explorer row or an editor is one of many, named by the file
@@ -12,7 +12,8 @@
 //!
 //! Marking costs nothing while nobody is looking: whoever wants anchors asks for them, a frame at
 //! a time (`want`), and `mark` returns at once in a frame nobody asked. Shared through the
-//! window's data like `core.motion`, so a plugin dylib's copy of this file agrees.
+//! window's data, so a plugin dylib's copy of this file agrees. fizzy's plugins reach it as
+//! `core.anchor`.
 const std = @import("std");
 const dvui = @import("dvui");
 

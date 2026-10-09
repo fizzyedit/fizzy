@@ -21,7 +21,7 @@ const icons = @import("icons");
 const platform = @import("platform.zig");
 const dialogs = @import("dialogs.zig");
 const draw = @import("draw.zig");
-const anchor = @import("anchor.zig");
+const anchor = @import("replay").anchor;
 const icon_tex = @import("gfx/icon.zig");
 
 pub const CanvasWidget = @import("widgets/CanvasWidget.zig");

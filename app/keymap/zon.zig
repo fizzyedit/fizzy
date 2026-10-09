@@ -34,7 +34,7 @@
 //! settings pane surfaces the diagnostics.
 
 const std = @import("std");
-const chord_mod = @import("chord.zig");
+const chord_mod = @import("tape").chord;
 const Keymap = @import("Keymap.zig");
 
 const Allocator = std.mem.Allocator;
