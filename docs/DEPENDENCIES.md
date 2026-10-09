@@ -49,9 +49,19 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    david-vanderson/dvui#945; upstream's own long-line work (#992) replaced the rest of that PR
    but not this. Upstream: wants its own PR. Test: `zig build test-integration
    -Dtest-filter="wider than the view"`.
+4. **debug: frame capture records tag, role, label and a label's text** (`f8b32db`). Each
+   `Debug.CapturedWidget` in a `captureFrame` / `dumpFrame` now holds `Options.tag`, `.role`,
+   `.label` (as given), and the text the widget shows as its own: `LabelWidget` records its
+   string through the new `Debug.captureText`. A dump can then name widgets without AccessKit,
+   which is never built on the testing or web backends. A button's name is the text of the
+   label inside it; an icon-only button's is its `label`. The agents plan's widget snapshot is
+   built on this (`docs/AGENTS_PLAN.md`, "Accessible names"). Upstream: worth proposing as is,
+   once fizzy's snapshot uses it. Test: dvui's `zig build test -Dbackend=testing`, "dumpFrame
+   records tag, role, label and a label's text".
 
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
-builds); `fizzy-sdk-0.2.16` → `4428108`, what `sdk/build.zig.zon` pins now.
+builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
+`f8b32db`, what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`src/backend/native/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
