@@ -554,14 +554,6 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-direction-tests", "core/math/direction.zig" },
         .{ "fizzy-easing-tests", "core/math/easing.zig" },
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
-        .{ "fizzy-window-layout-tests", "src/backend/native/platform/window_layout.zig" },
-        // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
-        .{ "fizzy-titlebar-tests", "src/backend/native/platform/titlebar.zig" },
-        // The rounded frame Linux's blur behind the window is stepped into (`wayland_blur`).
-        .{ "fizzy-blur-region-tests", "src/backend/native/platform/blur_region.zig" },
-        // Where a viewport's OS window is on the desktop and where its part of the frame lies.
-        // std-only (see viewport_map.zig); `SDLBackend` applies it.
-        .{ "fizzy-viewport-map-tests", "src/backend/native/viewport_map.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
         // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.
@@ -641,6 +633,20 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
                 .target = target,
                 .optimize = optimize,
                 .root_source_file = b.path(entry[1]),
+            }),
+            .filters = test_filters,
+        }));
+    }
+    // The backend package's std-only tests (window layout, the title-bar hit test, the blur
+    // region, the viewport map), from its own list, so `zig build test` here still runs them.
+    const backend_dep = fizzy_exe.backendDependency(b);
+    for (@import("fizzy_backend").unit_tests) |t| {
+        try unit_test_artifacts.append(b.allocator, b.addTest(.{
+            .name = t.name,
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = backend_dep.path(t.root),
             }),
             .filters = test_filters,
         }));
@@ -870,12 +876,12 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     }));
 
     if (target.result.os.tag == .macos) {
-        if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
-            fizzy_test_module.addImport("objc", dep.module("objc"));
+        if (@import("fizzy_backend").objcModule(fizzy_exe.backendDependency(b), fizzy_exe.backendOptions(target, optimize, macos_sdl_paths))) |objc| {
+            fizzy_test_module.addImport("objc", objc);
         }
     } else if (target.result.os.tag == .windows) {
-        if (b.lazyDependency("zigwin32", .{})) |dep| {
-            fizzy_test_module.addImport("win32", dep.module("win32"));
+        if (@import("fizzy_backend").win32Module(fizzy_exe.backendDependency(b))) |win32| {
+            fizzy_test_module.addImport("win32", win32);
         }
     }
 

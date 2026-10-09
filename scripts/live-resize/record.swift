@@ -1,6 +1,6 @@
 // Drags an edge of a fizzy window with real mouse events while recording the screen around it at
 // 120 fps (ScreenCaptureKit), and decodes, in every captured frame, the overlay fizzy draws with
-// FIZZY_LIVE_RESIZE_TRACE (`live_resize_trace` in src/backend/native/SDLBackend.zig). One line per
+// FIZZY_LIVE_RESIZE_TRACE (`live_resize_trace` in backend/src/SDLBackend.zig). One line per
 // screen update on stdout:
 //   <display time, CACurrentMediaTime's clock> <n> drawn=<frame> <W>x<H> pitch=<p> shown=<W>x<H>
 // "drawn" is the size the frame was drawn for (its barcode); "shown" the size the window shows it

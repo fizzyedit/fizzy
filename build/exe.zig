@@ -8,6 +8,8 @@ const core_mod = @import("fizzy_sdk").core_module;
 const common = @import("common.zig");
 const plugins = @import("plugins.zig");
 const sdk = @import("sdk.zig");
+// Fizzy's native backend, a package of its own (`backend/`): its build helpers wire it under dvui.
+const fizzy_backend = @import("fizzy_backend");
 
 const workbench_plugin = plugins.workbench;
 const text_plugin = plugins.text;
@@ -70,7 +72,7 @@ pub const FizzyExecutable = struct {
 
 /// What the native executable draws with.
 pub const NativeBackend = enum {
-    /// Fizzy's own backend (`src/backend/native/`): SDL3 for the window and events, an
+    /// Fizzy's own backend (the `backend/` package): SDL3 for the window and events, an
     /// SDL_GPU renderer of its own, custom fragment programs.
     fizzy,
     /// dvui's SDL3 backend: SDL_Renderer, fixed shaders.
@@ -92,11 +94,6 @@ const NativeDvui = struct {
     dvui: *std.Build.Module,
     backend: *std.Build.Module,
 };
-
-/// The `backend` module wired into each dvui built for fizzy's own backend. One per dvui
-/// module, however many executables use it: dvui imports it by name, and a second module over
-/// the same file in one compilation is an error.
-var fizzy_backend_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
 
 /// dvui in its `custom` mode with fizzy's backend linked under it — as `build/web.zig` does for
 /// the web. Every option is the one dvui's own `sdl3` mode sets, so dvui's shape, and with it
@@ -120,87 +117,33 @@ fn fizzyNativeDvui(
         .@"tree-sitter" = true,
     });
     const dvui_mod = dep.module("dvui");
-    if (fizzy_backend_modules.get(dvui_mod)) |backend| return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
-
-    // SDL3 from fizzy's own pin, not dvui's: the backend is fizzy's, and so are the SDL patches it
-    // needs (docs/DEPENDENCIES.md). The wrapper already builds without GameInput.
-    //
-    // Optimized in a Debug app too: Zig builds C in Debug unoptimized and with its undefined-
-    // behaviour checks on every call, and SDL is on every frame's path — event pumping, the GPU
-    // device, every window's present. A Debug frame spent much of itself there (`sample`), and a
-    // window's way into full screen ran at half the display's rate in Debug alone (the user).
-    // Fizzy's own code stays Debug; stepping into SDL's C is what a Debug app gives up.
-    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseFast else optimize;
-    const sdl_dep = if (macos_sdl_paths) |p|
-        b.lazyDependency("sdl", .{
-            .target = target,
-            .optimize = sdl_optimize,
-            .include_path = p.include,
-            .framework_path = p.framework,
-            .library_path = p.lib,
-        })
-    else
-        b.lazyDependency("sdl", .{ .target = target, .optimize = sdl_optimize });
-
-    const sdl_translate_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/backend/native/sdl3-c.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    if (sdl_dep) |sdl| sdl_translate_c.addIncludePath(sdl.artifact("SDL3").getEmittedIncludeTree());
-
-    const backend = b.createModule(.{
-        .root_source_file = b.path("src/backend/native/SDLBackend.zig"),
-        .target = target,
-        .optimize = optimize,
-        .sanitize_c = .full,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "sdl3-c", .module = sdl_translate_c.createModule() },
-            .{ .name = "dvui", .module = dvui_mod },
-        },
-    });
-    if (sdl_dep) |sdl| backend.linkLibrary(sdl.artifact("SDL3"));
-    dvui_mod.addImport("backend", backend);
-    fizzy_backend_modules.put(b.allocator, dvui_mod, backend) catch @panic("OOM");
+    const backend = fizzy_backend.backendModule(backendDependency(b), dvui_mod, backendOptions(target, optimize, macos_sdl_paths));
     return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
 }
 
-/// The `platform` module (`src/backend/native/platform`) for each backend module: one per
-/// backend, as the backend itself is, since fizzy's backend imports it by name too.
-var platform_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+/// The backend package (`backend/`), as a dependency of this build.
+pub fn backendDependency(b: *std.Build) *std.Build.Dependency {
+    return b.dependency("fizzy_backend", .{});
+}
 
-/// Window and platform pieces for apps on either SDL3 backend: dvui and the backend's SDL, plus
-/// zig-objc on macOS and zigwin32 on Windows. Fizzy's own backend imports it as well, so an app on
-/// that backend reaches it as `backend.platform`.
+pub fn backendOptions(target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, macos_sdl_paths: ?MacosSdlPaths) fizzy_backend.Options {
+    return .{
+        .target = target,
+        .optimize = optimize,
+        .macos_sdk = if (macos_sdl_paths) |p| .{ .include = p.include, .framework = p.framework, .lib = p.lib } else null,
+    };
+}
+
+/// Window and platform pieces for apps on either SDL3 backend (the backend package's
+/// `platform`). Fizzy's own backend imports it as well.
 fn platformModule(
     b: *std.Build,
     native: NativeDvui,
-    native_backend: NativeBackend,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    macos_sdl_paths: ?MacosSdlPaths,
 ) *std.Build.Module {
-    if (platform_modules.get(native.backend)) |m| return m;
-    const m = b.createModule(.{
-        .root_source_file = b.path("src/backend/native/platform/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    m.addImport("dvui", native.dvui);
-    m.addImport("backend", native.backend);
-    switch (target.result.os.tag) {
-        .macos => if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
-            m.addImport("objc", dep.module("objc"));
-        },
-        .windows => if (b.lazyDependency("zigwin32", .{})) |dep| {
-            m.addImport("win32", dep.module("win32"));
-        },
-        else => {},
-    }
-    if (native_backend == .fizzy) native.backend.addImport("platform", m);
-    platform_modules.put(b.allocator, native.backend, m) catch @panic("OOM");
-    return m;
+    return fizzy_backend.platformModule(backendDependency(b), native.dvui, native.backend, backendOptions(target, optimize, macos_sdl_paths));
 }
 
 pub fn addFizzyExecutableForTarget(
@@ -293,7 +236,7 @@ pub fn addFizzyExecutableForTarget(
 
     exe.root_module.addImport("dvui", dvui_mod);
     exe.root_module.addImport("backend", native.backend);
-    exe.root_module.addImport("platform", platformModule(b, native, native_backend, resolved_target, optimize));
+    exe.root_module.addImport("platform", platformModule(b, native, resolved_target, optimize, macos_sdl_paths));
 
     // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
     // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.
@@ -481,27 +424,15 @@ pub fn addFizzyExecutableForTarget(
             exe.root_module.addSystemFrameworkPath(p.framework);
             exe.root_module.addLibraryPath(p.lib);
         }
-        if (b.lazyDependency("zig_objc", .{
-            .target = resolved_target,
-            .optimize = optimize,
-        })) |dep| {
-            exe.root_module.addImport("objc", dep.module("objc"));
-        }
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/visual_effect_view.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/menu_target.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/window_monitor.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/live_resize_trace.m") });
-        // The native backend's AppKit helpers, compiled here with fizzy's other Objective-C
-        // (the root module is where the SDK's headers are found on a native build); the
-        // backend module calls them by name.
-        if (native_backend == .fizzy) {
-            exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/macos_monitor.m") });
+        // zig-objc from the backend package's pin. The backend's Objective-C comes with its modules.
+        if (fizzy_backend.objcModule(backendDependency(b), backendOptions(resolved_target, optimize, macos_sdl_paths))) |objc| {
+            exe.root_module.addImport("objc", objc);
         }
     } else if (resolved_target.result.os.tag == .windows) {
-        if (b.lazyDependency("zigwin32", .{})) |dep| {
-            exe.root_module.addImport("win32", dep.module("win32"));
+        if (fizzy_backend.win32Module(backendDependency(b))) |win32| {
+            exe.root_module.addImport("win32", win32);
             // The updater (`app/update`) calls into Windows too, from the `app` module.
-            app_module.addImport("win32", dep.module("win32"));
+            app_module.addImport("win32", win32);
         }
         exe.root_module.linkSystemLibrary("comctl32", .{});
 

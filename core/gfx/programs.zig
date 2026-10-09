@@ -191,7 +191,7 @@ pub const Program = struct {
     /// each backend takes the form it can and draws nothing where it has none. Native programs
     /// take the default vertex shader's colour and uv, the draw's own texture at 0 and the extra
     /// ones at 1 and 2, and the uniforms as `constant float4 *data [[buffer(0)]]` (see
-    /// `src/backend/native/shaders/program_example.fragment.hlsl`).
+    /// `backend/src/shaders/program_example.fragment.hlsl`).
     pub fn from(comptime sources: Sources, shape: Shape) Program {
         var src: Source = .{ .textures = shape.textures, .uniform_vec4s = shape.uniform_vec4s };
         if (sources.glsl) |t| {

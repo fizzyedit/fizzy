@@ -18,7 +18,7 @@ const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
 
 /// What an app gets from its window beyond drawing into it: native dialogs, files the OS hands
-/// over, trackpad gestures, the window's chrome and state (`src/backend/native/platform`).
+/// over, trackpad gestures, the window's chrome and state (`platform/`).
 pub const platform = @import("platform");
 
 /// SDL3 only. Kept as a constant so the event code below stays a verbatim copy of dvui's

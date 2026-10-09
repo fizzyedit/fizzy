@@ -1,4 +1,4 @@
-// `liquid_glass.glsl` in Metal, for fizzy's native backend (`src/backend/native`): the same
+// `liquid_glass.glsl` in Metal, for fizzy's native backend (`backend/`): the same
 // program line for line — change it, `liquid_glass.fragment.hlsl` and `LiquidField.sample`
 // together. To the interface the native backend's programs take: entry point `main0`, the
 // default vertex shader's outputs as inputs, the draw's own texture (the frost) at 0, the sharp
