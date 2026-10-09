@@ -235,6 +235,35 @@ claimed and kept by a benchmark once it is:
 - **Small output.** A snapshot is a line per node, and a later one can be just what changed;
   arguments and results are ZON text, not screenshots. Fewer tokens is a faster agent.
 
+**Measured, 2026-10-09** (`scripts/plugin-loop/bench.py`; `examples/hello-plugin`, Debug, an
+Apple-silicon Mac with other builds running, so upper bounds). From a one-line edit saved to the
+plugin running again in a fizzy: **2.7–3.3 s**.
+
+| Stage | Time | What sets it |
+|---|---|---|
+| `zig build` (compile ~2 s, the build runner the rest) | 2.2–2.9 s | the plugin compiles as one unit with all of `core` and dvui; LLVM in Debug on arm64 |
+| the watcher notices the new binary | ~215 ms | `SettingsWatcher`'s 200 ms coalesce, meant for `settings.zon` |
+| the swap: unload | ~4 ms | |
+| the swap: load (`dlopen`, register, `initPlugin`) | ~180 ms | on macOS, mostly the first-load validation of a new file |
+
+ReleaseFast: a one-line edit rebuilds in ~7.9 s. A new plugin's first build (its own cache
+empty, the global one warm): 14–20 s. A rebuild with nothing changed: ~0.2 s.
+
+What that says, in order of what it would save:
+
+1. **The compile is most of it.** A three-line plugin recompiles everything it imports. Levers:
+   Zig's incremental compilation with a long-running `zig build --watch -fincremental` (tried:
+   save-to-installed 1.1–2.3 s, so not yet effective here — it wants the self-hosted backend,
+   which Debug on arm64 macOS does not use yet; on x86_64 Linux it is the default), and less for a
+   plugin to compile (the plugin-facing `core` is the whole of it today).
+2. **A reload freezes the person's frame for ~190 ms**, on the UI thread. That is the one stage
+   that costs a person something even when nobody is waiting on the loop. Lever: `dlopen` on a
+   worker, and only registration on the UI thread; the development window (above) moves the
+   rest out of the person's process altogether.
+3. **The watcher waits 200 ms** for a burst of writes to settle. A plugin's install writes once;
+   its own pass needs no coalesce.
+4. **The build runner** costs ~0.2–0.9 s a run; a watching `zig build` pays it once.
+
 ## The seams
 
 Two kinds. A change to `Host`, `Plugin` or `Command` moves the ABI fingerprint and needs every
@@ -574,6 +603,7 @@ Each lands on its own and is useful without the next.
 
 - What a reload carries beyond documents, and whether that hook moves the fingerprint now or
   waits for the next batch.
-- The rebuild loop's stages, unmeasured: the first benchmark, then the budget per stage.
+- The rebuild loop's budget per stage, now that it is measured ("Fast enough to watch"), and the
+  same measurement on Linux and Windows.
 - How the agent plugin reaches the development instance: a second socket in its profile, or the
   person's instance relaying.
