@@ -151,21 +151,21 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build check-web
 
-      # Fizzy consumed as a library by an outside package. This is the only check that can
-      # catch a path resolving against the consumer's cwd instead of fizzy's build root — the
-      # exact bug that broke this (`.cwd_relative = "src/App.zig"`) is invisible when fizzy
-      # builds itself, because then the two directories are the same. Linux only: that bug is no
-      # platform's, and on macOS the four apps (each compiling its own SDL3) took most of the run.
-      - name: Build external consumer apps (fizzy as a library)
+      # Fizzy consumed from outside: fizzyedit/example-app (fizzy as a library, in every shape)
+      # and fizzyedit/example-plugin (the plugin template), built against this tree fetched as a
+      # URL dependency would be. The only checks that catch a path resolving against the
+      # consumer's cwd instead of fizzy's build root (`.cwd_relative = "src/App.zig"` once), or a
+      # file missing from `build.zig.zon`'s `.paths` (`VERSION`, `app/`) — both invisible when
+      # fizzy builds itself. Linux only: neither bug is a platform's, and each app compiles its
+      # own SDL3.
+      - name: Build the example repos against this tree
         if: matrix.name == 'Linux'
-        run: |
-          for app in examples/hello-plugin examples/minimal-app examples/studio-app examples/endless-app examples/replay-app; do
-            echo "::group::$app"
-            # Each example is its own package and fetches its own copy of the tree, so each one
-            # is another handful of chances to meet a closed connection.
-            (cd "$app" && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --summary all)
-            echo "::endgroup::"
-          done
+        run: bash scripts/ci-retry.sh bash scripts/check-examples.sh
+      # A plain dvui app with tape playback, on the SDK package alone. In this repo until the
+      # SDK release that carries `replay` (fizzyedit/fizzy#281).
+      - name: Build examples/replay-app
+        if: matrix.name == 'Linux'
+        run: (cd examples/replay-app && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --summary all)
 
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash

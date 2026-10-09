@@ -1,6 +1,6 @@
 //! Fizzy's own shape: icon rail, left explorer, bottom panel, main area.
 //!
-//! Same role as `examples/*/src/layout.zig`: this file *is* the app's layout. A consumer that
+//! Same role as fizzyedit/example-app's `shapes/*.zig`: this file *is* the app's layout. A consumer that
 //! wants a different shape writes its own and passes `-Dapp-layout=`.
 const std = @import("std");
 const builtin = @import("builtin");

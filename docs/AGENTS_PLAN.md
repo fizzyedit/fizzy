@@ -427,7 +427,7 @@ These decide where plugins come from, so a plugin cannot provide them.
   reported through `plugins`. The per-document half exists already
   (`captureDocumentState`/`restoreDocumentState`, for demo snapshots); a reload can use it first.
 - **A headless harness for plugin tests.** `tests/fizzy_shim.zig` grown into something a plugin
-  repo can use: its plugin linked statically into a minimal host (`examples/minimal-app` is the
+  repo can use: its plugin linked statically into a minimal host (fizzyedit/example-app is the
   shape), a headless window, then open a document from bytes, run commands, play a tape, step
   until settled, and assert on anchors, state or a frame. Exposed as a build step beside
   `fizzy.plugin.create`. Consumers: every plugin's `zig build test`, and the plugin-build-action

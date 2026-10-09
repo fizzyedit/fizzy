@@ -39,7 +39,9 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 
 ## Writing a plugin
 
-1. Copy `plugins/text/` as your template (or `plugins/image/` for a document-owning viewer).
+1. Copy [`fizzyedit/example-plugin`](https://github.com/fizzyedit/example-plugin) (one surface,
+   nothing else) as your template; `plugins/text/` or `plugins/image/` when the plugin owns
+   documents.
 2. Add identity-only `plugin.zig.zon` (`id`/`name`/`version`/`min_sdk_version`). Implement root `plugin.zig`: `Plugin` + `register(host)` + vtable; call `host.register{Surface,Menu,Command,Service,…}` as needed. A surface's keywords (`sdk.keywords`) say where it may go; the app's regions accept it, and the user can move it with the picker.
 3. Plugin prefs: `sdk.settings.Schema(struct { … })` then `.register(host, &plugin, …)` — Fizzy draws them only while the plugin is loaded. User config on disk is ZON (`settings.zon` / `recents.zon`).
 4. Editor plugins implement the document vtable cluster; a plugin that lays out documents itself declares its panes with `host.region(spec)` and draws the accepted surfaces where it wants them.
@@ -57,7 +59,14 @@ generates `bundled_plugins` (`pub const modules = .{ @import("workbench"), … }
 runtime iterates it — nothing in `app/` or `src/` names a plugin except the workbench (its
 state still lives on the Editor). An app built on fizzy adds its own with `defer-app` +
 `fizzy.buildApp(fizzy_dep, &.{ .{ .name, .module = dep.module("plugin") } })`; see
-`examples/README.md` and `examples/minimal-app`, which bundles `examples/hello-plugin`.
+[`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
+`fizzyedit/example-plugin`.
+
+**The example repos move with fizzy.** `fizzyedit/example-app` (fizzy as a library, in every
+shape) and `fizzyedit/example-plugin` (the plugin template) live outside this repo, and CI builds
+both against each pull request's own tree (`scripts/check-examples.sh`, which you can run
+locally): a change here that breaks either fails here. A change that needs them changed too
+lands its PR in that repo alongside.
 
 ## Plugin store: built, not forward-looking
 
@@ -71,7 +80,8 @@ Don't trust older narrative docs that call this forward-looking/not-yet-built.
 ## Shipped shapes, meant to be copied (dvui's methodology)
 
 Fizzy follows dvui's approach to widgets, one level up: it ships a handful of **layout shapes**
-(fizzy's own in `src/editor/layout.zig`; `examples/{minimal,studio,endless}-app/src/layout.zig`) rather than a configurable layout engine. An app
+(fizzy's own in `src/editor/layout.zig`; `shapes/{minimal,studio,endless}.zig` in
+`fizzyedit/example-app`) rather than a configurable layout engine. An app
 either picks one as-is and writes no layout code at all, or **copies** the closest one into its
 own source and edits it.
 
@@ -99,7 +109,6 @@ sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside
 app/       the framework an application switches on — layout, store, update, watch, window,
            single_instance, automation (demos); never compiled into a dylib
 plugins/   the bundled plugins, in the exact shape a third-party plugin has
-examples/  apps built on fizzy (minimal, studio, endless), each owning its own layout shape
 src/       fizzy the application — `Entry`, `editor/`, `backend/`
 build/     the app build API
 ```

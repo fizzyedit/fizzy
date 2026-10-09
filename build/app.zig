@@ -227,7 +227,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
 
     // A consumer that wants its own shape passes `-Dapp-layout=` (a LazyPath to
     // `pub fn layout(?*anyopaque, *Layout)`). Fizzy itself uses `src/editor/layout.zig`.
-    // There is no `-Dlayout=` enum of shipped presets — those live in `examples/`.
+    // There is no `-Dlayout=` enum of shipped presets: the shapes are fizzyedit/example-app's.
     const app_layout_path = b.option(std.Build.LazyPath, "app-layout", "App-owned layout file (pub fn layout(?*anyopaque, *Layout))");
     build_opts.addOption(bool, "has_app_layout", app_layout_path != null);
     const static_workbench = b.option(
@@ -883,12 +883,13 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     integration_module.addImport("fizzy", fizzy_test_module);
     integration_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
 
-    // The endless example's own layout — not a shipped preset. Tests drive it the way a
-    // consumer would: as a file that imports `app` / `dvui` / `core`.
+    // The endless shape (fizzyedit/example-app's `shapes/endless.zig`, copied here as a test
+    // fixture) — not a shipped preset. Tests drive it the way a consumer would: as a file that
+    // imports `app` / `dvui` / `core`.
     const endless_layout_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("examples/endless-app/src/layout.zig"),
+        .root_source_file = b.path("tests/shapes/endless.zig"),
     });
     endless_layout_mod.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
     endless_layout_mod.addImport("app", app_module_test);
