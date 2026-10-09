@@ -49,7 +49,7 @@ pub const Options = struct {
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options) !void {
-    const cfg = try readConfig(b, target, opts) orelse return;
+    const cfg = try readConfig(b, target, opts);
     try construct(b, target, optimize, opts, cfg);
 }
 
@@ -58,7 +58,8 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 /// (`build.zig`'s `defer-app`) consumes its options now and constructs later, with its own
 /// plugins.
 pub const Config = struct {
-    vz: velopack.Dep,
+    /// Null on the configure pass that fetches Velopack (see `readConfig`).
+    vz: ?velopack.Dep,
     macos_sdl_paths: ?@import("common.zig").MacosSdlPaths,
     zig_out_subdir: []const u8,
     zig_out_install_dir: std.Build.InstallDir,
@@ -83,7 +84,8 @@ pub const Config = struct {
     static_text: bool,
     static_image: bool,
     workbench_opts: *std.Build.Step.Options,
-    msvcup_before_compile: *std.Build.Step.Run,
+    /// Null on the configure pass that fetches Velopack (see `readConfig`).
+    msvcup_before_compile: ?*std.Build.Step.Run,
     accesskit: dvui.AccesskitOptions,
     /// What the native executable draws with (`-Dnative-backend`, `build/exe.zig`).
     native_backend: @import("exe.zig").NativeBackend,
@@ -96,19 +98,20 @@ pub const Config = struct {
     win_libc: velopack.ResolvedWindowsMsvcLibc,
 };
 
-/// Phase one of `build`: read every option and set up the option steps. Null on the
-/// configure pass where Velopack is not fetched yet (Zig fetches it and runs again).
-pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options) !?Config {
+/// Phase one of `build`: read every option and set up the option steps.
+pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options) !Config {
     const windows_msvc_libc_opt = opts.windows_msvc_libc_opt;
     const fetch_msvc_opt = opts.fetch_msvc_opt;
     const macos_sign_app_identity = opts.macos_sign_app_identity;
     const macos_sign_install_identity = opts.macos_sign_install_identity;
     const macos_notary_profile = opts.macos_notary_profile;
 
-    // Resolve Velopack lazily (app-only; plugins depend on `sdk/` which has no Velopack).
-    // First configure pass returns null → Zig fetches velopack_zig and re-runs build();
-    // the second pass proceeds with a valid handle.
-    const vz = b.lazyDependency("velopack_zig", .{}) orelse return null;
+    // Resolve Velopack lazily (app-only; plugins depend on `sdk/` which has no Velopack). Null on
+    // the first configure pass of a cold cache: Zig fetches it and runs `build` again. That pass
+    // configures the app all the same, leaving out only what links Velopack (packaging, the
+    // MSVC setup, `-Dvelopack`), which nothing else waits on. Returning early instead left the
+    // app unconfigured, and an app built on fizzy (`buildApp`) found no artifact and no options.
+    const vz = b.lazyDependency("velopack_zig", .{});
 
     const common = @import("common.zig");
 
@@ -258,9 +261,9 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
 
     common.addUpdateStep(b);
 
-    const msvcup_before_compile = velopack.addMsvcupSetupStep(b, vz, ".velopack-msvc");
+    const msvcup_before_compile: ?*std.Build.Step.Run = if (vz) |v| velopack.addMsvcupSetupStep(b, v, ".velopack-msvc") else null;
     const msvcup_setup_step = b.step("msvcup-setup", "Download MSVC SDK into .velopack-msvc/ via velopack-zig (writes zig-libc-*.ini)");
-    msvcup_setup_step.dependOn(&msvcup_before_compile.step);
+    if (msvcup_before_compile) |m| msvcup_setup_step.dependOn(&m.step);
 
     const accesskit = b.option(dvui.AccesskitOptions, "accesskit", "Enable accesskit") orelse .off;
     const fizzy_exe = @import("exe.zig");
@@ -380,6 +383,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const package_fizzy: FizzyExecutable = package_blk: {
         if (velopack_enabled) break :package_blk main_fizzy;
         if (!velopack_supported_for_target) break :package_blk main_fizzy;
+        if (vz == null) break :package_blk main_fizzy;
         const pack_opts = b.addOptions();
         pack_opts.addOption([]const u8, "app_version", app_version);
         // The same identity as `build_opts`: the packaged exe reads them through `AppInfo`
@@ -492,9 +496,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         image_dylib_step.dependOn(&install_image.step);
     }
 
-    _ = package.addSteps(.{
+    if (vz) |v| _ = package.addSteps(.{
         .b = b,
-        .vz = vz,
+        .vz = v,
         .target = target,
         .optimize = optimize,
         .app_version = app_version,
@@ -947,9 +951,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // --libc (vcruntime_typeinfo.h vs libc++ type_info, etc.), so libc++ must be
     // off for the msvc ABI regardless of host (cross or native Windows).
     integration_tests.root_module.link_libcpp = !target_is_windows_msvc;
-    if (velopack_enabled) {
-        try velopack.linkVelopack(b, vz, integration_tests, .{ .target = target, .optimize = optimize });
-    }
+    if (velopack_enabled) if (vz) |v| {
+        try velopack.linkVelopack(b, v, integration_tests, .{ .target = target, .optimize = optimize });
+    };
 
     test_integration_step.dependOn(&b.addRunArtifact(integration_tests).step);
     check_integration_step.dependOn(&integration_tests.step);
@@ -1057,9 +1061,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (target.result.os.tag == .windows) {
             bench_replay.root_module.linkSystemLibrary("comctl32", .{});
         }
-        if (velopack_enabled) {
-            try velopack.linkVelopack(b, vz, bench_replay, .{ .target = target, .optimize = optimize });
-        }
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize });
+        };
 
         const bench_step = b.step("bench-replay", "Benchmark a demo seek, silent against shown frame by frame (prints timings)");
         const run_bench = b.addRunArtifact(bench_replay);
@@ -1133,24 +1137,24 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             });
             test_integration_step.dependOn(&b.addRunArtifact(t).step);
             check_integration_step.dependOn(&t.step);
-            if (win_libc.needs_setup) t.step.dependOn(&msvcup_before_compile.step);
+            if (win_libc.needs_setup) if (msvcup_before_compile) |m| t.step.dependOn(&m.step);
         }
     }
 
-    if (win_libc.needs_setup) {
-        exe.step.dependOn(&msvcup_before_compile.step);
+    if (win_libc.needs_setup) if (msvcup_before_compile) |msvcup| {
+        exe.step.dependOn(&msvcup.step);
         if (!velopack_enabled and velopack_supported_for_target) {
-            exe_for_package.step.dependOn(&msvcup_before_compile.step);
+            exe_for_package.step.dependOn(&msvcup.step);
         }
-        integration_tests.step.dependOn(&msvcup_before_compile.step);
-        for (unit_test_artifacts.items) |unit_test| unit_test.step.dependOn(&msvcup_before_compile.step);
+        integration_tests.step.dependOn(&msvcup.step);
+        for (unit_test_artifacts.items) |unit_test| unit_test.step.dependOn(&msvcup.step);
         inline for (.{ main_fizzy, package_fizzy }) |fizzy_exe_result| {
-            if (fizzy_exe_result.workbench_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
-            if (fizzy_exe_result.text_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
-            if (fizzy_exe_result.markdown_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
-            if (fizzy_exe_result.image_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
+            if (fizzy_exe_result.workbench_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
+            if (fizzy_exe_result.text_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
+            if (fizzy_exe_result.markdown_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
+            if (fizzy_exe_result.image_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
         }
-    }
+    };
 
     if (target.result.os.tag == .windows and target.result.abi == .msvc) {
         var roots: [12]*std.Build.Step.Compile = undefined;
