@@ -59,9 +59,19 @@ static BOOL fizzy_mouseDownCanMoveWindow(id self, SEL cmd) {
     return YES;
 }
 
+/* SDL's view hands a left press on to SDL — its next responder, SDL's window listener — as it hands
+ * on a right one, itself: it inherited NSView's -mouseDown:, which in a full-screen window kept the
+ * press. A float's window in full screen took hover, right presses and even left releases, and no
+ * left press (the user); traced, the press reached the view and went no further. */
+static void fizzy_sdl_view_mouse_down(id self, SEL cmd, NSEvent *event) {
+    (void)cmd;
+    [[self nextResponder] mouseDown:event];
+}
+
 /* Once per window (idempotent): answers -mouseDownCanMoveWindow from `interactive_at` for
  * `nswindow`. Replaced on SDL's view class, not swizzled onto the instance (which KVO's own
- * subclassing would fight); other windows get SDL's answer. */
+ * subclassing would fight); other windows get SDL's answer. And SDL's view passes a left press on
+ * itself (`fizzy_sdl_view_mouse_down`), on every window of the app. */
 void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at)(double, double)) {
     g_titlebar_window = nswindow;
     g_titlebar_interactive_at = interactive_at;
@@ -73,6 +83,8 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
         view = view.subviews.firstObject;
     }
     if (view == nil) return;
+    /* Added only where SDL's view has none of its own. */
+    class_addMethod([view class], @selector(mouseDown:), (IMP)fizzy_sdl_view_mouse_down, "v@:@");
     g_sdl_can_move_window = class_replaceMethod([view class], @selector(mouseDownCanMoveWindow),
                                                 (IMP)fizzy_mouseDownCanMoveWindow, "c@:");
     if (g_sdl_can_move_window == NULL) {

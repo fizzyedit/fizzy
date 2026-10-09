@@ -416,6 +416,20 @@ static void hold_landing(WindowMonitor *m) {
     if (!NSEqualRects(window.frame, m->anim_to)) [window setFrame:m->anim_to display:NO];
 }
 
+/* SDL's view filling `window`, as a window whose content runs under its title bar has it. Moved by
+ * its own way into or out of full screen (`setFrame:display:NO`, drawn by Metal and never by AppKit's
+ * display), the window's views were laid out again only when AppKit got round to it: a float's in
+ * full screen kept its windowed size, and SDL drops a press outside its view — hover reached the
+ * float, clicks past its windowed width or height did not (the user). */
+static void fit_content_view(NSWindow *window) {
+    if (([window styleMask] & NSWindowStyleMaskFullSizeContentView) == 0) return;
+    NSView *content = [window contentView];
+    NSView *frame = [content superview];
+    if (content == nil || frame == nil) return;
+    const NSRect want = [frame bounds];
+    if (!NSEqualRects([content frame], want)) [content setFrame:want];
+}
+
 static void step_space_animation(WindowMonitor *m) {
     NSWindow *window = (__bridge NSWindow *)m->window;
     double t = (CACurrentMediaTime() - m->anim_start) / m->anim_duration;
@@ -434,6 +448,7 @@ static void step_space_animation(WindowMonitor *m) {
     /* Whole points: a fractional size is a fractional drawable, scaled. */
     r = NSMakeRect(round(r.origin.x), round(r.origin.y), round(r.size.width), round(r.size.height));
     if (!NSEqualRects(window.frame, r)) [window setFrame:r display:NO];
+    fit_content_view(window);
 }
 
 /* Where the window lands, at did-enter or did-exit, however far the pump got. */
@@ -451,6 +466,7 @@ static void finish_space_animation(WindowMonitor *m) {
     }
     m->anim_active = NO;
     m->anim_follow = NO;
+    fit_content_view((__bridge NSWindow *)m->window);
 }
 
 static void start_space_animation(NSWindow *window, NSRect to, NSTimeInterval duration, BOOL entering) {
