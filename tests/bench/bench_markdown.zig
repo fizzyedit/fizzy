@@ -29,10 +29,11 @@ const render_ast = markdown.render_ast;
 /// prompted this benchmark (single-digit fps in Debug), and the smaller ones separate costs
 /// that scale with document size from those that don't.
 const sample_huge = @embedFile("sample_huge"); // docs/PLUGINS.md
-/// Same size as `sample_huge` but shaped completely differently: very long paragraphs (single
-/// blocks of several thousand characters) and several tables. It is the document that stayed slow
-/// after block virtualization, which is exactly why it is in here.
-const sample_prose = @embedFile("sample_prose"); // plans/PLUGIN_MANIFEST_PLAN.md
+/// Shaped completely differently from `sample_huge`: one 48KB table whose cells wrap over many
+/// lines, three smaller ones, and a paragraph several thousand characters long. Synthetic (the
+/// integration tests' table sample); it stands in for a plan doc that stayed slow after block
+/// virtualization, which is exactly why a document of this shape is in here.
+const sample_prose = @embedFile("sample_prose"); // tests/data/markdown_sample_tables.md
 const sample_medium = @embedFile("sample_medium"); // CLAUDE.md
 const sample_small = @embedFile("sample_small"); // docs/MODULARIZATION_RELEASE_NOTES.md
 
@@ -283,7 +284,7 @@ test "bench: markdown preview frame cost" {
 
     const cases = [_]struct { name: []const u8, text: []const u8 }{
         .{ .name = "huge (docs/PLUGINS.md)", .text = sample_huge },
-        .{ .name = "prose (plans/PLUGIN_MANIFEST_PLAN.md)", .text = sample_prose },
+        .{ .name = "prose (tests/data/markdown_sample_tables.md)", .text = sample_prose },
         .{ .name = "medium (CLAUDE.md)", .text = sample_medium },
         .{ .name = "small (release notes)", .text = sample_small },
     };
