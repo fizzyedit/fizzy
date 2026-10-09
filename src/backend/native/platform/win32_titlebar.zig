@@ -42,6 +42,15 @@ pub fn applyChrome(win: *dvui.Window) void {
             // non-client area, rounded corners, and the black class brush.
             _ = win32.ui.shell.SetWindowSubclass(hwnd_h, win32MicaSubclassProc, win32_mica_subclass_id, 0);
 
+            // Draw each step of a live resize from inside it and let the compositor show it before
+            // the next, so the window's new size and the frame drawn for it reach the screen
+            // together (fizzyedit/SDL's Windows live-resize patch, docs/WINDOWS_LIVE_RESIZE.md).
+            // By name, not SDL's #define, so this builds against an SDL without it, which ignores
+            // it. `FIZZY_LIVE_RESIZE_TRACE` has SDL log each step; `SDL_VIDEO_WIN_SYNC_LIVE_RESIZE=0`
+            // in the environment turns the steps off.
+            const trace = c.SDL_getenv("FIZZY_LIVE_RESIZE_TRACE") != null;
+            _ = c.SDL_SetHint("SDL_VIDEO_WIN_SYNC_LIVE_RESIZE", if (trace) "2" else "1");
+
             _ = win32.graphics.dwm.DwmSetWindowAttribute(
                 hwnd_h,
                 @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE)),
@@ -350,7 +359,8 @@ const WM_FIZZY_DRAG_MOVE: u32 = 0x8000 + 0x46; // WM_APP + 'F'
 /// (`WM_ENTERSIZEMOVE` … `WM_EXITSIZEMOVE`): the backend's, per viewport, at an address that holds
 /// for the window's life (the subclass keeps a pointer to it).
 pub const ViewportLoop = struct {
-    /// In the loop now: a frame then must not wait for events (SDL runs it from the loop's timer).
+    /// In the loop now. (A frame then must not wait for events, SDL running it from the loop's
+    /// timer: `SDLBackend.inLiveResize` reads that from the thread's `GUI_INMOVESIZE`.)
     moving: bool = false,
     /// The loop ended since the app last asked: a press the OS took was let go.
     ended: bool = false,
