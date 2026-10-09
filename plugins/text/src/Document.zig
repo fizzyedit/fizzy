@@ -88,9 +88,9 @@ sel_cursor: usize = 0,
 /// document that isn't drawn this frame (background tab) keeps its last value, which is
 /// correct: it can't be the active document *and* undrawn.
 editor_focused: bool = false,
-/// The next `TextEditor.draw` focuses the editor: a demo's snapshot put the document back as it
-/// was while its editor had focus (`restoreState`), and the editor drawing it now may not be the
-/// widget that had it.
+/// The next `TextEditor.draw` focuses the editor: a new file, which a person opens to type into
+/// (`createDocument`), or a demo's snapshot putting the document back as it was while its editor
+/// had focus (`restoreState`), where the editor drawing it now may not be the widget that had it.
 pending_focus: bool = false,
 /// Selection the next `TextEditor.draw` should install, set by Paste/Undo/Redo (which all
 /// edit `text` from outside the widget's own frame) and consumed once. A full range rather

@@ -255,6 +255,7 @@ fn createDocument(_: *anyopaque, path: []const u8, _: sdk.EditorAPI.NewDocGrid, 
     const doc = docBuf(out_doc);
     doc.* = try Document.fromBytes(path, "");
     doc.unsaved = true;
+    doc.pending_focus = true;
 }
 fn setDocumentGroupingOnBuffer(_: *anyopaque, doc: *anyopaque, grouping: u64) void {
     docBuf(doc).grouping = grouping;
