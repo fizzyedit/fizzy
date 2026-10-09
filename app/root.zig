@@ -120,6 +120,9 @@ pub const automation = struct {
 /// means is not, which is `singleton.Sink`. The app also sets its own `app_id` — the lock is per
 /// application, and two fizzy-based apps must not fight over one.
 pub const single_instance = @import("single_instance/singleton.zig");
+/// `--profile <dir>` / `FIZZY_PROFILE`: one root for the config folder, the plugins, the lock and
+/// the runtime directory. Read by `single_instance` at startup; the app asks it where to live.
+pub const profile = @import("profile.zig");
 
 pub const store = struct {
     pub const Store = @import("store/PluginStore.zig");

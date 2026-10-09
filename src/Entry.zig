@@ -98,7 +98,12 @@ fn startOptions() dvui.App.StartOptions {
         if (comptime builtin.os.tag == .macos) {
             if (runningFromAppBundle(main_init.io)) opts.icon = null;
         }
-        if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir)) |pref_path| {
+        // A profile is the config folder itself (`app.profile`), for SDL's preferences too.
+        const pref: ?[:0]const u8 = if (@import("app").profile.root) |root|
+            std.fmt.bufPrintZ(&pref_path_buf, "{s}", .{root}) catch null
+        else
+            paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
+        if (pref) |pref_path| {
             pref_path_len = pref_path.len;
             opts.pref_path = pref_path_buf[0..pref_path_len :0];
         }

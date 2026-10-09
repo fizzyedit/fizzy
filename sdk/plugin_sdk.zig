@@ -348,8 +348,16 @@ fn pluginExt(os_tag: std.Target.Os.Tag) []const u8 {
 ///   macOS   `~/Library/Application Support/fizzy/plugins`
 ///   Linux   `$XDG_CONFIG_HOME/fizzy/plugins` (or `~/.config/fizzy/plugins`)
 ///   Windows `%LOCALAPPDATA%/fizzy/plugins`   (FOLDERID_LocalAppData — *not* Roaming/`%APPDATA%`)
+///
+/// With `FIZZY_PROFILE` set, `<profile>/plugins` instead — the plugins directory of a fizzy run
+/// with that profile (`app/profile.zig`), so a sandbox build never replaces the plugin a person
+/// has installed. A relative profile is taken from the plugin's directory, where `zig build`
+/// runs; give an absolute one to share it with a fizzy started elsewhere.
 fn fizzyPluginsDir(b: *std.Build) ![]const u8 {
     const env = &b.graph.environ_map;
+    if (env.get("FIZZY_PROFILE")) |profile| {
+        if (profile.len > 0) return std.fs.path.resolve(b.allocator, &.{ b.build_root.path orelse ".", profile, "plugins" });
+    }
     const config_root = (try core_paths.localConfigRoot(
         b.graph.host.result.os.tag,
         b.allocator,
@@ -382,14 +390,10 @@ const DevInstall = struct {
             std.log.warn("fizzy: skipping plugin dev install (no config home: {s})", .{@errorName(err)});
             return;
         };
-        // Create `{config}/fizzy`, `{config}/fizzy/plugins`, then this plugin's own
-        // `{config}/fizzy/plugins/{name}` directory (the config root already exists);
-        // "already exists" is fine at every level.
-        const fizzy_dir = std.fs.path.dirname(plugins_dir).?;
-        std.Io.Dir.createDirAbsolute(io, fizzy_dir, .default_dir) catch {};
-        std.Io.Dir.createDirAbsolute(io, plugins_dir, .default_dir) catch {};
+        // This plugin's own `{plugins}/{name}` directory, and whatever above it is missing — a
+        // profile's whole tree, the first time a sandbox is built into. "Already exists" is fine.
         const dir = try std.fs.path.join(b.allocator, &.{ plugins_dir, self.name });
-        std.Io.Dir.createDirAbsolute(io, dir, .default_dir) catch {};
+        std.Io.Dir.cwd().createDirPath(io, dir) catch {};
 
         // `getPath2` is relative to the build root (the runner's cwd); the dest is absolute.
         const src = self.lib.getEmittedBin().getPath2(b, step);

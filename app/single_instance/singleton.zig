@@ -22,6 +22,7 @@ pub const deinit = impl.deinit;
 pub const drainPending = impl.drainPending;
 pub const queuePath = impl.queuePath;
 pub const collectAndResolveArgv = impl.collectAndResolveArgv;
+pub const resolveArgs = impl.resolveArgs;
 /// What the application does with a forwarded path. Native only — one browser tab is one app,
 /// so the web layer has nothing to forward.
 pub const setSink = if (builtin.target.cpu.arch == .wasm32) noopSetSink else impl.setSink;

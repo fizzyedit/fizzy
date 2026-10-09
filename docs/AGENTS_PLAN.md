@@ -1,6 +1,6 @@
 # Agents — the plan
 
-Status: in progress, #250. Milestone 1 (command parameters and results) is #251.
+Status: in progress, #250. Milestone 1 (command parameters and results) is #251, with #253 (keybinds) and #254 (tapes); milestone 2 (profiles) is #255.
 
 How fizzy becomes something an agent can drive, build plugins for and check its own work in —
 **without fizzy, or any app built on it, carrying anything agent-shaped.** Agent support is an
@@ -200,9 +200,16 @@ These decide where plugins come from, so a plugin cannot provide them.
 
 - **Profiles.** `--profile <dir>` (and `FIZZY_PROFILE`): the config directory, the plugins
   directory, the single-instance lock, recents and the runtime directory, all under one root.
-  Today a sandbox means moving `HOME` (CONTRIBUTING.md) and `TMPDIR` (the lock lives there),
-  and a plugin build still installs into the real plugins dir unless `HOME` is moved. Consumers: every sandbox recipe, the integration
-  tests, portable installs, two configs side by side.
+  Before it, a sandbox meant moving `HOME` (CONTRIBUTING.md) and `TMPDIR` (the lock lived there),
+  and a plugin build installed into the real plugins dir unless `HOME` was moved. Consumers: every sandbox recipe, the integration
+  tests, portable installs, two configs side by side. Built: `app/profile.zig`. The root *is*
+  the config folder (`<dir>/plugins`, `<dir>/settings.zon`, …), `<dir>/run` is the runtime
+  directory, and the lock is named for the profile (`<app id>.p<hash>`), so it is its own on
+  Windows too, where a named pipe has no directory. A socket path too long for a socket address
+  (104 bytes on macOS) falls back to the temp directory under that same name. A plugin's
+  `zig build` installs into `<FIZZY_PROFILE>/plugins`. The runtime directory is not offered to
+  plugins yet. The agent plugin's socket wants it, and it will reach plugins as an `EditorAPI`
+  read or a `paths` service, whichever lands with milestone 5.
 - **Hot reload keeps state.** Reload exists: `zig build install` of a loaded user plugin swaps
   it in (`reconcileChangedPluginBinaries`), its documents reopened from disk. What it drops is
   everything else the plugin held — undo history, unsaved edits (a dirty document blocks the
@@ -248,9 +255,10 @@ Each lands on its own and is useful without the next.
    (the non-agent proof). Moves the fingerprint. Built in #251: `Command.Params` /
    `Arg` / `runWith` / `Call`, `Host.callCommand` and `CommandOutcome`, `commandCount` /
    `commandAt`, `EditorAPI.askCommandArguments`, `sdk.Command.answer`, the palette's argument
-   step, and `text.goToLine`. Still to do on this seam, none of it moving the fingerprint again:
-   keybinds that carry arguments (`keybinds.zon`), and a tape's `command` op with arguments.
-2. **Profiles.**
+   step, and `text.goToLine`. The rest of this seam, none of it moving the fingerprint again:
+   keybinds that carry arguments (`keybinds.zon`, #253) and a tape's `command` op with arguments
+   (#254).
+2. **Profiles.** #255: `--profile <dir>` / `FIZZY_PROFILE` (`app/profile.zig`; see "In the framework" above).
 3. **The `automation` service**: anchors on request, settled, and live tapes — the dvui sink
    factored out of the `Player` first, then the `LiveDriver` on it. Role, label and tag in dvui's
    frame dump (a fizzy-dev patch), the snapshot over it, and a pass labelling fizzy's icon-only

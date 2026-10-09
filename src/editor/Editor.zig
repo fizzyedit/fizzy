@@ -321,8 +321,12 @@ pub fn init(
     else config_root_blk: {
         break :config_root_blk try fizzy.core.paths.configRoot(dvui.io, arena, fizzy.core.platform.processEnviron(), app.root_path);
     };
+    // A profile is the config folder itself (`app.profile`); the platform's otherwise.
+    const profile_root = @import("app").profile.root;
     const config_folder: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
+    else if (profile_root) |root|
+        try app.allocator.dupe(u8, root)
     else config_folder_blk: {
         break :config_folder_blk try fizzy.core.paths.configFolder(app.allocator, dvui.io, arena, fizzy.core.platform.processEnviron(), app.root_path, AppInfo.current.config_dir);
     };
@@ -334,7 +338,9 @@ pub fn init(
     // dir is otherwise orphaned, so we move it across to preserve user settings.
     // Wasm: no filesystem, no migration; `Io.Dir.renameAbsolute` pulls in posix.AT.
     // Fizzy's own one-time migration, not something an app built on fizzy inherits.
-    if (comptime builtin.target.cpu.arch != .wasm32 and std.mem.eql(u8, AppInfo.current.name, "fizzy")) {
+    if (comptime builtin.target.cpu.arch != .wasm32 and std.mem.eql(u8, AppInfo.current.name, "fizzy")) migrate: {
+        // A profile is new by construction: nothing to bring across into it.
+        if (profile_root != null) break :migrate;
         const legacy = std.fs.path.join(arena, &.{ config_root, "Fizzy" }) catch null;
         if (legacy) |legacy_path| {
             // Only rename if the new path doesn't already have content.

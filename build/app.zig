@@ -582,6 +582,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // Keybinding parse/resolve core. Deliberately dvui-free (see keymap.zig) — dvui's
         // keybind map can't express chords and is keyed by bind name, not command.
         .{ "fizzy-keymap-tests", "app/keymap/Keymap.zig" },
+        // Profiles: taking `--profile` out of argv, and each profile's own lock name. std-only;
+        // where a profile's folders go is `single_instance` and the editor's, run by hand.
+        .{ "fizzy-profile-tests", "app/profile.zig" },
         // `<img>` scanning for the markdown preview's raw-HTML blocks. Under plugins/
         // but std-only by design (see html_images.zig), so it tests from the app build.
         .{ "fizzy-md-html-images-tests", "plugins/markdown/src/md/html_images.zig" },
@@ -800,7 +803,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     }, fizzy_test_module);
     // The `app` framework module (the plugin store), wired the same way the exe and the web
     // build wire it — see `build/sdk.zig`.
-    const app_module_test = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, build_opts, null, fizzy_test_module);
+    // The single-instance backend too, so its argv and profile handling are tested where the exe
+    // is not built (`tests/integration.zig`, "profile").
+    const singleton_test_dep = b.dependency("dvui_singleton_app", .{ .target = target, .optimize = optimize });
+    const app_module_test = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_test_dep.module("singleton_app"), fizzy_test_module);
     _ = image_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,

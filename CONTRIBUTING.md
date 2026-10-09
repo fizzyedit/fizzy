@@ -82,7 +82,9 @@ The open PR list is the board of who is working on what.
 - **Know what a green run covered.** `addTest` collects tests from its root module only; check
   the list in `build/app.zig` before citing a run for a file's tests.
 - **A plugin's plain `zig build` also installs** into the real plugins directory. For a sandbox
-  run, point `HOME` at the sandbox, so a test build never replaces someone's installed plugin.
+  run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
+  (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
+  config, recents, lock and socket there too, apart from the person's own instance.
 - **UI changes say how they were seen** (a test, a demo tape, a screenshot, a measurement) and
   on which platforms. CI's Windows cross-compile shows the app links, not that it works.
 
