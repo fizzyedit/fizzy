@@ -1,6 +1,6 @@
 //! The desktop's blur behind a Wayland window: `ext-background-effect-v1`, the protocol GNOME
 //! (Mutter 51) and KDE (Plasma 6.7) both have, and before it KDE's own `org_kde_kwin_blur`
-//! (`docs/WINDOWS_LINUX_GLASS_PLAN.md`). The window asks for a region of its surface to be
+//! (`plans/WINDOWS_LINUX_GLASS_PLAN.md`). The window asks for a region of its surface to be
 //! blurred behind; the compositor draws the blur, at a strength of its own.
 //!
 //! The region is surface state, double-buffered: set before a frame is presented, it changes

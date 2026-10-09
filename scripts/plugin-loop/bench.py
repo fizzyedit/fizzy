@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Time each stage of a plugin's rebuild loop: from an edit saved to the plugin running again.
 
-`docs/AGENTS_PLAN.md`, "Fast enough to watch": every stage is measured before it is called fast.
+`plans/AGENTS_PLAN.md`, "Fast enough to watch": every stage is measured before it is called fast.
 This measures them for one plugin (default: `examples/hello-plugin`, the smallest third-party-shaped
 plugin, depending only on `sdk/`):
 

@@ -11,7 +11,10 @@ preferences, findings still in flight.
 ## One plan step, one branch, one PR
 
 - **A plan is an issue** with a checklist of steps, or a plan doc merged on its own and linked
-  from one. A plan is never the PR its implementation lands in.
+  from one, both in the private [`fizzyedit/plans`](https://github.com/fizzyedit/plans) repo. A
+  plan is never the PR its implementation lands in. A PR here says `Part of fizzyedit/plans#N`,
+  or names the plan file as `plans/<NAME>_PLAN.md`; what a reviewer without access needs to judge
+  the change goes in the PR itself.
 - **Each step is its own PR**, saying `Part of #N`. A PR is one change a reviewer can hold in
   their head: aim for **800 lines or fewer** of diff outside tests and docs. Bigger work goes in
   a stack of PRs, or lands dark behind a flag (`FIZZY_POPOUT` is the pattern) and is switched on
@@ -125,7 +128,7 @@ tarball is pinned by hash, so it is never replaced.
 | What fizzy is, and its architecture rules | `CLAUDE.md` |
 | How we work | this file |
 | The plugin contract | `docs/PLUGINS.md` |
-| Plans | issues; a long design as `docs/<NAME>_PLAN.md`, opening with a status line (`Status: proposed`, `in progress, #N`, or `done`) |
+| Plans | private, in [`fizzyedit/plans`](https://github.com/fizzyedit/plans): issues, and a long design as `plans/<NAME>_PLAN.md` opening with a status line (`Status: proposed`, `in progress, fizzyedit/fizzy#N`, or `done`) |
 | The forks fizzy builds on | `docs/DEPENDENCIES.md` |
 | Releases | `RELEASING.md` |
 

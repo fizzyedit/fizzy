@@ -95,7 +95,7 @@ pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(st);
 
     try host.registerPlugin(&plugin);
-    // Loaded-only settings UI (see `docs/PLUGIN_MANIFEST_PLAN.md`): the schema lives in the
+    // Loaded-only settings UI (see `plans/PLUGIN_MANIFEST_PLAN.md`): the schema lives in the
     // Host's registry only while this plugin stays registered. Registered directly against
     // `&st.settings`, so fizzy's pane edits land straight on the live struct — no
     // `settingsChanged` sync hook needed.

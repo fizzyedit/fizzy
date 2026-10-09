@@ -4,7 +4,7 @@
 //!
 //! The half of a `Sequencer.Sink` that is dvui's and nothing else's. Whoever plays a tape owns one
 //! and adds what is its own around it: the `Player` (a demo) its stage's commands, keyframes and
-//! idleness, its transport and its interruptions; a live driver (`docs/AGENTS_PLAN.md`, "Driving a
+//! idleness, its transport and its interruptions; a live driver (`plans/AGENTS_PLAN.md`, "Driving a
 //! live tape") the same few calls with rules of its own. Each owns one, so a button one of them
 //! holds is that one's to let go of.
 const Input = @This();

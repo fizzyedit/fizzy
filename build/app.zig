@@ -796,7 +796,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     // `replay` (`sdk/replay/`) on its own: dvui and `tape`, nothing of fizzy's. A reach into
     // `core` or `app` fails to compile here, which is what keeps it a library any dvui app can
-    // take (`docs/AUTOMATION_PLAN.md`, "The libraries").
+    // take (`plans/AUTOMATION_PLAN.md`, "The libraries").
     {
         const replay_only = b.createModule(.{
             .target = target,
@@ -914,7 +914,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     integration_module.addAnonymousImport("markdown_sample", .{ .root_source_file = b.path("docs/PLUGINS.md") });
     // The document with the 45KB table — the case table-row culling exists for, and the one it
     // could get wrong.
-    integration_module.addAnonymousImport("markdown_sample_tables", .{ .root_source_file = b.path("docs/PLUGIN_MANIFEST_PLAN.md") });
+    integration_module.addAnonymousImport("markdown_sample_tables", .{ .root_source_file = b.path("tests/data/markdown_sample_tables.md") });
     // The image-heavy fixture. Both docs above are prose and tables, so without this no test ever
     // laid out an image block — the one block kind whose height nothing in the source predicts
     // and which rescales with the pane right up until the pane is wider than the image.
@@ -1022,7 +1022,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // reasoning as `bench-text`'s samples. `PLUGINS.md` is the document that prompted the
         // benchmark.
         bench_module.addAnonymousImport("sample_huge", .{ .root_source_file = b.path("docs/PLUGINS.md") });
-        bench_module.addAnonymousImport("sample_prose", .{ .root_source_file = b.path("docs/PLUGIN_MANIFEST_PLAN.md") });
+        bench_module.addAnonymousImport("sample_prose", .{ .root_source_file = b.path("tests/data/markdown_sample_tables.md") });
         bench_module.addAnonymousImport("sample_medium", .{ .root_source_file = b.path("CLAUDE.md") });
         bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("docs/MODULARIZATION_RELEASE_NOTES.md") });
 

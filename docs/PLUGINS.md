@@ -1297,7 +1297,7 @@ that suits a disk is a spent API quota on a cloud mount.
 
 `fizzyedit/drive` (Google Drive) is the worked example; `plugins/archive` mounts a `.zip`
 through `core.vfs.Mem` in a few dozen lines. The design and its remaining edges are in
-`docs/CLOUD_FS_PLAN.md`.
+`plans/CLOUD_FS_PLAN.md`.
 
 ### 3.13 Motion — `core.motion`
 

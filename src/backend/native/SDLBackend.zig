@@ -115,7 +115,7 @@ const cursor_enum_count = @typeInfo(dvui.enums.Cursor).@"enum".fields.len;
 pub const max_viewports = 8;
 
 /// An OS window besides the main one that shows a part of the one frame: a float popped out of
-/// the main window (`docs/POPOUT_WINDOWS_PLAN.md`). There stays one `dvui.Window`. The part this
+/// the main window (`plans/POPOUT_WINDOWS_PLAN.md`). There stays one `dvui.Window`. The part this
 /// window shows is a band of the frame past the main window's edge (`viewport_map`): the app
 /// draws the float there, replays its drawing into a target of its own and hands that over
 /// (`viewportPresent`), and the pointer over this window goes back to dvui where the window
@@ -1195,7 +1195,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // transient for it on X11). Without it, a press on the main window — or one the OS took as
     // its own while the viewport was being resized — put the main window over it. Not on macOS,
     // where SDL makes it a child window that moves with its parent, and the windows that left
-    // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
+    // the main one stay where they are when it moves (`plans/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
     self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu };
     const vp = &self.viewports[slot].?;
@@ -1283,7 +1283,7 @@ pub fn viewportFade(_: *SDLBackend, vp: *Viewport, alpha: f32) void {
 
 /// Whether this run can open viewports at all: not on Wayland, where a client cannot put its
 /// windows anywhere — a window split out of the main one would open where the compositor likes, and
-/// none could follow a drag (`docs/POPOUT_WINDOWS_PLAN.md`). Floats stay in the main window there.
+/// none could follow a drag (`plans/POPOUT_WINDOWS_PLAN.md`). Floats stay in the main window there.
 pub fn viewportsAvailable() bool {
     if (comptime builtin.os.tag != .linux) return true;
     const driver = c.SDL_GetCurrentVideoDriver() orelse return false;
@@ -1618,7 +1618,7 @@ fn mainOnScreen(self: *SDLBackend) viewport_map.Point {
 }
 
 /// The main window's pixels per point: every viewport draws at its scale for now (one
-/// `natural_scale`, `docs/POPOUT_WINDOWS_PLAN.md` on DPI).
+/// `natural_scale`, `plans/POPOUT_WINDOWS_PLAN.md` on DPI).
 fn density(self: *SDLBackend) f32 {
     // The screen's, from AppKit: SDL's is its pixel size over its size, as it last heard of each,
     // and the two arrive apart — the frames after a window jumps its size into or out of full screen

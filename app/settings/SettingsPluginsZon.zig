@@ -1,5 +1,5 @@
 //! Reads/writes the `.plugins = .{ .<id> = .{...}, ... }` sub-tree of the merged
-//! `settings.zon` — see docs/PLUGIN_MANIFEST_PLAN.md R10/R12.
+//! `settings.zon` — see plans/PLUGIN_MANIFEST_PLAN.md R10/R12.
 //!
 //! Every plugin's block lives as a real nested ZON struct literal keyed by plugin id, not an
 //! escaped-string blob. On-disk shape after R12:

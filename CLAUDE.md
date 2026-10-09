@@ -50,7 +50,7 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 7. Memory: `host.allocator` vs `host.arena()`; never touch `dvui.currentWindow().gpa` directly.
 8. ABI: structural fingerprint at `dlopen` (`fizzy_plugin_abi_fingerprint`). A change that moves the boundary's shape records the new `recorded_sdk_shape_fingerprint` and leaves `sdk_version` alone; only an SDK release PR bumps the version (`CONTRIBUTING.md`, "Changing the SDK").
 
-Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)**.
+Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`plans/PLUGIN_MANIFEST_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/PLUGIN_MANIFEST_PLAN.md)**.
 
 ## Bundling plugins into an app
 
@@ -175,13 +175,19 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 
 ## When you need more than this file
 
-- **The library/framework work (merged from bookmark `fizzy-lib` in #194)** → [`docs/LIB_CHECKPOINT.md`](docs/LIB_CHECKPOINT.md):
+**Plans live in a private repo, [`fizzyedit/plans`](https://github.com/fizzyedit/plans)**, open to
+the `fizzyedit` organization. A path written `plans/X.md` — here, in the code's comments, in
+PRs — means `plans/X.md` in that repo. Clone it beside the others (`~/dev/fizzyedit/plans`,
+`gh repo clone fizzyedit/plans`) and read the plan before working on its step; a session without
+access works from what the code and its public docs say.
+
+- **The library/framework work (merged from bookmark `fizzy-lib` in #194)** → [`plans/LIB_CHECKPOINT.md`](https://github.com/fizzyedit/plans/blob/main/plans/LIB_CHECKPOINT.md):
   what was done and the agreed next steps. Its ground rules predate `CONTRIBUTING.md`, which wins
   where they differ.
 
 - Demos that play the real app (tapes, the player, rewind, writing a demo, the anchors widgets
   publish) → [`docs/AUTOMATION.md`](docs/AUTOMATION.md); where it is going (recording, seeking,
-  libraries) → [`docs/AUTOMATION_PLAN.md`](docs/AUTOMATION_PLAN.md). The tape, sequencer and
+  libraries) → [`plans/AUTOMATION_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/AUTOMATION_PLAN.md). The tape, sequencer and
   script are the `tape` library in `sdk/tape/` (std-only); the players, their input and anchors
   the `replay` library in `sdk/replay/` (dvui and `tape` only, for any dvui app); fizzy's overlay
   and plugin service in `app/automation/`; fizzy's stage and bundled demos in
@@ -189,10 +195,10 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 - Floating views (a view dropped on its own place's middle floats into a glass window: the rule,
   occlusion, close-home, persistence) → `app/layout/SPLITS.md` "Floating a view"; taking floats out
   into OS windows (ImGui-style viewports, per-OS dressing, the dvui-dev replay hook) →
-  [`docs/POPOUT_WINDOWS_PLAN.md`](docs/POPOUT_WINDOWS_PLAN.md).
+  [`plans/POPOUT_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/POPOUT_WINDOWS_PLAN.md).
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - The forks fizzy builds on (dvui-dev, SDL, sdl_zig): what each patches, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 - Native windows and glass: what Liquid Glass can do (measured), the drag's glass as one native
   overlay on macOS 26, and fizzy's backend owning its windows while taking SDL's releases →
-  [`docs/NATIVE_WINDOWS_PLAN.md`](docs/NATIVE_WINDOWS_PLAN.md)
-- Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)
+  [`plans/NATIVE_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/NATIVE_WINDOWS_PLAN.md)
+- Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`plans/PLUGIN_MANIFEST_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/PLUGIN_MANIFEST_PLAN.md)

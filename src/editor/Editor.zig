@@ -94,7 +94,7 @@ pub const Profiler = @import("Profiler.zig");
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
-/// `FIZZY_POPOUT=1` elsewhere (`docs/POPOUT_WINDOWS_PLAN.md`).
+/// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
 pub const Popout = @import("Popout.zig");
 pub const Host = sdk.Host;
 
@@ -1834,7 +1834,7 @@ pub fn updateWebPlugin(editor: *Editor, id: []const u8, url: []const u8, sha256:
 pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {
     if (isBundledPluginId(id)) return error.NotUnloadable;
     // Each half timed: a rebuilt plugin's swap is a stage of the loop a plugin author waits on
-    // (`docs/AGENTS_PLAN.md`, "Fast enough to watch"), and `scripts/plugin-loop/bench.sh` reads it.
+    // (`plans/AGENTS_PLAN.md`, "Fast enough to watch"), and `scripts/plugin-loop/bench.sh` reads it.
     const start = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     try editor.unloadPlugin(id, force);
     const unloaded = std.Io.Clock.boot.now(dvui.io).nanoseconds;
@@ -2092,7 +2092,7 @@ pub fn postInit(editor: *Editor) !void {
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
 
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
-    // R11/R12 in docs/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
+    // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
     // nightwatch retains `&editor.app.settings_watcher.handler`, so `editor` has to already be at
     // its final heap address (see `SettingsWatcher.start`'s doc comment). Best-effort
     // throughout: fizzy must never fail to launch just because the watcher couldn't start.
@@ -3005,7 +3005,7 @@ fn activelyDrawing(editor: *const Editor) bool {
 
 /// Composes fizzy's own fields (`Settings.serialize`) together with every plugin's pending
 /// settings write into one `<config>/settings.zon` and writes it in a single pass (see
-/// `docs/PLUGIN_MANIFEST_PLAN.md` R10). This *must* stay one combined write: writing fizzy's
+/// `plans/PLUGIN_MANIFEST_PLAN.md` R10). This *must* stay one combined write: writing fizzy's
 /// fields and the plugins' blobs independently would let whichever write ran second silently
 /// drop the other's data, since `Settings.serialize` only knows fizzy's own fields and has no
 /// notion of `.plugins` at all. `settings_last_saved_hash` dedupes over the *whole* composed
@@ -3162,7 +3162,7 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
 /// Called from `SettingsWatcher.tick` when the background watcher noticed a change to
 /// `settings.zon` — reconciles that external change (hand edit, another tool) into fizzy's live
 /// state instead of letting the next autosave silently overwrite it. See R11 in
-/// docs/PLUGIN_MANIFEST_PLAN.md for the full design; `SettingsWatcher` itself never touches file
+/// plans/PLUGIN_MANIFEST_PLAN.md for the full design; `SettingsWatcher` itself never touches file
 /// content, only detects "something changed" — this is the half that actually reads and applies.
 pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -3719,7 +3719,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Linux: the desktop's blur behind the window's frame, where the compositor has one
     // (`backend.blurBehind`), asked for while the window is translucent at all, its corners the
     // frame's (square maximized, as `draw` draws it). Behind `FIZZY_BLUR_BEHIND=1` until it has been
-    // seen on GNOME and KDE (`docs/WINDOWS_LINUX_GLASS_PLAN.md`).
+    // seen on GNOME and KDE (`plans/WINDOWS_LINUX_GLASS_PLAN.md`).
     if (builtin.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
         const win = dvui.currentWindow();
         const radius: f32 = if (fizzy.backend.isMaximized(win)) 0 else Constants.linux_window_radius;
@@ -3752,7 +3752,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     PluginStore.tick();
 
     const hitch_watchers = fizzy.core.hitch.begin(.watchers);
-    // Pick up any external edit to settings.zon (see R11 in docs/PLUGIN_MANIFEST_PLAN.md).
+    // Pick up any external edit to settings.zon (see R11 in plans/PLUGIN_MANIFEST_PLAN.md).
     // Cheap no-op unless the watcher thread actually saw a change.
     if (editor.app.settings_watcher) |*w| w.tick(editor.configWatchSink());
 

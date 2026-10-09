@@ -1,5 +1,5 @@
 //! Watches `<config>/` (recursive) for external changes while fizzy is running — see
-//! docs/PLUGIN_MANIFEST_PLAN.md R11/R12.
+//! plans/PLUGIN_MANIFEST_PLAN.md R11/R12.
 //!
 //! Thin adapter over [`neurocyte/nightwatch`](https://github.com/neurocyte/nightwatch): one
 //! recursive `watch(config_folder)` covers `settings.zon` reconciliation, discovery of

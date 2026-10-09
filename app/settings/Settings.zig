@@ -218,7 +218,7 @@ fn fieldEqual(comptime FT: type, a: FT, b: FT) bool {
 
 /// Serialize fizzy's own fields as `.{ ...fizzy fields... }`, emitting **only the fields that
 /// differ from the declared defaults above** — the same non-default-only rule plugin settings
-/// follow (`sdk.settings.Schema(T).diffSerialize`, R12 in docs/PLUGIN_MANIFEST_PLAN.md), so both
+/// follow (`sdk.settings.Schema(T).diffSerialize`, R12 in plans/PLUGIN_MANIFEST_PLAN.md), so both
 /// halves of `settings.zon` record just what the user actually changed. An untouched fizzy
 /// serializes to `.{}`; a field hand-written back at its default drops out on the next write.
 /// Reading back is unaffected: `load`/`parseOnly` fill every missing field from these same
