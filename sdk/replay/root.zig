@@ -9,6 +9,7 @@
 //! - `Stage` is the seam an app fills in: what its state is, how to run a command, whether it is
 //!   idle.
 //! - `anchor` names widgets for a tape to aim at (`dvui.tag`, with names built from data).
+//! - `Snapshot` says what is on screen, as text: roles, names, tags, rects.
 //!
 //! See `docs/AUTOMATION.md` and `docs/AUTOMATION_PLAN.md`.
 pub const Player = @import("Player.zig");
@@ -16,6 +17,7 @@ pub const LiveDriver = @import("LiveDriver.zig");
 pub const Input = @import("Input.zig");
 pub const Stage = @import("Stage.zig");
 pub const anchor = @import("anchor.zig");
+pub const Snapshot = @import("Snapshot.zig");
 
 test {
     _ = Player;
@@ -23,4 +25,5 @@ test {
     _ = Input;
     _ = Stage;
     _ = anchor;
+    _ = Snapshot;
 }

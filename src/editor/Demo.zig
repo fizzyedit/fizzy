@@ -48,6 +48,8 @@ live: automation.LiveDriver,
 /// The `automation` service plugins play live tapes through, over `live`. The only way a live
 /// tape starts.
 service: automation.Service,
+/// What the service's `snapshot` takes: framed here (`frame`) and in the editor's frame end.
+snapshot: automation.Snapshot,
 /// A seek is replaying: animation is off until it arrives.
 fast: bool = false,
 /// The user's session, set aside while a demo is loaded.
@@ -97,6 +99,7 @@ pub const detached: Demo = .{
     .player = .{ .gpa = undefined, .stage = undefined },
     .live = .{ .stage = undefined },
     .service = .{ .gpa = undefined, .driver = undefined },
+    .snapshot = .{ .gpa = undefined },
 };
 
 /// Point the player and the live driver at this stage. `self` must not move afterwards (it is
@@ -108,7 +111,8 @@ pub fn attach(self: *Demo, editor: *Editor) void {
         .editor = editor,
         .player = .init(gpa, stage),
         .live = .init(stage),
-        .service = .{ .gpa = gpa, .driver = &self.live, .other = .{ .ctx = self, .driving = demoLoaded } },
+        .service = .{ .gpa = gpa, .driver = &self.live, .other = .{ .ctx = self, .driving = demoLoaded }, .snapshots = &self.snapshot },
+        .snapshot = .init(gpa),
     };
     self.service.bind();
     // A seek's catch-up frames draw nothing where the backend can drop them (the web's).
@@ -121,6 +125,7 @@ fn demoLoaded(ctx: *anyopaque) bool {
 
 pub fn deinit(self: *Demo) void {
     self.quitting = true;
+    self.snapshot.deinit();
     self.live.deinit();
     self.player.deinit();
     self.unmountFiles();
@@ -218,6 +223,7 @@ pub fn frame(self: *Demo) void {
             },
         }
     }
+    self.snapshot.beginFrame();
     self.live.frame();
     self.player.frame();
 }

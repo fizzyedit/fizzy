@@ -111,6 +111,8 @@ pub const automation = struct {
     pub const Input = @import("replay").Input;
     /// Plays a live tape — input on the app as it is, a step at a time — beside the `Player`.
     pub const LiveDriver = @import("replay").LiveDriver;
+    /// What is on screen, as text: roles, names, tags, rects (`replay.Snapshot`).
+    pub const Snapshot = @import("replay").Snapshot;
     /// The `automation` service a plugin plays live tapes through, over a `LiveDriver`.
     pub const Service = @import("automation/Service.zig");
     pub const overlay = @import("automation/overlay.zig");

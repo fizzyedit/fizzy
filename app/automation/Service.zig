@@ -17,6 +17,7 @@ const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const Tape = @import("tape").Tape;
 const LiveDriver = @import("replay").LiveDriver;
+const Snapshot = @import("replay").Snapshot;
 const Input = @import("replay").Input;
 
 const Api = sdk.services.automation.Api;
@@ -25,6 +26,9 @@ gpa: std.mem.Allocator,
 driver: *LiveDriver,
 /// Something else that drives the app, refusing a tape while it does — fizzy's demos.
 other: ?Other = null,
+/// What `snapshot` takes, framed by the app (`Snapshot.beginFrame` / `endFrame`). Null: no
+/// snapshots, and `snapshotText` is always null.
+snapshots: ?*Snapshot = null,
 /// The value to register (`Host.registerService`), pointing back here.
 api: Api = undefined,
 /// The ticket the driver's current or last tape was played under.
@@ -58,6 +62,8 @@ const vtable: Api.VTable = .{
     .stop = stop,
     .outcome = outcome,
     .settled = settled,
+    .snapshot = snapshot,
+    .snapshotText = snapshotText,
 };
 
 fn from(ctx: *anyopaque) *Service {
@@ -137,4 +143,14 @@ pub fn frameEnded(self: *Service, end_micros: ?u32) bool {
     const wake = self.asked and self.quiet;
     self.asked = false;
     return wake;
+}
+
+fn snapshot(ctx: *anyopaque) Api.SnapshotTicket {
+    const s = from(ctx).snapshots orelse return @enumFromInt(0);
+    return @enumFromInt(s.request());
+}
+
+fn snapshotText(ctx: *anyopaque, ticket: Api.SnapshotTicket) ?[]const u8 {
+    const s = from(ctx).snapshots orelse return null;
+    return s.get(@intFromEnum(ticket));
 }
