@@ -26,6 +26,8 @@ pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting
         .bool => {
             var b = access.getBool(value, field_index);
             if (dvui.checkbox(@src(), &b, null, .{
+                // The description beside it is drawn apart, so the box carries the setting's name.
+                .label = .{ .text = field.label },
                 .id_extra = id_extra,
                 .expand = .none,
                 .gravity_y = 0.5,

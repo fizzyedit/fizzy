@@ -661,7 +661,7 @@ fn drawFloatWindows() void {
     const editor = fizzy.editor();
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     defer row.deinit();
-    drawToggle(&editor.app.settings.float_windows);
+    drawToggle(&editor.app.settings.float_windows, "Floats in their own windows");
     // Taken at launch: changed, it waits for a restart, offered here and in the info bar.
     if (editor.restartPending()) {
         if (dvui.button(@src(), "Restart", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 6 }, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } })) {
@@ -671,20 +671,22 @@ fn drawFloatWindows() void {
 }
 
 fn drawNativeGlass() void {
-    drawToggle(&fizzy.editor().app.settings.native_glass);
+    drawToggle(&fizzy.editor().app.settings.native_glass, "Native glass");
 }
 
 fn drawNativeMenus() void {
-    drawToggle(&fizzy.editor().app.settings.native_menus);
+    drawToggle(&fizzy.editor().app.settings.native_menus, "Native menus");
 }
 
 fn drawNativeDialogs() void {
-    drawToggle(&fizzy.editor().app.settings.native_dialogs);
+    drawToggle(&fizzy.editor().app.settings.native_dialogs, "Native dialogs");
 }
 
-/// A setting's checkbox, saved and applied as it changes.
-fn drawToggle(value: *bool) void {
+/// A setting's checkbox, saved and applied as it changes. Its row's label is drawn apart from it,
+/// so `name` (the same words) is what a screen reader or a script calls the box.
+fn drawToggle(value: *bool, name: []const u8) void {
     if (dvui.checkbox(@src(), value, null, .{
+        .label = .{ .text = name },
         .expand = .none,
         .gravity_y = 0.5,
         .margin = .{ .x = 4, .w = 4 },
@@ -700,6 +702,7 @@ fn drawToggle(value: *bool) void {
 fn drawGlassShader() void {
     const editor = fizzy.editor();
     if (dvui.checkbox(@src(), &editor.app.settings.glass_shader, null, .{
+        .label = .{ .text = "Glass shader" },
         .expand = .none,
         .gravity_y = 0.5,
         .margin = .{ .x = 4, .w = 4 },

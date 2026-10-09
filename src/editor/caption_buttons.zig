@@ -52,6 +52,8 @@ fn drawWindows(frame: dvui.Rect, corner_radius: ?f32) void {
         const hover = hovered == button;
         const close = button == .close;
         var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .role = .button,
+            .label = .{ .text = nameOf(button, maximized) },
             .id_extra = @intFromEnum(button),
             .min_size_content = .{ .w = cell_w, .h = cell_h },
             .expand = .vertical,
@@ -90,6 +92,8 @@ fn drawGnome(frame: dvui.Rect) void {
     const maximized = fizzy.backend.isMaximized(dvui.currentWindow());
     for ([_]Button{ .minimize, .maximize, .close }, 0..) |button, i| {
         var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .role = .button,
+            .label = .{ .text = nameOf(button, maximized) },
             .id_extra = @intFromEnum(button),
             .min_size_content = .{ .w = d, .h = d },
             .margin = .{ .x = if (i == 0) 0 else gap },
@@ -116,6 +120,16 @@ fn clickThrough(wd: *dvui.WidgetData, button: Button) void {
 }
 
 const Glyph = enum { minimize, maximize, restore, close };
+
+/// What a screen reader or a script calls the button: its glyph is drawn, never written.
+fn nameOf(button: Button, maximized: bool) []const u8 {
+    return switch (glyphFor(button, maximized)) {
+        .minimize => "Minimize",
+        .maximize => "Maximize",
+        .restore => "Restore",
+        .close => "Close Window",
+    };
+}
 
 fn glyphFor(button: Button, maximized: bool) Glyph {
     return switch (button) {

@@ -184,6 +184,8 @@ pub const Row = struct {
 pub fn row(src: std.builtin.SourceLocation, opts: RowOptions) Row {
     const theme = dvui.themeGet();
     const box = dvui.box(src, .{ .dir = .horizontal }, .{
+        // Clicked like one; named by the text the caller draws in it.
+        .role = .menu_item,
         .id_extra = opts.id_extra,
         .expand = .horizontal,
         .background = false,
