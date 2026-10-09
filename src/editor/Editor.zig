@@ -124,6 +124,9 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// address (the stage's context is this field).
 demo: Demo = .detached,
 
+/// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
+plugin_reloads: @import("PluginReloads.zig") = .{},
+
 explorer: *Explorer,
 
 last_titlebar_color: dvui.Color,
@@ -1364,18 +1367,26 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
-    errdefer editor.app.gpa.free(path);
+    const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
+        editor.userPluginLoadFailed(id, path, err);
+        editor.app.gpa.free(path);
+        return err;
+    };
+    return editor.finishUserPluginLoad(id, opened);
+}
 
-    const loaded = PluginLoader.loadAndRegister(&editor.app.host, editor.app.gpa, path, id, .{
+/// The UI-thread half of loading a user plugin: register an `open`ed binary and wire it into the
+/// app. Takes `opened` and its path (gpa-owned) either way — `PluginReloads` opens a rebuild off
+/// the UI thread and finishes it here.
+pub fn finishUserPluginLoad(editor: *Editor, id: []const u8, opened: PluginLoader.Opened) !void {
+    const path = opened.path;
+    errdefer editor.app.gpa.free(path);
+    const loaded = PluginLoader.register(&editor.app.host, opened, .{
         .gpa = &editor.app.gpa,
         .arg_b = @ptrCast(&editor.app.host),
         .arg_c = null,
     }) catch |err| {
-        // Leave the same actionable record the startup scan leaves (see `recordLoadFailure`), so
-        // a build that fails a live load stays visible in the store's installed pane with its
-        // Reinstall/Uninstall controls instead of disappearing until the next restart.
-        dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ id, path, @errorName(err), App.pluginLoadFailureReason(err) });
-        editor.app.recordLoadFailure(id, path, err);
+        editor.userPluginLoadFailed(id, path, err);
         return err;
     };
     try editor.app.appendLoadedPluginLib(loaded);
@@ -1392,6 +1403,14 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     // The plugin now loads cleanly; drop any prior failure record so the store/dialog stop
     // showing it as broken (e.g. after installing a compatible rebuild over a mismatched one).
     editor.app.clearFailedUserPlugin(id);
+}
+
+/// Leave the same actionable record the startup scan leaves (see `recordLoadFailure`), so a build
+/// that fails a live load stays visible in the store's installed pane with its Reinstall/Uninstall
+/// controls instead of disappearing until the next restart.
+fn userPluginLoadFailed(editor: *Editor, id: []const u8, path: []const u8, err: PluginLoader.LoadError) void {
+    dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ id, path, @errorName(err), App.pluginLoadFailureReason(err) });
+    editor.app.recordLoadFailure(id, path, err);
 }
 
 /// What the web load/update pair can fail with. Spelled out rather than inferred: the two call
@@ -3331,18 +3350,11 @@ pub fn reconcileChangedPluginBinaries(editor: *Editor) void {
     if (newest_write) |written| dvui.log.info("plugin watcher: a rebuilt binary noticed {d:.1}ms after it was written", .{
         msBetween(written, std.Io.Clock.real.now(dvui.io).nanoseconds),
     });
-    for (changed.items) |id| {
-        if (editor.updatePlugin(id, false)) {
-            dvui.log.info("plugin watcher: reloaded '{s}' from its rebuilt binary", .{id});
-        } else |err| {
-            dvui.log.warn("plugin watcher: could not reload rebuilt '{s}' ({s})", .{ id, @errorName(err) });
-            // Re-stamp so a plugin we chose not to reload (unsaved documents, most likely) doesn't
-            // re-trigger on every subsequent watcher event. The next rebuild moves the stamp again
-            // and gets a fresh attempt; until then the running build stays, which is what the
-            // failed unload already decided.
-            editor.app.restampLoadedPlugin(id);
-        }
-    }
+    // Opened off the UI thread and swapped in on a later frame (`PluginReloads`): the `dlopen` of a
+    // rebuilt binary is ~180 ms on macOS, and here it froze the person's frame. A swap the plugin
+    // refuses (unsaved documents, most likely) re-stamps it there, so it does not re-trigger on
+    // every later watcher event; the next rebuild gets a fresh attempt.
+    for (changed.items) |id| editor.plugin_reloads.start(editor, id);
 }
 
 fn msBetween(from_ns: i96, to_ns: i96) f64 {
@@ -3755,6 +3767,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Pick up any external edit to settings.zon (see R11 in docs/PLUGIN_MANIFEST_PLAN.md).
     // Cheap no-op unless the watcher thread actually saw a change.
     if (editor.app.settings_watcher) |*w| w.tick(editor.configWatchSink());
+    // A rebuilt plugin opened off the UI thread since the last frame is swapped in now.
+    editor.plugin_reloads.frame(editor);
 
     // Reload clean open docs / flag dirty conflicts when files change on disk.
     if (editor.document_watcher) |*w| w.tick(editor);
@@ -5756,6 +5770,8 @@ pub fn deinit(editor: *Editor) !void {
         w.stop();
         editor.app.settings_watcher = null;
     }
+    // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
+    editor.plugin_reloads.deinit(editor.app.gpa);
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.
     if (editor.app.folder_watcher) |*w| {
