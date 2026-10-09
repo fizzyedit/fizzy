@@ -7,8 +7,8 @@
 # dependency does. A path dependency (or `zig build --fork`) would see the whole checkout and
 # miss a file left out of `.paths`.
 #
-# example-app gets the whole repo; example-plugin gets the plugin SDK, packed as a release would
-# be (`scripts/pack-sdk.sh`).
+# example-app gets the whole repo, and for its replay app the plugin SDK; example-plugin gets the
+# plugin SDK. The SDK is packed as a release would be (`scripts/pack-sdk.sh`).
 #
 # Usage:
 #   scripts/check-examples.sh            # clones both repos' main
@@ -57,10 +57,14 @@ echo "== example-app, against this tree"
 (
   cd "$work/example-app"
   zig fetch --save=fizzy "$work/fizzy.tar.gz" >/dev/null
+  # Its replay app depends on the plugin SDK alone: this tree's, packed as a release would be.
+  zig fetch --save=fizzy_sdk "$sdk_tarball" >/dev/null
   for shape in minimal studio endless; do
     echo "-- $shape"
     zig build -Dshape="$shape" --summary all
   done
   echo "-- studio, as data"
   zig build -Dshape=studio -Dzon-layout=true --summary all
+  echo "-- the replay app"
+  zig build replay --summary all
 )

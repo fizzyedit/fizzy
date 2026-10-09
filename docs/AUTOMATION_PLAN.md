@@ -200,7 +200,8 @@ Each lands on its own and leaves the demos working.
    the pair against its own dvui with `replay.modules` from the SDK package
    (`sdk/replay_module.zig`); `replay.overlay` is the plain overlay (the pointer and its clicks),
    which fizzy's glass one draws its pointer with; a `Stage` for live tapes needs only `idle` and
-   `command`; and `examples/replay-app` is a plain dvui app on dvui's own SDL3 backend that plays
+   `command`; and fizzyedit/example-app's replay app (`zig build run-replay`) is a plain dvui app on
+   dvui's own SDL3 backend that plays
    a live tape into its window and prints its snapshot. Left: `replay` and `tape` as packages of
    their own (their own `build.zig.zon`, outside the SDK tarball), and the plain overlay's
    captions and keys.

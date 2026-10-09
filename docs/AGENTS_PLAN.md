@@ -539,7 +539,8 @@ Each lands on its own and is useful without the next.
    `settled` needed no fork patch, it reads `Window.end`'s return; icon-only controls labelled,
    held by a headless test (#275); the dvui half moved to `sdk/replay/`, dvui and `tape` only
    (#276). In review: the snapshot, through the service as `snapshot` / `snapshotText` (#277),
-   and `replay` for any dvui app, with a plain overlay and `examples/replay-app` (#283). Left:
+   and `replay` for any dvui app, with a plain overlay and a plain dvui app using it (#283, now
+   fizzyedit/example-app's `run-replay`). Left:
    the demo transport bar's buttons, which have no widgets to name.
    Between this and the next: **an SDK release**, so store plugins (pixi first) can register
    commands with arguments — they merged after `sdk-v0.2.18`.
