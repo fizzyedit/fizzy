@@ -979,9 +979,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         });
         if (target.result.os.tag == .windows) demo_tests.root_module.linkSystemLibrary("comctl32", .{});
         demo_tests.root_module.link_libcpp = !target_is_windows_msvc;
-        if (velopack_enabled) {
-            try velopack.linkVelopack(b, vz, demo_tests, .{ .target = target, .optimize = optimize });
-        }
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, demo_tests, .{ .target = target, .optimize = optimize });
+        };
         test_integration_step.dependOn(&b.addRunArtifact(demo_tests).step);
         check_integration_step.dependOn(&demo_tests.step);
     }
