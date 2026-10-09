@@ -6,7 +6,7 @@
 //! and implements `Fs` over `http.Transport`; nothing here knows any provider's name.
 //!
 //! See `Fs.zig` for the two decisions that shape the API (paths, not ids; completions from
-//! `pump`, never a blocking call) and `docs/CLOUD_FS_PLAN.md` for the whole design.
+//! `pump`, never a blocking call) and `plans/CLOUD_FS_PLAN.md` for the whole design.
 const FsFile = @import("Fs.zig");
 
 pub const Error = FsFile.Error;

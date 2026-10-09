@@ -1,4 +1,4 @@
-//! One-shot migrations for `settings.zon` layout changes — see docs/PLUGIN_MANIFEST_PLAN.md.
+//! One-shot migrations for `settings.zon` layout changes — see plans/PLUGIN_MANIFEST_PLAN.md.
 //!
 //! 1. `mergeLegacyPerPluginFiles` — pre-R10 one-file-per-plugin (`<plugins_dir>/<id>.settings.zon`)
 //!    into the merged `.plugins.<id>` field (R10).

@@ -132,7 +132,7 @@ pub const InitOptions = struct {
     /// else places and sizes — a layout's float, which lands exactly where a drop put it.
     placed: bool = false,
     /// Drawn for an OS window of its own rather than the main one (a float popped out,
-    /// `docs/POPOUT_WINDOWS_PLAN.md`): its rect lies wherever that window's part of the frame is,
+    /// `plans/POPOUT_WINDOWS_PLAN.md`): its rect lies wherever that window's part of the frame is,
     /// usually past the main window's edge, so it is not held on the main window and is clipped
     /// to itself rather than to it.
     detached: bool = false,

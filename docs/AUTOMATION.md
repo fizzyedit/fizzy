@@ -19,7 +19,7 @@ the `tape` library (`sdk/tape/`): std-only, no window, shipped with the SDK so a
 author a demo too. The `Player`, the live driver and their input are the `replay` library
 (`sdk/replay/`: dvui and `tape`, nothing of fizzy's), which any dvui app can drive by filling in
 a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app/automation/`). `src/editor/Demo.zig` is fizzy's stage and
-`src/editor/demos/` its bundled demos. Where this is going: `docs/AUTOMATION_PLAN.md`.
+`src/editor/demos/` its bundled demos. Where this is going: `plans/AUTOMATION_PLAN.md`.
 
 ## Playing one
 

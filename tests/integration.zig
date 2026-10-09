@@ -631,8 +631,10 @@ const md_render_ast = markdown.render_ast;
 var md_preview: markdown.Preview = .{};
 var md_doc: []const u8 = "";
 const md_sample = @embedFile("markdown_sample");
-/// Table-heavy: one of its tables is 45KB on its own, which is what makes it the document that
-/// exercises row culling inside a table rather than only block skipping around it.
+/// Table-heavy (`tests/data/markdown_sample_tables.md`, a frozen copy of what was
+/// `docs/PLUGIN_MANIFEST_PLAN.md` before the plans moved to `fizzyedit/plans`): one of its tables
+/// is 45KB on its own, which is what makes it the document that exercises row culling inside a
+/// table rather than only block skipping around it.
 const md_sample_tables = @embedFile("markdown_sample_tables");
 /// Image-heavy. Both samples above are prose and tables, so without this one no test in this file
 /// ever laid out an image block — the block kind whose height nothing in the source predicts, and
@@ -779,7 +781,7 @@ fn markdownScroll(ticks: f32, frames: usize) !void {
     for (0..frames) |_| _ = try dvui.testing.step(markdownFrame);
 }
 
-// The user-visible complaint these two encode: on docs/PLUGIN_MANIFEST_PLAN.md, scrolling about
+// The user-visible complaint these two encode: on plans/PLUGIN_MANIFEST_PLAN.md, scrolling about
 // three quarters of the way down went unstable — the document jumped under the reader and the
 // scrollbar jumped with it, and scrolling back up landed near the top of the document instead of
 // where they had been.
@@ -1498,7 +1500,7 @@ test "markdown preview: an edit does not move the reader or lose the layout" {
 // warm-up sweep finishes, the scrollbar is the sum of those guesses. The guess used to ignore what
 // kind of block it was: an image is one line of source and hundreds of points tall, a table row is
 // a line of source and a line *plus* cell padding, a heading is a line in a much larger font. All
-// the errors pointed the same way, and docs/PLUGIN_MANIFEST_PLAN.md estimated at 24% of its real
+// the errors pointed the same way, and plans/PLUGIN_MANIFEST_PLAN.md estimated at 24% of its real
 // length — a scrollbar claiming the document was a quarter of its true size.
 //
 // A band, not a number: these are guesses and are meant to be. What matters is that they are the
@@ -1537,7 +1539,7 @@ test "markdown preview: the estimated document length is in the right ballpark" 
 // because they all parked somewhere and thrashed locally instead of traversing.
 //
 // The last one it caught: anchoring by block source hash, where the hash identifies *text* and
-// documents repeat themselves. docs/PLUGIN_MANIFEST_PLAN.md has seven top-level blocks sharing a
+// documents repeat themselves. plans/PLUGIN_MANIFEST_PLAN.md has seven top-level blocks sharing a
 // single hash, so an anchor on any of them resolved to whichever copy came first and the reader
 // was thrown to the top of the document.
 test "markdown preview: scrolling through the document never jumps past where it was asked" {
@@ -6540,7 +6542,7 @@ fn expectButtonsNamed(frame: fn () anyerror!dvui.App.Result) !void {
 }
 
 // ── Headless ────────────────────────────────────────────────────────────────────────────────────
-// The spike in docs/AGENTS_PLAN.md ("Running with no display"): the whole editor, as `Entry`
+// The spike in plans/AGENTS_PLAN.md ("Running with no display"): the whole editor, as `Entry`
 // brings it up, over dvui's testing backend in a profile of its own.
 
 /// The app's frame as `Entry` runs it: the demo player, the frame target, the editor.

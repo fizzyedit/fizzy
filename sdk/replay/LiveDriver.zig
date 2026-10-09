@@ -1,6 +1,6 @@
 //! Plays a live tape: input played on the app as it is, a step at a time, each once the last has
 //! landed. The other way to play a tape besides a demo, and a driver of its own rather than a
-//! mode of the `Player` (`docs/AGENTS_PLAN.md`, "Driving a live tape"):
+//! mode of the `Player` (`plans/AGENTS_PLAN.md`, "Driving a live tape"):
 //!
 //! |                       | a demo (`Player`)                   | a live tape (this)                |
 //! |-----------------------|-------------------------------------|-----------------------------------|

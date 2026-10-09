@@ -55,7 +55,7 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    string through the new `Debug.captureText`. A dump can then name widgets without AccessKit,
    which is never built on the testing or web backends. A button's name is the text of the
    label inside it; an icon-only button's is its `label`. The agents plan's widget snapshot is
-   built on this (`docs/AGENTS_PLAN.md`, "Accessible names"). Upstream: worth proposing as is,
+   built on this (`plans/AGENTS_PLAN.md`, "Accessible names"). Upstream: worth proposing as is,
    once fizzy's snapshot uses it. Test: dvui's `zig build test -Dbackend=testing`, "dumpFrame
    records tag, role, label and a label's text".
 
@@ -63,7 +63,7 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    `endRendering` drew dialogs and toasts and then replayed every subwindow, with nothing between.
    `drawRetained` is the first half on its own, called by `endRendering` if the app did not.
    Popout calls it before taking subwindows into their OS windows, so a dialog exists by then
-   (`docs/WINDOWING_FOUNDATION_PLAN.md`). Upstream: branch `window-draw-retained`, to propose.
+   (`plans/WINDOWING_FOUNDATION_PLAN.md`). Upstream: branch `window-draw-retained`, to propose.
    Test: dvui's `zig build test`, "drawRetained draws dialogs once".
 6. **screensSet: floating widgets can be kept on screens besides the window** (`a90bc70`).
    `dvui.screensSet(rects)` lists areas besides the window that are screens of their own;

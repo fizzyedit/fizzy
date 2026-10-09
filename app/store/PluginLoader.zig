@@ -107,7 +107,7 @@ pub fn pluginExtension() []const u8 {
 }
 
 /// Bare `{name}.{ext}` filename (no directory) — the basename inside a plugin's own
-/// `{plugins_dir}/{name}/` directory (see docs/PLUGIN_MANIFEST_PLAN.md R10; every plugin, built-in
+/// `{plugins_dir}/{name}/` directory (see plans/PLUGIN_MANIFEST_PLAN.md R10; every plugin, built-in
 /// or third-party, gets its own directory rather than sitting flat in `plugins/`).
 pub fn pluginFilename(name: []const u8, allocator: std.mem.Allocator) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}.{s}", .{ name, pluginExtension() });

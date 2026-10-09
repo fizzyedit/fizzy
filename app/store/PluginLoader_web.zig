@@ -1,5 +1,5 @@
 //! Runtime plugin loading on the web: a plugin built as a wasm *side module* (see
-//! `sdk/plugin_sdk.zig`'s `create` for wasm32 and `docs/REVIEW_2026-09.md` §2), fetched and
+//! `sdk/plugin_sdk.zig`'s `create` for wasm32 and `plans/REVIEW_2026-09.md` §2), fetched and
 //! linked into the page by `web/index.html`'s `loadPlugin`, which hands back one function-table
 //! index per entry point. On wasm32 a function pointer *is* a table index, so from there this
 //! runs the same sequence the desktop loader runs (`PluginLoader.loadAndRegister`): fingerprint,

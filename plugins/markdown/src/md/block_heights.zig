@@ -138,7 +138,7 @@ pub const Measurement = struct {
 ///
 /// Sized for the legitimate case, not the pathological one: a table converges by measuring a few
 /// KB of its rows per frame (`render_ast.table_measure_bytes`), so the 45KB table in
-/// docs/PLUGIN_MANIFEST_PLAN.md needs a dozen-odd passes and a much larger one proportionally
+/// plans/PLUGIN_MANIFEST_PLAN.md needs a dozen-odd passes and a much larger one proportionally
 /// more. At 60fps this cap is about four seconds — long enough that nothing real hits it, short
 /// enough that a block which will *never* settle stops holding the app awake.
 ///
@@ -305,7 +305,7 @@ pub const Table = struct {
             // Code never wraps — one source line is one laid-out line — plus the panel's padding.
             .code => src_lines * m.line_h + 12,
             // A table's height is driven by how much its cells *wrap*, not by how many rows it
-            // has: the 45KB table in docs/PLUGIN_MANIFEST_PLAN.md is 25 source lines and 13,310pt
+            // has: the 45KB table in plans/PLUGIN_MANIFEST_PLAN.md is 25 source lines and 13,310pt
             // tall. Cell text wraps inside a column rather than across the whole width, so it
             // needs far more lines than the same bytes of prose — measured at roughly a third of
             // the full column width across the sample documents, which is what the divisor is.
@@ -501,7 +501,7 @@ pub const Table = struct {
     /// text, in which case the caller falls back to the line.
     ///
     /// Duplicates are not an edge case — a source hash identifies *text*, and real documents
-    /// repeat themselves. docs/PLUGIN_MANIFEST_PLAN.md has seven top-level blocks sharing one
+    /// repeat themselves. plans/PLUGIN_MANIFEST_PLAN.md has seven top-level blocks sharing one
     /// hash. Taking the first match threw the reader to whichever copy came earliest in the
     /// document, which is why anchoring by hash alone sent them to the top.
     pub fn blockForHash(self: *const Table, hash: u64, near_line: u32) ?usize {

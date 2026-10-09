@@ -1,4 +1,4 @@
-//! Windows composition spike (docs/WINDOWS_LINUX_GLASS_PLAN.md, "Order of work" step 5). See
+//! Windows composition spike (plans/WINDOWS_LINUX_GLASS_PLAN.md, "Order of work" step 5). See
 //! README.md for what each mode asks and how to read what it shows.
 //!
 //! An SDL window made transparent and claimed for SDL_GPU on D3D12, so fizzyedit/SDL presents it
