@@ -312,6 +312,13 @@ pub const InitOptions = struct {
 /// (`platform.linux_titlebar.useClientDecorations`).
 pub var window_create_hook: ?*const fn (props: c.SDL_PropertiesID) void = null;
 
+/// Called right after each frame's `Window.end` with what it returned: null when dvui would sleep,
+/// 0 when it wants the next frame now, the wait for a later animation otherwise. True runs one more
+/// frame now whatever `end` said. fizzy's `automation` service uses it: it notes whether dvui
+/// went quiet (`settled`), and runs one more frame when a caller was told "not yet", so the caller
+/// sees the answer change without asking for frames itself.
+pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
+
 /// SDL initialization for the all SDL app, i.e. common for all OS Windows
 /// This is expected to be called only once.
 pub fn initSDL() !void {
@@ -2994,7 +3001,10 @@ pub fn main(main_init: std.process.Init) !u8 {
 
         const res = try app.frameFn();
 
-        const end_micros = try win.end(.{});
+        var end_micros = try win.end(.{});
+        if (frame_ended_hook) |hook| if (hook(end_micros)) {
+            end_micros = 0;
+        };
 
         if (res != .ok) break :main_loop;
 
@@ -3210,9 +3220,12 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
 
     live_resize_trace.overlay();
 
-    const end_micros = appState.win.end(.{ .manage_backend = false }) catch |err| {
+    var end_micros = appState.win.end(.{ .manage_backend = false }) catch |err| {
         log.err("dvui.Window.end failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
+    };
+    if (frame_ended_hook) |hook| if (hook(end_micros)) {
+        end_micros = 0;
     };
 
     // check if window got quit/close event

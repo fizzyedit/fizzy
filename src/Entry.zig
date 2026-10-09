@@ -335,6 +335,9 @@ pub fn AppInit(win: *dvui.Window) !void {
     // including pixi as a generic dylib that owns its own state + atlas packer.
     fizzy.editor().postInit() catch unreachable;
 
+    // Whether dvui went quiet at the end of each frame, for the `automation` service's `settled`.
+    if (comptime @hasDecl(dvui.backend, "frame_ended_hook")) dvui.backend.frame_ended_hook = frameEnded;
+
     // Hand the window to the listener thread and queue our own argv so the
     // first frame opens any files / project folder supplied on the command line.
     singleton.registerWindow(win, resolved_argv);
@@ -398,6 +401,11 @@ pub fn AppFrame() !dvui.App.Result {
     const player = &fizzy.editor().demo.player;
     const win = fizzy.entry().window;
     return player.frames(win, frameOnce, automation.Player.backendClock(win));
+}
+
+/// The backend's `frame_ended_hook`: what `Window.end` said, to the `automation` service.
+fn frameEnded(end_micros: ?u32) bool {
+    return fizzy.editor().demo.service.frameEnded(end_micros);
 }
 
 /// How long the backend took to end the last frame after the app's part of it — its draws

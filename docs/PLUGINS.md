@@ -1167,6 +1167,7 @@ The SDK ships definitions for the services in this ecosystem, in
 | `"workbench"` | `workbench` | Only what the thing drawing tabs is the authority on: `currentGrouping` / `newGrouping` (which pane a new document lands in — pass as `host.openFile`'s `grouping`) and `registerBranchDecorator` (draw on every file-tree row) |
 | `"markdown"` | `markdown` | Render a markdown byte slice into the current dvui parent (native only — absent on web) |
 | `"wikilink"` | any indexer (e.g. `brain`) | Resolve `[[Note]]` to a file, plus completion candidates and index state |
+| `"automation"` | the application (fizzy: `app/automation/Service.zig`, over its live driver) | `play` a live tape — input on the app as it is, built with the `tape` module and handed over as ZON or binary bytes — and get a ticket to ask its `outcome` (finished, or interrupted / timed out / stopped before which op); `stop` your own tape; `settled` when nothing is in flight. One tape at a time, refused while a demo plays; a person's input stops it. For plugin tests, macros, tutorials |
 
 Everything a plugin might reasonably ask *fizzy* for lives on `Host` instead — `openFile`,
 `closeDocById`, `docFromPath`, `revealPosition`, `setProjectFolder`, `isPathIgnored`, … — where it
