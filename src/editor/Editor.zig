@@ -1833,8 +1833,19 @@ pub fn updateWebPlugin(editor: *Editor, id: []const u8, url: []const u8, sha256:
 
 pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {
     if (isBundledPluginId(id)) return error.NotUnloadable;
+    // Each half timed: a rebuilt plugin's swap is a stage of the loop a plugin author waits on
+    // (`docs/AGENTS_PLAN.md`, "Fast enough to watch"), and `scripts/plugin-loop/bench.sh` reads it.
+    const start = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     try editor.unloadPlugin(id, force);
+    const unloaded = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     try editor.loadUserPluginById(id);
+    const loaded = std.Io.Clock.boot.now(dvui.io).nanoseconds;
+    dvui.log.info("plugin '{s}': swapped in {d:.1}ms (unload {d:.1}ms, load {d:.1}ms)", .{
+        id,
+        msBetween(start, loaded),
+        msBetween(start, unloaded),
+        msBetween(unloaded, loaded),
+    });
     editor.rebuildExtensionOwnerCache();
 }
 
@@ -3302,10 +3313,14 @@ pub fn reconcileChangedPluginBinaries(editor: *Editor) void {
         changed.deinit(gpa);
     }
 
+    // When the newest rebuilt binary was written (wall clock, as file times are): how long the
+    // install, the watcher and this pass took to notice it is part of the loop's cost.
+    var newest_write: ?i96 = null;
     for (editor.app.loaded_plugin_libs.items) |loaded| {
         if (isBundledPluginId(loaded.plugin_id)) continue; // shipped beside the exe, not user-managed
         const st = std.Io.Dir.cwd().statFile(dvui.io, loaded.path, .{}) catch continue; // gone mid-write: leave it loaded
         if (st.mtime.nanoseconds == loaded.source_mtime_ns and st.size == loaded.source_size) continue;
+        newest_write = @max(newest_write orelse st.mtime.nanoseconds, st.mtime.nanoseconds);
         const id = gpa.dupe(u8, loaded.plugin_id) catch continue;
         changed.append(gpa, id) catch {
             gpa.free(id);
@@ -3313,6 +3328,9 @@ pub fn reconcileChangedPluginBinaries(editor: *Editor) void {
         };
     }
 
+    if (newest_write) |written| dvui.log.info("plugin watcher: a rebuilt binary noticed {d:.1}ms after it was written", .{
+        msBetween(written, std.Io.Clock.real.now(dvui.io).nanoseconds),
+    });
     for (changed.items) |id| {
         if (editor.updatePlugin(id, false)) {
             dvui.log.info("plugin watcher: reloaded '{s}' from its rebuilt binary", .{id});
@@ -3325,6 +3343,10 @@ pub fn reconcileChangedPluginBinaries(editor: *Editor) void {
             editor.app.restampLoadedPlugin(id);
         }
     }
+}
+
+fn msBetween(from_ns: i96, to_ns: i96) f64 {
+    return @as(f64, @floatFromInt(to_ns - from_ns)) / std.time.ns_per_ms;
 }
 
 /// Retries a plugin whose load failed once its build on disk changes.
