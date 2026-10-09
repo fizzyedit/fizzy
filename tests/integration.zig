@@ -218,6 +218,19 @@ test "typing a closer steps over the auto-inserted one instead of doubling it" {
     try std.testing.expectEqualStrings("call(1)", te_text.items);
 }
 
+test "keystrokes typed inside a pair closed in the same frame land, and do not crash" {
+    // Several keystrokes in one frame — a hitch, a fast typist, a live tape — where one closes a
+    // pair and the next lands between its halves: inside bytes this frame already added, which
+    // the layout cache's changed-interval bookkeeping once underflowed on.
+    var t = try textEntryCtx("", 0);
+    defer deinitTextEntry(&t);
+
+    for ([_][]const u8{ "f", "(", "\"", "x", "\"", ")", ";" }) |key| try dvui.testing.writeText(key);
+    try dvui.testing.settle(textEntryFrame);
+
+    try std.testing.expectEqualStrings("f(\"x\");", te_text.items);
+}
+
 test "typing an opener directly before a word does not auto-close" {
     var t = try textEntryCtx("foo", 0);
     defer deinitTextEntry(&t);
