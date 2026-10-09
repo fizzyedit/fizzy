@@ -1177,8 +1177,9 @@ pub fn tick() !void {
                         const id = invoked.id;
                         // macOS delivers these twice — once as an NSMenu key equivalent (which
                         // already ran the action) and once as an SDL key event. Let the native
-                        // menu own them there.
-                        if (nativeMenuOwnsChord(editor, id)) continue;
+                        // menu own them there. A tape's key never went through the menu, so
+                        // nothing ran it yet.
+                        if (nativeMenuOwnsChord(editor, id) and !@import("app").automation.Input.synthetic(&e)) continue;
 
                         // Repeat only makes sense for the actions that were previously wired to
                         // accept it; everything else fires once per press.

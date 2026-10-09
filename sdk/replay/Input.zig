@@ -121,6 +121,34 @@ fn dvuiMod(m: chord.Mods) dvui.enums.Mod {
     return @enumFromInt(bits);
 }
 
+/// The key events this frame's tape added, by `dvui.Event.num`: what `synthetic` answers from.
+var synthetic_nums: [32]u16 = undefined;
+var synthetic_len: usize = 0;
+var synthetic_frame: i128 = 0;
+
+fn addKey(cw: *dvui.Window, k: dvui.Event.Key) void {
+    _ = cw.addEventKey(k) catch return;
+    const frame = dvui.frameTimeNS();
+    if (frame != synthetic_frame) {
+        synthetic_frame = frame;
+        synthetic_len = 0;
+    }
+    if (synthetic_len < synthetic_nums.len) {
+        synthetic_nums[synthetic_len] = cw.event_num;
+        synthetic_len += 1;
+    }
+}
+
+/// Whether this frame's key event `e` was a tape's rather than the OS's. An app that lets a
+/// native menu run some chords (AppKit's key equivalents) skips those keys in its own dispatch,
+/// since the menu already ran them; a tape's key never passed through the menu, so the app
+/// runs it after all.
+pub fn synthetic(e: *const dvui.Event) bool {
+    if (e.evt != .key or synthetic_frame != dvui.frameTimeNS()) return false;
+    for (synthetic_nums[0..synthetic_len]) |n| if (n == e.num) return true;
+    return false;
+}
+
 fn pressChord(c: chord.Chord) void {
     const cw = dvui.currentWindow();
     // `chord.Key`'s tags are spelled as `dvui.enums.Key`'s.
@@ -128,12 +156,44 @@ fn pressChord(c: chord.Chord) void {
         inline else => |tag| @field(dvui.enums.Key, @tagName(tag)),
     };
     const mod = dvuiMod(c.mods);
-    _ = cw.addEventKey(.{ .code = code, .mod = mod, .action = .down }) catch {};
-    _ = cw.addEventKey(.{ .code = code, .mod = mod, .action = .up }) catch {};
+    addKey(cw, .{ .code = code, .mod = mod, .action = .down });
+    addKey(cw, .{ .code = code, .mod = mod, .action = .up });
     // dvui keeps the last key event's modifiers as the window's, and every pointer event after
     // carries them: let go of the modifier, as a hand does, or the next click is a Ctrl-click.
     if (mod != .none) {
         const modifier: dvui.enums.Key = if (c.mods.command) .left_command else if (c.mods.ctrl) .left_control else if (c.mods.alt) .left_alt else .left_shift;
-        _ = cw.addEventKey(.{ .code = modifier, .mod = .none, .action = .up }) catch {};
+        addKey(cw, .{ .code = modifier, .mod = .none, .action = .up });
     }
+}
+
+var test_seen: struct { tape: usize = 0, person: usize = 0 } = .{};
+var test_press = false;
+
+fn testKeysFrame() !dvui.App.Result {
+    // As `LiveDriver.frame` does: first thing in the frame, before anything reads the events.
+    if (test_press) {
+        key("ctrl+s");
+        test_press = false;
+    }
+    for (dvui.events()) |*e| {
+        if (e.evt != .key or e.evt.key.action != .down or e.evt.key.code != .s) continue;
+        if (synthetic(e)) test_seen.tape += 1 else test_seen.person += 1;
+    }
+    return .ok;
+}
+
+test "a tape's key reads as the tape's, a person's as theirs" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    test_seen = .{};
+
+    test_press = true;
+    _ = try dvui.testing.step(testKeysFrame);
+    try std.testing.expectEqual(@as(usize, 1), test_seen.tape);
+    try std.testing.expectEqual(@as(usize, 0), test_seen.person);
+
+    try dvui.testing.pressKey(.s, .lcontrol);
+    _ = try dvui.testing.step(testKeysFrame);
+    try std.testing.expectEqual(@as(usize, 1), test_seen.tape);
+    try std.testing.expectEqual(@as(usize, 1), test_seen.person);
 }
