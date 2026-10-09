@@ -768,7 +768,11 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         const g = &o.grow.?;
         const into = viewports.inMain(o.viewport);
         const to: dvui.Rect.Physical = .{ .x = into.x, .y = into.y, .w = into.w, .h = into.h };
-        const t = Floats.landedAt(land);
+        // Into the window's size, a little past it and back, and at rest on it by the time the window
+        // comes in over the glass (`grow_window_from`), at its own size.
+        const longest = @max(1, @max(to.w, to.h));
+        const swing = @min(grow_swing, grow_swing_pt * dvui.windowNaturalScale() / (fizzy.core.motion.overshoot_max * longest));
+        const t = fizzy.core.motion.arrive(Floats.landingFraction(land) / grow_window_from, swing);
         const from = land.from;
         const rect: dvui.Rect.Physical = .{
             .x = std.math.lerp(from.x, to.x, t),
@@ -919,6 +923,13 @@ const grow_seeds = [_]GrowSeed{
 /// How far through the growth its own window starts coming in over the glass, which goes as it
 /// does: the window's glass is not the drag's, and a cut between them showed.
 const grow_window_from: f32 = 0.7;
+
+/// How much of the app's swing past (`core.motion.enter`) a float's glass takes growing into its
+/// window (`core.motion.arrive`): a small overshoot, settled before the window comes in…
+const grow_swing: f32 = 0.5;
+/// …and at most this many points past the window's longer side: a share of a tall window's height
+/// was some 40 points (the user: a small overshoot).
+const grow_swing_pt: f32 = 14;
 
 /// A float's growth as the OS's glass (`growFrame`): the growing glass `rect` (corners `radius`) and
 /// the drops budding out of it toward the window `to` (`grow_seeds`), run together by the OS where

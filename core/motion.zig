@@ -135,6 +135,20 @@ pub fn enter(t: f32) f32 {
     return enterAt(level(), t);
 }
 
+/// Something growing into a thing that cannot swing with it — a carried glass into the OS window it
+/// lands as, which shows at its own size: `enter`'s approach and its swing past and back over the
+/// whole of `t` (`enterFull`), the swing `swing` of `enter`'s, at rest on the target at the end —
+/// when the window takes over. With `enter`'s swing still going as the window came in, a tall
+/// float's glass stood some 40 points past its window, which cut it to its size: an overshoot,
+/// then a snap; with no swing at all it had none of the life the rest of the app's motion has
+/// (the user: a small overshoot).
+pub fn arrive(t: f32, swing: f32) f32 {
+    const lv = level();
+    const u = clamp01(t) * (arrival + (1 - arrival) * playfulness(lv));
+    const e = enterAt(lv, u);
+    return if (u <= arrival) e else 1 + (e - 1) * swing;
+}
+
 /// Something leaving — closing, shrinking away: above minimal it draws back first, then leaves at
 /// constant speed, gone `arrival` after it set off, and holds there.
 pub fn exit(t: f32) f32 {
