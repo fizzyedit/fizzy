@@ -129,6 +129,11 @@ const FizzyCommand = struct {
     bind: ?[]const u8,
     run: *const fn (state: *anyopaque) anyerror!void,
     isEnabled: ?*const fn (state: *anyopaque) bool = null,
+    /// What `runWith` takes (`sdk.Command.Params`). `run` stays what a menu row or a key does —
+    /// with no arguments, so Open Files still asks with its dialog — and `runWith` is the same
+    /// action told exactly what to act on: by a keybind with arguments, a tape, an agent.
+    params: []const sdk.Command.Param = &.{},
+    runWith: ?*const fn (state: *anyopaque, call: *sdk.Command.Call) anyerror!void = null,
     /// TVG icon bytes (e.g. `icons.tvg.lucide.save`), the single source both the menu bar
     /// (`Menu.drawModelItem`, via `Host.command`) and the command palette
     /// (`CommandPalette.collectCommandRows`) read for this command's row — see
@@ -142,10 +147,13 @@ const fizzy_commands = [_]FizzyCommand{
     // sign-in and its folder picker. No default key: nobody reaches for a shortcut to focus the
     // window they are already looking at, and the command exists so `Host.runCommand` can.
     .{ .id = "fizzy.focusWindow", .title = "Bring Fizzy to the Front", .bind = null, .run = cmdFocusWindow, .icon = icons.tvg.lucide.@"app-window" },
-    .{ .id = "fizzy.openFiles", .title = "Open Files…", .bind = "open_files", .run = cmdOpenFiles, .icon = icons.tvg.lucide.files },
+    .{ .id = "fizzy.openFiles", .title = "Open Files…", .bind = "open_files", .run = cmdOpenFiles, .params = OpenPath.params, .runWith = OpenPath.bind(cmdOpenPath), .icon = icons.tvg.lucide.files },
     .{ .id = "fizzy.newFile", .title = "New File…", .bind = "new_file", .run = cmdNewFile, .icon = icons.tvg.lucide.@"file-plus" },
     .{ .id = "fizzy.save", .title = "Save", .bind = "save", .run = cmdSave, .icon = icons.tvg.lucide.save },
-    .{ .id = "fizzy.saveAs", .title = "Save As…", .bind = "save_as", .run = cmdSaveAs, .icon = icons.tvg.lucide.@"file-down" },
+    .{ .id = "fizzy.saveAs", .title = "Save As…", .bind = "save_as", .run = cmdSaveAs, .params = SaveAsPath.params, .runWith = SaveAsPath.bind(cmdSaveAsPath), .icon = icons.tvg.lucide.@"file-down" },
+    // No default key yet: on macOS AppKit's own Window ▸ Close holds ⌘W, and in a browser the
+    // tab does. Anyone can bind it (`keybinds.zon`).
+    .{ .id = "fizzy.close", .title = "Close", .bind = null, .run = cmdClose, .isEnabled = anyDocOpen, .params = ClosePath.params, .runWith = ClosePath.bind(cmdClosePath), .icon = icons.tvg.lucide.x },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll, .icon = icons.tvg.lucide.@"save-all" },
     .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = cmdUndoEnabled, .icon = icons.tvg.lucide.undo },
     .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = cmdRedoEnabled, .icon = icons.tvg.lucide.redo },
@@ -220,7 +228,7 @@ const is_web = builtin.target.cpu.arch == .wasm32;
 
 /// Not on the web: see `open_folder_defaults`.
 const open_folder_commands = if (is_web) [_]FizzyCommand{} else [_]FizzyCommand{
-    .{ .id = "fizzy.openFolder", .title = "Open Folder…", .bind = "open_folder", .run = cmdOpenFolder, .icon = icons.tvg.lucide.@"folder-open" },
+    .{ .id = "fizzy.openFolder", .title = "Open Folder…", .bind = "open_folder", .run = cmdOpenFolder, .params = FolderPath.params, .runWith = FolderPath.bind(cmdOpenFolderPath), .icon = icons.tvg.lucide.@"folder-open" },
 };
 
 // Ids and bind names must both be unique: a duplicate id would make `Host.runCommand`
@@ -257,6 +265,80 @@ fn cmdOpenFolder(_: *anyopaque) anyerror!void {
 
 fn cmdOpenFiles(_: *anyopaque) anyerror!void {
     fizzy.backend.showOpenFileDialog(Editor.Workspace.openFilesCallback, &.{}, "", null);
+}
+
+const OpenPath = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The file to open, as an absolute path. Empty asks with the open dialog." }) = .init(""),
+});
+
+fn cmdOpenPath(state: *anyopaque, args: OpenPath.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.path.len == 0) return cmdOpenFiles(state);
+    const editor = editorFromState(state);
+    // A mount's paths (a zip, Drive) are not on disk; anything else must be, or its tab would
+    // open only to say it could not be read. A page has no disk to ask.
+    if (!is_web and !editor.doc_io.owns(args.path)) {
+        if (!std.fs.path.isAbsolute(args.path)) return call.fail("give an absolute path: {s}", .{args.path});
+        std.Io.Dir.cwd().access(dvui.io, args.path, .{}) catch return call.fail("there is no file at {s}", .{args.path});
+    }
+    _ = try editor.openFile(.{ .path = args.path, .grouping = editor.workbench.open_workspace_grouping });
+}
+
+const FolderPath = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The folder to open as the project, as an absolute path. Empty asks with the folder dialog." }) = .init(""),
+});
+
+fn cmdOpenFolderPath(state: *anyopaque, args: FolderPath.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.path.len == 0) return cmdOpenFolder(state);
+    if (is_web) unreachable; // not registered there (`open_folder_commands`)
+    if (!std.fs.path.isAbsolute(args.path)) return call.fail("give an absolute path: {s}", .{args.path});
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, args.path, .{}) catch return call.fail("there is no folder at {s}", .{args.path});
+    dir.close(dvui.io);
+    try editorFromState(state).setProjectFolder(args.path);
+}
+
+const SaveAsPath = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "Where to save the active document, as an absolute path. Empty asks with the save dialog." }) = .init(""),
+});
+
+fn cmdSaveAsPath(state: *anyopaque, args: SaveAsPath.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.path.len == 0) return cmdSaveAs(state);
+    const editor = editorFromState(state);
+    if (editor.activeDoc() == null) return call.fail("no document is active", .{});
+    if (!is_web and !editor.doc_io.owns(args.path)) {
+        if (!std.fs.path.isAbsolute(args.path)) return call.fail("give an absolute path: {s}", .{args.path});
+        const parent = std.fs.path.dirname(args.path) orelse return call.fail("give a file's path, not a root: {s}", .{args.path});
+        var dir = std.Io.Dir.cwd().openDir(dvui.io, parent, .{}) catch return call.fail("there is no folder at {s}", .{parent});
+        dir.close(dvui.io);
+    }
+    // As the save dialog's answer does: written by the next frame (`processPendingSaveAs`).
+    if (editor.app.pending_save_as_path) |old| editor.app.gpa.free(old);
+    editor.app.pending_save_as_path = try editor.app.gpa.dupe(u8, args.path);
+    editor.app.host.refresh();
+}
+
+const ClosePath = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document to close, by its path. Empty closes the active one." }) = .init(""),
+});
+
+fn anyDocOpen(state: *anyopaque) bool {
+    return editorFromState(state).app.open_files.count() > 0;
+}
+
+/// As its tab's close button does: one with unsaved changes asks first.
+fn cmdClose(state: *anyopaque) anyerror!void {
+    const editor = editorFromState(state);
+    const doc = editor.activeDoc() orelse return;
+    try editor.closeFileID(doc.id);
+}
+
+fn cmdClosePath(state: *anyopaque, args: ClosePath.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.path.len == 0) {
+        if (editorFromState(state).activeDoc() == null) return call.fail("no document is active", .{});
+        return cmdClose(state);
+    }
+    const editor = editorFromState(state);
+    const doc = editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
+    try editor.closeFileID(doc.id);
 }
 
 fn cmdNewFile(state: *anyopaque) anyerror!void {
@@ -450,6 +532,8 @@ pub fn registerCommands(editor: *Editor) !void {
             .run = c.run,
             .isEnabled = c.isEnabled,
             .icon = c.icon,
+            .params = c.params,
+            .runWith = c.runWith,
         });
     }
 }
