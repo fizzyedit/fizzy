@@ -177,14 +177,14 @@ What `app/automation` already does, offered to plugins. Registered by an app tha
   `registerDemo`, AUTOMATION_PLAN milestone 6.) How a live tape is driven is below.
 - **`settled()`** — `Stage.idle`, and nothing asked dvui for another frame, and nothing animating.
   With a callback form, so a caller can wait without polling. Consumers: demos, tests, a plugin
-  that acts once a load has landed. *Open:* "nothing asked dvui for another
-  frame" is not observable at the start of the next frame through dvui's public API. `refresh`
-  sets `Window.extra_frames_needed`, which `Window.begin` counts back down, and running
-  animations sit in `Window.animations`. Either the app notes it at the end of its own frame
-  function, reading those fields (a reach into dvui's state, which CONTRIBUTING asks against), or
-  dvui says it: an accessor beside the frame-dump fields, in the same fizzy-dev patch. The second
-  is the right one. Until then the live driver paces on `Stage.idle` and the sequencer's yields
-  alone, which the tests show is enough for input to land.
+  that acts once a load has landed. "Nothing asked dvui for another frame, nothing animating"
+  needs no dvui change: it is what `Window.end` returns. `0` means a refresh or a running
+  animation wants the next frame now, a number means an animation starts later, and null means
+  dvui would sleep. fizzy's backends already hold that value as `end_micros`, so the app notes it
+  once a frame and `settled` reads the note, through public API only. It can't serve a tape's
+  own `waitIdle`, though: the live driver asks for a frame every frame while it plays, so `end`
+  never returns null then. A tape keeps pacing on `Stage.idle` and the sequencer's yields, which
+  the tests show is enough for input to land.
 
 #### Driving a live tape: its own driver, not the `Player`
 
@@ -228,7 +228,8 @@ What is there instead: every widget's `Options.role` and `Options.label` as it r
 (`WidgetData.register`), and dvui main already has a machine-readable widget-tree dump
 (`dvui.debug.captureFrame` / `dumpFrame`: ids, parents, rects, subwindow, focus, visibility,
 call site) — on every backend, armed for one frame, free when not. It records neither role, label
-nor tag. Adding those three fields is a small, upstreamable dvui change and gives the snapshot a
+nor tag. Adding those three fields, plus the text a label widget shows (a button's name is the
+text of the label inside it), is a small, upstreamable dvui change and gives the snapshot a
 whole tree: the anchors fizzy marks, named `role:label`s for the rest, and the structure between.
 The snapshot no longer waits on the recorder; whichever lands first brings the names.
 
@@ -395,9 +396,10 @@ Each lands on its own and is useful without the next.
    (AUTOMATION_PLAN milestone 6) through the same anchors. So far: the sink as
    `automation.Input` (#257); the `LiveDriver`, and anchors on request as `core.anchor.want`
    (#258). Next: the service itself (`play`, `stop`, `outcome`, `settled`), and the overlay
-   drawing a live tape's pointer. **On the dvui fork:** the frame-dump fields, and the "another
-   frame?" accessor `settled` wants. Both are a patch on `foxnne/dvui-dev`'s `fizzy-dev` stack,
-   then a tag and a repin, not yet made.
+   drawing a live tape's pointer. **On the dvui fork:** the frame-dump fields (tag, role, label,
+   and a label's text), patch 4 of `foxnne/dvui-dev`'s stack, tagged `fizzy-sdk-0.2.19`
+   (`docs/DEPENDENCIES.md`). `settled` needs no fork patch: it reads `Window.end`'s return (see
+   the `automation` service above).
 4. **`state`, `frames`, `log`, `plugins`.**
 5. **`fizzyedit/agent` and `fizzy-mcp`**, desktop. Everything it needs exists by now; if it
    needs anything else, that is a missing seam to add here, not a reach into fizzy.
