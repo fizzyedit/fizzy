@@ -1,11 +1,19 @@
 # Agents — the plan
 
-Status: in progress, #250. Milestone 1 (command parameters and results) is #251, with #253 (keybinds) and #254 (tapes); milestone 2 (profiles) is #255; milestone 3 has begun, #257 and #258.
+Status: in progress, #250. Milestone 1 (command parameters and results) is #251, with #253 (keybinds) and #254 (tapes); milestone 2 (profiles) is #255; milestone 3 is #257, #258, #261, #263, #274, #275, #276, with the snapshot in #277 and the standalone `replay` in #283.
 
 How fizzy becomes something an agent can drive, build plugins for and check its own work in —
 **without fizzy, or any app built on it, carrying anything agent-shaped.** Agent support is an
 external plugin, installed by whoever wants it, the same way pixi is. What fizzy owes it is a set
 of seams in the SDK and the framework; this document is those seams.
+
+**Where it is going: fizzy building itself.** A person asks an agent — any agent — for a plugin,
+and watches it being made inside fizzy, from the first file to the plugin running: the code
+appearing in the editor, the build in the output panel, the plugin loading beside them. The same
+agent draws in pixi, writes code into an open document, opens the explorer or a new window. Every
+layer, from the backend to the UI, is designed so the agent and the person have as much freedom
+as possible — without giving up the windowing, the polish or a millisecond of frame time. "The
+whole loop" below is that end to end.
 
 ## Principles
 
@@ -26,6 +34,13 @@ of seams in the SDK and the framework; this document is those seams.
    not, and everything it does shows up the way a person's would — on screen, in undo.
 5. **The person wins.** A click, tap or key from the person interrupts whatever an agent is
    playing, exactly as it pauses a demo (`docs/AUTOMATION.md`, "Playing one").
+6. **Performance is the edge, and comes first.** Fizzy is native, systems-level software: no
+   browser, no script runtime, no extension host between an agent and the app. A tool call is a
+   function call on the UI thread, a snapshot is a walk over one frame's widgets, a plugin is
+   machine code loaded in place. That is what makes "watch it being built" possible at all, and
+   it is kept: nothing agent-shaped costs anything while no agent is there, nothing an agent
+   does blocks a frame, and every step of the build loop is measured and made shorter. When a
+   design choice trades speed for convenience, speed wins.
 
 ## What there is
 
@@ -62,10 +77,10 @@ a plugin.
   plugin installed there and drive that one, leaving the person's own instance alone.
 - **Showing that an agent is there.** An infobar entry while a client is connected; the demo
   overlay's pointer while it is playing input, so a person sees what is being clicked.
-- **Later, a chat surface** — perhaps a plugin of its own: Claude Code over
-  `--input-format stream-json --output-format stream-json`, or ACP, both JSON over stdio as LSP is
-  (`core.lsp.Client` is the template). Edits shown as diffs in the `text` plugin; permission
-  prompts as fizzy dialogs. Nothing in it asks the SDK for more than the rest does.
+- **Later, a chat surface** — a plugin of its own, speaking ACP, JSON-RPC over stdio as LSP is
+  (`core.lsp.Client` is the template); see "Many agents, one contract" below. Edits shown as
+  diffs in the `text` plugin; permission prompts as fizzy dialogs. Nothing in it asks the SDK for
+  more than the rest does.
 
 ## What an agent wants from it
 
@@ -125,6 +140,100 @@ frame dump) read from another image; frame capture through the render bridge; it
 schema (permissions, socket, limits), a surface (the pane above), an infobar entry; and hot reload
 while connected. Each is something any plugin might do; this one does them all, so a break in any
 shows up here first.
+
+## The whole loop: fizzy building itself
+
+### What the person sees
+
+They open the chat pane and ask for a plugin — "a color picker that writes hex into the open
+document", say. The agent scaffolds it from the template: the files appear in the explorer, and
+each opens in the editor as the agent writes it, edits arriving as edits (in undo, highlighted as
+they land), not as files changing behind the editor's back. The build runs; its output streams
+into the output panel, and a compile error opens at its line. The plugin loads — in a
+development window beside theirs (below) — and its surface appears. The agent drives it with a
+live tape, its pointer drawn over the window, reads the result back from a snapshot, and reports.
+The person can stop it at any moment, undo any edit, and answer a permission prompt as a fizzy
+dialog. Then they ask for a change, and the loop runs again.
+
+Every piece of that is either built (commands with arguments, profiles, live tapes, the snapshot,
+hot reload of a rebuilt plugin) or a milestone below.
+
+### Many agents, one contract
+
+Fizzy speaks two open protocols and nothing vendor-specific, so whichever agent a person uses —
+Claude Code, Codex, Gemini, Grok, or the next one — plugs in without fizzy changing:
+
+- **Outward, MCP.** `fizzy-mcp` serves fizzy's tools (milestone 5): every enabled command, the
+  snapshot, live tapes, `settled`, and the state, frames, log and plugins services. Any MCP
+  client drives fizzy with them, from a terminal, an IDE, or the cloud against a headless
+  instance.
+- **Inward, ACP** (the Agent Client Protocol). The chat surface is an ACP *client*; the agent is
+  any ACP *agent*, run as a subprocess — natively or through an adapter. Starting a session, the
+  chat plugin hands the agent fizzy's own MCP server, so the agent the person talks to is also
+  the one driving fizzy. ACP carries the rest of the loop too: file reads and writes (which fizzy
+  applies to its open documents), diffs, plans, permission requests.
+
+An agent that speaks neither gets an adapter, in its own plugin; fizzy does not learn its API.
+
+**No browser library.** An agent observes fizzy as text (the snapshot), acts through commands and
+input (live tapes), and sees pixels only when it asks (`frames`). Nothing in that needs a web
+view or a headless browser. The web build gets agents through the page — a bridge the agent
+plugin's web variant provides (see "The web") — not a browser inside fizzy; and an agent's own
+web research is its tool, not fizzy's.
+
+### Every plugin, driven by its commands
+
+A plugin's agent API is its commands with arguments and results (milestone 1). The agent plugin
+turns each into a tool; a plugin installed tomorrow is drivable the moment it registers, and
+writes nothing for agents. The rule that makes this work: **anything a person can do in a plugin,
+the plugin also offers as a command** — a menu row, a palette entry, a keybind, and a tool, all
+the same thing. Where a command does not exist yet, the snapshot and live tapes still reach the
+UI, as a person's hands would.
+
+| The person asks | How it happens | What is missing |
+|---|---|---|
+| "Open the explorer" | `fizzy.toggleExplorer`; the snapshot confirms `region:Sidebar` | nothing |
+| "Open a new window" | a command from the workspaces plan (⌘N) | the command (`docs/WORKSPACES_PLAN.md`) |
+| "Code me something" | ACP writes, applied by the `text` plugin to the open document: live, in undo, shown as a diff; `text.insert` / `text.replaceRange` for an agent on MCP | those `text` commands |
+| "Draw me something in pixi" | pixi's commands: a new sprite (`.w`, `.h`), paint rows of palette indices at a place, fill, choose a layer or color; `frames` to see the result | an SDK release with command arguments, then the commands in pixi |
+| "Build me a plugin" | the loop above | milestones 4–8 |
+
+Reading is commands too: a document's text or a range, pixi's layers and palette, what is open.
+Each returns ZON (`Command.Call.returns`), which the bridge turns into JSON at its edge.
+
+### The development window
+
+A plugin being written runs native code, and a plugin half-written can crash. It is not loaded
+into the person's own session. The agent's build installs into a **development profile**
+(milestone 2), and a second fizzy runs from it — a separate process, in an OS window of its own
+beside the person's, the way an editor runs its extension development host. The person watches it
+come alive; their documents, layout and frames are never at stake; a crash restarts the
+development window, not their work. The agent plugin talks to both: the person's instance for
+the chat, the editor and the code, the development instance for loading, driving and checking the
+plugin. Hot reload (`reconcileChangedPluginBinaries`), with state carried across a reload (see
+"Hot reload keeps state"), makes each rebuild a swap rather than a restart.
+
+### Fast enough to watch
+
+Native code is the edge, and the loop is where it shows. The targets, each measured before it is
+claimed and kept by a benchmark once it is:
+
+- **Free when no agent is there.** No socket, no thread, no per-frame work: anchors are asked
+  for a frame at a time, a snapshot is taken only on request, the frame dump is armed for one
+  frame. A build without the agent plugin carries none of it.
+- **No frame waits on an agent.** The socket's thread blocks on its own; requests are drained in
+  `beginFrame` and answered from later frames. A snapshot is a walk over one captured frame —
+  measured, and budgeted well under a millisecond for a window of fizzy's size. A live tape step
+  is a frame. The development window is another process, so a slow plugin cannot stall the
+  person's frames.
+- **A rebuild a person can wait for.** From an edit saved to the plugin running again: the
+  compile (the plugin's own module only — its dependencies are the SDK, cached, never the app
+  or Velopack), the link, the install, the `dlopen` (on macOS the first load of a new file costs
+  ~110–140 ms of OS validation), the reload and its reopened documents. Each stage is timed and
+  reported through `plugins` (milestone 4), and the slowest one is the next thing worked on. The
+  goal is seconds, not tens of seconds, for a small plugin in Debug.
+- **Small output.** A snapshot is a line per node, and a later one can be just what changed;
+  arguments and results are ZON text, not screenshots. Fewer tokens is a faster agent.
 
 ## The seams
 
@@ -395,17 +504,26 @@ Each lands on its own and is useful without the next.
    buttons. First consumers: plugin tests, and plugin demos
    (AUTOMATION_PLAN milestone 6) through the same anchors. So far: the sink as
    `automation.Input` (#257); the `LiveDriver`, and anchors on request as `core.anchor.want`
-   (#258). Next: the service itself (`play`, `stop`, `outcome`, `settled`), and the overlay
-   drawing a live tape's pointer. **On the dvui fork:** the frame-dump fields (tag, role, label,
-   and a label's text), patch 4 of `foxnne/dvui-dev`'s stack, tagged `fizzy-sdk-0.2.19`
-   (`docs/DEPENDENCIES.md`). `settled` needs no fork patch: it reads `Window.end`'s return (see
-   the `automation` service above).
-4. **`state`, `frames`, `log`, `plugins`.**
+   (#258); the service (`play`, `stop`, `outcome`, `settled`, #261) and a live tape's pointer
+   (#263); the frame-dump fields (tag, role, label, and a label's text), patch 4 of
+   `foxnne/dvui-dev`'s stack, tagged `fizzy-sdk-0.2.19` (#274, `docs/DEPENDENCIES.md`) —
+   `settled` needed no fork patch, it reads `Window.end`'s return; icon-only controls labelled,
+   held by a headless test (#275); the dvui half moved to `sdk/replay/`, dvui and `tape` only
+   (#276). In review: the snapshot, through the service as `snapshot` / `snapshotText` (#277),
+   and `replay` for any dvui app, with a plain overlay and `examples/replay-app` (#283). Left:
+   the demo transport bar's buttons, which have no widgets to name.
+   Between this and the next: **an SDK release**, so store plugins (pixi first) can register
+   commands with arguments — they merged after `sdk-v0.2.18`.
+4. **`state`, `frames`, `log`, `plugins`.** `plugins` reports each stage of a rebuild's loop,
+   timed ("Fast enough to watch").
 5. **`fizzyedit/agent` and `fizzy-mcp`**, desktop. Everything it needs exists by now; if it
    needs anything else, that is a missing seam to add here, not a reach into fizzy.
 6. **The headless plugin-test harness**, and `AGENTS.md` in the tarball. Over dvui's testing
    backend ("Running with no display"): the whole editor already runs there.
-7. **A chat surface**, if wanted.
+7. **The chat surface, over ACP**: any ACP agent as a subprocess, handed fizzy's MCP server;
+   edits applied to open documents as diffs, permission prompts as dialogs.
+8. **The development window**: the agent's plugin built into a development profile and run in
+   a second fizzy beside the person's, driven and checked there ("The whole loop").
 
 ## Decisions
 
@@ -442,7 +560,20 @@ Each lands on its own and is useful without the next.
   `core` rather than a service call: the request already crosses dylibs through the window's
   data.
 
+- **MCP outward, ACP inward** (2026-10-09): fizzy speaks open protocols and nothing
+  vendor-specific; any agent comes in through one or the other, an adapter in its own plugin
+  where it speaks neither. No browser library.
+- **A plugin's agent API is its commands.** Anything a person can do in a plugin is also a
+  command with arguments; agents get tools from the registry, and plugins write nothing for them.
+- **Performance first.** Nothing agent-shaped costs a frame while no agent is there, nothing an
+  agent does blocks one, and every stage of the build loop is measured before it is called fast.
+- **A plugin under construction runs in its own process** (the development window), never in the
+  person's session.
+
 ## Open
 
 - What a reload carries beyond documents, and whether that hook moves the fingerprint now or
   waits for the next batch.
+- The rebuild loop's stages, unmeasured: the first benchmark, then the budget per stage.
+- How the agent plugin reaches the development instance: a second socket in its profile, or the
+  person's instance relaying.
