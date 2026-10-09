@@ -6307,6 +6307,7 @@ fn liveFrame() !dvui.App.Result {
     te.processEvents();
     te.draw();
     te.deinit();
+    automation.overlay.drawLive(&demo_live);
     return .ok;
 }
 
@@ -6368,6 +6369,26 @@ test "live: a tape plays on the app as it is, each step once the last has landed
     // Nothing of a demo's: no keyframe, no session set aside.
     try std.testing.expectEqual(@as(usize, 0), demo_stage.keyframes);
     try std.testing.expect(!demo_stage.begun);
+}
+
+test "live: the pointer clicks, then steps aside while the tape types" {
+    var t = try liveCtx();
+    defer deinitLive(&t);
+
+    try demo_live.play(try liveTape());
+    try std.testing.expect(demo_live.hand.press == null);
+    try std.testing.expect(!demo_live.hand.typing);
+    // Until the tape types: by then both clicks have landed.
+    for (0..200) |_| {
+        if (demo_live.hand.typing) break;
+        _ = try dvui.testing.step(liveFrame);
+    } else return error.TestUnexpectedResult;
+    const press = demo_live.hand.press orelse return error.TestUnexpectedResult;
+    // The second click, into the field: its pointer is where the ripple spreads from.
+    const field = (dvui.tagGet("demo.field") orelse return error.TestUnexpectedResult).rect;
+    try std.testing.expect(field.contains(.{ .x = press.pt.x, .y = press.pt.y }));
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try stepLiveUntilDone(200);
 }
 
 test "live: a person's key stops it, before the op it had not reached" {

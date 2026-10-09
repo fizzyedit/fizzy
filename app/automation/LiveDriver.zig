@@ -49,6 +49,25 @@ input: Input = .{},
 outcome: ?Outcome = null,
 /// A wait gave up during this frame's advance: the op index it gave up at.
 gave_up_at: ?usize = null,
+/// What the overlay shows of the tape's hand (`overlay.drawLive`), in wall time: a live tape's
+/// own clock jumps from op to op, so nothing drawn can be timed by it.
+hand: Hand = .{},
+
+pub const Hand = struct {
+    /// The last press, where and when, for the ripple.
+    press: ?struct { pt: Sequencer.Point, ns: i128 } = null,
+    /// Typing (a key, text, a command) rather than pointing: the pointer steps aside, as a
+    /// desktop's does.
+    typing: bool = false,
+    /// When `typing` last changed, or the tape started: the pointer fades from there.
+    since_ns: i128 = 0,
+
+    fn set(self: *Hand, typing: bool) void {
+        if (self.typing == typing) return;
+        self.typing = typing;
+        self.since_ns = dvui.frameTimeNS();
+    }
+};
 
 pub const Outcome = union(enum) {
     /// Every op was applied.
@@ -98,6 +117,7 @@ pub fn play(self: *LiveDriver, owned: Tape.Owned) PlayError!void {
     self.seq.pointer = .{ .x = p.x, .y = p.y };
     self.outcome = null;
     self.gave_up_at = null;
+    self.hand = .{ .since_ns = dvui.frameTimeNS() };
     dvui.refresh(null, @src(), null);
 }
 
@@ -187,28 +207,37 @@ fn locate(_: *anyopaque, target: Tape.Target) ?Sequencer.Point {
     return Input.targetPoint(target);
 }
 
-fn moveTo(_: *anyopaque, pt: Sequencer.Point) void {
+fn moveTo(ctx: *anyopaque, pt: Sequencer.Point) void {
+    from(ctx).hand.set(false);
     Input.moveTo(pt);
 }
 
 fn button(ctx: *anyopaque, b: Tape.Button, down: bool) void {
-    from(ctx).input.button(b, down);
+    const self = from(ctx);
+    self.hand.set(false);
+    self.input.button(b, down);
+    if (down) self.hand.press = .{ .pt = self.seq.pointer, .ns = dvui.frameTimeNS() };
 }
 
-fn scroll(_: *anyopaque, by: Tape.Scroll) void {
+fn scroll(ctx: *anyopaque, by: Tape.Scroll) void {
+    from(ctx).hand.set(false);
     Input.scroll(by);
 }
 
-fn key(_: *anyopaque, spelled: []const u8) void {
+fn key(ctx: *anyopaque, spelled: []const u8) void {
+    from(ctx).hand.set(true);
     Input.key(spelled);
 }
 
-fn text(_: *anyopaque, bytes: []const u8) void {
+fn text(ctx: *anyopaque, bytes: []const u8) void {
+    from(ctx).hand.set(true);
     Input.text(bytes);
 }
 
 fn command(ctx: *anyopaque, cmd: Tape.Command) void {
-    from(ctx).stage.command(cmd.id, cmd.args);
+    const self = from(ctx);
+    self.hand.set(true);
+    self.stage.command(cmd.id, cmd.args);
 }
 
 /// Never reached: `play` refuses a tape with a keyframe.
