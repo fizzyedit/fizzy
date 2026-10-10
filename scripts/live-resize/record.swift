@@ -94,8 +94,10 @@ func drag(_ f: CGRect) {
         if t >= total { break }
         let s = amp * 0.5 * (1 - cos(2 * .pi * t / period))
         let p = CGPoint(x: start.x + dir.dx * s, y: start.y + dir.dy * s)
-        // Stop the moment anything else comes over the pointer.
-        if Int(k) % 15 == 0, ownerOfTopWindow(at: p) != pid {
+        // Stop the moment another app's window comes over the pointer. None at all is fine: the
+        // window's edge trails the pointer while each step waits for the app's frame (a Debug
+        // build's above all), and the window that took the press keeps the drag past its edge.
+        if Int(k) % 15 == 0, let owner = ownerOfTopWindow(at: p), owner != pid {
             postMouse(.leftMouseUp, p)
             fail("another window came over fizzy's during the drag; released the button and stopped")
         }
@@ -104,7 +106,14 @@ func drag(_ f: CGRect) {
     }
     postMouse(.leftMouseUp, start)
     FileHandle.standardError.write(String(format: "drag end %.6f\n", CACurrentMediaTime()).data(using: .utf8)!)
+    dragDone.signal()
 }
+
+/// The drag has ended and its button is up. The recording waits for it: stopped after a fixed
+/// time instead, it could stop — and the recorder exit — mid-drag when bringing fizzy to the front
+/// took longer than usual, leaving the button down: AppKit's live resize then never ended, and
+/// fizzy could not quit.
+let dragDone = DispatchSemaphore(value: 0)
 
 var timebase = mach_timebase_info_data_t()
 mach_timebase_info(&timebase)
@@ -264,7 +273,13 @@ Task {
         let th = Thread { drag(f) }
         th.qualityOfService = .userInteractive
         th.start()
-        try await Task.sleep(nanoseconds: UInt64((period * cycles + 0.2 + 0.6) * 1e9))
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                _ = dragDone.wait(timeout: .now() + period * cycles + 10)
+                done.resume()
+            }
+        }
+        try await Task.sleep(nanoseconds: 300_000_000)
         try await stream.stopCapture()
         out.pngQueue.sync {}
         for l in out.lines { print(l) }
