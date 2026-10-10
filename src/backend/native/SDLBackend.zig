@@ -16,6 +16,8 @@ const dvui = @import("dvui");
 
 const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
+/// What this backend keeps count of as it runs (`health`).
+pub const Health = @import("Health.zig");
 
 /// What an app gets from its window beyond drawing into it: native dialogs, files the OS hands
 /// over, trackpad gestures, the window's chrome and state (`src/backend/native/platform`).
@@ -115,7 +117,7 @@ const cursor_enum_count = @typeInfo(dvui.enums.Cursor).@"enum".fields.len;
 pub const max_viewports = 8;
 
 /// An OS window besides the main one that shows a part of the one frame: a float popped out of
-/// the main window (`docs/POPOUT_WINDOWS_PLAN.md`). There stays one `dvui.Window`. The part this
+/// the main window (`plans/POPOUT_WINDOWS_PLAN.md`). There stays one `dvui.Window`. The part this
 /// window shows is a band of the frame past the main window's edge (`viewport_map`): the app
 /// draws the float there, replays its drawing into a target of its own and hands that over
 /// (`viewportPresent`), and the pointer over this window goes back to dvui where the window
@@ -328,6 +330,27 @@ pub var window_create_hook: ?*const fn (props: c.SDL_PropertiesID) void = null;
 /// went quiet (`settled`), and runs one more frame when a caller was told "not yet", so the caller
 /// sees the answer change without asking for frames itself.
 pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
+
+/// The backend's health counters now (`Health`): frames, presents, swapchain resizes, the OS
+/// windows alive, what SDL logged, frame-time percentiles and each frame's GPU work. Kept current
+/// whether or not anyone reads them; reading them sorts the frame times and asks SDL (and AppKit)
+/// for their windows, so it is for a run's end or a once-a-second readout, not every frame. Main
+/// thread.
+pub fn health() Health.Snapshot {
+    var s = Health.current.snapshot();
+    var n: c_int = 0;
+    if (c.SDL_GetWindows(&n)) |windows| c.SDL_free(@ptrCast(windows));
+    s.os_windows = @intCast(@max(n, 0));
+    if (comptime builtin.os.tag == .macos) {
+        var all: c_uint = 0;
+        var visible: c_uint = 0;
+        fizzy_macos_window_counts(&all, &visible);
+        s.ns_windows = all;
+        s.ns_windows_visible = visible;
+    }
+    return s;
+}
+extern fn fizzy_macos_window_counts(all: *c_uint, visible: *c_uint) void;
 
 /// SDL initialization for the all SDL app, i.e. common for all OS Windows
 /// This is expected to be called only once.
@@ -1195,7 +1218,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // transient for it on X11). Without it, a press on the main window — or one the OS took as
     // its own while the viewport was being resized — put the main window over it. Not on macOS,
     // where SDL makes it a child window that moves with its parent, and the windows that left
-    // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
+    // the main one stay where they are when it moves (`plans/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
     self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu };
     const vp = &self.viewports[slot].?;
@@ -1283,7 +1306,7 @@ pub fn viewportFade(_: *SDLBackend, vp: *Viewport, alpha: f32) void {
 
 /// Whether this run can open viewports at all: not on Wayland, where a client cannot put its
 /// windows anywhere — a window split out of the main one would open where the compositor likes, and
-/// none could follow a drag (`docs/POPOUT_WINDOWS_PLAN.md`). Floats stay in the main window there.
+/// none could follow a drag (`plans/POPOUT_WINDOWS_PLAN.md`). Floats stay in the main window there.
 pub fn viewportsAvailable() bool {
     if (comptime builtin.os.tag != .linux) return true;
     const driver = c.SDL_GetCurrentVideoDriver() orelse return false;
@@ -1618,7 +1641,7 @@ fn mainOnScreen(self: *SDLBackend) viewport_map.Point {
 }
 
 /// The main window's pixels per point: every viewport draws at its scale for now (one
-/// `natural_scale`, `docs/POPOUT_WINDOWS_PLAN.md` on DPI).
+/// `natural_scale`, `plans/POPOUT_WINDOWS_PLAN.md` on DPI).
 fn density(self: *SDLBackend) f32 {
     // The screen's, from AppKit: SDL's is its pixel size over its size, as it last heard of each,
     // and the two arrive apart — the frames after a window jumps its size into or out of full screen
@@ -3014,6 +3037,31 @@ fn sdlLog(comptime category: @EnumLiteral(), priority: c_int, message: [*c]const
     }
 }
 
+/// What SDL's log output was before `countSDLLog` took it: every message goes on to it.
+var sdl_log_next: c.SDL_LogOutputFunction = null;
+var sdl_log_next_data: ?*anyopaque = null;
+var sdl_log_counted = false;
+
+/// Count SDL's warnings and errors into `Health` from here on, passing every message on to the
+/// output function SDL had (`enableSDLLogging`'s, or SDL's own). An app with its own log output
+/// sets it first. Once; main thread.
+pub fn countSDLLog() void {
+    if (sdl_log_counted) return;
+    sdl_log_counted = true;
+    c.SDL_GetLogOutputFunction(&sdl_log_next, &sdl_log_next_data);
+    c.SDL_SetLogOutputFunction(&sdlLogCount, null);
+}
+
+fn sdlLogCount(_: ?*anyopaque, category: c_int, priority: SdlLogPriorityType, message: [*c]const u8) callconv(.c) void {
+    const p: c_int = @intCast(priority);
+    if (p >= c.SDL_LOG_PRIORITY_ERROR) {
+        Health.current.noteLog(.@"error", std.mem.span(message));
+    } else if (p == c.SDL_LOG_PRIORITY_WARN) {
+        Health.current.noteLog(.warning, std.mem.span(message));
+    }
+    if (sdl_log_next) |next| next(sdl_log_next_data, category, priority, message);
+}
+
 /// This set enables the internal logging of SDL based on the level of std.log (and the SDL_... scopes)
 pub fn enableSDLLogging() void {
     if (sdl3) {
@@ -3021,6 +3069,7 @@ pub fn enableSDLLogging() void {
     } else {
         c.SDL_LogSetOutputFunction(&sdlLogCallback, null);
     }
+    countSDLLog();
     // Set default log level
     const default_log_level: c.SDL_LogPriority = if (std.log.logEnabled(.debug, .SDLBackend))
         c.SDL_LOG_PRIORITY_VERBOSE
@@ -3148,6 +3197,7 @@ pub fn main(main_init: std.process.Init) !u8 {
         // beginWait coordinates with waitTime below to run frames only when needed
         const nstime = win.beginWait(interrupted);
 
+        Health.current.frameBegin(c.SDL_GetTicksNS());
         // marks the beginning of a frame for dvui, can call dvui functions after this
         try win.begin(nstime);
 
@@ -3157,6 +3207,7 @@ pub fn main(main_init: std.process.Init) !u8 {
         const res = try app.frameFn();
 
         var end_micros = try win.end(.{});
+        Health.current.frameEnd(c.SDL_GetTicksNS());
         if (frame_ended_hook) |hook| if (hook(end_micros)) {
             end_micros = 0;
         };
@@ -3355,6 +3406,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
         appState.ios_event_pending = false;
     }
 
+    Health.current.frameBegin(c.SDL_GetTicksNS());
     const trace = live_resize_trace.begin(&appState.back);
 
     // beginWait coordinates with waitTime below to run frames only when needed
@@ -3389,6 +3441,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     appState.back.setCursor(appState.win.cursorRequested());
     appState.back.textInputRect(appState.win.textInputRequested());
     appState.back.renderPresent();
+    Health.current.frameEnd(c.SDL_GetTicksNS());
     app_frame_open = false;
 
     if (res != .ok) return c.SDL_APP_SUCCESS;
@@ -3443,12 +3496,12 @@ test {
 /// decodes (`scripts/live-resize/`) to tell which frame, drawn for which size, reached the screen
 /// at the window's size. `src=display` is a frame SDL drew from AppKit's display of the view,
 /// presented with the transaction that resizes the window; `src=timer` one from its timer.
+/// A reader of the health counters (`Health`): the frame's number and how long it took are theirs.
 const live_resize_trace = struct {
     extern "c" fn fizzy_live_resize_trace_enabled() c_int;
     extern "c" fn fizzy_live_resize_now() f64;
     extern "c" fn fizzy_live_resize_probe(nswindow: *anyopaque, out: *[8]f64) void;
 
-    var frame_number: u16 = 0;
     var last_start: f64 = 0;
     /// The frame's window rect, kept by `overlay` for `end`, which runs after the frame.
     var frame_rect: dvui.Rect.Physical = .{};
@@ -3463,7 +3516,6 @@ const live_resize_trace = struct {
     fn begin(back: *SDLBackend) ?Start {
         if (comptime builtin.os.tag != .macos) return null;
         if (!enabled()) return null;
-        frame_number +%= 1;
         const nswindow = cocoaWindow(back.window) orelse return null;
         var p: [8]f64 = undefined;
         fizzy_live_resize_probe(nswindow, &p);
@@ -3471,20 +3523,24 @@ const live_resize_trace = struct {
         return .{ .t = fizzy_live_resize_now(), .probe = p };
     }
 
+    /// The frame in flight's number, as its barcode carries it.
+    fn frameNumber() u16 {
+        return @truncate(Health.current.frames);
+    }
+
     fn end(s: Start, back: *SDLBackend, wait_micros: u32) void {
         if (comptime builtin.os.tag != .macos) return;
-        const now = fizzy_live_resize_now();
         const r = frame_rect;
         const p = s.probe;
         std.debug.print("[lr] {d:.6} frame {d} src={s} since={d:.1}ms took={d:.1}ms win={d}x{d} layer={d}x{d} drawable={d}x{d} swap={d}x{d} rect={d}x{d} wait={d}us\n", .{
-            s.t,                                   frame_number,
-            if (p[6] != 0) "display" else "timer", (s.t - last_start) * 1000,
-            (now - s.t) * 1000,                    p[0],
-            p[1],                                  p[2],
-            p[3],                                  p[4],
-            p[5],                                  back.gpu.swapchain_w,
-            back.gpu.swapchain_h,                  r.w,
-            r.h,                                   wait_micros,
+            s.t,                                                                        frameNumber(),
+            if (p[6] != 0) "display" else "timer",                                      (s.t - last_start) * 1000,
+            @as(f64, @floatFromInt(Health.current.lastFrameNs())) / std.time.ns_per_ms, p[0],
+            p[1],                                                                       p[2],
+            p[3],                                                                       p[4],
+            p[5],                                                                       back.gpu.swapchain_w,
+            back.gpu.swapchain_h,                                                       r.w,
+            r.h,                                                                        wait_micros,
         });
         last_start = s.t;
     }
@@ -3502,7 +3558,7 @@ const live_resize_trace = struct {
         const x0: f32 = 24;
         const y0: f32 = 160;
         const red: dvui.Color = .{ .r = 255, .g = 0, .b = 0 };
-        const fields = [3]u16{ frame_number, @intFromFloat(r.w), @intFromFloat(r.h) };
+        const fields = [3]u16{ frameNumber(), @intFromFloat(r.w), @intFromFloat(r.h) };
         var i: usize = 0;
         while (i < 50) : (i += 1) {
             const color: dvui.Color = if (i == 0 or i == 49) red else blk: {

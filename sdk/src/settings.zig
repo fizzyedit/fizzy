@@ -286,7 +286,7 @@ pub const Access = struct {
     persist: *const fn (value: *anyopaque, owner: *Plugin) void,
     /// Parse `blob` into `value` and notify `owner.settingsChanged(blob)` — the reconciliation-
     /// path counterpart to `persist` (which goes the other direction: live value → disk). Used
-    /// only by external-change reconciliation (see R11 in docs/PLUGIN_MANIFEST_PLAN.md), never
+    /// only by external-change reconciliation (see R11 in plans/PLUGIN_MANIFEST_PLAN.md), never
     /// by an in-app edit through the settings pane.
     applyBlob: *const fn (value: *anyopaque, owner: *Plugin, blob: []const u8) void,
 };
@@ -309,7 +309,7 @@ pub const SettingsSchema = struct {
 
 /// Build a settings namespace for `T`, a struct whose every field is a `Value(...)` cell with a
 /// default (`= .init(…)`). The default is required to compute `default_value` below, which the
-/// non-default-only persistence (see `diffSerialize`, R12 in docs/PLUGIN_MANIFEST_PLAN.md) diffs
+/// non-default-only persistence (see `diffSerialize`, R12 in plans/PLUGIN_MANIFEST_PLAN.md) diffs
 /// every value against.
 pub fn Schema(comptime T: type) type {
     const struct_fields = std.meta.fields(T);

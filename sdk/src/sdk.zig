@@ -48,7 +48,7 @@ pub const Host = @import("Host.zig");
 pub const Plugin = @import("Plugin.zig");
 pub const DocHandle = @import("DocHandle.zig");
 
-/// Comptime settings API (`sdk.settings.Schema(T)`) — see `docs/PLUGIN_MANIFEST_PLAN.md`.
+/// Comptime settings API (`sdk.settings.Schema(T)`) — see `plans/PLUGIN_MANIFEST_PLAN.md`.
 pub const settings = @import("settings.zig");
 
 pub const language = @import("language.zig");
@@ -97,7 +97,7 @@ pub fn refresh() void {
 /// Document staging helpers (`allocStaging`, `loadPathInto`, …).
 pub const document = @import("document.zig");
 
-/// The declarative `plugin.zig.zon` manifest types (see `docs/PLUGIN_MANIFEST_PLAN.md`).
+/// The declarative `plugin.zig.zon` manifest types (see `plans/PLUGIN_MANIFEST_PLAN.md`).
 pub const Manifest = @import("Manifest.zig");
 
 /// Services: capability offered by name and version rather than by the ABI.

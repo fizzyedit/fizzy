@@ -111,11 +111,18 @@ restore_pending: ?usize = null,
 /// The pending seek is forward on the tape's own state: should no snapshot restore, it carries on
 /// from here rather than going back to the keyframe.
 restore_forward: bool = false,
+/// A rewind let go of held buttons (`letGo`): the next run lets the release land, and cuts after.
+cut_waits: bool = false,
+/// Put back from a snapshot, the app is still settling and no op lands yet (`restoreSnapshot`).
+settling: ?Settling = null,
 /// The op a snapshot's fingerprint was last compared at, so a moment is checked once a pass.
 checked_cursor: ?usize = null,
 /// Replays that did not reach the model a snapshot holds (`Stage.fingerprint`): the tape does
 /// not replay exactly. Logged as they happen; tests read it.
 mismatches: u32 = 0,
+/// Waits that gave up since the demo was loaded: what one waited for never came, and the tape
+/// carried on regardless. Logged as they happen; tests read it.
+timeouts: u32 = 0,
 /// Whether letting go of the scrubber plays or stays paused: as it was when it was taken.
 scrub_after: After = .pause,
 /// The demo time the scrubber last sought to while held.
@@ -126,6 +133,20 @@ input: Input = .{},
 /// The last press the tape made, for the overlay's ripple.
 last_press: ?Press = null,
 transport: Transport = .{},
+
+/// The app put back from a snapshot, settling before the tape goes on (`restoreSnapshot`).
+pub const Settling = struct {
+    /// The anchor the tape last moved the pointer onto: the pointer goes back onto it once it
+    /// has stopped moving. Null: the tape had not moved the pointer in the scene yet.
+    target: ?Tape.Target,
+    /// Where the target was in the run before, to tell when it has stopped moving.
+    last: ?Sequencer.Point = null,
+    runs: u8 = 0,
+
+    /// The most runs the app gets to settle. A target never seen in them leaves the pointer
+    /// where it was, as a glide does.
+    pub const max_runs = 8;
+};
 
 pub const State = enum {
     /// Nothing loaded.
@@ -266,6 +287,7 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     self.diverged = false;
     self.transport = .{};
     self.mismatches = 0;
+    self.timeouts = 0;
     self.stage.begin(t);
     self.seekTo(0, if (opts.autoplay) .play else .pause);
 }
@@ -291,6 +313,8 @@ pub fn unload(self: *Player) void {
     self.owned.?.deinit();
     self.owned = null;
     self.state = .idle;
+    self.cut_waits = false;
+    self.settling = null;
     self.live = false;
     self.last_press = null;
     self.transport = .{};
@@ -405,20 +429,50 @@ fn arrive(self: *Player) void {
 
 /// Back to the keyframe op `kf`, to replay from there.
 fn rewind(self: *Player, kf: usize) void {
-    self.input.releaseHeld();
+    if (self.letGo()) self.cut_waits = true;
+    self.settling = null;
     self.seq.rewind(kf);
     self.last_press = null;
     self.diverged = false;
     self.checked_cursor = null;
 }
 
+/// Let go of the buttons the tape holds, ahead of a cut (a rewind, a restore), and say whether it
+/// held any. dvui hands a release to what the press was on, which takes it as a click, so the cut
+/// waits a run (`cut_waits`) for the release to land on the app it belongs to: let go after a
+/// restore, it acted on the app put back, and a tree row held mid-click opened a file the
+/// snapshot never had.
+fn letGo(self: *Player) bool {
+    if (self.input.held.count() == 0) return false;
+    self.input.releaseHeld();
+    return true;
+}
+
 /// Put the app back to snapshot `i` and the sequencer to its moment. False when the stage cannot
 /// from where the app is now.
 fn restoreSnapshot(self: *Player, i: usize) bool {
     const s = self.snapshots.items[i];
-    self.input.releaseHeld();
     if (!self.stage.restore(s.state)) return false;
     self.seq.restoreTo(s.cursor, s.at, s.pointer);
+    // The pointer is kept in pixels, and they are only where the tape left it in the layout the
+    // snapshot was taken in. The app put back takes a few runs to get there — a sidebar the
+    // restore shut eases away, even with motion off, and the document beside it moves over — and
+    // a press at the old pixels, or at where the anchor was drawn mid-way, went into the sidebar
+    // or onto the wrong line. So no op lands until what the pointer was last sent to has stopped
+    // moving, and the pointer goes back onto it there: a tape aims at anchors, never at pixels.
+    self.settling = .{ .target = null };
+    const ops = self.tape().?.ops;
+    var op = s.cursor;
+    while (op > s.scene) {
+        op -= 1;
+        switch (ops[op].do) {
+            .move => |target| {
+                self.settling.?.target = target;
+                break;
+            },
+            else => {},
+        }
+    }
     self.last_press = null;
     self.diverged = false;
     // The moment is checked again: a restore is a replay too.
@@ -428,11 +482,30 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
     return true;
 }
 
+/// A run of the app settling after a restore (`settling`): true while it still is, and no op may
+/// land.
+fn settle(self: *Player) bool {
+    const st = &(self.settling orelse return false);
+    st.runs += 1;
+    const pt = if (st.target) |t| Input.targetPoint(t) else null;
+    const still = if (st.target == null) true else if (pt != null and st.last != null)
+        pt.?.x == st.last.?.x and pt.?.y == st.last.?.y
+    else
+        false;
+    if (!still and st.runs < Settling.max_runs) {
+        st.last = pt;
+        return true;
+    }
+    if (pt) |p| self.seq.pointer = p;
+    self.settling = null;
+    return false;
+}
+
 /// Put the app back to the latest snapshot from `first` down, in its scene, that the stage can
 /// restore where the app is now — one taken before a document was opened, when that document
 /// has since been closed again, say. None: a forward seek carries on from where the tape is, any
-/// other goes back to the keyframe.
-fn goBack(self: *Player, first: usize) void {
+/// other goes back to the keyframe. True when a snapshot was put back.
+fn goBack(self: *Player, first: usize) bool {
     const scene = self.snapshots.items[first].scene;
     var i = first + 1;
     while (i > 0) {
@@ -441,12 +514,13 @@ fn goBack(self: *Player, first: usize) void {
         if (s.scene != scene) break;
         // Forward, a snapshot no further on than the tape already is gains nothing.
         if (self.restore_forward and s.at <= self.seq.now) break;
-        if (self.restoreSnapshot(i)) return;
+        if (self.restoreSnapshot(i)) return true;
     }
     if (!self.restore_forward) {
         self.rewind(self.tape().?.keyframeBefore(self.seek_target));
         self.seek_from = self.seq.now;
     }
+    return false;
 }
 
 /// The latest snapshot at or before demo time `t` in the scene of keyframe op `kf`.
@@ -552,11 +626,26 @@ pub fn frame(self: *Player) void {
             self.seekTo(t, .pause);
         }
     }
-    if (self.restore_pending) |i| {
-        self.restore_pending = null;
-        if (self.state == .seeking) self.goBack(i);
+    // Put back from a snapshot this run: a cut, as a keyframe is, which the app draws before the
+    // next op lands on it. dvui sends a press to the floating window under it as the last frame
+    // drew them, and that frame was drawn for wherever the app was when the seek was asked: a
+    // palette still open over the rail took the tape's first click.
+    // A run that cuts — or lets go ahead of a cut (`letGo`) — applies no ops, and neither takes
+    // a snapshot nor checks one: the app is not at a moment of the tape until it has drawn.
+    var cut = false;
+    if (self.cut_waits) {
+        self.cut_waits = false;
+        cut = true;
+    } else if (self.restore_pending) |i| {
+        if (self.letGo()) {
+            cut = true;
+        } else {
+            self.restore_pending = null;
+            if (self.state == .seeking) cut = self.goBack(i);
+        }
     }
-    if (self.state == .playing or self.state == .seeking) self.keepSnapshot();
+    if (!cut and self.state == .seeking) cut = self.settle();
+    if (!cut and (self.state == .playing or self.state == .seeking)) self.keepSnapshot();
 
     // While the tape drives, a frame's wall time is all demo time, however slow the frame: a
     // browser that slows to a few frames a second plays the demo at its pace, choppily, rather
@@ -576,7 +665,7 @@ pub fn frame(self: *Player) void {
         },
         .seeking => {
             Input.holdPointer(self.seq.pointer);
-            if (self.seq.advance(self.seek_target, wall_ms, self.sink()) == .reached) self.arrive();
+            if (!cut and self.seq.advance(self.seek_target, wall_ms, self.sink()) == .reached) self.arrive();
         },
         .paused, .ended, .idle => return,
     }
@@ -676,11 +765,20 @@ fn wallClock(self: *const Player, win: *dvui.Window) i128 {
 }
 
 /// The backend's clock offset, if it has one (`frames`): a `clock_ahead_ns` its `nanoTime` adds.
+/// dvui's testing backend has none, and needs none: `dvui.testing.step` begins each frame a fixed
+/// step after the last frame's time, not on a wall, so its clock carries on from wherever the
+/// catch-up runs took it. It gets an offset no one reads, so a seek under test runs on demo time
+/// as it does on a real backend.
 pub fn backendClock(win: *dvui.Window) ?*i128 {
     const impl = win.backend.impl;
-    if (@hasField(@TypeOf(impl.*), "clock_ahead_ns")) return &impl.clock_ahead_ns;
+    const Impl = @TypeOf(impl.*);
+    if (@hasField(Impl, "clock_ahead_ns")) return &impl.clock_ahead_ns;
+    if (@hasDecl(Impl, "kind") and Impl.kind == .testing) return &testing_clock;
     return null;
 }
+
+/// The offset `backendClock` hands out for dvui's testing backend.
+var testing_clock: i128 = 0;
 
 /// Real events, before any widget sees them: the bar's, then the interrupt rule.
 fn takeRealInput(self: *Player) void {
@@ -862,6 +960,7 @@ fn holds(ctx: *anyopaque, until: Tape.Until) bool {
 }
 
 fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
+    from(ctx).timeouts += 1;
     const name = if (from(ctx).tape()) |t| t.name else "?";
     switch (until) {
         .idle => dvui.log.warn("demo '{s}': gave up waiting for the app to settle", .{name}),

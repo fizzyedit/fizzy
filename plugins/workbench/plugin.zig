@@ -5,7 +5,7 @@
 //!
 //! Re-exports the handful of types/values fizzy still reaches through `@import("workbench")`
 //! directly (`Workspace`/`Workbench`/`FileLoadJob`/`runtime`/`files`/`has_file_tree`) — see
-//! `docs/PLUGIN_MANIFEST_PLAN.md`'s "static module root" decision: the hub dies as an
+//! `plans/PLUGIN_MANIFEST_PLAN.md`'s "static module root" decision: the hub dies as an
 //! intra-plugin import surface, but fizzy's `@import("workbench")` needs *something* to
 //! resolve `Workspace` etc. against, so those re-exports move onto the module root instead.
 const std = @import("std");

@@ -42,7 +42,7 @@ pub const Command = @import("Command.zig");
 /// `takePendingPluginSettings`) composes each entry into fizzy's own `<config>/settings.zon`
 /// under `.plugins.<id>.settings` (a real, human-editable nested ZON struct literal, not an
 /// escaped-string blob — see `src/editor/SettingsPluginsZon.zig` and
-/// `docs/PLUGIN_MANIFEST_PLAN.md` R10/R12) and never interprets the contents.
+/// `plans/PLUGIN_MANIFEST_PLAN.md` R10/R12) and never interprets the contents.
 pub const PluginSettings = std.StringArrayHashMapUnmanaged(?[]const u8);
 
 /// Optional tint for a workbench file-tree row background. `color_index` is the row's
@@ -766,7 +766,7 @@ pub fn drawMenuItem(self: *Host, title: []const u8, command_id: ?[]const u8) boo
 // Every plugin's settings live as a real, hand-editable ZON struct literal keyed by plugin id,
 // nested inside fizzy's own `<config>/settings.zon` under a
 // `.plugins = .{ .<id> = .{...}, ... }` field — not an escaped-string blob, and not one file per
-// plugin (see `docs/PLUGIN_MANIFEST_PLAN.md` R10, superseding R8's one-file-per-plugin design).
+// plugin (see `plans/PLUGIN_MANIFEST_PLAN.md` R10, superseding R8's one-file-per-plugin design).
 // `SettingsPluginsZon` (in `src/editor/`) does the actual ZON text surgery; the Host only buffers
 // pending writes and routes reads through `fizzy_api` — see `loadPluginSettings`'s doc comment
 // for why that indirection is required. This is deliberately not cached across calls:
@@ -835,7 +835,7 @@ pub fn takePendingPluginSettings(self: *Host) PluginSettings {
 // ---- plugin install directory -----------------------------------------------
 
 /// `<plugins_dir>/<id>` — the directory a plugin (built-in or third-party) is installed into,
-/// beside its own `<id>.{dylib,so,dll}` (see docs/PLUGIN_MANIFEST_PLAN.md R10: every plugin gets
+/// beside its own `<id>.{dylib,so,dll}` (see plans/PLUGIN_MANIFEST_PLAN.md R10: every plugin gets
 /// its own directory rather than sitting flat in `plugins/`). A plugin can use this for its own
 /// assets/data; the directory is not guaranteed to exist yet — create it (and any subpath) before
 /// writing into it. Null when `plugins_dir` itself is unset (wasm/headless). Pure path join, no

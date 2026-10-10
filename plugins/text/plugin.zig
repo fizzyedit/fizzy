@@ -95,7 +95,7 @@ pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(st);
 
     try host.registerPlugin(&plugin);
-    // Loaded-only settings UI (see `docs/PLUGIN_MANIFEST_PLAN.md`): the schema lives in the
+    // Loaded-only settings UI (see `plans/PLUGIN_MANIFEST_PLAN.md`): the schema lives in the
     // Host's registry only while this plugin stays registered. Registered directly against
     // `&st.settings`, so fizzy's pane edits land straight on the live struct — no
     // `settingsChanged` sync hook needed.
@@ -136,6 +136,36 @@ pub fn register(host: *sdk.Host) !void {
         .runWith = GoToLine.bind(cmdGoToLine),
         .isEnabled = cmdGoToLineEnabled,
         .icon = icons.tvg.lucide.@"arrow-down-to-line",
+    });
+
+    // What a snippet keybind, a tape or an agent edits through: each one undoable edit to the
+    // active document, scrolled into view, as typing or a paste would be.
+    try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("text", "insert"),
+        .owner = &plugin,
+        .title = "Insert Text…",
+        .params = Insert.params,
+        .runWith = Insert.bind(cmdInsert),
+        .isEnabled = cmdGoToLineEnabled,
+        .icon = icons.tvg.lucide.@"text-cursor-input",
+    });
+    try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("text", "replace"),
+        .owner = &plugin,
+        .title = "Replace Text…",
+        .params = Replace.params,
+        .runWith = Replace.bind(cmdReplace),
+        .isEnabled = cmdGoToLineEnabled,
+        .icon = icons.tvg.lucide.replace,
+    });
+    try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("text", "read"),
+        .owner = &plugin,
+        .title = "Read Text",
+        .params = Read.params,
+        .runWith = Read.bind(cmdRead),
+        .isEnabled = cmdGoToLineEnabled,
+        .icon = icons.tvg.lucide.@"file-text",
     });
 
     // "Format Document" is only meaningful when a language plugin claims the active
@@ -453,6 +483,91 @@ fn cmdGoToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) 
     doc.pending_preview_line = at.line;
     try call.returns(.{ .line = at.line + 1, .column = at.character + 1 });
 }
+const Insert = sdk.Command.Params(struct {
+    text: sdk.Command.Arg([]const u8, .{ .description = "The text to insert." }),
+    line: sdk.Command.Arg(u32, .{ .description = "The line to insert at, counting from 1. 0 inserts at the caret, replacing any selection, as typing does." }) = .init(0),
+    column: sdk.Command.Arg(u32, .{ .description = "The column on that line, counting from 1.", .min = 1 }) = .init(1),
+});
+/// Inserts `text` as one undoable edit and returns where the caret landed, after it
+/// (`.{ .line, .column }`, from 1).
+fn cmdInsert(state: *anyopaque, args: Insert.Args, call: *sdk.Command.Call) anyerror!void {
+    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    const start, const end = if (args.line == 0)
+        .{ @min(doc.sel_start, doc.sel_end), @max(doc.sel_start, doc.sel_end) }
+    else blk: {
+        const at = doc.byteOffsetForLineCharacter(args.line - 1, args.column -| 1);
+        break :blk .{ at, at };
+    };
+    try doc.replaceRange(@min(start, doc.text.items.len), @min(end, doc.text.items.len), args.text);
+    try returnCaret(doc, call);
+}
+
+const Replace = sdk.Command.Params(struct {
+    find: sdk.Command.Arg([]const u8, .{ .description = "The exact text to find. Without `all`, it must occur exactly once." }),
+    with: sdk.Command.Arg([]const u8, .{ .description = "What to put in its place." }),
+    all: sdk.Command.Arg(bool, .{ .description = "Replace every occurrence rather than the one." }) = .init(false),
+});
+/// Replaces `find` with `with`, as one undoable edit. Without `all`, a `find` that occurs more
+/// than once is refused rather than guessed at: the caller narrows it with more context. Returns
+/// how many were replaced and where the caret landed.
+fn cmdReplace(state: *anyopaque, args: Replace.Args, call: *sdk.Command.Call) anyerror!void {
+    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    if (args.find.len == 0) return call.fail("find is empty", .{});
+    const text = doc.text.items;
+    const count = std.mem.count(u8, text, args.find);
+    if (count == 0) return call.fail("not found: the text does not occur in {s}", .{std.fs.path.basename(doc.path)});
+    if (count > 1 and !args.all) return call.fail("found {d} times: give more of the surrounding text, or all = true", .{count});
+
+    if (count == 1) {
+        const at = std.mem.indexOf(u8, text, args.find).?;
+        try doc.replaceRange(at, at + args.find.len, args.with);
+    } else {
+        // Every occurrence, as one edit: one undo puts them all back.
+        const replaced = try std.mem.replaceOwned(u8, call.arena, text, args.find, args.with);
+        const first = std.mem.indexOf(u8, text, args.find).?;
+        try doc.replaceRange(0, text.len, replaced);
+        const caret = first + args.with.len;
+        doc.sel_start = caret;
+        doc.sel_end = caret;
+        doc.pending_sel = .collapsed(caret);
+    }
+    const at = doc.lineCharacterForByteOffset(doc.sel_start);
+    doc.pending_scroll_line = at.line;
+    try call.returns(.{ .replaced = count, .line = at.line + 1, .column = at.character + 1 });
+}
+
+const Read = sdk.Command.Params(struct {
+    from_line: sdk.Command.Arg(u32, .{ .description = "The first line to read, counting from 1.", .min = 1 }) = .init(1),
+    to_line: sdk.Command.Arg(u32, .{ .description = "The last line to read. 0 reads to the end." }) = .init(0),
+});
+/// The active document as it is in the editor, unsaved edits included: its path, the lines
+/// asked for, how many lines it has, and where the caret is.
+fn cmdRead(state: *anyopaque, args: Read.Args, call: *sdk.Command.Call) anyerror!void {
+    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    const first = args.from_line - 1;
+    const start = doc.byteOffsetForLineCharacter(first, 0);
+    const end = if (args.to_line == 0 or args.to_line >= doc.line_count)
+        doc.text.items.len
+    else
+        doc.byteOffsetForLineCharacter(args.to_line, 0);
+    const caret = doc.lineCharacterForByteOffset(doc.sel_start);
+    try call.returns(.{
+        .path = doc.path,
+        .lines = doc.line_count,
+        .from_line = args.from_line,
+        .text = doc.text.items[@min(start, end)..end],
+        .caret = .{ .line = caret.line + 1, .column = caret.character + 1 },
+        .unsaved = doc.isDirty(),
+    });
+}
+
+/// Scroll the caret into view and return where it is, from 1.
+fn returnCaret(doc: *Document, call: *sdk.Command.Call) !void {
+    const at = doc.lineCharacterForByteOffset(doc.sel_start);
+    doc.pending_scroll_line = at.line;
+    try call.returns(.{ .line = at.line + 1, .column = at.character + 1 });
+}
+
 fn cmdFormatEnabled(state: *anyopaque) bool {
     const doc = activeTextDoc(state) orelse return false;
     return sdk.host().canFormatExt(std.fs.path.extension(doc.path));

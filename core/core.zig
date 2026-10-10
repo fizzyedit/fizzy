@@ -103,7 +103,7 @@ pub const fuzzy = @import("fuzzy.zig");
 pub const FileTable = @import("FileTable.zig");
 /// The mountable-filesystem contract (`vfs.Fs`): path-addressed, completion-based, wasm-safe.
 /// A cloud plugin mounts one on the host's `FileTable`; the local disk is `LocalFs` behind the
-/// same interface. See `docs/CLOUD_FS_PLAN.md`.
+/// same interface. See `plans/CLOUD_FS_PLAN.md`.
 pub const vfs = @import("vfs/vfs.zig");
 pub const LocalFs = @import("LocalFs.zig");
 /// Long-running work as a stepped `Task`, run on a thread natively or from the frame on the

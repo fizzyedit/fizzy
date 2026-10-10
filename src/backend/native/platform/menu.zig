@@ -230,6 +230,20 @@ pub fn install(menus: []const Menu, h: Hooks, about_title: ?[:0]const u8) void {
             about_item.msgSend(void, "setTarget:", .{t.value});
         }
     };
+    // SDL's Window menu closes the window on ⌘W, the chord an editor gives to closing the
+    // document (`fizzy.close`, File ▸ Close). Two items on one key equivalent leave AppKit to pick,
+    // and it picked the window. The window takes ⇧⌘W instead, as VS Code's does.
+    if (selector("performClose:")) |close| {
+        const window_menu = app.msgSend(objc.Object, "windowsMenu", .{});
+        if (window_menu.value != 0) {
+            const index = window_menu.msgSend(c_long, "indexOfItemWithTarget:andAction:", .{ @as(usize, 0), close });
+            if (index >= 0) {
+                const item = window_menu.msgSend(objc.Object, "itemAtIndex:", .{index});
+                item.msgSend(void, "setKeyEquivalent:", .{nsString("w").value});
+                item.msgSend(void, "setKeyEquivalentModifierMask:", .{@as(c_ulong, modifier_command | modifier_shift)});
+            }
+        }
+    }
     installed = true;
     log.debug("menu bar: {d} menus, {d} items, {d} lists", .{ fixed_count, bar_items.count(), list_count });
 }

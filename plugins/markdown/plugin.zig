@@ -6,7 +6,7 @@ const md = @import("src/markdown.zig");
 
 /// Re-exported for fizzy's own use of the preview renderer outside this plugin's own
 /// vtable/service surface (e.g. `src/editor/readme.zig` rendering a fetched plugin README) —
-/// see `docs/PLUGIN_MANIFEST_PLAN.md`'s "static module root" decision.
+/// see `plans/PLUGIN_MANIFEST_PLAN.md`'s "static module root" decision.
 pub const Preview = md.Preview;
 pub const drawPreview = md.drawPreview;
 pub const drawPreviewForDocument = md.drawPreviewForDocument;

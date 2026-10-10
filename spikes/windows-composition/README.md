@@ -1,6 +1,6 @@
 # Spike: the drag's glass on Windows, through Windows.UI.Composition
 
-Answers the four questions `docs/WINDOWS_LINUX_GLASS_PLAN.md` ("Order of work", step 5) asks before
+Answers the four questions `plans/WINDOWS_LINUX_GLASS_PLAN.md` ("Order of work", step 5) asks before
 fizzy builds the Windows overlay (`NATIVE_WINDOWS_PLAN.md`, Phase 2):
 
 1. Can a Windows.UI.Composition target that is **not** topmost share an HWND with the topmost

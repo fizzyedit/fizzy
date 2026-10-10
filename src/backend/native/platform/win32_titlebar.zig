@@ -342,7 +342,7 @@ fn win32MicaSubclassProc(
 
 // ---- a float popped out of the main window ------------------------------------------------
 //
-// fizzy's viewports (`docs/POPOUT_WINDOWS_PLAN.md`): a float out of the main window, in a borderless
+// fizzy's viewports (`plans/POPOUT_WINDOWS_PLAN.md`): a float out of the main window, in a borderless
 // window of its own. SDL styles a borderless window with a caption it takes away again
 // (`WM_NCCALCSIZE`), so DWM still treats it as a framed window — it rounds its corners and draws
 // its shadow — and the frame extended over it shows the backdrop behind its transparent pixels, as

@@ -151,21 +151,21 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build check-web
 
-      # Fizzy consumed as a library by an outside package. This is the only check that can
-      # catch a path resolving against the consumer's cwd instead of fizzy's build root — the
-      # exact bug that broke this (`.cwd_relative = "src/App.zig"`) is invisible when fizzy
-      # builds itself, because then the two directories are the same. Linux only: that bug is no
-      # platform's, and on macOS the four apps (each compiling its own SDL3) took most of the run.
-      - name: Build external consumer apps (fizzy as a library)
+      # Fizzy consumed from outside: fizzyedit/example-app (fizzy as a library, in every shape)
+      # and fizzyedit/example-plugin (the plugin template), built against this tree fetched as a
+      # URL dependency would be. The only checks that catch a path resolving against the
+      # consumer's cwd instead of fizzy's build root (`.cwd_relative = "src/App.zig"` once), or a
+      # file missing from `build.zig.zon`'s `.paths` (`VERSION`, `app/`) — both invisible when
+      # fizzy builds itself. Linux only: neither bug is a platform's, and each app compiles its
+      # own SDL3.
+      - name: Build the example repos against this tree
         if: matrix.name == 'Linux'
-        run: |
-          for app in examples/hello-plugin examples/minimal-app examples/studio-app examples/endless-app examples/replay-app; do
-            echo "::group::$app"
-            # Each example is its own package and fetches its own copy of the tree, so each one
-            # is another handful of chances to meet a closed connection.
-            (cd "$app" && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --summary all)
-            echo "::endgroup::"
-          done
+        run: bash scripts/ci-retry.sh bash scripts/check-examples.sh
+      # A plain dvui app with tape playback, on the SDK package alone. In this repo until the
+      # SDK release that carries `replay` (fizzyedit/fizzy#281).
+      - name: Build examples/replay-app
+        if: matrix.name == 'Linux'
+        run: (cd examples/replay-app && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --summary all)
 
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash
@@ -226,6 +226,100 @@ jobs:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
 
+  # A run of the real app that plays the soak tape to its end and exits with a verdict
+  # (`src/editor/verdict.zig`, docs/AUTOMATION.md "A run that ends in a verdict"): no wait gave up,
+  # SDL logged no error, the OS windows came back to one. Debug, so the debug allocator looks for
+  # leaks at exit. On X11 under Xvfb, drawn by Mesa's Vulkan rasterizer (lavapipe), with floats in
+  # OS windows of their own (`FIZZY_POPOUT=1`), as they are on macOS. The verdict and the backend's
+  # counters are kept as an artifact.
+  verdict:
+    name: Verdict run (Linux)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The Zig cache as in the test job: a fixed key, one cold build saved once.
+      - name: Zig cache key
+        id: zig-cache-key
+        shell: bash
+        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+      - name: Pre-create Zig cache tmp/
+        shell: bash
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Install lavapipe and a headless display
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers libvulkan1 vulkan-tools xvfb xauth gdb \
+            libx11-6 libxext6 libxrandr2 libxcursor1 libxi6 libxfixes3 libxss1 libxtst6 libxkbcommon0
+          # The manifest's name moves between Mesa releases (lvp_icd.json, lvp_icd.x86_64.json).
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
+      - name: Fetch dependencies (with retries)
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Build fizzy (Debug)
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build --summary all
+      # Saved once the build is, not after the run: a verdict that fails still leaves the cache.
+      - name: Save Zig cache
+        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+      - name: Play the soak tape to a verdict
+        shell: bash
+        env:
+          SDL_VIDEO_DRIVER: x11
+          FIZZY_POPOUT: "1"
+          FIZZY_DEMO: tests/tapes/soak.zon
+          FIZZY_VERDICT: verdict/verdict.zon
+          FIZZY_VERDICT_EXPECT: tests/tapes/soak.expect.zon
+        run: |
+          mkdir -p verdict
+          xvfb-run -a -s "-screen 0 1280x1024x24" vulkaninfo --summary
+          bin=$(ls zig-out/*/fizzy | head -n 1)
+          xvfb-run -a -s "-screen 0 1280x1024x24" "$bin" --profile verdict/profile > verdict/fizzy.log 2>&1 &
+          wrapper=$!
+          # A run that hangs (on the way out, say) is given 10 minutes, then says where every
+          # thread is before it is killed: a hang is a failure with a place, not just a timeout.
+          for _ in $(seq 600); do kill -0 "$wrapper" 2>/dev/null || break; sleep 1; done
+          if kill -0 "$wrapper" 2>/dev/null; then
+            pid=$(pgrep -n -x fizzy)
+            echo "fizzy (pid $pid) still running after 10 minutes; its threads:"
+            sudo gdb -batch -p "$pid" -ex "thread apply all bt" > verdict/hang.txt 2>&1 || true
+            grep -E "^Thread|^#" verdict/hang.txt | head -n 200 || true
+            kill -9 "$pid" 2>/dev/null || true
+          fi
+          status=0
+          wait "$wrapper" || status=$?
+          grep -E "verdict|panic|error\(" verdict/fizzy.log | grep -v DebugAllocator | tail -n 40 || true
+          echo "--- verdict.zon"
+          cat verdict/verdict.zon || { echo "(no verdict written)"; status=1; }
+          exit $status
+      - name: Keep the verdict and the counters
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verdict-linux
+          path: |
+            verdict/verdict.zon
+            verdict/fizzy.log
+            verdict/hang.txt
+          if-no-files-found: warn
+
   # Fizzy's own backend on Windows — the default there too now (`build/exe.zig`'s
   # `defaultNativeBackend`) — which nothing else here builds: the consumer apps above run on Linux only.
   # Cross-compiled from Linux for the GNU ABI, which needs no MSVC SDK (release.yml's msvc
@@ -274,7 +368,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, test, integration, windows-fizzy-backend]
+    needs: [changes, test, integration, verdict, windows-fizzy-backend]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped

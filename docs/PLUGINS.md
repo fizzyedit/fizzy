@@ -1297,7 +1297,7 @@ that suits a disk is a spent API quota on a cloud mount.
 
 `fizzyedit/drive` (Google Drive) is the worked example; `plugins/archive` mounts a `.zip`
 through `core.vfs.Mem` in a few dozen lines. The design and its remaining edges are in
-`docs/CLOUD_FS_PLAN.md`.
+`plans/CLOUD_FS_PLAN.md`.
 
 ### 3.13 Motion — `core.motion`
 
@@ -1337,7 +1337,7 @@ follow the setting.
 
 A plugin can draw with a GPU program of its own — a UI effect, a game's world under the UI. The
 backend compiles it; `core.programs` sends draws through it. The worked example is
-[`examples/shader-plugin`](../examples/shader-plugin): one surface of liquid metaballs that follow
+[fizzyedit/example-app's `plugins/shader`](https://github.com/fizzyedit/example-app/tree/main/plugins/shader): one surface of liquid metaballs that follow
 the pointer, about sixty lines of Zig and a shader.
 
 ```zig

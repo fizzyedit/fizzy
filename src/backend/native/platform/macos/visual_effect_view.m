@@ -309,6 +309,21 @@ int fizzy_macos_viewport_under_main(void *nswindow, void *main_nswindow) {
 }
 
 /*
+ * The windows AppKit holds for the app (`NSApp.windows`), and how many of them are on screen: the
+ * health counters' check on windows SDL let go of that something kept alive (`Health.Snapshot`).
+ * Asked only when a snapshot is taken.
+ */
+void fizzy_macos_window_counts(unsigned *all, unsigned *visible) {
+    @autoreleasepool {
+        NSArray<NSWindow *> *windows = [NSApp windows];
+        unsigned shown = 0;
+        for (NSWindow *w in windows) if ([w isVisible]) shown++;
+        *all = (unsigned)[windows count];
+        *visible = shown;
+    }
+}
+
+/*
  * A popped-out float's window in the Window menu — and so in the Dock's menu for the app —
  * called `title`, as a titled window is listed by itself: AppKit lists no borderless window
  * unasked. Again whenever its title changes (the view it shows). `fizzy_macos_viewport_unglass`

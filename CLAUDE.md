@@ -39,7 +39,9 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 
 ## Writing a plugin
 
-1. Copy `plugins/text/` as your template (or `plugins/image/` for a document-owning viewer).
+1. Copy [`fizzyedit/example-plugin`](https://github.com/fizzyedit/example-plugin) (one surface,
+   nothing else) as your template; `plugins/text/` or `plugins/image/` when the plugin owns
+   documents.
 2. Add identity-only `plugin.zig.zon` (`id`/`name`/`version`/`min_sdk_version`). Implement root `plugin.zig`: `Plugin` + `register(host)` + vtable; call `host.register{Surface,Menu,Command,Service,…}` as needed. A surface's keywords (`sdk.keywords`) say where it may go; the app's regions accept it, and the user can move it with the picker.
 3. Plugin prefs: `sdk.settings.Schema(struct { … })` then `.register(host, &plugin, …)` — Fizzy draws them only while the plugin is loaded. User config on disk is ZON (`settings.zon` / `recents.zon`).
 4. Editor plugins implement the document vtable cluster; a plugin that lays out documents itself declares its panes with `host.region(spec)` and draws the accepted surfaces where it wants them.
@@ -48,7 +50,7 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 7. Memory: `host.allocator` vs `host.arena()`; never touch `dvui.currentWindow().gpa` directly.
 8. ABI: structural fingerprint at `dlopen` (`fizzy_plugin_abi_fingerprint`). A change that moves the boundary's shape records the new `recorded_sdk_shape_fingerprint` and leaves `sdk_version` alone; only an SDK release PR bumps the version (`CONTRIBUTING.md`, "Changing the SDK").
 
-Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)**.
+Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`plans/PLUGIN_MANIFEST_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/PLUGIN_MANIFEST_PLAN.md)**.
 
 ## Bundling plugins into an app
 
@@ -57,7 +59,14 @@ generates `bundled_plugins` (`pub const modules = .{ @import("workbench"), … }
 runtime iterates it — nothing in `app/` or `src/` names a plugin except the workbench (its
 state still lives on the Editor). An app built on fizzy adds its own with `defer-app` +
 `fizzy.buildApp(fizzy_dep, &.{ .{ .name, .module = dep.module("plugin") } })`; see
-`examples/README.md` and `examples/minimal-app`, which bundles `examples/hello-plugin`.
+[`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
+`fizzyedit/example-plugin`.
+
+**The example repos move with fizzy.** `fizzyedit/example-app` (fizzy as a library, in every
+shape) and `fizzyedit/example-plugin` (the plugin template) live outside this repo, and CI builds
+both against each pull request's own tree (`scripts/check-examples.sh`, which you can run
+locally): a change here that breaks either fails here. A change that needs them changed too
+lands its PR in that repo alongside.
 
 ## Plugin store: built, not forward-looking
 
@@ -71,7 +80,8 @@ Don't trust older narrative docs that call this forward-looking/not-yet-built.
 ## Shipped shapes, meant to be copied (dvui's methodology)
 
 Fizzy follows dvui's approach to widgets, one level up: it ships a handful of **layout shapes**
-(fizzy's own in `src/editor/layout.zig`; `examples/{minimal,studio,endless}-app/src/layout.zig`) rather than a configurable layout engine. An app
+(fizzy's own in `src/editor/layout.zig`; `shapes/{minimal,studio,endless}.zig` in
+`fizzyedit/example-app`) rather than a configurable layout engine. An app
 either picks one as-is and writes no layout code at all, or **copies** the closest one into its
 own source and edits it.
 
@@ -99,7 +109,6 @@ sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside
 app/       the framework an application switches on — layout, store, update, watch, window,
            single_instance, automation (demos); never compiled into a dylib
 plugins/   the bundled plugins, in the exact shape a third-party plugin has
-examples/  apps built on fizzy (minimal, studio, endless), each owning its own layout shape
 src/       fizzy the application — `Entry`, `editor/`, `backend/`
 build/     the app build API
 ```
@@ -166,13 +175,19 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 
 ## When you need more than this file
 
-- **The library/framework work (merged from bookmark `fizzy-lib` in #194)** → [`docs/LIB_CHECKPOINT.md`](docs/LIB_CHECKPOINT.md):
+**Plans live in a private repo, [`fizzyedit/plans`](https://github.com/fizzyedit/plans)**, open to
+the `fizzyedit` organization. A path written `plans/X.md` — here, in the code's comments, in
+PRs — means `plans/X.md` in that repo. Clone it beside the others (`~/dev/fizzyedit/plans`,
+`gh repo clone fizzyedit/plans`) and read the plan before working on its step; a session without
+access works from what the code and its public docs say.
+
+- **The library/framework work (merged from bookmark `fizzy-lib` in #194)** → [`plans/LIB_CHECKPOINT.md`](https://github.com/fizzyedit/plans/blob/main/plans/LIB_CHECKPOINT.md):
   what was done and the agreed next steps. Its ground rules predate `CONTRIBUTING.md`, which wins
   where they differ.
 
 - Demos that play the real app (tapes, the player, rewind, writing a demo, the anchors widgets
   publish) → [`docs/AUTOMATION.md`](docs/AUTOMATION.md); where it is going (recording, seeking,
-  libraries) → [`docs/AUTOMATION_PLAN.md`](docs/AUTOMATION_PLAN.md). The tape, sequencer and
+  libraries) → [`plans/AUTOMATION_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/AUTOMATION_PLAN.md). The tape, sequencer and
   script are the `tape` library in `sdk/tape/` (std-only); the players, their input and anchors
   the `replay` library in `sdk/replay/` (dvui and `tape` only, for any dvui app); fizzy's overlay
   and plugin service in `app/automation/`; fizzy's stage and bundled demos in
@@ -180,10 +195,10 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 - Floating views (a view dropped on its own place's middle floats into a glass window: the rule,
   occlusion, close-home, persistence) → `app/layout/SPLITS.md` "Floating a view"; taking floats out
   into OS windows (ImGui-style viewports, per-OS dressing, the dvui-dev replay hook) →
-  [`docs/POPOUT_WINDOWS_PLAN.md`](docs/POPOUT_WINDOWS_PLAN.md).
+  [`plans/POPOUT_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/POPOUT_WINDOWS_PLAN.md).
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - The forks fizzy builds on (dvui-dev, SDL, sdl_zig): what each patches, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 - Native windows and glass: what Liquid Glass can do (measured), the drag's glass as one native
   overlay on macOS 26, and fizzy's backend owning its windows while taking SDL's releases →
-  [`docs/NATIVE_WINDOWS_PLAN.md`](docs/NATIVE_WINDOWS_PLAN.md)
-- Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)
+  [`plans/NATIVE_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/NATIVE_WINDOWS_PLAN.md)
+- Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`plans/PLUGIN_MANIFEST_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/PLUGIN_MANIFEST_PLAN.md)

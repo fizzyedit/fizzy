@@ -1,9 +1,9 @@
 //! A text document's state as bytes, for a demo's snapshot (`sdk.Plugin.captureDocumentState`).
 //!
 //! Held in memory for one session of one build and never written anywhere, so the layout is
-//! this file's alone: a version byte, the flags, the selection as anchor and head (the caret's
-//! end, so a selection made backwards comes back backwards), the scroll and the preview's split,
-//! then the text. std-only, so it tests as pure logic (`Document.captureState` and `restoreState`
+//! this file's alone: a version byte, the flags (dirty, focused), the selection as anchor and
+//! head (the caret's end, so a selection made backwards comes back backwards), the scroll and the
+//! preview's split, then the text. std-only, so it tests as pure logic (`Document.captureState` and `restoreState`
 //! are the halves that touch the editor).
 const std = @import("std");
 
@@ -12,19 +12,23 @@ pub const State = struct {
     anchor: usize,
     head: usize,
     dirty: bool,
+    /// The editor had keyboard focus. A snapshot's own record of focus is a widget id, and the
+    /// editor's id changes when its document is closed and opened again: put back with the
+    /// document, focus follows it to whichever editor shows it now.
+    focused: bool = false,
     /// `Document.PreviewMode`, as its integer.
     preview_mode: u8,
     scroll_y: f32,
     split: f32,
 };
 
-const version: u8 = 1;
+const version: u8 = 2;
 const header = 3 + 8 + 8 + 4 + 4 + 8;
 
 pub fn encode(allocator: std.mem.Allocator, s: State) ![]u8 {
     const out = try allocator.alloc(u8, header + s.text.len);
     out[0] = version;
-    out[1] = @intFromBool(s.dirty);
+    out[1] = @as(u8, @intFromBool(s.dirty)) | @as(u8, @intFromBool(s.focused)) << 1;
     out[2] = s.preview_mode;
     std.mem.writeInt(u64, out[3..11], s.anchor, .little);
     std.mem.writeInt(u64, out[11..19], s.head, .little);
@@ -45,7 +49,8 @@ pub fn decode(bytes: []const u8) error{BadState}!State {
         .text = text,
         .anchor = @min(std.mem.readInt(u64, bytes[3..11], .little), text.len),
         .head = @min(std.mem.readInt(u64, bytes[11..19], .little), text.len),
-        .dirty = bytes[1] != 0,
+        .dirty = bytes[1] & 1 != 0,
+        .focused = bytes[1] & 2 != 0,
         .preview_mode = bytes[2],
         .scroll_y = @bitCast(std.mem.readInt(u32, bytes[19..23], .little)),
         .split = @bitCast(std.mem.readInt(u32, bytes[23..27], .little)),
@@ -54,7 +59,7 @@ pub fn decode(bytes: []const u8) error{BadState}!State {
 
 test "a document's state round-trips, a backwards selection with it" {
     const gpa = std.testing.allocator;
-    const s: State = .{ .text = "const x = 1;\n", .anchor = 9, .head = 6, .dirty = true, .preview_mode = 2, .scroll_y = 120.5, .split = 0.4 };
+    const s: State = .{ .text = "const x = 1;\n", .anchor = 9, .head = 6, .dirty = true, .focused = true, .preview_mode = 2, .scroll_y = 120.5, .split = 0.4 };
     const bytes = try encode(gpa, s);
     defer gpa.free(bytes);
     try std.testing.expectEqualDeep(s, try decode(bytes));

@@ -149,5 +149,6 @@ test {
     _ = layout.Layout;
     _ = layout.Shape;
     _ = watch.FolderWatcher;
+    _ = watch.SettingsWatcher;
     _ = store.Loader;
 }

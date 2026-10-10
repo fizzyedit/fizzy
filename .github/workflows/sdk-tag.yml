@@ -233,7 +233,9 @@ jobs:
             echo "::warning::could not read fizzyedit/plugins' registry: no plugin was asked to repin to $VERSION"
             exit 0
           fi
-          repos=""
+          # fizzyedit/example-plugin is in no store but is the template people copy: it moves
+          # with every SDK too.
+          repos="example-plugin"
           for name in $names; do
             homepage=$(GH_TOKEN="$READ_TOKEN" gh api "repos/fizzyedit/plugins/contents/registry/$name" \
               --jq '.content | @base64d | fromjson | .homepage // ""')

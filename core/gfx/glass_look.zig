@@ -1,4 +1,4 @@
-//! One material on two sliders, the window's (`docs/NATIVE_WINDOWS_PLAN.md`): what every glass
+//! One material on two sliders, the window's (`plans/NATIVE_WINDOWS_PLAN.md`): what every glass
 //! surface is at the window's opacity and roughness.
 //!
 //! - **Roughness** is the glass. At 0 it is clear, shiny glass, a lens bending what is behind it

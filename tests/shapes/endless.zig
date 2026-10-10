@@ -1,7 +1,8 @@
-//! The endless shape, owned by this app — not a shipped fizzy preset.
+//! The endless shape — not a shipped fizzy preset. A copy of fizzyedit/example-app's
+//! `shapes/endless.zig`, kept here for the integration tests that drive it (`endless_layout`).
 //!
-//! A real consumer copies a shape into its own source (or writes one). This file is that copy:
-//! fizzy compiles it in through `-Dapp-layout=` and calls `layout` instead of a shipped preset.
+//! A real consumer copies a shape into its own source (or writes one), as that app does: fizzy
+//! compiles it in through `-Dapp-layout=` and calls `layout` instead of a shipped preset.
 //!
 //! One leftover place, declared as a seed tree. The corner menu splits it horizontally or
 //! vertically; each new side is an empty slot the picker fills. Remove slides a created pane

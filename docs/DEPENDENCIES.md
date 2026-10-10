@@ -55,13 +55,31 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    string through the new `Debug.captureText`. A dump can then name widgets without AccessKit,
    which is never built on the testing or web backends. A button's name is the text of the
    label inside it; an icon-only button's is its `label`. The agents plan's widget snapshot is
-   built on this (`docs/AGENTS_PLAN.md`, "Accessible names"). Upstream: worth proposing as is,
+   built on this (`plans/AGENTS_PLAN.md`, "Accessible names"). Upstream: worth proposing as is,
    once fizzy's snapshot uses it. Test: dvui's `zig build test -Dbackend=testing`, "dumpFrame
    records tag, role, label and a label's text".
 
+5. **Window: drawRetained, so an app can see dialogs before they are drawn** (`e1c6ef1`).
+   `endRendering` drew dialogs and toasts and then replayed every subwindow, with nothing between.
+   `drawRetained` is the first half on its own, called by `endRendering` if the app did not.
+   Popout calls it before taking subwindows into their OS windows, so a dialog exists by then
+   (`plans/WINDOWING_FOUNDATION_PLAN.md`). Upstream: branch `window-draw-retained`, to propose.
+   Test: dvui's `zig build test`, "drawRetained draws dialogs once".
+6. **screensSet: floating widgets can be kept on screens besides the window** (`a90bc70`).
+   `dvui.screensSet(rects)` lists areas besides the window that are screens of their own;
+   floating windows, menus and tooltips place, clip and dim against `dvui.screenFor` (the one
+   holding their middle, else `windowRect`). Not yet used by fizzy, whose `core.screens` and
+   widget forks do the same. Upstream: branch `screens-set`, to propose. Test: "a floating window
+   on another screen (dvui.screensSet) stays on it".
+
+Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
+`screens-set`), from which the upstream PR is opened.
+
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
-`f8b32db`, what `sdk/build.zig.zon` pins now.
+`f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70`, what `sdk/build.zig.zon` pins now (0.2.19 was not
+released yet, and a tag never moves, so the second pin of one version takes a suffix, as the SDL
+fork's tags do).
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`src/backend/native/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
@@ -129,8 +147,29 @@ Fizzy adapts to two upstream behaviours rather than patching them:
    and a band of up to 8 units round it, the min/max sizes are the frame's, and popups anchor to
    the parent's frame; maximized, tiled or fullscreen the insets are zero. The insets in effect
    are published as `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_*_NUMBER`. libdecor windows are
-   untouched. Fizzy draws its Linux window's shadow in them (`linux_titlebar.zig`). Upstream:
-   worth proposing; a public API would want a setter as well.
+   untouched. Fizzy draws its Linux window's shadow in them (`linux_titlebar.zig`).
+
+   Fixes on top, each to squash into 6 at the next rebase (#280 C2b, after the suite's test
+   commit `1eb90b7`):
+   - `9258288`: a window SDL makes again (`SDL_RecreateWindow`, e.g. for an OpenGL renderer)
+     keeps its insets. They are kept in the window's own properties, which outlive its data.
+   - `0ca75f2`: an opaque window's opaque region is its frame, not the shadow round it.
+   - `0426af9`: the toplevel bounds the compositor sends (in frame units) are widened by the
+     insets before the clamp. Weston never sends bounds, so no test shows this.
+   - `91b7a29`: the input band is
+     `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER` (default 8; 0 = only the frame
+     takes input), still capped at each side's inset.
+   - `883f5c8`: the insets are published from creation (zero for libdecor), and the first
+     configure corrects them for a window that comes up maximized, tiled or fullscreen.
+   - `011a2dc`: a window hidden and shown again is framed again. Hiding drops the xdg_surface and
+     its geometry, so the applied insets now reset on hide.
+
+   Upstream `main` (not `release-3.4.x`) gained its own version on 2026-09-24 (`5d7167cb`, with
+   `86b89cff` and `dff05080`): opted into with `SDL_PROP_WINDOW_CREATE_WAYLAND_ENABLE_INSETS_BOOLEAN`,
+   the insets set as `SDL_PROP_WINDOW_WAYLAND_BORDER_INSET_*_NUMBER` window properties and read at
+   each configure. It has no input band, the same opaque-region, bounds and recreate problems,
+   and it keeps insets on tiled windows. At the rebase onto a release that has it, move
+   `linux_titlebar.zig` to upstream's API, and keep only what upstream lacks as patches on top.
 
 7. **Windows: draw each step of a live resize before the loop goes on** (`ee721bf`).
    `SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE` (default off): inside the modal size loop,
@@ -140,8 +179,40 @@ Fizzy adapts to two upstream behaviours rather than patching them:
    [`docs/WINDOWS_LIVE_RESIZE.md`](WINDOWS_LIVE_RESIZE.md)). Measured only in a Windows on Arm VM
    so far, not on GPU hardware. Upstream: worth proposing with the macOS pair (3–5).
 
+8. **Wayland: make `xkb_keymap_mod_get_mask()` optional at runtime** (`36dda37`, #289). Built
+   against libxkbcommon 1.10 or newer headers (sdl_zig uses 1.13), SDL required that symbol, so
+   where the system's libxkbcommon is older (Ubuntu 24.04 ships 1.6, Debian 12 ships 1.5) the
+   whole Wayland driver reported itself unavailable and fizzy fell back to X11. It is now
+   `SDL_WAYLAND_SYM_OPT`, and the keymap handler builds the modifier masks from
+   `xkb_keymap_mod_get_index()` when it did not load, the path builds against older headers have
+   always taken. For the standard xkeyboard-config keymaps both paths give the same masks.
+   Upstream `main` has the same problem. Upstream: worth proposing; the PR text is in #289.
+
+On top of the patches, **the fork's own tests** (#280): `test/testfizzy.c` runs suites on SDL's
+test harness (`test/testautomation_fizzy*.c`), with no library code changed. Each suite checks one
+patch and must fail on the upstream release it is based on, or, for patch 8, on the fork without
+it. So far:
+
+- patch 1, `testautomation_fizzy_gpu.c` (`4839ede`): a transparent window claimed and presented on
+  Metal and Vulkan;
+- patch 8, `testautomation_fizzy_xkb.c` (`213751e`): the Wayland driver loads on an older
+  libxkbcommon, and a German keymap's Shift, Caps Lock and AltGr levels come out right;
+- patch 6, `testautomation_fizzy_wayland.c` (`a518aaf`): read from libwayland's own request trace
+  (`WAYLAND_DEBUG`) under headless weston, a floating window's geometry is its frame, its input
+  region the frame plus up to 8 units, its min/max sizes the frame's, and the published insets
+  what was asked; maximized and fullscreen the insets are zero; a popup anchors to the parent's
+  frame. Since `1eb90b7` it also checks the fixes above: insets kept across a recreate, the
+  opaque region, the input-margin property, the props before show, and framing after hide and
+  show. Headless weston can't show a floating size the compositor chooses, toplevel bounds, tiled
+  states, fractional scale or xdg-decoration.
+
+sdl_zig builds and runs them (`zig build test-fizzy`, below). A suite moves through a rebase with
+its patch, and goes upstream in that patch's PR.
+
 Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
-`fizzy-3.4.16-4` → `2d6efde`; `fizzy-3.4.16-5` → `ee721bf`, what sdl_zig pins now.
+`fizzy-3.4.16-4` → `2d6efde`; `fizzy-3.4.16-5` → `ee721bf`; `fizzy-3.4.16-6` → `4839ede`;
+`fizzy-3.4.16-7` → `36dda37`; `fizzy-3.4.16-8` → `a518aaf`; `fizzy-3.4.16-9` → `011a2dc`, what
+sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -163,10 +234,30 @@ Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4
    insets (6). Squash into 1 at the next rebase.
 6. **Build fizzyedit/SDL `fizzy-3.4.16-5`** (`8e88dba`, first described as a test pin): the pin
    moves to SDL's Windows live-resize steps (7). Squash into 1 at the next rebase.
+7. **A `test-fizzy` step running fizzy's SDL patch suites** (`0f6a2a8`): `zig build test-fizzy --
+   <args>` builds SDL_test and the fork's suites against the library this package already builds
+   and runs them (`--filter`, `--require-gpu <driver>`); a plain `zig build` is unchanged. CI runs
+   them on Linux (lavapipe, under Xvfb and headless weston) and on the hosted macOS runners, which
+   have a Metal device. The pin moves to SDL's `fizzy-3.4.16-6`. Fizzy-only; squash the pin into 1
+   at the next rebase.
+8. **Run the Wayland keyboard suite on Ubuntu 24.04 and 26.04** (`264af2a`): CI job
+   `test-fizzy-xkb`, weston's X11 backend inside `Xvfb -noreset` with a German layout (weston's
+   headless backend has no keyboard), in `ubuntu:24.04` (libxkbcommon 1.6, the oldest we support)
+   and `ubuntu:26.04` (1.13), so both of patch 8's paths run. The pin moves to SDL's
+   `fizzy-3.4.16-7`; squash it into 1 at the next rebase.
+9. **Run the Wayland frame-insets suite under headless weston** (`a02dda8`): CI job
+   `test-fizzy-wayland-insets` at output scale 1 and 2, in `ubuntu:26.04`. The pin moves to SDL's
+   `fizzy-3.4.16-8`; squash it into 1 at the next rebase.
+10. **OpenGL ES and a timeout for the frame-insets suite** (`ed4ffea`): the recreate test attaches
+    an OpenGL ES renderer, and the suite's jobs stop after 20 minutes, writing progress to stderr
+    so a hang shows where it stopped. Then the pin moves to SDL's `fizzy-3.4.16-9` (`5e41c70`);
+    squash the pin into 1 at the next rebase.
 
 Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
 `fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`;
-`fizzy-1.0.3+3.4.16-5` → `8e88dba`, the commit fizzy pins now.
+`fizzy-1.0.3+3.4.16-5` → `8e88dba`; `fizzy-1.0.3+3.4.16-6` → `0f6a2a8`;
+`fizzy-1.0.3+3.4.16-7` → `264af2a`; `fizzy-1.0.3+3.4.16-8` → `a02dda8`;
+`fizzy-1.0.3+3.4.16-9` → `5e41c70`, the commit fizzy pins now.
 
 ## Bumping
 
@@ -196,9 +287,12 @@ Metal view (`SDL_cocoawindow.{h,m}`, `SDL_cocoametalview.m`, one hint in `SDL_hi
 `clang -fsyntax-only -fobjc-arc` on the `.m` files with the macOS SDK is enough to push, and the
 real check is a drag on a Mac: `scripts/live-resize/run.sh` (`docs/MACOS_LIVE_RESIZE.md`). Patch 6
 touches `SDL_waylandwindow.c`'s toplevel configure, `ConfigureWindowGeometry`, the min/max sizes
-and the popup anchoring, beside two new fields in `SDL_waylandwindow.h`; its check is a Linux
-build of fizzy and, on a GNOME desktop, a floating window whose shadow passes clicks through and
-whose frame maximizes to the work area. After resolving, compile the file for Windows before pushing; it
+and the popup anchoring, beside two new fields in `SDL_waylandwindow.h`; its check is
+`test-fizzy-wayland-insets` in sdl_zig's CI, then a Linux build of fizzy and, on a GNOME desktop,
+a floating window whose shadow passes clicks through and whose frame maximizes to the work area
+(the parts headless weston can't show). Patch 8 touches one line of `SDL_waylandsym.h` and the
+modifier masks in `SDL_waylandevents.c`'s keymap handler; its check is `test-fizzy-xkb` in sdl_zig's
+CI. After resolving, compile the file for Windows before pushing; it
 needs no build of the rest of SDL:
 `zig cc -target x86_64-windows-gnu -Iinclude -Iinclude/build_config -Isrc -Isrc/video/khronos -c src/gpu/d3d12/SDL_gpu_d3d12.c -o /tmp/d3d12.o`.
 CI's Windows cross-build (`ci.yml`) then builds it into fizzy.

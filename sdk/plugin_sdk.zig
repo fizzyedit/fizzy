@@ -12,7 +12,7 @@
 //!
 //! `root.zig` is **not** part of the author's repo: `create` generates a tiny hidden dylib root
 //! (the `std_options` + `exportEntry` comptime block) in the cache, so the author's `plugin.zig`
-//! never carries C-ABI export boilerplate — see `docs/PLUGIN_MANIFEST_PLAN.md`'s "Streamlining
+//! never carries C-ABI export boilerplate — see `plans/PLUGIN_MANIFEST_PLAN.md`'s "Streamlining
 //! outcome" for why that generated root can't just be merged into `plugin.zig` itself.
 const std = @import("std");
 
@@ -220,7 +220,7 @@ pub const InstallOptions = struct {
 /// Wire `zig build install` for a plugin: emit `zig-out/{name}.{ext}` (a flat single-file
 /// artifact for packaging / store CI / release uploads) **and** drop a copy into this OS's fizzy
 /// plugins dir, under its own `{name}/{name}.{ext}` directory (see
-/// docs/PLUGIN_MANIFEST_PLAN.md R10 — every installed plugin gets its own directory; only this
+/// plans/PLUGIN_MANIFEST_PLAN.md R10 — every installed plugin gets its own directory; only this
 /// dev-convenience copy is nested, not the flat release artifact above), so the editor loads it
 /// on next launch. `{name}` must equal the plugin's manifest `id`. This is the canonical
 /// plugin-dev command — `zig build install` is all an author needs. There is no on-disk `.zon`
@@ -369,7 +369,7 @@ fn fizzyPluginsDir(b: *std.Build) ![]const u8 {
 }
 
 /// Custom step: copy the built dylib into the host's fizzy plugins dir, under its own
-/// `{id}/{id}.{ext}` directory (see docs/PLUGIN_MANIFEST_PLAN.md R10). No `.zon` sidecar — the
+/// `{id}/{id}.{ext}` directory (see plans/PLUGIN_MANIFEST_PLAN.md R10). No `.zon` sidecar — the
 /// dylib's own exports (`fizzy_plugin_id`/`fizzy_plugin_manifest_zon`/…) are identity's only
 /// on-disk-adjacent copy.
 const DevInstall = struct {
@@ -560,7 +560,7 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
     if (is_wasm) {
         // A wasm *side module* (Emscripten's term): position-independent, no entry, no
         // threads, loaded into the web host's memory and function table at runtime — the
-        // dylib model with table indices for function pointers. See `docs/REVIEW_2026-09.md`
+        // dylib model with table indices for function pointers. See `plans/REVIEW_2026-09.md`
         // §2 and `web/index.html`'s loader.
         lib.root_module.pic = true;
         lib.root_module.single_threaded = true;
@@ -649,7 +649,7 @@ pub fn exportModules(
 }
 
 /// Install a built-in plugin dylib as `{name}/{name}.{ext}` under `plugins/` — each plugin gets
-/// its own directory (see docs/PLUGIN_MANIFEST_PLAN.md R10), which it can also use at runtime for
+/// its own directory (see plans/PLUGIN_MANIFEST_PLAN.md R10), which it can also use at runtime for
 /// its own assets/data (`Host.pluginInstallDir`). No `.zon` sidecar — the dylib's own exports
 /// carry identity (see `helpers.zig`'s `addDylib`/`generatedDylibRoot`).
 pub fn installBuiltinPlugin(

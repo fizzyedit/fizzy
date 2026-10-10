@@ -1,4 +1,4 @@
-//! The pop-out plan's viewports (`docs/POPOUT_WINDOWS_PLAN.md`), on by default on macOS and behind
+//! The pop-out plan's viewports (`plans/POPOUT_WINDOWS_PLAN.md`), on by default on macOS and behind
 //! `FIZZY_POPOUT=1` elsewhere, on fizzy's native backend: where the platform has OS windows a float is one, from the frame it is
 //! made in — every float its own window (a viewport, `fizzy.backend.viewports`), titled and framed by
 //! the OS where it can be (macOS), moved, snapped and resized by the OS as any window. Its views go
@@ -330,12 +330,13 @@ pub fn endFrame(state: *State) void {
     for (&outs) |*slot| {
         if (slot.*) |*o| windowFrame(state, o);
     }
-    // The dialogs drawn now, for `menuFrame` to take them into windows of their own: dvui draws
-    // them later, at the very end of the frame. After the floats have their places for this frame
-    // (`covers`), which a dialog opened in one goes along with (`dialogsRide`).
+    // The dialogs drawn now (`Window.drawRetained`), for `menuFrame` to take them into windows of
+    // their own: left to dvui, they are drawn in its replay into the main window. After the floats
+    // have their places for this frame (`covers`), which a dialog opened in one goes along with
+    // (`dialogsRide`).
     if (nativeDialogs()) {
         dialogsRide();
-        fizzy.core.dialogs.drawEarly();
+        dvui.currentWindow().drawRetained(.{});
     }
     carryFrame(state);
     menuFrame();
@@ -434,7 +435,7 @@ const carried_backing: f32 = 0.2;
 /// A view drag's glass — the carried view and the drop zones' bubbles — is one overlay of the OS's
 /// Liquid Glass over the display the main window is on, wherever the OS has it
 /// (`viewports.liquidGlass`, macOS 26): the OS's glass where it can be, the app's where it cannot
-/// (`docs/NATIVE_WINDOWS_PLAN.md`) — as the setting says (`Settings.native_glass`,
+/// (`plans/NATIVE_WINDOWS_PLAN.md`) — as the setting says (`Settings.native_glass`,
 /// `FIZZY_NATIVE_GLASS` over it). Off, the app's glass.
 fn nativeGlass() bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.carries) return false;

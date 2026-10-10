@@ -4,7 +4,7 @@
 //! A **live tape** is input — clicks aimed at named widgets, keys, text, commands with arguments
 //! — played on whatever the person has open, a step at a time, each once the last has landed. It
 //! is the other kind of tape from a demo, which opens on a keyframe and sets the person's session
-//! aside (`docs/AUTOMATION.md`; `docs/AGENTS_PLAN.md`, "Driving a live tape"). A plugin builds one
+//! aside (`docs/AUTOMATION.md`; `plans/AGENTS_PLAN.md`, "Driving a live tape"). A plugin builds one
 //! with the SDK's `tape` module (`tape.Script`, with `check.live = true`) and hands it over as
 //! bytes, ZON (`Tape.write`) or binary (`tape.binary.encode`): the tape's layout never crosses the
 //! boundary, only its encoding.
