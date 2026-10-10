@@ -9,6 +9,7 @@ const objc = @import("objc");
 const titlebar = @import("titlebar.zig");
 const win32_titlebar = @import("win32_titlebar.zig");
 const linux_titlebar = @import("linux_titlebar.zig");
+const own_backend = @import("root.zig").own_backend;
 
 const NSPoint = extern struct { x: f64, y: f64 };
 const NSSize = extern struct { width: f64, height: f64 };
@@ -259,12 +260,12 @@ pub fn setStyle(win: *dvui.Window) void {
         // Not a menu's or a dialog's: dressed once as it opens (`fizzy_macos_viewport_menu`), it
         // never goes full screen, and this made it a full-screen primary window over the
         // auxiliary one it was opened as, every frame.
-        for (&win.backend.impl.viewports) |*slot| {
+        if (comptime own_backend) for (&win.backend.impl.viewports) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
             if (vp.passive or vp.menu) continue;
             const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
             styleTitled(ns);
-        }
+        };
     } else if (builtin.os.tag == .windows) {
         win32_titlebar.applyChrome(win);
     } else if (builtin.os.tag == .linux) {
@@ -382,12 +383,14 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
             skin(raw_ptr.?, color, dvui.themeGet().dark);
             // Every float's own window too, and each opened from now on (`SDLBackend.viewportGlass`):
             // side by side, and each in a Space of its own, they are one app's windows.
-            win.backend.impl.window_skin = color;
-            for (&win.backend.impl.viewports) |*slot| {
-                const vp = if (slot.*) |*v| v else continue;
-                if (vp.passive) continue;
-                const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
-                skin(ns, color, dvui.themeGet().dark);
+            if (comptime own_backend) {
+                win.backend.impl.window_skin = color;
+                for (&win.backend.impl.viewports) |*slot| {
+                    const vp = if (slot.*) |*v| v else continue;
+                    if (vp.passive) continue;
+                    const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
+                    skin(ns, color, dvui.themeGet().dark);
+                }
             }
 
             // SDL3 currently removes the shadow when the transparency flag for the window is set. This brings it back.

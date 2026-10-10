@@ -18,6 +18,7 @@ const dvui = @import("dvui");
 const Backend = @import("backend");
 const c = Backend.c;
 const window_layout = @import("window_layout.zig");
+const own_backend = @import("root.zig").own_backend;
 
 const log = std.log.scoped(.macos_monitor);
 
@@ -252,15 +253,16 @@ fn macosAppPreBeginSync(back: *Backend.SDLBackend) void {
     for (&watched) |*slot| {
         const w = if (slot.*) |*w| w else continue;
         // A window moving itself into or out of full screen takes its step for this frame first,
-        // in the frame's transaction (`macos_frame_transaction`).
-        if (fizzy_macos_window_space_moving(w.cocoa) != 0) {
+        // in the frame's transaction (`macos_frame_transaction`), which this backend's present hook
+        // closes: none on dvui's.
+        if (comptime own_backend) if (fizzy_macos_window_space_moving(w.cocoa) != 0) {
             if (!macos_frame_transaction) {
                 fizzy_native_transaction_begin();
                 macos_frame_transaction = true;
             }
             fizzy_native_viewport_transact(w.cocoa);
             w.transacted = true;
-        }
+        };
         fizzy_macos_window_space_step(w.cocoa);
         if (!macosTransitionSyncActive(w)) continue;
         fizzy_macos_window_sync_content_views(w.cocoa);
@@ -375,7 +377,7 @@ pub fn install(win: *dvui.Window) void {
     const cocoa = cocoaWindowOf(back.window) orelse return;
     macos_monitor_window = back.window;
     back.begin_hook = macosAppPreBeginSync;
-    back.present_hook = macosAppPresented;
+    if (comptime own_backend) back.present_hook = macosAppPresented;
     addWatched(.{ .window = back.window, .cocoa = cocoa, .follow_position = false });
     fizzy_macos_window_install_resize_observer(cocoa);
     // Draw each step of a live resize from inside it, presented with the Core Animation
