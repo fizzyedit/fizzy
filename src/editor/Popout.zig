@@ -419,13 +419,7 @@ fn carryFrame(state: *State) void {
     // The carried view's own layer (`core.screens.markCarried`), taken from it: dvui's replay into the main
     // window, and the float windows' (`windowFrame`), draw nothing of it.
     for (cw.subwindows.stack.items) |*sw| {
-        if (!fizzy.core.screens.isCarried(sw.id)) continue;
-        const cmds = sw.render_cmds;
-        const after = sw.render_cmds_after;
-        sw.render_cmds = .empty;
-        sw.render_cmds_after = .empty;
-        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
-        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
+        if (fizzy.core.screens.isCarried(sw.id)) drawing.picture.subwindow(sw, true);
     }
 }
 
@@ -543,18 +537,8 @@ fn overlayFrame(state: *State) void {
     // them lands in the overlay, the rest outside it.
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
-    if (o.target) |t| if (t.width != w or t.height != h) {
-        t.destroyLater();
-        o.target = null;
-    };
-    if (o.target == null) o.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
-    const target = o.target.?;
-    target.clear();
-    var rt = cw.render_target;
-    rt.texture = target;
-    rt.offset = .{ .x = shown.x, .y = shown.y };
-    rt.rendering = true;
-    const prev = dvui.renderTarget(rt);
+    const target = viewports.sizedTarget(&o.target, w, h) orelse return;
+    var picture: viewports.Picture = .begin(target, placed);
     glassBase(placed_shapes[0..n], shown, s, spacing, look.top_fill);
     var offsets: [max_out + 1]dvui.Point.Physical = undefined;
     offsets[0] = .{ .x = shown.x, .y = shown.y };
@@ -565,18 +549,12 @@ fn overlayFrame(state: *State) void {
     }
     for (cw.subwindows.stack.items) |*sw| {
         if (!fizzy.core.screens.isCarried(sw.id)) continue;
-        const cmds = sw.render_cmds;
-        const after = sw.render_cmds_after;
-        sw.render_cmds = .empty;
-        sw.render_cmds_after = .empty;
-        for (offsets[0..n_off]) |off| {
-            rt.offset = off;
-            _ = dvui.renderTarget(rt);
-            cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying over the overlay's glass", .{});
-            cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying over the overlay's glass", .{});
+        for (offsets[0..n_off], 0..) |off, i| {
+            picture.moveTo(off);
+            picture.subwindow(sw, i == n_off - 1);
         }
     }
-    _ = dvui.renderTarget(prev);
+    picture.end();
     viewports.present(o.viewport, target);
 }
 
@@ -682,10 +660,9 @@ fn inMainFrame(r: dvui.Rect.Physical, main_px: dvui.Rect.Physical) ?dvui.Rect.Ph
     return r.offsetPoint(.{ .x = cv.in_main.x - cv.band.x, .y = cv.in_main.y - cv.band.y });
 }
 
-/// A carry window's picture under way (`carryBegin`): the frame's own target to go back to, and
-/// the part of the frame the window shows.
+/// A carry window's picture under way (`carryBegin`), and the part of the frame the window shows.
 const CarryDrawing = struct {
-    prev: dvui.RenderTarget,
+    picture: viewports.Picture,
     shown: dvui.Rect.Physical,
 };
 
@@ -702,18 +679,8 @@ fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, r
     viewports.carryShape(c.viewport, radius, alpha);
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
-    if (c.target) |t| if (t.width != w or t.height != h) {
-        t.destroyLater();
-        c.target = null;
-    };
-    if (c.target == null) c.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return null;
-    const target = c.target.?;
-    target.clear();
-    var rt = cw.render_target;
-    rt.texture = target;
-    rt.offset = .{ .x = shown.x, .y = shown.y };
-    rt.rendering = true;
-    const prev = dvui.renderTarget(rt);
+    const target = viewports.sizedTarget(&c.target, w, h) orelse return null;
+    const picture: viewports.Picture = .begin(target, .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h });
     {
         const prev_clip = dvui.clipGet();
         defer dvui.clipSet(prev_clip);
@@ -727,12 +694,12 @@ fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, r
             shape.fill(dvui.CornerRect.Physical.all(radius), .{ .color = .{ .color = color } });
         }
     }
-    return .{ .prev = prev, .shown = shown };
+    return .{ .picture = picture, .shown = shown };
 }
 
 /// `carryBegin`'s picture done: handed to its window.
 fn carryEnd(c: *Carry, drawing: CarryDrawing) void {
-    _ = dvui.renderTarget(drawing.prev);
+    drawing.picture.end();
     if (c.target) |t| viewports.present(c.viewport, t);
 }
 
@@ -1112,13 +1079,8 @@ fn windowFrame(state: *State, o: *Out) void {
     const target = keepTarget(o, w, h) orelse return;
 
     // Transparent where the float is not: past its corners.
-    target.clear();
-    var rt = cw.render_target;
-    rt.texture = target;
-    rt.offset = .{ .x = shown.x, .y = shown.y };
-    rt.rendering = true;
-    const prev = dvui.renderTarget(rt);
-    defer _ = dvui.renderTarget(prev);
+    const picture: viewports.Picture = .begin(target, shown);
+    defer picture.end();
     // Zoomed or full screen there is no desktop behind it: opaque, eased there and back with the
     // OS's transitions as the main window's base is. Where it has no material it is opaque
     // throughout.
@@ -1140,15 +1102,7 @@ fn windowFrame(state: *State, o: *Out) void {
         if (fizzy.core.screens.isCarried(sw.id)) continue;
         if (fizzy.core.screens.isMenu(sw.id) and nativeMenus()) continue;
         const mine = area.contains(sw.rect_pixels.center());
-        if (!mine and !fizzy.core.screens.isEverywhere(sw.id)) continue;
-        const cmds = sw.render_cmds;
-        const after = sw.render_cmds_after;
-        if (mine) {
-            sw.render_cmds = .empty;
-            sw.render_cmds_after = .empty;
-        }
-        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
-        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
+        if (mine or fizzy.core.screens.isEverywhere(sw.id)) picture.subwindow(sw, mine);
     }
     viewports.present(o.viewport, target);
 }
@@ -1318,19 +1272,8 @@ fn menuFrame() void {
         m.glass = viewports.windowGlass(m.viewport, look);
         const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
         const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
-        if (m.target) |t| if (t.width != w or t.height != h) {
-            t.destroyLater();
-            m.target = null;
-        };
-        if (m.target == null) m.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch continue;
-        const target = m.target.?;
-        target.clear();
-        var rt = cw.render_target;
-        rt.texture = target;
-        rt.offset = .{ .x = shown.x, .y = shown.y };
-        rt.rendering = true;
-        const prev = dvui.renderTarget(rt);
-        defer _ = dvui.renderTarget(prev);
+        const target = viewports.sizedTarget(&m.target, w, h) orelse continue;
+        const picture: viewports.Picture = .begin(target, .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h });
         if (!m.glass) {
             const prev_clip = dvui.clipGet();
             defer dvui.clipSet(prev_clip);
@@ -1340,13 +1283,8 @@ fn menuFrame() void {
             defer dvui.alphaSet(prev_alpha);
             frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) } });
         }
-        const cmds = sw.render_cmds;
-        const after = sw.render_cmds_after;
-        sw.render_cmds = .empty;
-        sw.render_cmds_after = .empty;
-        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a menu into its window", .{});
-        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a menu into its window", .{});
-        _ = dvui.renderTarget(prev);
+        picture.subwindow(sw, true);
+        picture.end();
         viewports.present(m.viewport, target);
     }
 }

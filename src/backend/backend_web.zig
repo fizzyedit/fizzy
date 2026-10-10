@@ -158,6 +158,17 @@ pub const viewports = struct {
         return frame;
     }
     pub fn present(_: *Viewport, _: ?dvui.TextureTarget) void {}
+    pub const Picture = struct {
+        pub fn begin(_: dvui.Texture.Target, _: Rect) Picture {
+            return .{};
+        }
+        pub fn moveTo(_: *Picture, _: dvui.Point.Physical) void {}
+        pub fn subwindow(_: Picture, _: *dvui.Subwindows.Subwindow, _: bool) void {}
+        pub fn end(_: Picture) void {}
+    };
+    pub fn sizedTarget(_: *?dvui.Texture.Target, _: u32, _: u32) ?dvui.Texture.Target {
+        return null;
+    }
     pub fn inMain(_: *const Viewport) Rect {
         return .{};
     }

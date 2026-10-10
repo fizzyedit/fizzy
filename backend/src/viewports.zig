@@ -284,6 +284,64 @@ pub fn present(vp: *Viewport, target: ?dvui.TextureTarget) void {
     dvui.currentWindow().backend.impl.viewportPresent(vp, target);
 }
 
+/// A viewport's picture this frame, drawn as dvui draws the frame: into a target, from the top left
+/// of the part of the frame the viewport shows, until `end`. In it go the subwindows the viewport shows (`subwindow`) — a float and
+/// what opened in it, a menu, a carried view — and whatever the app draws under them. Begun after
+/// `Window.drawRetained`, so the dialogs and toasts are subwindows by then; then `present`.
+pub const Picture = struct {
+    /// The frame's own target, back at `end`.
+    prev: dvui.RenderTarget,
+    /// The picture's.
+    rt: dvui.RenderTarget,
+
+    /// `target` cleared, and drawn into from now as `part` of the frame (physical).
+    pub fn begin(target: dvui.Texture.Target, part: Rect) Picture {
+        target.clear();
+        var rt = dvui.currentWindow().render_target;
+        rt.texture = target;
+        rt.offset = .{ .x = part.x, .y = part.y };
+        rt.rendering = true;
+        return .{ .prev = dvui.renderTarget(rt), .rt = rt };
+    }
+
+    /// Drawn into from now as the part of the frame from `at` (physical): the same drawing again,
+    /// from another part of the frame — a layer drawn across several windows' parts of it.
+    pub fn moveTo(self: *Picture, at: dvui.Point.Physical) void {
+        self.rt.offset = at;
+        _ = dvui.renderTarget(self.rt);
+    }
+
+    /// Subwindow `sw`'s drawing this frame, in the picture. `take`: out of the frame too, so dvui's
+    /// replay into the main window — and any picture after this one — draws none of it.
+    pub fn subwindow(_: Picture, sw: *dvui.Subwindows.Subwindow, take: bool) void {
+        const cw = dvui.currentWindow();
+        const cmds = sw.render_cmds;
+        const after = sw.render_cmds_after;
+        if (take) {
+            sw.render_cmds = .empty;
+            sw.render_cmds_after = .empty;
+        }
+        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
+        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
+    }
+
+    /// Done: drawing goes to the frame's own target again.
+    pub fn end(self: Picture) void {
+        _ = dvui.renderTarget(self.prev);
+    }
+};
+
+/// `slot`'s target at `w` by `h` pixels, for a `Picture`: the one in it where it is that size,
+/// else a new one, the old let go after the frame. Null where none can be made.
+pub fn sizedTarget(slot: *?dvui.Texture.Target, w: u32, h: u32) ?dvui.Texture.Target {
+    if (slot.*) |t| if (t.width != w or t.height != h) {
+        t.destroyLater();
+        slot.* = null;
+    };
+    if (slot.* == null) slot.* = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return null;
+    return slot.*.?;
+}
+
 /// Where `vp`'s window is now, in the main window's part of the frame (physical pixels from
 /// its top left): where its float goes when it comes back.
 pub fn inMain(vp: *const Viewport) Rect {
