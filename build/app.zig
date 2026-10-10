@@ -49,7 +49,7 @@ pub const Options = struct {
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options) !void {
-    const cfg = try readConfig(b, target, opts) orelse return;
+    const cfg = try readConfig(b, target, opts);
     try construct(b, target, optimize, opts, cfg);
 }
 
@@ -58,7 +58,8 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 /// (`build.zig`'s `defer-app`) consumes its options now and constructs later, with its own
 /// plugins.
 pub const Config = struct {
-    vz: velopack.Dep,
+    /// Null on the configure pass that fetches Velopack (see `readConfig`).
+    vz: ?velopack.Dep,
     macos_sdl_paths: ?@import("common.zig").MacosSdlPaths,
     zig_out_subdir: []const u8,
     zig_out_install_dir: std.Build.InstallDir,
@@ -83,7 +84,8 @@ pub const Config = struct {
     static_text: bool,
     static_image: bool,
     workbench_opts: *std.Build.Step.Options,
-    msvcup_before_compile: *std.Build.Step.Run,
+    /// Null on the configure pass that fetches Velopack (see `readConfig`).
+    msvcup_before_compile: ?*std.Build.Step.Run,
     accesskit: dvui.AccesskitOptions,
     /// What the native executable draws with (`-Dnative-backend`, `build/exe.zig`).
     native_backend: @import("exe.zig").NativeBackend,
@@ -96,19 +98,20 @@ pub const Config = struct {
     win_libc: velopack.ResolvedWindowsMsvcLibc,
 };
 
-/// Phase one of `build`: read every option and set up the option steps. Null on the
-/// configure pass where Velopack is not fetched yet (Zig fetches it and runs again).
-pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options) !?Config {
+/// Phase one of `build`: read every option and set up the option steps.
+pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options) !Config {
     const windows_msvc_libc_opt = opts.windows_msvc_libc_opt;
     const fetch_msvc_opt = opts.fetch_msvc_opt;
     const macos_sign_app_identity = opts.macos_sign_app_identity;
     const macos_sign_install_identity = opts.macos_sign_install_identity;
     const macos_notary_profile = opts.macos_notary_profile;
 
-    // Resolve Velopack lazily (app-only; plugins depend on `sdk/` which has no Velopack).
-    // First configure pass returns null → Zig fetches velopack_zig and re-runs build();
-    // the second pass proceeds with a valid handle.
-    const vz = b.lazyDependency("velopack_zig", .{}) orelse return null;
+    // Resolve Velopack lazily (app-only; plugins depend on `sdk/` which has no Velopack). Null on
+    // the first configure pass of a cold cache: Zig fetches it and runs `build` again. That pass
+    // configures the app all the same, leaving out only what links Velopack (packaging, the
+    // MSVC setup, `-Dvelopack`), which nothing else waits on. Returning early instead left the
+    // app unconfigured, and an app built on fizzy (`buildApp`) found no artifact and no options.
+    const vz = b.lazyDependency("velopack_zig", .{});
 
     const common = @import("common.zig");
 
@@ -258,9 +261,9 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
 
     common.addUpdateStep(b);
 
-    const msvcup_before_compile = velopack.addMsvcupSetupStep(b, vz, ".velopack-msvc");
+    const msvcup_before_compile: ?*std.Build.Step.Run = if (vz) |v| velopack.addMsvcupSetupStep(b, v, ".velopack-msvc") else null;
     const msvcup_setup_step = b.step("msvcup-setup", "Download MSVC SDK into .velopack-msvc/ via velopack-zig (writes zig-libc-*.ini)");
-    msvcup_setup_step.dependOn(&msvcup_before_compile.step);
+    if (msvcup_before_compile) |m| msvcup_setup_step.dependOn(&m.step);
 
     const accesskit = b.option(dvui.AccesskitOptions, "accesskit", "Enable accesskit") orelse .off;
     const fizzy_exe = @import("exe.zig");
@@ -380,6 +383,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const package_fizzy: FizzyExecutable = package_blk: {
         if (velopack_enabled) break :package_blk main_fizzy;
         if (!velopack_supported_for_target) break :package_blk main_fizzy;
+        if (vz == null) break :package_blk main_fizzy;
         const pack_opts = b.addOptions();
         pack_opts.addOption([]const u8, "app_version", app_version);
         // The same identity as `build_opts`: the packaged exe reads them through `AppInfo`
@@ -492,9 +496,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         image_dylib_step.dependOn(&install_image.step);
     }
 
-    _ = package.addSteps(.{
+    if (vz) |v| _ = package.addSteps(.{
         .b = b,
-        .vz = vz,
+        .vz = v,
         .target = target,
         .optimize = optimize,
         .app_version = app_version,
@@ -558,6 +562,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // Where a viewport's OS window is on the desktop and where its part of the frame lies.
         // std-only (see viewport_map.zig); `SDLBackend` applies it.
         .{ "fizzy-viewport-map-tests", "src/backend/native/viewport_map.zig" },
+        // The native backend's health counters: frame-time percentiles, per-frame counts, SDL's
+        // log counted from any thread, a snapshot as ZON. std-only (see Health.zig).
+        .{ "fizzy-backend-health-tests", "src/backend/native/Health.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
         // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.
@@ -641,6 +648,20 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             .filters = test_filters,
         }));
     }
+
+    // The single-instance listener (`libs/dvui-singleton-app`): its shutdown wakes the thread
+    // waiting in `accept`, which closing the socket does not on Linux. It talks to its socket
+    // through libc.
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-singleton-unix-tests",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("libs/dvui-singleton-app/src/unix_impl.zig"),
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    }));
 
     // Keybinding parse/resolve core. Deliberately dvui-free (see Keymap.zig) — dvui's keybind map
     // can't express chords and is keyed by bind name, not command. Its key spelling is `tape`'s
@@ -796,7 +817,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     // `replay` (`sdk/replay/`) on its own: dvui and `tape`, nothing of fizzy's. A reach into
     // `core` or `app` fails to compile here, which is what keeps it a library any dvui app can
-    // take (`docs/AUTOMATION_PLAN.md`, "The libraries").
+    // take (`plans/AUTOMATION_PLAN.md`, "The libraries").
     {
         const replay_only = b.createModule(.{
             .target = target,
@@ -816,6 +837,23 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         });
         test_integration_step.dependOn(&b.addRunArtifact(replay_tests).step);
         check_integration_step.dependOn(&replay_tests.step);
+    }
+    // The native backend's health counters as SDL feeds them: its log counted, and passed on to
+    // the output it had. Needs SDL, no window.
+    if (main_fizzy.backend) |native_backend_module| {
+        const health_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/backend_health.zig"),
+        });
+        health_module.addImport("backend", native_backend_module);
+        const health_tests = b.addTest(.{
+            .name = "fizzy-backend-health-sdl-tests",
+            .root_module = health_module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(health_tests).step);
+        check_integration_step.dependOn(&health_tests.step);
     }
     // See `exe.zig` for why macOS needs the FSEvents backend.
     const nightwatch_test_dep = if (target.result.os.tag == .macos)
@@ -914,7 +952,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     integration_module.addAnonymousImport("markdown_sample", .{ .root_source_file = b.path("docs/PLUGINS.md") });
     // The document with the 45KB table — the case table-row culling exists for, and the one it
     // could get wrong.
-    integration_module.addAnonymousImport("markdown_sample_tables", .{ .root_source_file = b.path("docs/PLUGIN_MANIFEST_PLAN.md") });
+    integration_module.addAnonymousImport("markdown_sample_tables", .{ .root_source_file = b.path("tests/data/markdown_sample_tables.md") });
     // The image-heavy fixture. Both docs above are prose and tables, so without this no test ever
     // laid out an image block — the one block kind whose height nothing in the source predicts
     // and which rescales with the pane right up until the pane is wider than the image.
@@ -933,6 +971,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     integration_module.addImport("app", app_module_test);
     // The hand-written sample tape `docs/AUTOMATION.md` points at, so it cannot rot.
     integration_module.addAnonymousImport("demo_sample_tape", .{ .root_source_file = b.path("docs/demos/hello.zon") });
+    integration_module.addAnonymousImport("soak_tape", .{ .root_source_file = b.path("tests/tapes/soak.zon") });
+    integration_module.addAnonymousImport("soak_expect", .{ .root_source_file = b.path("tests/tapes/soak.expect.zon") });
 
     const integration_tests = b.addTest(.{
         .name = "fizzy-integration-tests",
@@ -947,12 +987,40 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // --libc (vcruntime_typeinfo.h vs libc++ type_info, etc.), so libc++ must be
     // off for the msvc ABI regardless of host (cross or native Windows).
     integration_tests.root_module.link_libcpp = !target_is_windows_msvc;
-    if (velopack_enabled) {
-        try velopack.linkVelopack(b, vz, integration_tests, .{ .target = target, .optimize = optimize });
-    }
+    if (velopack_enabled) if (vz) |v| {
+        try velopack.linkVelopack(b, v, integration_tests, .{ .target = target, .optimize = optimize });
+    };
 
     test_integration_step.dependOn(&b.addRunArtifact(integration_tests).step);
     check_integration_step.dependOn(&integration_tests.step);
+
+    // Every bundled demo played through fizzy's own stage in the whole editor (`tests/demos.zig`).
+    // A process of its own: the editor going down leaves module state behind in the plugins it
+    // links, so one process brings the whole editor up once, and `tests/integration.zig` already
+    // does ("headless: …").
+    {
+        const demos_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/demos.zig"),
+        });
+        demos_module.addImport("fizzy", fizzy_test_module);
+        demos_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        demos_module.addImport("app", app_module_test);
+        demos_module.addImport("workbench", workbench_module_test);
+        const demo_tests = b.addTest(.{
+            .name = "fizzy-demo-tests",
+            .root_module = demos_module,
+            .filters = test_filters,
+        });
+        if (target.result.os.tag == .windows) demo_tests.root_module.linkSystemLibrary("comctl32", .{});
+        demo_tests.root_module.link_libcpp = !target_is_windows_msvc;
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, demo_tests, .{ .target = target, .optimize = optimize });
+        };
+        test_integration_step.dependOn(&b.addRunArtifact(demo_tests).step);
+        check_integration_step.dependOn(&demo_tests.step);
+    }
 
     // The `app` framework module's own tests — the split trees, seeds, drop plans and view drag
     // under `app/layout/` (`Layout.zig`'s `test` block). `addTest` collects from its root module
@@ -1022,7 +1090,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // reasoning as `bench-text`'s samples. `PLUGINS.md` is the document that prompted the
         // benchmark.
         bench_module.addAnonymousImport("sample_huge", .{ .root_source_file = b.path("docs/PLUGINS.md") });
-        bench_module.addAnonymousImport("sample_prose", .{ .root_source_file = b.path("docs/PLUGIN_MANIFEST_PLAN.md") });
+        bench_module.addAnonymousImport("sample_prose", .{ .root_source_file = b.path("tests/data/markdown_sample_tables.md") });
         bench_module.addAnonymousImport("sample_medium", .{ .root_source_file = b.path("CLAUDE.md") });
         bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("docs/MODULARIZATION_RELEASE_NOTES.md") });
 
@@ -1057,9 +1125,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (target.result.os.tag == .windows) {
             bench_replay.root_module.linkSystemLibrary("comctl32", .{});
         }
-        if (velopack_enabled) {
-            try velopack.linkVelopack(b, vz, bench_replay, .{ .target = target, .optimize = optimize });
-        }
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize });
+        };
 
         const bench_step = b.step("bench-replay", "Benchmark a demo seek, silent against shown frame by frame (prints timings)");
         const run_bench = b.addRunArtifact(bench_replay);
@@ -1133,24 +1201,24 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             });
             test_integration_step.dependOn(&b.addRunArtifact(t).step);
             check_integration_step.dependOn(&t.step);
-            if (win_libc.needs_setup) t.step.dependOn(&msvcup_before_compile.step);
+            if (win_libc.needs_setup) if (msvcup_before_compile) |m| t.step.dependOn(&m.step);
         }
     }
 
-    if (win_libc.needs_setup) {
-        exe.step.dependOn(&msvcup_before_compile.step);
+    if (win_libc.needs_setup) if (msvcup_before_compile) |msvcup| {
+        exe.step.dependOn(&msvcup.step);
         if (!velopack_enabled and velopack_supported_for_target) {
-            exe_for_package.step.dependOn(&msvcup_before_compile.step);
+            exe_for_package.step.dependOn(&msvcup.step);
         }
-        integration_tests.step.dependOn(&msvcup_before_compile.step);
-        for (unit_test_artifacts.items) |unit_test| unit_test.step.dependOn(&msvcup_before_compile.step);
+        integration_tests.step.dependOn(&msvcup.step);
+        for (unit_test_artifacts.items) |unit_test| unit_test.step.dependOn(&msvcup.step);
         inline for (.{ main_fizzy, package_fizzy }) |fizzy_exe_result| {
-            if (fizzy_exe_result.workbench_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
-            if (fizzy_exe_result.text_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
-            if (fizzy_exe_result.markdown_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
-            if (fizzy_exe_result.image_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
+            if (fizzy_exe_result.workbench_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
+            if (fizzy_exe_result.text_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
+            if (fizzy_exe_result.markdown_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
+            if (fizzy_exe_result.image_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
         }
-    }
+    };
 
     if (target.result.os.tag == .windows and target.result.abi == .msvc) {
         var roots: [12]*std.Build.Step.Compile = undefined;

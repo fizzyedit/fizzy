@@ -66,6 +66,9 @@ pub const FizzyExecutable = struct {
     text_dylib: ?*std.Build.Step.Compile = null,
     markdown_dylib: ?*std.Build.Step.Compile = null,
     image_dylib: ?*std.Build.Step.Compile = null,
+    /// Fizzy's own native backend module (`src/backend/native/SDLBackend.zig`) the executable
+    /// draws with; null for dvui's `sdl3` backend.
+    backend: ?*std.Build.Module = null,
 };
 
 /// What the native executable draws with.
@@ -205,7 +208,8 @@ fn platformModule(
 
 pub fn addFizzyExecutableForTarget(
     b: *std.Build,
-    vz: velopack.Dep,
+    /// Null on the configure pass that fetches Velopack (`app.readConfig`).
+    vz: ?velopack.Dep,
     resolved_target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
@@ -522,9 +526,9 @@ pub fn addFizzyExecutableForTarget(
     const exe_is_windows_msvc = resolved_target.result.os.tag == .windows and
         resolved_target.result.abi == .msvc;
     exe.root_module.link_libcpp = !exe_is_windows_msvc;
-    if (velopack_enabled) {
-        try velopack.linkVelopack(b, vz, exe, .{ .target = resolved_target, .optimize = optimize, .include_modules = &.{app_module} });
-    }
+    if (velopack_enabled) if (vz) |v| {
+        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .include_modules = &.{app_module} });
+    };
 
     return .{
         .exe = exe,
@@ -532,6 +536,7 @@ pub fn addFizzyExecutableForTarget(
         .text_dylib = text_dylib,
         .markdown_dylib = markdown_dylib,
         .image_dylib = image_dylib,
+        .backend = if (native_backend == .fizzy) native.backend else null,
     };
 }
 

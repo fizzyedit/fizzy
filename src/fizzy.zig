@@ -21,6 +21,8 @@ pub const Explorer = @import("editor/explorer/Explorer.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 pub const OutputLog = @import("editor/OutputLog.zig");
 pub const OutputPanel = @import("editor/OutputPanel.zig");
+/// A run that plays a tape and ends in a verdict (`FIZZY_VERDICT`).
+pub const verdict = @import("editor/verdict.zig");
 
 // The process-wide entry / application-state instances.
 //

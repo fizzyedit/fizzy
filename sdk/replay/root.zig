@@ -12,7 +12,7 @@
 //! - `Snapshot` says what is on screen, as text: roles, names, tags, rects.
 //! - `overlay` draws the tape's pointer and its clicks, plainly — an app may draw its own.
 //!
-//! See `docs/AUTOMATION.md` and `docs/AUTOMATION_PLAN.md`.
+//! See `docs/AUTOMATION.md` and `plans/AUTOMATION_PLAN.md`.
 pub const Player = @import("Player.zig");
 pub const LiveDriver = @import("LiveDriver.zig");
 pub const Input = @import("Input.zig");

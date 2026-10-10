@@ -176,7 +176,7 @@ pub fn windowGlass(win: *dvui.Window, look: WindowGlassLook) bool {
 }
 
 /// OS windows besides the main one, each showing a part of the one frame — a float popped out
-/// (`docs/POPOUT_WINDOWS_PLAN.md`, the backend's `Viewport`). Fizzy's own backend only: on dvui's
+/// (`plans/POPOUT_WINDOWS_PLAN.md`, the backend's `Viewport`). Fizzy's own backend only: on dvui's
 /// SDL3 backend (`-Dnative-backend=sdl3`) there are none, as on the web, and floats stay in.
 pub const viewports = struct {
     const Impl = @import("backend");

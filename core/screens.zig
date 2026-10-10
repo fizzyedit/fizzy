@@ -1,6 +1,6 @@
 //! The screens a floating thing — a menu, a tooltip, a popover, a dialog — is placed on and kept
 //! within. The main window's, and, while a float is out of it in an OS window of its own, that
-//! window's part of the frame (`docs/POPOUT_WINDOWS_PLAN.md`): far past the main window's edge,
+//! window's part of the frame (`plans/POPOUT_WINDOWS_PLAN.md`): far past the main window's edge,
 //! where anything opened from the float is drawn and from where it is copied into that window.
 //! Placed against the main window there, a menu opened in a float that is out was pulled all the
 //! way back onto the main window, and drawn there.

@@ -1,5 +1,5 @@
 //! One-shot migration of the legacy `recents.json` into `recents.zon` (see
-//! docs/PLUGIN_MANIFEST_PLAN.md R3). All `std.json` usage on the recents path is isolated
+//! plans/PLUGIN_MANIFEST_PLAN.md R3). All `std.json` usage on the recents path is isolated
 //! to this file so it can be deleted once every install has migrated.
 const std = @import("std");
 const core = @import("core");

@@ -1847,7 +1847,7 @@ fn scoreEntry(entry: StoreEntry, query: *const fuzzy.Query) ?f64 {
 
     // `descriptionFor`/`tagsFor` already fall back past the registry (built-in manifest, then a
     // dylib probe), so a plugin with no registry entry yet still scores on its own prose — only
-    // `author` has no such fallback (it's registry-only, see `docs/PLUGIN_MANIFEST_PLAN.md`).
+    // `author` has no such fallback (it's registry-only, see `plans/PLUGIN_MANIFEST_PLAN.md`).
     const author = if (entry.registry) |r| r.author else "";
     var prose = fuzzy.scoreBest(&.{ descriptionFor(entry) orelse "", author }, query, .{ .plain = true });
     for (tagsFor(entry)) |tag| {

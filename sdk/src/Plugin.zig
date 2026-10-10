@@ -397,7 +397,7 @@ pub const VTable = struct {
     /// not assume which one: (1) fizzy's settings pane edited it in-app (see
     /// `Host.storePluginSettings`), or (2) an external edit to `settings.zon` (hand edit, another
     /// tool) was picked up live by the settings watcher and reconciled (see R11 in
-    /// docs/PLUGIN_MANIFEST_PLAN.md) — in that case this fires with no settings-pane interaction
+    /// plans/PLUGIN_MANIFEST_PLAN.md) — in that case this fires with no settings-pane interaction
     /// having happened at all. A plugin that keeps its own in-memory copy of settings (e.g. to
     /// avoid re-parsing zon every draw) should re-parse and apply it here instead of only reading
     /// the blob once at `register`. Absent = the plugin only ever reads its settings at

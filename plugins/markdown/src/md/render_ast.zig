@@ -202,7 +202,7 @@ const resettle_above_budget: usize = 4;
 
 /// Off-screen table text (in bytes of markdown) that may be measured per frame the first time a
 /// table is seen. Same idea as `resettle_budget`, one level down: a 45KB table
-/// (docs/PLUGIN_MANIFEST_PLAN.md has one) costs several milliseconds to lay out in full, and
+/// (plans/PLUGIN_MANIFEST_PLAN.md has one) costs several milliseconds to lay out in full, and
 /// doing that on the frame the document opens is the hitch this whole file is about. Spread over
 /// frames instead, the table's height is briefly short — by however many rows are still unmeasured
 /// — and settles within half a second.
@@ -1758,7 +1758,7 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
     // a scrollbar that lies by thousands of pixels — which scrolling then "discovers" a screen at
     // a time. That was the reported instability, and the earlier distance gate caused it by
     // starving distant blocks outright (164 of 185 unmeasured after 600 frames on
-    // docs/PLUGIN_MANIFEST_PLAN.md). Both budgets being non-zero is what makes the sweep
+    // plans/PLUGIN_MANIFEST_PLAN.md). Both budgets being non-zero is what makes the sweep
     // terminate: once every block has been measured twice, nothing wants a re-measure,
     // `pending_measure` hits zero, and the refresh loop stops. A bounded warm-up, not a
     // permanent wake.
@@ -2758,7 +2758,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 // same reason `renderTopLevel` zeroes its block budget: a row measured at this
                 // frame's width is invalid at the next frame's, so a split drag would pay for the
                 // whole table over and over and keep none of it (~5.4KB of text shaped per frame
-                // on docs/PLUGIN_MANIFEST_PLAN.md, discarded every time). Those rows stay owed —
+                // on plans/PLUGIN_MANIFEST_PLAN.md, discarded every time). Those rows stay owed —
                 // `pending_measure` keeps frames coming — and get measured once the width holds.
                 //
                 // `first_sight_left` is deliberately *not* zeroed. It gates rows that are on
@@ -2796,7 +2796,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                         // *content-sized* grid — it scrolls with the page rather than inside
                         // itself — so dvui's own row virtualization (`GridWidget.rowsVisible`)
                         // can't help: as far as the grid is concerned its whole body is in view.
-                        // Without this, one 45KB table (docs/PLUGIN_MANIFEST_PLAN.md has one) is
+                        // Without this, one 45KB table (plans/PLUGIN_MANIFEST_PLAN.md has one) is
                         // laid out in full on every frame it appears on, which costs more than
                         // the rest of that document put together.
                         //

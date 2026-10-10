@@ -41,6 +41,9 @@ const c = @import("sdl3-c");
 
 const GpuRenderer = @This();
 const log = std.log.scoped(.GpuRenderer);
+/// What the backend keeps count of (`Health`): presents, swapchain resizes, each frame's passes,
+/// draws, target switches and uploads.
+const health = &@import("Health.zig").current;
 
 const Index = dvui.Vertex.Index;
 const index_element_size = if (Index == u32) c.SDL_GPU_INDEXELEMENTSIZE_32BIT else c.SDL_GPU_INDEXELEMENTSIZE_16BIT;
@@ -382,6 +385,7 @@ pub fn setVSync(self: *GpuRenderer, on: bool) void {
     }
     prepareLayer(self.window);
     self.vsync = on;
+    health.swapchain_reconfigures += 1;
 }
 
 fn makeShader(self: *GpuRenderer, code: []const u8, stage: c.SDL_GPUShaderStage, samplers: u32, uniform_buffers: u32) ?*c.SDL_GPUShader {
@@ -534,6 +538,7 @@ pub fn present(self: *GpuRenderer, clear_if_empty: bool, finish: bool) void {
         self.target = null;
         self.windowPass() catch |err| log.err("present clear: {any}", .{err});
     }
+    if (self.swapchain_state == .acquired) health.presents += 1 else health.presents_skipped += 1;
     if (finish) {
         self.submitAndWait() catch |err| log.err("present: {any}", .{err});
     } else {
@@ -567,6 +572,7 @@ fn acquireSwapchain(self: *GpuRenderer) !bool {
         self.swapchain_state = .unavailable;
         return false;
     }
+    if (self.swapchain_w != 0 and (w != self.swapchain_w or h != self.swapchain_h)) health.swapchain_resizes += 1;
     self.swapchain = tex;
     self.swapchain_w = w;
     self.swapchain_h = h;
@@ -651,6 +657,7 @@ pub fn presentInto(self: *GpuRenderer, window: *c.SDL_Window, target: dvui.Textu
     info.clear_color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     info.filter = c.SDL_GPU_FILTER_NEAREST;
     c.SDL_BlitGPUTexture(cmd, &info);
+    health.viewport_presents += 1;
     return true;
 }
 
@@ -755,6 +762,7 @@ pub fn renderTarget(self: *GpuRenderer, texture: ?dvui.TextureTarget) !void {
     if (next == self.target) return;
     try self.flush();
     self.target = next;
+    health.counts.target_switches += 1;
 }
 
 fn resetPass(self: *GpuRenderer) void {
@@ -810,6 +818,7 @@ fn clearPass(self: *GpuRenderer, tex: *Tex) !void {
         log.err("SDL_BeginGPURenderPass (clear) failed: {s}", .{c.SDL_GetError()});
         return error.GpuRenderPass;
     };
+    health.counts.passes += 1;
     c.SDL_EndGPURenderPass(pass);
     tex.needs_clear = false;
 }
@@ -859,6 +868,7 @@ fn encodePass(self: *GpuRenderer, dest: *c.SDL_GPUTexture, dw: u32, dh: u32, for
         return error.GpuRenderPass;
     };
     defer c.SDL_EndGPURenderPass(pass);
+    health.counts.passes += 1;
     if (self.draws.items.len == 0) return;
 
     c.SDL_BindGPUVertexBuffers(pass, 0, &vbind, 1);
@@ -908,6 +918,7 @@ fn encodePass(self: *GpuRenderer, dest: *c.SDL_GPUTexture, dw: u32, dh: u32, for
         };
 
         c.SDL_DrawGPUIndexedPrimitives(pass, d.index_count, 1, d.first_index, @intCast(d.vertex_offset), 0);
+        health.counts.draws += 1;
     }
 }
 
@@ -983,6 +994,7 @@ fn upload(self: *GpuRenderer, tex: *Tex, pixels: [*]const u8, format: dvui.enums
         &.{ .texture = tex.texture, .mip_level = 0, .layer = 0, .x = x, .y = y, .z = 0, .w = w, .h = h, .d = 1 },
         false,
     );
+    health.counts.uploads += 1;
 }
 
 /// The command buffer uploads go on: acquired here when none is being recorded (an upload

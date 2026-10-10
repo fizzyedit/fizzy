@@ -1,7 +1,7 @@
 //! The declarative `plugin.zig.zon` manifest (`Manifest`): identity/version metadata a plugin
 //! author declares, and fizzy reads back out of a loaded dylib.
 //!
-//! See `docs/PLUGIN_MANIFEST_PLAN.md`'s "Locked decisions": the author's `plugin.zig.zon`
+//! See `plans/PLUGIN_MANIFEST_PLAN.md`'s "Locked decisions": the author's `plugin.zig.zon`
 //! declares `id`/`name`/`version`/`min_sdk_version`/`description`/`tags` and nothing else (R16
 //! added `description` — the store's plugin detail page needs one for every plugin, not just ones
 //! with a registry entry; R17 added `tags` the same way, so browse-list search/categorization
@@ -20,7 +20,7 @@ pub fn versionTriplet(v: std.SemanticVersion) [3]u32 {
 }
 
 /// The declarative `plugin.zig.zon` manifest. See the module doc comment and
-/// `docs/PLUGIN_MANIFEST_PLAN.md`.
+/// `plans/PLUGIN_MANIFEST_PLAN.md`.
 const Manifest = @This();
 
 id: []const u8,

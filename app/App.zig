@@ -163,7 +163,8 @@ keymap: Keymap = .{},
 /// it must outlive the keymap and is replaced wholesale on every rebuild.
 keybinds_overrides: ?Keymap.zon.File = null,
 
-/// Cached `Keymap.conflicts()` result from the last rebuild — owned, freed on next rebuild.
+/// `Keymap.conflicts()` for the current keymap, worked out when first asked for (fizzy's
+/// `Keybinds.conflicts`) — owned, dropped on the next rebuild. Null: not asked for since.
 keybind_conflicts: ?[]Keymap.Conflict = null,
 
 /// User plugins that failed to load this session, so the UI can tell the author what
@@ -230,7 +231,7 @@ pending_app_close: bool = false,
 /// Hash of the last serialized settings.zon text written or captured at startup; avoids
 /// redundant writes without keeping a full duplicate copy of the text around. Doubles as the
 /// "was that change ours" filter for `settings_watcher` (see R11 in
-/// docs/PLUGIN_MANIFEST_PLAN.md) — a change to disk whose hash matches this is our own last
+/// plans/PLUGIN_MANIFEST_PLAN.md) — a change to disk whose hash matches this is our own last
 /// write, not an external edit worth reconciling.
 settings_last_saved_hash: ?u64 = null,
 
@@ -788,7 +789,7 @@ pub fn closeProjectFolder(app: *App) void {
 }
 
 /// One-shot: moves any pre-R10 flat `{plugins_dir}/{id}.{ext}` into its own
-/// `{plugins_dir}/{id}/{id}.{ext}` directory (see docs/PLUGIN_MANIFEST_PLAN.md R10). Collects the
+/// `{plugins_dir}/{id}/{id}.{ext}` directory (see plans/PLUGIN_MANIFEST_PLAN.md R10). Collects the
 /// list of flat files first, then renames in a second pass, so mutating the directory never races
 /// the iterator that's still walking it. Best-effort: a single failed rename is logged and
 /// skipped rather than aborting the rest.

@@ -1,5 +1,5 @@
 //! Where a viewport's OS window is on the desktop and where its part of the frame lies — the one
-//! mapping between the two (`docs/POPOUT_WINDOWS_PLAN.md`). std-only, its own `b.addTest` root in
+//! mapping between the two (`plans/POPOUT_WINDOWS_PLAN.md`). std-only, its own `b.addTest` root in
 //! `build/app.zig`; `SDLBackend` applies it.
 //!
 //! There is one `dvui.Window` and one frame. The main window shows the part of it at its origin.

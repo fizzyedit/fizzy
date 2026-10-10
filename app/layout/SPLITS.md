@@ -206,7 +206,7 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
   its floats held on screen, and gives them back their places when it grows.
 
 A float is a window inside fizzy's own window for now. Taking one out into an OS window of its
-own is the plan in `docs/POPOUT_WINDOWS_PLAN.md`.
+own is the plan in `plans/POPOUT_WINDOWS_PLAN.md`.
 
 ## Edges and bands
 

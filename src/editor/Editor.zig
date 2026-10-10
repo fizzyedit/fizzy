@@ -94,7 +94,7 @@ pub const Profiler = @import("Profiler.zig");
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
-/// `FIZZY_POPOUT=1` elsewhere (`docs/POPOUT_WINDOWS_PLAN.md`).
+/// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
 pub const Popout = @import("Popout.zig");
 pub const Host = sdk.Host;
 
@@ -123,6 +123,9 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// The demo player and fizzy's stage for it. Attached in `postInit`, at the Editor's final
 /// address (the stage's context is this field).
 demo: Demo = .detached,
+
+/// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
+plugin_reloads: @import("PluginReloads.zig") = .{},
 
 explorer: *Explorer,
 
@@ -1364,18 +1367,26 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
-    errdefer editor.app.gpa.free(path);
+    const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
+        editor.userPluginLoadFailed(id, path, err);
+        editor.app.gpa.free(path);
+        return err;
+    };
+    return editor.finishUserPluginLoad(id, opened);
+}
 
-    const loaded = PluginLoader.loadAndRegister(&editor.app.host, editor.app.gpa, path, id, .{
+/// The UI-thread half of loading a user plugin: register an `open`ed binary and wire it into the
+/// app. Takes `opened` and its path (gpa-owned) either way — `PluginReloads` opens a rebuild off
+/// the UI thread and finishes it here.
+pub fn finishUserPluginLoad(editor: *Editor, id: []const u8, opened: PluginLoader.Opened) !void {
+    const path = opened.path;
+    errdefer editor.app.gpa.free(path);
+    const loaded = PluginLoader.register(&editor.app.host, opened, .{
         .gpa = &editor.app.gpa,
         .arg_b = @ptrCast(&editor.app.host),
         .arg_c = null,
     }) catch |err| {
-        // Leave the same actionable record the startup scan leaves (see `recordLoadFailure`), so
-        // a build that fails a live load stays visible in the store's installed pane with its
-        // Reinstall/Uninstall controls instead of disappearing until the next restart.
-        dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ id, path, @errorName(err), App.pluginLoadFailureReason(err) });
-        editor.app.recordLoadFailure(id, path, err);
+        editor.userPluginLoadFailed(id, path, err);
         return err;
     };
     try editor.app.appendLoadedPluginLib(loaded);
@@ -1392,6 +1403,14 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     // The plugin now loads cleanly; drop any prior failure record so the store/dialog stop
     // showing it as broken (e.g. after installing a compatible rebuild over a mismatched one).
     editor.app.clearFailedUserPlugin(id);
+}
+
+/// Leave the same actionable record the startup scan leaves (see `recordLoadFailure`), so a build
+/// that fails a live load stays visible in the store's installed pane with its Reinstall/Uninstall
+/// controls instead of disappearing until the next restart.
+fn userPluginLoadFailed(editor: *Editor, id: []const u8, path: []const u8, err: PluginLoader.LoadError) void {
+    dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ id, path, @errorName(err), App.pluginLoadFailureReason(err) });
+    editor.app.recordLoadFailure(id, path, err);
 }
 
 /// What the web load/update pair can fail with. Spelled out rather than inferred: the two call
@@ -1834,7 +1853,7 @@ pub fn updateWebPlugin(editor: *Editor, id: []const u8, url: []const u8, sha256:
 pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {
     if (isBundledPluginId(id)) return error.NotUnloadable;
     // Each half timed: a rebuilt plugin's swap is a stage of the loop a plugin author waits on
-    // (`docs/AGENTS_PLAN.md`, "Fast enough to watch"), and `scripts/plugin-loop/bench.sh` reads it.
+    // (`plans/AGENTS_PLAN.md`, "Fast enough to watch"), and `scripts/plugin-loop/bench.sh` reads it.
     const start = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     try editor.unloadPlugin(id, force);
     const unloaded = std.Io.Clock.boot.now(dvui.io).nanoseconds;
@@ -1920,9 +1939,14 @@ pub fn postInit(editor: *Editor) !void {
     sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
 
     editor.demo.attach(editor);
-    // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made.
+    // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made — and
+    // `FIZZY_DEMO=<file>.zon` (or `.tape`) a tape, read before the app moved its working directory.
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
+        if (Demo.env_tape) |bytes| {
+            Demo.env_tape = null;
+            defer editor.app.gpa.free(bytes);
+            editor.demo.playTapeSoon(bytes);
+        } else if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
             defer editor.app.gpa.free(name);
             editor.demo.playSoon(name);
         } else |_| {}
@@ -2092,7 +2116,7 @@ pub fn postInit(editor: *Editor) !void {
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
 
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
-    // R11/R12 in docs/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
+    // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
     // nightwatch retains `&editor.app.settings_watcher.handler`, so `editor` has to already be at
     // its final heap address (see `SettingsWatcher.start`'s doc comment). Best-effort
     // throughout: fizzy must never fail to launch just because the watcher couldn't start.
@@ -3005,7 +3029,7 @@ fn activelyDrawing(editor: *const Editor) bool {
 
 /// Composes fizzy's own fields (`Settings.serialize`) together with every plugin's pending
 /// settings write into one `<config>/settings.zon` and writes it in a single pass (see
-/// `docs/PLUGIN_MANIFEST_PLAN.md` R10). This *must* stay one combined write: writing fizzy's
+/// `plans/PLUGIN_MANIFEST_PLAN.md` R10). This *must* stay one combined write: writing fizzy's
 /// fields and the plugins' blobs independently would let whichever write ran second silently
 /// drop the other's data, since `Settings.serialize` only knows fizzy's own fields and has no
 /// notion of `.plugins` at all. `settings_last_saved_hash` dedupes over the *whole* composed
@@ -3162,7 +3186,7 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
 /// Called from `SettingsWatcher.tick` when the background watcher noticed a change to
 /// `settings.zon` — reconciles that external change (hand edit, another tool) into fizzy's live
 /// state instead of letting the next autosave silently overwrite it. See R11 in
-/// docs/PLUGIN_MANIFEST_PLAN.md for the full design; `SettingsWatcher` itself never touches file
+/// plans/PLUGIN_MANIFEST_PLAN.md for the full design; `SettingsWatcher` itself never touches file
 /// content, only detects "something changed" — this is the half that actually reads and applies.
 pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -3331,18 +3355,11 @@ pub fn reconcileChangedPluginBinaries(editor: *Editor) void {
     if (newest_write) |written| dvui.log.info("plugin watcher: a rebuilt binary noticed {d:.1}ms after it was written", .{
         msBetween(written, std.Io.Clock.real.now(dvui.io).nanoseconds),
     });
-    for (changed.items) |id| {
-        if (editor.updatePlugin(id, false)) {
-            dvui.log.info("plugin watcher: reloaded '{s}' from its rebuilt binary", .{id});
-        } else |err| {
-            dvui.log.warn("plugin watcher: could not reload rebuilt '{s}' ({s})", .{ id, @errorName(err) });
-            // Re-stamp so a plugin we chose not to reload (unsaved documents, most likely) doesn't
-            // re-trigger on every subsequent watcher event. The next rebuild moves the stamp again
-            // and gets a fresh attempt; until then the running build stays, which is what the
-            // failed unload already decided.
-            editor.app.restampLoadedPlugin(id);
-        }
-    }
+    // Opened off the UI thread and swapped in on a later frame (`PluginReloads`): the `dlopen` of a
+    // rebuilt binary is ~180 ms on macOS, and here it froze the person's frame. A swap the plugin
+    // refuses (unsaved documents, most likely) re-stamps it there, so it does not re-trigger on
+    // every later watcher event; the next rebuild gets a fresh attempt.
+    for (changed.items) |id| editor.plugin_reloads.start(editor, id);
 }
 
 fn msBetween(from_ns: i96, to_ns: i96) f64 {
@@ -3719,7 +3736,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Linux: the desktop's blur behind the window's frame, where the compositor has one
     // (`backend.blurBehind`), asked for while the window is translucent at all, its corners the
     // frame's (square maximized, as `draw` draws it). Behind `FIZZY_BLUR_BEHIND=1` until it has been
-    // seen on GNOME and KDE (`docs/WINDOWS_LINUX_GLASS_PLAN.md`).
+    // seen on GNOME and KDE (`plans/WINDOWS_LINUX_GLASS_PLAN.md`).
     if (builtin.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
         const win = dvui.currentWindow();
         const radius: f32 = if (fizzy.backend.isMaximized(win)) 0 else Constants.linux_window_radius;
@@ -3752,9 +3769,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     PluginStore.tick();
 
     const hitch_watchers = fizzy.core.hitch.begin(.watchers);
-    // Pick up any external edit to settings.zon (see R11 in docs/PLUGIN_MANIFEST_PLAN.md).
+    // Pick up any external edit to settings.zon (see R11 in plans/PLUGIN_MANIFEST_PLAN.md).
     // Cheap no-op unless the watcher thread actually saw a change.
     if (editor.app.settings_watcher) |*w| w.tick(editor.configWatchSink());
+    // A rebuilt plugin opened off the UI thread since the last frame is swapped in now.
+    editor.plugin_reloads.frame(editor);
 
     // Reload clean open docs / flag dirty conflicts when files change on disk.
     if (editor.document_watcher) |*w| w.tick(editor);
@@ -5756,6 +5775,8 @@ pub fn deinit(editor: *Editor) !void {
         w.stop();
         editor.app.settings_watcher = null;
     }
+    // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
+    editor.plugin_reloads.deinit(editor.app.gpa);
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.
     if (editor.app.folder_watcher) |*w| {
@@ -6057,7 +6078,6 @@ pub fn pluginManager(editor: *Editor) PluginManager {
         .vtable = &plugin_manager_vtable,
     };
 }
-
 
 /// A surface's draw, timed in the frame profiler under its owner and id (`core.profile`).
 fn profiledSurfaceDraw(s: *sdk.Surface) anyerror!dvui.App.Result {

@@ -1445,7 +1445,11 @@ pub fn textChanged(self: *TextEntryWidget, start: usize, end: usize, added: i64)
         // end is in current bytes, so we update it to previous frame's indexing
         var end_old: usize = undefined;
         if (self.text_changed_added >= 0) {
-            end_old = end - @as(usize, @intCast(self.text_changed_added));
+            // An edit inside bytes this frame already added (typing between the halves of a
+            // pair just auto-closed) has no previous-frame index of its own, and may sit before
+            // `text_changed_added` bytes in: it is inside the interval already, which the `@max`
+            // below keeps.
+            end_old = end -| @as(usize, @intCast(self.text_changed_added));
         } else {
             end_old = end + @as(usize, @intCast(-self.text_changed_added));
         }

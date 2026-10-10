@@ -83,7 +83,7 @@ pub const Float = struct {
     /// the drop was cancelled and the photograph is still a true picture of it; gone, it landed
     /// elsewhere, and the float comes back as it is now.
     aside_view: []const u8 = "",
-    /// Out of the main window, in an OS window of its own (`docs/POPOUT_WINDOWS_PLAN.md`); null
+    /// Out of the main window, in an OS window of its own (`plans/POPOUT_WINDOWS_PLAN.md`); null
     /// while it is in the main window. The application that owns the OS windows sets and clears
     /// it, replays the float's drawing into its window and routes that window's pointer back.
     viewport: ?Viewport = null,

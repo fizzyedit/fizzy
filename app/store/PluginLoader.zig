@@ -107,7 +107,7 @@ pub fn pluginExtension() []const u8 {
 }
 
 /// Bare `{name}.{ext}` filename (no directory) — the basename inside a plugin's own
-/// `{plugins_dir}/{name}/` directory (see docs/PLUGIN_MANIFEST_PLAN.md R10; every plugin, built-in
+/// `{plugins_dir}/{name}/` directory (see plans/PLUGIN_MANIFEST_PLAN.md R10; every plugin, built-in
 /// or third-party, gets its own directory rather than sitting flat in `plugins/`).
 pub fn pluginFilename(name: []const u8, allocator: std.mem.Allocator) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}.{s}", .{ name, pluginExtension() });
@@ -329,6 +329,28 @@ pub fn sweepLoadTempDir(allocator: std.mem.Allocator, plugins_dir: []const u8) v
     }
 }
 
+/// A plugin binary opened and checked, not yet registered — everything `loadAndRegister` does
+/// that touches no host state, so `open` runs on any thread. The `dlopen` in it is what a load
+/// costs (on macOS ~180 ms for a file the system has not seen, a rebuilt plugin every time);
+/// `register` finishes it on the UI thread in microseconds. Dropped unregistered with `close`.
+pub const Opened = struct {
+    lib: DynLib,
+    path: []const u8,
+    plugin_id: []const u8,
+    src_stat: ?std.Io.File.Stat,
+    version_info: PluginVersionInfo,
+    set_globals: dylib_api.SetGlobalsFn,
+    register_fn: *const fn (?*Host) callconv(.c) u32,
+    set_dvui_context: dvui_context.SetContextFn,
+    set_render_bridge: sdk.render_bridge.SetRenderBridgeFn,
+
+    pub fn close(self: *Opened) void {
+        self.lib.close();
+    }
+};
+
+/// `open` then `register`, on the calling thread: startup's load, and any other that does not
+/// mind the frame.
 pub fn loadAndRegister(
     host: *Host,
     allocator: std.mem.Allocator,
@@ -336,6 +358,13 @@ pub fn loadAndRegister(
     expected_id: []const u8,
     pre: ?PreRegister,
 ) LoadError!LoadedLib {
+    return register(host, try open(allocator, path, expected_id), pre);
+}
+
+/// Open the plugin at `path` and check it is one this host can load: its ABI fingerprint, the
+/// SDK it needs, the id it declares, the symbols registration calls. Safe on any thread: it reads
+/// the file and the image, and nothing of the host's. `allocator` must be too.
+pub fn open(allocator: std.mem.Allocator, path: []const u8, expected_id: []const u8) LoadError!Opened {
     // First open of this path in this process: no stale-image risk, so load the installed file
     // directly and skip the copy (and, on macOS, the ~110ms first-open validation a brand-new
     // file would cost). Any later open of the same path — a reload after the store wrote a new
@@ -424,15 +453,38 @@ pub fn loadAndRegister(
         dylib_api.symbol_set_render_bridge,
     ) orelse return error.SetRenderBridgeSymbolMissing;
 
+    return .{
+        .lib = lib,
+        .path = path,
+        .plugin_id = expected_id,
+        .src_stat = src_stat,
+        .version_info = .{
+            .plugin_version = plugin_version,
+            .built_with_sdk_version = built_with,
+            .min_sdk_version = min_sdk,
+            .declared_id = if (get_plugin_id) |f| std.mem.span(f()) else null,
+        },
+        .set_globals = set_globals,
+        .register_fn = reg_fn,
+        .set_dvui_context = set_ctx,
+        .set_render_bridge = set_bridge,
+    };
+}
+
+/// Register an `open`ed plugin with `host`, `pre`'s pointers injected first. On the UI thread.
+/// Takes `opened` either way: on failure its image is closed.
+pub fn register(host: *Host, opened: Opened, pre: ?PreRegister) LoadError!LoadedLib {
+    var o = opened;
+    errdefer o.close();
     if (pre) |inject| {
-        set_globals(
+        o.set_globals(
             if (inject.gpa) |gpa| @ptrCast(gpa) else null,
             inject.arg_b,
             inject.arg_c,
         );
     }
 
-    const status: dylib_api.RegisterStatus = @enumFromInt(reg_fn(host));
+    const status: dylib_api.RegisterStatus = @enumFromInt(o.register_fn(host));
     switch (status) {
         .ok => {},
         .err_abi_mismatch => return error.AbiMismatch,
@@ -441,20 +493,15 @@ pub fn loadAndRegister(
     }
 
     return .{
-        .lib = lib,
-        .path = path,
-        .plugin_id = expected_id,
-        .source_mtime_ns = if (src_stat) |st| st.mtime.nanoseconds else 0,
-        .source_size = if (src_stat) |st| st.size else 0,
-        .version_info = .{
-            .plugin_version = plugin_version,
-            .built_with_sdk_version = built_with,
-            .min_sdk_version = min_sdk,
-            .declared_id = if (get_plugin_id) |f| std.mem.span(f()) else null,
-        },
-        .set_globals = set_globals,
-        .set_dvui_context = set_ctx,
-        .set_render_bridge = set_bridge,
+        .lib = o.lib,
+        .path = o.path,
+        .plugin_id = o.plugin_id,
+        .source_mtime_ns = if (o.src_stat) |st| st.mtime.nanoseconds else 0,
+        .source_size = if (o.src_stat) |st| st.size else 0,
+        .version_info = o.version_info,
+        .set_globals = o.set_globals,
+        .set_dvui_context = o.set_dvui_context,
+        .set_render_bridge = o.set_render_bridge,
     };
 }
 
