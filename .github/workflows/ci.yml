@@ -161,11 +161,6 @@ jobs:
       - name: Build the example repos against this tree
         if: matrix.name == 'Linux'
         run: bash scripts/ci-retry.sh bash scripts/check-examples.sh
-      # A plain dvui app with tape playback, on the SDK package alone. In this repo until the
-      # SDK release that carries `replay` (fizzyedit/fizzy#281).
-      - name: Build examples/replay-app
-        if: matrix.name == 'Linux'
-        run: (cd examples/replay-app && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --summary all)
 
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash

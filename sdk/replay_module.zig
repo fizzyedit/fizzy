@@ -12,7 +12,7 @@
 //! exe.root_module.addImport("replay", automation.replay);
 //! ```
 //!
-//! `examples/replay-app` is the whole of it in a plain dvui app.
+//! fizzyedit/example-app's replay app (`replay/main.zig`) is the whole of it in a plain dvui app.
 //!
 //! Pure `std.Build` glue — lives in the `sdk/` package so it ships in the tarball.
 const std = @import("std");
