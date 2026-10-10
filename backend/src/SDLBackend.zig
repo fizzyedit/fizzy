@@ -2561,7 +2561,8 @@ pub fn windowVSync(window: *c.SDL_Window) ?bool {
 ///   binding 0.
 /// * Output: one premultiplied `float4` colour (`[[color(0)]]`, `SV_Target0`).
 ///
-/// Compiling is synchronous: a program is ready (`status` 2) or failed (0) once created.
+/// Metal source compiles on a thread of its own (`status` 1 until it is done, a moment warm, tens
+/// of milliseconds cold); SPIR-V and DXIL are compiled already, ready (2) or failed (0) at once.
 /// `shaders/program_example.fragment.hlsl` (and its Metal form beside the compiled shaders)
 /// is a worked example.
 pub const program_api = struct {
