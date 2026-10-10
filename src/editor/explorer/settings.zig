@@ -315,6 +315,16 @@ const window_items = [_]Item{
         .draw = drawFloatWindows,
         .inline_control = true,
     },
+    .{
+        .label = "Restart when rebuilt",
+        .key = "restart_on_rebuild",
+        .description = "When fizzy's own executable is rebuilt, fizzy restarts into the new " ++
+            "build, every open document kept as it was, unsaved changes included. On in a " ++
+            "build from source.",
+        .keywords = "restart rebuild reload build develop development hot source executable",
+        .draw = drawRestartOnRebuild,
+        .inline_control = true,
+    },
 }) ++ (if (builtin.os.tag != .macos or builtin.target.cpu.arch == .wasm32) [_]Item{} else [_]Item{
     .{
         .label = "Native glass",
@@ -684,6 +694,10 @@ fn drawNativeDialogs() void {
 
 /// A setting's checkbox, saved and applied as it changes. Its row's label is drawn apart from it,
 /// so `name` (the same words) is what a screen reader or a script calls the box.
+fn drawRestartOnRebuild() void {
+    drawToggle(&fizzy.editor().app.settings.restart_on_rebuild, "Restart when rebuilt");
+}
+
 fn drawToggle(value: *bool, name: []const u8) void {
     if (dvui.checkbox(@src(), value, null, .{
         .label = .{ .text = name },

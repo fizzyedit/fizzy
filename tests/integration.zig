@@ -4570,6 +4570,7 @@ test "motion: every level arrives on time, and passes through without a kink" {
 // when it resumes. The sequencing rules themselves are unit-tested in `sdk/tape/`.
 
 const automation = @import("app").automation;
+const ExecutableWatcher = @import("app").watch.ExecutableWatcher;
 
 const DemoStage = struct {
     keyframes: usize = 0,
@@ -6897,6 +6898,39 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     }
 
     try editor.deinit();
+}
+
+// ── The app's own executable ────────────────────────────────────────────────────────────────────
+// `ExecutableWatcher.tick`: when a replaced executable is a rebuild to restart into (the watcher's
+// thread is nightwatch's, which sets the same flag the test sets).
+
+test "executable watcher: a rebuild is a replaced executable that has held still" {
+    if (comptime !ExecutableWatcher.have_impl) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "app", .data = "the launched build" });
+    const path = try std.fs.path.join(gpa, &.{ ".zig-cache", "tmp", &tmp.sub_path, "app" });
+    defer gpa.free(path);
+    var w = try ExecutableWatcher.init(gpa, path);
+    defer w.deinit();
+
+    // An event for an executable that did not change (touched by a no-op install): no restart.
+    w.dirty.store(true, .release);
+    try std.testing.expect(!w.tick());
+    w.pending_ns -= ExecutableWatcher.settle_ns;
+    try std.testing.expect(!w.tick());
+
+    // Replaced, as an install does it: written beside it, renamed into place.
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "app.new", .data = "the rebuilt build, longer" });
+    try tmp.dir.rename("app.new", tmp.dir, "app", dvui.io);
+    w.dirty.store(true, .release);
+    try std.testing.expect(!w.tick()); // settling
+    w.pending_ns -= ExecutableWatcher.settle_ns;
+    try std.testing.expect(w.tick());
 }
 
 // ── The automation service ──────────────────────────────────────────────────────────────────────
