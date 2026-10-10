@@ -193,7 +193,7 @@ pub fn beginFrame(state: *State) void {
     fizzy.core.screens.publishDialogs(if (nativeDialogs()) displayNatural() else null);
     menus_left_behind = false;
     // Whatever happened, the screens floating things are placed on this frame: each window's,
-    // besides the main window's (`core.screens`).
+    // besides the main window's (`dvui.screensSet`).
     defer publishScreens();
     // And where a held pointer is read: pinned while a float's window is being moved or resized.
     defer pinPointer(state);
@@ -296,7 +296,7 @@ fn pinPointer(state: *const State) void {
 }
 
 /// Each window's part of the frame, natural, as a screen menus, tooltips and popovers opened in its
-/// float are placed on and kept within (`core.screens`).
+/// float are placed on and kept within (`dvui.screensSet`, `core.screens.screenFor`).
 fn publishScreens() void {
     var rects: [max_out]dvui.Rect.Natural = undefined;
     var n: usize = 0;
@@ -307,7 +307,7 @@ fn publishScreens() void {
         rects[n] = .{ .x = f.x / s, .y = f.y / s, .w = f.w / s, .h = f.h / s };
         n += 1;
     }
-    fizzy.core.screens.publish(rects[0..n]);
+    dvui.screensSet(rects[0..n]);
 }
 
 fn find(state: *const State, serial: u64) ?usize {

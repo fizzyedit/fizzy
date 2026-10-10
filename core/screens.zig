@@ -5,55 +5,25 @@
 //! Placed against the main window there, a menu opened in a float that is out was pulled all the
 //! way back onto the main window, and drawn there.
 //!
-//! The app publishes them each frame, before anything is placed (`publish`). In the shared dvui
-//! window's data rather than this module's own state: a plugin built as a library carries its own
-//! copy of `core`, and its menus and tooltips must read the same list as the app's.
-const std = @import("std");
+//! The app sets them each frame, before anything is placed, as dvui's (`dvui.screensSet`): dvui's
+//! own floating windows, menus and tooltips keep to them too. What else it publishes here is in the
+//! shared dvui window's data rather than this module's own state: a plugin built as a library
+//! carries its own copy of `core`, and its menus and tooltips must read the same as the app's.
 const dvui = @import("dvui");
 
-/// The most screens besides the main window's.
-pub const max = 8;
-
-const Published = struct {
-    n: u8 = 0,
-    rects: [max]dvui.Rect.Natural = undefined,
-};
-
 const key_id: dvui.Id = @enumFromInt(0x6669_7a7a_7363_726e); // "fizzscrn"
-const key = "_screens";
 
-/// The screens there are this frame besides the main window's, natural. The app's, each frame
-/// before anything is placed; not published, or empty, there is the main window's alone.
-pub fn publish(rects: []const dvui.Rect.Natural) void {
-    if (rects.len == 0) return clear();
-    var p: Published = .{};
-    for (rects[0..@min(rects.len, max)]) |r| {
-        p.rects[p.n] = r;
-        p.n += 1;
-    }
-    dvui.dataSet(null, key_id, key, p);
-}
-
-/// No screens but the main window's, from now.
-pub fn clear() void {
-    dvui.dataRemove(null, key_id, key);
-}
-
-/// The screen `r` (natural) is on: the published one its middle is in, else the main window's
-/// (`mainScreen`).
+/// The screen `r` (natural) is on: the one set this frame (`dvui.screensSet`) its middle is in,
+/// else the main window's (`mainScreen`).
 pub fn screenFor(r: dvui.Rect.Natural) dvui.Rect.Natural {
-    const p = dvui.dataGetPtr(null, key_id, key, Published) orelse return mainScreen();
-    const c = r.center();
-    for (p.rects[0..p.n]) |s| if (s.contains(c)) return s;
-    return mainScreen();
+    const s = dvui.screenFor(r);
+    return if (s.equals(dvui.windowRect())) mainScreen() else s;
 }
 
 /// Whether `p`, natural, is on a screen of the app's besides the main window's: a float's window
 /// that is out. Not where `screenFor` falls back to, which is no rect of the main window's own.
 pub fn onScreen(p: dvui.Point.Natural) bool {
-    const s = dvui.dataGetPtr(null, key_id, key, Published) orelse return false;
-    for (s.rects[0..s.n]) |r| if (r.contains(p)) return true;
-    return false;
+    return !dvui.screenFor(.fromPoint(p)).equals(dvui.windowRect());
 }
 
 /// How far down the main window its screen starts, natural (`mainScreen`): the strip its title bar
@@ -134,7 +104,7 @@ const Carried = struct {
 /// Menus in windows of their own this frame (`markMenu`): the app's, each frame, with the display
 /// the main window is on — natural, in the main window's frame — as the screen they are kept on, so
 /// one near the window's edge hangs past it. Null: menus are drawn in the window they open from, on
-/// its screen. In dvui's data, as `publish`, so a plugin's menus read it too.
+/// its screen. In dvui's data, so a plugin's menus read it too.
 pub fn publishMenus(display: ?dvui.Rect.Natural) void {
     if (display) |d| dvui.dataSet(null, key_id, "_menus", d) else dvui.dataRemove(null, key_id, "_menus");
 }
@@ -281,9 +251,8 @@ const beyond: f32 = 16384;
 pub fn allPixels() dvui.Rect.Physical {
     var r = dvui.windowRectPixels();
     if (dvui.dataGet(null, key_id, "_beyond", bool) orelse false) r = r.outsetAll(beyond * dvui.windowNaturalScale());
-    const p = dvui.dataGetPtr(null, key_id, key, Published) orelse return r;
     const m = dvui.windowNaturalScale();
-    for (p.rects[0..p.n]) |s| r = r.unionWith(.{ .x = s.x * m, .y = s.y * m, .w = s.w * m, .h = s.h * m });
+    for (dvui.currentWindow().screens) |s| r = r.unionWith(.{ .x = s.x * m, .y = s.y * m, .w = s.w * m, .h = s.h * m });
     return r;
 }
 
