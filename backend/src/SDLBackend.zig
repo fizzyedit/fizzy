@@ -18,6 +18,8 @@ const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
 /// The OS windows besides the main one an app draws with (`Viewport`).
 pub const viewports = @import("viewports.zig");
+/// `dvui.osWindow` as a window of its own from the one frame (`osWindowFloating`).
+pub const os_windows = @import("os_windows.zig");
 /// What this backend keeps count of as it runs (`health`).
 pub const Health = @import("Health.zig");
 
@@ -97,7 +99,7 @@ clock_ahead_ns: i128 = 0,
 /// Last known window rect while not maximized/fullscreen/minimized, tracked
 /// from move/resize events
 window_geometry: WindowGeometry = .{},
-// Set by `initWindow` and `initWindowSecondary` for use by eventual child window.
+// Set by `initWindow`.
 init_opts_save: ?InitOptions = null,
 /// The OS windows besides this one that show part of its frame (`Viewport`).
 viewport_slots: [max_viewports]?Viewport = @splat(null),
@@ -490,43 +492,6 @@ pub fn initWindow(init_options: InitOptions) !SDLBackend {
     return back;
 }
 
-pub fn initWindowSecondary(parent: *SDLBackend, child_win_opts: dvui.OsWindowWidget.InitOptions) !SDLBackend {
-    const parent_opts = parent.init_opts_save orelse {
-        log.err("initWindowSecondary expects parent instance with `init_opts_save` field set (typically by `initWindow`)", .{});
-        return dvui.Backend.GenericError.BackendError;
-    };
-    const new_init_opts: SDLBackend.InitOptions = .{
-        .io = parent.io,
-        .environ_map = parent_opts.environ_map,
-
-        .size = child_win_opts.size orelse parent_opts.size,
-        .min_size = child_win_opts.min_size orelse parent_opts.min_size,
-        .max_size = child_win_opts.max_size orelse parent_opts.max_size,
-        .vsync = parent_opts.vsync,
-        .title = child_win_opts.title orelse parent_opts.title,
-        .org = parent_opts.org,
-        .icon = child_win_opts.icon orelse parent_opts.icon,
-        .hidden = child_win_opts.hidden,
-        .fullscreen = child_win_opts.fullscreen,
-        .transparent = parent_opts.transparent,
-        .sdl_init = false,
-        // only the primary window persists its geometry
-        .persist_window_geometry = false,
-    };
-    // Secondary windows share the primary's GPU device: textures are per dvui window, but one
-    // device can drive any number of claimed windows.
-    const new = try createWindowRenderer(new_init_opts, parent.gpu);
-
-    var back = init(dvui.io, new.win, new.gpu);
-    back.init_opts_save = new_init_opts;
-    back.window_geometry = new.saved_geometry orelse .{};
-    back.sdl_quit = false;
-    back.log_events = parent.log_events;
-
-    try configureBackend(&back, new_init_opts);
-
-    return back;
-}
 
 fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !struct {
     win: *c.SDL_Window,
@@ -775,7 +740,7 @@ pub const WindowGeometry = struct {
     }
 };
 
-// Common configuration part for both `initWindow` and `initWindowSecondary`
+// The configuration `initWindow` applies.
 fn configureBackend(back: *SDLBackend, options: InitOptions) !void {
     var hidden = options.hidden;
     var show_window_in_begin = false;
@@ -1078,6 +1043,17 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
         )) return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------------------------
+// dvui's OS windows
+
+/// A `dvui.osWindow`, which dvui draws as a floating window here: this backend makes no
+/// `dvui.Window` of its own for one (no `initWindowSecondary`), so it is a floating window in the
+/// one frame, and `os_windows` shows it in an OS window of its own. dvui calls this each frame it is
+/// drawn, with the header it is moved by (physical).
+pub fn osWindowFloating(_: *SDLBackend, id: dvui.Id, header: dvui.Rect.Physical, opts: dvui.OsWindowWidget.InitOptions) void {
+    os_windows.named(id, header, opts.title);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3596,10 +3572,12 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     };
 
     const app = dvui.App.get() orelse unreachable;
+    os_windows.beforeFrame();
     var res = app.frameFn() catch |err| {
         log.err("dvui.App.frameFn failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
     };
+    os_windows.afterFrame();
 
     live_resize_trace.overlay();
 

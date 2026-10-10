@@ -39,9 +39,9 @@
         // `fizzy-sdk-<version>` tag in the fork before the pin lands. `fizzy-dev` itself stays a
         // working branch and can be rebased freely — the tag, never.
         .dvui = .{
-            // fizzy-sdk-0.2.19-2
-            .url = "https://github.com/foxnne/dvui-dev/archive/a90bc701c5b9.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmfUrBAEB1joV1vjYrG_e_jx27JfNi9Bdr9ldPPGn",
+            // fizzy-sdk-0.2.23
+            .url = "https://github.com/foxnne/dvui-dev/archive/f646ec0b17899a2c2f222ecce834c82e235e0486.tar.gz",
+            .hash = "dvui-0.5.0-dev-AQFJmTQyBAHtzJRJ2BzYtusSfj5mYzF4owYGcDHfyNY_",
             //.path = "../../dvui-dev",
         },
         .zf = .{

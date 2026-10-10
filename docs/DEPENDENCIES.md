@@ -69,18 +69,31 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 6. **screensSet: floating widgets can be kept on screens besides the window** (`a90bc70`).
    `dvui.screensSet(rects)` lists areas besides the window that are screens of their own;
    floating windows, menus and tooltips place, clip and dim against `dvui.screenFor` (the one
-   holding their middle, else `windowRect`). Not yet used by fizzy, whose `core.screens` and
-   widget forks do the same. Upstream: branch `screens-set`, to propose. Test: "a floating window
-   on another screen (dvui.screensSet) stays on it".
+   holding their middle, else `windowRect`). Popout sets each float window's band as one (#325),
+   and the backend's `os_windows` each `dvui.osWindow`'s. Upstream: branch `screens-set`, to
+   propose. Test: "a floating window on another screen (dvui.screensSet) stays on it".
+7. **OsWindowWidget: a child window is deinit before its backend** (`f0f498a`). `ChildOsWindow.deinit`
+   freed the backend first, then the `dvui.Window`, whose deinit gives its textures (the font
+   atlases) back to that backend: closing any `dvui.osWindow` on a backend with secondary windows
+   crashed. Upstream: worth proposing on its own.
+8. **osWindow: the fallback floating window is the window asked for, and its backend hears of it**
+   (`f646ec0`). Where a backend makes no OS window of its own, `dvui.osWindow` falls back to a
+   floating window, which now takes the window's size, least and most size, `id_extra`, a close
+   button on its `open_flag` (the next frame asked for at once), and steps past one already there;
+   and the backend hears of it each frame (`Backend.osWindowFloating`: its id, the header it is
+   moved by, the options). Fizzy's backend makes no secondary `dvui.Window`, so every
+   `dvui.osWindow` takes this path, and `backend/src/os_windows.zig` shows the floating window in
+   an OS window of its own. Upstream: to propose with `run-dvui` (fizzyedit/example-app) as the
+   demonstration.
 
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
 
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
-`f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70`, what `sdk/build.zig.zon` pins now (0.2.19 was not
-released yet, and a tag never moves, so the second pin of one version takes a suffix, as the SDL
-fork's tags do).
+`f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70` (0.2.19 was not released yet, and a tag never
+moves, so the second pin of one version takes a suffix, as the SDL fork's tags do; SDK 0.2.19 to
+0.2.22); `fizzy-sdk-0.2.23` → `f646ec0`, what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
