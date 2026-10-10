@@ -363,6 +363,33 @@ const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7970_7266); // "fizzyprf"
 const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
 const lookback_key = std.fmt.comptimePrint("_profiler_lookback{d}", .{Lookback.abi});
 const causes_key = std.fmt.comptimePrint("_profiler_causes{d}", .{FrameCauses.abi});
+const phases_key = std.fmt.comptimePrint("_profiler_phases{d}", .{Phases.abi});
+
+/// The moments the app's start took, stamped by the app as it reaches them (`phase`): process
+/// entry, the window, the plugins, the window shown, the first frame; and, for an instance a
+/// restart started beside the old one, the handover's. Measured by the app itself, on every
+/// platform, rather than from outside. Published beside the profiler under its own key.
+pub const Phases = struct {
+    pub const abi: u32 = 1;
+    pub const max = 16;
+    /// Each phase's name: a string that lives as long as the process (a literal).
+    names: [max][]const u8 = undefined,
+    at_ns: [max]i128 = undefined,
+    len: usize = 0,
+
+    /// Milliseconds from the first phase to phase `i`.
+    pub fn ms(self: *const Phases, i: usize) f64 {
+        return @as(f64, @floatFromInt(self.at_ns[i] - self.at_ns[0])) / std.time.ns_per_ms;
+    }
+
+    /// As ZON: each phase and when it came, in milliseconds from the first.
+    pub fn write(self: *const Phases, w: *std.Io.Writer, indent: []const u8) std.Io.Writer.Error!void {
+        try w.writeAll(".{\n");
+        for (0..self.len) |i| try w.print("{s}    .{{ .phase = \"{s}\", .ms = {d:.1} }},\n", .{ indent, self.names[i], self.ms(i) });
+        try w.print("{s}}}", .{indent});
+    }
+};
+var host_phases: Phases = .{};
 
 /// The profiler to record into: the host's own in the host, the one it published in a plugin.
 /// Null when there is none, or it was built with another layout.
@@ -453,6 +480,24 @@ fn causingEvents() usize {
     return n;
 }
 
+/// Host only: the app's start has reached `name` (a string literal). The first call is time zero.
+/// Past `Phases.max`, not kept. `io` reads the clock: the process's own before the backend has
+/// set `dvui.io` (at the top of `main`), which the clock otherwise goes through.
+pub fn phase(io: std.Io, name: []const u8) void {
+    if (host_phases.len == Phases.max) return;
+    host_phases.names[host_phases.len] = name;
+    host_phases.at_ns[host_phases.len] = std.Io.Clock.boot.now(io).nanoseconds;
+    host_phases.len += 1;
+}
+
+/// The app's start, from any image.
+pub fn phases() ?*const Phases {
+    if (is_host) return &host_phases;
+    if (dvui.current_window == null) return null;
+    const addr = dvui.dataGet(null, publish_id, phases_key, usize) orelse return null;
+    return @ptrFromInt(addr);
+}
+
 /// Host only: the profiler the window shows and controls.
 pub fn host() *Profiler {
     return &host_profiler;
@@ -468,6 +513,7 @@ pub fn hostFrameBegin(prev_submit_ns: ?u64) void {
     dvui.dataSet(null, publish_id, publish_key, @as(usize, @intFromPtr(&host_profiler)));
     if (host_lookback == null and host_profiler.active) host_lookback = Lookback.create(std.heap.page_allocator, max_entries) catch null;
     if (host_lookback) |lb| dvui.dataSet(null, publish_id, lookback_key, @as(usize, @intFromPtr(lb)));
+    dvui.dataSet(null, publish_id, phases_key, @as(usize, @intFromPtr(&host_phases)));
     const active = host_profiler.active;
     if (host_causes == null and active) host_causes = std.heap.page_allocator.create(FrameCauses) catch null;
     if (host_causes) |c| {
@@ -539,6 +585,8 @@ pub const ReportOptions = struct {
     /// Also why the frames happened (`FrameCauses`), with at most this many of the places that
     /// asked for them; 0 leaves it out.
     causes: usize = 8,
+    /// Also the app's start (`Phases`): when it reached each phase.
+    startup: bool = false,
 };
 
 /// Each entry's own time in a frame whose times (`ns`, indexed as `Profiler.slice`) are given:
@@ -601,6 +649,11 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
         if (opts.over_ms > 0) try writeOver(p, lb, w, opts);
         if (opts.hitches > 0) try writeHitches(p, lb, w, opts);
     }
+    if (opts.startup) if (phases()) |ph| {
+        try w.writeAll("    .startup = ");
+        try ph.write(w, "    ");
+        try w.writeAll(",\n");
+    };
     if (opts.causes > 0) if (frameCauses()) |c| {
         try w.writeAll("    .causes = ");
         try c.write(w, "    ", opts.causes);
