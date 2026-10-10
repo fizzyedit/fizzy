@@ -250,6 +250,10 @@ pub fn main(main_init: std.process.Init) !u8 {
 pub const panic = if (crash.supported) std.debug.FullPanic(crash.panic) else dvui.App.panic;
 pub const std_options: std.Options = .{
     .logFn = logFn,
+    // dvui's refresh records are debug lines, which a release build would compile out; they are
+    // what the profiler puts frames down to (`core.profile.interceptLog`). dvui's other debug lines
+    // are dropped in `logFn` outside Debug, as they were before.
+    .log_scope_levels = &.{.{ .scope = .dvui, .level = .debug }},
     // In every build mode, not only the safe ones: a release crash is the one worth a report.
     .enable_segfault_handler = crash.supported,
 };
@@ -267,6 +271,9 @@ const sdk_version = std.fmt.comptimePrint("{f} ({x})", .{
 // web) and also into `fizzy.OutputLog`, so fizzy's "Output" bottom panel can show it — except
 // while `FIZZY_LOG_REFRESH` is on, see `refresh_log_active`.
 fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+    // A refresh record, counted as a frame's cause; printed only for `FIZZY_LOG_REFRESH`.
+    if (fizzy.core.profile.interceptLog(level, scope, format, args) and !refresh_log_active) return;
+    if (comptime scope == .dvui and level == .debug and @import("builtin").mode != .Debug) return;
     if (!refresh_log_active) fizzy.OutputLog.append(level, scope, format, args);
     dvui.App.logFn(level, scope, format, args);
 }
@@ -431,6 +438,9 @@ pub fn AppDeinit(_: *dvui.Window) void {
 pub fn AppFrame() !dvui.App.Result {
     fizzy.core.hitch.frameBegin();
     defer fizzy.core.hitch.frameEnd();
+    // dvui's refresh records, while someone reads them: the profiler, as frame causes, or a
+    // `FIZZY_LOG_REFRESH` run.
+    _ = dvui.debug.logRefresh(refresh_log_active or fizzy.core.profile.recordingCauses());
     fizzy.core.profile.hostFrameBegin(lastSubmitNs());
     defer fizzy.core.profile.hostFrameEnd();
     singleton.drainPending();
