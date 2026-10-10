@@ -58,6 +58,8 @@ const Impl = if (have_impl) struct {
     /// `@fieldParentPtr` alignment dance from the nested `impl` field.
     raw_dirty: ?*std.atomic.Value(bool) = null,
     binary_dirty: ?*std.atomic.Value(bool) = null,
+    /// The watched folder, so an event can be placed in it (`classify`).
+    config_folder: []const u8 = "",
 
     const vtable = Handler.VTable{
         .change = onChange,
@@ -66,7 +68,7 @@ const Impl = if (have_impl) struct {
 
     fn note(h: *Handler, path: []const u8) void {
         const impl: *Impl = @fieldParentPtr("handler", h);
-        const flag = switch (classify(path)) {
+        const flag = switch (classify(impl.config_folder, path)) {
             .ignored => return,
             .binary => impl.binary_dirty,
             .other => impl.raw_dirty,
@@ -96,8 +98,16 @@ const Kind = enum { binary, ignored, other };
 /// same. The `.part` itself, and fizzy's own load copies (`.load-copy/`, `.load-tmp/`, written when
 /// it loads a plugin), say nothing new. Everything else — `settings.zon` above all, which an editor
 /// may write in several bursts — waits for the coalesce.
-fn classify(path: []const u8) Kind {
+fn classify(config_folder: []const u8, path: []const u8) Kind {
     if (std.mem.indexOf(u8, path, ".load-copy") != null or std.mem.indexOf(u8, path, ".load-tmp") != null) return .ignored;
+    // The app's own state beside its settings, written while it runs: a crash checkpoint every few
+    // seconds while something is unsaved, a restart's session, a handover's signals. None of it is
+    // settings or a plugin, and reconciling on each write would re-read `settings.zon` for nothing.
+    if (std.mem.startsWith(u8, path, config_folder) and path.len > config_folder.len and std.fs.path.isSep(path[config_folder.len])) {
+        const rest = path[config_folder.len + 1 ..];
+        const top = rest[0 .. std.mem.indexOfAny(u8, rest, "/\\") orelse rest.len];
+        for (state_folders) |name| if (std.mem.eql(u8, top, name)) return .ignored;
+    }
     const ext = switch (builtin.os.tag) {
         .windows => ".dll",
         .macos => ".dylib",
@@ -108,18 +118,29 @@ fn classify(path: []const u8) Kind {
     return .other;
 }
 
+/// Top-level folders of the config folder that hold the app's running state, not settings.
+const state_folders = [_][]const u8{ "checkpoint", "checkpoint.new", "session", "handover" };
+
 test classify {
     const ext = switch (builtin.os.tag) {
         .windows => ".dll",
         .macos => ".dylib",
         else => ".so",
     };
-    try std.testing.expectEqual(Kind.binary, classify("/cfg/plugins/hello/hello" ++ ext));
-    try std.testing.expectEqual(Kind.ignored, classify("/cfg/plugins/hello/hello" ++ ext ++ ".part"));
-    try std.testing.expectEqual(Kind.ignored, classify("/cfg/plugins/hello/.load-copy/12-34-hello" ++ ext));
-    try std.testing.expectEqual(Kind.ignored, classify("/cfg/plugins/hello/.load-tmp/3-hello" ++ ext));
-    try std.testing.expectEqual(Kind.other, classify("/cfg/settings.zon"));
-    try std.testing.expectEqual(Kind.other, classify("/cfg/plugins/hello"));
+    try std.testing.expectEqual(Kind.binary, classify("/cfg", "/cfg/plugins/hello/hello" ++ ext));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/plugins/hello/hello" ++ ext ++ ".part"));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/plugins/hello/.load-copy/12-34-hello" ++ ext));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/plugins/hello/.load-tmp/3-hello" ++ ext));
+    try std.testing.expectEqual(Kind.other, classify("/cfg", "/cfg/settings.zon"));
+    try std.testing.expectEqual(Kind.other, classify("/cfg", "/cfg/plugins/hello"));
+    // The app's own state: never settings, never a plugin.
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/checkpoint/3-0.state"));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/checkpoint"));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/checkpoint.new/session.zon"));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/session/session.zon"));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/handover/ready"));
+    // A plugin that happens to share a name is still a plugin.
+    try std.testing.expectEqual(Kind.binary, classify("/cfg", "/cfg/plugins/checkpoint/checkpoint" ++ ext));
 }
 
 /// Sets up bookkeeping but does **not** start nightwatch yet — see `start`'s doc comment.
@@ -144,6 +165,7 @@ pub fn start(self: *SettingsWatcher) !void {
         const nightwatch = @import("nightwatch");
         self.impl.raw_dirty = &self.raw_dirty;
         self.impl.binary_dirty = &self.binary_dirty;
+        self.impl.config_folder = self.config_folder;
         var nw = try nightwatch.Default.init(dvui.io, self.gpa, &self.impl.handler);
         errdefer nw.deinit();
         try nw.watch(self.config_folder);

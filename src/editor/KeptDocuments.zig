@@ -202,9 +202,12 @@ fn loadInto(editor: *Editor, plugin: *sdk.Plugin, d: Kept, grouping: u64) !sdk.D
 }
 
 /// What `save` writes as `session.zon`, beside a file per document's state and unsaved contents
-/// (named by its index, so no path has to be made safe as a file name).
+/// (named by its index, so no path has to be made safe as a file name; and by `generation` when
+/// the folder is rewritten in place, `saveGeneration`).
 const Saved = struct {
     version: u32 = session_version,
+    /// The files' generation, `<generation>-<index>.<kind>`; 0 for plain `<index>.<kind>`.
+    generation: u32 = 0,
     active: []const u8 = "",
     docs: []const Doc = &.{},
 
@@ -227,6 +230,18 @@ const Saved = struct {
 /// misread: its documents open from disk.
 const session_version = 1;
 
+/// This run opened documents a crashed run left (`Checkpoint.recover`): its unsaved changes are
+/// back. For a notice at launch to say so.
+var recovered_from_checkpoint = false;
+
+pub fn recoveredFromCheckpoint() bool {
+    return recovered_from_checkpoint;
+}
+
+pub fn noteRecoveredFromCheckpoint() void {
+    recovered_from_checkpoint = true;
+}
+
 /// `<config>/session`, owned by `gpa`.
 pub fn sessionDir(gpa: std.mem.Allocator, config_folder: []const u8) ![]u8 {
     return std.fs.path.join(gpa, &.{ config_folder, "session" });
@@ -235,17 +250,56 @@ pub fn sessionDir(gpa: std.mem.Allocator, config_folder: []const u8) ![]u8 {
 /// Write these documents to `dir`, replacing any session there. Only documents with state are
 /// worth keeping: the rest open from disk as any launch does.
 pub fn save(self: *const KeptDocuments, dir: []const u8) !void {
-    const gpa = self.gpa;
     const cwd = std.Io.Dir.cwd();
     cwd.deleteTree(dvui.io, dir) catch {};
     try cwd.createDirPath(dvui.io, dir);
+    const text = try self.writeFiles(dir, 0);
+    defer self.gpa.free(text);
+    const file = try std.fs.path.join(self.gpa, &.{ dir, "session.zon" });
+    defer self.gpa.free(file);
+    try cwd.writeFile(dvui.io, .{ .sub_path = file, .data = text });
+}
+
+/// Write these documents into `dir` in place, as generation `generation` (above 0, a new one each
+/// time): its files beside the last one's, then `session.zon` renamed over the last, which is the
+/// moment the new one counts, then the last one's files removed. A crash at any point leaves one
+/// whole generation to read. The folder itself is never replaced: a file watcher on a tree around
+/// it (`SettingsWatcher`) sees files come and go, not folders appearing and vanishing under it.
+pub fn saveGeneration(self: *const KeptDocuments, dir: []const u8, generation: u32) !void {
+    const gpa = self.gpa;
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(dvui.io, dir);
+    const text = try self.writeFiles(dir, generation);
+    defer gpa.free(text);
+    const part = try std.fs.path.join(gpa, &.{ dir, "session.zon.part" });
+    defer gpa.free(part);
+    const file = try std.fs.path.join(gpa, &.{ dir, "session.zon" });
+    defer gpa.free(file);
+    try cwd.writeFile(dvui.io, .{ .sub_path = part, .data = text });
+    try std.Io.Dir.renameAbsolute(part, file, dvui.io);
+    // The last generation's files: everything but this one's and `session.zon`.
+    var d = cwd.openDir(dvui.io, dir, .{ .iterate = true }) catch return;
+    defer d.close(dvui.io);
+    var prefix_buf: [16]u8 = undefined;
+    const prefix = std.fmt.bufPrint(&prefix_buf, "{d}-", .{generation}) catch return;
+    var it = d.iterate();
+    while (it.next(dvui.io) catch null) |entry| {
+        if (entry.kind != .file or std.mem.eql(u8, entry.name, "session.zon") or std.mem.startsWith(u8, entry.name, prefix)) continue;
+        d.deleteFile(dvui.io, entry.name) catch {};
+    }
+}
+
+/// Each document's files, written into `dir` as `generation`'s; `session.zon`'s text, owned by
+/// the caller, which writes it.
+fn writeFiles(self: *const KeptDocuments, dir: []const u8, generation: u32) ![]u8 {
+    const gpa = self.gpa;
     var docs: std.ArrayListUnmanaged(Saved.Doc) = .empty;
     defer docs.deinit(gpa);
     for (self.docs.items) |d| {
         const state = d.state orelse continue;
         const i = docs.items.len;
-        try writeBlob(gpa, dir, i, "state", state);
-        if (d.unsaved) |u| try writeBlob(gpa, dir, i, "unsaved", u);
+        try writeBlob(gpa, dir, generation, i, "state", state);
+        if (d.unsaved) |u| try writeBlob(gpa, dir, generation, i, "unsaved", u);
         try docs.append(gpa, .{
             .path = d.path,
             .owner = d.owner,
@@ -260,23 +314,26 @@ pub fn save(self: *const KeptDocuments, dir: []const u8) !void {
         });
     }
     var aw: std.Io.Writer.Allocating = .init(gpa);
-    defer aw.deinit();
-    try std.zon.stringify.serialize(Saved{ .active = self.active orelse "", .docs = docs.items }, .{}, &aw.writer);
-    const file = try std.fs.path.join(gpa, &.{ dir, "session.zon" });
-    defer gpa.free(file);
-    try cwd.writeFile(dvui.io, .{ .sub_path = file, .data = aw.written() });
+    errdefer aw.deinit();
+    try std.zon.stringify.serialize(Saved{ .generation = generation, .active = self.active orelse "", .docs = docs.items }, .{}, &aw.writer);
+    return aw.toOwnedSlice();
 }
 
-fn writeBlob(gpa: std.mem.Allocator, dir: []const u8, i: usize, kind: []const u8, bytes: []const u8) !void {
-    const name = try std.fmt.allocPrint(gpa, "{d}.{s}", .{ i, kind });
+fn blobName(gpa: std.mem.Allocator, generation: u32, i: usize, kind: []const u8) ![]u8 {
+    if (generation == 0) return std.fmt.allocPrint(gpa, "{d}.{s}", .{ i, kind });
+    return std.fmt.allocPrint(gpa, "{d}-{d}.{s}", .{ generation, i, kind });
+}
+
+fn writeBlob(gpa: std.mem.Allocator, dir: []const u8, generation: u32, i: usize, kind: []const u8, bytes: []const u8) !void {
+    const name = try blobName(gpa, generation, i, kind);
     defer gpa.free(name);
     const file = try std.fs.path.join(gpa, &.{ dir, name });
     defer gpa.free(file);
     try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = file, .data = bytes });
 }
 
-fn readBlob(gpa: std.mem.Allocator, dir: []const u8, i: usize, kind: []const u8) ![]u8 {
-    const name = try std.fmt.allocPrint(gpa, "{d}.{s}", .{ i, kind });
+fn readBlob(gpa: std.mem.Allocator, dir: []const u8, generation: u32, i: usize, kind: []const u8) ![]u8 {
+    const name = try blobName(gpa, generation, i, kind);
     defer gpa.free(name);
     const file = try std.fs.path.join(gpa, &.{ dir, name });
     defer gpa.free(file);
@@ -301,7 +358,7 @@ pub fn loadSession(gpa: std.mem.Allocator, dir: []const u8) ?KeptDocuments {
     if (saved.version != session_version) return null;
     var self: KeptDocuments = .{ .gpa = gpa };
     for (saved.docs, 0..) |d, i| {
-        const kept = readKept(gpa, dir, i, d) catch |err| {
+        const kept = readKept(gpa, dir, saved.generation, i, d) catch |err| {
             dvui.log.warn("restart: could not keep {s} ({t}); it opens from disk", .{ d.path, err });
             continue;
         };
@@ -314,14 +371,14 @@ pub fn loadSession(gpa: std.mem.Allocator, dir: []const u8) ?KeptDocuments {
     return self;
 }
 
-fn readKept(gpa: std.mem.Allocator, dir: []const u8, i: usize, d: Saved.Doc) !Kept {
+fn readKept(gpa: std.mem.Allocator, dir: []const u8, generation: u32, i: usize, d: Saved.Doc) !Kept {
     const path = try gpa.dupe(u8, d.path);
     errdefer gpa.free(path);
     const owner = try gpa.dupe(u8, d.owner);
     errdefer gpa.free(owner);
-    const state: ?[]u8 = if (d.has_state) try readBlob(gpa, dir, i, "state") else null;
+    const state: ?[]u8 = if (d.has_state) try readBlob(gpa, dir, generation, i, "state") else null;
     errdefer if (state) |s| gpa.free(s);
-    const unsaved: ?[]u8 = if (d.has_unsaved) try readBlob(gpa, dir, i, "unsaved") else null;
+    const unsaved: ?[]u8 = if (d.has_unsaved) try readBlob(gpa, dir, generation, i, "unsaved") else null;
     return .{
         .path = path,
         .owner = owner,
