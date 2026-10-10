@@ -10,6 +10,7 @@ const runtime = @import("runtime.zig");
 const Plugin = @import("Plugin.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
+const document = @import("document.zig");
 const RegionSpec = @import("RegionSpec.zig");
 const language = @import("language.zig");
 const settings = @import("settings.zig");
@@ -269,6 +270,9 @@ language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 /// region name, so the app's layout decides where it lands and the SDK never has to grow a new
 /// registry for a new kind of place.
 surfaces: std.ArrayListUnmanaged(Surface) = .empty,
+/// Titles given after registration (`setSurfaceTitle`), by surface id: the Host's own copies,
+/// which those surfaces' `title` points at. Freed with the surface.
+surface_titles: std.StringHashMapUnmanaged([]u8) = .empty,
 
 /// Active selection by contribution id (null = use the first registered).
 /// Which surface is selected, per keyword group.
@@ -289,6 +293,12 @@ pub fn deinit(self: *Host) void {
     self.services.deinit(self.allocator);
     self.selections.deinit(self.allocator);
     self.surfaces.deinit(self.allocator);
+    var titles = self.surface_titles.iterator();
+    while (titles.next()) |e| {
+        self.allocator.free(e.key_ptr.*);
+        self.allocator.free(e.value_ptr.*);
+    }
+    self.surface_titles.deinit(self.allocator);
     self.menus.deinit(self.allocator);
     self.menu_sections.deinit(self.allocator);
     self.rail_items.deinit(self.allocator);
@@ -865,6 +875,7 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
 /// this *before* `dlclose`, so that the active-selection ids (which may point into that
 /// image) are compared and reset while the memory is still mapped.
 pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
+    for (self.surfaces.items) |s| if (s.owner == plugin) self.dropSurfaceTitle(s.id);
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
@@ -1247,10 +1258,47 @@ pub fn registerSurface(self: *Host, s: Surface) !void {
 pub fn unregisterSurface(self: *Host, id: []const u8) void {
     for (self.surfaces.items, 0..) |*s, i| {
         if (std.mem.eql(u8, s.id, id)) {
+            self.dropSurfaceTitle(id);
             _ = self.surfaces.orderedRemove(i);
             return;
         }
     }
+}
+
+/// Rename a surface: what its tab, the picker and menus call it from now on. The Host keeps its
+/// own copy, so `title` need not outlive the call. A surface registered with a fixed title keeps
+/// it until this is called; nothing asks again. No-op for an id no surface has.
+pub fn setSurfaceTitle(self: *Host, id: []const u8, title: []const u8) !void {
+    const s = self.surfaceById(id) orelse return;
+    const copy = try self.allocator.dupe(u8, title);
+    errdefer self.allocator.free(copy);
+    const gop = try self.surface_titles.getOrPut(self.allocator, id);
+    if (gop.found_existing) {
+        self.allocator.free(gop.value_ptr.*);
+    } else {
+        gop.key_ptr.* = self.allocator.dupe(u8, id) catch |err| {
+            self.surface_titles.removeByPtr(gop.key_ptr);
+            return err;
+        };
+    }
+    gop.value_ptr.* = copy;
+    s.title = copy;
+}
+
+/// A document's title changed (`Plugin.VTable.documentTitle`): its tab is renamed to it once,
+/// here, rather than asked every frame. Called by the owner whenever its answer changes, and by
+/// the app when it registers the document's surface. An owner with no answer keeps the file name.
+pub fn documentTitleChanged(self: *Host, doc: DocHandle) void {
+    const title = doc.owner.documentTitle(doc) orelse return;
+    const id = document.surfaceId(self.allocator, doc.owner.id, doc.owner.documentPath(doc)) catch return;
+    defer self.allocator.free(id);
+    self.setSurfaceTitle(id, title) catch {};
+}
+
+fn dropSurfaceTitle(self: *Host, id: []const u8) void {
+    const kv = self.surface_titles.fetchRemove(id) orelse return;
+    self.allocator.free(kv.key);
+    self.allocator.free(kv.value);
 }
 
 /// Runtime visibility, not registration data — the plugin store toggles a built-in without
@@ -2374,4 +2422,52 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
     try host.runCommand("t.goTo");
     try testing.expectEqualStrings("t.goTo", S.asked.?);
+}
+
+test "a surface's title can change: the Host keeps the copy, and frees it with the surface" {
+    const noopCenter = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const Doc = struct {
+        var title: []const u8 = "";
+        fn path(_: *anyopaque, _: DocHandle) []const u8 {
+            return "/chats/a.chat";
+        }
+        fn named(_: *anyopaque, _: DocHandle) ?[]const u8 {
+            return if (title.len > 0) title else null;
+        }
+    };
+    const vt = Plugin.VTable{ .documentPath = Doc.path, .documentTitle = Doc.named };
+    var plugin = Plugin{ .state = undefined, .vtable = &vt, .id = "chat", .display_name = "Chat" };
+    try host.registerPlugin(&plugin);
+
+    // A plugin renames its own surface; the title it passed need not outlive the call.
+    try host.registerSurface(.{ .id = "chat.chats", .owner = &plugin, .title = "Chats", .keywords = keywords.ide.sidebar, .draw = noopCenter });
+    {
+        var scratch = "Chats (3)".*;
+        try host.setSurfaceTitle("chat.chats", &scratch);
+        scratch[0] = 'X';
+    }
+    try testing.expectEqualStrings("Chats (3)", host.surfaceById("chat.chats").?.title);
+    try host.setSurfaceTitle("chat.chats", "Chats (4)");
+    try testing.expectEqualStrings("Chats (4)", host.surfaceById("chat.chats").?.title);
+    try host.setSurfaceTitle("no.such", "ignored");
+
+    // A document's tab keeps its file name until its owner names it, then follows the name.
+    try host.registerSurface(.{ .id = "chat.doc:/chats/a.chat", .owner = &plugin, .title = "a.chat", .keywords = keywords.ide.main, .draw = noopCenter });
+    const doc: DocHandle = .{ .ptr = undefined, .id = 1, .owner = &plugin };
+    host.documentTitleChanged(doc);
+    try testing.expectEqualStrings("a.chat", host.surfaceById("chat.doc:/chats/a.chat").?.title);
+    Doc.title = "What is on the screen?";
+    host.documentTitleChanged(doc);
+    try testing.expectEqualStrings("What is on the screen?", host.surfaceById("chat.doc:/chats/a.chat").?.title);
+
+    // Closing the document and unloading the plugin free the copies (the testing allocator checks).
+    host.unregisterSurface("chat.doc:/chats/a.chat");
+    host.unregisterPlugin(&plugin);
+    try testing.expectEqual(@as(u32, 0), host.surface_titles.count());
 }
