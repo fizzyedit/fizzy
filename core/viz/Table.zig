@@ -57,7 +57,9 @@ pub const Options = struct {
 };
 
 pub fn init(src: std.builtin.SourceLocation, columns: []const Column, opts: Options, wopts: dvui.Options) Table {
-    const defaults: dvui.Options = .{ .name = "viz.Table", .expand = .both, .background = false };
+    // No border: dvui's grid squares its top corners for a header joined to it, and here the
+    // header is a strip of its own (`stripe`), so a border showed square above and round below.
+    const defaults: dvui.Options = .{ .name = "viz.Table", .expand = .both, .background = false, .border = .{} };
     const grid = dvui.grid(src, .{ .rows = opts.rows }, defaults.override(wopts));
     // Columns fit to what they hold, every frame: the numbers keep a steady width (fixed
     // decimals, monospace), and names come and go as rows do. The text column takes the rest.
@@ -75,7 +77,7 @@ pub fn init(src: std.builtin.SourceLocation, columns: []const Column, opts: Opti
             min_w = @max(min_w, mono.textSize(digits[0 .. 3 + @as(usize, if (c.decimals > 0) 1 + @min(c.decimals, 9) else 0)]).w);
         }
         grid.cellMinSize(col, std.math.maxInt(usize), .{ .w = min_w + 16, .h = 0 });
-        const cell = grid.colHeader(.{ .col = col }, .{ .expand = if (c.kind == .text) .horizontal else .none, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } });
+        const cell = grid.colHeader(.{ .col = col }, stripe(col, columns.len, header_shade).override(.{ .expand = if (c.kind == .text) .horizontal else .none, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } }));
         defer cell.deinit();
         const gravity_x: f32 = if (c.kind == .number) 1 else 0;
         if (opts.sortable) {
@@ -108,6 +110,35 @@ pub fn deinit(self: *Table) void {
     self.grid.deinit();
 }
 
+/// How strongly the header strip and every other row are shaded: the theme's text colour, faint,
+/// so the shade reads in light and dark alike.
+const header_shade: f32 = 0.08;
+const row_shade: f32 = 0.04;
+
+/// A cell's part of a shaded strip across the table: filled `shade` of the text colour, its outer
+/// corners rounded at the strip's ends — the first column's left, the last column's right — so
+/// the cells side by side are one rounded strip.
+fn stripe(col: usize, cols: usize, shade: f32) dvui.Options {
+    const first = col == 0;
+    const last = col + 1 == cols;
+    return .{
+        .background = true,
+        .color_fill = .{ .color = dvui.themeGet().color(.control, .text).opacity(shade) },
+        .corners = .{
+            .tl = if (first) .default else .square,
+            .bl = if (first) .default else .square,
+            .tr = if (last) .default else .square,
+            .br = if (last) .default else .square,
+        },
+    };
+}
+
+/// Row `row`'s cell in column `col`: every other row shaded, so a row reads across without a rule.
+fn rowCell(self: *Table, row: usize, col: usize) dvui.Options {
+    if (row % 2 == 0) return .{};
+    return stripe(col, self.columns.len, row_shade);
+}
+
 pub const TextOptions = struct {
     /// Nesting depth: a call tree's child sits under its parent.
     indent: u8 = 0,
@@ -115,7 +146,7 @@ pub const TextOptions = struct {
 };
 
 pub fn text(self: *Table, row: usize, col: usize, t: []const u8, opts: TextOptions) void {
-    const c = self.grid.cell(.{ .col = col, .row = row }, .{ .expand = .horizontal, .padding = .{ .x = 8 + @as(f32, @floatFromInt(opts.indent)) * 16, .w = 8 } });
+    const c = self.grid.cell(.{ .col = col, .row = row }, self.rowCell(row, col).override(.{ .expand = .horizontal, .padding = .{ .x = 8 + @as(f32, @floatFromInt(opts.indent)) * 16, .w = 8 } }));
     defer c.deinit();
     var f = dvui.Font.theme(.body);
     if (opts.strong) f.weight = .bold;
@@ -130,7 +161,7 @@ pub fn text(self: *Table, row: usize, col: usize, t: []const u8, opts: TextOptio
 
 /// `v` with the column's decimals, right-aligned; an empty cell for null.
 pub fn number(self: *Table, row: usize, col: usize, v: ?f64) void {
-    const c = self.grid.cell(.{ .col = col, .row = row }, .{ .padding = .{ .x = 8, .w = 8 } });
+    const c = self.grid.cell(.{ .col = col, .row = row }, self.rowCell(row, col).override(.{ .padding = .{ .x = 8, .w = 8 } }));
     defer c.deinit();
     var buf: [48]u8 = undefined;
     const t = if (v) |x| std.fmt.bufPrint(&buf, "{[v]d:.[p]}", .{ .v = x, .p = self.columns[col].decimals }) catch "?" else "";
@@ -138,7 +169,7 @@ pub fn number(self: *Table, row: usize, col: usize, v: ?f64) void {
 }
 
 pub fn bar(self: *Table, row: usize, col: usize, fraction: f32, opts: viz.BarOptions) void {
-    const c = self.grid.cell(.{ .col = col, .row = row }, .{ .padding = .{ .x = 8, .w = 8 } });
+    const c = self.grid.cell(.{ .col = col, .row = row }, self.rowCell(row, col).override(.{ .padding = .{ .x = 8, .w = 8 } }));
     defer c.deinit();
     viz.bar(@src(), fraction, opts, .{ .min_size_content = .{ .w = self.columns[col].bar_w, .h = 10 } });
 }
