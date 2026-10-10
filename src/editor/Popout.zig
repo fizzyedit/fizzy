@@ -52,6 +52,8 @@ const MenuOut = struct {
     id: dvui.Id,
     viewport: *viewports.Viewport,
     target: ?dvui.Texture.Target = null,
+    /// The part of the frame its picture shows this frame, once drawn (`overlaysFrame`).
+    part: ?viewports.Rect = null,
     /// Drawn this frame: a menu not drawn has closed, and its window goes.
     seen: bool = false,
     /// On Liquid Glass (`viewports.windowGlass`), else vibrancy with the menu's colour drawn over it.
@@ -98,6 +100,8 @@ const Out = struct {
     /// the texture is kept larger through a fullscreen transition (`keepTarget`).
     target: ?dvui.Texture.Target = null,
     drawn: [2]u32 = .{ 0, 0 },
+    /// The part of the frame its picture shows this frame, once drawn (`overlaysFrame`).
+    part: ?viewports.Rect = null,
     /// What its window is called now: the float's title, as its header says (`Floats.Float.titleText`).
     title_buf: [96]u8 = undefined,
     title_len: u8 = 0,
@@ -327,6 +331,12 @@ fn release(o: *Out) void {
 pub fn endFrame(state: *State) void {
     if (!enabled()) return;
     cover_count = 0;
+    for (&outs) |*slot| if (slot.*) |*o| {
+        o.part = null;
+    };
+    for (&menus) |*slot| if (slot.*) |*m| {
+        m.part = null;
+    };
     for (&outs) |*slot| {
         if (slot.*) |*o| windowFrame(state, o);
     }
@@ -340,6 +350,7 @@ pub fn endFrame(state: *State) void {
     }
     carryFrame(state);
     menuFrame();
+    overlaysFrame();
     // A drag's carry window no float grew out of in the frame after the drag: gone.
     if (spare) |*sp| {
         if (spare_kept) {
@@ -1081,6 +1092,7 @@ fn windowFrame(state: *State, o: *Out) void {
     // Transparent where the float is not: past its corners.
     const picture: viewports.Picture = .begin(target, shown);
     defer picture.end();
+    o.part = shown;
     // Zoomed or full screen there is no desktop behind it: opaque, eased there and back with the
     // OS's transitions as the main window's base is. Where it has no material it is opaque
     // throughout.
@@ -1101,6 +1113,8 @@ fn windowFrame(state: *State, o: *Out) void {
         // A carried view is its carry window's (`carryFrame`); a menu, its own (`menuFrame`).
         if (fizzy.core.screens.isCarried(sw.id)) continue;
         if (fizzy.core.screens.isMenu(sw.id) and nativeMenus()) continue;
+        // What takes no input goes over everything, last (`overlaysFrame`).
+        if (!sw.mouse_events and !fizzy.core.screens.isEverywhere(sw.id)) continue;
         const mine = area.contains(sw.rect_pixels.center());
         if (mine or fizzy.core.screens.isEverywhere(sw.id)) picture.subwindow(sw, mine);
     }
@@ -1273,7 +1287,8 @@ fn menuFrame() void {
         const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
         const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
         const target = viewports.sizedTarget(&m.target, w, h) orelse continue;
-        const picture: viewports.Picture = .begin(target, .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h });
+        m.part = .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h };
+        const picture: viewports.Picture = .begin(target, m.part.?);
         if (!m.glass) {
             const prev_clip = dvui.clipGet();
             defer dvui.clipSet(prev_clip);
@@ -1319,6 +1334,35 @@ fn dialogsRide() void {
         dvui.dataSet(null, m.id, "_rect", rect);
         m.float_at = at;
     };
+}
+
+/// What takes no input, drawn last: a demo's pointer and the ripple of its click
+/// (`replay.overlay`, its layer round the pointer's tip), a tooltip. Each goes into the topmost of
+/// the app's windows over its middle — a menu's or a dialog's, else a float's — over all that
+/// window shows, so the pointer is seen on whatever it is over; over none of them it is left to
+/// the main window. Those windows' pictures are handed over already (`windowFrame`, `menuFrame`):
+/// a window copies its picture only when the frame ends, so this still goes in.
+fn overlaysFrame() void {
+    const cw = dvui.currentWindow();
+    for (cw.subwindows.stack.items) |*sw| {
+        if (sw.mouse_events) continue;
+        if (fizzy.core.screens.isCarried(sw.id) or fizzy.core.screens.isEverywhere(sw.id)) continue;
+        const mid = sw.rect_pixels.center();
+        const Into = struct { target: dvui.Texture.Target, part: viewports.Rect };
+        const into: ?Into = blk: {
+            for (menus) |slot| if (slot) |m| if (m.part) |p| if (m.target) |t| {
+                if ((dvui.Rect.Physical{ .x = p.x, .y = p.y, .w = p.w, .h = p.h }).contains(mid)) break :blk .{ .target = t, .part = p };
+            };
+            for (outs) |slot| if (slot) |o| if (o.part) |p| if (o.target) |t| {
+                if ((dvui.Rect.Physical{ .x = p.x, .y = p.y, .w = p.w, .h = p.h }).contains(mid)) break :blk .{ .target = t, .part = p };
+            };
+            break :blk null;
+        };
+        const w = into orelse continue;
+        const picture: viewports.Picture = .again(w.target, w.part);
+        picture.subwindow(sw, true);
+        picture.end();
+    }
 }
 
 /// Menu `id`'s window (`menuFrame`), opened at `place` (physical, in the main window's frame) where

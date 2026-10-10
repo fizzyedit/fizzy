@@ -297,6 +297,13 @@ pub const Picture = struct {
     /// `target` cleared, and drawn into from now as `part` of the frame (physical).
     pub fn begin(target: dvui.Texture.Target, part: Rect) Picture {
         target.clear();
+        return again(target, part);
+    }
+
+    /// `target` drawn into again as `part` of the frame, what is in it kept: more for a picture
+    /// begun and ended earlier this frame. A window handed its picture (`present`) copies it only
+    /// when the frame ends, so what goes over it last — a demo's pointer — can still go in.
+    pub fn again(target: dvui.Texture.Target, part: Rect) Picture {
         var rt = dvui.currentWindow().render_target;
         rt.texture = target;
         rt.offset = .{ .x = part.x, .y = part.y };
