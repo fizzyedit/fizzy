@@ -105,31 +105,31 @@ fn selector(name: [*:0]const u8) ?*anyopaque {
     return FizzyGetSelector(name);
 }
 
-export fn FizzyMenuActivated(section: c_int, tag: c_int, from_key: bool) void {
+pub export fn FizzyMenuActivated(section: c_int, tag: c_int, from_key: bool) void {
     if (section < 0 or section > 2 or tag < 0) return;
     if (section == 0) pending_from_key.store(from_key, .release);
     pending_tag[@intCast(section)].store(tag, .release);
 }
 
-export fn FizzyMenuEnabled(section: c_int, tag: c_int) callconv(.c) bool {
+pub export fn FizzyMenuEnabled(section: c_int, tag: c_int) callconv(.c) bool {
     const h = hooks orelse return true;
     if (h.input_blocked(h.ctx)) return false;
     if (section < 0 or section > 2 or tag < 0) return true;
     return h.enabled(h.ctx, .{ .section = @enumFromInt(section), .tag = @intCast(tag) });
 }
 
-export fn FizzyMenuTitle(section: c_int, tag: c_int) callconv(.c) ?[*:0]const u8 {
+pub export fn FizzyMenuTitle(section: c_int, tag: c_int) callconv(.c) ?[*:0]const u8 {
     const h = hooks orelse return null;
     if (section < 0 or section > 2 or tag < 0) return null;
     return h.title(h.ctx, .{ .section = @enumFromInt(section), .tag = @intCast(tag) });
 }
 
-export fn FizzyMenuInputBlocked() callconv(.c) bool {
+pub export fn FizzyMenuInputBlocked() callconv(.c) bool {
     const h = hooks orelse return false;
     return h.input_blocked(h.ctx);
 }
 
-export fn FizzyMenuAbout() callconv(.c) void {
+pub export fn FizzyMenuAbout() callconv(.c) void {
     pending_about.store(true, .release);
 }
 

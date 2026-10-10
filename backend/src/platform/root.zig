@@ -16,3 +16,16 @@ pub const geometry = @import("geometry.zig");
 pub const macos_monitor = @import("macos_monitor.zig");
 pub const window_layout = @import("window_layout.zig");
 pub const menu = @import("menu.zig");
+
+comptime {
+    // The menu bar's Objective-C (`macos/menu_target.m`) calls these back, and it is compiled into
+    // every app on macOS (`addPlatformObjC`), so they are kept whether or not the app ever reaches
+    // `menu` — a plain dvui app with no menu bar of its own failed to link without them.
+    if (@import("builtin").os.tag == .macos) {
+        _ = &menu.FizzyMenuActivated;
+        _ = &menu.FizzyMenuEnabled;
+        _ = &menu.FizzyMenuTitle;
+        _ = &menu.FizzyMenuInputBlocked;
+        _ = &menu.FizzyMenuAbout;
+    }
+}
