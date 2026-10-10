@@ -615,7 +615,7 @@ fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Phys
             r.insetAll(inset).fill(.all(@max(0, sh.radius - inset)), .{ .color = .{ .color = c } });
         }
     }
-    fizzy.core.liquid_blob.fill(discs[0..nd], spacing * s, s, color, 0, .white);
+    fizzy.core.liquid_blob.fill(discs[0..nd], spacing * s, s, color, 0, .white, fizzy.core.liquid_blob.cell_points * @max(s, 0.5));
 }
 
 /// What the OS's glass is at the window's opacity and roughness (`Editor.window_opacity`): the one
