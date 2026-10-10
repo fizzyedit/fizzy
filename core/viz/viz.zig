@@ -7,15 +7,17 @@
 //! - `bar`: a share of a whole, as a bar from the left (a table's "share of work").
 //! - `stat`: a number with its label and unit.
 //! - `Table`: columns of names, fixed-decimal numbers and bars, only the rows in view built.
+//! - `Pie`: shares of a whole as a donut, with leaders out to their labels, easing as they change.
 //!
 //! None allocates beyond the frame's arena, and none keeps state but what dvui keeps for its
 //! widgets. The arithmetic is in `scale` (tested without a window).
 const std = @import("std");
 const dvui = @import("dvui");
-const palette = @import("../palette.zig");
+pub const palette = @import("../palette.zig");
 
 pub const scale = @import("scale.zig");
 pub const Table = @import("Table.zig");
+pub const Pie = @import("Pie.zig");
 
 /// One series of a `line`.
 pub const Series = struct {
@@ -63,6 +65,12 @@ pub const Line = struct {
 pub fn seriesColor(i: usize) dvui.Color {
     if (i == 0) return dvui.themeGet().color(.highlight, .fill);
     return palette.colors[(i - 1) % palette.colors.len];
+}
+
+/// The colour for a thing known by `key` (a hash of its name, a profiler scope's key): the same
+/// thing is the same colour in every graphic that shows it, a pie's slice and a table's bar.
+pub fn keyColor(key: u64) dvui.Color {
+    return palette.colors[@intCast(key % palette.colors.len)];
 }
 
 /// `series` over time in a box of their own. The caller `deinit`s what it returns.
