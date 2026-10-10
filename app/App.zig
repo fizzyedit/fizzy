@@ -522,15 +522,65 @@ pub fn pluginStatus(app: *App, id: []const u8) sdk.services.plugins.Api.Status {
     };
 }
 
-/// The `plugins` service over this app (`pluginStatus`); register it once `app` is at its final
-/// address.
+/// Every plugin the app has, for the `plugins` service's `list`: the loaded ones in the order
+/// they registered, then those that failed to load.
+pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.services.plugins.Api.Info {
+    const Api = sdk.services.plugins.Api;
+    var out: std.ArrayList(Api.Info) = .empty;
+    const host = &app.host;
+    for (host.plugins.items) |plugin| {
+        if (plugin.internal) continue;
+        var info: Api.Info = .{
+            .id = plugin.id,
+            .name = plugin.display_name,
+            .link = .bundled,
+            .status = app.pluginStatus(plugin.id),
+        };
+        for (app.loaded_plugin_libs.items) |lib| if (std.mem.eql(u8, lib.plugin_id, plugin.id)) {
+            info.link = .library;
+            info.path = lib.path;
+            info.version = lib.version_info.plugin_version;
+            info.built_with_sdk = lib.version_info.built_with_sdk_version;
+        };
+        const r = &info.registered;
+        r.surfaces = countOwned(host.surfaces.items, plugin);
+        r.commands = countOwned(host.commands.items, plugin);
+        r.services = countOwned(host.services.items, plugin);
+        r.menus = countOwned(host.menus.items, plugin) + countOwned(host.menu_sections.items, plugin) +
+            countOwned(host.native_menu_items.items, plugin) + countOwned(host.rail_items.items, plugin) +
+            countOwned(host.open_actions.items, plugin);
+        for (host.settings_schemas.items) |schema| r.settings += @intFromBool(schema.owner == plugin);
+        r.file_kinds = countOwned(host.file_kinds.items, plugin);
+        r.languages = countOwned(host.language_support.items, plugin);
+        try out.append(arena, info);
+    }
+    for (app.failed_user_plugins.items) |f| {
+        if (host.pluginById(f.id) != null) continue;
+        try out.append(arena, .{ .id = f.id, .name = f.id, .link = .library, .status = app.pluginStatus(f.id) });
+    }
+    return out.items;
+}
+
+/// How many of `items` (a host registry: each has an `owner`) `plugin` registered.
+fn countOwned(items: anytype, plugin: *sdk.Plugin) u32 {
+    var n: u32 = 0;
+    for (items) |item| n += @intFromBool(item.owner == plugin);
+    return n;
+}
+
+/// The `plugins` service over this app (`pluginStatus`, `pluginList`); register it once `app` is
+/// at its final address.
 pub fn pluginsService(app: *App) sdk.services.plugins.Api {
     const Impl = struct {
         fn status(ctx: *anyopaque, id: []const u8) sdk.services.plugins.Api.Status {
             const a: *App = @ptrCast(@alignCast(ctx));
             return a.pluginStatus(id);
         }
-        const vtable: sdk.services.plugins.Api.VTable = .{ .status = status };
+        fn list(ctx: *anyopaque, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.services.plugins.Api.Info {
+            const a: *App = @ptrCast(@alignCast(ctx));
+            return a.pluginList(arena);
+        }
+        const vtable: sdk.services.plugins.Api.VTable = .{ .status = status, .list = list };
     };
     return .{ .ctx = app, .vtable = &Impl.vtable };
 }

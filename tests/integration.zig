@@ -6829,6 +6829,25 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqual(@as(u32, 1), st.failures);
         editor.app.noteLoadTimes("text", 180, 6);
         try std.testing.expectEqual(@as(f32, 6), plugins.status("text").swapped_ms);
+
+        // Who each plugin is and what it brought: the text plugin, bundled in this harness, with
+        // the commands it registered; the app's own internal plugins left out.
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        const all = try plugins.list(arena.allocator());
+        const text_info = for (all) |info| {
+            if (std.mem.eql(u8, info.id, "text")) break info;
+        } else return error.TestUnexpectedResult;
+        try std.testing.expectEqual(sdk.services.plugins.Api.Link.bundled, text_info.link);
+        try std.testing.expect(text_info.registered.commands > 0);
+        try std.testing.expectEqual(sdk.services.plugins.Api.State.loaded, text_info.status.state);
+        for (all) |info| {
+            const p = editor.app.host.pluginById(info.id) orelse continue;
+            try std.testing.expect(!p.internal);
+        }
+        try std.testing.expect(for (all) |info| {
+            if (std.mem.eql(u8, info.id, "workbench")) break info.registered.surfaces > 0;
+        } else false);
     }
 
     // A plugin's reload keeps its open documents (`KeptDocuments`): captured, detached with their
