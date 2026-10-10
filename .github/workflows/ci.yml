@@ -159,6 +159,17 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build check-web
 
+      # Fizzy on dvui's own SDL3 backend (`-Dnative-backend=sdl3`), where any dvui app on the stock
+      # backend stands: the platform pieces compile without fizzy's backend and lose what needs it
+      # (floats' windows, the window skin). It rotted unnoticed while nothing built it. macOS
+      # only: the platform reaches furthest into the backend there, and that is where it broke.
+      - name: Fetch dependencies for dvui's SDL3 backend (with retries)
+        if: matrix.name == 'macOS'
+        run: bash scripts/ci-retry.sh zig build --fetch -Dnative-backend=sdl3
+      - name: Compile on dvui's SDL3 backend
+        if: matrix.name == 'macOS'
+        run: bash scripts/ci-retry.sh zig build -Dnative-backend=sdl3 -Dno-emit --summary all
+
       # Fizzy consumed from outside: fizzyedit/example-app (fizzy as a library, in every shape)
       # and fizzyedit/example-plugin (the plugin template), built against this tree fetched as a
       # URL dependency would be. The only checks that catch a path resolving against the
