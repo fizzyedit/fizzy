@@ -6709,6 +6709,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     // minute of demo in a few hundred frames.
     // Measured while it plays, with no profiler window open: what each plugin cost, by name.
     fizzy.core.profile.want(60_000);
+    // Every frame of it a hitch, so the lookback keeps some whatever this machine's speed.
+    _ = try dvui.testing.step(headlessFrame);
+    const lookback = fizzy.core.profile.lookback() orelse return error.TestUnexpectedResult;
+    lookback.budget_ns = 0;
+    defer lookback.budget_ns = std.time.ns_per_s / 60;
     try editor.demo.play("tour");
     var frames: usize = 0;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
@@ -6718,8 +6723,13 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     {
         var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer out.deinit();
-        try fizzy.core.profile.report(fizzy.core.profile.host(), &out.writer, .{ .min_ms = 0 });
+        try fizzy.core.profile.report(fizzy.core.profile.host(), &out.writer, .{ .min_ms = 0, .over_ms = 30_000, .hitches = 3 });
         const profiled = out.written();
+        // Past the half second: the costliest scopes over the last 30 s, and the frames that
+        // went over budget, each with what it spent.
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".over = .{ .seconds = ") != null);
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".hitch_budget_ms = 0.000") != null);
+        try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, profiled, ".ago_s = "));
         try std.testing.expect(std.mem.indexOf(u8, profiled, ".frame = .{ .fps = ") != null);
         try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"fizzy\"") != null);
         // The plugins drawing the tour, each under its own name.

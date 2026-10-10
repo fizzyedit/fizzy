@@ -24,6 +24,9 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const perf = @import("gfx/perf.zig");
+/// What the profiler keeps past its half-second window: 30 seconds of windows, and the frames
+/// over budget (`lookback`).
+pub const Lookback = @import("profile/Lookback.zig");
 
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
@@ -158,6 +161,7 @@ pub const Profiler = struct {
         self.history_submit = @splat(0);
         for (&self.history_ns) |*h| h.* = @splat(0);
         for (&self.history_calls) |*h| h.* = @splat(0);
+        if (host_lookback) |lb| lb.reset();
     }
 
     /// The frame `ago` frames back (0 the latest recorded): its work, its submit (0 until the
@@ -280,6 +284,7 @@ pub const Profiler = struct {
             }
             self.history_head = (slot + 1) % history_len;
             self.history_filled = @min(self.history_filled + 1, history_len);
+            if (host_lookback) |lb| lb.noteFrame(t, work, self.history_ns[slot][0..self.count], self.history_calls[slot][0..self.count]);
         }
         self.win_work_ns += work;
         self.win_worst_work_ns = @max(self.win_worst_work_ns, work);
@@ -308,6 +313,12 @@ pub const Profiler = struct {
             .frames = self.win_frames,
             .inputs_per_s = @as(f64, @floatFromInt(self.win_inputs)) / (span / std.time.ns_per_s),
         };
+        if (host_lookback) |lb| lb.foldWindow(.{
+            .end_ns = t,
+            .frames = self.win_frames,
+            .work_ns = self.win_work_ns,
+            .worst_work_ns = self.win_worst_work_ns,
+        }, self.slice());
         for (self.slice()) |*e| {
             e.avg_ns = @as(f64, @floatFromInt(e.win_ns)) / frames;
             e.avg_self_ns = @as(f64, @floatFromInt(e.win_ns -| e.win_child_ns)) / frames;
@@ -336,9 +347,14 @@ fn now() i128 {
 /// The host's profiler. Only the host image's copy is ever used as one (`hostFrameBegin`).
 var host_profiler: Profiler = .{};
 var is_host = false;
+/// The host's lookback, made the first frame the profiler records: nothing is spent on it while
+/// nobody profiles. Published beside the profiler under a key of its own, so the profiler's
+/// layout, and the plugins built against it, are untouched.
+var host_lookback: ?*Lookback = null;
 
 const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7970_7266); // "fizzyprf"
 const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
+const lookback_key = std.fmt.comptimePrint("_profiler_lookback{d}", .{Lookback.abi});
 
 /// The profiler to record into: the host's own in the host, the one it published in a plugin.
 /// Null when there is none, or it was built with another layout.
@@ -351,6 +367,15 @@ pub fn current() ?*Profiler {
     const addr = dvui.dataGet(null, publish_id, publish_key, usize) orelse return null;
     const p: *Profiler = @ptrFromInt(addr);
     return if (p.abi == abi) p else null;
+}
+
+/// What the profiler kept past its half-second window, from any image: the costs of the last 30
+/// seconds and the frames over budget. Null until the profiler has recorded a frame.
+pub fn lookback() ?*Lookback {
+    if (is_host) return host_lookback;
+    if (dvui.current_window == null) return null;
+    const addr = dvui.dataGet(null, publish_id, lookback_key, usize) orelse return null;
+    return @ptrFromInt(addr);
 }
 
 /// Host only: the profiler the window shows and controls.
@@ -366,6 +391,8 @@ pub fn hostFrameBegin(prev_submit_ns: ?u64) void {
     is_host = true;
     host_profiler.frameBegin(prev_submit_ns);
     dvui.dataSet(null, publish_id, publish_key, @as(usize, @intFromPtr(&host_profiler)));
+    if (host_lookback == null and host_profiler.active) host_lookback = Lookback.create(std.heap.page_allocator, max_entries) catch null;
+    if (host_lookback) |lb| dvui.dataSet(null, publish_id, lookback_key, @as(usize, @intFromPtr(lb)));
 }
 
 /// Host only, at the end of every frame.
@@ -418,7 +445,25 @@ pub const ReportOptions = struct {
     /// Leave out scopes cheaper than this per frame, on average: most of a frame's scopes cost
     /// next to nothing, and a reader wants the ones that do not.
     min_ms: f64 = 0.01,
+    /// Also the costliest scopes over this many milliseconds (`lookback`, at most 30 s), by
+    /// their own time, when above zero: the averages a half second hides.
+    over_ms: u32 = 0,
+    /// How many scopes `over` lists, and each hitch.
+    top: usize = 10,
+    /// Also the newest this many frames that went over budget (`Lookback.budget_ns`), each with
+    /// its costliest scopes.
+    hitches: usize = 0,
 };
+
+/// Each entry's own time in a frame whose times (`ns`, indexed as `Profiler.slice`) are given:
+/// its time less its children's.
+pub fn selfTimes(p: *const Profiler, ns: []const u32, out: []u64) void {
+    const n = @min(ns.len, out.len, p.count);
+    for (out[0..n], ns[0..n]) |*o, v| o.* = v;
+    for (p.entries[0..n], 0..) |e, i| if (e.parent != none and e.parent < n) {
+        out[e.parent] -|= ns[i];
+    };
+}
 
 /// What the last window (`window_ns`) measured, as ZON, a line per item so two reports diff:
 /// the frame (rate, interval, fizzy's work, its worst, the backend's submit), each owner's own
@@ -465,7 +510,70 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
     for (p.entries[0..p.count], 0..) |e, i| {
         if (e.parent == none) try writeScope(p, w, @intCast(i), none, &out_index, &written, opts);
     }
-    try w.writeAll("    },\n}\n");
+    try w.writeAll("    },\n");
+    if (lookback()) |lb| {
+        if (opts.over_ms > 0) try writeOver(p, lb, w, opts);
+        if (opts.hitches > 0) try writeHitches(p, lb, w, opts);
+    }
+    try w.writeAll("}\n");
+}
+
+/// The costliest scopes over `opts.over_ms`, by their own time per frame.
+fn writeOver(p: *const Profiler, lb: *const Lookback, w: *std.Io.Writer, opts: ReportOptions) std.Io.Writer.Error!void {
+    var costs: [max_entries]Lookback.Cost = undefined;
+    const n = p.count;
+    const span = lb.costs(opts.over_ms, costs[0..n]);
+    var order: [max_entries]u16 = undefined;
+    for (order[0..n], 0..) |*o, i| o.* = @intCast(i);
+    std.mem.sort(u16, order[0..n], costs[0..n], struct {
+        fn lt(cs: []const Lookback.Cost, a: u16, b: u16) bool {
+            return cs[a].self_ns > cs[b].self_ns;
+        }
+    }.lt);
+    try w.print("    .over = .{{ .seconds = {d:.1}, .frames = {d}, .work_ms = {d:.3}, .worst_work_ms = {d:.3}, .top = .{{\n", .{
+        @as(f64, @floatFromInt(span.ns)) / std.time.ns_per_s, span.frames, millis(span.work_ns), millis(@floatFromInt(span.worst_work_ns)),
+    });
+    for (order[0..@min(n, opts.top)]) |i| {
+        const c = costs[i];
+        if (millis(c.self_ns) < opts.min_ms) break;
+        const e = p.entries[i];
+        try w.print("        .{{ .owner = \"{f}\", .name = \"{f}\", .self_ms = {d:.3}, .avg_ms = {d:.3}, .max_ms = {d:.3}, .calls = {d:.1} }},\n", .{
+            std.zig.fmtString(e.owner), std.zig.fmtString(e.name), millis(c.self_ns), millis(c.avg_ns), millis(@floatFromInt(c.max_ns)), c.calls,
+        });
+    }
+    try w.writeAll("    } },\n");
+}
+
+/// The newest `opts.hitches` frames over budget, each with its costliest scopes by own time.
+fn writeHitches(p: *const Profiler, lb: *const Lookback, w: *std.Io.Writer, opts: ReportOptions) std.Io.Writer.Error!void {
+    try w.print("    .hitch_budget_ms = {d:.3},\n    .hitches = .{{\n", .{millis(@floatFromInt(lb.budget_ns))});
+    const t = now();
+    var ago: usize = 0;
+    while (ago < opts.hitches) : (ago += 1) {
+        const h = lb.hitchAt(ago) orelse break;
+        var self_ns: [max_entries]u64 = undefined;
+        const n = h.ns.len;
+        selfTimes(p, h.ns, self_ns[0..n]);
+        var order: [max_entries]u16 = undefined;
+        for (order[0..n], 0..) |*o, i| o.* = @intCast(i);
+        std.mem.sort(u16, order[0..n], self_ns[0..n], struct {
+            fn lt(ss: []const u64, a: u16, b: u16) bool {
+                return ss[a] > ss[b];
+            }
+        }.lt);
+        try w.print("        .{{ .ago_s = {d:.1}, .work_ms = {d:.3}, .top = .{{\n", .{
+            @as(f64, @floatFromInt(t - h.at_ns)) / std.time.ns_per_s, millis(@floatFromInt(h.work_ns)),
+        });
+        for (order[0..@min(n, opts.top)]) |i| {
+            if (millis(@floatFromInt(self_ns[i])) < opts.min_ms) break;
+            const e = p.entries[i];
+            try w.print("            .{{ .owner = \"{f}\", .name = \"{f}\", .self_ms = {d:.3}, .ms = {d:.3}, .calls = {d} }},\n", .{
+                std.zig.fmtString(e.owner), std.zig.fmtString(e.name), millis(@floatFromInt(self_ns[i])), millis(@floatFromInt(h.ns[i])), h.calls[i],
+            });
+        }
+        try w.writeAll("        } },\n");
+    }
+    try w.writeAll("    },\n");
 }
 
 fn writeScope(p: *const Profiler, w: *std.Io.Writer, idx: u16, parent_out: u16, out_index: *[max_entries]u16, written: *u16, opts: ReportOptions) std.Io.Writer.Error!void {

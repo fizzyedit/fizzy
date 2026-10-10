@@ -23,6 +23,11 @@ const viz = core.viz;
 pub var open: bool = false;
 var rect: dvui.Rect = .{ .x = 80, .y = 80, .w = 1000, .h = 640 };
 var view: enum { by_plugin, tree } = .by_plugin;
+/// What the table and the pie cover: the last half second, or the last 30 s (`profile.lookback`).
+var span: enum { recent, long } = .recent;
+/// The hitch the person clicked, held in the table and the pie until clicked again; by when it
+/// happened, since newer hitches move it along the list.
+var held_hitch: ?i128 = null;
 /// The window is too narrow for the table's full share bars (a phone).
 var narrow = false;
 /// Wide enough for the pie beside the table; narrower, it sits above it.
@@ -117,8 +122,15 @@ pub fn draw() void {
         if (dvui.button(@src(), if (view == .by_plugin) "Call tree" else "By plugin", .{}, .{})) {
             view = if (view == .by_plugin) .tree else .by_plugin;
         }
+        if (dvui.button(@src(), if (span == .recent) "Last 30 s" else "Last 0.5 s", .{}, .{})) {
+            span = if (span == .recent) .long else .recent;
+        }
         // The explanation is the widest thing in the window; a phone has no room for it.
-        if (!narrow) dvui.labelNoFmt(@src(), "per frame, over the last 0.5 s — self is a scope's time less the scopes inside it", .{}, .{
+        const explain = if (span == .recent)
+            "per frame, over the last 0.5 s — self is a scope's time less the scopes inside it"
+        else
+            "per frame, over the last 30 s; max is the slowest frame in it";
+        if (!narrow) dvui.labelNoFmt(@src(), explain, .{}, .{
             .gravity_y = 0.5,
             .color_text = .{ .color = dim },
         });
@@ -130,24 +142,42 @@ pub fn draw() void {
     const inspected = drawGraph(p, mono, dim);
     p.frozen = inspected != null;
 
+    // The frames that went over budget, as chips: one clicked is held in the table and the pie.
+    const held = drawHitches();
+
+    // What the table and the pie show: the frame under the pointer, a held hitch, the last 30 s,
+    // or the last half second, in the shape they read (an entry's numbers as its "average").
     var entries = p.slice();
     var work = @max(s.work_ns, 1);
-    if (inspected) |ago| if (p.historyFrame(ago)) |f| {
-        // That frame's numbers, in the shape the tables read: its time as the "average", its
-        // self time from its children's, its calls.
-        const copy = arena.dupe(profile.Entry, entries) catch entries;
-        for (copy, 0..) |*e, i| {
-            e.avg_ns = @floatFromInt(f.ns[i]);
-            e.avg_calls = @floatFromInt(f.calls[i]);
-            e.max_ns = f.ns[i];
-            e.avg_self_ns = e.avg_ns;
+    var caption_buf: [48]u8 = undefined;
+    var caption: []const u8 = "per frame";
+    if (inspected) |ago| {
+        if (p.historyFrame(ago)) |f| {
+            entries = withFrame(arena, entries, f.ns, f.calls);
+            work = @max(@as(f64, @floatFromInt(f.work_ns)), 1);
+            caption = std.fmt.bufPrint(&caption_buf, "frame -{d}", .{ago}) catch "";
         }
-        for (copy) |e| if (e.parent != std.math.maxInt(u16)) {
-            copy[e.parent].avg_self_ns = @max(0, copy[e.parent].avg_self_ns - e.avg_ns);
-        };
-        entries = copy;
-        work = @max(@as(f64, @floatFromInt(f.work_ns)), 1);
-    };
+    } else if (held) |h| {
+        entries = withFrame(arena, entries, h.ns, h.calls);
+        work = @max(@as(f64, @floatFromInt(h.work_ns)), 1);
+        caption = std.fmt.bufPrint(&caption_buf, "hitch {d:.1} s ago", .{secondsAgo(h.at_ns)}) catch "";
+    } else if (span == .long) {
+        if (profile.lookback()) |lb| {
+            if (arena.alloc(profile.Lookback.Cost, entries.len)) |costs| {
+                const covered = lb.costs(30_000, costs);
+                const copy = arena.dupe(profile.Entry, entries) catch entries;
+                for (copy, costs) |*e, c| {
+                    e.avg_ns = c.avg_ns;
+                    e.avg_self_ns = c.self_ns;
+                    e.avg_calls = c.calls;
+                    e.max_ns = c.max_ns;
+                }
+                entries = copy;
+                work = @max(covered.work_ns, 1);
+                caption = std.fmt.bufPrint(&caption_buf, "per frame · {d:.0} s", .{@as(f64, @floatFromInt(covered.ns)) / std.time.ns_per_s}) catch "";
+            } else |_| {}
+        }
+    }
     var rows: std.ArrayList(Row) = .empty;
     switch (view) {
         .by_plugin => collectByPlugin(arena, entries, work, &rows),
@@ -158,8 +188,6 @@ pub fn draw() void {
     var lower = dvui.box(@src(), .{ .dir = if (beside) .horizontal else .vertical }, .{ .expand = .both });
     defer lower.deinit();
     {
-        var caption_buf: [32]u8 = undefined;
-        const caption = if (inspected) |ago| std.fmt.bufPrint(&caption_buf, "frame -{d}", .{ago}) catch "" else "per frame";
         var pie: viz.Pie = .init(@src(), collectSlices(arena, entries, work), .{ .unit = "ms", .caption = caption }, .{
             .min_size_content = .{ .w = if (beside) 420 else 300, .h = if (beside) 260 else 200 },
             .expand = if (beside) .none else .horizontal,
@@ -168,6 +196,59 @@ pub fn draw() void {
         pie.deinit();
         drawGrid(rows.items, work, .{ .keys = pie.keys, .colors = pie.colors, .hovered = if (pie.hovered) |h| pie.keys[h] else null });
     }
+}
+
+/// `entries` as one frame saw them (`ns`, `calls`, indexed as `entries`): its time as each one's
+/// "average", its self time from its children's, its calls.
+fn withFrame(arena: std.mem.Allocator, entries: []profile.Entry, ns: []const u32, calls: []const u16) []profile.Entry {
+    const copy = arena.dupe(profile.Entry, entries) catch return entries;
+    for (copy, 0..) |*e, i| {
+        const t: u32 = if (i < ns.len) ns[i] else 0;
+        e.avg_ns = @floatFromInt(t);
+        e.avg_calls = if (i < calls.len) @floatFromInt(calls[i]) else 0;
+        e.max_ns = t;
+        e.avg_self_ns = e.avg_ns;
+    }
+    for (copy) |e| if (e.parent != std.math.maxInt(u16)) {
+        copy[e.parent].avg_self_ns = @max(0, copy[e.parent].avg_self_ns - e.avg_ns);
+    };
+    return copy;
+}
+
+fn secondsAgo(at_ns: i128) f64 {
+    return @as(f64, @floatFromInt(core.perf.nanoTimestamp() - at_ns)) / std.time.ns_per_s;
+}
+
+const Held = struct { at_ns: i128, work_ns: u64, ns: []const u32, calls: []const u16 };
+
+/// The kept hitches as a row of chips, newest first, each saying when and how long; a click holds
+/// one (and another click lets it go). The held one, while it is still kept.
+fn drawHitches() ?Held {
+    const lb = profile.lookback() orelse return null;
+    if (lb.hitch_filled == 0) {
+        held_hitch = null;
+        return null;
+    }
+    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal, .margin = .{ .h = 6 } });
+    defer row.deinit();
+    const dim = dvui.themeGet().color(.control, .text).opacity(0.6);
+    var buf: [64]u8 = undefined;
+    const title = std.fmt.bufPrint(&buf, "over {d:.1} ms:", .{@as(f64, @floatFromInt(lb.budget_ns)) / std.time.ns_per_ms}) catch "";
+    dvui.labelNoFmt(@src(), title, .{}, .{ .color_text = .{ .color = dim }, .gravity_y = 0.5 });
+    var found: ?Held = null;
+    var clicked: ??i128 = null;
+    var ago: usize = 0;
+    while (lb.hitchAt(ago)) |h| : (ago += 1) {
+        const is_held = held_hitch != null and held_hitch.? == h.at_ns;
+        if (is_held) found = .{ .at_ns = h.at_ns, .work_ns = h.work_ns, .ns = h.ns, .calls = h.calls };
+        const text = std.fmt.bufPrint(&buf, "{d:.0} s ago · {d:.1} ms", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms }) catch "";
+        if (dvui.button(@src(), text, .{}, .{ .id_extra = ago, .style = if (is_held) .highlight else .control, .margin = .all(2) })) {
+            clicked = if (is_held) @as(?i128, null) else h.at_ns;
+        }
+    }
+    // A click takes effect next frame; one held that fell out of the list is let go.
+    if (clicked) |c| held_hitch = c else if (found == null) held_hitch = null;
+    return found;
 }
 
 /// The last `profile.history_len` frames' work as columns, newest at the right, each with its
