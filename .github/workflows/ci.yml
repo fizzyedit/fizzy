@@ -213,6 +213,9 @@ jobs:
       - name: Run integration tests
         shell: bash
         run: bash scripts/ci-retry.sh zig build test-integration --summary all
+      - name: Check benchmark compile targets
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build check-bench --summary all
 
       - name: Save Zig cache
         if: success() && steps.zig-cache.outputs.cache-hit != 'true'

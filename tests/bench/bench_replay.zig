@@ -67,7 +67,7 @@ const Stage = struct {
     fn idle(_: *anyopaque) bool {
         return true;
     }
-    fn command(_: *anyopaque, _: []const u8) void {}
+    fn command(_: *anyopaque, _: []const u8, _: []const u8) void {}
     fn chordFor(_: *anyopaque, _: []const u8) ?@import("app").keymap.chord.Stroke {
         return null;
     }
