@@ -103,6 +103,9 @@ init_opts_save: ?InitOptions = null,
 viewport_slots: [max_viewports]?Viewport = @splat(null),
 /// Where a held pointer is read while one is held (`PointerPin`, `heldPoint`).
 pointer_pin: PointerPin = .none,
+/// The window the last press landed on: on top where windows overlap, as the OS gave it the press
+/// (`heldPoint`).
+press_window: ?*c.SDL_Window = null,
 /// macOS: the main window may have come in front of a viewport's window — it took focus, was
 /// pressed on, shown or restored — or a viewport's window has just shown: put each viewport's window
 /// back over it at the next present (`renderPresent`). Asking AppKit for the order is a trip to the
@@ -945,6 +948,7 @@ pub fn addAllEvents(self: *SDLBackend, win: *dvui.Window) !void {
 /// Note that contrary to `addEvent`, this function return true if the event is sent based on the
 ///  SDL_Window handle (i.e. OS Window dispatch) and doesn't care about subwindows.
 fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Window, target_win: *c.SDL_Window) !bool {
+    if (event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN) self.press_window = target_win;
     // A held pointer, with a viewport open, goes where it is — whichever of fizzy's windows took
     // the press (`heldPoint`).
     if ((self.window == target_win or self.viewportOf(target_win) != null) and self.heldAcrossWindows(event.*)) {
@@ -1321,6 +1325,7 @@ pub fn viewportsAvailable() bool {
 
 /// Close a viewport: its window goes, and the slot (and band) with it.
 pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
+    if (self.press_window == vp.window) self.press_window = null;
     // A pin to it goes with it: it would point at an empty slot.
     switch (self.pointer_pin) {
         .viewport => |p| if (p == vp) {
@@ -1699,6 +1704,18 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
             return .{ .x = p.x, .y = p.y };
         },
     }
+    // Over the viewport the press landed on, that one: where two viewports' windows overlap, the
+    // OS gave the press to the one on top, which the order of the slots below does not know — a
+    // press on the second of two overlapping floats' windows was read in the first's band.
+    if (self.press_window) |pw| if (self.viewportOf(pw)) |vp| if (!vp.passive and !vp.see_through) {
+        const full = c.SDL_GetWindowFlags(vp.window) & c.SDL_WINDOW_FULLSCREEN != 0;
+        const s = if (full) liveScreen(vp) else vp.screen;
+        if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
+            gx < @as(f32, @floatFromInt(s.x + s.w)) and gy < @as(f32, @floatFromInt(s.y + s.h)))
+        {
+            return self.viewportPoint(vp);
+        }
+    };
     // Over the main window, a window under it in the stacking (`Viewport.under_main`) is not
     // what the pointer is over: the main window is.
     const origin = self.mainOnScreen();
