@@ -16,6 +16,8 @@ const dvui = @import("dvui");
 
 const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
+/// The OS windows besides the main one an app draws with (`Viewport`).
+pub const viewports = @import("viewports.zig");
 /// What this backend keeps count of as it runs (`health`).
 pub const Health = @import("Health.zig");
 
@@ -98,7 +100,7 @@ window_geometry: WindowGeometry = .{},
 // Set by `initWindow` and `initWindowSecondary` for use by eventual child window.
 init_opts_save: ?InitOptions = null,
 /// The OS windows besides this one that show part of its frame (`Viewport`).
-viewports: [max_viewports]?Viewport = @splat(null),
+viewport_slots: [max_viewports]?Viewport = @splat(null),
 /// Where a held pointer is read while one is held (`PointerPin`, `heldPoint`).
 pointer_pin: PointerPin = .none,
 /// macOS: the main window may have come in front of a viewport's window — it took focus, was
@@ -919,7 +921,7 @@ fn noteMainForward(self: *SDLBackend, target: ?*c.SDL_Window, event_type: u32) v
     };
     if (event_type == c.SDL_EVENT_WINDOW_FOCUS_GAINED) self.main_focused_once = true;
     if (!over) return;
-    for (&self.viewports) |*slot| if (slot.*) |*v| {
+    for (&self.viewport_slots) |*slot| if (slot.*) |*v| {
         v.over_main = true;
     };
 }
@@ -1176,7 +1178,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     const carry = role != .window;
     const menu = role == .menu;
     if (!viewportsAvailable()) return null;
-    const slot = for (self.viewports, 0..) |v, i| {
+    const slot = for (self.viewport_slots, 0..) |v, i| {
         if (v == null) break i;
     } else return null;
     const b = viewport_map.band(slot);
@@ -1224,8 +1226,8 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`plans/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu };
-    const vp = &self.viewports[slot].?;
+    self.viewport_slots[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu };
+    const vp = &self.viewport_slots[slot].?;
     // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
     if (menu) return vp;
     if (role == .overlay) {
@@ -1329,13 +1331,13 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
     // What rides on it lets go first (`Viewport.ride`): SDL destroys a window's children with it,
     // and the slot of each still holds its window. The app moves a dialog left behind back over
     // the main window (`Popout`).
-    for (&self.viewports) |*slot| {
+    for (&self.viewport_slots) |*slot| {
         if (slot.*) |*other| if (other != vp and other.ride != null and other.ride == vp.window) {
             _ = c.SDL_SetWindowParent(other.window, null);
             other.ride = null;
         };
     }
-    for (&self.viewports) |*slot| {
+    for (&self.viewport_slots) |*slot| {
         if (slot.*) |*v| if (v == vp) {
             // Holding the keyboard as it goes — a float that merged back into the main window, or
             // came back on a command, while its window was the one in front — it hands it back to
@@ -1356,7 +1358,7 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
             break;
         };
     }
-    for (self.viewports) |v| if (v != null) return;
+    for (self.viewport_slots) |v| if (v != null) return;
     _ = c.SDL_ResetHint(c.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH);
 }
 
@@ -1627,7 +1629,7 @@ pub fn viewportPresent(_: *SDLBackend, vp: *Viewport, target: ?dvui.TextureTarge
 }
 
 fn viewportOf(self: *SDLBackend, window: *c.SDL_Window) ?*Viewport {
-    for (&self.viewports) |*slot| {
+    for (&self.viewport_slots) |*slot| {
         if (slot.*) |*v| if (v.window == window) return v;
     }
     return null;
@@ -1670,7 +1672,7 @@ fn heldAcrossWindows(self: *SDLBackend, event: c.SDL_Event) bool {
         c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_UP => if (event.button.which == c.SDL_TOUCH_MOUSEID) return false,
         else => return false,
     }
-    const any = for (self.viewports) |v| {
+    const any = for (self.viewport_slots) |v| {
         if (v != null) break true;
     } else false;
     if (!any) return false;
@@ -1704,7 +1706,7 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     var mh: c_int = 0;
     _ = c.SDL_GetWindowSize(self.window, &mw, &mh);
     const over_main = gx >= origin.x and gy >= origin.y and gx < origin.x + @as(f32, @floatFromInt(mw)) and gy < origin.y + @as(f32, @floatFromInt(mh));
-    for (&self.viewports) |*slot| {
+    for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.passive or vp.see_through) continue;
         // In a fullscreen Space of its own, a window is where the OS put it, and under nothing:
@@ -1968,7 +1970,7 @@ pub fn deinit(self: *SDLBackend) void {
             WindowGeometry.save(self);
         }
         // Viewports are claimed on this window's device: given back before it goes.
-        for (&self.viewports) |*slot| {
+        for (&self.viewport_slots) |*slot| {
             if (slot.*) |*v| self.viewportClose(v);
         }
         self.gpu.destroy();
@@ -1992,7 +1994,7 @@ pub fn renderPresent(self: *SDLBackend) void {
     var transacted: [max_viewports]bool = @splat(false);
     var any = false;
     if (comptime builtin.os.tag == .macos) {
-        for (&self.viewports, 0..) |*slot, i| {
+        for (&self.viewport_slots, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             const first = !vp.shown and vp.pending != null;
             const reshaped = vp.passive and !vp.overlay and (vp.carry_radius != vp.carry_radius_shown or vp.carry_alpha != vp.carry_alpha_shown or vp.carry_size_shown[0] != vp.screen.w or vp.carry_size_shown[1] != vp.screen.h);
@@ -2022,7 +2024,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         }
     }
     defer if (comptime builtin.os.tag == .macos) if (any) {
-        for (&self.viewports, transacted) |*slot, t| {
+        for (&self.viewport_slots, transacted) |*slot, t| {
             if (!t) continue;
             const vp = if (slot.*) |*v| v else continue;
             fizzy_native_viewport_presented(cocoaWindow(vp.window));
@@ -2037,7 +2039,7 @@ pub fn renderPresent(self: *SDLBackend) void {
     // drawables back slowly while the main window goes through a Space transition, and waiting on
     // them every frame halved the move's rate with one open.
     const main_moving = platform.window.windowMovingItself(self.window);
-    for (&self.viewports, 0..) |*slot, i| {
+    for (&self.viewport_slots, 0..) |*slot, i| {
         const vp = if (slot.*) |*v| v else continue;
         const target = vp.pending orelse continue;
         vp.pending = null;
@@ -2062,7 +2064,7 @@ pub fn renderPresent(self: *SDLBackend) void {
     self.gpu.present(self.clear_window_on_begin, builtin.os.tag == .windows and self.inLiveResize());
     // Shown once there is a frame in it (or empty, above). Not made key: the window it came out of
     // keeps the keyboard until the viewport is clicked.
-    for (&self.viewports, first_frame, map_empty) |*slot, show, empty| {
+    for (&self.viewport_slots, first_frame, map_empty) |*slot, show, empty| {
         if (!show and !empty) continue;
         const vp = if (slot.*) |*v| v else continue;
         if (!vp.mapped) {
@@ -2085,11 +2087,11 @@ pub fn renderPresent(self: *SDLBackend) void {
     // activates, which brings the main window in front of them (`fizzy_macos_watch_first_activation`).
     if (comptime builtin.os.tag == .macos) {
         fizzy_macos_watch_first_activation();
-        if (fizzy_macos_took_first_activation() != 0) for (&self.viewports) |*slot| if (slot.*) |*v| {
+        if (fizzy_macos_took_first_activation() != 0) for (&self.viewport_slots) |*slot| if (slot.*) |*v| {
             v.over_main = true;
         };
         const main_ns = cocoaWindow(self.window);
-        for (&self.viewports) |*slot| {
+        for (&self.viewport_slots) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
             if (!vp.over_main) continue;
             vp.over_main = false;
@@ -2102,7 +2104,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         // when the stacking may have changed.
         if (self.stack_stale) {
             self.stack_stale = false;
-            for (&self.viewports) |*slot| {
+            for (&self.viewport_slots) |*slot| {
                 const vp = if (slot.*) |*v| v else continue;
                 vp.under_main = vp.mapped and !vp.passive and !vp.menu and fizzy_macos_viewport_under_main(cocoaWindow(vp.window), main_ns) != 0;
             }
@@ -2180,7 +2182,7 @@ pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     // A float's window standing still on its way into or out of full screen: its picture has
     // taken this frame's step (`begin_hook`), and the float follows it there — as it did the
     // window's moves — and back to the window as the way ends.
-    if (comptime builtin.os.tag == .macos) for (&self.viewports) |*slot| {
+    if (comptime builtin.os.tag == .macos) for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.picture_at[0] != 0 or vp.picture_at[1] != 0 or platform.window.windowSpacePicture(vp.window) != null)
             viewportFollowWindow(vp);
@@ -2231,7 +2233,7 @@ fn mainHeld(self: *SDLBackend) bool {
     // Its own way into or out of full screen is drawn whatever AppKit says of it on the way.
     if (platform.window.windowMovingItself(self.window)) return false;
     if (c.SDL_GetWindowFlags(self.window) & c.SDL_WINDOW_OCCLUDED != 0) return true;
-    for (&self.viewports) |*slot| {
+    for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.shown and platform.window.windowMovingItself(vp.window)) return true;
     }

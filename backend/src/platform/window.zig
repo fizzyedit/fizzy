@@ -54,6 +54,46 @@ pub const WindowGlass = extern struct {
     feather: f64,
 };
 
+/// A window's Liquid Glass this frame (`liquidGlassLook`, `viewports.windowGlass`), as an app
+/// says it: what `core.glass_look.window` says at the window's opacity, the window's colour, and the clearing
+/// bevel `core.glass_look.band` gives its size.
+pub const WindowGlassLook = struct {
+    under_variant: i32,
+    under_style: i32,
+    over_variant: i32,
+    over_style: i32,
+    frost: f32,
+    blur: f32,
+    glass: f32,
+    fill: dvui.Color,
+    /// The colour's opacity in the body…
+    fill_opacity: f32,
+    /// …and over all of it, the bevel too.
+    top_fill: f32,
+    /// Points, each.
+    radius: f32,
+    clear: f32,
+    feather: f32,
+
+    /// As `fizzy_macos_window_liquid_glass_look` reads it.
+    pub fn native(self: WindowGlassLook) WindowGlass {
+        return .{
+            .under_variant = self.under_variant,
+            .under_style = self.under_style,
+            .over_variant = self.over_variant,
+            .over_style = self.over_style,
+            .frost = self.frost,
+            .blur = self.blur,
+            .glass = self.glass,
+            .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.fill_opacity },
+            .top_fill = self.top_fill,
+            .radius = self.radius,
+            .clear = self.clear,
+            .feather = self.feather,
+        };
+    }
+};
+
 /// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — over
 /// the clear lens a body of frost, the plain blur (the vibrancy it wore before,
 /// `ns_visual_effect_material`) and the window's colour, fading out across a clearing bevel along
@@ -260,7 +300,7 @@ pub fn setStyle(win: *dvui.Window) void {
         // Not a menu's or a dialog's: dressed once as it opens (`fizzy_macos_viewport_menu`), it
         // never goes full screen, and this made it a full-screen primary window over the
         // auxiliary one it was opened as, every frame.
-        if (comptime own_backend) for (&win.backend.impl.viewports) |*slot| {
+        if (comptime own_backend) for (&win.backend.impl.viewport_slots) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
             if (vp.passive or vp.menu) continue;
             const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
@@ -385,7 +425,7 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
             // side by side, and each in a Space of its own, they are one app's windows.
             if (comptime own_backend) {
                 win.backend.impl.window_skin = color;
-                for (&win.backend.impl.viewports) |*slot| {
+                for (&win.backend.impl.viewport_slots) |*slot| {
                     const vp = if (slot.*) |*v| v else continue;
                     if (vp.passive) continue;
                     const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
