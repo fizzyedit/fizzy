@@ -6776,6 +6776,26 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
     }
 
+    // New File's editor takes the keyboard: what is typed next lands in it, no click first.
+    {
+        const host = &editor.app.host;
+        try editor.app.host.runCommand("fizzy.newFile");
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+        }
+        try dvui.testing.settle(headlessFrame);
+        try dvui.testing.writeText("typed");
+        try dvui.testing.settle(headlessFrame);
+        const out = host.callCommand("text.read", "", host.arena());
+        const zon = switch (out) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
+    }
+
     try editor.deinit();
 }
 
