@@ -525,7 +525,12 @@ static void fit_content_view(NSWindow *window) {
  * it, and a float came out with a drawable the size of something it had been, squeezed into the
  * window it shrank to (the user). Whoever moves the frame keeps the drawable with it. */
 static void fit_drawable(NSWindow *window) {
-    NSMutableArray<NSView *> *stack = [NSMutableArray arrayWithObject:[window contentView]];
+    /* None once the window is closing: quitting during a full-screen transition, AppKit cuts the
+     * transition short as it closes the window and tells the monitor it entered full screen, by
+     * which time the window had no content view — and `arrayWithObject:nil` threw (the user). */
+    NSView *content = [window contentView];
+    if (content == nil) return;
+    NSMutableArray<NSView *> *stack = [NSMutableArray arrayWithObject:content];
     while (stack.count > 0) {
         NSView *v = stack.lastObject;
         [stack removeLastObject];
