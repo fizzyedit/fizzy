@@ -127,6 +127,12 @@ demo: Demo = .detached,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
+/// The documents a restart kept (`KeptDocuments.loadSession`), until the workbench has reopened
+/// last session's tabs: each one it asks for opens from here (`openPath`).
+session: ?KeptDocuments = null,
+/// Frames the session has been read for: its documents open in the first, its panes' selections
+/// apply in the next.
+session_frames: u8 = 0,
 /// The `plugins` service, registered at this address in `postInit`.
 plugins_service: sdk.services.plugins.Api = undefined,
 
@@ -407,6 +413,12 @@ pub fn init(
     }
 
     editor.loadSavedLayout();
+    if (comptime restart.supported) {
+        if (KeptDocuments.sessionDir(app.allocator, editor.app.config_folder)) |dir| {
+            defer app.allocator.free(dir);
+            editor.session = KeptDocuments.loadSession(editor.app.gpa, dir);
+        } else |_| {}
+    }
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
 
@@ -3849,6 +3861,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             (e.evt == .app and e.evt.app.action == .quit);
         if (!want_quit) continue;
 
+        // A restart keeps every document, unsaved edits included, and asks nothing; one whose
+        // unsaved changes cannot be kept is asked about as for any quit.
+        if (comptime restart.supported) if (restart.requested() and editor.keepSessionForRestart()) continue;
+
         var dirty_n: usize = 0;
         for (editor.app.open_files.values()) |doc| {
             if (doc.owner.isDirty(doc)) dirty_n += 1;
@@ -3924,6 +3940,19 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.rebuildWorkspaces() catch {
             dvui.log.err("Failed to rebuild workspaces", .{});
         };
+        // The first rebuild reopened last session's tabs; what the session held beyond them is
+        // kept in recovery files. A frame on, the panes have drawn, and each shows the tab it did.
+        if (editor.session) |*kept| {
+            if (editor.session_frames > 0) {
+                kept.applySelections(editor);
+                kept.deinit();
+                editor.session = null;
+            } else {
+                kept.finishDocuments(editor);
+                editor.session_frames += 1;
+                dvui.refresh(null, @src(), null);
+            }
+        }
     }
 
     if (editor.pending_composite_warmup) {
@@ -4799,6 +4828,11 @@ pub fn close(app: *Entry, editor: *Editor) void {
         editor.app.pending_app_close = true;
         return;
     }
+    // A restart keeps every document instead of asking (`keepSessionForRestart`).
+    if (comptime restart.supported) if (restart.requested() and editor.keepSessionForRestart()) {
+        editor.app.pending_app_close = true;
+        return;
+    };
     var dirty_n: usize = 0;
     for (editor.app.open_files.values()) |doc| {
         if (doc.owner.isDirty(doc)) dirty_n += 1;
@@ -4999,7 +5033,29 @@ const Placement = struct {
     take_slot_of: ?[]const u8 = null,
 };
 
+/// Write every open document to the session a restart reopens (`KeptDocuments`). False when one
+/// has unsaved changes its owner cannot keep, or the session could not be written: then the quit
+/// asks, as any quit does.
+fn keepSessionForRestart(editor: *Editor) bool {
+    var kept = KeptDocuments.capture(editor, null) catch |err| {
+        dvui.log.warn("restart: open documents not kept ({t}); asking about unsaved changes", .{err});
+        return false;
+    };
+    defer kept.deinit();
+    const dir = KeptDocuments.sessionDir(editor.app.gpa, editor.app.config_folder) catch return false;
+    defer editor.app.gpa.free(dir);
+    kept.save(dir) catch |err| {
+        dvui.log.warn("restart: could not write the session ({t}); asking about unsaved changes", .{err});
+        std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+        return false;
+    };
+    return true;
+}
+
 fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Placement) !bool {
+    // Last session's document, as a restart kept it: from its state, not the disk.
+    if (comptime restart.supported) if (editor.session) |*kept| if (kept.openKept(editor, path_in, grouping) != null) return true;
+
     const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
 
@@ -5828,6 +5884,7 @@ pub fn deinit(editor: *Editor) !void {
     }
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
+    if (editor.session) |*kept| kept.deinit();
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.
     if (editor.app.folder_watcher) |*w| {
