@@ -6863,6 +6863,39 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
     }
 
+    // A restart keeps every open document (`KeptDocuments.save` / `loadSession` / `openKept`):
+    // written to the session, gone with the old process, and opened from the session — not the
+    // disk, where an untitled document has nothing — when its tab asks for it at the next launch.
+    // The session is read once.
+    {
+        const before = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const path = try gpa.dupe(u8, before.owner.documentPath(before));
+        defer gpa.free(path);
+        const grouping = before.owner.documentGrouping(before);
+        const dir = try fizzy.Editor.KeptDocuments.sessionDir(gpa, editor.app.config_folder);
+        defer gpa.free(dir);
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            defer kept.deinit();
+            try kept.save(dir);
+        }
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer ids.deinit(gpa);
+        for (editor.app.open_files.values()) |d| try ids.append(gpa, d.id);
+        for (ids.items) |id| editor.detachFileID(id);
+        try std.testing.expect(editor.docFromPath(path) == null);
+
+        editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(dvui.io, dir, .{}));
+        _ = try editor.app.host.openFile(.{ .path = path, .grouping = grouping });
+        const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(after.owner.isDirty(after));
+        const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        if (editor.session) |*kept| kept.deinit();
+        editor.session = null;
+    }
+
     try editor.deinit();
 }
 
