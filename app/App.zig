@@ -43,6 +43,7 @@ const Layout = @import("layout/Layout.zig");
 const Host = sdk.Host;
 const PluginLoader = @import("root.zig").store.Loader;
 const SettingsWatcher = @import("watch/SettingsWatcher.zig");
+const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
 const FolderWatcher = @import("watch/FolderWatcher.zig");
 const Keymap = @import("keymap/Keymap.zig");
 pub const Settings = @import("settings/Settings.zig");
@@ -254,6 +255,11 @@ settings_save_deadline_ns: i128 = 0,
 /// reconciliation. Set up in `postInit` (needs `editor` at its final heap address — see
 /// `SettingsWatcher.start`'s doc comment), torn down first in `deinit`.
 settings_watcher: ?SettingsWatcher = null,
+
+/// Watches the app's own executable while `settings.restart_on_rebuild` is on: a rebuild restarts
+/// the app into it, keeping every document. Null while the setting is off, and wherever
+/// `SettingsWatcher` would be.
+executable_watcher: ?ExecutableWatcher = null,
 
 /// Recursive watch on the open root folder, fanned out to plugins as `folderPathsChanged`.
 /// Same final-address constraint as the two above — started in `postInit`, retargeted whenever

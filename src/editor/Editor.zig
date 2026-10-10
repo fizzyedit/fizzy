@@ -69,6 +69,7 @@ const OutputPanel = @import("OutputPanel.zig");
 const SettingsPluginsZon = @import("app").settings.PluginsZon;
 const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
+const ExecutableWatcher = @import("app").watch.ExecutableWatcher;
 const Constants = @import("Constants.zig");
 const DocumentWatcher = @import("DocumentWatcher.zig");
 const DocumentIo = @import("DocumentIo.zig");
@@ -133,6 +134,8 @@ session: ?KeptDocuments = null,
 /// Frames the session has been read for: its documents open in the first, its panes' selections
 /// apply in the next.
 session_frames: u8 = 0,
+/// The executable watcher could not start: not tried again every frame (`syncExecutableWatcher`).
+executable_watch_failed: bool = false,
 /// The `plugins` service, registered at this address in `postInit`.
 plugins_service: sdk.services.plugins.Api = undefined,
 
@@ -3821,6 +3824,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Pick up any external edit to settings.zon (see R11 in plans/PLUGIN_MANIFEST_PLAN.md).
     // Cheap no-op unless the watcher thread actually saw a change.
     if (editor.app.settings_watcher) |*w| w.tick(editor.configWatchSink());
+    // fizzy itself rebuilt: start again as the new build, every document kept.
+    editor.syncExecutableWatcher();
+    if (editor.app.executable_watcher) |*w| if (w.tick() and !restart.requested()) {
+        dvui.log.info("restart: this executable was rebuilt; restarting into the new build", .{});
+        restart.request();
+    };
     // A rebuilt plugin opened off the UI thread since the last frame is swapped in now.
     editor.plugin_reloads.frame(editor);
 
@@ -5033,6 +5042,38 @@ const Placement = struct {
     take_slot_of: ?[]const u8 = null,
 };
 
+/// Watch this executable while `restart_on_rebuild` is on, and stop when it goes off. Once a frame;
+/// a no-op unless the setting changed. The watcher has to be at its final address to start
+/// (`ExecutableWatcher.start`), which `editor.app` is.
+fn syncExecutableWatcher(editor: *Editor) void {
+    if (comptime !ExecutableWatcher.have_impl or !restart.supported) return;
+    const want = editor.app.settings.restart_on_rebuild;
+    if (want == (editor.app.executable_watcher != null)) return;
+    if (!want) {
+        if (editor.app.executable_watcher) |*w| w.deinit();
+        editor.app.executable_watcher = null;
+        return;
+    }
+    if (editor.executable_watch_failed) return;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe = std.process.executablePath(dvui.io, &buf) catch |err| {
+        dvui.log.warn("restart: cannot find this executable ({t}); a rebuild will not restart fizzy", .{err});
+        editor.executable_watch_failed = true;
+        return;
+    };
+    editor.app.executable_watcher = ExecutableWatcher.init(editor.app.gpa, buf[0..exe]) catch |err| {
+        dvui.log.warn("restart: cannot watch this executable ({t}); a rebuild will not restart fizzy", .{err});
+        editor.executable_watch_failed = true;
+        return;
+    };
+    if (editor.app.executable_watcher) |*w| w.start() catch |err| {
+        dvui.log.warn("restart: cannot watch this executable ({t}); a rebuild will not restart fizzy", .{err});
+        w.deinit();
+        editor.app.executable_watcher = null;
+        editor.executable_watch_failed = true;
+    };
+}
+
 /// Write every open document to the session a restart reopens (`KeptDocuments`). False when one
 /// has unsaved changes its owner cannot keep, or the session could not be written: then the quit
 /// asks, as any quit does.
@@ -5882,6 +5923,8 @@ pub fn deinit(editor: *Editor) !void {
         w.stop();
         editor.app.settings_watcher = null;
     }
+    if (editor.app.executable_watcher) |*w| w.deinit();
+    editor.app.executable_watcher = null;
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
     if (editor.session) |*kept| kept.deinit();

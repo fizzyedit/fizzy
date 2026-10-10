@@ -4,6 +4,7 @@ const sdk = @import("fizzy_sdk");
 const std = @import("std");
 const dvui = @import("dvui");
 const SettingsMigration = @import("SettingsMigration.zig");
+const build_opts = @import("build_opts");
 
 const Settings = @This();
 
@@ -102,6 +103,11 @@ native_menus: bool = true,
 /// on the main window — rather than drawn inside it, where floats are windows. Applied at once;
 /// `FIZZY_NATIVE_DIALOGS` overrides it.
 native_dialogs: bool = true,
+
+/// Whether a rebuild of the app's own executable restarts the app into it, keeping every open
+/// document (`ExecutableWatcher`). On in a source build, which is what rebuilds; off in a release
+/// built to update itself (Velopack), whose binary only changes through its own updater.
+restart_on_rebuild: bool = !build_opts.velopack_enabled,
 
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.

@@ -76,6 +76,8 @@ pub const watch = struct {
     pub const FolderWatcher = @import("watch/FolderWatcher.zig");
     /// Changes under the app's own config folder — its settings file, its plugin directory.
     pub const SettingsWatcher = @import("watch/SettingsWatcher.zig");
+    /// The app's own executable: a rebuild of it restarts the app into the new build.
+    pub const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
     /// How a watcher thread wakes a sleeping UI. Set once by the application.
     pub const wake = @import("watch/wake.zig");
 };
@@ -150,5 +152,6 @@ test {
     _ = layout.Shape;
     _ = watch.FolderWatcher;
     _ = watch.SettingsWatcher;
+    _ = watch.ExecutableWatcher;
     _ = store.Loader;
 }
