@@ -196,6 +196,22 @@ Fizzy adapts to two upstream behaviours rather than patching them:
    every tick, and the app never got back to its events (a beachball, the user). The timer now
    asks the window whether it is still in a live resize (`inLiveResize`), and ends it when it is
    not. Squash into 4 at the next rebase.
+10. **Cocoa: a live resize that has gone still, with no button held, is over** (`629e976`). Tiled
+    to a side of the screen (macOS 26), a window could go on saying it was in a live resize, with
+    no button held and its size settled, and the end never came. A live resize that has gone still
+    with no button held for a second is over (`endLiveResizeIfOver`, from the timer and the
+    display): a drag holds a button, and an animated resize changes the size every tick. Since 11,
+    a last resort. Squash into 4 at the next rebase.
+11. **Cocoa: a live-resize frame that is not a step is drawn after the display, not inside it**
+    (`61e656f`). The root of 9 and 10. Every frame of a live resize was drawn inside a display —
+    the timer's while the pointer rests and the app's while it animates
+    (`fizzy_native_live_resize_next_frame`), not only the steps — so with a frame as long as a
+    refresh the main thread had nothing between frames, and AppKit could not finish a live resize
+    it was animating (a tile): it never posted its end. Only a step, where the size changed, is
+    drawn in its display now; any other frame just after it, outside the transaction. Measured
+    (`scripts/live-resize`, 120 Hz, a 4 s right-edge drag): 0 stretched frames of 428, every step
+    drawn in its display, 13 frames after one. AppKit ends a tile's live resize about 600 ms in,
+    before 10's second. Squash into 4 at the next rebase.
 
 On top of the patches, **the fork's own tests** (#280): `test/testfizzy.c` runs suites on SDL's
 test harness (`test/testautomation_fizzy*.c`), with no library code changed. Each suite checks one
@@ -221,7 +237,7 @@ its patch, and goes upstream in that patch's PR.
 Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
 `fizzy-3.4.16-4` → `2d6efde`; `fizzy-3.4.16-5` → `ee721bf`; `fizzy-3.4.16-6` → `4839ede`;
 `fizzy-3.4.16-7` → `36dda37`; `fizzy-3.4.16-8` → `a518aaf`; `fizzy-3.4.16-9` → `011a2dc`;
-`fizzy-3.4.16-10` → `f57c7e5`, what sdl_zig pins now.
+`fizzy-3.4.16-10` → `f57c7e5`; `fizzy-3.4.16-11` → `61e656f`, what sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -263,13 +279,15 @@ Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4
     squash the pin into 1 at the next rebase.
 11. **Build fizzyedit/SDL `fizzy-3.4.16-10`** (`e8f4ac0`): the pin moves to SDL's live-resize fix
     (9). Squash into 1 at the next rebase.
+12. **Build fizzyedit/SDL `fizzy-3.4.16-11`** (`d0c70fe`): the pin moves to SDL's 10 and 11.
+    Squash into 1 at the next rebase.
 
 Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
 `fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`;
 `fizzy-1.0.3+3.4.16-5` → `8e88dba`; `fizzy-1.0.3+3.4.16-6` → `0f6a2a8`;
 `fizzy-1.0.3+3.4.16-7` → `264af2a`; `fizzy-1.0.3+3.4.16-8` → `a02dda8`;
-`fizzy-1.0.3+3.4.16-9` → `5e41c70`; `fizzy-1.0.3+3.4.16-10` → `e8f4ac0`, the commit fizzy pins
-now.
+`fizzy-1.0.3+3.4.16-9` → `5e41c70`; `fizzy-1.0.3+3.4.16-10` → `e8f4ac0`;
+`fizzy-1.0.3+3.4.16-11` → `d0c70fe`, the commit fizzy pins now.
 
 ## Bumping
 

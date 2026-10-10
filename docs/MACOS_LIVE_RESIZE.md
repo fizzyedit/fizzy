@@ -193,9 +193,12 @@ timer's ticks. Once the slide ended there was nothing left to draw.
 the Metal view as needing display when that frame is due — no sooner than a display refresh
 (`NSScreen.maximumFramesPerSecond`) after this frame began, and two refreshes after a step, so a
 drag's own steps, about a refresh apart, are not each preceded by a frame of this one's. Any frame
-that comes first re-arms it; a wait for an event disarms it. The frame is drawn from the same
-display a step draws from, presented with its transaction like every other; SDL's timer, finding a
-frame inside its tick, asks for nothing. Only when SDL draws the resize (the listener answers
+that comes first re-arms it; a wait for an event disarms it. The display it asks for is not a
+step (nothing changed size), so SDL draws the frame just after that display rather than inside it
+(fizzyedit/SDL's patch 11, `docs/DEPENDENCIES.md`): drawn inside every display, a frame as long
+as a refresh left the main thread nothing between frames, AppKit could not finish a tile's
+animated live resize, and fizzy froze. SDL's timer, finding a frame inside its tick, asks for
+nothing. Only when SDL draws the resize (the listener answers
 `drawsLiveResizeInView:` for the view); on an SDL without the patches the timer draws every tick, as
 before.
 
