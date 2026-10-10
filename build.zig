@@ -89,3 +89,35 @@ pub fn buildApp(fizzy_dep: *std.Build.Dependency, plugins: []const BundledPlugin
     opts.app_plugins = plugins;
     try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg);
 }
+
+/// What a dvui app of its own builds on (`addDvui`): fizzy's backend, with OS windows besides the
+/// main one, or dvui's own SDL3 backend, with the main window only.
+pub const NativeBackend = @import("build/exe.zig").NativeBackend;
+
+/// A plain dvui app — dvui's widgets and `dvui.App`, nothing of fizzy the editor — on `backend`:
+/// `root_module` gets `dvui` (fizzy's pin), its `backend`, and `viewports_none`, so the same code
+/// builds on either backend:
+///
+/// ```zig
+/// const backend = @import("backend");
+/// const viewports = if (@hasDecl(backend, "viewports")) backend.viewports else @import("viewports_none");
+/// ```
+///
+/// On fizzy's backend it also gets `platform` (the window's chrome and state), and on macOS the
+/// backend's Objective-C, compiled into it. Give `root_module` its target and optimize mode first.
+pub fn addDvui(fizzy_dep: *std.Build.Dependency, root_module: *std.Build.Module, backend: NativeBackend) !void {
+    const b = fizzy_dep.builder;
+    const exe = @import("build/exe.zig");
+    const target = root_module.resolved_target orelse @panic("fizzy.addDvui: give the root module its target first");
+    const optimize = root_module.optimize orelse .Debug;
+    const macos_sdl_paths = try @import("build/common.zig").macosSdlPathsForExplicitTarget(b, target);
+    const native = exe.nativeDvui(b, backend, target, optimize, .off, macos_sdl_paths);
+    root_module.addImport("dvui", native.dvui);
+    root_module.addImport("backend", native.backend);
+    const backend_dep = exe.backendDependency(b);
+    root_module.addImport("viewports_none", @import("fizzy_backend").viewportsNoneModule(backend_dep, native.dvui));
+    if (backend == .fizzy) {
+        root_module.addImport("platform", exe.platformModule(b, native, target, optimize, macos_sdl_paths));
+        @import("fizzy_backend").addPlatformObjC(backend_dep, root_module, exe.backendOptions(target, optimize, macos_sdl_paths));
+    }
+}

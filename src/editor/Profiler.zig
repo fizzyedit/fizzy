@@ -18,16 +18,13 @@ const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 const core = fizzy.core;
 const profile = core.profile;
+const viz = core.viz;
 
 pub var open: bool = false;
 var rect: dvui.Rect = .{ .x = 80, .y = 80, .w = 720, .h = 560 };
 var view: enum { by_plugin, tree } = .by_plugin;
 /// The window is too narrow for the table's full share bars (a phone).
 var narrow = false;
-/// Touch: a finger on the graph holds the frame under it only while it is down. The pointer
-/// stays where the finger lifted, and read as a hover it froze the profiler for good.
-var touch_pointer = false;
-var touch_down = false;
 /// Ask for every frame while the window is open, instead of only the ones something wants.
 var continuous = false;
 
@@ -98,19 +95,15 @@ pub fn draw() void {
 
     // The frame.
     {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
         defer row.deinit();
-        var submit_buf: [32]u8 = undefined;
-        const submit = if (s.submit_ns) |ns| std.fmt.bufPrint(&submit_buf, "   submit {d:.2} ms", .{ms(ns)}) catch "" else "";
-        dvui.label(@src(), "{d:.0} fps   frame {d:.2} ms   work {d:.2} ms{s}   worst {d:.2} ms   input {d:.0}/s   {d} frames", .{
-            s.fps,
-            ms(s.interval_ns),
-            ms(s.work_ns),
-            submit,
-            ms(@floatFromInt(s.worst_work_ns)),
-            s.inputs_per_s,
-            s.frames,
-        }, .{ .font = mono, .gravity_y = 0.5 });
+        viz.stat(@src(), "", s.fps, .{ .unit = "fps", .decimals = 0 }, .{});
+        viz.stat(@src(), "frame", ms(s.interval_ns), .{ .unit = "ms" }, .{});
+        viz.stat(@src(), "work", ms(s.work_ns), .{ .unit = "ms" }, .{});
+        if (s.submit_ns) |ns| viz.stat(@src(), "submit", ms(ns), .{ .unit = "ms" }, .{});
+        viz.stat(@src(), "worst", ms(@floatFromInt(s.worst_work_ns)), .{ .unit = "ms" }, .{});
+        viz.stat(@src(), "input", s.inputs_per_s, .{ .unit = "/s", .decimals = 0 }, .{});
+        viz.stat(@src(), "", @floatFromInt(s.frames), .{ .unit = "frames", .decimals = 0 }, .{});
     }
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 4, .h = 6 } });
@@ -157,105 +150,47 @@ pub fn draw() void {
         .by_plugin => collectByPlugin(arena, entries, work, &rows),
         .tree => collectTree(arena, entries, &rows),
     }
-    drawGrid(rows.items, work, mono, dim);
+    drawGrid(rows.items, work);
 }
 
-/// The last `profile.history_len` frames' work as bars, newest at the right, each with its
+/// The last `profile.history_len` frames' work as columns, newest at the right, each with its
 /// submit on top in a fainter colour, and the 120 and 60 fps lines. Returns how many frames back
 /// the pointer is over (0 the newest), if it is.
 fn drawGraph(p: *profile.Profiler, font: dvui.Font, dim: dvui.Color) ?usize {
-    var box = dvui.box(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .w = 200, .h = 90 }, .margin = .{ .h = 6 } });
-    defer box.deinit();
-    const rs = box.data().contentRectScale();
-    const r = rs.r;
-    r.fill(.all(4 * rs.s), .{ .color = .{ .color = dvui.themeGet().color(.control, .fill).opacity(0.35) }, .fade = 0 });
-
+    const arena = dvui.currentWindow().arena();
     const n = p.history_filled;
-    var top_ns: f64 = 1000.0 / 60.0 * std.time.ns_per_ms * 1.25;
-    var ago: usize = 0;
-    while (ago < n) : (ago += 1) {
-        if (p.historyFrame(ago)) |f| top_ns = @max(top_ns, @as(f64, @floatFromInt(@as(u64, f.work_ns) + f.submit_ns)) * 1.1);
+    const work = arena.alloc(f32, n) catch return null;
+    const submit = arena.alloc(f32, n) catch return null;
+    @memset(work, 0);
+    @memset(submit, 0);
+    for (0..n) |ago| {
+        const f = p.historyFrame(ago) orelse break;
+        work[n - 1 - ago] = @floatCast(ms(@floatFromInt(f.work_ns)));
+        submit[n - 1 - ago] = @floatCast(ms(@floatFromInt(f.submit_ns)));
     }
-    const bar_w = r.w / @as(f32, @floatFromInt(profile.history_len));
-    const scale: f32 = @floatCast(r.h / top_ns);
-
-    for (dvui.events()) |*e| {
-        if (e.evt != .mouse) continue;
-        const me = e.evt.mouse;
-        switch (me.action) {
-            .press => {
-                touch_pointer = me.button.touch();
-                if (touch_pointer) touch_down = true;
-            },
-            .release => if (me.button.touch()) {
-                touch_down = false;
-            },
-            .motion => if (!me.button.touch() and !touch_down) {
-                touch_pointer = false;
-            },
-            else => {},
-        }
-    }
-
-    // Which frame the pointer is over.
-    const mouse = dvui.currentWindow().mouse_pt;
-    var hovered: ?usize = null;
-    if ((!touch_pointer or touch_down) and r.contains(mouse) and dvui.clipGet().contains(mouse) and n > 0) {
-        const from_right = (r.x + r.w - mouse.x) / bar_w;
-        const h: usize = @intFromFloat(@max(0, @floor(from_right)));
-        if (h < n) hovered = h;
-    }
-
-    // Every bar and both frame-rate lines as one batch of quads: one draw rather than 240 fills
-    // (each its own path, triangulation and draw call), so the graph stays out of the numbers
-    // it shows.
-    const lifo = dvui.currentWindow().lifo();
-    const quads = 2 * n + 2;
-    if (dvui.Triangles.Builder.init(lifo, quads * 4, quads * 6)) |builder| {
-        var b = builder;
-        defer b.deinit(lifo);
-        const bar_col = dvui.Color.PMA.fromColor(dvui.themeGet().color(.highlight, .fill).opacity(0.8));
-        const submit_col = dvui.Color.PMA.fromColor(dvui.themeGet().color(.highlight, .fill).opacity(0.35));
-        const hover_col = dvui.Color.PMA.fromColor(dvui.themeGet().color(.window, .text));
-        const line_col = dvui.Color.PMA.fromColor(dim.opacity(0.5));
-        ago = 0;
-        while (ago < n) : (ago += 1) {
-            const f = p.historyFrame(ago) orelse break;
-            const hgt = @min(r.h, @as(f32, @floatFromInt(f.work_ns)) * scale);
-            const submit_hgt = @min(r.h - hgt, @as(f32, @floatFromInt(f.submit_ns)) * scale);
-            const x = r.x + r.w - @as(f32, @floatFromInt(ago + 1)) * bar_w;
-            const w = @max(1, bar_w - rs.s);
-            const is_hovered = hovered != null and hovered.? == ago;
-            addQuad(&b, .{ .x = x, .y = r.y + r.h - hgt, .w = w, .h = hgt }, if (is_hovered) hover_col else bar_col);
-            if (submit_hgt > 0) addQuad(&b, .{ .x = x, .y = r.y + r.h - hgt - submit_hgt, .w = w, .h = submit_hgt }, submit_col);
-        }
-        inline for (.{ 120.0, 60.0 }) |fps| {
-            const y = r.y + r.h - @as(f32, @floatCast(1000.0 / fps * std.time.ns_per_ms)) * scale;
-            if (y > r.y) addQuad(&b, .{ .x = r.x, .y = y, .w = r.w, .h = rs.s }, line_col);
-        }
-        if (b.indices.items.len > 0) dvui.renderTriangles(b.build_unowned(), null) catch {};
-    } else |_| {}
-    {
-        var label_buf: [128]u8 = undefined;
-        const text = if (hovered) |h| blk: {
-            const f = p.historyFrame(h).?;
-            // Submit only where the backend measures it (`FrameStats.submit_ns`).
-            break :blk if (p.stats.submit_ns != null)
-                std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms + submit {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)), ms(@floatFromInt(f.submit_ns)) }) catch ""
-            else
-                std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)) }) catch "";
-        } else std.fmt.bufPrint(&label_buf, "last {d} frames · hover one to hold it", .{n}) catch "";
-        dvui.labelNoFmt(@src(), text, .{}, .{ .font = font, .color_text = .{ .color = dim }, .gravity_x = 0, .gravity_y = 0 });
-    }
-    return hovered;
-}
-
-fn addQuad(b: *dvui.Triangles.Builder, q: dvui.Rect.Physical, col: dvui.Color.PMA) void {
-    const base: dvui.Vertex.Index = @intCast(b.vertexes.items.len);
-    for ([4]dvui.Point.Physical{ q.topLeft(), q.topRight(), q.bottomRight(), q.bottomLeft() }) |pt| {
-        b.appendVertex(.{ .pos = pt, .col = col, .uv = .{ 0, 0 } });
-    }
-    b.appendTriangles(&.{ base, base + 1, base + 2, base, base + 2, base + 3 });
+    const highlight = dvui.themeGet().color(.highlight, .fill);
+    var graph = viz.line(@src(), &.{
+        .{ .name = "work", .values = work, .color = highlight.opacity(0.8) },
+        .{ .name = "submit", .values = submit, .color = highlight.opacity(0.35) },
+    }, .{
+        .style = .columns,
+        .stacked = true,
+        .slots = profile.history_len,
+        .floor = 1000.0 / 60.0 * 1.25,
+        .marks = &.{ 1000.0 / 120.0, 1000.0 / 60.0 },
+    }, .{ .margin = .{ .h = 6 } });
+    defer graph.deinit();
+    var label_buf: [128]u8 = undefined;
+    const text = if (graph.hovered) |h| blk: {
+        const f = p.historyFrame(h).?;
+        // Submit only where the backend measures it (`FrameStats.submit_ns`).
+        break :blk if (p.stats.submit_ns != null)
+            std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms + submit {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)), ms(@floatFromInt(f.submit_ns)) }) catch ""
+        else
+            std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)) }) catch "";
+    } else std.fmt.bufPrint(&label_buf, "last {d} frames · hover one to hold it", .{n}) catch "";
+    dvui.labelNoFmt(@src(), text, .{}, .{ .font = font, .color_text = .{ .color = dim }, .gravity_x = 0, .gravity_y = 0 });
+    return graph.hovered;
 }
 
 fn ms(ns: f64) f64 {
@@ -273,61 +208,24 @@ const Row = struct {
     max_ns: f64 = 0,
 };
 
-const columns = [_][]const u8{ "", "self ms", "total ms", "calls", "max ms", "share of work" };
-
-fn drawGrid(rows: []const Row, work: f64, font: dvui.Font, dim: dvui.Color) void {
-    var grid = dvui.grid(@src(), .{ .rows = rows.len }, .{ .expand = .both, .background = false });
-    defer grid.deinit();
-    // Columns fit to what they hold, every frame: the numbers keep a steady width (fixed
-    // decimals, monospace), and names come and go as scopes do. The name column takes the rest.
-    grid.autoSize(.both);
-    const body = dvui.Font.theme(.body);
-    for (columns, 0..) |title, col| {
-        // At least as wide as its title: the grid fits columns to their body cells only.
-        const title_w = body.textSize(title).w + 16;
-        grid.cellMinSize(col, std.math.maxInt(usize), .{ .w = title_w, .h = 0 });
-        const c = grid.colHeader(.{ .col = col }, .{ .expand = if (col == 0) .horizontal else .none, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } });
-        defer c.deinit();
-        dvui.labelNoFmt(@src(), title, .{}, .{ .font = body, .color_text = .{ .color = dim }, .gravity_x = if (col == 0 or col == 5) 0 else 1, .padding = .{} });
-    }
-    const text = dvui.themeGet().color(.control, .text);
-    // Only the rows in view are built: a scrolled-away row is widgets, labels and number
-    // formatting every frame for nothing.
-    const first, const last = grid.rowsVisible();
-    const lo = @min(first, rows.len);
-    const hi = @min(last, rows.len); // `last` is exclusive
-    for (rows[lo..hi], lo..) |r, ri| {
-        {
-            const c = grid.cell(.{ .col = 0, .row = ri }, .{ .expand = .horizontal, .padding = .{ .x = 8 + @as(f32, @floatFromInt(r.indent)) * 16, .w = 8 } });
-            defer c.deinit();
-            var f = body;
-            if (r.strong) f.weight = .bold;
-            dvui.labelNoFmt(@src(), r.name, .{}, .{ .font = f, .color_text = .{ .color = text }, .padding = .{} });
-        }
-        const nums = [_]f64{ ms(r.self_ns), ms(r.total_ns), r.calls, ms(r.max_ns) };
-        for (nums, 1..) |v, col| {
-            const c = grid.cell(.{ .col = col, .row = ri }, .{ .padding = .{ .x = 8, .w = 8 } });
-            defer c.deinit();
-            var buf: [32]u8 = undefined;
-            const t = if (col == 3 and r.strong)
-                ""
-            else if (col == 3)
-                std.fmt.bufPrint(&buf, "{d:.1}", .{v}) catch "?"
-            else
-                std.fmt.bufPrint(&buf, "{d:.3}", .{v}) catch "?";
-            dvui.labelNoFmt(@src(), t, .{}, .{ .font = font, .color_text = .{ .color = text }, .gravity_x = 1, .padding = .{} });
-        }
-        {
-            const c = grid.cell(.{ .col = 5, .row = ri }, .{ .padding = .{ .x = 8, .w = 8 } });
-            defer c.deinit();
-            // From the left edge of the column, so bars compare by their length.
-            var bb = dvui.box(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .w = if (narrow) 48 else 140, .h = 10 }, .gravity_y = 0.5 });
-            defer bb.deinit();
-            const rs = bb.data().contentRectScale();
-            var bar = rs.r;
-            bar.w *= @floatCast(std.math.clamp(r.self_ns / work, 0, 1));
-            if (bar.w >= 1) bar.fill(.all(2 * rs.s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(if (r.strong) 1 else 0.75) }, .fade = 0 });
-        }
+fn drawGrid(rows: []const Row, work: f64) void {
+    const columns = [_]viz.Table.Column{
+        .{ .title = "", .kind = .text },
+        .{ .title = "self ms" },
+        .{ .title = "total ms" },
+        .{ .title = "calls", .decimals = 1 },
+        .{ .title = "max ms" },
+        .{ .title = "share of work", .kind = .bar, .bar_w = if (narrow) 48 else 140 },
+    };
+    var table: viz.Table = .init(@src(), &columns, .{ .rows = rows.len }, .{});
+    defer table.deinit();
+    for (rows[table.first..table.last], table.first..) |r, i| {
+        table.text(i, 0, r.name, .{ .indent = r.indent, .strong = r.strong });
+        table.number(i, 1, ms(r.self_ns));
+        table.number(i, 2, ms(r.total_ns));
+        table.number(i, 3, if (r.strong) null else r.calls);
+        table.number(i, 4, ms(r.max_ns));
+        table.bar(i, 5, viz.scale.fraction(r.self_ns, work), .{ .strong = r.strong });
     }
 }
 

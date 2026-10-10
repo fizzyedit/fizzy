@@ -6775,6 +6775,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // Every replacement at once was one edit: one undo puts them all back.
         try editor.undo();
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
+
+        // By path: a document that is open but not the one in front, read and written.
+        const notes_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{notes});
+        defer gpa.free(notes_args);
+        try std.testing.expect(std.mem.startsWith(u8, (try read(host, notes_args)).text, "# Notes"));
+        try std.testing.expect(host.callCommand("text.read", ".{ .path = \"/not/open.txt\" }", host.arena()) == .failed);
+
+        // A write changes only what differs, as one edit, and one undo puts back exactly that.
+        const write_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{main_zig});
+        defer gpa.free(write_args);
+        const wrote = host.callCommand("text.write", write_args, host.arena());
+        try std.testing.expect(wrote == .ok);
+        try std.testing.expect(std.mem.indexOf(u8, wrote.ok.?, ".line = 2") != null);
+        try std.testing.expectEqualStrings("// top\nconst a = 42;\nconst b = 3;\n", (try read(host, "")).text);
+        try editor.undo();
+        try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
+        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = true") != null);
+        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = false") != null);
     }
 
     // New File's editor takes the keyboard: what is typed next lands in it, no click first.
@@ -6795,6 +6813,87 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             else => return error.TestUnexpectedResult,
         };
         try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
+    }
+
+    // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that
+    // fails is reported without making a running plugin look broken.
+    {
+        const plugins = editor.app.host.getServiceTyped(sdk.services.plugins.Api) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(sdk.services.plugins.Api.State.loaded, plugins.status("text").state);
+        try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, plugins.status("nothing.here").state);
+        editor.app.noteLoadFailed("text", "the rebuilt binary is for another SDK");
+        const st = plugins.status("text");
+        try std.testing.expectEqual(sdk.services.plugins.Api.State.loaded, st.state);
+        try std.testing.expectEqualStrings("the rebuilt binary is for another SDK", st.why);
+        try std.testing.expectEqual(@as(u32, 1), st.failures);
+        editor.app.noteLoadTimes("text", 180, 6);
+        try std.testing.expectEqual(@as(f32, 6), plugins.status("text").swapped_ms);
+    }
+
+    // A plugin's reload keeps its open documents (`KeptDocuments`): captured, detached with their
+    // tabs left in place, and brought back through the plugin as they were, unsaved edits and
+    // all. A reload swaps a dylib, which this harness has none of; this is all of it but the swap,
+    // on the untitled document just typed into, which has nothing on disk to load from.
+    {
+        const text_plugin = editor.app.host.pluginById("text") orelse return error.TestUnexpectedResult;
+        const before = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const path = try gpa.dupe(u8, before.owner.documentPath(before));
+        defer gpa.free(path);
+        try std.testing.expect(text_plugin.isDirty(before));
+        var owned: std.ArrayListUnmanaged(u64) = .empty;
+        defer owned.deinit(gpa);
+        for (editor.app.open_files.values()) |d| if (d.owner == text_plugin) try owned.append(gpa, d.id);
+
+        var kept = try fizzy.Editor.KeptDocuments.capture(editor, text_plugin);
+        defer kept.deinit();
+        for (owned.items) |id| editor.detachFileID(id);
+        try std.testing.expect(editor.docFromPath(path) == null);
+        kept.reattach(editor, text_plugin);
+        try dvui.testing.settle(headlessFrame);
+
+        var count: usize = 0;
+        for (editor.app.open_files.values()) |d| count += @intFromBool(d.owner == text_plugin);
+        try std.testing.expectEqual(owned.items.len, count);
+        const after = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(path, after.owner.documentPath(after));
+        try std.testing.expect(text_plugin.isDirty(after));
+        const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        // Still untitled: Save asks where, rather than writing its placeholder name.
+        try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
+    }
+
+    // A restart keeps every open document (`KeptDocuments.save` / `loadSession` / `openKept`):
+    // written to the session, gone with the old process, and opened from the session — not the
+    // disk, where an untitled document has nothing — when its tab asks for it at the next launch.
+    // The session is read once.
+    {
+        const before = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const path = try gpa.dupe(u8, before.owner.documentPath(before));
+        defer gpa.free(path);
+        const grouping = before.owner.documentGrouping(before);
+        const dir = try fizzy.Editor.KeptDocuments.sessionDir(gpa, editor.app.config_folder);
+        defer gpa.free(dir);
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            defer kept.deinit();
+            try kept.save(dir);
+        }
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer ids.deinit(gpa);
+        for (editor.app.open_files.values()) |d| try ids.append(gpa, d.id);
+        for (ids.items) |id| editor.detachFileID(id);
+        try std.testing.expect(editor.docFromPath(path) == null);
+
+        editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(dvui.io, dir, .{}));
+        _ = try editor.app.host.openFile(.{ .path = path, .grouping = grouping });
+        const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(after.owner.isDirty(after));
+        const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        if (editor.session) |*kept| kept.deinit();
+        editor.session = null;
     }
 
     try editor.deinit();

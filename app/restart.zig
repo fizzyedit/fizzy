@@ -11,11 +11,16 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const update_install = @import("update/update_install.zig");
+const profile = @import("profile.zig");
 
 /// A browser tab has nothing to start again.
 pub const supported = builtin.target.cpu.arch != .wasm32;
 
 var requested_: bool = false;
+/// The profile to start again on, copied when the restart is asked for: teardown frees
+/// `profile.root` (`single_instance.deinit`) before `relaunch` runs.
+var profile_buf: [if (supported) std.fs.max_path_bytes else 0]u8 = undefined;
+var profile_dir: ?[]const u8 = null;
 /// Frames since the restart's quit was posted (`tick`).
 var quit_frames: u8 = 0;
 
@@ -24,6 +29,10 @@ pub fn request() void {
     if (comptime !supported) return;
     requested_ = true;
     quit_frames = 0;
+    profile_dir = if (profile.root) |dir| if (dir.len <= profile_buf.len) blk: {
+        @memcpy(profile_buf[0..dir.len], dir);
+        break :blk profile_buf[0..dir.len];
+    } else null else null;
     dvui.refresh(null, @src(), null);
 }
 
@@ -62,15 +71,17 @@ pub fn relaunch(io: std.Io, gpa: std.mem.Allocator) void {
     relaunchSelf(io, gpa);
 }
 
-/// This executable again, as a process of its own that nothing waits on. On macOS through
-/// `core.darwin_spawn` — std's spawn crashes after any `unsetenv`.
+/// This executable again, as a process of its own that nothing waits on, on the same profile. On
+/// macOS through `core.darwin_spawn` — std's spawn crashes after any `unsetenv`, and it passes a
+/// fixed environment, so a profile named by `FIZZY_PROFILE` goes on as the flag. The files this
+/// run was started with are not passed again: the session brings back what is still open.
 fn relaunchSelf(io: std.Io, gpa: std.mem.Allocator) void {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.process.executablePath(io, &buf) catch |err| {
         dvui.log.err("restart: could not find this executable: {s}", .{@errorName(err)});
         return;
     };
-    const argv: []const []const u8 = &.{buf[0..n]};
+    const argv: []const []const u8 = if (profile_dir) |dir| &.{ buf[0..n], profile.flag, dir } else &.{buf[0..n]};
     if (comptime builtin.os.tag.isDarwin()) {
         _ = core.darwin_spawn.spawn(gpa, .{ .argv = argv, .stdin = .discard, .stdout = .discard, .stderr = .discard }, null) catch |err| {
             dvui.log.err("restart: could not launch again: {s}", .{@errorName(err)});

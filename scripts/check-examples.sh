@@ -7,8 +7,8 @@
 # dependency does. A path dependency (or `zig build --fork`) would see the whole checkout and
 # miss a file left out of `.paths`.
 #
-# example-app gets the whole repo, and for its replay app the plugin SDK; example-plugin gets the
-# plugin SDK. The SDK is packed as a release would be (`scripts/pack-sdk.sh`).
+# example-app gets the whole repo (its shapes, and its dvui app on either backend), and for its
+# replay app the plugin SDK; example-plugin gets the plugin SDK. The SDK is packed as a release would be (`scripts/pack-sdk.sh`).
 #
 # Usage:
 #   scripts/check-examples.sh            # clones both repos' main
@@ -67,4 +67,10 @@ echo "== example-app, against this tree"
   zig build -Dshape=studio -Dzon-layout=true --summary all
   echo "-- the replay app"
   zig build replay --summary all
+  # A plain dvui app on fizzy's backend, its floating windows OS windows (`fizzy.addDvui`,
+  # `viewports`); and the same code on dvui's own SDL3 backend, through `viewports_none`.
+  echo "-- the dvui app, on fizzy's backend"
+  zig build dvui --summary all
+  echo "-- the dvui app, on dvui's SDL3 backend"
+  zig build dvui -Ddvui-backend=sdl3 --summary all
 )

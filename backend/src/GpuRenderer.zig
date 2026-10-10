@@ -559,6 +559,10 @@ fn acquireSwapchain(self: *GpuRenderer) !bool {
         return false;
     }
     const cmd = try self.ensureCmd();
+    // No pass may be open while a drawable is acquired, the uploads' copy pass included. An app
+    // drawing its frame straight into the window (any dvui app; fizzy draws into a target first)
+    // had one open from the frame's uploads, and SDL asserted on every frame.
+    self.endCopy();
     var tex: ?*c.SDL_GPUTexture = null;
     var w: u32 = 0;
     var h: u32 = 0;

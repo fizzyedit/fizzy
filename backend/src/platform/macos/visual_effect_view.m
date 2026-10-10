@@ -155,6 +155,34 @@ static void viewportDress(NSWindow *window, NSWindow *main) {
     [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
 }
 
+/*
+ * A viewport's window framed by the app (`ViewportFrame.app`): borderless, as SDL made it, and
+ * exactly what the app draws in it — clear past its corners — with the OS's shadow round that, as
+ * a window has. No show or close animation (`viewportDress`). AppKit shapes the shadow from the
+ * window's picture, so it is taken again once the picture is up (`fizzy_macos_viewport_reshadow`).
+ */
+void fizzy_macos_viewport_plain(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        [window setHasShadow:YES];
+        [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+        /* Never a full-screen window of its own: it has no button for it, and a floating window
+         * out there would leave the app it belongs to behind. */
+        [window setCollectionBehavior:([window collectionBehavior] & ~NSWindowCollectionBehaviorFullScreenPrimary) | NSWindowCollectionBehaviorFullScreenAuxiliary];
+    }
+}
+
+void fizzy_macos_viewport_reshadow(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        [window invalidateShadow];
+    }
+}
+
 void fizzy_macos_viewport_dress(void *nswindow, void *main_nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;

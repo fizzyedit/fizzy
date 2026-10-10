@@ -72,6 +72,8 @@ pub fn addSteps(
     });
     web_exe.entry = .disabled;
     web_exe.root_module.addImport("dvui", dvui_web);
+    // A page has one canvas: `backend_web.viewports`.
+    web_exe.root_module.addImport("viewports_none", @import("fizzy_backend").viewportsNoneModule(@import("exe.zig").backendDependency(b), dvui_web));
     web_exe.root_module.addImport("web-backend", web_backend);
 
     // Extra wasm exports beyond dvui's own (`dvui_init`/`dvui_update`/etc.). The wasm

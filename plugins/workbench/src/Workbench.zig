@@ -227,6 +227,22 @@ pub fn documentClosed(self: *Workbench, doc: sdk.DocHandle) void {
     }
 }
 
+/// The tab naming surface `id` goes from whichever pane holds it: a document that will not come
+/// back after its plugin's reload.
+pub fn tabClosed(self: *Workbench, id: []const u8) void {
+    for (self.workspaces.values()) |*ws| ws.removeTab(id);
+}
+
+/// A document left for its plugin's reload, to come back under the same surface id: its tab stays.
+/// Only the pane's cached handle goes, which names the old build's document.
+pub fn documentDetached(self: *Workbench, doc: sdk.DocHandle) void {
+    for (self.workspaces.values()) |*ws| {
+        if (ws.active) |active| {
+            if (active.id == doc.id) ws.active = null;
+        }
+    }
+}
+
 /// A document's path changed under it (an explorer rename, a Save As): its tab is keyed by
 /// the surface id the old path spelled, so the pane holding it swaps that id for the new one
 /// in place — same slot, same selection. Without this the tab is orphaned: `documentOf` finds

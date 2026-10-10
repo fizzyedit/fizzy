@@ -18,6 +18,7 @@ const dvui = @import("dvui");
 const Backend = @import("backend");
 const c = Backend.c;
 const window_layout = @import("window_layout.zig");
+const own_backend = @import("root.zig").own_backend;
 
 const log = std.log.scoped(.macos_monitor);
 
@@ -45,6 +46,7 @@ extern fn fizzy_macos_window_set_frame(cocoa_window: ?*anyopaque, x: f64, y: f64
 extern fn fizzy_macos_copy_screen_frames(out: [*]f64, max: c_int) c_int;
 extern fn fizzy_macos_window_sync_content_views(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_install_resize_observer(cocoa_window: ?*anyopaque) void;
+extern fn fizzy_macos_window_keep_full_size_content(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_sdl_draws_live_resize(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_step(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_space_moving(cocoa_window: ?*anyopaque) c_int;
@@ -369,10 +371,18 @@ export fn fizzy_macos_origin_nudged(cap_x: f64, cap_y: f64, cur_x: f64, cur_y: f
 /// Follow `win` through Spaces, zooms and live resizes: from here on AppKit's live sizes reach SDL
 /// before each frame (`Backend.SDLBackend.begin_hook`) and through every animation. Call once the
 /// window's chrome is in place, before it is shown.
+///
+/// This package's backend only. The monitor takes full screen and zooms over from AppKit and draws
+/// their steps itself, which needs that backend's frame hooks; on dvui's its steps were drawn out of
+/// time with the window. There the window goes in and out as AppKit and SDL take it, every query
+/// here answers from AppKit's own state, and the window only keeps its content under the title bar
+/// through SDL's styles, for fizzy's chrome (`styleTitled`): without that it came back from each
+/// round trip a title bar shorter.
 pub fn install(win: *dvui.Window) void {
     if (comptime builtin.os.tag != .macos) return;
     const back = win.backend.impl;
     const cocoa = cocoaWindowOf(back.window) orelse return;
+    if (comptime !own_backend) return fizzy_macos_window_keep_full_size_content(cocoa);
     macos_monitor_window = back.window;
     back.begin_hook = macosAppPreBeginSync;
     back.present_hook = macosAppPresented;

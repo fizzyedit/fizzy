@@ -77,6 +77,7 @@ const Watch = @import("app").watch;
 const FolderWatcher = Watch.FolderWatcher;
 
 pub const Workspace = workbench_mod.Workspace;
+pub const KeptDocuments = @import("KeptDocuments.zig");
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
 pub const Sidebar = @import("Sidebar.zig");
@@ -126,6 +127,14 @@ demo: Demo = .detached,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
+/// The documents a restart kept (`KeptDocuments.loadSession`), until the workbench has reopened
+/// last session's tabs: each one it asks for opens from here (`openPath`).
+session: ?KeptDocuments = null,
+/// Frames the session has been read for: its documents open in the first, its panes' selections
+/// apply in the next.
+session_frames: u8 = 0,
+/// The `plugins` service, registered at this address in `postInit`.
+plugins_service: sdk.services.plugins.Api = undefined,
 
 explorer: *Explorer,
 
@@ -404,6 +413,12 @@ pub fn init(
     }
 
     editor.loadSavedLayout();
+    if (comptime restart.supported) {
+        if (KeptDocuments.sessionDir(app.allocator, editor.app.config_folder)) |dir| {
+            defer app.allocator.free(dir);
+            editor.session = KeptDocuments.loadSession(editor.app.gpa, dir);
+        } else |_| {}
+    }
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
 
@@ -759,6 +774,7 @@ fn unloadPluginLibs(editor: *Editor) void {
         if (f.detail) |d| editor.app.gpa.free(d);
     }
     editor.app.failed_user_plugins.deinit(editor.app.gpa);
+    editor.app.deinitPluginLoads();
 
     for (editor.app.disabled_plugin_ids.items) |id| editor.app.gpa.free(id);
     editor.app.disabled_plugin_ids.deinit(editor.app.gpa);
@@ -1510,7 +1526,7 @@ const WebPluginRequest = struct {
             // `force = false`: a plugin with unsaved documents keeps them, and the update stays
             // on offer. The module just linked is wasted, which costs the page some memory and
             // the user nothing.
-            editor.unloadPlugin(req.id, false) catch |err| {
+            editor.unloadPlugin(req.id, .{}) catch |err| {
                 dvui.log.err("web plugin '{s}': cannot take over: {s}", .{ req.id, @errorName(err) });
                 gpa.free(req.url);
                 return;
@@ -1737,7 +1753,15 @@ fn cancelPluginLoadingJobs(editor: *Editor, plugin: *sdk.Plugin) void {
 /// documents closed, contributions withdrawn, `deinit`) is the same, and `WebDynLib.close` is a
 /// no-op. Slices into the image stay readable afterwards, which is what makes the desktop's
 /// "persist before unload" hazard a non-issue here.
-pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!void {
+pub const UnloadOptions = struct {
+    /// Unload even with unsaved documents, which are closed unsaved.
+    force: bool = false,
+    /// A reload: the plugin's documents are detached, not closed, and their tabs and panes kept,
+    /// for the new build to fill (`KeptDocuments`). Implies their unsaved state is carried.
+    keep: bool = false,
+};
+
+pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) UnloadError!void {
     if (!editor.isUnloadablePlugin(id)) return error.NotUnloadable;
     const plugin = editor.app.host.pluginById(id) orelse return error.NotUnloadable;
 
@@ -1748,7 +1772,7 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!vo
         return error.NotUnloadable;
     };
 
-    if (!force and editor.app.pluginHasDirtyDocs(plugin)) return error.DirtyDocuments;
+    if (!opts.force and !opts.keep and editor.app.pluginHasDirtyDocs(plugin)) return error.DirtyDocuments;
 
     // Let in-flight async saves finish while the owning `File` records still exist.
     editor.app.waitForPluginSaves(plugin);
@@ -1764,11 +1788,16 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!vo
     for (editor.app.open_files.values()) |doc| {
         if (doc.owner == plugin) owned.append(editor.app.gpa, doc.id) catch {};
     }
-    for (owned.items) |doc_id| editor.rawCloseFileID(doc_id) catch |err|
-        dvui.log.err("unloadPlugin '{s}': closing doc {d} failed: {s}", .{ id, doc_id, @errorName(err) });
+    for (owned.items) |doc_id| {
+        if (opts.keep) {
+            editor.detachFileID(doc_id);
+        } else editor.rawCloseFileID(doc_id) catch |err|
+            dvui.log.err("unloadPlugin '{s}': closing doc {d} failed: {s}", .{ id, doc_id, @errorName(err) });
+    }
 
-    // Drop empty workspace panes (and plugin canvas chrome) before plugin `deinit`.
-    editor.rebuildWorkspaces() catch |err|
+    // Drop empty workspace panes (and plugin canvas chrome) before plugin `deinit`. Not on a
+    // reload: the panes the documents left wait for them, under the same ids.
+    if (!opts.keep) editor.rebuildWorkspaces() catch |err|
         dvui.log.err("unloadPlugin '{s}': rebuildWorkspaces failed: {s}", .{ id, @errorName(err) });
 
     // Remove all contributions + services + active-id references (before dlclose), then
@@ -1819,7 +1848,7 @@ pub fn setPluginEnabled(editor: *Editor, id: []const u8, enabled: bool, force: b
         // Persist before unload: `id` may point at static memory inside the plugin image.
         try editor.app.trackDisabledPlugin(id);
         try editor.setPluginEnabledPersisted(id, false);
-        if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, force);
+        if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, .{ .force = force });
     }
     // The *cache* drops (or regains) this plugin's claims immediately; `settings.zon` keeps
     // remembering them non-destructively, so re-enabling restores ownership with no re-prompt.
@@ -1860,9 +1889,20 @@ pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {
     // Each half timed: a rebuilt plugin's swap is a stage of the loop a plugin author waits on
     // (`plans/AGENTS_PLAN.md`, "Fast enough to watch"), and `scripts/plugin-loop/bench.sh` reads it.
     const start = std.Io.Clock.boot.now(dvui.io).nanoseconds;
-    try editor.unloadPlugin(id, force);
+    // Its open documents come back with the new build, as they were (`KeptDocuments`). One whose
+    // unsaved changes cannot be carried refuses the update, unless `force` closes it unsaved.
+    var kept: ?KeptDocuments = if (editor.app.host.pluginById(id)) |p| KeptDocuments.capture(editor, p) catch |err| switch (err) {
+        error.UnsavedNotCarried => if (force) null else return error.DirtyDocuments,
+        error.OutOfMemory => return err,
+    } else null;
+    defer if (kept) |*k| k.deinit();
+    try editor.unloadPlugin(id, .{ .force = force, .keep = kept != null });
     const unloaded = std.Io.Clock.boot.now(dvui.io).nanoseconds;
-    try editor.loadUserPluginById(id);
+    editor.loadUserPluginById(id) catch |err| {
+        if (kept) |*k| k.abandon(editor, id);
+        return err;
+    };
+    if (kept) |*k| if (editor.app.host.pluginById(id)) |p| k.reattach(editor, p);
     const loaded = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     dvui.log.info("plugin '{s}': swapped in {d:.1}ms (unload {d:.1}ms, load {d:.1}ms)", .{
         id,
@@ -1885,7 +1925,7 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
         // The module itself stays in the page — nothing can unlink it — but the plugin goes now,
         // and the page forgets it so the next visit does not bring it back.
         PluginLoader.forget(id);
-        editor.unloadPlugin(id, force) catch |err| switch (err) {
+        editor.unloadPlugin(id, .{ .force = force }) catch |err| switch (err) {
             error.NotUnloadable => {}, // already gone
             else => return err,
         };
@@ -1896,7 +1936,7 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
         return;
     }
     if (isBundledPluginId(id)) return error.NotUnloadable;
-    if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, force);
+    if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, .{ .force = force });
     // Drop runtime disabled bookkeeping — the plugin no longer exists to be disabled. Its
     // `.plugins.<id>` settings block deliberately survives (reinstall restores config); a
     // later store install writes `.enabled = true` fresh.
@@ -2115,6 +2155,10 @@ pub fn postInit(editor: *Editor) !void {
         editor.app.files_service = FilesService.api(editor);
         try editor.app.host.registerService(sdk.services.files.Api, &editor.app.files_service, null);
     }
+
+    // The `plugins` service: what each plugin's loading did (`App.pluginStatus`).
+    editor.plugins_service = editor.app.pluginsService();
+    try editor.app.host.registerService(sdk.services.plugins.Api, &editor.plugins_service, null);
 
     // The `automation` service: plugins play live tapes on the app as it is (`automation.Service`).
     // `editor.demo` was attached above, at its final address.
@@ -2663,16 +2707,16 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     try editor.app.host.registerSurface(.{
         .id = ds.id,
         .owner = doc.owner,
-        // The owner's name for it when it has one (a synthetic document whose path is an
-        // address), else the file name. The path half of the id, not the whole id: a browser
-        // upload's path is a bare name with no separator, and `basename` of the whole id would
-        // then be `owner.doc:name`.
-        .title = doc.owner.documentTitle(doc) orelse
-            std.fs.path.basename(sdk.document.pathOfSurfaceId(ds.id) orelse ds.id),
+        // The file name until the owner names it: the path half of the id, not the whole id (a
+        // browser upload's path is a bare name with no separator, and `basename` of the whole id
+        // would then be `owner.doc:name`).
+        .title = std.fs.path.basename(sdk.document.pathOfSurfaceId(ds.id) orelse ds.id),
         .keywords = sdk.document.keywords,
         .ctx = ds,
         .draw = drawDocSurface,
     });
+    // The owner's own name for it, when it has one, copied in (`Host.documentTitleChanged`).
+    editor.app.host.documentTitleChanged(doc);
 }
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
@@ -3817,6 +3861,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             (e.evt == .app and e.evt.app.action == .quit);
         if (!want_quit) continue;
 
+        // A restart keeps every document, unsaved edits included, and asks nothing; one whose
+        // unsaved changes cannot be kept is asked about as for any quit.
+        if (comptime restart.supported) if (restart.requested() and editor.keepSessionForRestart()) continue;
+
         var dirty_n: usize = 0;
         for (editor.app.open_files.values()) |doc| {
             if (doc.owner.isDirty(doc)) dirty_n += 1;
@@ -3892,6 +3940,19 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.rebuildWorkspaces() catch {
             dvui.log.err("Failed to rebuild workspaces", .{});
         };
+        // The first rebuild reopened last session's tabs; what the session held beyond them is
+        // kept in recovery files. A frame on, the panes have drawn, and each shows the tab it did.
+        if (editor.session) |*kept| {
+            if (editor.session_frames > 0) {
+                kept.applySelections(editor);
+                kept.deinit();
+                editor.session = null;
+            } else {
+                kept.finishDocuments(editor);
+                editor.session_frames += 1;
+                dvui.refresh(null, @src(), null);
+            }
+        }
     }
 
     if (editor.pending_composite_warmup) {
@@ -4767,6 +4828,11 @@ pub fn close(app: *Entry, editor: *Editor) void {
         editor.app.pending_app_close = true;
         return;
     }
+    // A restart keeps every document instead of asking (`keepSessionForRestart`).
+    if (comptime restart.supported) if (restart.requested() and editor.keepSessionForRestart()) {
+        editor.app.pending_app_close = true;
+        return;
+    };
     var dirty_n: usize = 0;
     for (editor.app.open_files.values()) |doc| {
         if (doc.owner.isDirty(doc)) dirty_n += 1;
@@ -4967,7 +5033,29 @@ const Placement = struct {
     take_slot_of: ?[]const u8 = null,
 };
 
+/// Write every open document to the session a restart reopens (`KeptDocuments`). False when one
+/// has unsaved changes its owner cannot keep, or the session could not be written: then the quit
+/// asks, as any quit does.
+fn keepSessionForRestart(editor: *Editor) bool {
+    var kept = KeptDocuments.capture(editor, null) catch |err| {
+        dvui.log.warn("restart: open documents not kept ({t}); asking about unsaved changes", .{err});
+        return false;
+    };
+    defer kept.deinit();
+    const dir = KeptDocuments.sessionDir(editor.app.gpa, editor.app.config_folder) catch return false;
+    defer editor.app.gpa.free(dir);
+    kept.save(dir) catch |err| {
+        dvui.log.warn("restart: could not write the session ({t}); asking about unsaved changes", .{err});
+        std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+        return false;
+    };
+    return true;
+}
+
 fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Placement) !bool {
+    // Last session's document, as a restart kept it: from its state, not the disk.
+    if (comptime restart.supported) if (editor.session) |*kept| if (kept.openKept(editor, path_in, grouping) != null) return true;
+
     const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
 
@@ -5737,6 +5825,20 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     editor.app.open_files.orderedRemoveAt(index);
 }
 
+/// Take a document out of fizzy for its plugin's reload (`KeptDocuments`): everything
+/// `rawCloseFileID` does but take its tab away, which stays in its pane for the new build's
+/// document under the same surface id.
+pub fn detachFileID(editor: *Editor, id: u64) void {
+    const doc = editor.app.open_files.get(id) orelse return;
+    editor.workbench.documentDetached(doc);
+    if (editor.document_watcher) |*w| w.untrack(doc.id);
+    editor.doc_io.documentClosed(doc.id);
+    editor.unregisterDocSurface(doc.id);
+    editor.app.closeDocumentResources(doc);
+    _ = editor.preview_docs.swapRemove(id);
+    _ = editor.app.open_files.orderedRemove(id);
+}
+
 pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     const doc = editor.app.open_files.get(id) orelse return;
     editor.snapshotClosingPane(doc);
@@ -5782,6 +5884,7 @@ pub fn deinit(editor: *Editor) !void {
     }
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
+    if (editor.session) |*kept| kept.deinit();
     // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
     // joins the thread that feeds it.
     if (editor.app.folder_watcher) |*w| {

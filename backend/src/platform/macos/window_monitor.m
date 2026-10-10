@@ -1206,11 +1206,14 @@ static void install_constrain_override(NSWindow *window) {
  * AppKit keeps the content rect across each change, so the window grew by its title bar and shrank
  * back: kept at will-enter it came back from full screen a title bar taller each time, and at
  * did-exit it jumped up a title bar and back down in a frame. A window the monitor follows keeps its
- * content under the title bar through any style it is given. */
+ * content under the title bar through any style it is given, and so does one that asked for that
+ * alone (`fizzy_macos_window_keep_full_size_content`). */
 static IMP g_nswindow_style_mask_imp = NULL;
+static char g_keeps_full_size_content;
 
 static void fizzy_set_style_mask(id self, SEL _cmd, NSWindowStyleMask mask) {
-    if (monitor_of((__bridge void *)self)) mask |= NSWindowStyleMaskFullSizeContentView;
+    if (monitor_of((__bridge void *)self) || objc_getAssociatedObject(self, &g_keeps_full_size_content))
+        mask |= NSWindowStyleMaskFullSizeContentView;
     ((void (*)(id, SEL, NSWindowStyleMask))g_nswindow_style_mask_imp)(self, _cmd, mask);
 }
 
@@ -1229,6 +1232,16 @@ static void install_style_mask_override(NSWindow *window) {
             method_setImplementation(existing, (IMP)fizzy_set_style_mask);
         }
     }
+}
+
+/* `nswindow` keeps its content under the title bar through every style SDL gives it, as a followed
+ * window does, without the rest of the monitor: on a backend whose frames the monitor cannot step
+ * (`macos_monitor.zig`'s `install`), the window's chrome is still fizzy's. */
+void fizzy_macos_window_keep_full_size_content(void *nswindow) {
+    if (!nswindow) return;
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    objc_setAssociatedObject(window, &g_keeps_full_size_content, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    install_style_mask_override(window);
 }
 
 /* Keep `token`, an observer `m` added, to remove when the window is forgotten. */

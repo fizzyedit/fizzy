@@ -92,11 +92,41 @@ pub fn defaultNativeBackend(target: std.Build.ResolvedTarget) NativeBackend {
 }
 
 /// dvui as the executable links it, and the backend under it.
-const NativeDvui = struct {
+pub const NativeDvui = struct {
     dep: *std.Build.Dependency,
     dvui: *std.Build.Module,
     backend: *std.Build.Module,
 };
+
+/// dvui on the native backend asked for: fizzy's (`fizzyNativeDvui`), or dvui's own SDL3 backend.
+/// The executable's, and a dvui app's of its own (`fizzy.addDvui`, in `build.zig`).
+pub fn nativeDvui(
+    b: *std.Build,
+    native_backend: NativeBackend,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    accesskit: dvui.AccesskitOptions,
+    macos_sdl_paths: ?MacosSdlPaths,
+) NativeDvui {
+    return switch (native_backend) {
+        .fizzy => fizzyNativeDvui(b, target, optimize, accesskit, macos_sdl_paths),
+        .sdl3 => blk: {
+            const dep = if (macos_sdl_paths) |p|
+                sdk.dvuiDependency(b, .{
+                    .target = target,
+                    .optimize = optimize,
+                    .backend = .sdl3,
+                    .accesskit = accesskit,
+                    .system_include_path = p.include,
+                    .system_framework_path = p.framework,
+                    .library_path = p.lib,
+                })
+            else
+                sdk.dvuiDependency(b, .{ .target = target, .optimize = optimize, .backend = .sdl3, .accesskit = accesskit });
+            break :blk .{ .dep = dep, .dvui = dep.module("dvui_sdl3"), .backend = dep.module("sdl3") };
+        },
+    };
+}
 
 /// dvui in its `custom` mode with fizzy's backend linked under it — as `build/web.zig` does for
 /// the web. Every option is the one dvui's own `sdl3` mode sets, so dvui's shape, and with it
@@ -139,7 +169,7 @@ pub fn backendOptions(target: std.Build.ResolvedTarget, optimize: std.builtin.Op
 
 /// Window and platform pieces for apps on either SDL3 backend (the backend package's
 /// `platform`). Fizzy's own backend imports it as well.
-fn platformModule(
+pub fn platformModule(
     b: *std.Build,
     native: NativeDvui,
     target: std.Build.ResolvedTarget,
@@ -175,24 +205,7 @@ pub fn addFizzyExecutableForTarget(
     /// `bundled_plugins` module under its plugin id.
     app_plugins: []const sdk.BundledPlugin,
 ) !FizzyExecutable {
-    const native: NativeDvui = switch (native_backend) {
-        .fizzy => fizzyNativeDvui(b, resolved_target, optimize, accesskit, macos_sdl_paths),
-        .sdl3 => blk: {
-            const dep = if (macos_sdl_paths) |p|
-                sdk.dvuiDependency(b, .{
-                    .target = resolved_target,
-                    .optimize = optimize,
-                    .backend = .sdl3,
-                    .accesskit = accesskit,
-                    .system_include_path = p.include,
-                    .system_framework_path = p.framework,
-                    .library_path = p.lib,
-                })
-            else
-                sdk.dvuiDependency(b, .{ .target = resolved_target, .optimize = optimize, .backend = .sdl3, .accesskit = accesskit });
-            break :blk .{ .dep = dep, .dvui = dep.module("dvui_sdl3"), .backend = dep.module("sdl3") };
-        },
-    };
+    const native = nativeDvui(b, native_backend, resolved_target, optimize, accesskit, macos_sdl_paths);
     const dvui_dep = native.dep;
     const dvui_mod = native.dvui;
 
@@ -240,6 +253,8 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.addImport("dvui", dvui_mod);
     exe.root_module.addImport("backend", native.backend);
     exe.root_module.addImport("platform", platformModule(b, native, resolved_target, optimize, macos_sdl_paths));
+    // On dvui's own SDL3 backend (`-Dnative-backend=sdl3`), which has no viewports.
+    exe.root_module.addImport("viewports_none", fizzy_backend.viewportsNoneModule(backendDependency(b), dvui_mod));
 
     // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
     // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.

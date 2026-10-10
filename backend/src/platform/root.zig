@@ -16,3 +16,22 @@ pub const geometry = @import("geometry.zig");
 pub const macos_monitor = @import("macos_monitor.zig");
 pub const window_layout = @import("window_layout.zig");
 pub const menu = @import("menu.zig");
+
+/// Whether the app is on this package's backend (`SDLBackend`, which imports these pieces) rather
+/// than dvui's own SDL3 backend. What they reach into beyond SDL's window — floats' windows, the
+/// window skin, the present hook — is there only; on dvui's, those parts do nothing. One flag, not
+/// a `@hasField` per field: a field renamed on this backend then fails its build, not goes quiet.
+pub const own_backend = @hasDecl(@import("backend"), "platform");
+
+comptime {
+    // The menu bar's Objective-C (`macos/menu_target.m`) calls these back, and it is compiled into
+    // every app on macOS (`addPlatformObjC`), so they are kept whether or not the app ever reaches
+    // `menu` — a plain dvui app with no menu bar of its own failed to link without them.
+    if (@import("builtin").os.tag == .macos) {
+        _ = &menu.FizzyMenuActivated;
+        _ = &menu.FizzyMenuEnabled;
+        _ = &menu.FizzyMenuTitle;
+        _ = &menu.FizzyMenuInputBlocked;
+        _ = &menu.FizzyMenuAbout;
+    }
+}

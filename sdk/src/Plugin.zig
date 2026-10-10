@@ -189,14 +189,20 @@ pub const VTable = struct {
     reloadDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     /// `doc` as it is right now — its contents, caret and selection, scroll, whatever else the
     /// owner needs to put it back exactly — as bytes only the owner reads, owned by the caller
-    /// and allocated with `allocator`. A demo's seek snapshot (`app.automation`): held in memory
-    /// for one session of one build and never written anywhere, so the format is the owner's
-    /// and may change freely. Absent = a demo cannot snapshot a moment with this document open,
-    /// and seeks back through it replay from the keyframe instead.
+    /// and allocated with `allocator`. Two consumers: a demo's seek snapshot (`app.automation`),
+    /// and this plugin's own reload, which carries each open document, unsaved edits included,
+    /// from the running build to the rebuilt one. Held in memory and never written anywhere, so
+    /// the format is the owner's and may change freely, but a reload hands one build's bytes to
+    /// the next: start them with a version the next build checks (`restoreDocumentState`).
+    /// Absent = a demo cannot snapshot a moment with this document open, and a reload of this
+    /// plugin refuses while the document has unsaved changes.
     captureDocumentState: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 = null,
     /// Put `doc` back to what `captureDocumentState` returned for it, in place: the same
     /// document in the same pane, its contents, caret and scroll as they were, dirty or clean
-    /// as it was. Undo history may be dropped. `bytes` is only valid for the call.
+    /// as it was. Undo history may be dropped. `bytes` is only valid for the call, and may come
+    /// from an earlier build of this plugin (a reload): fail on what this build does not read,
+    /// never misread it. The app then opens the document as saved and keeps its unsaved
+    /// contents in a recovery file.
     restoreDocumentState: ?*const fn (state: *anyopaque, doc: DocHandle, bytes: []const u8) anyerror!void = null,
     /// A hash of what in `doc` decides what happens next — its contents and caret, not its
     /// scroll — with no side effects. A demo compares it when a replay reaches a moment it
@@ -271,7 +277,11 @@ pub const VTable = struct {
     ///
     /// For a document whose path is an address rather than a name: a store page lives at
     /// `store://pages/<plugin id>.fizzyplugin`, because a path has to be stable enough to
-    /// reopen from a saved layout, and its tab should still read "Google Drive".
+    /// reopen from a saved layout, and its tab should still read "Google Drive". Or for one whose
+    /// name is not its path: a chat reads as its first question.
+    ///
+    /// Asked when the document's tab is made, and again whenever the owner calls
+    /// `Host.documentTitleChanged`; the Host keeps a copy, so the slice need only last the call.
     documentTitle: ?*const fn (state: *anyopaque, doc: DocHandle) ?[]const u8 = null,
 
     /// The context menu to open on a right-click inside this document, or null for none.

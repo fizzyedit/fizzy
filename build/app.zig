@@ -556,6 +556,11 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
+        // `core.viz`'s arithmetic: a chart's scale, the slot under the pointer, a bar's fill.
+        .{ "fizzy-viz-scale-tests", "core/viz/scale.zig" },
+        // The login-shell PATH cache: it owns its string whatever allocator the first caller
+        // passed, and threads that ask at once resolve once. The shell spawn itself is not run.
+        .{ "fizzy-shell-env-tests", "core/shell_env.zig" },
         // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.
         .{ "fizzy-secrets-tests", "app/Secrets.zig" },
         .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
@@ -806,6 +811,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     });
     fizzy_test_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
     fizzy_test_module.addImport("backend", dvui_testing_dep.module("testing"));
+    // The testing backend has no viewports (`backend_web.viewports`).
+    fizzy_test_module.addImport("viewports_none", @import("fizzy_backend").viewportsNoneModule(fizzy_exe.backendDependency(b), dvui_testing_dep.module("dvui_testing")));
     fizzy_test_module.addImport("assets", assets_module);
     fizzy_test_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
@@ -1137,6 +1144,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize });
         };
         check_bench_step.dependOn(&bench_replay.step);
+
+        const check_bench_replay_step = b.step("check-bench-replay", "Compile fizzy bench-replay without running it");
+        check_bench_replay_step.dependOn(&bench_replay.step);
 
         const bench_step = b.step("bench-replay", "Benchmark a demo seek, silent against shown frame by frame (prints timings)");
         const run_bench = b.addRunArtifact(bench_replay);
