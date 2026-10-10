@@ -261,7 +261,7 @@ fn popOut(f: *Floats.Float) void {
     // frame, it may have been drawn as the carried glass it lands from, a drop's size.
     const at: dvui.Rect.Physical = .{ .x = f.rect.x * s, .y = f.rect.y * s, .w = f.rect.w * s, .h = f.rect.h * s };
     const b = at.outsetAll(reach() * s);
-    const vp = viewports.open(.{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }, if (title.len > 0) title else "Fizzy") orelse return;
+    const vp = viewports.open(.{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }, if (title.len > 0) title else "Fizzy", .os) orelse return;
     // A material behind its glass where the platform has one, so it looks there as it does in
     // the main window (`Floats.Viewport.material`). The glass is the float's rect less its own
     // margin: inside the clear one round it, or all of the window the OS frames.

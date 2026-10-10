@@ -25,11 +25,16 @@ pub fn available() bool {
 }
 
 /// A viewport over `at` (the frame as the main window shows it), its window opening over that
-/// place on the desktop, hidden until a frame is presented into it. Its own part of the frame
-/// is `frameOf`.
-pub fn open(at: Rect, title: [:0]const u8) ?*Viewport {
-    return dvui.currentWindow().backend.impl.viewportOpen(at, title);
+/// place on the desktop, hidden until a frame is presented into it, framed by `frame`. Its own
+/// part of the frame is `frameOf`.
+pub fn open(at: Rect, title: [:0]const u8, frame: Frame) ?*Viewport {
+    return dvui.currentWindow().backend.impl.viewportOpen(at, title, frame);
 }
+
+/// Who frames a viewport's window: the OS (a titled window on macOS, with its traffic lights and
+/// full screen), or the app (borderless, exactly what the app draws — a dvui floating window's
+/// own header and close button). `os_frame` and `os_buttons` are about `.os`.
+pub const Frame = SDLBackend.ViewportFrame;
 
 /// A window to carry a view past every window of the app's, over the desktop: clear, the pointer
 /// passing through it, above every window, placed and drawn as any viewport (`placeMain`,
@@ -378,14 +383,15 @@ pub fn pinPointer(pin: Pin) void {
     dvui.currentWindow().backend.impl.viewportPinPointer(pin);
 }
 
-/// Whether the OS frames a viewport's window itself — its corners, its shadow, resizing from its
-/// edges (Windows: DWM; macOS: a titled window, as the main window is) — so the window is
+/// Whether the OS frames a viewport's window opened `.os` itself — its corners, its shadow, resizing
+/// from its edges (Windows: DWM; macOS: a titled window, as the main window is) — so the window is
 /// exactly the float's glass. Otherwise it is the glass with a clear
 /// margin round it, which the float draws its own shadow in.
 pub const os_frame = builtin.os.tag == .windows or builtin.os.tag == .macos;
 
-/// Whether a viewport's window has the OS's own buttons to close, minimize and zoom it — macOS's
-/// traffic lights, a titled window's — so its float draws no close button of its own.
+/// Whether a viewport's window opened `.os` has the OS's own buttons to close, minimize and zoom
+/// it — macOS's traffic lights, a titled window's — so its float draws no close button of its own.
+/// One opened `.app` has none anywhere.
 pub const os_buttons = builtin.os.tag == .macos;
 
 /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical

@@ -299,10 +299,11 @@ pub fn setStyle(win: *dvui.Window) void {
         // own hit test's (`SDLBackend.viewportHitTest`), so no titlebar hit test of the main one's.
         // Not a menu's or a dialog's: dressed once as it opens (`fizzy_macos_viewport_menu`), it
         // never goes full screen, and this made it a full-screen primary window over the
-        // auxiliary one it was opened as, every frame.
+        // auxiliary one it was opened as, every frame. Nor one the app frames (`app_frame`):
+        // borderless, it was never titled.
         if (comptime own_backend) for (&win.backend.impl.viewport_slots) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
-            if (vp.passive or vp.menu) continue;
+            if (vp.passive or vp.menu or vp.app_frame) continue;
             const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
             styleTitled(ns);
         };
