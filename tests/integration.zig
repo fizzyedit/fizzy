@@ -6815,6 +6815,39 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
     }
 
+    // A plugin's reload keeps its open documents (`KeptDocuments`): captured, detached with their
+    // tabs left in place, and brought back through the plugin as they were, unsaved edits and
+    // all. A reload swaps a dylib, which this harness has none of; this is all of it but the swap,
+    // on the untitled document just typed into, which has nothing on disk to load from.
+    {
+        const text_plugin = editor.app.host.pluginById("text") orelse return error.TestUnexpectedResult;
+        const before = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const path = try gpa.dupe(u8, before.owner.documentPath(before));
+        defer gpa.free(path);
+        try std.testing.expect(text_plugin.isDirty(before));
+        var owned: std.ArrayListUnmanaged(u64) = .empty;
+        defer owned.deinit(gpa);
+        for (editor.app.open_files.values()) |d| if (d.owner == text_plugin) try owned.append(gpa, d.id);
+
+        var kept = try fizzy.Editor.KeptDocuments.capture(editor, text_plugin);
+        defer kept.deinit();
+        for (owned.items) |id| editor.detachFileID(id);
+        try std.testing.expect(editor.docFromPath(path) == null);
+        kept.reattach(editor, text_plugin);
+        try dvui.testing.settle(headlessFrame);
+
+        var count: usize = 0;
+        for (editor.app.open_files.values()) |d| count += @intFromBool(d.owner == text_plugin);
+        try std.testing.expectEqual(owned.items.len, count);
+        const after = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(path, after.owner.documentPath(after));
+        try std.testing.expect(text_plugin.isDirty(after));
+        const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        // Still untitled: Save asks where, rather than writing its placeholder name.
+        try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
+    }
+
     try editor.deinit();
 }
 

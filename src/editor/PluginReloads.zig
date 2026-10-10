@@ -9,10 +9,13 @@
 //! milliseconds. Measured by `scripts/plugin-loop/bench.py` (`docs/AGENTS_PLAN.md`, "Fast enough to
 //! watch").
 //!
+//! The plugin's open documents come back with it, in their tabs, as they were, unsaved edits
+//! included (`KeptDocuments`).
+//!
 //! One open per plugin at a time. A rebuild that lands while its plugin is still opening is picked
 //! up after the swap, by checking the binaries again. A build the swap cannot take — the old
-//! plugin has unsaved documents, or the new one fails to register — leaves the running one in
-//! place, as a failed synchronous reload did.
+//! plugin has unsaved documents it cannot capture, or the new one fails to register — leaves the
+//! running one in place, as a failed synchronous reload did.
 const PluginReloads = @This();
 
 const std = @import("std");
@@ -22,6 +25,7 @@ const fizzy = @import("../fizzy.zig");
 const App = @import("app").App;
 const PluginLoader = @import("app").store.Loader;
 const Editor = @import("Editor.zig");
+const KeptDocuments = @import("KeptDocuments.zig");
 
 jobs: std.ArrayListUnmanaged(*Job) = .empty,
 
@@ -115,7 +119,18 @@ fn swap(editor: *Editor, job: *Job) void {
         return;
     };
     const start_ns = std.Io.Clock.boot.now(dvui.io).nanoseconds;
-    editor.unloadPlugin(job.id, false) catch |err| {
+    // Its open documents come back, in their tabs, as they were (`KeptDocuments`).
+    const old_plugin = editor.app.host.pluginById(job.id);
+    var kept: ?KeptDocuments = if (old_plugin) |p| KeptDocuments.capture(editor, p) catch |err| {
+        dvui.log.warn("plugin watcher: could not reload rebuilt '{s}' ({s}): a document's unsaved changes cannot be carried across", .{ job.id, @errorName(err) });
+        opened.close();
+        gpa.free(job.path);
+        editor.app.restampLoadedPlugin(job.id);
+        again = false;
+        return;
+    } else null;
+    defer if (kept) |*k| k.deinit();
+    editor.unloadPlugin(job.id, .{ .keep = true }) catch |err| {
         dvui.log.warn("plugin watcher: could not reload rebuilt '{s}' ({s})", .{ job.id, @errorName(err) });
         opened.close();
         gpa.free(job.path);
@@ -127,8 +142,10 @@ fn swap(editor: *Editor, job: *Job) void {
     // Takes `opened` and its path either way.
     editor.finishUserPluginLoad(job.id, opened) catch |err| {
         dvui.log.warn("plugin watcher: rebuilt '{s}' did not register ({s})", .{ job.id, @errorName(err) });
+        if (kept) |*k| k.abandon(editor, job.id);
         return;
     };
+    if (kept) |*k| if (editor.app.host.pluginById(job.id)) |p| k.reattach(editor, p);
     const loaded_ns = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     dvui.log.info("plugin '{s}': swapped in {d:.1}ms on the UI thread (unload {d:.1}ms, register {d:.1}ms), opened off it in {d:.1}ms", .{
         job.id,

@@ -453,6 +453,7 @@ pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
         .head = self.sel_cursor,
         .dirty = self.isDirty(),
         .focused = self.editor_focused,
+        .untitled = self.unsaved,
         .preview_mode = @intFromEnum(self.preview_mode),
         .scroll_y = self.scroll_y,
         .split = self.preview_split_ratio_user,
@@ -494,6 +495,7 @@ pub fn restoreState(self: *Document, bytes: []const u8) !void {
     self.preview_mode = mode;
     self.preview_split_ratio_user = st.split;
     self.pending_focus = st.focused;
+    self.unsaved = st.untitled;
     self.followed_caret = null;
     self.clearCompletionItems();
     self.completion_anchor = null;
