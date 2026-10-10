@@ -5101,8 +5101,10 @@ fn syncExecutableWatcher(editor: *Editor) void {
 fn driveHandover(editor: *Editor) void {
     // The new instance's side: the lock, once the old instance has let go of it.
     if (restart.startedByHandover()) {
-        if (restart.pollReleased(dvui.io, editor.app.gpa))
+        if (restart.pollReleased(dvui.io, editor.app.gpa)) {
             @import("app").single_instance.acquireLock(editor.app.gpa, &.{}) catch |err| dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
+            fizzy.core.profile.phase(dvui.io, "handover lock");
+        }
         return;
     }
     if (restart.canHandOver()) {
