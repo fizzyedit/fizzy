@@ -678,6 +678,19 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .filters = test_filters,
     }));
 
+    // Crash reports: the report's text, and the image (range, build id) holding an address.
+    // std-only; it reads images and writes the report through libc.
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-crash-tests",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("app/crash/crash.zig"),
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    }));
+
     // Keybinding parse/resolve core. Deliberately dvui-free (see Keymap.zig) — dvui's keybind map
     // can't express chords and is keyed by bind name, not command. Its key spelling is `tape`'s
     // (`sdk/tape/chord.zig`), the one dependency it has.
@@ -1194,6 +1207,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         });
         plugin_loader_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         plugin_loader_module.addImport("fizzy_sdk", sdk_module_test);
+        plugin_loader_module.addImport("crash", sdk.crashModule(b, target, optimize));
 
         // How big a pane is: the split's drag, capture handoff and hit distance, and the pane
         // row's shares. Both need a real Window — every bug either has had was a dvui

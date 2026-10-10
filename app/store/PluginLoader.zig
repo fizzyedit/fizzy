@@ -13,6 +13,7 @@ const Host = sdk.Host;
 const dylib_api = sdk.dylib;
 const dvui_context = sdk.dvui_context;
 const version = sdk.version;
+const crash = @import("crash");
 
 /// Zig 0.16.0's `std.DynLib` dropped Windows support; this thin wrapper restores it for
 /// Windows while delegating elsewhere. Shape matches `std.DynLib.{open, close, lookup}`.
@@ -483,6 +484,12 @@ pub fn register(host: *Host, opened: Opened, pre: ?PreRegister) LoadError!Loaded
             inject.arg_c,
         );
     }
+
+    // In the crash table from before its `register` runs, so a crash there is the plugin's.
+    var version_buf: [24]u8 = undefined;
+    const plugin_version = std.fmt.bufPrint(&version_buf, "{f}", .{o.version_info.plugin_version}) catch "?";
+    crash.addModule(o.plugin_id, plugin_version, @intFromPtr(o.register_fn));
+    errdefer crash.removeModule(@intFromPtr(o.register_fn));
 
     const status: dylib_api.RegisterStatus = @enumFromInt(o.register_fn(host));
     switch (status) {

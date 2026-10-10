@@ -32,6 +32,10 @@ pub const settings = struct {
     pub const PluginPane = @import("settings/PluginSettingsPane.zig");
 };
 
+/// Crash reports: whose code crashed, from the panic and fault handlers, written to
+/// `<config>/crashes/`.
+pub const crash = @import("crash");
+
 /// Recently opened folders, persisted as `recents.zon`.
 pub const Recents = @import("Recents.zig");
 

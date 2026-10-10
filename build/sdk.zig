@@ -114,8 +114,19 @@ pub fn wireAppModule(
     // (`core_module.addImports`), so a `Tape` here is the `Tape` there.
     app_module.addImport("tape", core_module.import_table.get("tape").?);
     app_module.addImport("replay", core_module.import_table.get("replay").?);
+    app_module.addImport("crash", crashModule(b, target, optimize));
     if (consumer) |c| c.addImport("app", app_module);
     return app_module;
+}
+
+/// Crash reports (`app/crash/`): std-only, a module of its own so the plugin loader reaches it
+/// from a test rooted at the loader as well as from the app.
+pub fn crashModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+    return b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("app/crash/crash.zig"),
+    });
 }
 
 /// One module per `Options` step, shared by every consumer.

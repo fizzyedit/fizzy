@@ -18,6 +18,7 @@ const update_notify = @import("app").update.update_notify;
 const singleton = @import("app").single_instance;
 const restart = @import("app").restart;
 const automation = @import("app").automation;
+const crash = @import("app").crash;
 const paths = fizzy.core.paths;
 const Constants = @import("editor/Constants.zig");
 const AppInfo = @import("app").AppInfo;
@@ -142,6 +143,7 @@ pub const dvui_app: dvui.App = .{
 };
 
 pub fn main(main_init: std.process.Init) !u8 {
+    crash.init(.{ .app = AppInfo.current.name, .version = AppInfo.current.version, .sdk = sdk_version });
     std.log.info("{s} version {s} ({s})", .{ AppInfo.current.display_name, AppInfo.current.version, @tagName(@import("builtin").mode) });
 
     if (comptime auto_update.impl) {
@@ -245,10 +247,21 @@ pub fn main(main_init: std.process.Init) !u8 {
     return 0;
 }
 
-pub const panic = dvui.App.panic;
+pub const panic = if (crash.supported) std.debug.FullPanic(crash.panic) else dvui.App.panic;
 pub const std_options: std.Options = .{
     .logFn = logFn,
+    // In every build mode, not only the safe ones: a release crash is the one worth a report.
+    .enable_segfault_handler = crash.supported,
 };
+/// std's segfault handler hands a fault here (`std.debug.handleSegfault`).
+pub const debug = struct {
+    pub const handleSegfault = crash.handleSegfault;
+};
+/// The SDK this build hosts, as a crash report names it: version and boundary fingerprint.
+const sdk_version = std.fmt.comptimePrint("{f} ({x})", .{
+    fizzy.sdk.version.sdk_version,
+    fizzy.sdk.version.recorded_sdk_shape_fingerprint,
+});
 
 // Forwards every log call to dvui's usual sink (stderr on native, the browser console on
 // web) and also into `fizzy.OutputLog`, so fizzy's "Output" bottom panel can show it — except
