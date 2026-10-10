@@ -971,6 +971,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     integration_module.addImport("app", app_module_test);
     // The hand-written sample tape `docs/AUTOMATION.md` points at, so it cannot rot.
     integration_module.addAnonymousImport("demo_sample_tape", .{ .root_source_file = b.path("docs/demos/hello.zon") });
+    integration_module.addAnonymousImport("soak_tape", .{ .root_source_file = b.path("tests/tapes/soak.zon") });
+    integration_module.addAnonymousImport("soak_expect", .{ .root_source_file = b.path("tests/tapes/soak.expect.zon") });
 
     const integration_tests = b.addTest(.{
         .name = "fizzy-integration-tests",

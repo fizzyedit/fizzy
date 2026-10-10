@@ -5086,6 +5086,19 @@ test "demo: every bundled demo builds into a valid tape" {
     }
 }
 
+test "verdict: the soak tape is a demo, and its expectations read" {
+    var owned = try automation.Tape.parse(std.testing.allocator, @embedFile("soak_tape"), automation.Input.check);
+    defer owned.deinit();
+    try std.testing.expectEqualStrings("soak", owned.tape.name);
+    // It ends on a wait, so what closed last has time to close before the windows are counted.
+    try std.testing.expect(owned.tape.ops[owned.tape.ops.len - 1].do == .wait);
+
+    const expect = try std.zon.parse.fromSlice(fizzy.verdict.Expect, std.testing.allocator, @embedFile("soak_expect"), null, .{});
+    try std.testing.expect(expect.allow_leaks);
+    try std.testing.expectEqual(@as(u32, 0), expect.max_sdl_errors);
+    try std.testing.expectEqual(@as(?u32, null), expect.os_windows);
+}
+
 test "demo: the hand-written sample tape parses and round-trips" {
     const source = @embedFile("demo_sample_tape");
     var owned = try automation.Tape.parse(std.testing.allocator, source, automation.Input.check);
