@@ -332,7 +332,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     app_ptr.* = .{
         .allocator = allocator,
         .window = win,
-        .root_path = allocator.dupeZ(u8, path) catch ".",
+        .root_path = try allocator.dupeZ(u8, path),
     };
 
     const editor_ptr = try allocator.create(Editor);
@@ -394,12 +394,19 @@ pub fn AppDeinit(_: *dvui.Window) void {
     defer restart.relaunch(dvui.io, appAllocator());
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.entry().window);
+    // Before the editor goes: the bar's hooks read its host.
+    fizzy.backend.teardownMacOSMenuBar();
     // `editor.deinit` runs each plugin's `deinit` first (pixi's persists its `.fizproject` and
     // frees its own state + packer while `editor.app.host`/folder are still live).
     fizzy.editor().deinit() catch unreachable;
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.
     singleton.deinit();
+    // The instances themselves, last: nothing that could reach them is left running.
+    const allocator = appAllocator();
+    allocator.destroy(fizzy.editor());
+    allocator.free(fizzy.entry().root_path);
+    allocator.destroy(fizzy.entry());
 }
 
 // Run each frame to do normal UI

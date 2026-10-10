@@ -1,8 +1,2 @@
 // What the soak run (`tests/tapes/soak.zon`) is held to beyond `verdict.Expect`'s defaults.
-.{
-    // Fizzy leaks 16 allocations at exit today, most of them owned for the whole run and never
-    // freed on the way out (Entry, Editor, paths joined in `Editor.init`, the native menu's extras,
-    // the explorer's selection). Recorded in the verdict either way; the run fails on them again
-    // once they are fixed.
-    .allow_leaks = true,
-}
+.{}

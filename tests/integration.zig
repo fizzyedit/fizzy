@@ -5094,7 +5094,7 @@ test "verdict: the soak tape is a demo, and its expectations read" {
     try std.testing.expect(owned.tape.ops[owned.tape.ops.len - 1].do == .wait);
 
     const expect = try std.zon.parse.fromSlice(fizzy.verdict.Expect, std.testing.allocator, @embedFile("soak_expect"), null, .{});
-    try std.testing.expect(expect.allow_leaks);
+    try std.testing.expect(!expect.allow_leaks);
     try std.testing.expectEqual(@as(u32, 0), expect.max_sdl_errors);
     try std.testing.expectEqual(@as(?u32, null), expect.os_windows);
 }

@@ -705,6 +705,12 @@ pub fn setupMacOSMenuBar() void {
     fizzy.Editor.Keybinds.syncNativeMenuShortcuts(fizzy.editor());
 }
 
+/// Let go of the menu bar before the editor its hooks read is freed. No-op off macOS.
+pub fn teardownMacOSMenuBar() void {
+    if (builtin.os.tag != .macos) return;
+    platform.menu.deinit();
+}
+
 /// True while keys must not act at all: capturing a chord in the Keyboard Shortcuts settings.
 fn menuInputBlocked(_: ?*anyopaque) bool {
     return KeybindSettings.isRecording();
