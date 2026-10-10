@@ -1,0 +1,93 @@
+// The first soak tape for a run that ends in a verdict (`src/editor/verdict.zig`, docs/AUTOMATION.md
+// "A run that ends in a verdict"): it repeats what fizzy's SDL patches and native backend serve —
+// full screen, a dialog and the palette over the frost, a view floated out of the main window (an OS
+// window of its own where floats are, macOS by default) and put back — and the run checks the OS
+// windows alive come back to what they were, with nothing logged and nothing lost.
+//
+//   FIZZY_VERDICT=out.zon FIZZY_DEMO=tests/tapes/soak.zon fizzy --profile <dir>
+//
+// Times are demo milliseconds; the gaps after a full-screen toggle leave its transition time to end.
+.{
+    .name = "soak",
+    .title = "Soak",
+    .keyframes = .{.{
+        .root = "demo://soak",
+        .files = .{
+            .{ .path = "README.md", .text = "# Soak\n\nA tape that repeats the risky things.\n\n- full screen\n- dialogs over frost\n- floats in OS windows\n" },
+            .{ .path = "src/main.zig", .text = "const std = @import(\"std\");\n\npub fn main() void {\n    std.debug.print(\"soak\\n\", .{});\n}\n" },
+        },
+        .open = .{ "src/main.zig", "README.md" },
+        // The explorer open, so there is a view to float.
+        .layout = .reset,
+    }},
+    .home = "region:Main",
+    .chapters = .{
+        .{ .at = 0, .title = "Documents" },
+        .{ .at = 1500, .title = "Floats" },
+        .{ .at = 13500, .title = "Full screen" },
+        .{ .at = 24000, .title = "Dialogs" },
+    },
+    .ops = .{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .wait = .{ .until = .idle, .timeout = 10000 } } },
+        .{ .at = 0, .do = .{ .wait = .{ .until = .{ .shown = "workbench.tab:demo://soak/README.md" }, .timeout = 10000 } } },
+        .{ .at = 0, .do = .{ .wait = .{ .until = .{ .shown = "region:Sidebar" }, .timeout = 10000 } } },
+
+        // The explorer out of its place by the place's corner button, dropped on the place's own
+        // middle: it floats. Back by resetting the layout, which closes the float and its window.
+        .{ .at = 1500, .ms = 400, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -20, .dy = 20 } } },
+        .{ .at = 2000, .do = .{ .press = .left } },
+        .{ .at = 2100, .ms = 600, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 0.5, .y = 0.5 } } },
+        .{ .at = 2900, .do = .{ .release = .left } },
+        .{ .at = 2900, .do = .{ .wait = .{ .until = .{ .shown = "region:Float 1" }, .timeout = 5000 } } },
+        .{ .at = 4500, .do = .{ .command = .{ .id = "fizzy.resetLayout" } } },
+        .{ .at = 4500, .do = .{ .wait = .{ .until = .{ .gone = "region:Float 1" }, .timeout = 5000 } } },
+        .{ .at = 4500, .do = .{ .wait = .{ .until = .{ .shown = "region:Sidebar" }, .timeout = 5000 } } },
+
+        .{ .at = 5500, .ms = 400, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -20, .dy = 20 } } },
+        .{ .at = 6000, .do = .{ .press = .left } },
+        .{ .at = 6100, .ms = 600, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 0.5, .y = 0.5 } } },
+        .{ .at = 6900, .do = .{ .release = .left } },
+        .{ .at = 6900, .do = .{ .wait = .{ .until = .{ .shown = "region:Float 1" }, .timeout = 5000 } } },
+        .{ .at = 8500, .do = .{ .command = .{ .id = "fizzy.resetLayout" } } },
+        .{ .at = 8500, .do = .{ .wait = .{ .until = .{ .gone = "region:Float 1" }, .timeout = 5000 } } },
+        .{ .at = 8500, .do = .{ .wait = .{ .until = .{ .shown = "region:Sidebar" }, .timeout = 5000 } } },
+
+        .{ .at = 9500, .ms = 400, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -20, .dy = 20 } } },
+        .{ .at = 10000, .do = .{ .press = .left } },
+        .{ .at = 10100, .ms = 600, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 0.5, .y = 0.5 } } },
+        .{ .at = 10900, .do = .{ .release = .left } },
+        .{ .at = 10900, .do = .{ .wait = .{ .until = .{ .shown = "region:Float 1" }, .timeout = 5000 } } },
+        .{ .at = 12500, .do = .{ .command = .{ .id = "fizzy.resetLayout" } } },
+        .{ .at = 12500, .do = .{ .wait = .{ .until = .{ .gone = "region:Float 1" }, .timeout = 5000 } } },
+
+        // Into full screen and out, twice.
+        .{ .at = 13500, .do = .{ .command = .{ .id = "fizzy.toggleFullScreen" } } },
+        .{ .at = 16000, .do = .{ .command = .{ .id = "fizzy.toggleFullScreen" } } },
+        .{ .at = 18500, .do = .{ .command = .{ .id = "fizzy.toggleFullScreen" } } },
+        .{ .at = 21000, .do = .{ .command = .{ .id = "fizzy.toggleFullScreen" } } },
+        .{ .at = 21000, .do = .{ .wait = .{ .until = .idle, .timeout = 10000 } } },
+
+        // A dialog over the frost, and the palette, opened and closed.
+        .{ .at = 24000, .do = .{ .command = .{ .id = "fizzy.about" } } },
+        .{ .at = 24000, .do = .{ .wait = .{ .until = .{ .shown = "fizzy.dialog.close" }, .timeout = 5000 } } },
+        .{ .at = 24800, .ms = 500, .do = .{ .move = .{ .tag = "fizzy.dialog.close" } } },
+        .{ .at = 25500, .do = .{ .press = .left } },
+        .{ .at = 25600, .do = .{ .release = .left } },
+        .{ .at = 25600, .do = .{ .wait = .{ .until = .{ .gone = "fizzy.dialog.close" }, .timeout = 5000 } } },
+        .{ .at = 26500, .do = .{ .command = .{ .id = "fizzy.commandPalette" } } },
+        .{ .at = 26500, .do = .{ .wait = .{ .until = .{ .shown = "fizzy.palette" }, .timeout = 5000 } } },
+        .{ .at = 27000, .ms = 600, .do = .{ .type = "toggle" } },
+        .{ .at = 28000, .do = .{ .key = "escape" } },
+        .{ .at = 28000, .do = .{ .wait = .{ .until = .{ .gone = "fizzy.palette" }, .timeout = 5000 } } },
+        .{ .at = 29000, .do = .{ .command = .{ .id = "fizzy.about" } } },
+        .{ .at = 29000, .do = .{ .wait = .{ .until = .{ .shown = "fizzy.dialog.close" }, .timeout = 5000 } } },
+        .{ .at = 29800, .ms = 500, .do = .{ .move = .{ .tag = "fizzy.dialog.close" } } },
+        .{ .at = 30500, .do = .{ .press = .left } },
+        .{ .at = 30600, .do = .{ .release = .left } },
+        .{ .at = 30600, .do = .{ .wait = .{ .until = .{ .gone = "fizzy.dialog.close" }, .timeout = 5000 } } },
+        // Time for what closed to finish closing — a dialog's window goes once its fade has —
+        // before the run counts the windows left.
+        .{ .at = 34000, .do = .{ .wait = .{ .until = .idle, .timeout = 10000 } } },
+    },
+}

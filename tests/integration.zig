@@ -5086,6 +5086,19 @@ test "demo: every bundled demo builds into a valid tape" {
     }
 }
 
+test "verdict: the soak tape is a demo, and its expectations read" {
+    var owned = try automation.Tape.parse(std.testing.allocator, @embedFile("soak_tape"), automation.Input.check);
+    defer owned.deinit();
+    try std.testing.expectEqualStrings("soak", owned.tape.name);
+    // It ends on a wait, so what closed last has time to close before the windows are counted.
+    try std.testing.expect(owned.tape.ops[owned.tape.ops.len - 1].do == .wait);
+
+    const expect = try std.zon.parse.fromSlice(fizzy.verdict.Expect, std.testing.allocator, @embedFile("soak_expect"), null, .{});
+    try std.testing.expect(expect.allow_leaks);
+    try std.testing.expectEqual(@as(u32, 0), expect.max_sdl_errors);
+    try std.testing.expectEqual(@as(?u32, null), expect.os_windows);
+}
+
 test "demo: the hand-written sample tape parses and round-trips" {
     const source = @embedFile("demo_sample_tape");
     var owned = try automation.Tape.parse(std.testing.allocator, source, automation.Input.check);
@@ -6551,6 +6564,7 @@ fn headlessFrame() !dvui.App.Result {
 }
 
 test "headless: the whole editor comes up, opens a file, plays the tour and goes down" {
+    // One test, not several: a second whole editor in the same process cannot load its plugins.
     // Not the testing allocator: this is the app's own lifetime, whose exit leaks by design
     // (`Editor.unloadPluginLibs`), and what is measured here is that it runs.
     const gpa = std.heap.smp_allocator;
@@ -6620,14 +6634,96 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     // A markdown file opens on its preview.
     try std.testing.expect(std.mem.indexOf(u8, text, ".tag=\"text.preview:") != null);
 
+    // Open, open folder, save as and close, told a path, as a keybind with arguments, a tape or
+    // an agent calls them (`Host.callCommand`); each refuses what it cannot do, saying why.
+    {
+        const host = &editor.app.host;
+        const call = struct {
+            fn call(h: *sdk.Host, id: []const u8, args: []const u8) sdk.Host.CommandOutcome {
+                return h.callCommand(id, args, h.arena());
+            }
+        }.call;
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/a.txt", .data = "alpha\n" });
+        const a = try std.fs.path.join(gpa, &.{ project, "a.txt" });
+        defer gpa.free(a);
+        const b = try std.fs.path.join(gpa, &.{ project, "b.txt" });
+        defer gpa.free(b);
+        const args = struct {
+            fn path(p: []const u8) ![]u8 {
+                return std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{p});
+            }
+        };
+
+        try std.testing.expect(call(host, "fizzy.openFolder", ".{ .path = \"project\" }") == .failed);
+        try std.testing.expect(call(host, "fizzy.openFiles", ".{ .path = \"/no/such/file.txt\" }") == .failed);
+        const folder_args = try args.path(project);
+        defer gpa.free(folder_args);
+        try std.testing.expect(call(host, "fizzy.openFolder", folder_args) == .ok);
+
+        const open_args = try args.path(a);
+        defer gpa.free(open_args);
+        try std.testing.expect(call(host, "fizzy.openFiles", open_args) == .ok);
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (std.mem.eql(u8, d.owner.documentPath(d), a)) break;
+        }
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(a, doc.owner.documentPath(doc));
+
+        // Save As: written by the next frame, and the document takes the new name.
+        try std.testing.expect(call(host, "fizzy.saveAs", ".{ .path = \"/no/such/dir/b.txt\" }") == .failed);
+        const save_args = try args.path(b);
+        defer gpa.free(save_args);
+        try std.testing.expect(call(host, "fizzy.saveAs", save_args) == .ok);
+        for (0..50) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (std.mem.eql(u8, d.owner.documentPath(d), b)) break;
+        }
+        const saved = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(b, saved.owner.documentPath(saved));
+        const written = try tmp.dir.readFileAlloc(dvui.io, "project/b.txt", gpa, .limited(1024));
+        defer gpa.free(written);
+        try std.testing.expectEqualStrings("alpha\n", written);
+
+        // Close is ⌘W/Ctrl+W, the document's key in every editor (the window's is ⇧⌘W).
+        const close_key = fizzy.Editor.Keybinds.menuKeybindFor(editor, "fizzy.close");
+        try std.testing.expectEqual(dvui.enums.Key.w, close_key.key.?);
+        try std.testing.expect((close_key.command orelse false) or (close_key.control orelse false));
+        try std.testing.expect(!(close_key.shift orelse false));
+
+        // Close, by path: that document goes, the notes stay.
+        const before = editor.app.open_files.count();
+        try std.testing.expect(call(host, "fizzy.close", ".{ .path = \"/no/such/file.txt\" }") == .failed);
+        try std.testing.expect(call(host, "fizzy.close", save_args) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(before - 1, editor.app.open_files.count());
+        try std.testing.expect(editor.docFromPath(b) == null);
+        try std.testing.expect(editor.docFromPath(notes) != null);
+    }
+
     // The tour, every frame of it, on the testing backend's clock (100 ms a step): about a
     // minute of demo in a few hundred frames.
+    // Measured while it plays, with no profiler window open: what each plugin cost, by name.
+    fizzy.core.profile.want(60_000);
     try editor.demo.play("tour");
     var frames: usize = 0;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
         _ = try dvui.testing.step(headlessFrame);
     }
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
+    {
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        try fizzy.core.profile.report(fizzy.core.profile.host(), &out.writer, .{ .min_ms = 0 });
+        const profiled = out.written();
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".frame = .{ .fps = ") != null);
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"fizzy\"") != null);
+        // The plugins drawing the tour, each under its own name.
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"workbench\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"text\"") != null);
+    }
     // The tour leaves the explorer, the panel and the rest of the window open: their buttons too.
     try expectButtonsNamed(headlessFrame);
     editor.demo.player.unload();

@@ -79,10 +79,19 @@ pub const Primary = struct {
 
     pub fn shutdown(self: *Primary) void {
         self.running.store(0, .release);
-        // Closing the server makes the in-flight `accept` return an error;
-        // the loop sees `running == 0` and exits cleanly.
-        self.server.deinit(self.io);
+        // Wake the thread in `accept` by connecting to it: it sees `running == 0` and returns.
+        // Closing the socket under it is not enough: Linux leaves a thread in `accept` on a
+        // descriptor another thread closes, so `join` waited for good and the app never exited
+        // there (macOS returns from it). Should the connect fail, shutting the socket down wakes
+        // `accept` on Linux as well. Closed once the thread is gone, so it never accepts on a
+        // closed, or reused, descriptor.
+        if (connectUnixClient(self.path)) |fd| {
+            _ = std.c.close(fd);
+        } else {
+            _ = std.c.shutdown(self.server.socket.handle, 2); // SHUT_RDWR
+        }
         self.thread.join();
+        self.server.deinit(self.io);
         _ = unlinkPath(self.path);
         self.allocator.free(self.path);
     }
@@ -96,6 +105,8 @@ pub const Primary = struct {
                 continue;
             };
             defer stream.close(self.io);
+            // `shutdown` connecting to wake this thread.
+            if (self.running.load(.acquire) == 0) return;
 
             var rbuf: [4096]u8 = undefined;
             var sr = stream.reader(self.io, &rbuf);
@@ -205,4 +216,39 @@ fn chmodPath(path: []const u8, mode: std.c.mode_t) c_int {
     var buf: [1024]u8 = undefined;
     const p = pathZ(&buf, path) orelse return -1;
     return std.c.fchmodat(std.posix.AT.FDCWD, p, mode, 0);
+}
+
+test "shutdown returns while the listener waits in accept" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    const io = std.testing.io;
+    var name_buf: [64]u8 = undefined;
+    const app_id = try std.fmt.bufPrint(&name_buf, "fizzy-singleton-test-{d}", .{std.c.getpid()});
+    const primary = (try Primary.acquire(.{
+        .allocator = std.testing.allocator,
+        .io = io,
+        .app_id = app_id,
+        .unix_socket_dir = "/tmp",
+        .callback = null,
+        .user_data = null,
+        .argv = &.{},
+    })) orelse return error.SocketInUse;
+    defer std.testing.allocator.destroy(primary);
+    // Long enough for the listener to be in `accept`.
+    std.Io.sleep(io, .fromMilliseconds(50), .awake) catch {};
+
+    var done: std.atomic.Value(bool) = .init(false);
+    const thread = try std.Thread.spawn(.{}, struct {
+        fn run(p: *Primary, d: *std.atomic.Value(bool)) void {
+            p.shutdown();
+            d.store(true, .release);
+        }
+    }.run, .{ primary, &done });
+    var waited: u32 = 0;
+    while (!done.load(.acquire) and waited < 300) : (waited += 1) std.Io.sleep(io, .fromMilliseconds(10), .awake) catch {};
+    if (!done.load(.acquire)) {
+        // Hung in `join` on the listener, as it did on Linux: the test fails rather than waits.
+        thread.detach();
+        return error.ShutdownHung;
+    }
+    thread.join();
 }

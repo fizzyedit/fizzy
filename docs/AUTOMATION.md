@@ -27,7 +27,7 @@ a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app
 |---|---|
 | Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop** |
 | Menu | Help › Take the Tour |
-| Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made) |
+| Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made); `FIZZY_DEMO=<file>.zon` (or `.tape`) plays a tape file, a live one through the live driver |
 | Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`) fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |
 
 While a demo plays:
@@ -147,6 +147,7 @@ user's motion settings, timed in demo time.
 | `fizzy.palette.row:<command id or abs path>` | a palette row |
 | `fizzy.menu:<title>` | a menu-bar menu (the in-app bar; macOS uses the native one) |
 | `fizzy.command:<command id>` | a menu row that runs a command |
+| `fizzy.dialog.close` | the close button in a dialog's header |
 | `region:<name>` | a layout region (`Main`, `Panel`, …) |
 
 A demo's files live under its keyframe's `root`, so a path is `demo://tour/src/main.zig`.
@@ -326,6 +327,37 @@ try editor.demo.playLive(try s.finish());               // fizzy: refused while 
   one plays (`error.Busy`).
 
 The overlay does not draw a live tape's pointer yet.
+
+## A run that ends in a verdict
+
+```sh
+FIZZY_VERDICT=out/verdict.zon FIZZY_DEMO=tests/tapes/soak.zon \
+  FIZZY_VERDICT_EXPECT=tests/tapes/soak.expect.zon fizzy --profile out/profile
+```
+
+`FIZZY_VERDICT` makes a run of the real app one that plays its tape (`FIZZY_DEMO`: a bundled demo,
+or a `.zon`/`.tape` file, a demo through the `Player` or a live tape through the `LiveDriver`) to
+the end, quits, and exits 1 when anything went wrong (`src/editor/verdict.zig`):
+
+- the tape did not start or did not end (a person's input paused or stopped it, or
+  `Expect.timeout_s` ran out), or lost its place (a wait gave up);
+- a replay did not reach what playing did (`Player.mismatches`);
+- SDL logged an error, launch to exit (the native backend's health counters, `SDLBackend.health`);
+- the debug allocator found memory still allocated at exit (Debug builds);
+- the backend's counters break what the run expects: by default the OS windows alive at the end
+  are as many as at the start, and the main window was presented to. `FIZZY_VERDICT_EXPECT` names
+  a ZON file of `verdict.Expect` for more: per-frame GPU budgets (draws, passes, target switches),
+  SDL warnings, AppKit's windows, a p99 frame time for a run on known hardware.
+
+The verdict, with the counters as the tape began and as it ended, goes to the `FIZZY_VERDICT` path as
+ZON for CI to keep. Relative paths are taken from where fizzy was launched. A verdict run needs a
+profile of its own (`--profile` or `FIZZY_PROFILE`) and refuses to start without one (exit 2): it
+quits by itself, and must never touch a person's settings, plugins, lock or socket.
+
+`tests/tapes/soak.zon` is the first soak tape: a view floated out of the main window (an OS window
+where floats are: macOS, or `FIZZY_POPOUT=1`) and put back three times, full screen in and out
+twice, the About dialog over the frost closed from its header twice, and the palette. CI plays it
+on Linux under Xvfb with Mesa's lavapipe (`ci.yml`, "Verdict run").
 
 ## For apps built on fizzy
 
