@@ -21,10 +21,12 @@ const profile = core.profile;
 const viz = core.viz;
 
 pub var open: bool = false;
-var rect: dvui.Rect = .{ .x = 80, .y = 80, .w = 720, .h = 560 };
+var rect: dvui.Rect = .{ .x = 80, .y = 80, .w = 1000, .h = 640 };
 var view: enum { by_plugin, tree } = .by_plugin;
 /// The window is too narrow for the table's full share bars (a phone).
 var narrow = false;
+/// Wide enough for the pie beside the table; narrower, it sits above it.
+var beside = true;
 /// Ask for every frame while the window is open, instead of only the ones something wants.
 var continuous = false;
 
@@ -58,6 +60,7 @@ pub fn draw() void {
     rect.x = std.math.clamp(rect.x, margin, @max(margin, screen.w - rect.w - margin));
     rect.y = std.math.clamp(rect.y, margin, @max(margin, screen.h - rect.h - margin));
     narrow = rect.w < 600;
+    beside = rect.w >= 860;
 
     // Frosted like every floating surface — and its blur shows up in its own numbers, under
     // "frost pane", with every other surface's.
@@ -150,7 +153,21 @@ pub fn draw() void {
         .by_plugin => collectByPlugin(arena, entries, work, &rows),
         .tree => collectTree(arena, entries, &rows),
     }
-    drawGrid(rows.items, work);
+    // Where the frame went: its costliest scopes as a pie beside the table, the same frame the
+    // table shows (the averages, or the one held under the pointer).
+    var lower = dvui.box(@src(), .{ .dir = if (beside) .horizontal else .vertical }, .{ .expand = .both });
+    defer lower.deinit();
+    {
+        var caption_buf: [32]u8 = undefined;
+        const caption = if (inspected) |ago| std.fmt.bufPrint(&caption_buf, "frame -{d}", .{ago}) catch "" else "per frame";
+        var pie: viz.Pie = .init(@src(), collectSlices(arena, entries, work), .{ .unit = "ms", .caption = caption }, .{
+            .min_size_content = .{ .w = if (beside) 420 else 300, .h = if (beside) 260 else 200 },
+            .expand = if (beside) .none else .horizontal,
+            .margin = .{ .w = if (beside) 8 else 0, .h = if (beside) 0 else 8 },
+        });
+        pie.deinit();
+        drawGrid(rows.items, work, .{ .keys = pie.keys, .colors = pie.colors, .hovered = if (pie.hovered) |h| pie.keys[h] else null });
+    }
 }
 
 /// The last `profile.history_len` frames' work as columns, newest at the right, each with its
@@ -200,6 +217,8 @@ fn ms(ns: f64) f64 {
 /// One line of the table.
 const Row = struct {
     name: []const u8,
+    /// The scope's key, so its bar is the colour of its slice in the pie; none for an owner.
+    key: ?u64 = null,
     indent: u8 = 0,
     strong: bool = false,
     self_ns: f64 = 0,
@@ -208,7 +227,21 @@ const Row = struct {
     max_ns: f64 = 0,
 };
 
-fn drawGrid(rows: []const Row, work: f64) void {
+/// The pie's colours, for the table's bars to match, and the slice under the pointer, whose row
+/// stays bright while the others fade.
+const PieColors = struct {
+    keys: []const u64 = &.{},
+    colors: []const dvui.Color = &.{},
+    hovered: ?u64 = null,
+
+    fn of(self: PieColors, key: ?u64) ?dvui.Color {
+        const k = key orelse return null;
+        for (self.keys, self.colors) |pk, c| if (pk == k) return c;
+        return null;
+    }
+};
+
+fn drawGrid(rows: []const Row, work: f64, pie: PieColors) void {
     const columns = [_]viz.Table.Column{
         .{ .title = "", .kind = .text },
         .{ .title = "self ms" },
@@ -225,8 +258,45 @@ fn drawGrid(rows: []const Row, work: f64) void {
         table.number(i, 2, ms(r.total_ns));
         table.number(i, 3, if (r.strong) null else r.calls);
         table.number(i, 4, ms(r.max_ns));
-        table.bar(i, 5, viz.scale.fraction(r.self_ns, work), .{ .strong = r.strong });
+        var bar_col = pie.of(r.key);
+        if (pie.hovered) |h| if (r.key != h) {
+            bar_col = (bar_col orelse dvui.themeGet().color(.highlight, .fill)).opacity(0.3);
+        };
+        table.bar(i, 5, viz.scale.fraction(r.self_ns, work), .{ .strong = r.strong, .color = bar_col });
     }
+}
+
+/// How many scopes the pie names; the rest of the frame's work is one slice, "the rest".
+const pie_slices = 7;
+
+/// The frame's costliest scopes by their own time, each named with its owner, and the rest of
+/// the frame's work as one slice.
+fn collectSlices(arena: std.mem.Allocator, entries: []profile.Entry, work: f64) []const viz.Pie.Slice {
+    var idx: std.ArrayList(usize) = .empty;
+    for (entries, 0..) |e, i| if (e.avg_self_ns > 0) idx.append(arena, i) catch return &.{};
+    std.mem.sort(usize, idx.items, entries, struct {
+        fn lt(es: []profile.Entry, a: usize, b: usize) bool {
+            return es[a].avg_self_ns > es[b].avg_self_ns;
+        }
+    }.lt);
+    var slices: std.ArrayList(viz.Pie.Slice) = .empty;
+    var named: f64 = 0;
+    for (idx.items[0..@min(idx.items.len, pie_slices)]) |i| {
+        const e = entries[i];
+        // Fizzy's own scopes by name; a plugin's with its id in front, unless the name says it.
+        const short = shortName(e.name);
+        const label = if (std.mem.eql(u8, e.owner, "fizzy") or std.mem.startsWith(u8, short, e.owner)) short else std.fmt.allocPrint(arena, "{s} · {s}", .{ e.owner, short }) catch short;
+        slices.append(arena, .{ .label = label, .value = @floatCast(ms(e.avg_self_ns)), .key = e.key }) catch break;
+        named += e.avg_self_ns;
+    }
+    const rest = work - named;
+    if (ms(rest) >= min_ms_shown) slices.append(arena, .{
+        .label = "the rest",
+        .value = @floatCast(ms(rest)),
+        .key = 0,
+        .color = dvui.themeGet().color(.control, .text).opacity(0.35),
+    }) catch {};
+    return slices.items;
 }
 
 /// Rows below this much total time (ms per frame) are left out: they are noise, and a table of
@@ -285,6 +355,7 @@ fn collectByPlugin(arena: std.mem.Allocator, entries: []profile.Entry, work: f64
             const e = entries[i];
             rows.append(arena, .{
                 .name = pathName(arena, entries, i),
+                .key = e.key,
                 .indent = 1,
                 .self_ns = e.avg_self_ns,
                 .total_ns = e.avg_ns,
@@ -343,6 +414,7 @@ fn collectTree(arena: std.mem.Allocator, entries: []profile.Entry, rows: *std.Ar
                 const name = if (outermostForOwner(es, e)) std.fmt.allocPrint(a, "{s} · {s}", .{ e.owner, shortName(e.name) }) catch e.name else shortName(e.name);
                 out.append(a, .{
                     .name = name,
+                    .key = e.key,
                     .indent = e.depth,
                     .strong = e.depth == 0,
                     .self_ns = e.avg_self_ns,
