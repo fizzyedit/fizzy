@@ -22,8 +22,16 @@ on:
   merge_group:
   workflow_dispatch:
 
+# A pull request's newer push cancels its older run: only the head is merged. A push to main is
+# never cancelled, because each one is a merge that belongs in main's history: its group is the
+# commit, so merges landing minutes apart each run to the end. When main's group was the branch,
+# every merge cancelled the one before. Each cancelled commit read as failed: GitHub counts a
+# cancelled check as a failure, and `ci-ok` (`if: always()`) fails on cancelled jobs. And a break
+# between two PRs that merged close together showed only at the later commit, never the one that
+# caused it. Two main runs overlapping is harmless: both restore the same caches, and the second
+# to save a key only gets a warning.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
