@@ -6815,6 +6815,21 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
     }
 
+    // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that
+    // fails is reported without making a running plugin look broken.
+    {
+        const plugins = editor.app.host.getServiceTyped(sdk.services.plugins.Api) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(sdk.services.plugins.Api.State.loaded, plugins.status("text").state);
+        try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, plugins.status("nothing.here").state);
+        editor.app.noteLoadFailed("text", "the rebuilt binary is for another SDK");
+        const st = plugins.status("text");
+        try std.testing.expectEqual(sdk.services.plugins.Api.State.loaded, st.state);
+        try std.testing.expectEqualStrings("the rebuilt binary is for another SDK", st.why);
+        try std.testing.expectEqual(@as(u32, 1), st.failures);
+        editor.app.noteLoadTimes("text", 180, 6);
+        try std.testing.expectEqual(@as(f32, 6), plugins.status("text").swapped_ms);
+    }
+
     // A plugin's reload keeps its open documents (`KeptDocuments`): captured, detached with their
     // tabs left in place, and brought back through the plugin as they were, unsaved edits and
     // all. A reload swaps a dylib, which this harness has none of; this is all of it but the swap,

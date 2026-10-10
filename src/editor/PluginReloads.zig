@@ -112,6 +112,7 @@ fn swap(editor: *Editor, job: *Job) void {
     }
     var opened = job.opened catch |err| {
         dvui.log.warn("plugin watcher: could not reload rebuilt '{s}' ({s}): {s}", .{ job.id, @errorName(err), App.pluginLoadFailureReason(err) });
+        editor.app.noteLoadFailed(job.id, App.pluginLoadFailureReason(err));
         gpa.free(job.path);
         // Not again until the binary changes again (as a failed synchronous reload did).
         editor.app.restampLoadedPlugin(job.id);
@@ -123,6 +124,7 @@ fn swap(editor: *Editor, job: *Job) void {
     const old_plugin = editor.app.host.pluginById(job.id);
     var kept: ?KeptDocuments = if (old_plugin) |p| KeptDocuments.capture(editor, p) catch |err| {
         dvui.log.warn("plugin watcher: could not reload rebuilt '{s}' ({s}): a document's unsaved changes cannot be carried across", .{ job.id, @errorName(err) });
+        editor.app.noteLoadFailed(job.id, "not reloaded: a document's unsaved changes cannot be carried across");
         opened.close();
         gpa.free(job.path);
         editor.app.restampLoadedPlugin(job.id);
@@ -132,6 +134,7 @@ fn swap(editor: *Editor, job: *Job) void {
     defer if (kept) |*k| k.deinit();
     editor.unloadPlugin(job.id, .{ .keep = true }) catch |err| {
         dvui.log.warn("plugin watcher: could not reload rebuilt '{s}' ({s})", .{ job.id, @errorName(err) });
+        editor.app.noteLoadFailed(job.id, @errorName(err));
         opened.close();
         gpa.free(job.path);
         editor.app.restampLoadedPlugin(job.id);
@@ -155,6 +158,7 @@ fn swap(editor: *Editor, job: *Job) void {
         ms(job.started_ns, job.opened_ns),
     });
     dvui.log.info("plugin watcher: reloaded '{s}' from its rebuilt binary", .{job.id});
+    editor.app.noteLoadTimes(job.id, @floatCast(ms(job.started_ns, job.opened_ns)), @floatCast(ms(start_ns, loaded_ns)));
 }
 
 /// Wait for every open in flight and drop what it opened. At shutdown, before plugins unload.
