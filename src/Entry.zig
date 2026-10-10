@@ -24,6 +24,7 @@ const AppInfo = @import("app").AppInfo;
 
 const Entry = @This();
 const Editor = fizzy.Editor;
+const verdict = @import("editor/verdict.zig");
 
 // Entry fields
 allocator: std.mem.Allocator = undefined,
@@ -195,6 +196,8 @@ pub fn main(main_init: std.process.Init) !u8 {
         // Before anything native allocates on the app's behalf — dialog paths, menu titles.
         fizzy.backend.setAllocator(appAllocator());
 
+        if (verdict.refuseWithoutProfile(appAllocator(), main_init.minimal.args)) |code| return code;
+
         // The lock is per *application*, so fizzy names itself rather than the framework
         // reading fizzy's identity file — which is exactly what made it fizzy's before.
         singleton.setIdentity(AppInfo.bundle_id_z, AppInfo.current.name);
@@ -224,10 +227,19 @@ pub fn main(main_init: std.process.Init) !u8 {
             }.f,
         });
         try singleton.earlyStartup(appAllocator(), main_init);
+
+        // Both read relative to where fizzy was launched, before `AppInit` moves to its own directory.
+        Editor.Demo.readEnvTape(appAllocator(), main_init.io);
+        if (verdict.init(appAllocator(), main_init.io, @import("app").profile.root)) |code| return code;
     }
 
     if (@hasDecl(dvui.backend, "main")) {
-        return dvui.App.main(main_init);
+        const status = try dvui.App.main(main_init);
+        if (comptime builtin.target.cpu.arch == .wasm32) return status;
+        if (!verdict.on()) return status;
+        // Everything the app allocated is freed by now: what the debug allocator still holds leaked.
+        const leaks: ?bool = if (comptime std.debug.runtime_safety) gpa.deinit() == .leak else null;
+        return verdict.finish(leaks);
     }
     try dvui.App.main();
     return 0;
@@ -400,7 +412,10 @@ pub fn AppFrame() !dvui.App.Result {
     // Once, or — while a demo is seeking — again and again unseen until it lands (`frames`).
     const player = &fizzy.editor().demo.player;
     const win = fizzy.entry().window;
-    return player.frames(win, frameOnce, automation.Player.backendClock(win));
+    const res = try player.frames(win, frameOnce, automation.Player.backendClock(win));
+    // A run that ends in a verdict quits once its tape has ended.
+    if (verdict.frame(&fizzy.editor().demo)) return .close;
+    return res;
 }
 
 /// The backend's `frame_ended_hook`: what `Window.end` said, to the `automation` service.

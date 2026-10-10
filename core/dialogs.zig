@@ -17,6 +17,7 @@ const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
 const widgets = @import("widgets.zig");
+const anchor = @import("replay").anchor;
 const anim = @import("anim.zig");
 const draw = @import("draw.zig");
 const screens = @import("screens.zig");
@@ -985,6 +986,8 @@ fn windowHeaderPaintClose(openflag: ?*bool) void {
             .gravity_x = 0.5,
         }));
         defer button.deinit();
+        // For a tape to close the dialog as a person does (docs/AUTOMATION.md, "Anchors").
+        anchor.mark(button.data(), "fizzy.dialog.close", .{});
 
         button.processEvents();
         button.drawBackground();

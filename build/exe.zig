@@ -68,6 +68,9 @@ pub const FizzyExecutable = struct {
     text_dylib: ?*std.Build.Step.Compile = null,
     markdown_dylib: ?*std.Build.Step.Compile = null,
     image_dylib: ?*std.Build.Step.Compile = null,
+    /// Fizzy's own native backend module (the backend package's `SDLBackend`) the executable
+    /// draws with; null for dvui's `sdl3` backend.
+    backend: ?*std.Build.Module = null,
 };
 
 /// What the native executable draws with.
@@ -424,10 +427,12 @@ pub fn addFizzyExecutableForTarget(
             exe.root_module.addSystemFrameworkPath(p.framework);
             exe.root_module.addLibraryPath(p.lib);
         }
-        // zig-objc from the backend package's pin. The backend's Objective-C comes with its modules.
+        // zig-objc from the backend package's pin, and the platform's Objective-C, which calls back
+        // into the platform's Zig and so is linked here, where the executable reaches it.
         if (fizzy_backend.objcModule(backendDependency(b), backendOptions(resolved_target, optimize, macos_sdl_paths))) |objc| {
             exe.root_module.addImport("objc", objc);
         }
+        fizzy_backend.addPlatformObjC(backendDependency(b), exe.root_module, backendOptions(resolved_target, optimize, macos_sdl_paths));
     } else if (resolved_target.result.os.tag == .windows) {
         if (fizzy_backend.win32Module(backendDependency(b))) |win32| {
             exe.root_module.addImport("win32", win32);
@@ -464,6 +469,7 @@ pub fn addFizzyExecutableForTarget(
         .text_dylib = text_dylib,
         .markdown_dylib = markdown_dylib,
         .image_dylib = image_dylib,
+        .backend = if (native_backend == .fizzy) native.backend else null,
     };
 }
 

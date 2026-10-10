@@ -638,7 +638,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         }));
     }
     // The backend package's std-only tests (window layout, the title-bar hit test, the blur
-    // region, the viewport map), from its own list, so `zig build test` here still runs them.
+    // region, the viewport map, the health counters), from its own list, so `zig build test`
+    // here still runs them.
     const backend_dep = fizzy_exe.backendDependency(b);
     for (@import("fizzy_backend").unit_tests) |t| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
@@ -651,6 +652,20 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             .filters = test_filters,
         }));
     }
+
+    // The single-instance listener (`libs/dvui-singleton-app`): its shutdown wakes the thread
+    // waiting in `accept`, which closing the socket does not on Linux. It talks to its socket
+    // through libc.
+    try unit_test_artifacts.append(b.allocator, b.addTest(.{
+        .name = "fizzy-singleton-unix-tests",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("libs/dvui-singleton-app/src/unix_impl.zig"),
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    }));
 
     // Keybinding parse/resolve core. Deliberately dvui-free (see Keymap.zig) — dvui's keybind map
     // can't express chords and is keyed by bind name, not command. Its key spelling is `tape`'s
@@ -827,6 +842,23 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         test_integration_step.dependOn(&b.addRunArtifact(replay_tests).step);
         check_integration_step.dependOn(&replay_tests.step);
     }
+    // The native backend's health counters as SDL feeds them: its log counted, and passed on to
+    // the output it had. Needs SDL, no window.
+    if (main_fizzy.backend) |native_backend_module| {
+        const health_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/backend_health.zig"),
+        });
+        health_module.addImport("backend", native_backend_module);
+        const health_tests = b.addTest(.{
+            .name = "fizzy-backend-health-sdl-tests",
+            .root_module = health_module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(health_tests).step);
+        check_integration_step.dependOn(&health_tests.step);
+    }
     // See `exe.zig` for why macOS needs the FSEvents backend.
     const nightwatch_test_dep = if (target.result.os.tag == .macos)
         b.lazyDependency("nightwatch", .{ .target = target, .optimize = optimize, .macos_fsevents = true })
@@ -943,6 +975,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     integration_module.addImport("app", app_module_test);
     // The hand-written sample tape `docs/AUTOMATION.md` points at, so it cannot rot.
     integration_module.addAnonymousImport("demo_sample_tape", .{ .root_source_file = b.path("docs/demos/hello.zon") });
+    integration_module.addAnonymousImport("soak_tape", .{ .root_source_file = b.path("tests/tapes/soak.zon") });
+    integration_module.addAnonymousImport("soak_expect", .{ .root_source_file = b.path("tests/tapes/soak.expect.zon") });
 
     const integration_tests = b.addTest(.{
         .name = "fizzy-integration-tests",

@@ -30,6 +30,9 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     .{ .name = "backend-blur-region-tests", .root = "src/platform/blur_region.zig" },
     // Where a viewport's OS window is on the desktop and where its part of the frame lies.
     .{ .name = "backend-viewport-map-tests", .root = "src/viewport_map.zig" },
+    // The backend's health counters: frame-time percentiles, per-frame counts, SDL's log counted
+    // from any thread, a snapshot as ZON.
+    .{ .name = "backend-health-tests", .root = "src/Health.zig" },
 };
 
 /// Where the macOS SDK is, for a macOS target that is not the host's own (`-Dtarget=aarch64-macos`
@@ -121,14 +124,7 @@ pub fn platformModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, b
     m.addImport("dvui", dvui_mod);
     m.addImport("backend", backend_mod);
     switch (opts.target.result.os.tag) {
-        .macos => {
-            if (objcModule(dep, opts)) |objc| m.addImport("objc", objc);
-            addMacosSdk(m, opts);
-            m.addCSourceFile(.{ .file = b.path("src/platform/macos/visual_effect_view.m") });
-            m.addCSourceFile(.{ .file = b.path("src/platform/macos/menu_target.m") });
-            m.addCSourceFile(.{ .file = b.path("src/platform/macos/window_monitor.m") });
-            m.addCSourceFile(.{ .file = b.path("src/platform/macos/live_resize_trace.m") });
-        },
+        .macos => if (objcModule(dep, opts)) |objc| m.addImport("objc", objc),
         .windows => if (win32Module(dep)) |win32| m.addImport("win32", win32),
         else => {},
     }
@@ -137,6 +133,20 @@ pub fn platformModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, b
     while (it.next()) |own| if (own.* == backend_mod) backend_mod.addImport("platform", m);
     platform_modules.put(b.allocator, backend_mod, m) catch @panic("OOM");
     return m;
+}
+
+/// The platform's Objective-C (`src/platform/macos/*.m`), added to an executable's root module: an
+/// app on this backend calls it once for its executable. `platformModule` does not carry it, because
+/// it calls back into the platform's Zig by name, which only a compile that reaches those files
+/// emits: carried by the module, a test that imports the backend alone would fail to link.
+pub fn addPlatformObjC(dep: *std.Build.Dependency, root_module: *std.Build.Module, opts: Options) void {
+    if (opts.target.result.os.tag != .macos) return;
+    const b = dep.builder;
+    addMacosSdk(root_module, opts);
+    root_module.addCSourceFile(.{ .file = b.path("src/platform/macos/visual_effect_view.m") });
+    root_module.addCSourceFile(.{ .file = b.path("src/platform/macos/menu_target.m") });
+    root_module.addCSourceFile(.{ .file = b.path("src/platform/macos/window_monitor.m") });
+    root_module.addCSourceFile(.{ .file = b.path("src/platform/macos/live_resize_trace.m") });
 }
 
 /// zig-objc, from this package's pin, for an app's own AppKit code. Null on the configure pass

@@ -148,8 +148,29 @@ Fizzy adapts to two upstream behaviours rather than patching them:
    and a band of up to 8 units round it, the min/max sizes are the frame's, and popups anchor to
    the parent's frame; maximized, tiled or fullscreen the insets are zero. The insets in effect
    are published as `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_*_NUMBER`. libdecor windows are
-   untouched. Fizzy draws its Linux window's shadow in them (`linux_titlebar.zig`). Upstream:
-   worth proposing; a public API would want a setter as well.
+   untouched. Fizzy draws its Linux window's shadow in them (`linux_titlebar.zig`).
+
+   Fixes on top, each to squash into 6 at the next rebase (#280 C2b, after the suite's test
+   commit `1eb90b7`):
+   - `9258288`: a window SDL makes again (`SDL_RecreateWindow`, e.g. for an OpenGL renderer)
+     keeps its insets. They are kept in the window's own properties, which outlive its data.
+   - `0ca75f2`: an opaque window's opaque region is its frame, not the shadow round it.
+   - `0426af9`: the toplevel bounds the compositor sends (in frame units) are widened by the
+     insets before the clamp. Weston never sends bounds, so no test shows this.
+   - `91b7a29`: the input band is
+     `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER` (default 8; 0 = only the frame
+     takes input), still capped at each side's inset.
+   - `883f5c8`: the insets are published from creation (zero for libdecor), and the first
+     configure corrects them for a window that comes up maximized, tiled or fullscreen.
+   - `011a2dc`: a window hidden and shown again is framed again. Hiding drops the xdg_surface and
+     its geometry, so the applied insets now reset on hide.
+
+   Upstream `main` (not `release-3.4.x`) gained its own version on 2026-09-24 (`5d7167cb`, with
+   `86b89cff` and `dff05080`): opted into with `SDL_PROP_WINDOW_CREATE_WAYLAND_ENABLE_INSETS_BOOLEAN`,
+   the insets set as `SDL_PROP_WINDOW_WAYLAND_BORDER_INSET_*_NUMBER` window properties and read at
+   each configure. It has no input band, the same opaque-region, bounds and recreate problems,
+   and it keeps insets on tiled windows. At the rebase onto a release that has it, move
+   `linux_titlebar.zig` to upstream's API, and keep only what upstream lacks as patches on top.
 
 7. **Windows: draw each step of a live resize before the loop goes on** (`ee721bf`).
    `SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE` (default off): inside the modal size loop,
@@ -181,16 +202,18 @@ it. So far:
   (`WAYLAND_DEBUG`) under headless weston, a floating window's geometry is its frame, its input
   region the frame plus up to 8 units, its min/max sizes the frame's, and the published insets
   what was asked; maximized and fullscreen the insets are zero; a popup anchors to the parent's
-  frame. Headless weston can't show a floating size the compositor chooses, tiled states,
-  fractional scale or xdg-decoration. What it found still to fix before proposing patch 6 is in
-  #280 (C2b).
+  frame. Since `1eb90b7` it also checks the fixes above: insets kept across a recreate, the
+  opaque region, the input-margin property, the props before show, and framing after hide and
+  show. Headless weston can't show a floating size the compositor chooses, toplevel bounds, tiled
+  states, fractional scale or xdg-decoration.
 
 sdl_zig builds and runs them (`zig build test-fizzy`, below). A suite moves through a rebase with
 its patch, and goes upstream in that patch's PR.
 
 Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
 `fizzy-3.4.16-4` → `2d6efde`; `fizzy-3.4.16-5` → `ee721bf`; `fizzy-3.4.16-6` → `4839ede`;
-`fizzy-3.4.16-7` → `36dda37`; `fizzy-3.4.16-8` → `a518aaf`, what sdl_zig pins now.
+`fizzy-3.4.16-7` → `36dda37`; `fizzy-3.4.16-8` → `a518aaf`; `fizzy-3.4.16-9` → `011a2dc`, what
+sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -226,11 +249,16 @@ Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4
 9. **Run the Wayland frame-insets suite under headless weston** (`a02dda8`): CI job
    `test-fizzy-wayland-insets` at output scale 1 and 2, in `ubuntu:26.04`. The pin moves to SDL's
    `fizzy-3.4.16-8`; squash it into 1 at the next rebase.
+10. **OpenGL ES and a timeout for the frame-insets suite** (`ed4ffea`): the recreate test attaches
+    an OpenGL ES renderer, and the suite's jobs stop after 20 minutes, writing progress to stderr
+    so a hang shows where it stopped. Then the pin moves to SDL's `fizzy-3.4.16-9` (`5e41c70`);
+    squash the pin into 1 at the next rebase.
 
 Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
 `fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`;
 `fizzy-1.0.3+3.4.16-5` → `8e88dba`; `fizzy-1.0.3+3.4.16-6` → `0f6a2a8`;
-`fizzy-1.0.3+3.4.16-7` → `264af2a`; `fizzy-1.0.3+3.4.16-8` → `a02dda8`, the commit fizzy pins now.
+`fizzy-1.0.3+3.4.16-7` → `264af2a`; `fizzy-1.0.3+3.4.16-8` → `a02dda8`;
+`fizzy-1.0.3+3.4.16-9` → `5e41c70`, the commit fizzy pins now.
 
 ## Bumping
 

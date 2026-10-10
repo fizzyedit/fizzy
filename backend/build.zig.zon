@@ -8,8 +8,8 @@
         // building fizzyedit/SDL's `fizzy-3.4` with the patches this backend needs (fizzy's
         // docs/DEPENDENCIES.md). Pinned here, by the package that uses it, and nowhere else.
         .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/a02dda8d4c12bfd6132f24f4d00bcdbc8a274b52.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0SIUqgAsokLeE08dWLGiUN4cL3ZDOM94hrJ-DTam",
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/5e41c70e21f673d5b2ac6af2a3cba7e7aaa68489.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0UwUqgA04UDxXFbmfpE1e2Oo6wwX0LJuIMG82mis",
             .lazy = true,
         },
         // AppKit from Zig, for the macOS platform pieces (and an app's own, `objcModule`).

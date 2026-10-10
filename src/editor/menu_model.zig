@@ -173,6 +173,8 @@ const file_items = [_]Item{
     .{ .command = .{ .id = "fizzy.save", .title = .{ .static = "Save" }, .sf_symbol = "square.and.arrow.down", .enabled = canSave } },
     .{ .command = .{ .id = "fizzy.saveAs", .title = .{ .static = "Save As…" }, .sf_symbol = "arrow.down.doc", .enabled = hasActiveDoc } },
     .{ .command = .{ .id = "fizzy.saveAll", .title = .{ .static = "Save All" }, .sf_symbol = "square.and.arrow.down.on.square", .enabled = canSaveAll } },
+    .separator,
+    .{ .command = .{ .id = "fizzy.close", .title = .{ .static = "Close" }, .sf_symbol = "xmark", .enabled = hasActiveDoc } },
 };
 
 // The four SF Symbols below are the ones AppKit's own Edit menus use, so a fizzy Edit menu sits
