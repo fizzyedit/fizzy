@@ -17,6 +17,7 @@ const dvui = @import("dvui");
 const singleton_app = @import("singleton_app");
 const core = @import("core");
 const profile = @import("../profile.zig");
+const restart = @import("../restart.zig");
 
 const log = std.log.scoped(.singleton);
 
@@ -55,6 +56,10 @@ pub fn earlyStartup(gpa: std.mem.Allocator, main_init: std.process.Init) !void {
     state.allocator = gpa;
     const resolved = try collectAndResolveArgv(gpa, main_init);
     state.resolved_argv = resolved;
+    // Started by a restart's handover: the old instance still holds the lock, and would be handed
+    // this launch. It is taken once the old one has let go (`restart.awaitHandover`, then
+    // `acquireLock`).
+    if (restart.startedByHandover()) return;
     try acquireLock(gpa, resolved);
 }
 
@@ -324,6 +329,7 @@ pub fn collectAndResolveArgv(
     var raw: std.ArrayList([]const u8) = .empty;
     defer raw.deinit(gpa);
     while (iter.next()) |arg| try raw.append(gpa, arg);
+    try restart.takeHandoverArg(gpa, &raw);
 
     const env_profile: ?[]const u8 = if (std.c.getenv(profile.env_var)) |v| std.mem.span(v) else null;
     const resolved = try resolveArgs(gpa, cwd, raw.items, env_profile);

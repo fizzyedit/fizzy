@@ -2184,6 +2184,9 @@ pub fn postInit(editor: *Editor) !void {
             if (std.process.executablePath(dvui.io, &buf)) |n| ExecutableWatcher.removeSetAside(buf[0..n]) else |_| {}
         }
 
+        // A restart into this executable hands the window over (`driveHandover`).
+        restart.hands_over = true;
+
         editor.app.settings_watcher = SettingsWatcher.init(editor.app.gpa, editor.app.config_folder) catch |err| blk: {
             dvui.log.warn("settings watcher: failed to init ({s}); external hand-edits / dropped-in plugins won't be picked up live", .{@errorName(err)});
             break :blk null;
@@ -3726,6 +3729,8 @@ pub fn restartPending(_: *const Editor) bool {
 
 pub fn tick(editor: *Editor) !dvui.App.Result {
     // (A playing demo has already had its turn: `Entry.frameOnce` runs `Demo.frame` first.)
+    // A restart handing the window to the new instance: before anything reads this frame's input.
+    if (comptime restart.supported) editor.driveHandover();
     // Finger or mouse: how far a tap may drift, here and (through the context sync) in every
     // plugin — see `sdk.dvui_context.syncTouchInput`.
     sdk.dvui_context.syncTouchInput();
@@ -3877,8 +3882,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         if (!want_quit) continue;
 
         // A restart keeps every document, unsaved edits included, and asks nothing; one whose
-        // unsaved changes cannot be kept is asked about as for any quit.
-        if (comptime restart.supported) if (restart.requested() and editor.keepSessionForRestart()) continue;
+        // unsaved changes cannot be kept is asked about as for any quit. Handed over, the new
+        // instance has them already.
+        if (comptime restart.supported) if (restart.handedOver() or (restart.requested() and editor.keepSessionForRestart())) continue;
 
         var dirty_n: usize = 0;
         for (editor.app.open_files.values()) |doc| {
@@ -4844,7 +4850,7 @@ pub fn close(app: *Entry, editor: *Editor) void {
         return;
     }
     // A restart keeps every document instead of asking (`keepSessionForRestart`).
-    if (comptime restart.supported) if (restart.requested() and editor.keepSessionForRestart()) {
+    if (comptime restart.supported) if (restart.handedOver() or (restart.requested() and editor.keepSessionForRestart())) {
         editor.app.pending_app_close = true;
         return;
     };
@@ -5078,6 +5084,51 @@ fn syncExecutableWatcher(editor: *Editor) void {
         editor.app.executable_watcher = null;
         editor.executable_watch_failed = true;
     };
+}
+
+/// A restart into this executable hands the window over rather than closing it (`restart`): the
+/// session, the layout and the window's place saved, then the new instance started beside this
+/// one. Until it is ready this one stays on screen and takes no input, so nothing done after the
+/// save is lost; then its quit is posted. Should anything fail, the restart goes the ordinary way.
+fn driveHandover(editor: *Editor) void {
+    // The new instance's side: the lock, once the old instance has let go of it.
+    if (restart.startedByHandover()) {
+        if (restart.pollReleased(dvui.io, editor.app.gpa))
+            @import("app").single_instance.acquireLock(editor.app.gpa, &.{}) catch |err| dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
+        return;
+    }
+    if (restart.canHandOver()) {
+        const gpa = editor.app.gpa;
+        if (!editor.keepSessionForRestart()) {
+            // A document the session cannot keep: the ordinary quit asks about it.
+            restart.declineHandover();
+            return;
+        }
+        editor.saveRegions();
+        fizzy.backend.saveWindowGeometry(fizzy.entry().window);
+        const dir = std.fs.path.join(gpa, &.{ editor.app.config_folder, "handover" }) catch return restart.declineHandover();
+        defer gpa.free(dir);
+        restart.beginHandover(dvui.io, gpa, dir) catch |err| {
+            dvui.log.warn("restart: could not start the new instance beside this one ({t}); restarting the ordinary way", .{err});
+            return;
+        };
+        dvui.log.info("restart: handing the window over to the new instance", .{});
+    }
+    switch (restart.pollHandover(dvui.io)) {
+        .none, .ready => {},
+        .waiting => {
+            // The session is saved: anything typed now would be lost.
+            for (dvui.events()) |*e| e.handled = true;
+        },
+        .failed => {
+            dvui.log.err("restart: the new instance did not come up; carrying on in this one", .{});
+            if (KeptDocuments.sessionDir(editor.app.gpa, editor.app.config_folder)) |dir| {
+                defer editor.app.gpa.free(dir);
+                std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+            } else |_| {}
+            dvui.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
+        },
+    }
 }
 
 /// Write every open document to the session a restart reopens (`KeptDocuments`). False when one

@@ -382,6 +382,11 @@ pub fn AppInit(win: *dvui.Window) !void {
     // window animations.
     fizzy.backend.macosLaunchComplete();
 
+    // Started by a restart's handover: up and hidden, the session read. The old instance goes
+    // now, and this window shows over its own at the same place (`restart`); the lock follows
+    // once the old one lets go of it (`Editor.tick`).
+    if (restart.startedByHandover()) restart.signalReady(dvui.io);
+
     // Chrome and geometry are settled — reveal the window (created hidden).
     fizzy.backend.showWindow(win);
 }
