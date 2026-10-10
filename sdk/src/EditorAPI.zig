@@ -382,6 +382,12 @@ pub const VTable = struct {
     /// process's stderr).
     logLine: *const fn (ctx: *anyopaque, level: std.log.Level, scope: []const u8, message: []const u8) void,
 
+    /// A plugin dylib's panic, handed to the app's own panic handler (`sdk.dylib.panic`). A
+    /// dylib compiles its own std, whose handler would print the message to a stderr nobody reads
+    /// and abort; through here the message reaches the app's crash report, and on the web the
+    /// console. `first_trace_addr` is where the stack trace starts, in the plugin's frames.
+    panic: *const fn (ctx: *anyopaque, msg: []const u8, first_trace_addr: ?usize) noreturn,
+
     /// Draws a standard menu-item row (separator above, label + keybind hint, click-detect)
     /// inside whatever menu is currently open, and returns whether it was clicked this frame.
     /// `command_id` is the registered `Command` this row runs (e.g. `"text.format"`), or null
@@ -752,6 +758,10 @@ pub fn abortSaveAllQuit(self: EditorAPI) void {
 
 pub fn logLine(self: EditorAPI, level: std.log.Level, scope: []const u8, message: []const u8) void {
     self.vtable.logLine(self.ctx, level, scope, message);
+}
+
+pub fn panic(self: EditorAPI, msg: []const u8, first_trace_addr: ?usize) noreturn {
+    self.vtable.panic(self.ctx, msg, first_trace_addr);
 }
 
 pub fn drawMenuItem(self: EditorAPI, title: []const u8, command_id: ?[]const u8) bool {

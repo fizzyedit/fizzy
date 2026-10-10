@@ -1720,6 +1720,11 @@ drop straight into the plugins directory, exactly like §2.6.
 | `fizzy_plugin_set_dvui_context` | Host injects live dvui window/io before draw |
 | `fizzy_plugin_set_render_bridge` | Host injects the dvui proxy render bridge |
 
+The generated root also declares the dylib's `std_options` (its logging reaches fizzy's Output
+panel, `sdk.dylib.stdOptions`) and its `panic` (`sdk.dylib.panic`): a panic in plugin code goes
+to fizzy's own handler through `EditorAPI.panic`, so fizzy's crash report names the plugin and
+carries the message.
+
 ### Plugin dylib layout
 
 ```

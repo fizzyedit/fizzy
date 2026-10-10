@@ -12,7 +12,7 @@ const dvui = @import("dvui");
 const Host = @import("Host.zig");
 
 var gpa: std.mem.Allocator = undefined;
-var host_ptr: *Host = undefined;
+var host_ptr: ?*Host = null;
 /// Fizzy-owned plugin state injected before `register` (built-in static/dylib path).
 var injected_state: ?*anyopaque = null;
 
@@ -24,6 +24,12 @@ pub fn allocator() std.mem.Allocator {
 
 /// Fizzy `*Host` — registries, services, and the `EditorAPI` read surface.
 pub fn host() *Host {
+    return host_ptr.?;
+}
+
+/// The `*Host`, or null before fizzy has installed it: for code that may run before
+/// `register`, such as the panic handler.
+pub fn installedHost() ?*Host {
     return host_ptr;
 }
 
@@ -52,7 +58,7 @@ pub fn installRuntime(
 }
 
 fn hostFrostPane(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool {
-    const api = host_ptr.fizzy_api orelse return false;
+    const api = host_ptr.?.fizzy_api orelse return false;
     return api.frostPane(id, rect, corners, scale);
 }
 
