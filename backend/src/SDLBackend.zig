@@ -212,6 +212,14 @@ pub const Viewport = struct {
     /// its window lies over the main one: nothing for a menu of the main window's, the way to its
     /// float's band for one opened in a float that is out (`viewportMainOffset`).
     menu: bool = false,
+    /// Framed by the app, not the OS (`ViewportFrame.app`): borderless everywhere, macOS too.
+    app_frame: bool = false,
+    /// macOS, framed by the app: the size its shadow was last taken at, and how many frames more
+    /// to take it again. AppKit shapes a clear window's shadow from what is drawn in it, so it is
+    /// taken again once the window shows and after it changes size, a frame late, once the
+    /// picture is on screen.
+    shadow_size: [2]i32 = .{ 0, 0 },
+    shadow_frames: u8 = 0,
     main_offset: viewport_map.Point = .{ .x = 0, .y = 0 },
     /// To be put over the main window before the frame presents, once (`noteMainForward`).
     over_main: bool = false,
@@ -985,9 +993,22 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 /// popped out of was. Its own part of the frame is `at` moved into its band (`Viewport.frame`).
 /// Hidden until a frame is presented into it. Null when it cannot be made, or `max_viewports`
 /// are open.
-pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8) ?*Viewport {
-    return self.openViewport(at, title_text, .window);
+pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, frame: ViewportFrame) ?*Viewport {
+    return self.openViewport(at, title_text, .window, frame);
 }
+
+/// Who frames a viewport's window (`viewportOpen`).
+pub const ViewportFrame = enum {
+    /// The OS, where it can (`viewports.os_frame`): on macOS a titled window — the traffic lights,
+    /// corners, shadow and resizing from every edge, and full screen in a Space of its own — its
+    /// title bar transparent over the app's own header. Fizzy's floats.
+    os,
+    /// The app: borderless everywhere, the window exactly what the app draws in it — its header,
+    /// its close button, its corners (the window clear past them) — with the OS's shadow round it
+    /// on macOS. Moved and resized only where the app says (`viewportHints`). A dvui app's
+    /// floating windows, drawn as dvui draws them.
+    app,
+};
 
 const ViewportKind = enum { window, carry, overlay, menu };
 
@@ -1003,7 +1024,7 @@ const ViewportKind = enum { window, carry, overlay, menu };
 /// (`Viewport.dialog`).
 pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, ride: Ride, dialog: bool) ?*Viewport {
     if (comptime builtin.os.tag != .macos and builtin.os.tag != .windows) return null;
-    const vp = self.openViewport(at, "", .menu) orelse return null;
+    const vp = self.openViewport(at, "", .menu, .os) orelse return null;
     switch (comptime builtin.os.tag) {
         .macos => {
             _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
@@ -1078,7 +1099,7 @@ pub fn viewportMainOffset(_: *SDLBackend, vp: *Viewport, offset: viewport_map.Po
 /// window, in no window list, never focused. macOS. Placed and drawn as any viewport.
 pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
     if (comptime builtin.os.tag != .macos) return null;
-    return self.openViewport(at, "", .carry);
+    return self.openViewport(at, "", .carry, .os);
 }
 
 /// A window over a whole display that holds the OS's glass (`viewportOverlayGlass`) — Liquid Glass,
@@ -1088,7 +1109,7 @@ pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
 pub fn viewportOpenOverlay(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
     if (comptime builtin.os.tag != .macos) return null;
     if (!liquidGlassAvailable()) return null;
-    return self.openViewport(at, "", .overlay);
+    return self.openViewport(at, "", .overlay, .os);
 }
 
 /// Whether the OS has Liquid Glass to draw (`viewportOpenOverlay`): macOS 26.
@@ -1174,7 +1195,7 @@ pub fn viewportDisplayInMain(self: *SDLBackend) viewport_map.Rect {
     };
 }
 
-fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, role: ViewportKind) ?*Viewport {
+fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, role: ViewportKind, frame: ViewportFrame) ?*Viewport {
     const carry = role != .window;
     const menu = role == .menu;
     if (!viewportsAvailable()) return null;
@@ -1202,7 +1223,9 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // A carry window is neither: borderless, and not resizable — the app puts it where the view is.
     // A menu's window is a carry window that takes the pointer, never focused: the window it opened
     // from keeps the keyboard, as an OS menu leaves it.
-    const frame_flag: c.SDL_WindowFlags = if (builtin.os.tag == .macos and !carry) 0 else c.SDL_WINDOW_BORDERLESS;
+    // One framed by the app (`ViewportFrame.app`) is borderless on macOS as well.
+    const titled = builtin.os.tag == .macos and !carry and frame == .os;
+    const frame_flag: c.SDL_WindowFlags = if (titled) 0 else c.SDL_WINDOW_BORDERLESS;
     const size_flag: c.SDL_WindowFlags = if (carry) 0 else c.SDL_WINDOW_RESIZABLE;
     const focus_flag: c.SDL_WindowFlags = if (menu) c.SDL_WINDOW_NOT_FOCUSABLE else 0;
     const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag | focus_flag;
@@ -1226,7 +1249,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`plans/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewport_slots[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu };
+    self.viewport_slots[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu, .app_frame = frame == .app };
     const vp = &self.viewport_slots[slot].?;
     // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
     if (menu) return vp;
@@ -1240,6 +1263,10 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     }
     // The slot holds it for the window's life, so SDL may keep the pointer.
     _ = c.SDL_SetWindowHitTest(window, viewportHitTest, vp);
+    if (comptime builtin.os.tag == .macos) if (frame == .app) {
+        fizzy_macos_viewport_plain(cocoaWindow(window));
+        fizzy_macos_viewport_windows_item(cocoaWindow(window), title_text.ptr);
+    };
     return vp;
 }
 
@@ -1547,6 +1574,8 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_plain(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_reshadow(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_order_above(nswindow: ?*anyopaque, other: ?*anyopaque) void;
@@ -1996,6 +2025,16 @@ pub fn renderPresent(self: *SDLBackend) void {
     if (comptime builtin.os.tag == .macos) {
         for (&self.viewport_slots, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
+            if (vp.app_frame and vp.shown) {
+                if (vp.shadow_size[0] != vp.screen.w or vp.shadow_size[1] != vp.screen.h) {
+                    vp.shadow_size = .{ vp.screen.w, vp.screen.h };
+                    vp.shadow_frames = 2;
+                }
+                if (vp.shadow_frames > 0) {
+                    vp.shadow_frames -= 1;
+                    fizzy_macos_viewport_reshadow(cocoaWindow(vp.window));
+                }
+            }
             const first = !vp.shown and vp.pending != null;
             const reshaped = vp.passive and !vp.overlay and (vp.carry_radius != vp.carry_radius_shown or vp.carry_alpha != vp.carry_alpha_shown or vp.carry_size_shown[0] != vp.screen.w or vp.carry_size_shown[1] != vp.screen.h);
             const reglassed = vp.overlay and (vp.glass_dirty or vp.photo_dirty);

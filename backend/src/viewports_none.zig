@@ -34,7 +34,8 @@ pub fn available() bool {
 pub const Viewport = struct {};
 pub const Rect = struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
 
-pub fn open(_: Rect, _: [:0]const u8) ?*Viewport {
+pub const Frame = enum { os, app };
+pub fn open(_: Rect, _: [:0]const u8, _: Frame) ?*Viewport {
     return null;
 }
 pub fn close(_: *Viewport) void {}
