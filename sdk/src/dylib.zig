@@ -356,6 +356,18 @@ pub fn stdOptions(comptime id: []const u8) std.Options {
     return .{ .logFn = Impl.logFn };
 }
 
+/// The dylib's panic handler, which the generated root declares (`pub const panic =
+/// sdk.dylib.panic`): the panic goes to the app's (`EditorAPI.panic`), so a crash report carries
+/// the message and the plugin's frames. Before the host is installed (nothing of the plugin's has
+/// run yet), std's own.
+pub const panic = std.debug.FullPanic(forwardPanic);
+
+fn forwardPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    @branchHint(.cold);
+    if (runtime.installedHost()) |h| if (h.fizzy_api) |api| api.panic(msg, first_trace_addr orelse @returnAddress());
+    std.debug.defaultPanic(msg, first_trace_addr);
+}
+
 /// Identity passed to `exportEntry` — built-injected from `plugin.zig.zon` (see `readManifest`
 /// in `plugin_sdk.zig` / `helpers.zig`), never author-supplied `Zig` source. `version`/
 /// `min_sdk_version` are typed `SemanticVersion` (not strings) because the generated dylib root

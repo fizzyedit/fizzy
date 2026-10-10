@@ -500,6 +500,7 @@ fn generatedDylibRoot(
         \\const plugin = @import("plugin_impl");
         \\const opts = plugin.plugin_options;
         \\pub const std_options: std.Options = sdk.dylib.stdOptions(opts.id);
+        \\pub const panic = sdk.dylib.panic;
         \\comptime {
         \\    sdk.dylib.exportEntry(plugin, .{
         \\        .id = opts.id,

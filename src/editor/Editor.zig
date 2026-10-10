@@ -2312,6 +2312,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .resumeSaveAllQuit = fizzyResumeSaveAllQuit,
     .abortSaveAllQuit = fizzyAbortSaveAllQuit,
     .logLine = fizzyLogLine,
+    .panic = fizzyPanic,
     .drawMenuItem = fizzyDrawMenuItem,
     .askCommandArguments = fizzyAskCommandArguments,
     .loadPluginSettingsFile = fizzyLoadPluginSettingsFile,
@@ -2327,6 +2328,12 @@ fn fizzyAskCommandArguments(ctx: *anyopaque, command_id: []const u8) bool {
 fn fizzyLogLine(ctx: *anyopaque, level: std.log.Level, scope: []const u8, message: []const u8) void {
     _ = ctx;
     fizzy.OutputLog.appendLine(level, scope, message);
+}
+
+/// A plugin's panic, raised again as the app's own: the root's handler writes the crash report
+/// (`app.crash`), or on the web logs it to the console.
+fn fizzyPanic(_: *anyopaque, msg: []const u8, first_trace_addr: ?usize) noreturn {
+    std.debug.panicExtra(first_trace_addr, "{s}", .{msg});
 }
 
 /// See `EditorAPI.VTable.drawMenuItem`'s doc comment for why this widget construction has to
