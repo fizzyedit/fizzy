@@ -1,0 +1,79 @@
+name: Plugin rebuild loop
+
+# How long a plugin takes from an edit saved to a rebuilt binary installed, per code generator and
+# with incremental compilation (`scripts/plugin-loop/bench.py`; `docs/AGENTS_PLAN.md`, "Fast enough
+# to watch"). A measurement, not a gate: it is not part of `ci-ok`.
+#
+# On Linux CI rather than a workstation: forcing an experimental backend on a large compile can take
+# far more memory than LLVM, and a shared machine has crashed doing it.
+#
+# Run it by hand with a newer Zig to see what an upgrade buys (Zig 0.17 is expected to extend
+# incremental compilation): Actions > Plugin rebuild loop > Run workflow, `zig_version` = 0.17.0 or
+# `master`. A plugin that no longer builds on it fails the run, which is worth knowing too.
+
+on:
+  workflow_dispatch:
+    inputs:
+      zig_version:
+        description: "Zig to measure with (a version, or master)"
+        default: "0.16.0"
+      backends:
+        description: "Comma-separated: default, llvm, self-hosted"
+        default: "default,llvm,self-hosted"
+      watch_edits:
+        description: "Edits timed under zig build --watch -fincremental (0 to skip)"
+        default: "3"
+  pull_request:
+    paths:
+      - scripts/plugin-loop/**
+      - .github/workflows/plugin-loop.yml
+      - sdk/plugin_sdk.zig
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: ${{ inputs.zig_version || '0.16.0' }}
+
+jobs:
+  measure:
+    name: Measure (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      # Borrow the Linux test job's Zig cache (see ci.yml's "Restore Zig cache") so dependencies
+      # come unpacked and only the plugin compiles; never saved from here.
+      - name: Restore Zig cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: zig-${{ env.ZIG_VERSION }}-plugin-loop-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}
+          restore-keys: |
+            zig-${{ env.ZIG_VERSION }}-test-${{ runner.os }}-${{ runner.arch }}-
+      - name: Pre-create Zig cache tmp/
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch the plugin's dependencies (with retries)
+        working-directory: plugins/image
+        run: bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --fetch
+      - name: Machine
+        run: |
+          {
+            echo "### Runner"
+            echo
+            echo "\`$(nproc)\` cores, \`$(free -g | awk '/Mem:/ {print $2}')\` GB memory, zig \`$(zig version)\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Measure
+        run: |
+          python3 scripts/plugin-loop/bench.py \
+            --plugin plugins/image --id image \
+            --optimize Debug,ReleaseFast \
+            --backend "${{ inputs.backends || 'default,llvm,self-hosted' }}" \
+            --watch "${{ inputs.watch_edits || '3' }}" \
+            --summary "$GITHUB_STEP_SUMMARY"
