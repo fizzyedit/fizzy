@@ -287,6 +287,13 @@ now.
 3. In fizzy's `backend/`: `zig fetch --save=sdl https://github.com/fizzyedit/sdl_zig/archive/<sha>.tar.gz`,
    then build macOS, Linux and Windows.
 
+**What fizzy relies on that SDL does not promise.** `GpuRenderer` compiles a Metal program's
+source on a thread of its own (`Compile`): SDL documents no thread for `SDL_CreateGPUShader`, and
+in the pinned SDL it is safe there because `SDL_CreateGPUShader` reads only the device's fixed
+fields and `METAL_CreateShader` calls `newLibraryWithSource` on the `MTLDevice` (thread-safe) in its
+own autorelease pool. On a bump, check both still hold in `src/gpu/SDL_gpu.c` and
+`src/gpu/metal/SDL_gpu_metal.m`.
+
 **A fizzy-only SDL change:** the same, with only step 1's new change instead of a rebase.
 
 **Where a rebase conflicts.** Patch 1 touches one check in `SDL_ClaimWindowForGPUDevice`. Patch 2

@@ -119,9 +119,50 @@ const Draw = struct {
 };
 
 const Program = struct {
+    /// Null while `compile` runs, and for good when it failed.
     shader: ?*c.SDL_GPUShader,
     textures: u32,
     uniform_vec4s: u32,
+    /// Metal source compiling on a thread of its own; `programStatus` takes its shader once done.
+    compile: ?*Compile = null,
+};
+
+/// A program's Metal source compiling off the UI thread. Metal compiles source into a library the
+/// first time it sees it: 0.1 ms once the system's shader cache has it, but 40 ms cold, and 240 ms
+/// on a busy machine, and the first frosted surface (a menu, the profiler, a dialog) asked for its
+/// glass program from inside a frame. The program reads `compiling` meanwhile, and its callers
+/// draw without it (`programs.Program.ready` keeps frames coming until it is there).
+///
+/// SDL does not document `SDL_CreateGPUShader` as safe off the thread that made the device. In the
+/// SDL fizzy pins it is: the wrapper reads only the device's fixed fields, and Metal's
+/// `METAL_CreateShader` calls `newLibraryWithSource` on the `MTLDevice` (thread-safe by Apple's
+/// documentation) inside its own autorelease pool, touching no renderer state; its error is
+/// thread-local. Check `SDL_gpu_metal.m` again when bumping SDL (docs/DEPENDENCIES.md). SPIR-V and
+/// DXIL are compiled already and load in a moment, so they stay on the calling thread.
+const Compile = struct {
+    thread: std.Thread,
+    /// The source, copied: a plugin's is in its image, which may unload before this finishes.
+    code: []u8,
+    samplers: u32,
+    uniform_buffers: u32,
+    device: *c.SDL_GPUDevice,
+    format: c.SDL_GPUShaderFormat,
+    shader: ?*c.SDL_GPUShader = null,
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn run(self: *Compile) void {
+        self.shader = createShader(self.device, self.format, self.code, c.SDL_GPU_SHADERSTAGE_FRAGMENT, self.samplers, self.uniform_buffers);
+        self.done.store(true, .release);
+    }
+
+    /// Wait for it, and take its shader (null when it failed).
+    fn finish(self: *Compile, gpa: std.mem.Allocator) ?*c.SDL_GPUShader {
+        self.thread.join();
+        const shader = self.shader;
+        gpa.free(self.code);
+        gpa.destroy(self);
+        return shader;
+    }
 };
 
 const Active = struct {
@@ -340,7 +381,10 @@ pub fn destroy(self: *GpuRenderer) void {
     var it = self.pipelines.valueIterator();
     while (it.next()) |p| c.SDL_ReleaseGPUGraphicsPipeline(self.device, p.*);
     self.pipelines.deinit(self.gpa);
-    for (self.programs.items) |p| if (p.shader) |s| c.SDL_ReleaseGPUShader(self.device, s);
+    for (self.programs.items) |*p| {
+        if (p.compile) |job| p.shader = job.finish(self.gpa);
+        if (p.shader) |s| c.SDL_ReleaseGPUShader(self.device, s);
+    }
     self.programs.deinit(self.gpa);
     for (self.samplers) |a| for (a) |b| for (b) |s| c.SDL_ReleaseGPUSampler(self.device, s);
     c.SDL_ReleaseGPUShader(self.device, self.vertex_shader);
@@ -389,15 +433,19 @@ pub fn setVSync(self: *GpuRenderer, on: bool) void {
 }
 
 fn makeShader(self: *GpuRenderer, code: []const u8, stage: c.SDL_GPUShaderStage, samplers: u32, uniform_buffers: u32) ?*c.SDL_GPUShader {
+    return createShader(self.device, self.shader_format, code, stage, samplers, uniform_buffers);
+}
+
+fn createShader(device: *c.SDL_GPUDevice, format: c.SDL_GPUShaderFormat, code: []const u8, stage: c.SDL_GPUShaderStage, samplers: u32, uniform_buffers: u32) ?*c.SDL_GPUShader {
     var info = std.mem.zeroes(c.SDL_GPUShaderCreateInfo);
     info.code = code.ptr;
     info.code_size = code.len;
-    info.entrypoint = if (self.shader_format == c.SDL_GPU_SHADERFORMAT_MSL) "main0" else "main";
-    info.format = self.shader_format;
+    info.entrypoint = if (format == c.SDL_GPU_SHADERFORMAT_MSL) "main0" else "main";
+    info.format = format;
     info.stage = stage;
     info.num_samplers = samplers;
     info.num_uniform_buffers = uniform_buffers;
-    return c.SDL_CreateGPUShader(self.device, &info) orelse {
+    return c.SDL_CreateGPUShader(device, &info) orelse {
         log.err("SDL_CreateGPUShader failed: {s}", .{c.SDL_GetError()});
         return null;
     };
@@ -1191,7 +1239,18 @@ pub fn programCreate(self: *GpuRenderer, source: NativeSource, textures: u32, un
         else => source.dxil,
     };
     if (code.len == 0) return 0;
-    const shader = self.makeShader(code, c.SDL_GPU_SHADERSTAGE_FRAGMENT, 1 + textures, if (uniform_vec4s > 0) 1 else 0) orelse return 0;
+    const samplers = 1 + textures;
+    const uniform_buffers: u32 = if (uniform_vec4s > 0) 1 else 0;
+    if (self.shader_format == c.SDL_GPU_SHADERFORMAT_MSL) {
+        if (self.compileOffThread(code, samplers, uniform_buffers)) |job| {
+            self.programs.append(self.gpa, .{ .shader = null, .compile = job, .textures = textures, .uniform_vec4s = uniform_vec4s }) catch {
+                if (job.finish(self.gpa)) |s| c.SDL_ReleaseGPUShader(self.device, s);
+                return 0;
+            };
+            return @intCast(self.programs.items.len);
+        }
+    }
+    const shader = self.makeShader(code, c.SDL_GPU_SHADERSTAGE_FRAGMENT, samplers, uniform_buffers) orelse return 0;
     self.programs.append(self.gpa, .{ .shader = shader, .textures = textures, .uniform_vec4s = uniform_vec4s }) catch {
         c.SDL_ReleaseGPUShader(self.device, shader);
         return 0;
@@ -1199,9 +1258,33 @@ pub fn programCreate(self: *GpuRenderer, source: NativeSource, textures: u32, un
     return @intCast(self.programs.items.len);
 }
 
+/// Start compiling `code` on a thread of its own (`Compile`); null when it cannot, and the
+/// caller compiles it here instead.
+fn compileOffThread(self: *GpuRenderer, code: []const u8, samplers: u32, uniform_buffers: u32) ?*Compile {
+    const job = self.gpa.create(Compile) catch return null;
+    const copy = self.gpa.dupe(u8, code) catch {
+        self.gpa.destroy(job);
+        return null;
+    };
+    job.* = .{ .thread = undefined, .code = copy, .samplers = samplers, .uniform_buffers = uniform_buffers, .device = self.device, .format = self.shader_format };
+    job.thread = std.Thread.spawn(.{}, Compile.run, .{job}) catch {
+        self.gpa.free(copy);
+        self.gpa.destroy(job);
+        return null;
+    };
+    return job;
+}
+
+/// 2 ready, 1 compiling, 0 failed or no such program.
 pub fn programStatus(self: *GpuRenderer, id: u32) u8 {
     if (id == 0 or id > self.programs.items.len) return 0;
-    return if (self.programs.items[id - 1].shader != null) 2 else 0;
+    const prog = &self.programs.items[id - 1];
+    if (prog.compile) |job| {
+        if (!job.done.load(.acquire)) return 1;
+        prog.shader = job.finish(self.gpa);
+        prog.compile = null;
+    }
+    return if (prog.shader != null) 2 else 0;
 }
 
 pub fn programBegin(self: *GpuRenderer, id: u32, textures: []const ?*anyopaque, uniforms: []const [4]f32) bool {
