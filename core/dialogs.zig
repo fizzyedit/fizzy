@@ -11,6 +11,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const rounding = @import("corners.zig");
 const liquid_glass = @import("gfx/liquid_glass.zig");
+const liquid_blob = @import("gfx/liquid_blob.zig");
 const motion = @import("motion.zig");
 const icon_tex = @import("gfx/icon.zig");
 const builtin = @import("builtin");
@@ -1207,28 +1208,32 @@ pub const BubbleSpinnerInit = struct {
     complete_elapsed_ns: ?i128 = null,
 };
 
-/// Finish animation after save (wall-clock, driven by the file flash timer):
-/// 1. **Sync** — bubbles around the ring sequentially grow to the same size, filling the ring.
-/// 2. **Pop** — ring radius expands quickly while dots shrink and fade.
-/// 3. **Check** — only the highlight checkmark until the flash window ends.
-const bubble_save_sync_ns: i128 = 400 * std.time.ns_per_ms;
-const bubble_save_pop_ns: i128 = 160 * std.time.ns_per_ms;
-pub const bubble_save_transition_ns: i128 = bubble_save_sync_ns + bubble_save_pop_ns;
+/// Finish after a save (wall-clock, driven by the caller's flash timer):
+/// 1. **Gather** — every bubble is pulled into the core, still boiling, and runs together with it.
+/// 2. **Swell** — the one bubble left fills out together, with a small wobble.
+/// 3. **Pop** — it bursts into a ring and a spray of droplets, and the check grows in through them.
+const bubble_gather_ns: i128 = 380 * std.time.ns_per_ms;
+const bubble_swell_ns: i128 = 120 * std.time.ns_per_ms;
+const bubble_pop_ns: i128 = 300 * std.time.ns_per_ms;
+/// From the pop to the check: the burst clears the middle first.
+const bubble_check_delay_ns: i128 = 80 * std.time.ns_per_ms;
+/// How long the check takes to grow in (`motion.enter`, so it overshoots as the motion level says).
+const bubble_check_grow_ns: i128 = 400 * std.time.ns_per_ms;
+pub const bubble_save_transition_ns: i128 = bubble_gather_ns + bubble_swell_ns + bubble_check_delay_ns;
 
 /// True when save-complete feedback is showing the check (tab close may appear on hover).
 pub fn bubbleSpinnerSaveInCheckPhase(complete_elapsed_ns: i128) bool {
     return complete_elapsed_ns >= bubble_save_transition_ns;
 }
-const bubble_save_check_fade_ns: i128 = 120 * std.time.ns_per_ms;
-const bubble_spinner_period_micros: i32 = 1_050_000;
-const bubble_dot_count: u32 = 9;
 
-/// Fizzy-themed bubble spinner. N small filled dots arranged on a ring; each pulses size
-/// and alpha in a sine wave with a phase offset around the circle, giving a wave of
-/// brightness that rotates — like bubbles rising in a fizzy drink.
+/// Fizzy's spinner: a bubble boiling in the middle that buds smaller bubbles off. Each leaves on a
+/// neck that thins and lets go, drifts out growing, and pops into a ring; bubbles that pass close
+/// run together (`core.liquid_blob`). Each bud leaves a golden angle round from the last, so the
+/// stream turns without ever lining up.
 ///
-/// When `init.save_done_elapsed_ns` is set, plays the save-complete finish (sync → pop → check)
-/// instead of the looping wave. `options.color(.text)` is the dot colour.
+/// When `init.complete_elapsed_ns` is set, plays the finish (gather → swell → pop → check) instead.
+/// `options.color(.text)` is the bubbles' colour. Runs at the motion speed; with motion off it
+/// stands still, and the finish is the check.
 pub fn bubbleSpinner(
     src: std.builtin.SourceLocation,
     opts: dvui.Options,
@@ -1246,77 +1251,219 @@ pub fn bubbleSpinner(
     if (wd.rect.empty()) return;
 
     const rs = wd.contentRectScale();
-    const text_color = options.color(.text).toColor();
+    const still = motion.off();
+    const now = dvui.frameTimeNS();
+    const t0 = dvui.dataGet(null, wd.id, "_t0", i128) orelse now;
+    dvui.dataSet(null, wd.id, "_t0", t0);
+    const t: f64 = if (still) 1.3 else @as(f64, @floatFromInt(now - t0)) / std.time.ns_per_s * motion.rate();
 
+    var frame: BubbleFrame = .{};
     if (init.complete_elapsed_ns) |elapsed_ns| {
-        if (elapsed_ns >= bubble_save_transition_ns) {
-            const check_elapsed = elapsed_ns - bubble_save_transition_ns;
-            const check_alpha = if (check_elapsed >= bubble_save_check_fade_ns)
-                1.0
-            else
-                @as(f32, @floatFromInt(check_elapsed)) / @as(f32, @floatFromInt(bubble_save_check_fade_ns));
-            bubbleSpinnerPaintCheck(rs, check_alpha);
-            return;
+        if (still or elapsed_ns >= bubble_save_transition_ns) {
+            const grow = if (still) 1 else @as(f32, @floatFromInt(elapsed_ns - bubble_save_transition_ns)) /
+                @as(f32, @floatFromInt(bubble_check_grow_ns));
+            frame.check = motion.enter(grow);
+            frame.check_alpha = motion.fade(grow);
         }
-        if (elapsed_ns < bubble_save_sync_ns) {
-            var spin_t: f32 = 0;
-            const spin: dvui.Animation = .{ .end_time = bubble_spinner_period_micros };
-            if (dvui.animationGet(wd.id, "_t")) |a| {
-                var aa = a;
-                if (aa.done()) {
-                    aa = spin;
-                    aa.start_time = a.end_time;
-                    aa.end_time += a.end_time;
-                    dvui.animation(wd.id, "_t", aa);
-                }
-                spin_t = aa.value();
-            } else {
-                dvui.animation(wd.id, "_t", spin);
-            }
-            bubbleSpinnerPaintSaveSync(rs.r, spin_t, text_color, elapsed_ns);
-            return;
+        if (!still) {
+            bubbleBoil(t, &frame);
+            bubbleFinish(&frame, elapsed_ns);
         }
-        bubbleSpinnerPaintSavePop(rs.r, text_color, elapsed_ns - bubble_save_sync_ns);
+        if (!still and elapsed_ns < bubble_save_transition_ns + @max(bubble_check_grow_ns, bubble_pop_ns))
+            dvui.refresh(null, @src(), wd.id);
+    } else {
+        bubbleBoil(t, &frame);
+        if (!still) dvui.refresh(null, @src(), wd.id);
+    }
+    bubblePaint(rs, &frame, options.color(.text).toColor());
+}
+
+/// The boiling, in units of the spinner's drawing radius (`bubblePaint`).
+const boil = struct {
+    /// Seconds between buds.
+    const period: f64 = 0.27;
+    /// Seconds a bud lives before it pops (±25%), and the pop.
+    const life: f32 = 1.0;
+    const pop: f32 = 0.22;
+    const core: f32 = 0.18;
+    /// How far apart bubbles still bridge (`liquid_blob.field`'s `k`).
+    const merge: f32 = 0.38;
+    /// Where a bud leaves the middle and how far out it gets (72–100% of `reach`).
+    const start: f32 = 0.08;
+    const reach: f32 = 0.74;
+    /// A bud's radius as it leaves and what it grows by (60–100% of `grow`) before it pops.
+    const bud: f32 = 0.09;
+    const grow: f32 = 0.195;
+    const wobble: f32 = 0.05;
+    /// How far a pop's ring spreads past the bubble.
+    const ring: f32 = 0.16;
+    const golden_angle: f64 = 2.39996322972865332;
+};
+
+/// One frame of bubbles, in `boil` units about the middle.
+const BubbleFrame = struct {
+    discs: [24]liquid_blob.Disc = undefined,
+    n: usize = 0,
+    rings: [12]Ring = undefined,
+    nr: usize = 0,
+    merge: f32 = boil.merge,
+    /// The check's size (past 1 while it overshoots) and opacity.
+    check: f32 = 0,
+    check_alpha: f32 = 0,
+
+    const Ring = struct { x: f32, y: f32, r: f32, a: f32 };
+
+    fn disc(self: *BubbleFrame, x: f32, y: f32, r: f32) void {
+        if (r <= 0.004 or self.n == self.discs.len) return;
+        self.discs[self.n] = .{ .c = .{ .x = x, .y = y }, .r = r };
+        self.n += 1;
+    }
+
+    fn ring(self: *BubbleFrame, x: f32, y: f32, r: f32, a: f32) void {
+        if (a <= 0 or self.nr == self.rings.len) return;
+        self.rings[self.nr] = .{ .x = x, .y = y, .r = r, .a = a };
+        self.nr += 1;
+    }
+};
+
+/// 0…1, the same for the same bud and salt every frame.
+fn bubbleHash(bud: i64, salt: u64) f32 {
+    var x: u64 = @as(u64, @bitCast(bud)) *% 16 +% salt +% 0x9E3779B97F4A7C15;
+    x = (x ^ (x >> 30)) *% 0xBF58476D1CE4E5B9;
+    x = (x ^ (x >> 27)) *% 0x94D049BB133111EB;
+    x ^= x >> 31;
+    return @as(f32, @floatFromInt(x >> 40)) / (1 << 24);
+}
+
+fn bubbleSmoothstep(edge0: f32, edge1: f32, x: f32) f32 {
+    const u = std.math.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+    return u * u * (3.0 - 2.0 * u);
+}
+
+fn bubbleEaseOut(x: f32) f32 {
+    const u = 1 - std.math.clamp(x, 0, 1);
+    return 1 - u * u * u;
+}
+
+/// The spinner at `t` seconds: the core, churning, and the buds out from it.
+fn bubbleBoil(t: f64, f: *BubbleFrame) void {
+    const tau = 2 * std.math.pi;
+    const pulse: f32 = @floatCast(0.5 + 0.5 * @sin(t * tau / (boil.period * 1.5)));
+    f.disc(0, 0, boil.core * (0.9 + 0.12 * pulse));
+    // The core churns: three bubbles inside it, each wandering off-centre at its own pace.
+    for (0..3) |i| {
+        const fi: f64 = @floatFromInt(i);
+        const a = t * (5 + fi * 1.7) + fi * 2.1;
+        const off: f32 = @floatCast(0.06 + 0.03 * @sin(t * 13 + fi * 4));
+        const size: f32 = @floatCast(0.62 + 0.08 * @sin(t * 9 + fi));
+        f.disc(off * @as(f32, @floatCast(@cos(a))), off * @as(f32, @floatCast(@sin(a))), boil.core * size);
+    }
+
+    const span: f64 = boil.life * 1.25 + boil.pop;
+    var j: i64 = @intFromFloat(@floor((t - span) / boil.period));
+    const last: i64 = @intFromFloat(@floor(t / boil.period));
+    while (j <= last) : (j += 1) {
+        const born = @as(f64, @floatFromInt(j)) * boil.period;
+        if (born > t) continue;
+        const age: f32 = @floatCast(t - born);
+        const dir: f32 = @floatCast(@mod(@as(f64, @floatFromInt(j)) * boil.golden_angle, tau));
+        const life = boil.life * (0.75 + 0.5 * bubbleHash(j, 7));
+        const end = boil.reach * (0.72 + 0.28 * bubbleHash(j, 3));
+        const full = boil.bud + boil.grow * (0.6 + 0.4 * bubbleHash(j, 9));
+        const phase = bubbleHash(j, 5) * tau;
+
+        const g = @min(age / life, 1);
+        const out = boil.start + (end - boil.start) * (1 - (1 - g) * (1 - g));
+        const sway = boil.wobble * @sin(age * 10 + phase) * g;
+        const x = out * @cos(dir) - sway * @sin(dir);
+        const y = out * @sin(dir) + sway * @cos(dir);
+        const r = full * (0.35 + 0.65 * bubbleEaseOut(g * 1.4));
+        if (age < life) {
+            f.disc(x, y, r * bubbleSmoothstep(0, 0.1, age));
+            // The neck it leaves on, thinning until it lets go.
+            if (g < 0.35) f.disc(x * 0.55, y * 0.55, r * 0.75 * (1 - bubbleSmoothstep(0.05, 0.35, g)));
+        } else {
+            const v = (age - life) / boil.pop;
+            if (v < 1) f.ring(x, y, r + boil.ring * bubbleEaseOut(v), 1 - v);
+        }
+    }
+}
+
+/// The finish over the boiling `f` at `elapsed_ns` since the save: gather, swell, pop.
+fn bubbleFinish(f: *BubbleFrame, elapsed_ns: i128) void {
+    const micros = struct {
+        fn of(ns: i128) f32 {
+            return @floatFromInt(@divTrunc(ns, std.time.ns_per_us));
+        }
+    }.of;
+    const e = micros(elapsed_ns);
+    const gather = micros(bubble_gather_ns);
+    const swell = micros(bubble_swell_ns);
+    const gathered: f32 = 0.4;
+    const swollen: f32 = 0.54;
+    if (e < gather) {
+        const u = e / gather;
+        const g = if (u < 0.5) 4 * u * u * u else 1 - std.math.pow(f32, -2 * u + 2, 3) / 2;
+        for (f.discs[0..f.n]) |*d| {
+            d.c = .{ .x = d.c.x * (1 - g), .y = d.c.y * (1 - g) };
+            d.r += (gathered - d.r) * g;
+        }
+        f.merge = @max(f.merge, gathered);
+        for (f.rings[0..f.nr]) |*r| r.a *= 1 - g;
         return;
     }
-
-    var t: f32 = 0;
-    const spin: dvui.Animation = .{ .end_time = bubble_spinner_period_micros };
-    if (dvui.animationGet(wd.id, "_t")) |a| {
-        var aa = a;
-        if (aa.done()) {
-            aa = spin;
-            aa.start_time = a.end_time;
-            aa.end_time += a.end_time;
-            dvui.animation(wd.id, "_t", aa);
-        }
-        t = aa.value();
-    } else {
-        dvui.animation(wd.id, "_t", spin);
+    f.n = 0;
+    f.nr = 0;
+    if (e < gather + swell) {
+        const g = (e - gather) / swell;
+        f.disc(0, 0, gathered + (swollen - gathered) * bubbleEaseOut(g) + @sin(g * 3 * std.math.pi) * 0.02 * (1 - g));
+        return;
     }
-
-    bubbleSpinnerPaintSpin(rs.r, t, text_color);
+    const q = (e - gather - swell) / micros(bubble_pop_ns);
+    if (q >= 1) return;
+    const burst = bubbleEaseOut(q);
+    f.merge = 0;
+    f.ring(0, 0, swollen + 0.5 * burst, 1 - q);
+    for (0..8) |i| {
+        const a = @as(f32, @floatFromInt(i)) * std.math.pi / 4 + 0.2;
+        const out = swollen + 0.4 * burst;
+        f.disc(out * @cos(a), out * @sin(a), 0.09 * (1 - q));
+    }
 }
 
-fn bubbleSpinnerGeom(r: dvui.Rect.Physical) struct {
-    center: dvui.Point.Physical,
-    ring_radius: f32,
-    dot_max_radius: f32,
-} {
-    const bounding_radius = @min(r.w, r.h) * 0.5;
-    return .{
-        .center = r.center(),
-        .ring_radius = bounding_radius * 0.78,
-        .dot_max_radius = bounding_radius * 0.18,
-    };
+fn bubblePaint(rs: dvui.RectScale, f: *const BubbleFrame, color: dvui.Color) void {
+    const side = @min(rs.r.w, rs.r.h);
+    // A bubble popping at the edge stays inside the spinner's own rect.
+    const unit = side * 0.5 * 0.85;
+    const c = rs.r.center();
+    var discs: [f.discs.len]liquid_blob.Disc = undefined;
+    for (f.discs[0..f.n], discs[0..f.n]) |d, *p| {
+        p.* = .{ .c = .{ .x = c.x + d.c.x * unit, .y = c.y + d.c.y * unit }, .r = d.r * unit };
+    }
+    // A cell a point and a half across, or a twenty-fourth of a big spinner: the edge between
+    // samples is interpolated, so it still reads round, and the grid stays a few hundred samples.
+    liquid_blob.fill(discs[0..f.n], f.merge * unit, rs.s, color, 0, .white, @max(1.5 * rs.s, side / 24));
+
+    for (f.rings[0..f.nr]) |r| {
+        var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
+        defer path.deinit();
+        path.addArc(.{ .x = c.x + r.x * unit, .y = c.y + r.y * unit }, r.r * unit, 2 * std.math.pi, 0, false);
+        path.build().stroke(.{
+            .thickness = @max(0.7 * rs.s, 0.06 * r.a * unit),
+            .color = .{ .color = color.opacity(@as(f32, @floatFromInt(color.a)) / 255 * r.a) },
+            .closed = true,
+        });
+    }
+    if (f.check_alpha > 0) bubbleSpinnerPaintCheck(rs, f.check, f.check_alpha);
 }
 
-/// Centered in the same content rect as the bubble ring (not a child `icon` widget).
-fn bubbleSpinnerPaintCheck(rs: dvui.RectScale, alpha: f32) void {
+/// Centered in the same content rect as the bubbles (not a child `icon` widget), `grow` its size.
+fn bubbleSpinnerPaintCheck(rs: dvui.RectScale, grow: f32, alpha: f32) void {
     // Match tab close X (`expand = .ratio` in the same slot). Lucide `check` has a bit more
     // viewbox padding than `x`, so render slightly larger than the content square.
     const slot = @min(rs.r.w, rs.r.h);
-    const side = slot * 1.08;
+    const side = slot * 1.08 * @max(grow, 0);
+    if (side < 1) return;
     const cx = rs.r.x + rs.r.w * 0.5;
     const cy = rs.r.y + rs.r.h * 0.5;
     const icon_rs: dvui.RectScale = .{
@@ -1335,114 +1482,6 @@ fn bubbleSpinnerPaintCheck(rs: dvui.RectScale, alpha: f32) void {
     }) catch |err| {
         dvui.logError(@src(), err, "bubble save check icon", .{});
     };
-}
-
-fn bubbleSpinnerPaintDot(
-    center: dvui.Point.Physical,
-    ring_radius: f32,
-    angle: f32,
-    dot_radius: f32,
-    color: dvui.Color,
-) void {
-    const dot_center: dvui.Point.Physical = .{
-        .x = center.x + ring_radius * @cos(angle),
-        .y = center.y + ring_radius * @sin(angle),
-    };
-    var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
-    defer path.deinit();
-    path.addArc(dot_center, dot_radius, 2 * std.math.pi, 0, true);
-    path.build().fillConvex(.{ .color = .{ .color = color } });
-}
-
-fn bubbleSpinnerSmoothstep(edge0: f32, edge1: f32, x: f32) f32 {
-    const t = std.math.clamp((x - edge0) / (edge1 - edge0), 0, 1);
-    return t * t * (3.0 - 2.0 * t);
-}
-
-fn bubbleSpinnerPaintSpin(r: dvui.Rect.Physical, t: f32, text_color: dvui.Color) void {
-    const geom = bubbleSpinnerGeom(r);
-    const dot_min_scale: f32 = 0.35;
-    const base_alpha_f: f32 = @floatFromInt(text_color.a);
-    const n = @as(f32, @floatFromInt(bubble_dot_count));
-
-    var i: u32 = 0;
-    while (i < bubble_dot_count) : (i += 1) {
-        const angle = -std.math.pi * 0.5 + 2 * std.math.pi * @as(f32, @floatFromInt(i)) / n;
-        const phase = @as(f32, @floatFromInt(i)) / n;
-        const local_t = @mod(t + phase, 1.0);
-        const pulse = @sin(std.math.pi * local_t);
-        const dot_radius = geom.dot_max_radius * (dot_min_scale + (1.0 - dot_min_scale) * pulse);
-        const alpha_floor: f32 = 0.25;
-        const alpha_mul = alpha_floor + (1.0 - alpha_floor) * pulse;
-        const dot_color: dvui.Color = .{
-            .r = text_color.r,
-            .g = text_color.g,
-            .b = text_color.b,
-            .a = @intFromFloat(base_alpha_f * alpha_mul),
-        };
-        bubbleSpinnerPaintDot(geom.center, geom.ring_radius, angle, dot_radius, dot_color);
-    }
-}
-
-/// Sequential sync: each bubble in turn reaches full size so the ring reads as filled.
-fn bubbleSpinnerPaintSaveSync(r: dvui.Rect.Physical, spin_t: f32, text_color: dvui.Color, elapsed_ns: i128) void {
-    const geom = bubbleSpinnerGeom(r);
-    const dot_min_scale: f32 = 0.35;
-    const fill_scale: f32 = 1.08; // slightly oversized so adjacent dots meet on the ring
-    const base_alpha_f: f32 = @floatFromInt(text_color.a);
-    const n = @as(f32, @floatFromInt(bubble_dot_count));
-    const sync_p = @as(f32, @floatFromInt(elapsed_ns)) / @as(f32, @floatFromInt(bubble_save_sync_ns));
-
-    var i: u32 = 0;
-    while (i < bubble_dot_count) : (i += 1) {
-        const angle = -std.math.pi * 0.5 + 2 * std.math.pi * @as(f32, @floatFromInt(i)) / n;
-        const phase = @as(f32, @floatFromInt(i)) / n;
-        const local_t = @mod(spin_t + phase, 1.0);
-        const wave = @sin(std.math.pi * local_t);
-
-        const slot = (@as(f32, @floatFromInt(i)) + 0.5) / n;
-        const lock = bubbleSpinnerSmoothstep(slot - 0.12, slot + 0.08, sync_p);
-        const pulse = wave * (1.0 - lock) + lock;
-        const dot_radius = geom.dot_max_radius * (dot_min_scale + (1.0 - dot_min_scale) * pulse * fill_scale);
-        const alpha_floor: f32 = 0.25;
-        const alpha_mul = alpha_floor + (1.0 - alpha_floor) * pulse;
-        const dot_color: dvui.Color = .{
-            .r = text_color.r,
-            .g = text_color.g,
-            .b = text_color.b,
-            .a = @intFromFloat(base_alpha_f * alpha_mul),
-        };
-        bubbleSpinnerPaintDot(geom.center, geom.ring_radius, angle, dot_radius, dot_color);
-    }
-}
-
-/// Ring expands outward while dots shrink and vanish.
-fn bubbleSpinnerPaintSavePop(r: dvui.Rect.Physical, text_color: dvui.Color, pop_elapsed_ns: i128) void {
-    const geom = bubbleSpinnerGeom(r);
-    const base_alpha_f: f32 = @floatFromInt(text_color.a);
-    const n = @as(f32, @floatFromInt(bubble_dot_count));
-    const pop_p = std.math.clamp(
-        @as(f32, @floatFromInt(pop_elapsed_ns)) / @as(f32, @floatFromInt(bubble_save_pop_ns)),
-        0,
-        1,
-    );
-    const pop_ease = 1.0 - std.math.pow(f32, 1.0 - pop_p, 3.0);
-    const ring_mul = 1.0 + 0.62 * pop_ease;
-    const dot_scale = 1.08 * (1.0 - pop_ease);
-    const alpha_mul = 1.0 - pop_ease;
-
-    var i: u32 = 0;
-    while (i < bubble_dot_count) : (i += 1) {
-        const angle = -std.math.pi * 0.5 + 2 * std.math.pi * @as(f32, @floatFromInt(i)) / n;
-        const dot_radius = geom.dot_max_radius * dot_scale;
-        const dot_color: dvui.Color = .{
-            .r = text_color.r,
-            .g = text_color.g,
-            .b = text_color.b,
-            .a = @intFromFloat(base_alpha_f * alpha_mul),
-        };
-        bubbleSpinnerPaintDot(geom.center, geom.ring_radius * ring_mul, angle, dot_radius, dot_color);
-    }
 }
 
 /// Subwindow id used for save-complete toasts. Distinct from the canvas subwindow so
