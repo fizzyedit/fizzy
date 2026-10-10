@@ -114,6 +114,10 @@ pub const CellSize = struct {
     /// frames settles at one line and stays there.
     col_w: f32,
     settled: bool,
+    /// Measured from a text layout on its first frame, which dvui wraps at an assumed 1000pt
+    /// rather than the column (`Stats.fresh_text_layouts`). Kept only as a placeholder for a cell
+    /// with nothing better, and never one of the two draws that settle it.
+    provisional: bool = false,
 };
 
 /// One table's column widths, and the inputs they were computed from. Recomputed when either
@@ -1917,11 +1921,19 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         //
         // The pin is released as soon as the block produces a measurement worth believing, which
         // for a table means every one of its rows has been measured at least once.
-        // Scoped to blocks containing a table, and to states where the cached number is one we
-        // believe. Reacting to *this* frame's contamination would always be a frame late — the
-        // garbage measurement has already been emitted by then — so the pin goes on as soon as
-        // there is something worth holding, and comes off only when a width change demotes the
-        // entry back to `.measured` and the block genuinely has to be re-measured.
+        // Scoped to states where the cached number is one we believe. Reacting to *this* frame's
+        // contamination would always be a frame late — the garbage measurement has already been
+        // emitted by then — so the pin goes on as soon as there is something worth holding, and
+        // comes off when a new measurement disagrees with it or a width change demotes the entry
+        // to `.stale` and the block genuinely has to be re-measured.
+        //
+        // Any block, not only one holding a table. A paragraph scrolled back into view lays its
+        // text out for the first time, and dvui wraps a first-frame text layout at an assumed
+        // width rather than the column, so it emits a line or two short for one frame and the
+        // scroll total twitches with it. The pin was scoped to tables while a pinned block was
+        // measured by its pin, which would have held a paragraph at its old height for ever; it
+        // is measured by its inner box now (`measured` below), so a pin hides a frame's bad
+        // layout and still learns a real change.
         const block_state = rs.blocks.stateAt(index);
         // ...and never while the column width is moving: that is precisely when the block has to
         // be allowed to relearn its height, and a pin there would hold it at its pre-resize size.
@@ -1935,13 +1947,13 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         // *up* turns the skip-spacer above the viewport into real widgets; their first-frame
         // height (dvui sizes from last frame's children, which is 0) is not `known_h`, so
         // everything below jumps, and next frame's anchor "corrects" it — the flash that
-        // only happens when scrolling up. Pin the *emitted* height to the table; measure
-        // the unconstrained inner box so `record` can still learn the real size.
+        // only happens when scrolling up. Pin the *emitted* height to the table; `record` still
+        // learns the real size from the unconstrained inner box (see `measured` below).
         const pin_for_above = known_h > 0 and !width_in_flux and y <= anchor_y;
         const pin_h: ?f32 = if (known_h > 0 and !width_in_flux and
             (pin_for_above or
                 (frozen and block_state != .estimated) or
-                (pinnable and rs.subtree_has_table.contains(@intFromPtr(ch.n))))) known_h else null;
+                pinnable)) known_h else null;
         var wrapper = box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .id_extra = index,
@@ -2001,11 +2013,18 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
             }) catch {};
         }
 
-        // Wrapper is what the scroll container saw. Inner is unconstrained — used only when
-        // we pinned for a block above the fold, so `record` can learn the real height
-        // without letting that height reach the layout this frame.
+        // Wrapper is what the scroll container saw. Inner is unconstrained, and is what any pinned
+        // block is measured by, so `record` learns the real height without letting it reach the
+        // layout this frame.
+        //
+        // *Any* pinned block, not only one pinned above the fold. A pinned wrapper emits exactly
+        // its pin, so measuring the wrapper files the pin back as a measurement. That is how a
+        // `.deferred` table — pinned at a height nobody believes — came out of the deferral with
+        // that same height recorded as a clean measurement, as soon as its rows were all measured:
+        // the guess, laundered into an answer. The synthetic sample's last table had a 46pt
+        // header-only measurement filed that way on its first frames.
         const emitted = (dvui.minSizeGet(wrapper_id) orelse dvui.Size{}).h;
-        const measured = if (pin_for_above)
+        const measured = if (pin_h != null)
             (dvui.minSizeGet(inner_id) orelse dvui.Size{}).h
         else
             emitted;
@@ -2026,10 +2045,9 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         // assumed width, not the column's (`Stats.fresh_text_layouts`), so the height is not this
         // block's at this width, and next frame's will be.
         const partial = rs.block_rows_pending > 0 or stats.fresh_text_layouts != fresh_before;
-        // A pinned block measured exactly what it was pinned to, which says nothing about what
-        // it wants to be. Filing that would promote a first, still-settling measurement to
-        // `.settled` at the lagged height — the freeze would then *persist* the very error it
-        // exists to hide from one click.
+        // Nothing is filed while a click holds the document still: a new height becomes next
+        // frame's `known_h`, and with it next frame's pin, which would move the document under
+        // the pointer the freeze exists to hold it still for.
         if (measured > 0 and (!frozen or pin_h == null))
             rs.blocks.record(ctx.gpa, index, .{ .h = measured, .partial = partial }, metrics, ctx.column_width);
         const after_h = rs.blocks.heightAt(index, metrics, ctx.column_width);
@@ -2859,10 +2877,27 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                                 cs.size
                             else
                                 .{ .w = 0, .h = dvui.Font.theme(.body).lineHeight() };
+                            // A drawn cell with a settled size at this width is held to at least
+                            // that height, as a culled one is held to exactly it. Its text may be
+                            // laid out for the first time this frame — always so when the reader
+                            // scrolls a row into view — and dvui wraps that at an assumed width,
+                            // short. The grid sizes the row from what its cells report, so the
+                            // short frame became next frame's row height and the table measured
+                            // short, *cleanly*, the frame after: a settled table lurching by a few
+                            // lines each time the reader scrolled into it.
+                            const held: ?CellSize = if (cached) |cs|
+                                (if (cs.settled and cs.col_w == cell_w) cs else null)
+                            else
+                                null;
                             const cell_box = g.cell(
                                 .{ .col = col, .row = body_row },
                                 banded.opts(body_row, cell_padding).override(
-                                    if (draw_cell) .{} else .{ .min_size_content = cell_placeholder },
+                                    if (!draw_cell)
+                                        .{ .min_size_content = cell_placeholder }
+                                    else if (held) |cs|
+                                        .{ .min_size_content = .{ .w = 0, .h = cs.size.h } }
+                                    else
+                                        .{},
                                 ),
                             );
                             if (row_anchor == null) {
@@ -2877,6 +2912,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                                 // Ids inside a cell hang off the cell widget, so restarting them
                                 // per cell keeps a skipped neighbour from shifting anything.
                                 ids.n = 0;
+                                const fresh_before = stats.fresh_text_layouts;
                                 renderInlineFlowContainer(cell, .{ .background = false }, ctx, ids);
                                 // Read before `deinit`, and with the padding taken back off:
                                 // `min_size_content` has the padding added to it again, so
@@ -2885,13 +2921,36 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                                     .w = @max(0, cell_box.data().min_size.w - cell_padding.x - cell_padding.w),
                                     .h = @max(0, cell_box.data().min_size.h - cell_padding.y - cell_padding.h),
                                 };
-                                const agrees = cached != null and cached.?.col_w == cell_w and
-                                    cached.?.size.w == measured.w and cached.?.size.h == measured.h;
-                                ctx.rs.cell_sizes.put(ctx.gpa, cell_key, .{
-                                    .size = measured,
-                                    .col_w = cell_w,
-                                    .settled = agrees,
-                                }) catch {};
+                                // A cell whose text was laid out for the first time this frame
+                                // measured a wrap at dvui's assumed width, not this column's, so it
+                                // came out short. It must not count as a draw: a row measured only
+                                // on budgeted frames, with gaps between, loses its text layouts in
+                                // every gap and is *always* on its first frame — two such draws
+                                // agree with each other perfectly, and the cell settled short.
+                                // It must not replace a real size either. A table re-entering the
+                                // draw set gets a new grid and new text layouts, and every cell it
+                                // drew on that frame overwrote a settled size with a short one.
+                                // Measured on the synthetic sample's last table: its final row
+                                // settled 59pt short, so the table measured 1789 off screen and
+                                // 1730 on it.
+                                const first_frame = stats.fresh_text_layouts != fresh_before;
+                                if (!first_frame) {
+                                    const agrees = cached != null and !cached.?.provisional and
+                                        cached.?.col_w == cell_w and
+                                        cached.?.size.w == measured.w and cached.?.size.h == measured.h;
+                                    ctx.rs.cell_sizes.put(ctx.gpa, cell_key, .{
+                                        .size = measured,
+                                        .col_w = cell_w,
+                                        .settled = agrees,
+                                    }) catch {};
+                                } else if (cached == null) {
+                                    ctx.rs.cell_sizes.put(ctx.gpa, cell_key, .{
+                                        .size = measured,
+                                        .col_w = cell_w,
+                                        .settled = false,
+                                        .provisional = true,
+                                    }) catch {};
+                                }
                             }
                             cell_box.deinit();
                             col += 1;

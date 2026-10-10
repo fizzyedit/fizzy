@@ -89,6 +89,19 @@ pub const Height = struct {
         /// Laid out once at the current width. dvui sizes a widget from what its children
         /// reported the frame before, so a first measurement is still settling.
         measured,
+        /// Laid out at a column width the document no longer has (`invalidateForWidth`). Far
+        /// closer to the truth than an estimate, so placement keeps using it, but it describes a
+        /// column that is gone: the first measurement at the new width, contaminated or not,
+        /// replaces it.
+        ///
+        /// This used to be `.measured` as well, and the two meanings could not be told apart.
+        /// `record` has to throw a stale height away in favour of even a contaminated measurement
+        /// (or a table never reflows after a resize), so it threw away every `.measured` height —
+        /// including a table's first clean measurement at the *current* width. The very next
+        /// frame that drew a few rows for the first time (dvui lays a new text layout out at an
+        /// assumed 1000pt width, so those rows come out short) then replaced a correct height with
+        /// a short one, and the document moved under a reader scrolling into the table.
+        stale,
         /// Two consecutive measurements agreed. Trustworthy; don't re-measure.
         settled,
         /// Laid out, but the measurement was contaminated — a table inside it still has rows
@@ -113,7 +126,7 @@ pub const Height = struct {
     /// width change resets the count, and scrolling to it draws it anyway.
     pub fn wantsMeasure(self: Height) bool {
         return switch (self.state) {
-            .estimated, .measured => true,
+            .estimated, .measured, .stale => true,
             .deferred => self.attempts < deferred_max_attempts,
             .settled => false,
         };
@@ -244,9 +257,9 @@ pub const Table = struct {
         const seeded: ?Height = if (e.hash != 0) self.by_source.get(e.hash) else null;
         // Carry the *state* across too, not just the number.
         //
-        // Flattening everything to `.measured` looked harmless and was not: `record` reads
-        // `.measured` as "a height from before a width change", and discards it in favour of even a
-        // contaminated measurement. A re-parse hands every table exactly one contaminated
+        // Flattening everything to `.stale` looked harmless and was not: `record` reads it as "a
+        // height from before a width change", and discards it in favour of even a contaminated
+        // measurement. A re-parse hands every table exactly one contaminated
         // measurement — the cell sizes the renderer keys by AST node pointer die with the old tree
         // — so on every keystroke a settled 900pt table was replaced by whatever that frame's
         // half-culled layout reported. Measured at 42pt in the test below: an 858pt lurch under the
@@ -427,16 +440,13 @@ pub const Table = struct {
         };
 
         if (mm.partial) {
-            // Keep what we had, but only when it is worth keeping: a height already confirmed at
-            // *this* width. A `.measured` entry here is one a width change just invalidated, so
-            // it describes a column the document no longer has — holding onto it would freeze the
-            // table at its pre-resize size. A contaminated measurement at the right width beats a
-            // clean one at the wrong width.
-            // Only `.measured` is excluded, and only because a width change is what produces it
-            // here: that height describes a column the document no longer has. An `.estimated`
-            // entry is kept — it is crude, but it is derived from the source and does not lurch
-            // when the reader scrolls, which a contaminated measurement very much does.
-            const keep = prev.h > 0 and prev.state != .measured;
+            // Keep what we had, unless it describes a column the document no longer has: holding
+            // onto a `.stale` height would freeze the table at its pre-resize size, and a
+            // contaminated measurement at the right width beats a clean one at the wrong width.
+            // Everything else is kept. A `.measured` height is a clean layout at this width, and an
+            // `.estimated` one is crude but derived from the source; neither lurches when the
+            // reader scrolls, which a contaminated measurement very much does.
+            const keep = prev.h > 0 and prev.state != .stale;
             const entry: Height = .{
                 .h = if (keep) prev.h else mm.h,
                 .state = .deferred,
@@ -451,7 +461,7 @@ pub const Table = struct {
         }
 
         const agrees = switch (prev.state) {
-            .measured, .settled => @abs(prev.h - mm.h) <= settle_epsilon,
+            .measured, .settled, .stale => @abs(prev.h - mm.h) <= settle_epsilon,
             .estimated, .deferred => false,
         };
         // A clean measurement clears the strike count: whatever was wrong with this block has
@@ -476,7 +486,7 @@ pub const Table = struct {
     ///
     /// Every wrapped block reflows, so no height is *current* any more — but a stale measurement is
     /// still far closer to the truth than an estimate, so heights are kept and merely demoted to
-    /// re-measurable. They must not be clamped toward the estimate: an image or a table occupies
+    /// `.stale`. They must not be clamped toward the estimate: an image or a table occupies
     /// one line of source, so its estimate is a dozen pixels against a real several hundred, and
     /// clamping collapsed the whole document's height model on every split drag.
     ///
@@ -489,7 +499,10 @@ pub const Table = struct {
         // could never learn the new one — the pin forced each measurement to equal the pin, so
         // the block agreed with itself forever and the table never reflowed.
         for (self.heights.items) |*e| {
-            e.state = .measured;
+            // An estimate stays one. It is re-derived from the column on every read, so it is
+            // already current, and its stored `h` is a placeholder (zero, from `appendExtent`)
+            // that a `.stale` slot would hand back as the block's height.
+            if (e.state != .estimated) e.state = .stale;
             // A new width is a fresh problem — give every block its attempts back.
             e.attempts = 0;
         }
@@ -932,8 +945,40 @@ test "width change keeps measurements instead of clamping them to estimates" {
     // The regression this guards: the height used to be clamped to `@min(h, estimate)`, which
     // collapsed 540 to ~13 on every split drag and took the document's height model with it.
     try testing.expectEqual(@as(f32, 540), t.heights.items[0].h);
-    try testing.expectEqual(Height.State.measured, t.stateAt(0));
+    try testing.expectEqual(Height.State.stale, t.stateAt(0));
     try testing.expect(t.heights.items[0].wantsMeasure());
+}
+
+// The table that moved under a reader scrolling into it. Its first clean measurement at this width
+// is a real answer; the frame after it draws a few rows for the first time, and dvui lays a new
+// text layout out at an assumed width, so those rows come out short and the block's measurement is
+// contaminated. That number must not replace the clean one. It did while "clean, at this width"
+// and "laid out at a width that is gone" were both `.measured`, because the second must be replaced.
+test "a contaminated measurement does not replace a clean one at the same width" {
+    const gpa = testing.allocator;
+    var t = testTable(gpa, 1, 1);
+    defer t.deinit(gpa);
+    _ = t.invalidateForWidth(600);
+
+    t.record(gpa, 0, .{ .h = 1789 }, tm, 600);
+    try testing.expectEqual(Height.State.measured, t.stateAt(0));
+    t.record(gpa, 0, .{ .h = 1730, .partial = true }, tm, 600);
+    try testing.expectEqual(@as(f32, 1789), t.heightAt(0, tm, 600));
+    try testing.expectEqual(Height.State.deferred, t.stateAt(0));
+}
+
+// The first width a pane learns is a width change too, and it used to turn every never-measured
+// block into a "measurement" of its placeholder height — zero — so the document's first real frame
+// placed every block it had not yet drawn at y=0 instead of by its estimate.
+test "a width change leaves a never-measured block on its estimate" {
+    const gpa = testing.allocator;
+    var t = testTable(gpa, 3, 4);
+    defer t.deinit(gpa);
+
+    try testing.expect(t.invalidateForWidth(600));
+    try testing.expectEqual(Height.State.estimated, t.stateAt(1));
+    try testing.expectEqual(t.estimate(1, tm, 600).?, t.heightAt(1, tm, 600));
+    try testing.expect(t.heightAt(1, tm, 600) > 0);
 }
 
 test "width change within epsilon is not a change" {
@@ -964,7 +1009,7 @@ test "a width change invalidates a deferred height too" {
     // the renderer keep pinning the block to its pre-resize size, and because a pinned block
     // measures exactly its pin, it agreed with itself forever and never reflowed.
     _ = t.invalidateForWidth(900);
-    try testing.expectEqual(Height.State.measured, t.stateAt(0));
+    try testing.expectEqual(Height.State.stale, t.stateAt(0));
     try testing.expect(t.heights.items[0].wantsMeasure());
 
     // ...and now a contaminated measurement at the new width is preferred over the old-width
