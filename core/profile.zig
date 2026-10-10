@@ -17,7 +17,10 @@
 //! (`hostFrameBegin`), and a plugin's `section` records into that. `abi` guards the layout — a
 //! plugin built against a different one records nothing rather than into the wrong fields.
 //!
-//! Costs nothing while the window is closed (`enabled` off): a scope is then one branch.
+//! Costs nothing while nobody is looking: a scope is then one branch. Two things record — the
+//! profiler window while it is open (`enabled`), and anyone who asks (`want`): a plugin's test
+//! holding its own cost to a budget, an automation client measuring what a change costs, a
+//! benchmark. `report` writes what was measured as ZON, the same numbers the window shows.
 const std = @import("std");
 const dvui = @import("dvui");
 const perf = @import("gfx/perf.zig");
@@ -25,7 +28,7 @@ const perf = @import("gfx/perf.zig");
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 3;
+pub const abi: u32 = 4;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -89,6 +92,11 @@ pub const Profiler = struct {
     /// Held still for a moment (the window's graph under the pointer): like `paused`, but the
     /// window sets it each frame it wants it.
     frozen: bool = false,
+    /// Recording asked for (`want`) until this time (`now`), window open or not.
+    wanted_until_ns: i128 = 0,
+    /// This frame records: the window is open or someone asked. Decided once, at the frame's
+    /// start, so a scope costs one branch either way.
+    active: bool = false,
 
     /// The last `history_len` frames: each one's work and submit, and each entry's time and
     /// calls in it.
@@ -232,7 +240,8 @@ pub const Profiler = struct {
 
     fn frameBegin(self: *Profiler, prev_submit_ns: ?u64) void {
         const t = now();
-        if (self.prev_frame_start != 0 and self.enabled and !self.paused) {
+        self.active = self.enabled or t < self.wanted_until_ns;
+        if (self.prev_frame_start != 0 and self.active and !self.paused) {
             self.win_interval_ns += @intCast(@max(0, t - self.prev_frame_start));
         }
         // The last frame's submit only exists now that the backend has finished it.
@@ -249,7 +258,7 @@ pub const Profiler = struct {
     }
 
     fn frameEnd(self: *Profiler) void {
-        if (!self.enabled or self.paused or self.frozen) {
+        if (!self.active or self.paused or self.frozen) {
             // Still clear the frame's times, or a held frame's add to the next one recorded.
             for (self.slice()) |*e| {
                 e.frame_ns = 0;
@@ -378,7 +387,7 @@ pub const Scope = struct {
 /// scope already open. What the host wraps each call into a plugin with.
 pub fn begin(owner: []const u8, name: []const u8) Scope {
     const p = current() orelse return .{};
-    if (!p.enabled or p.paused) return .{};
+    if (!p.active or p.paused) return .{};
     const idx = p.open(owner, name) orelse return .{};
     return .{ .p = p, .idx = idx };
 }
@@ -387,10 +396,147 @@ pub fn begin(owner: []const u8, name: []const u8) Scope {
 /// how a plugin marks the parts of a hook.
 pub fn section(name: []const u8) Scope {
     const p = current() orelse return .{};
-    if (!p.enabled or p.paused) return .{};
+    if (!p.active or p.paused) return .{};
     const owner = if (p.depth > 0) p.entries[p.stack[p.depth - 1]].owner else "?";
     const idx = p.open(owner, name) orelse return .{};
     return .{ .p = p, .idx = idx };
+}
+
+/// Record for the next `ms` milliseconds, whether or not the profiler window is open — or for
+/// longer, if someone already asked for longer. From any image: it records into the host's
+/// profiler. The next frame is the first recorded; `report` covers the half second
+/// (`window_ns`) before it, so ask for at least a second to read a full window.
+///
+/// Consumers: a plugin's test holding its own cost to a budget, a benchmark, an automation
+/// client measuring what a change costs — without the window open, or anyone reading a log.
+pub fn want(ms: u32) void {
+    const p = current() orelse return;
+    p.wanted_until_ns = @max(p.wanted_until_ns, now() + @as(i128, ms) * std.time.ns_per_ms);
+}
+
+pub const ReportOptions = struct {
+    /// Leave out scopes cheaper than this per frame, on average: most of a frame's scopes cost
+    /// next to nothing, and a reader wants the ones that do not.
+    min_ms: f64 = 0.01,
+};
+
+/// What the last window (`window_ns`) measured, as ZON, a line per item so two reports diff:
+/// the frame (rate, interval, fizzy's work, its worst, the backend's submit), each owner's own
+/// time costliest first — where to look for the slow plugin — and the scopes as a tree, each
+/// with its average, its self time, its worst and its calls per frame, `parent` an index into
+/// the list. Milliseconds throughout.
+pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io.Writer.Error!void {
+    const st = p.stats;
+    try w.print(".{{\n    .frame = .{{ .fps = {d:.1}, .interval_ms = {d:.3}, .work_ms = {d:.3}, .worst_work_ms = {d:.3}, ", .{
+        st.fps, millis(st.interval_ns), millis(st.work_ns), millis(@floatFromInt(st.worst_work_ns)),
+    });
+    if (st.submit_ns) |sub| try w.print(".submit_ms = {d:.3}, ", .{millis(sub)});
+    try w.print(".frames = {d}, .inputs_per_s = {d:.1} }},\n", .{ st.frames, st.inputs_per_s });
+
+    // Each owner's own time: the self time of every scope it owns.
+    var owners: [64]struct { name: []const u8, self_ns: f64 } = undefined;
+    var n_owners: usize = 0;
+    for (p.entries[0..p.count]) |e| {
+        const i = for (owners[0..n_owners], 0..) |o, i| {
+            if (std.mem.eql(u8, o.name, e.owner)) break i;
+        } else blk: {
+            if (n_owners == owners.len) continue;
+            owners[n_owners] = .{ .name = e.owner, .self_ns = 0 };
+            n_owners += 1;
+            break :blk n_owners - 1;
+        };
+        owners[i].self_ns += e.avg_self_ns;
+    }
+    std.mem.sort(@TypeOf(owners[0]), owners[0..n_owners], {}, struct {
+        fn lt(_: void, a: @TypeOf(owners[0]), b: @TypeOf(owners[0])) bool {
+            return a.self_ns > b.self_ns;
+        }
+    }.lt);
+    try w.writeAll("    .owners = .{\n");
+    for (owners[0..n_owners]) |o| {
+        if (millis(o.self_ns) < opts.min_ms) continue;
+        try w.print("        .{{ .owner = \"{f}\", .self_ms = {d:.3} }},\n", .{ std.zig.fmtString(o.name), millis(o.self_ns) });
+    }
+
+    // The scopes, depth first: a scope, then the scopes inside it.
+    try w.writeAll("    },\n    .scopes = .{\n");
+    var out_index: [max_entries]u16 = @splat(none);
+    var written: u16 = 0;
+    for (p.entries[0..p.count], 0..) |e, i| {
+        if (e.parent == none) try writeScope(p, w, @intCast(i), none, &out_index, &written, opts);
+    }
+    try w.writeAll("    },\n}\n");
+}
+
+fn writeScope(p: *const Profiler, w: *std.Io.Writer, idx: u16, parent_out: u16, out_index: *[max_entries]u16, written: *u16, opts: ReportOptions) std.Io.Writer.Error!void {
+    const e = p.entries[idx];
+    // A scope below the line is left out, and what is inside it hangs from its nearest shown
+    // ancestor.
+    var mine = parent_out;
+    if (millis(e.avg_ns) >= opts.min_ms) {
+        try w.print("        .{{ .owner = \"{f}\", .name = \"{f}\", .avg_ms = {d:.3}, .self_ms = {d:.3}, .max_ms = {d:.3}, .calls = {d:.1}", .{
+            std.zig.fmtString(e.owner), std.zig.fmtString(e.name), millis(e.avg_ns), millis(e.avg_self_ns), millis(@floatFromInt(e.max_ns)), e.avg_calls,
+        });
+        if (parent_out != none) try w.print(", .parent = {d}", .{parent_out});
+        try w.writeAll(" },\n");
+        mine = written.*;
+        out_index[idx] = mine;
+        written.* += 1;
+    }
+    for (p.entries[0..p.count], 0..) |c, i| {
+        if (c.parent == idx) try writeScope(p, w, @intCast(i), mine, out_index, written, opts);
+    }
+}
+
+fn millis(ns: f64) f64 {
+    return ns / std.time.ns_per_ms;
+}
+
+test "a report says what each owner and scope cost, as ZON that reads back" {
+    // The profiler's clock reads `dvui.io`, which no window has set up in a test of its own.
+    dvui.io = std.testing.io;
+    var p: Profiler = .{ .wanted_until_ns = std.math.maxInt(i96) };
+    // Two frames a window apart, so the second publishes averages.
+    for (0..2) |_| {
+        p.frameBegin(null);
+        const outer = p.open("fizzy", "draw").?;
+        const inner = p.open("text", "surface").?;
+        const until = now() + 2 * std.time.ns_per_ms;
+        while (now() < until) {}
+        p.close(inner);
+        p.close(outer);
+        p.win_start -= window_ns;
+        p.frameEnd();
+    }
+    var buf: [4096]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try report(&p, &w, .{});
+    const text = w.buffered();
+
+    const Report = struct {
+        frame: struct { fps: f64, interval_ms: f64, work_ms: f64, worst_work_ms: f64, submit_ms: ?f64 = null, frames: u32, inputs_per_s: f64 },
+        owners: []const struct { owner: []const u8, self_ms: f64 },
+        scopes: []const struct { owner: []const u8, name: []const u8, avg_ms: f64, self_ms: f64, max_ms: f64, calls: f64, parent: ?u16 = null },
+    };
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const r = try std.zon.parse.fromSliceAlloc(Report, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    // The plugin's own time is what it spent; fizzy's own is what was left once that is taken out.
+    try std.testing.expectEqualStrings("text", r.owners[0].owner);
+    try std.testing.expect(r.owners[0].self_ms >= 1.5);
+    try std.testing.expectEqual(@as(usize, 2), r.scopes.len);
+    try std.testing.expectEqualStrings("draw", r.scopes[0].name);
+    try std.testing.expectEqual(@as(?u16, 0), r.scopes[1].parent);
+}
+
+test "nothing records unless the window is open or someone asked" {
+    dvui.io = std.testing.io;
+    var p: Profiler = .{};
+    p.frameBegin(null);
+    try std.testing.expect(!p.active);
+    p.wanted_until_ns = now() + std.time.ns_per_s;
+    p.frameBegin(null);
+    try std.testing.expect(p.active);
 }
 
 test "scopes nest, and a frame's time folds into the window's averages" {
