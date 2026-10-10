@@ -1513,6 +1513,7 @@ const WebPluginRequest = struct {
         }
         const lib = arrival.lib orelse {
             dvui.log.err("web plugin '{s}' ({s}): the page could not load it", .{ req.id, req.url });
+            req.failed("the page could not fetch or link the plugin's module (offline, a changed download, or not a plugin)", null);
             gpa.free(req.url);
             return;
         };
@@ -1521,6 +1522,7 @@ const WebPluginRequest = struct {
         // replacing is still running and still owns its documents.
         const ready = PluginLoader.prepare(req.url, req.id, lib) catch |err| {
             dvui.log.err("web plugin '{s}' ({s}): refused: {s}", .{ req.id, req.url, @errorName(err) });
+            req.failed(App.pluginLoadFailureReason(err), lib);
             gpa.free(req.url);
             return;
         };
@@ -1543,6 +1545,7 @@ const WebPluginRequest = struct {
             .arg_c = null,
         }) catch |err| {
             dvui.log.err("web plugin '{s}' ({s}): register failed: {s}", .{ req.id, req.url, @errorName(err) });
+            req.failed(App.pluginLoadFailureReason(err), lib);
             gpa.free(req.url);
             return;
         };
@@ -1551,6 +1554,8 @@ const WebPluginRequest = struct {
             return;
         };
         registered = true;
+        // As `loadUserPluginById` does: a build that loads retires any failure an earlier one left.
+        editor.app.clearFailedUserPlugin(req.id);
         App.syncLoadedPluginDvuiContexts(&editor.app);
         App.syncLoadedPluginRenderBridge(&editor.app);
         for (editor.app.host.plugins.items) |p| {
@@ -1570,6 +1575,23 @@ const WebPluginRequest = struct {
         PluginStore.webLoadSucceeded(req.id);
         dvui.log.info("web plugin '{s}' loaded from {s}", .{ req.id, req.url });
         editor.app.host.refresh();
+    }
+
+    /// This build did not take. With no build of this id running (a remembered build coming
+    /// back, a first install, a repair), the store's Installed pane shows it as failed and says
+    /// why, as the desktop does for a build on disk (`App.recordLoadFailure`) — before, the web
+    /// said so only in the console. An update the running build stays in front of is only noted,
+    /// as a failed reload is on the desktop; its row in the update window turns to Retry
+    /// (`PluginStore.webLoadFailed`).
+    fn failed(req: *const WebPluginRequest, reason: []const u8, lib: ?PluginLoader.WebDynLib) void {
+        const app = &req.editor.app;
+        if (app.host.pluginById(req.id) != null) return app.noteLoadFailed(req.id, reason);
+        const info: ?PluginLoader.PluginVersionInfo = if (lib) |l| PluginLoader.versionInfo(l) else null;
+        const detail: ?[]const u8 = if (info) |i| App.formatPluginProbeDetail(app.gpa, i) catch null else null;
+        defer if (detail) |d| app.gpa.free(d);
+        // `recordPluginFailure` appends: one card per id however many times it is retried.
+        app.clearFailedUserPlugin(req.id);
+        app.recordPluginFailure(req.id, reason, detail, if (info) |i| i.plugin_version else null, .{});
     }
 };
 
@@ -1934,9 +1956,11 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
             error.NotUnloadable => {}, // already gone
             else => return err,
         };
-        // As on the desktop: a reinstall asks again (see `clearPluginOwnershipRecord`).
+        // As on the desktop: a reinstall asks again (see `clearPluginOwnershipRecord`), and a
+        // refused build's card goes with it.
         editor.app.untrackDisabledPlugin(id);
         editor.clearPluginOwnershipRecord(id);
+        editor.app.clearFailedUserPlugin(id);
         editor.rebuildExtensionOwnerCache();
         return;
     }

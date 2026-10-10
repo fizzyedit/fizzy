@@ -886,24 +886,37 @@ pub fn themeFilenameToName(trimmed: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Human-readable, actionable explanation for a `PluginLoader.LoadError`.
+/// Human-readable, actionable explanation for a `PluginLoader.LoadError`. The desktop and web
+/// loaders have different error sets that share a name wherever they mean the same thing, so the
+/// reasons are kept by name (`load_failure_reasons`): an error either loader gains without a
+/// reason there is a compile error, as a missing switch prong would be.
 pub fn pluginLoadFailureReason(err: PluginLoader.LoadError) []const u8 {
     return switch (err) {
-        error.AbiMismatch => "built against an incompatible Fizzy SDK — rebuild the plugin against this Fizzy build",
-        error.AbiBuildEnvMismatch => "SDK versions match, but optimize mode does not match",
-        error.SdkVersionMismatch => "requires a newer Fizzy SDK — update Fizzy or install a matching plugin build",
-        error.PluginIdMismatch => "plugin id in the dylib does not match its filename — rename the file or fix manifest.id",
-        error.DylibOpenFailed => "the plugin library could not be opened (missing file, wrong architecture, or unresolved symbols)",
-        error.RegisterRejected => "the plugin's register() was rejected (often a duplicate plugin id — a built-in or another plugin already claims it)",
-        error.AbiFingerprintSymbolMissing,
-        error.RegisterSymbolMissing,
-        error.SetGlobalsSymbolMissing,
-        error.SetDvuiContextSymbolMissing,
-        error.SetRenderBridgeSymbolMissing,
-        error.SdkVersionSymbolMissing,
-        => "the plugin is missing required entry symbols — rebuild it from a current root.zig template",
+        inline else => |e| @field(load_failure_reasons, @errorName(e)),
     };
 }
+
+const missing_symbols_reason = "the plugin is missing required entry symbols — rebuild it from a current root.zig template";
+
+const load_failure_reasons = .{
+    .AbiMismatch = "built against an incompatible Fizzy SDK — rebuild the plugin against this Fizzy build",
+    .AbiBuildEnvMismatch = "SDK versions match, but optimize mode does not match",
+    .SdkVersionMismatch = "requires a newer Fizzy SDK — update Fizzy or install a matching plugin build",
+    .PluginIdMismatch = "plugin id in the dylib does not match its filename — rename the file or fix manifest.id",
+    .DylibOpenFailed = "the plugin library could not be opened (missing file, wrong architecture, or unresolved symbols)",
+    .RegisterRejected = "the plugin's register() was rejected (often a duplicate plugin id — a built-in or another plugin already claims it)",
+    .AbiFingerprintSymbolMissing = missing_symbols_reason,
+    .RegisterSymbolMissing = missing_symbols_reason,
+    .SetGlobalsSymbolMissing = missing_symbols_reason,
+    .SetDvuiContextSymbolMissing = missing_symbols_reason,
+    .SetRenderBridgeSymbolMissing = missing_symbols_reason,
+    .SdkVersionSymbolMissing = missing_symbols_reason,
+    // The web loader's own: a linked module without an entry point, a build that cannot load
+    // plugins at all, and an allocation failing on the way.
+    .LoadFailed = missing_symbols_reason,
+    .Unsupported = "this build of Fizzy cannot load plugins",
+    .OutOfMemory = "ran out of memory while loading",
+};
 
 pub fn formatPluginProbeDetail(allocator: std.mem.Allocator, info: PluginLoader.PluginVersionInfo) ![]const u8 {
     return std.fmt.allocPrint(allocator, "plugin {d}.{d}.{d}, min SDK {d}.{d}.{d}", .{
