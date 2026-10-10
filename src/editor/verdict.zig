@@ -53,7 +53,7 @@ pub const Expect = struct {
     max_sdl_warnings: ?u32 = null,
     /// OS windows alive when the tape ends; null: as many as when it began.
     os_windows: ?u32 = null,
-    /// macOS: the windows AppKit still holds when the tape ends (`Health.Snapshot.ns_windows`),
+    /// macOS: SDL's windows AppKit still holds when the tape ends (`Health.Snapshot.ns_windows`),
     /// visible or not; null: not checked. A window SDL destroyed that something keeps alive shows
     /// here and not in `os_windows`.
     ns_windows: ?u32 = null,

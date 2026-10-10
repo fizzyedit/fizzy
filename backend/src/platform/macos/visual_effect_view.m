@@ -118,9 +118,8 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
  * SDL tears down the window it made. No AppKit shadow: fizzy draws the float's own. Idempotent:
  * called again, it updates the mask.
  *
- * Both functions are called from the frame loop, outside any autorelease pool of SDL's: without
- * their own, what AppKit autoreleases here (the subview arrays among it) was never released, and
- * the window SDL closed stayed alive in the window server.
+ * Both run in the frame's autorelease pool (`SDLBackend.appIterate`), and in one of their own,
+ * which lets go of what AppKit autoreleases here (the subview arrays among it) as they return.
  */
 static NSImage *glassMask(double inset, double radius);
 
@@ -309,16 +308,23 @@ int fizzy_macos_viewport_under_main(void *nswindow, void *main_nswindow) {
 }
 
 /*
- * The windows AppKit holds for the app (`NSApp.windows`), and how many of them are on screen: the
- * health counters' check on windows SDL let go of that something kept alive (`Health.Snapshot`).
- * Asked only when a snapshot is taken.
+ * The windows SDL made that AppKit still holds for the app (in `NSApp.windows`), and how many of
+ * them are on screen: the health counters' check on windows SDL let go of that something kept
+ * alive (`Health.Snapshot`). SDL's windows only: AppKit makes windows of its own for the app — the
+ * text-input indicator's (`TUINSWindow`), the first time text is typed, kept from then on — which
+ * come and stay as the OS decides, not as fizzy does. Asked only when a snapshot is taken.
  */
 void fizzy_macos_window_counts(unsigned *all, unsigned *visible) {
     @autoreleasepool {
-        NSArray<NSWindow *> *windows = [NSApp windows];
+        Class sdl_window = NSClassFromString(@"SDL3Window");
+        unsigned n = 0;
         unsigned shown = 0;
-        for (NSWindow *w in windows) if ([w isVisible]) shown++;
-        *all = (unsigned)[windows count];
+        for (NSWindow *w in [NSApp windows]) {
+            if (sdl_window != nil && ![w isKindOfClass:sdl_window]) continue;
+            n++;
+            if ([w isVisible]) shown++;
+        }
+        *all = n;
         *visible = shown;
     }
 }

@@ -1,2 +1,6 @@
 // What the soak run (`tests/tapes/soak.zon`) is held to beyond `verdict.Expect`'s defaults.
-.{}
+.{
+    // macOS: SDL's windows AppKit still holds at the end are the main window alone — every float's
+    // window gone with its float (#316). Checked where AppKit is: CI's verdict run is Linux.
+    .ns_windows = 1,
+}

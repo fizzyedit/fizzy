@@ -101,8 +101,9 @@ pub const Snapshot = struct {
     swapchain_reconfigures: u64 = 0,
     /// OS windows SDL has alive: the main window and every viewport's.
     os_windows: u32 = 0,
-    /// macOS: the windows AppKit holds (`NSApp.windows`), and how many of them are on screen. A
-    /// window SDL let go of that something still holds shows here and not in `os_windows`.
+    /// macOS: the windows SDL made that AppKit still holds (`NSApp.windows`, less the OS's own),
+    /// and how many of them are on screen. A window SDL let go of that something still holds shows
+    /// here and not in `os_windows`.
     ns_windows: ?u32 = null,
     ns_windows_visible: ?u32 = null,
     sdl_errors: u32 = 0,
