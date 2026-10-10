@@ -384,7 +384,98 @@ pub fn initSDL() !void {
     }
 
     try toErr(c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_EVENTS), "SDL_Init in initWindow");
+    quit_signals.install();
 }
+
+/// SIGTERM and SIGINT wake the event wait, so an app asleep in it quits at once. SDL turns either
+/// into an `SDL_EVENT_QUIT`, but only at its next pump: its handler (`SDL_HandleSIG`) can do no
+/// more than set a flag, and nothing woke `SDL_WaitEvent`, so an idle app — no frame due, the wait
+/// without a timeout — slept on at 0% CPU until some other event came. The handler installed here
+/// runs SDL's, then writes a byte to a pipe; a thread parked on the other end pushes what `refresh`
+/// pushes (`SDL_PushEvent` is not safe in a signal handler, `write` is), and the pump after the wake
+/// sends SDL's quit. Only over a handler SDL installed: a signal left at its default (the
+/// `SDL_HINT_NO_SIGNAL_HANDLERS` hint) or set by the app is not ours to take.
+const quit_signals = struct {
+    const posix = std.posix;
+    const signals = [_]posix.SIG{ .TERM, .INT };
+
+    /// The handlers found installed (SDL's), run first by `handle` and put back by `uninstall`.
+    var chained: [signals.len]?posix.Sigaction = @splat(null);
+    var wake_fd: posix.fd_t = -1;
+
+    fn install() void {
+        if (comptime builtin.os.tag == .windows) return;
+        if (wake_fd == -1) wake_fd = spawnWaker() orelse return;
+        for (signals, &chained) |sig, *slot| {
+            if (slot.* != null) continue;
+            var old: posix.Sigaction = undefined;
+            posix.sigaction(sig, null, &old);
+            const h = old.handler.handler;
+            if (h == posix.SIG.DFL or h == posix.SIG.IGN or old.flags & posix.SA.SIGINFO != 0) continue;
+            var act = old;
+            act.handler = .{ .handler = handle };
+            posix.sigaction(sig, &act, null);
+            slot.* = old;
+        }
+    }
+
+    /// The pipe's write end, its read end given to a thread of its own that wakes the loop.
+    fn spawnWaker() ?posix.fd_t {
+        var fds: [2]posix.fd_t = undefined;
+        if (std.c.pipe(&fds) != 0) {
+            log.warn("quit signals: pipe failed, an idle app wakes for SIGTERM only on its next event", .{});
+            return null;
+        }
+        for (fds) |fd| _ = std.c.fcntl(fd, std.c.F.SETFD, @as(c_int, std.c.FD_CLOEXEC));
+        // Never block in the handler: a full pipe already holds a wake.
+        _ = std.c.fcntl(fds[1], std.c.F.SETFL, @as(c_int, @bitCast(posix.O{ .NONBLOCK = true })));
+        const thread = std.Thread.spawn(.{}, waker, .{fds[0]}) catch {
+            _ = std.c.close(fds[0]);
+            _ = std.c.close(fds[1]);
+            log.warn("quit signals: no wake thread, an idle app wakes for SIGTERM only on its next event", .{});
+            return null;
+        };
+        thread.detach();
+        return fds[1];
+    }
+
+    /// Puts SDL's handlers back, so `SDL_Quit` finds its own and resets the signals to their
+    /// defaults. The thread stays parked on its pipe for the rest of the process.
+    fn uninstall() void {
+        if (comptime builtin.os.tag == .windows) return;
+        for (signals, &chained) |sig, *slot| if (slot.*) |old| {
+            posix.sigaction(sig, &old, null);
+            slot.* = null;
+        };
+    }
+
+    fn handle(sig: posix.SIG) callconv(.c) void {
+        const saved_errno = std.c._errno().*;
+        defer std.c._errno().* = saved_errno;
+        for (signals, chained) |s, old| if (s == sig) {
+            if (old) |o| o.handler.handler.?(sig);
+        };
+        const byte: u8 = 0;
+        _ = std.c.write(wake_fd, @ptrCast(&byte), 1);
+    }
+
+    fn waker(fd: posix.fd_t) void {
+        var buf: [16]u8 = undefined;
+        while (true) {
+            const n = std.c.read(fd, &buf, buf.len);
+            if (n == 0) return;
+            if (n < 0) {
+                if (std.c._errno().* == @intFromEnum(posix.E.INTR)) continue;
+                return;
+            }
+            const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
+            defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
+            var ue = std.mem.zeroes(c.SDL_Event);
+            ue.type = c.SDL_EVENT_USER;
+            _ = c.SDL_PushEvent(&ue);
+        }
+    }
+};
 
 pub fn initWindow(init_options: InitOptions) !SDLBackend {
     try initSDL();
@@ -2022,6 +2113,7 @@ pub fn deinit(self: *SDLBackend) void {
         self.gpu.destroy();
         c.SDL_DestroyWindow(self.window);
         if (self.sdl_quit) {
+            quit_signals.uninstall();
             c.SDL_Quit();
         }
     }
