@@ -551,6 +551,9 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
     });
     lib.linker_allow_shlib_undefined = true;
     lib.root_module.export_symbol_names = &dylib_exports;
+    // The id a crash report names this exact binary by (fizzy's `app/crash/image.zig`). Mach-O
+    // always carries one (LC_UUID) and PE one with its PDB; an ELF image only when asked.
+    if (opts.target.result.ofmt == .elf) lib.build_id = .fast;
     // `FIZZY_PLUGIN_USE_LLVM=1` / `=0` forces the code generator for a plugin build; unset, Zig
     // chooses its default for the target. For measuring the rebuild
     // loop per backend (`scripts/plugin-loop/bench.py --backend`, `.github/workflows/plugin-loop.yml`):

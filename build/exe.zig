@@ -232,6 +232,9 @@ pub fn addFizzyExecutableForTarget(
         }),
     });
     exe.root_module.strip = false;
+    // The id a crash report names this exact binary by (`app/crash/image.zig`); see
+    // `sdk/plugin_sdk.zig`'s `create`.
+    if (resolved_target.result.ofmt == .elf) exe.build_id = .fast;
 
     exe.root_module.addImport("assets", assets_module);
     exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));

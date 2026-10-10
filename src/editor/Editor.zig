@@ -375,6 +375,7 @@ pub fn init(
         }
     }
     const palette_folder = try std.fs.path.join(app.allocator, &.{ config_folder, "palettes" });
+    @import("app").crash.writeTo(dvui.io, config_folder);
 
     var editor: Editor = .{
         .app = .{
@@ -1811,6 +1812,7 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) Unload
 
     // Unmap the image and free our bookkeeping for it.
     var loaded = editor.app.loaded_plugin_libs.orderedRemove(lib_index);
+    @import("app").crash.removeModule(@intFromPtr(loaded.set_globals));
     loaded.lib.close();
     editor.app.gpa.free(loaded.plugin_id);
     editor.app.gpa.free(loaded.path);
