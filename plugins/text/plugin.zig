@@ -146,7 +146,7 @@ pub fn register(host: *sdk.Host) !void {
         .title = "Insert Text…",
         .params = Insert.params,
         .runWith = Insert.bind(cmdInsert),
-        .isEnabled = cmdGoToLineEnabled,
+        .isEnabled = anyTextDoc,
         .icon = icons.tvg.lucide.@"text-cursor-input",
     });
     try host.registerCommand(.{
@@ -155,7 +155,7 @@ pub fn register(host: *sdk.Host) !void {
         .title = "Replace Text…",
         .params = Replace.params,
         .runWith = Replace.bind(cmdReplace),
-        .isEnabled = cmdGoToLineEnabled,
+        .isEnabled = anyTextDoc,
         .icon = icons.tvg.lucide.replace,
     });
     try host.registerCommand(.{
@@ -164,8 +164,17 @@ pub fn register(host: *sdk.Host) !void {
         .title = "Read Text",
         .params = Read.params,
         .runWith = Read.bind(cmdRead),
-        .isEnabled = cmdGoToLineEnabled,
+        .isEnabled = anyTextDoc,
         .icon = icons.tvg.lucide.@"file-text",
+    });
+    try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("text", "write"),
+        .owner = &plugin,
+        .title = "Write Text…",
+        .params = Write.params,
+        .runWith = Write.bind(cmdWrite),
+        .isEnabled = anyTextDoc,
+        .icon = icons.tvg.lucide.@"file-pen-line",
     });
 
     // "Format Document" is only meaningful when a language plugin claims the active
@@ -488,11 +497,12 @@ const Insert = sdk.Command.Params(struct {
     text: sdk.Command.Arg([]const u8, .{ .description = "The text to insert." }),
     line: sdk.Command.Arg(u32, .{ .description = "The line to insert at, counting from 1. 0 inserts at the caret, replacing any selection, as typing does." }) = .init(0),
     column: sdk.Command.Arg(u32, .{ .description = "The column on that line, counting from 1.", .min = 1 }) = .init(1),
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document to act on, by its path. Empty: the active one." }) = .init(""),
 });
 /// Inserts `text` as one undoable edit and returns where the caret landed, after it
 /// (`.{ .line, .column }`, from 1).
 fn cmdInsert(state: *anyopaque, args: Insert.Args, call: *sdk.Command.Call) anyerror!void {
-    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    const doc = try targetDoc(state, args.path, call);
     const start, const end = if (args.line == 0)
         .{ @min(doc.sel_start, doc.sel_end), @max(doc.sel_start, doc.sel_end) }
     else blk: {
@@ -507,12 +517,13 @@ const Replace = sdk.Command.Params(struct {
     find: sdk.Command.Arg([]const u8, .{ .description = "The exact text to find. Without `all`, it must occur exactly once." }),
     with: sdk.Command.Arg([]const u8, .{ .description = "What to put in its place." }),
     all: sdk.Command.Arg(bool, .{ .description = "Replace every occurrence rather than the one." }) = .init(false),
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document to act on, by its path. Empty: the active one." }) = .init(""),
 });
 /// Replaces `find` with `with`, as one undoable edit. Without `all`, a `find` that occurs more
 /// than once is refused rather than guessed at: the caller narrows it with more context. Returns
 /// how many were replaced and where the caret landed.
 fn cmdReplace(state: *anyopaque, args: Replace.Args, call: *sdk.Command.Call) anyerror!void {
-    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    const doc = try targetDoc(state, args.path, call);
     if (args.find.len == 0) return call.fail("find is empty", .{});
     const text = doc.text.items;
     const count = std.mem.count(u8, text, args.find);
@@ -540,11 +551,12 @@ fn cmdReplace(state: *anyopaque, args: Replace.Args, call: *sdk.Command.Call) an
 const Read = sdk.Command.Params(struct {
     from_line: sdk.Command.Arg(u32, .{ .description = "The first line to read, counting from 1.", .min = 1 }) = .init(1),
     to_line: sdk.Command.Arg(u32, .{ .description = "The last line to read. 0 reads to the end." }) = .init(0),
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document to act on, by its path. Empty: the active one." }) = .init(""),
 });
-/// The active document as it is in the editor, unsaved edits included: its path, the lines
-/// asked for, how many lines it has, and where the caret is.
+/// A document as it is in the editor, unsaved edits included: its path, the lines asked for, how
+/// many lines it has, and where the caret is.
 fn cmdRead(state: *anyopaque, args: Read.Args, call: *sdk.Command.Call) anyerror!void {
-    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    const doc = try targetDoc(state, args.path, call);
     const first = args.from_line - 1;
     const start = doc.byteOffsetForLineCharacter(first, 0);
     const end = if (args.to_line == 0 or args.to_line >= doc.line_count)
@@ -560,6 +572,40 @@ fn cmdRead(state: *anyopaque, args: Read.Args, call: *sdk.Command.Call) anyerror
         .caret = .{ .line = caret.line + 1, .column = caret.character + 1 },
         .unsaved = doc.isDirty(),
     });
+}
+
+const Write = sdk.Command.Params(struct {
+    text: sdk.Command.Arg([]const u8, .{ .description = "The document's whole new text." }),
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document to act on, by its path. Empty: the active one." }) = .init(""),
+});
+/// Makes a document's text `text`, as one undoable edit over only what differs: what is the same
+/// at the start and the end stays put, so the caret and the scroll stay where they were for a
+/// small change, and undo puts back exactly what was there. Returns whether anything changed and
+/// where the change begins (`.{ .changed, .line, .column }`, from 1).
+fn cmdWrite(state: *anyopaque, args: Write.Args, call: *sdk.Command.Call) anyerror!void {
+    const doc = try targetDoc(state, args.path, call);
+    const old = doc.text.items;
+    const new = args.text;
+    const prefix = std.mem.indexOfDiff(u8, old, new) orelse return call.returns(.{ .changed = false, .line = 1, .column = 1 });
+    var suffix: usize = 0;
+    while (suffix < old.len - prefix and suffix < new.len - prefix and old[old.len - 1 - suffix] == new[new.len - 1 - suffix]) suffix += 1;
+    try doc.replaceRange(prefix, old.len - suffix, new[prefix .. new.len - suffix]);
+    const at = doc.lineCharacterForByteOffset(prefix);
+    doc.pending_scroll_line = at.line;
+    try call.returns(.{ .changed = true, .line = at.line + 1, .column = at.character + 1 });
+}
+
+/// The document a text command acts on: the open one `path` names, else the active one.
+fn targetDoc(state: *anyopaque, path: []const u8, call: *sdk.Command.Call) !*Document {
+    if (path.len == 0) return activeTextDoc(state) orelse call.fail("no text document is active", .{});
+    const st: *State = @ptrCast(@alignCast(state));
+    return st.docByPath(path) orelse call.fail("{s} is not open in the text editor", .{path});
+}
+
+/// Whether any text document is open: the commands that take a `path` can reach it.
+fn anyTextDoc(state: *anyopaque) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return st.docs.count() > 0;
 }
 
 /// Scroll the caret into view and return where it is, from 1.

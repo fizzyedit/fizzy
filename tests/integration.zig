@@ -6775,6 +6775,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // Every replacement at once was one edit: one undo puts them all back.
         try editor.undo();
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
+
+        // By path: a document that is open but not the one in front, read and written.
+        const notes_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{notes});
+        defer gpa.free(notes_args);
+        try std.testing.expect(std.mem.startsWith(u8, (try read(host, notes_args)).text, "# Notes"));
+        try std.testing.expect(host.callCommand("text.read", ".{ .path = \"/not/open.txt\" }", host.arena()) == .failed);
+
+        // A write changes only what differs, as one edit, and one undo puts back exactly that.
+        const write_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{main_zig});
+        defer gpa.free(write_args);
+        const wrote = host.callCommand("text.write", write_args, host.arena());
+        try std.testing.expect(wrote == .ok);
+        try std.testing.expect(std.mem.indexOf(u8, wrote.ok.?, ".line = 2") != null);
+        try std.testing.expectEqualStrings("// top\nconst a = 42;\nconst b = 3;\n", (try read(host, "")).text);
+        try editor.undo();
+        try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
+        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = true") != null);
+        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = false") != null);
     }
 
     // New File's editor takes the keyboard: what is typed next lands in it, no click first.
