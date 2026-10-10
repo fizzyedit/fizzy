@@ -6926,6 +6926,53 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         editor.session = null;
     }
 
+    // A checkpoint (`Checkpoint`): what a run that did not quit cleanly left is read once at the
+    // next launch. Each write is a generation of files in the same folder (`saveGeneration`), the
+    // last one's removed once the new `session.zon` is in place; one cut off before any
+    // `session.zon` is neither read nor kept; and a restart's session, which is newer, wins.
+    {
+        const Checkpoint = fizzy.Editor.Checkpoint;
+        const config = editor.app.config_folder;
+        const dir = try Checkpoint.dir(gpa, config);
+        defer gpa.free(dir);
+        const cwd = std.Io.Dir.cwd();
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            defer kept.deinit();
+            try kept.saveGeneration(dir, 1);
+            try kept.saveGeneration(dir, 2);
+        }
+        // Only the second generation's files are left, beside its `session.zon`.
+        {
+            var d = try cwd.openDir(dvui.io, dir, .{ .iterate = true });
+            defer d.close(dvui.io);
+            var it = d.iterate();
+            while (try it.next(dvui.io)) |file| {
+                try std.testing.expect(std.mem.eql(u8, file.name, "session.zon") or std.mem.startsWith(u8, file.name, "2-"));
+            }
+        }
+        var recovered = Checkpoint.recover(gpa, config, false) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(recovered.docs.items.len > 0);
+        try std.testing.expect(recovered.docs.items[0].state != null);
+        recovered.deinit();
+        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+        try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
+
+        // Cut off before its first `session.zon`: nothing read, and nothing left.
+        try cwd.createDirPath(dvui.io, dir);
+        try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
+        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+
+        // A restart's session found: the checkpoint is older, and goes unread.
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            defer kept.deinit();
+            try kept.saveGeneration(dir, 1);
+        }
+        try std.testing.expect(Checkpoint.recover(gpa, config, true) == null);
+        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+    }
+
     try editor.deinit();
 }
 

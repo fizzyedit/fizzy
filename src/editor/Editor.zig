@@ -79,6 +79,7 @@ const FolderWatcher = Watch.FolderWatcher;
 
 pub const Workspace = workbench_mod.Workspace;
 pub const KeptDocuments = @import("KeptDocuments.zig");
+pub const Checkpoint = @import("Checkpoint.zig");
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
 pub const Sidebar = @import("Sidebar.zig");
@@ -134,6 +135,8 @@ session: ?KeptDocuments = null,
 /// Frames the session has been read for: its documents open in the first, its panes' selections
 /// apply in the next.
 session_frames: u8 = 0,
+/// Unsaved work kept against a crash (`Checkpoint`).
+checkpoint: Checkpoint = .{},
 /// The executable watcher could not start: not tried again every frame (`syncExecutableWatcher`).
 executable_watch_failed: bool = false,
 /// The `plugins` service, registered at this address in `postInit`.
@@ -422,6 +425,12 @@ pub fn init(
             defer app.allocator.free(dir);
             editor.session = KeptDocuments.loadSession(editor.app.gpa, dir);
         } else |_| {}
+        // The last run ended without quitting (a crash, a kill): what it had unsaved comes back
+        // the way a restart's documents do. A restart's session is newer, and wins.
+        if (Checkpoint.recover(editor.app.gpa, editor.app.config_folder, editor.session != null)) |kept| {
+            editor.session = kept;
+            KeptDocuments.noteRecoveredFromCheckpoint();
+        }
     }
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
@@ -3852,6 +3861,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.settings_watcher) |*w| w.tick(editor.configWatchSink());
     // fizzy itself rebuilt: start again as the new build, every document kept.
     editor.syncExecutableWatcher();
+    // Unsaved work kept against a crash.
+    editor.checkpoint.tick(editor);
     if (editor.app.executable_watcher) |*w| if (w.tick() and !restart.requested()) {
         dvui.log.info("restart: this executable was rebuilt; restarting into the new build", .{});
         restart.request();
@@ -3987,6 +3998,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 kept.finishDocuments(editor);
                 editor.session_frames += 1;
                 dvui.refresh(null, @src(), null);
+                if (KeptDocuments.recoveredFromCheckpoint())
+                    dvui.toast(@src(), .{ .message = "fizzy did not quit cleanly last time. Its unsaved changes are back." });
             }
         }
     }
@@ -5999,6 +6012,8 @@ pub fn deinit(editor: *Editor) !void {
     }
     if (editor.app.executable_watcher) |*w| w.deinit();
     editor.app.executable_watcher = null;
+    // A clean quit: nothing to recover at the next launch.
+    editor.checkpoint.deinit(editor);
     // Rebuilds still opening: their threads joined, what they opened dropped unregistered.
     editor.plugin_reloads.deinit(editor.app.gpa);
     if (editor.session) |*kept| kept.deinit();
