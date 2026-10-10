@@ -3269,12 +3269,26 @@ pub fn callbackFrames(on: bool) void {
     app_callback_frames = on;
 }
 
+/// SDL's main callbacks below run in an autorelease pool of their own each, drained as each
+/// returns. AppKit hands back much of what it is asked for autoreleased — a window, for one:
+/// `isZoomed` and AppKit's own lookups in its window list retain and autorelease it — and what is
+/// autoreleased is released only when the pool around it drains. SDL's loop on macOS
+/// (its generic `SDL_EnterAppMainCallbacks`) calls the callbacks with no pool around them, and
+/// only SDL's own calls drain one, so nothing autoreleased by the app's own calls into AppKit in a
+/// frame was ever released: every closed float's window stayed alive in `NSApp.windows` after
+/// SDL destroyed it (fizzy#316), and some 16,000 objects a second went the same way.
+const has_objc = builtin.target.os.tag.isDarwin();
+extern fn objc_autoreleasePoolPush() ?*anyopaque;
+extern fn objc_autoreleasePoolPop(pool: ?*anyopaque) void;
+
 // sdl3 callback
 fn appInit(appstate: ?*?*anyopaque, argc: c_int, argv: ?[*:null]?[*:0]u8) callconv(.c) c.SDL_AppResult {
     _ = appstate;
     _ = argc;
     _ = argv;
     //_ = c.SDL_SetAppMetadata("dvui-demo", "0.1", "com.example.dvui-demo");
+    const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
+    defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
 
     const app = dvui.App.get() orelse return error.DvuiAppNotDefined;
 
@@ -3343,6 +3357,8 @@ fn appInit(appstate: ?*?*anyopaque, argc: c_int, argv: ?[*:null]?[*:0]u8) callco
 // This function runs once at shutdown.
 fn appQuit(_: ?*anyopaque, result: c.SDL_AppResult) callconv(.c) void {
     _ = result;
+    const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
+    defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
 
     const app = dvui.App.get() orelse unreachable;
     if (appState.win_made) {
@@ -3357,6 +3373,8 @@ fn appQuit(_: ?*anyopaque, result: c.SDL_AppResult) callconv(.c) void {
 // sdl3 callback
 // This function runs when a new event (mouse input, keypresses, etc) occurs.
 fn appEvent(_: ?*anyopaque, event: ?*c.SDL_Event) callconv(.c) c.SDL_AppResult {
+    const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
+    defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
     if (builtin.target.os.tag == .ios) appState.ios_event_pending = true;
     if (event.?.type == c.SDL_EVENT_USER) {
         // SDL3 says this function might be called on whatever thread pushed
@@ -3405,6 +3423,9 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
         }
         appState.ios_event_pending = false;
     }
+
+    const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
+    defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
 
     Health.current.frameBegin(c.SDL_GetTicksNS());
     const trace = live_resize_trace.begin(&appState.back);
