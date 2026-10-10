@@ -66,6 +66,9 @@ pub const FizzyExecutable = struct {
     text_dylib: ?*std.Build.Step.Compile = null,
     markdown_dylib: ?*std.Build.Step.Compile = null,
     image_dylib: ?*std.Build.Step.Compile = null,
+    /// Fizzy's own native backend module (`src/backend/native/SDLBackend.zig`) the executable
+    /// draws with; null for dvui's `sdl3` backend.
+    backend: ?*std.Build.Module = null,
 };
 
 /// What the native executable draws with.
@@ -533,6 +536,7 @@ pub fn addFizzyExecutableForTarget(
         .text_dylib = text_dylib,
         .markdown_dylib = markdown_dylib,
         .image_dylib = image_dylib,
+        .backend = if (native_backend == .fizzy) native.backend else null,
     };
 }
 

@@ -562,6 +562,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // Where a viewport's OS window is on the desktop and where its part of the frame lies.
         // std-only (see viewport_map.zig); `SDLBackend` applies it.
         .{ "fizzy-viewport-map-tests", "src/backend/native/viewport_map.zig" },
+        // The native backend's health counters: frame-time percentiles, per-frame counts, SDL's
+        // log counted from any thread, a snapshot as ZON. std-only (see Health.zig).
+        .{ "fizzy-backend-health-tests", "src/backend/native/Health.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
         // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.
@@ -834,6 +837,23 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         });
         test_integration_step.dependOn(&b.addRunArtifact(replay_tests).step);
         check_integration_step.dependOn(&replay_tests.step);
+    }
+    // The native backend's health counters as SDL feeds them: its log counted, and passed on to
+    // the output it had. Needs SDL, no window.
+    if (main_fizzy.backend) |native_backend_module| {
+        const health_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/backend_health.zig"),
+        });
+        health_module.addImport("backend", native_backend_module);
+        const health_tests = b.addTest(.{
+            .name = "fizzy-backend-health-sdl-tests",
+            .root_module = health_module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(health_tests).step);
+        check_integration_step.dependOn(&health_tests.step);
     }
     // See `exe.zig` for why macOS needs the FSEvents backend.
     const nightwatch_test_dep = if (target.result.os.tag == .macos)
