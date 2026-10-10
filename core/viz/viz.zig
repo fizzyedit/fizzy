@@ -246,6 +246,16 @@ pub fn stat(src: std.builtin.SourceLocation, label: []const u8, value: f64, opts
     if (label.len > 0) dvui.labelNoFmt(@src(), label, .{}, .{ .font = mono, .color_text = .{ .color = dim }, .padding = .{ .w = 4 }, .gravity_y = 0.5 });
     var buf: [48]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, "{[v]d:.[p]}", .{ .v = value, .p = opts.decimals }) catch "?";
-    dvui.labelNoFmt(@src(), text, .{}, .{ .font = mono, .padding = .{}, .gravity_y = 0.5 });
+    // As wide as three digits and the decimals whatever the number, so a row of stats keeps
+    // its layout while the numbers change: "79" and "120" take the same room.
+    const digits = "000.000000000";
+    const room = mono.textSize(digits[0 .. 3 + @as(usize, if (opts.decimals > 0) 1 + @min(opts.decimals, 9) else 0)]).w;
+    {
+        // Right-aligned in its own box: in the row itself, a child pulled right is packed at the
+        // row's far end, after the unit.
+        var cell = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = room, .h = 0 }, .gravity_y = 0.5 });
+        defer cell.deinit();
+        dvui.labelNoFmt(@src(), text, .{}, .{ .font = mono, .padding = .{}, .gravity_x = 1 });
+    }
     if (opts.unit.len > 0) dvui.labelNoFmt(@src(), opts.unit, .{}, .{ .font = mono, .color_text = .{ .color = dim }, .padding = .{ .x = 3 }, .gravity_y = 0.5 });
 }
