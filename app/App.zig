@@ -173,6 +173,12 @@ keybind_conflicts: ?[]Keymap.Conflict = null,
 /// (`PluginStore.zig`), not a startup dialog.
 failed_user_plugins: std.ArrayListUnmanaged(FailedPlugin) = .empty,
 
+/// Each user plugin's loads this run, by id, for the `plugins` service (`pluginStatus`): a
+/// generation every load moves, why the last attempt failed, and the last load's timings. Kept
+/// apart from `failed_user_plugins`, which the store shows as a broken plugin: a rebuild that does
+/// not reload leaves a working plugin running, and is recorded here only.
+plugin_loads: std.StringHashMapUnmanaged(PluginLoad) = .empty,
+
 settings: Settings = undefined,
 
 recents: Recents = undefined,
@@ -443,6 +449,93 @@ pub fn appendLoadedPluginLib(app: *App, loaded: PluginLoader.LoadedLib) !void {
     var stored = loaded;
     stored.plugin_id = id_owned;
     try app.loaded_plugin_libs.append(app.gpa, stored);
+    app.noteLoaded(loaded.plugin_id);
+}
+
+pub const PluginLoad = struct {
+    generation: u32 = 0,
+    failures: u32 = 0,
+    /// Owned; null when the last attempt did not fail.
+    why: ?[]u8 = null,
+    opened_ms: f32 = 0,
+    swapped_ms: f32 = 0,
+};
+
+fn pluginLoad(app: *App, id: []const u8) ?*PluginLoad {
+    const gop = app.plugin_loads.getOrPut(app.gpa, id) catch return null;
+    if (!gop.found_existing) {
+        gop.key_ptr.* = app.gpa.dupe(u8, id) catch {
+            app.plugin_loads.removeByPtr(gop.key_ptr);
+            return null;
+        };
+        gop.value_ptr.* = .{};
+    }
+    return gop.value_ptr;
+}
+
+/// `id` loaded: every load moves its generation, and clears the last failure.
+fn noteLoaded(app: *App, id: []const u8) void {
+    const rec = app.pluginLoad(id) orelse return;
+    rec.generation +%= 1;
+    if (rec.why) |w| app.gpa.free(w);
+    rec.why = null;
+    rec.opened_ms = 0;
+    rec.swapped_ms = 0;
+}
+
+/// A load or a reload of `id` failed, saying why. A failed reload leaves the running build.
+pub fn noteLoadFailed(app: *App, id: []const u8, why: []const u8) void {
+    const rec = app.pluginLoad(id) orelse return;
+    rec.failures +%= 1;
+    const copy = app.gpa.dupe(u8, why) catch return;
+    if (rec.why) |w| app.gpa.free(w);
+    rec.why = copy;
+}
+
+/// How long `id`'s last load took: opening its binary, and swapping it in.
+pub fn noteLoadTimes(app: *App, id: []const u8, opened_ms: f32, swapped_ms: f32) void {
+    const rec = app.pluginLoad(id) orelse return;
+    rec.opened_ms = opened_ms;
+    rec.swapped_ms = swapped_ms;
+}
+
+/// `id` as the `plugins` service tells it.
+pub fn pluginStatus(app: *App, id: []const u8) sdk.services.plugins.Api.Status {
+    const rec: PluginLoad = app.plugin_loads.get(id) orelse .{};
+    const loaded = app.host.pluginById(id) != null;
+    const failed = for (app.failed_user_plugins.items) |f| {
+        if (std.mem.eql(u8, f.id, id)) break f.reason;
+    } else null;
+    return .{
+        .state = if (loaded) .loaded else if (failed != null) .failed else .not_loaded,
+        .generation = rec.generation,
+        .failures = rec.failures,
+        .why = rec.why orelse failed orelse "",
+        .opened_ms = rec.opened_ms,
+        .swapped_ms = rec.swapped_ms,
+    };
+}
+
+/// The `plugins` service over this app (`pluginStatus`); register it once `app` is at its final
+/// address.
+pub fn pluginsService(app: *App) sdk.services.plugins.Api {
+    const Impl = struct {
+        fn status(ctx: *anyopaque, id: []const u8) sdk.services.plugins.Api.Status {
+            const a: *App = @ptrCast(@alignCast(ctx));
+            return a.pluginStatus(id);
+        }
+        const vtable: sdk.services.plugins.Api.VTable = .{ .status = status };
+    };
+    return .{ .ctx = app, .vtable = &Impl.vtable };
+}
+
+pub fn deinitPluginLoads(app: *App) void {
+    var it = app.plugin_loads.iterator();
+    while (it.next()) |e| {
+        app.gpa.free(e.key_ptr.*);
+        if (e.value_ptr.why) |w| app.gpa.free(w);
+    }
+    app.plugin_loads.deinit(app.gpa);
 }
 
 /// Drop any recorded load-failure for `id` (freeing its strings). Called when the plugin later
@@ -921,6 +1014,7 @@ pub fn recordPluginFailure(
         app.gpa.free(reason_owned);
         return;
     }
+    app.noteLoadFailed(id, reason);
     app.failed_user_plugins.append(app.gpa, .{
         .id = id_owned,
         .reason = reason_owned,

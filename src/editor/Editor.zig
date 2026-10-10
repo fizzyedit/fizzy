@@ -127,6 +127,8 @@ demo: Demo = .detached,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
+/// The `plugins` service, registered at this address in `postInit`.
+plugins_service: sdk.services.plugins.Api = undefined,
 
 explorer: *Explorer,
 
@@ -760,6 +762,7 @@ fn unloadPluginLibs(editor: *Editor) void {
         if (f.detail) |d| editor.app.gpa.free(d);
     }
     editor.app.failed_user_plugins.deinit(editor.app.gpa);
+    editor.app.deinitPluginLoads();
 
     for (editor.app.disabled_plugin_ids.items) |id| editor.app.gpa.free(id);
     editor.app.disabled_plugin_ids.deinit(editor.app.gpa);
@@ -2140,6 +2143,10 @@ pub fn postInit(editor: *Editor) !void {
         editor.app.files_service = FilesService.api(editor);
         try editor.app.host.registerService(sdk.services.files.Api, &editor.app.files_service, null);
     }
+
+    // The `plugins` service: what each plugin's loading did (`App.pluginStatus`).
+    editor.plugins_service = editor.app.pluginsService();
+    try editor.app.host.registerService(sdk.services.plugins.Api, &editor.plugins_service, null);
 
     // The `automation` service: plugins play live tapes on the app as it is (`automation.Service`).
     // `editor.demo` was attached above, at its final address.

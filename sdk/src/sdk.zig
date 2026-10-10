@@ -111,6 +111,7 @@ pub const services = struct {
     pub const markdown = @import("services/markdown.zig");
     pub const wikilink = @import("services/wikilink.zig");
     pub const automation = @import("services/automation.zig");
+    pub const plugins = @import("services/plugins.zig");
 };
 
 /// SDK version + ABI fingerprint lock (`sdk_version`, `recorded_abi_fingerprints`).
