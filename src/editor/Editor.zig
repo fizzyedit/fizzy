@@ -330,7 +330,7 @@ pub fn init(
     // A profile is the config folder itself (`app.profile`); the platform's otherwise.
     const profile_root = @import("app").profile.root;
     const config_folder: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
-        app.root_path
+        try app.allocator.dupe(u8, app.root_path)
     else if (profile_root) |root|
         try app.allocator.dupe(u8, root)
     else config_folder_blk: {
@@ -365,7 +365,7 @@ pub fn init(
             }
         }
     }
-    const palette_folder = std.fs.path.join(app.allocator, &.{ config_folder, "palettes" }) catch config_folder;
+    const palette_folder = try std.fs.path.join(app.allocator, &.{ config_folder, "palettes" });
 
     var editor: Editor = .{
         .app = .{
@@ -399,6 +399,7 @@ pub fn init(
 
     {
         const settings_path = try std.fs.path.join(app.allocator, &.{ editor.app.config_folder, "settings.zon" });
+        defer app.allocator.free(settings_path);
         editor.app.settings = try Settings.load(app.allocator, settings_path, plugins_dir);
     }
 
@@ -579,9 +580,13 @@ pub fn init(
     }
 
     fizzy.core.perf.console_logging_enabled = Constants.perf_logging;
-    editor.app.recents = Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.app.config_folder, "recents.zon" })) catch .{
-        .folders = .init(app.allocator),
-    };
+    {
+        const recents_path = try std.fs.path.join(app.allocator, &.{ editor.app.config_folder, "recents.zon" });
+        defer app.allocator.free(recents_path);
+        editor.app.recents = Recents.load(app.allocator, recents_path) catch .{
+            .folders = .init(app.allocator),
+        };
+    }
 
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light));
 
@@ -5824,9 +5829,13 @@ pub fn deinit(editor: *Editor) !void {
     editor.app.quit_saves_in_flight.deinit(editor.app.gpa);
     editor.app.pending_close_after_save.deinit(editor.app.gpa);
 
-    editor.app.recents.save(editor.app.gpa, try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) catch {
-        dvui.log.err("Failed to save recents", .{});
-    };
+    {
+        const recents_path = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" });
+        defer editor.app.gpa.free(recents_path);
+        editor.app.recents.save(editor.app.gpa, recents_path) catch {
+            dvui.log.err("Failed to save recents", .{});
+        };
+    }
     editor.app.recents.deinit(editor.app.gpa);
 
     if (!demo_was_active) {
@@ -5851,6 +5860,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.app.settings.deinit(editor.app.gpa);
 
     editor.explorer.deinit();
+    editor.app.gpa.destroy(editor.explorer);
 
     PluginStore.deinit();
     editor.unloadPluginLibs();
@@ -5881,6 +5891,14 @@ pub fn deinit(editor: *Editor) !void {
     if (editor.app.folder) |folder| editor.app.gpa.free(folder);
     editor.app.releaseRetiredFolders();
     editor.app.folder_retired.deinit(editor.app.gpa);
+    // The documents themselves went with their owners' `deinit` above; this is the app's index.
+    editor.app.open_files.deinit(editor.app.gpa);
+    editor.themes.deinit(editor.app.gpa);
+    // What `init` joined onto the config folder, then the folder itself.
+    if (editor.app.host.plugins_dir) |dir| editor.app.gpa.free(dir);
+    editor.app.host.plugins_dir = null;
+    editor.app.gpa.free(editor.app.palette_folder);
+    editor.app.gpa.free(editor.app.config_folder);
     editor.app.arena.deinit();
 }
 

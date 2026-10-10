@@ -42,6 +42,7 @@ var plugin: sdk.Plugin = .{
 };
 
 const vtable: sdk.Plugin.VTable = .{
+    .deinit = deinit,
     .contributeKeybinds = contributeKeybinds,
 };
 
@@ -68,6 +69,13 @@ pub fn register(host: *sdk.Host) !void {
         .keywords = sdk.keywords.ide.main,
         .draw = drawCenter,
     });
+}
+
+/// What the file tree holds across frames lives in this copy of the plugin's globals — the
+/// dylib's when it is loaded as one — so it is freed from here, not by the app's `Workbench.deinit`,
+/// which runs in the copy linked into the app.
+fn deinit(_: *anyopaque) void {
+    files.deinitCaches();
 }
 
 fn drawFiles(_: ?*anyopaque) anyerror!dvui.App.Result {

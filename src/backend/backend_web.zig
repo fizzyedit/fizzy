@@ -300,6 +300,7 @@ pub fn setTitlebarColor(_: *dvui.Window, _: dvui.Color) void {}
 pub fn setSdlAppMetadata(_: [*:0]const u8, _: [*:0]const u8, _: [*:0]const u8) void {}
 
 pub fn setupMacOSMenuBar() void {}
+pub fn teardownMacOSMenuBar() void {}
 
 // Browser trackpad pinch arrives as a `wheel` event with `ctrlKey=true` (synthesized by every
 // modern browser). The bootstrap JS in `web/index.html` intercepts those events in the

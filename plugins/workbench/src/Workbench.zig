@@ -108,7 +108,6 @@ pub fn init(allocator: std.mem.Allocator) Workbench {
 
 pub fn deinit(self: *Workbench) void {
     self.loading.deinit(self.allocator);
-    files.deinitCaches();
     self.decorators.deinit(self.allocator);
     self.clearPendingNewFilePath();
 }

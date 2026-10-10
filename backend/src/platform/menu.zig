@@ -330,6 +330,24 @@ pub fn setExtras(menus: []const ExtraMenu, items: []const ExtraItem) void {
     log.debug("menu bar extras: {d} menus, {d} items", .{ extra_menus.items.len, extra_leaves.items.len });
 }
 
+/// Let go of the bar as the app quits: what it added at run time comes off, the hooks stop being
+/// asked (they read app state about to be freed), and what this file kept on the platform
+/// allocator is freed. The fixed menus stay on the bar for the rest of the process, every item
+/// enabled with its title as built. Not for a bar the app goes on using: `install` is once.
+pub fn deinit() void {
+    if (comptime builtin.os.tag != .macos) return;
+    hooks = null;
+    const gpa = dialogs.allocator();
+    for (extra_leaves.items) |e| e.parent.msgSend(void, "removeItem:", .{e.item.value});
+    extra_leaves.deinit(gpa);
+    extra_leaves = .empty;
+    if (main_menu) |bar| for (extra_menus.items) |e| bar.msgSend(void, "removeItem:", .{e.item.value});
+    extra_menus.deinit(gpa);
+    extra_menus = .empty;
+    bar_items.deinit(gpa);
+    bar_items = .empty;
+}
+
 /// Fill list submenu `index` (the `index`th `.list` entry across the bar) with `titles`, in
 /// order; an item chosen reports its position in `titles`. Hidden while empty.
 pub fn setList(index: usize, titles: []const []const u8) void {

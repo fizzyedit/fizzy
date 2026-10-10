@@ -1202,9 +1202,11 @@ pub fn isFileSelected(id: usize) bool {
     return selected_paths.contains(id);
 }
 
-/// Free everything this module holds across frames. Called from `Workbench.deinit`. Only the
-/// selection is left: the listing and path caches this used to tear down belong to the app now
-/// (see `table`), which is also why nothing here is per-copy any more.
+/// Free everything this module holds across frames: the selection and the row being carried (the
+/// listing and path caches belong to the app now, see `table`). Called from the plugin's own
+/// `deinit` (`plugin.zig`): these globals are per copy of the plugin, and the live copy is the
+/// dylib's when it is loaded as one — the app's `Workbench.deinit` would free the copy linked
+/// into the app, which never selected anything.
 pub fn deinitCaches() void {
     forgetCarried();
     selectionFreeAll();
