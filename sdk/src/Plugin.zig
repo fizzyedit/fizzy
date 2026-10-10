@@ -271,7 +271,11 @@ pub const VTable = struct {
     ///
     /// For a document whose path is an address rather than a name: a store page lives at
     /// `store://pages/<plugin id>.fizzyplugin`, because a path has to be stable enough to
-    /// reopen from a saved layout, and its tab should still read "Google Drive".
+    /// reopen from a saved layout, and its tab should still read "Google Drive". Or for one whose
+    /// name is not its path: a chat reads as its first question.
+    ///
+    /// Asked when the document's tab is made, and again whenever the owner calls
+    /// `Host.documentTitleChanged`; the Host keeps a copy, so the slice need only last the call.
     documentTitle: ?*const fn (state: *anyopaque, doc: DocHandle) ?[]const u8 = null,
 
     /// The context menu to open on a right-click inside this document, or null for none.
