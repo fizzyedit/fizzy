@@ -232,6 +232,17 @@ fn readVersionTriplet(get_fn: ?dylib_api.GetSdkVersionFn) std.SemanticVersion {
     return .{ .major = 0, .minor = 0, .patch = 0 };
 }
 
+/// The versions a linked module declares, read whether or not `prepare` accepts it — the web's
+/// `probeVersionInfo`, so a refused build is reported with the same detail as one on disk. Only
+/// the triplet getters run, which `prepare` already calls on a module whose fingerprint is wrong.
+pub fn versionInfo(lib: WebDynLib) PluginVersionInfo {
+    return .{
+        .plugin_version = readVersionTriplet(lib.lookup(dylib_api.GetSdkVersionFn, dylib_api.symbol_plugin_version)),
+        .built_with_sdk_version = readVersionTriplet(lib.lookup(dylib_api.GetSdkVersionFn, dylib_api.symbol_sdk_version)),
+        .min_sdk_version = readVersionTriplet(lib.lookup(dylib_api.GetSdkVersionFn, dylib_api.symbol_min_sdk_version)),
+    };
+}
+
 /// A linked module that has passed every check and has not yet been registered. Split from
 /// `register` so an update can find out whether the new build is acceptable *before* the running
 /// one is torn down: everything that can reject a module (fingerprint, SDK version, declared id,
