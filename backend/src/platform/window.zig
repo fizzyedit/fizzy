@@ -21,7 +21,6 @@ const NSWindowStyleMaskFullSizeContentView: c_ulong = 1 << 15;
 pub const ns_visual_effect_material: c_long = 15;
 
 // The window monitor (`FizzyWindowMonitor.m`), which follows the window through Spaces and zooms.
-extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_transition_active(cocoa_window: ?*anyopaque) c_int;
@@ -163,26 +162,23 @@ pub fn isMaximized(win: *dvui.Window) bool {
     return windowMaximized(win.backend.impl.window);
 }
 
-/// Whether `window` — the main window or a float's own — is maximized: zoomed, full screen, or in
-/// a fullscreen Space (on macOS through the whole of its way out of one). Nothing of the desktop
-/// behind it shows, and fizzy draws it opaque (`Editor.easeWindowOpacity`).
+/// Whether `window` — the main window or a float's own — is maximized: nothing of the desktop
+/// behind it shows, and fizzy draws it opaque (`Editor.easeWindowOpacity`). On macOS that is a
+/// fullscreen Space of its own (through the whole of its way out of one) or its chrome hidden — not
+/// zoomed: zoomed by its green button, or dragged to the top of the screen to fill it, it is still
+/// a window over the desktop, and keeps its translucency and its edge (the user). Elsewhere,
+/// maximized or full screen.
 pub fn windowMaximized(window: *c.SDL_Window) bool {
-    const flags = c.SDL_GetWindowFlags(window);
-    if (flags & c.SDL_WINDOW_MAXIMIZED != 0) return true;
     if (builtin.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(window),
             c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
             null,
-        );
-        if (raw_ptr != null) {
-            if (fizzy_macos_window_in_fullscreen_space(raw_ptr) != 0) return true;
-            if (fizzy_macos_window_is_zoomed(raw_ptr) != 0) return true;
-            if (fizzy_macos_window_chrome_hidden(raw_ptr) != 0) return true;
-        }
-        return false;
+        ) orelse return false;
+        return fizzy_macos_window_in_fullscreen_space(raw_ptr) != 0 or fizzy_macos_window_chrome_hidden(raw_ptr) != 0;
     }
-    return flags & c.SDL_WINDOW_FULLSCREEN != 0;
+    const flags = c.SDL_GetWindowFlags(window);
+    return flags & (c.SDL_WINDOW_MAXIMIZED | c.SDL_WINDOW_FULLSCREEN) != 0;
 }
 
 /// Whether `win` covers the desktop (`windowCovers`).
