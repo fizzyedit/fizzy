@@ -189,6 +189,14 @@ Fizzy adapts to two upstream behaviours rather than patching them:
    always taken. For the standard xkeyboard-config keymaps both paths give the same masks.
    Upstream `main` has the same problem. Upstream: worth proposing; the PR text is in #289.
 
+9. **Cocoa: a live resize AppKit ends without saying so ends all the same** (`f57c7e5`). AppKit
+   can end a live resize without posting `NSWindowDidEndLiveResizeNotification`: on macOS 26 a
+   window dragged to the top of the screen to fill it starts one and never says it ended. 4's
+   timer then ran on, having the Metal view display and the app draw a frame from that display
+   every tick, and the app never got back to its events (a beachball, the user). The timer now
+   asks the window whether it is still in a live resize (`inLiveResize`), and ends it when it is
+   not. Squash into 4 at the next rebase.
+
 On top of the patches, **the fork's own tests** (#280): `test/testfizzy.c` runs suites on SDL's
 test harness (`test/testautomation_fizzy*.c`), with no library code changed. Each suite checks one
 patch and must fail on the upstream release it is based on, or, for patch 8, on the fork without
@@ -212,8 +220,8 @@ its patch, and goes upstream in that patch's PR.
 
 Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
 `fizzy-3.4.16-4` → `2d6efde`; `fizzy-3.4.16-5` → `ee721bf`; `fizzy-3.4.16-6` → `4839ede`;
-`fizzy-3.4.16-7` → `36dda37`; `fizzy-3.4.16-8` → `a518aaf`; `fizzy-3.4.16-9` → `011a2dc`, what
-sdl_zig pins now.
+`fizzy-3.4.16-7` → `36dda37`; `fizzy-3.4.16-8` → `a518aaf`; `fizzy-3.4.16-9` → `011a2dc`;
+`fizzy-3.4.16-10` → `f57c7e5`, what sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -253,12 +261,15 @@ sdl_zig pins now.
     an OpenGL ES renderer, and the suite's jobs stop after 20 minutes, writing progress to stderr
     so a hang shows where it stopped. Then the pin moves to SDL's `fizzy-3.4.16-9` (`5e41c70`);
     squash the pin into 1 at the next rebase.
+11. **Build fizzyedit/SDL `fizzy-3.4.16-10`** (`e8f4ac0`): the pin moves to SDL's live-resize fix
+    (9). Squash into 1 at the next rebase.
 
 Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
 `fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`;
 `fizzy-1.0.3+3.4.16-5` → `8e88dba`; `fizzy-1.0.3+3.4.16-6` → `0f6a2a8`;
 `fizzy-1.0.3+3.4.16-7` → `264af2a`; `fizzy-1.0.3+3.4.16-8` → `a02dda8`;
-`fizzy-1.0.3+3.4.16-9` → `5e41c70`, the commit fizzy pins now.
+`fizzy-1.0.3+3.4.16-9` → `5e41c70`; `fizzy-1.0.3+3.4.16-10` → `e8f4ac0`, the commit fizzy pins
+now.
 
 ## Bumping
 
