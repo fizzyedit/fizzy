@@ -102,6 +102,8 @@ That constrains how these are written, and the constraint is the point:
 core/      the shared floor both an app and a plugin dylib draw with — widgets (Split,
            DockingWidget, Tabs, Tree, Canvas), anim, dialogs, draw, icon, image, fs, paths,
            math, fuzzy, lsp
+backend/   fizzy's native backend, a package of its own: SDL3, its GPU renderer and the platform
+           pieces (title bars, glass, OS windows); pins SDL, zig-objc and zigwin32
 sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside it are its
            build surface (this directory ships standalone as `fizzy-sdk-v*.tar.gz`);
            `sdk/tape/` is the std-only demo-tape library shipped with it, `sdk/replay/` the

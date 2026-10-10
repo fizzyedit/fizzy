@@ -1,4 +1,4 @@
-//! Fizzy's own use of its window: the platform pieces any app gets (`src/backend/native/platform`
+//! Fizzy's own use of its window: the platform pieces any app gets (the backend package's `platform`
 //! — dialogs, files from the OS, gestures, chrome, geometry, the window monitor, the menu bar) with
 //! fizzy's policy over them — where dialogs start, where geometry is kept (`layout.zon`), how high
 //! the titlebar strip is, what its menus hold and when their items are enabled. The web build has
@@ -16,7 +16,7 @@ const KeybindSettings = @import("../editor/KeybindSettings.zig");
 const menu_model = @import("../editor/menu_model.zig");
 const AppInfo = @import("app").AppInfo;
 
-/// The window and platform pieces any app on these backends gets (`src/backend/native/platform`):
+/// The window and platform pieces any app on these backends gets (the backend package's `platform`):
 /// dialogs, files from the OS, gestures, the window's chrome and state, Windows' title bar. What
 /// follows them here is fizzy's own use of them.
 const platform = @import("platform");

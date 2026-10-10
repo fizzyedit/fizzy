@@ -1,0 +1,29 @@
+.{
+    .name = .fizzy_backend,
+    .version = "0.1.0",
+    .fingerprint = 0x2bf08855a368b9a8,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // SDL3 for the window, its events and the GPU: fizzyedit/sdl_zig's `fizzy` branch,
+        // building fizzyedit/SDL's `fizzy-3.4` with the patches this backend needs (fizzy's
+        // docs/DEPENDENCIES.md). Pinned here, by the package that uses it, and nowhere else.
+        .sdl = .{
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/5e41c70e21f673d5b2ac6af2a3cba7e7aaa68489.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0UwUqgA04UDxXFbmfpE1e2Oo6wwX0LJuIMG82mis",
+            .lazy = true,
+        },
+        // AppKit from Zig, for the macOS platform pieces (and an app's own, `objcModule`).
+        .zig_objc = .{
+            .url = "https://github.com/foxnne/zig-objc/archive/c8de82ff80281215ad92900866dab7103a8efa8b.tar.gz",
+            .hash = "zig_objc-0.0.0-Ir_Sp9gsAQCPAJc0oF5xoWePHWP6Y6tCphDeyNUThJoi",
+            .lazy = true,
+        },
+        // Win32 from Zig, for the Windows platform pieces (and an app's own, `win32Module`).
+        .zigwin32 = .{
+            .url = "https://github.com/marlersoft/zigwin32/archive/ec98bb4d9eea532320a8551720a9e3ec6de64994.tar.gz",
+            .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
+            .lazy = true,
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}

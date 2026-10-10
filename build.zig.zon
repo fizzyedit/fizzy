@@ -10,6 +10,7 @@
         "build.zig.zon",
         "update.zig",
         "sdk",
+        "backend",
         "assets",
         "libs",
         "web",
@@ -19,24 +20,6 @@
     .version = "0.2.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .zig_objc = .{
-            .url = "https://github.com/foxnne/zig-objc/archive/c8de82ff80281215ad92900866dab7103a8efa8b.tar.gz",
-            .hash = "zig_objc-0.0.0-Ir_Sp9gsAQCPAJc0oF5xoWePHWP6Y6tCphDeyNUThJoi",
-            .lazy = true,
-        },
-        .zigwin32 = .{
-            .url = "https://github.com/marlersoft/zigwin32/archive/ec98bb4d9eea532320a8551720a9e3ec6de64994.tar.gz",
-            .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
-            .lazy = true,
-        },
-        // App-only: SDL for fizzy's own native backend (`src/backend/native`). fizzyedit/sdl_zig's
-        // `fizzy` branch, building fizzyedit/SDL's `fizzy-3.4` — see docs/DEPENDENCIES.md. Plugins
-        // draw through dvui's proxy backend and never link SDL.
-        .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/5e41c70e21f673d5b2ac6af2a3cba7e7aaa68489.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0UwUqgA04UDxXFbmfpE1e2Oo6wwX0LJuIMG82mis",
-            .lazy = true,
-        },
         .icons = .{
             .url = "https://github.com/fizzyedit/icons/archive/41e7d2162b121e3798438a7da25ff4648b204dc7.tar.gz",
             .hash = "icons-0.1.0-iJxA-Z0TNABnFm_tPfx46ZnvojHweT6xON9ay91XZ4Xo",
@@ -44,6 +27,11 @@
         },
         .fizzy_sdk = .{
             .path = "sdk/",
+        },
+        // Fizzy's native backend (SDL3, its GPU renderer, the platform pieces), with SDL,
+        // zig-objc and zigwin32 pinned there. App-only: plugins never link it.
+        .fizzy_backend = .{
+            .path = "backend",
         },
         .assetpack = .{
             .url = "https://github.com/foxnne/assetpack/archive/ac7592f3f5988857840d0df4610e1e1fad690e2e.tar.gz",

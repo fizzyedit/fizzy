@@ -8,10 +8,10 @@ what each fork changes and how to bump it; keep it current whenever a pin or a p
 |---|---|---|---|---|
 | [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | `fizzy-dev` | `sdk/build.zig.zon` | dvui changes fizzy needs |
 | [`fizzyedit/SDL`](https://github.com/fizzyedit/SDL) | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) | `fizzy-3.4` | `fizzyedit/sdl_zig`'s `build.zig.zon` | SDL C patches (below) |
-| [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | `fizzy` | root `build.zig.zon` (`.sdl`) | the Zig build of SDL, pointed at `fizzyedit/SDL` |
+| [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, pointed at `fizzyedit/SDL` |
 
-SDL is fizzy's own dependency, not dvui's: fizzy's native backend (`src/backend/native`) takes it
-from the root `build.zig.zon` and translates its own `sdl3-c.h`. dvui's SDL pin is used only by the
+SDL is fizzy's own dependency, not dvui's: fizzy's native backend (the `backend/` package) pins it
+in `backend/build.zig.zon` and translates its own `sdl3-c.h`. dvui's SDL pin is used only by the
 `-Dnative-backend=sdl3` build (dvui's SDL_Renderer backend). Plugins draw through dvui's proxy
 backend and never link SDL, so an SDL bump is never an SDK release and never moves
 `recorded_sdk_shape_fingerprint`.
@@ -27,7 +27,8 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    never moved or deleted; branches rebase freely. (The dvui rule in `docs/PLUGINS.md`, "Repinning
    dvui", for every fork.)
 3. **One pin per dependency, held by whoever uses it.** dvui in `sdk/build.zig.zon`, SDL (through
-   sdl_zig) in the root `build.zig.zon`. A fork pins at most its own source, as sdl_zig pins
+   sdl_zig) in `backend/build.zig.zon`, with zig-objc and zigwin32, which fizzy's own code reaches
+   through the backend package (`objcModule`, `win32Module`). A fork pins at most its own source, as sdl_zig pins
    `fizzyedit/SDL`.
 4. **Upstream first.** A patch that upstream would take goes up as a PR; once merged it comes out
    empty at the next rebase and is abandoned.
@@ -82,7 +83,7 @@ released yet, and a tag never moves, so the second pin of one version takes a su
 fork's tags do).
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
-(`src/backend/native/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
+(`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
 backends are only built by `-Dnative-backend=sdl3`. A dvui change to those backends is not a
 change to fizzy: anything fizzy wants from one is merged into its own by hand.
 
@@ -272,7 +273,7 @@ Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`
 2. In `fizzyedit/sdl_zig`: if upstream sdl_zig has moved to the same SDL release (its source lists
    follow SDL's files, so bump SDL when the wrapper does), rebase `fizzy` onto it. Point `.sdl` at
    the new SDL commit's archive (`zig fetch <url>` prints the hash), push, tag.
-3. In fizzy: `zig fetch --save=sdl https://github.com/fizzyedit/sdl_zig/archive/<sha>.tar.gz`,
+3. In fizzy's `backend/`: `zig fetch --save=sdl https://github.com/fizzyedit/sdl_zig/archive/<sha>.tar.gz`,
    then build macOS, Linux and Windows.
 
 **A fizzy-only SDL change:** the same, with only step 1's new change instead of a rebase.
@@ -297,5 +298,6 @@ needs no build of the rest of SDL:
 `zig cc -target x86_64-windows-gnu -Iinclude -Iinclude/build_config -Isrc -Isrc/video/khronos -c src/gpu/d3d12/SDL_gpu_d3d12.c -o /tmp/d3d12.o`.
 CI's Windows cross-build (`ci.yml`) then builds it into fizzy.
 
-For local work on either fork, point the pin at a checkout with `.path = "../sdl_zig"` (and the
-wrapper's `.sdl` at `../SDL`), as `sdk/build.zig.zon` does for `../dvui-dev`.
+For local work on either fork, point `backend/build.zig.zon`'s pin at a checkout with
+`.path = "../../sdl_zig"` (and the wrapper's `.sdl` at `../SDL`), as `sdk/build.zig.zon` does for
+`../dvui-dev`.

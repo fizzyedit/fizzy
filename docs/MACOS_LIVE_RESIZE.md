@@ -234,7 +234,7 @@ steps, the press missed the edge: run it again.
 
 To iterate on the SDL patches locally without pushing: clone fizzyedit/SDL and fizzyedit/sdl_zig
 beside fizzy (`../SDL`, `../sdl_zig`) on `fizzy-3.4` and `fizzy`; in sdl_zig's `build.zig.zon`,
-`.sdl = .{ .path = "../SDL" }`; in fizzy's root `build.zig.zon`, `.sdl = .{ .path = "../sdl_zig" }`.
+`.sdl = .{ .path = "../SDL" }`; in fizzy's `backend/build.zig.zon`, `.sdl = .{ .path = "../../sdl_zig" }`.
 A rebuild picks up an SDL edit.
 
 ## Checking it on a Mac by hand

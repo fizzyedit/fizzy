@@ -9,7 +9,7 @@
         "README.md",
         "src",
     },
-    // The same pins as fizzy's root `build.zig.zon`: fizzyedit/SDL (through sdl_zig), whose D3D12
+    // The same pins as fizzy's `backend/build.zig.zon`: fizzyedit/SDL (through sdl_zig), whose D3D12
     // presents a transparent window through a topmost DirectComposition target, and zigwin32.
     .dependencies = .{
         .sdl = .{
