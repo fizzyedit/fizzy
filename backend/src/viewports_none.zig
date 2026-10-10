@@ -49,6 +49,9 @@ pub const Picture = struct {
     pub fn begin(_: dvui.Texture.Target, _: Rect) Picture {
         return .{};
     }
+    pub fn again(_: dvui.Texture.Target, _: Rect) Picture {
+        return .{};
+    }
     pub fn moveTo(_: *Picture, _: dvui.Point.Physical) void {}
     pub fn subwindow(_: Picture, _: *dvui.Subwindows.Subwindow, _: bool) void {}
     pub fn end(_: Picture) void {}

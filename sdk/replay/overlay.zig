@@ -21,7 +21,7 @@ pub const Options = struct {
 /// (`LiveDriver.Hand`).
 pub fn drawLive(driver: *const LiveDriver, opts: Options) void {
     if (!driver.playing()) return;
-    const fw = layer(@src(), .{ .rect = .cast(dvui.windowRect()), .name = "LivePointer" }, .{});
+    const fw = layer(@src(), .{ .rect = pointerRect(driver.seq.pointer), .name = "LivePointer" }, .{});
     defer fw.deinit();
 
     const now = dvui.frameTimeNS();
@@ -38,12 +38,21 @@ pub fn drawLive(driver: *const LiveDriver, opts: Options) void {
 /// A demo's pointer, while it drives, timed in demo time: a seek shows what playing showed.
 pub fn drawPlayer(player: *Player, opts: Options) void {
     if (!player.driving()) return;
-    const fw = layer(@src(), .{ .rect = .cast(dvui.windowRect()), .name = "DemoPointer" }, .{});
+    const fw = layer(@src(), .{ .rect = pointerRect(player.seq.pointer), .name = "DemoPointer" }, .{});
     defer fw.deinit();
     const ripple: ?Ripple = if (player.last_press) |press| .{ .pt = press.pt, .age_ms = player.seq.now - press.at } else null;
     // Out of the way of the words while the tape types, as a desktop's pointer is.
     const shown = player.pointerShown(opts.fade_ms);
     paintPointer(player.seq.pointer, ripple, shown, player.input.held.count() > 0);
+}
+
+/// The pointer's layer: round its tip, natural, so its middle is where the pointer is. An app that
+/// shows parts of its frame in OS windows of their own (fizzy's floats, menus and dialogs) gives
+/// each window the layers whose middle is in it, and the pointer is then drawn on whatever window
+/// it is over. What it draws is clipped to the screen it is on (`dvui.screenFor`), not to this.
+fn pointerRect(p: Sequencer.Point) dvui.Rect {
+    const s = dvui.windowNaturalScale();
+    return .{ .x = p.x / s - 16, .y = p.y / s - 16, .w = 32, .h = 32 };
 }
 
 /// A floating widget that takes no input, raised to the top. A floating widget otherwise stays
