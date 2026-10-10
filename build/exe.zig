@@ -240,6 +240,8 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.addImport("dvui", dvui_mod);
     exe.root_module.addImport("backend", native.backend);
     exe.root_module.addImport("platform", platformModule(b, native, resolved_target, optimize, macos_sdl_paths));
+    // On dvui's own SDL3 backend (`-Dnative-backend=sdl3`), which has no viewports.
+    exe.root_module.addImport("viewports_none", fizzy_backend.viewportsNoneModule(backendDependency(b), dvui_mod));
 
     // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
     // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.

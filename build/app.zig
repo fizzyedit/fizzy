@@ -806,6 +806,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     });
     fizzy_test_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
     fizzy_test_module.addImport("backend", dvui_testing_dep.module("testing"));
+    // The testing backend has no viewports (`backend_web.viewports`).
+    fizzy_test_module.addImport("viewports_none", @import("fizzy_backend").viewportsNoneModule(fizzy_exe.backendDependency(b), dvui_testing_dep.module("dvui_testing")));
     fizzy_test_module.addImport("assets", assets_module);
     fizzy_test_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 

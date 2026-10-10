@@ -156,6 +156,16 @@ pub fn objcModule(dep: *std.Build.Dependency, opts: Options) ?*std.Build.Module 
     return objc.module("objc");
 }
 
+/// `viewports` for a backend without OS windows besides the main one (`src/viewports_none.zig`):
+/// dvui's own, its testing backend, the web. An app that builds on either kind imports it as
+/// `viewports_none` and takes the backend's own `viewports` where it has one. Needs only dvui,
+/// so nothing of SDL is fetched for it.
+pub fn viewportsNoneModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module) *std.Build.Module {
+    const m = dep.builder.createModule(.{ .root_source_file = dep.builder.path("src/viewports_none.zig") });
+    m.addImport("dvui", dvui_mod);
+    return m;
+}
+
 /// zigwin32, from this package's pin, for an app's own Windows code. Null on the configure pass
 /// that fetches it.
 pub fn win32Module(dep: *std.Build.Dependency) ?*std.Build.Module {
