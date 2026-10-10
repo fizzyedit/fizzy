@@ -64,6 +64,9 @@ pub const Spring = @import("Spring.zig");
 pub const dialogs = @import("dialogs.zig");
 /// Drawing helpers with no widget of their own: highlighted labels, menu rows, edge shadows.
 pub const draw = @import("draw.zig");
+/// Graphics for live numbers: lines and columns over time, share bars, stats, tables of
+/// numbers (plans/DASHBOARD_PLAN.md). The profiler draws with them, and so can a plugin.
+pub const viz = @import("viz/viz.zig");
 /// How a keybind is drawn: glyphs and keycaps, in each platform's modifier order.
 pub const keycaps = @import("keycaps.zig");
 /// Names for what a demo points at — `dvui.tag` with a name built from data (a file's row, its

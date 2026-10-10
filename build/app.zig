@@ -556,6 +556,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
+        // `core.viz`'s arithmetic: a chart's scale, the slot under the pointer, a bar's fill.
+        .{ "fizzy-viz-scale-tests", "core/viz/scale.zig" },
         // The login-shell PATH cache: it owns its string whatever allocator the first caller
         // passed, and threads that ask at once resolve once. The shell spawn itself is not run.
         .{ "fizzy-shell-env-tests", "core/shell_env.zig" },
