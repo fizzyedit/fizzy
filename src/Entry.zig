@@ -143,6 +143,8 @@ pub const dvui_app: dvui.App = .{
 };
 
 pub fn main(main_init: std.process.Init) !u8 {
+    // Time zero for the app's start (`core.profile.phase`).
+    fizzy.core.profile.phase(main_init.io, "main");
     crash.init(.{ .app = AppInfo.current.name, .version = AppInfo.current.version, .sdk = sdk_version });
     std.log.info("{s} version {s} ({s})", .{ AppInfo.current.display_name, AppInfo.current.version, @tagName(@import("builtin").mode) });
 
@@ -229,6 +231,7 @@ pub fn main(main_init: std.process.Init) !u8 {
             }.f,
         });
         try singleton.earlyStartup(appAllocator(), main_init);
+        fizzy.core.profile.phase(main_init.io, if (restart.startedByHandover()) "lock deferred (handover)" else "lock");
 
         // Both read relative to where fizzy was launched, before `AppInit` moves to its own directory.
         Editor.Demo.readEnvTape(appAllocator(), main_init.io);
@@ -250,6 +253,10 @@ pub fn main(main_init: std.process.Init) !u8 {
 pub const panic = if (crash.supported) std.debug.FullPanic(crash.panic) else dvui.App.panic;
 pub const std_options: std.Options = .{
     .logFn = logFn,
+    // dvui's refresh records are debug lines, which a release build would compile out; they are
+    // what the profiler puts frames down to (`core.profile.interceptLog`). dvui's other debug lines
+    // are dropped in `logFn` outside Debug, as they were before.
+    .log_scope_levels = &.{.{ .scope = .dvui, .level = .debug }},
     // In every build mode, not only the safe ones: a release crash is the one worth a report.
     .enable_segfault_handler = crash.supported,
 };
@@ -267,6 +274,9 @@ const sdk_version = std.fmt.comptimePrint("{f} ({x})", .{
 // web) and also into `fizzy.OutputLog`, so fizzy's "Output" bottom panel can show it — except
 // while `FIZZY_LOG_REFRESH` is on, see `refresh_log_active`.
 fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+    // A refresh record, counted as a frame's cause; printed only for `FIZZY_LOG_REFRESH`.
+    if (fizzy.core.profile.interceptLog(level, scope, format, args) and !refresh_log_active) return;
+    if (comptime scope == .dvui and level == .debug and @import("builtin").mode != .Debug) return;
     if (!refresh_log_active) fizzy.OutputLog.append(level, scope, format, args);
     dvui.App.logFn(level, scope, format, args);
 }
@@ -300,6 +310,7 @@ var refresh_log_active = false;
 
 // Runs before the first frame, after backend and dvui.Window.init()
 pub fn AppInit(win: *dvui.Window) !void {
+    fizzy.core.profile.phase(dvui.io, "window");
     // Snapshot the platform from DVUI's keybind selection. On native this is a
     // no-op; on wasm it tells `fizzy.core.platform.isMacOS()` what browser we're in.
     fizzy.core.platform.cacheFromWindow(win);
@@ -351,6 +362,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     const editor_ptr = try allocator.create(Editor);
     fizzy.setInstances(app_ptr, editor_ptr);
     editor_ptr.* = Editor.init(app_ptr) catch unreachable;
+    fizzy.core.profile.phase(dvui.io, "editor");
 
     // Workbench fizzy-owned state: wire before plugin `register`.
     workbench.runtime.setWorkbench(&fizzy.editor().workbench);
@@ -359,6 +371,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // workbench-api service whose `ctx` is this pointer). This loads the built-in plugins,
     // including pixi as a generic dylib that owns its own state + atlas packer.
     fizzy.editor().postInit() catch unreachable;
+    fizzy.core.profile.phase(dvui.io, "plugins");
 
     // Whether dvui went quiet at the end of each frame, for the `automation` service's `settled`.
     if (comptime @hasDecl(dvui.backend, "frame_ended_hook")) dvui.backend.frame_ended_hook = frameEnded;
@@ -398,10 +411,29 @@ pub fn AppInit(win: *dvui.Window) !void {
     // Started by a restart's handover: up and hidden, the session read. The old instance goes
     // now, and this window shows over its own at the same place (`restart`); the lock follows
     // once the old one lets go of it (`Editor.tick`).
-    if (restart.startedByHandover()) restart.signalReady(dvui.io);
+    if (restart.startedByHandover()) {
+        restart.signalReady(dvui.io);
+        fizzy.core.profile.phase(dvui.io, "handover ready");
+    }
 
     // Chrome and geometry are settled — reveal the window (created hidden).
     fizzy.backend.showWindow(win);
+    fizzy.core.profile.phase(dvui.io, "shown");
+}
+
+/// The first frame has ended: the app is up. Says how long that took, once.
+var first_frame_done = false;
+fn noteFirstFrame() void {
+    if (first_frame_done) return;
+    first_frame_done = true;
+    fizzy.core.profile.phase(dvui.io, "first frame");
+    const ph = fizzy.core.profile.phases() orelse return;
+    std.log.info("startup: up {d:.0} ms after main (window shown at {d:.0} ms)", .{ ph.ms(ph.len - 1), shownMs(ph) });
+}
+
+fn shownMs(ph: *const fizzy.core.profile.Phases) f64 {
+    for (0..ph.len) |i| if (std.mem.eql(u8, ph.names[i], "shown")) return ph.ms(i);
+    return 0;
 }
 
 // Run as app is shutting down before dvui.Window.deinit()
@@ -431,8 +463,12 @@ pub fn AppDeinit(_: *dvui.Window) void {
 pub fn AppFrame() !dvui.App.Result {
     fizzy.core.hitch.frameBegin();
     defer fizzy.core.hitch.frameEnd();
+    // dvui's refresh records, while someone reads them: the profiler, as frame causes, or a
+    // `FIZZY_LOG_REFRESH` run.
+    _ = dvui.debug.logRefresh(refresh_log_active or fizzy.core.profile.recordingCauses());
     fizzy.core.profile.hostFrameBegin(lastSubmitNs());
     defer fizzy.core.profile.hostFrameEnd();
+    defer noteFirstFrame();
     singleton.drainPending();
     // Once, or — while a demo is seeking — again and again unseen until it lands (`frames`).
     const player = &fizzy.editor().demo.player;

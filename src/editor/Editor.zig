@@ -2327,6 +2327,8 @@ fn fizzyAskCommandArguments(ctx: *anyopaque, command_id: []const u8) bool {
 
 fn fizzyLogLine(ctx: *anyopaque, level: std.log.Level, scope: []const u8, message: []const u8) void {
     _ = ctx;
+    // A plugin's dvui refresh record, counted as a frame cause while the profiler records.
+    if (fizzy.core.profile.interceptPluginLine(level, message)) return;
     fizzy.OutputLog.appendLine(level, scope, message);
 }
 
@@ -2626,6 +2628,10 @@ fn wakeEventLoop() void {
 
 fn fizzyRefresh(ctx: *anyopaque) void {
     _ = ctx;
+    // A plugin asking for a frame, which goes past `dvui.refresh` and so past its records: counted
+    // as a frame cause here. Which plugin asked, `Host.refresh` does not say (a source location
+    // through it would move the SDK's boundary).
+    fizzy.core.profile.noteRefresh("Host.refresh (a plugin)", 0, false);
     // Safe from any thread (see `SDLBackend.refresh`'s doc comment) — a single call reliably
     // wakes the blocked event loop and produces exactly one composited frame; see
     // `render_bridge.refresh`'s doc comment for how that was verified.
@@ -5102,8 +5108,10 @@ fn syncExecutableWatcher(editor: *Editor) void {
 fn driveHandover(editor: *Editor) void {
     // The new instance's side: the lock, once the old instance has let go of it.
     if (restart.startedByHandover()) {
-        if (restart.pollReleased(dvui.io, editor.app.gpa))
+        if (restart.pollReleased(dvui.io, editor.app.gpa)) {
             @import("app").single_instance.acquireLock(editor.app.gpa, &.{}) catch |err| dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
+            fizzy.core.profile.phase(dvui.io, "handover lock");
+        }
         return;
     }
     if (restart.canHandOver()) {
