@@ -1047,6 +1047,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     test_integration_step.dependOn(&b.addRunArtifact(app_tests).step);
     check_integration_step.dependOn(&app_tests.step);
 
+    const check_bench_step = b.step("check-bench", "Compile all benchmark targets without running them");
+
     // `zig build bench-text` — text editor frame-cost benchmark. Its own step, never wired into
     // `test`/`test-all`: it prints timings instead of asserting, and the numbers are
     // machine-dependent. Same headless harness as the integration tests, so it measures the
@@ -1077,6 +1079,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (target.result.os.tag == .windows) {
             bench_text.root_module.linkSystemLibrary("comctl32", .{});
         }
+        check_bench_step.dependOn(&bench_text.step);
 
         const bench_step = b.step("bench-text", "Benchmark the text editor's per-frame draw cost (prints timings)");
         const run_bench = b.addRunArtifact(bench_text);
@@ -1110,6 +1113,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (target.result.os.tag == .windows) {
             bench_markdown.root_module.linkSystemLibrary("comctl32", .{});
         }
+        check_bench_step.dependOn(&bench_markdown.step);
 
         const bench_step = b.step("bench-markdown", "Benchmark the markdown preview's per-frame draw cost (prints timings)");
         const run_bench = b.addRunArtifact(bench_markdown);
@@ -1139,6 +1143,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (velopack_enabled) if (vz) |v| {
             try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize });
         };
+        check_bench_step.dependOn(&bench_replay.step);
 
         const check_bench_replay_step = b.step("check-bench-replay", "Compile fizzy bench-replay without running it");
         check_bench_replay_step.dependOn(&bench_replay.step);
@@ -1164,6 +1169,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             .root_source_file = b.path("sdk/tape/root.zig"),
         }));
         const bench_tape = b.addTest(.{ .name = "fizzy-bench-tape", .root_module = bench_module });
+        check_bench_step.dependOn(&bench_tape.step);
 
         const bench_step = b.step("bench-tape", "Benchmark saving and loading demo tapes, ZON against binary (prints timings)");
         const run_bench = b.addRunArtifact(bench_tape);
