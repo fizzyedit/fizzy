@@ -96,6 +96,24 @@ pub fn init(gpa: Allocator, exe_path: []const u8) !ExecutableWatcher {
     return .{ .gpa = gpa, .path = path, .launched = Stamp.of(path) orelse return error.NoExecutable };
 }
 
+/// Delete what a Windows build set aside beside `exe_path` (`<name>.<time>.old`: an executable that
+/// was running when the build installed over it, renamed so the install could; `build/app.zig`'s
+/// `SetAsideRunningExe`). One still running (the app that is quitting as this one starts) is left
+/// for a later launch.
+pub fn removeSetAside(exe_path: []const u8) void {
+    const dir_path = std.fs.path.dirname(exe_path) orelse return;
+    const name = std.fs.path.basename(exe_path);
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(dvui.io);
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.startsWith(u8, entry.name, name) or !std.mem.endsWith(u8, entry.name, ".old")) continue;
+        if (entry.name.len <= name.len or entry.name[name.len] != '.') continue;
+        dir.deleteFile(dvui.io, entry.name) catch {};
+    }
+}
+
 /// Start watching the executable's folder. Only once `self` is at its final address: nightwatch
 /// keeps `&self.impl.handler` (as `SettingsWatcher.start`).
 pub fn start(self: *ExecutableWatcher) !void {

@@ -2178,6 +2178,12 @@ pub fn postInit(editor: *Editor) !void {
         // window that is; this is the app answering once.
         Watch.wake.setHook(wakeEventLoop);
 
+        // What a Windows build set aside to install over this executable while it ran.
+        if (comptime builtin.os.tag == .windows) {
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            if (std.process.executablePath(dvui.io, &buf)) |n| ExecutableWatcher.removeSetAside(buf[0..n]) else |_| {}
+        }
+
         editor.app.settings_watcher = SettingsWatcher.init(editor.app.gpa, editor.app.config_folder) catch |err| blk: {
             dvui.log.warn("settings watcher: failed to init ({s}); external hand-edits / dropped-in plugins won't be picked up live", .{@errorName(err)});
             break :blk null;
