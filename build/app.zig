@@ -1135,6 +1135,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize });
         };
 
+        const check_bench_replay_step = b.step("check-bench-replay", "Compile fizzy bench-replay without running it");
+        check_bench_replay_step.dependOn(&bench_replay.step);
+
         const bench_step = b.step("bench-replay", "Benchmark a demo seek, silent against shown frame by frame (prints timings)");
         const run_bench = b.addRunArtifact(bench_replay);
         run_bench.has_side_effects = true;
