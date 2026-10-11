@@ -386,8 +386,13 @@ pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radi
     const dwm = win32.graphics.dwm;
     const corner: u32 = if (radius_pt < 1) DWMWCP_DONOTROUND else if (radius_pt < 6) DWMWCP_ROUNDSMALL else DWMWCP_ROUND;
     _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    // No border and no caption colour, as the main window has none (`clearCaptionColors`): DWM
+    // treats the window as framed (its caption taken away, `WM_NCCALCSIZE`) and tinted the strip
+    // where a title bar would be — the accent colour, where Windows shows it on title bars — so
+    // each popped-out window had a title bar of another colour than the main window's (the user).
     const none: u32 = dwm.DWMWA_COLOR_NONE;
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_CAPTION_COLOR, &none, @sizeOf(u32));
     const dark_value: u32 = @intFromBool(dark);
     _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
     // No DWM animation as it shows or closes: it appears and goes exactly where its float is drawn,
@@ -442,8 +447,13 @@ pub fn viewportMenuChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
     const wm = win32.ui.windows_and_messaging;
     const corner: u32 = if (radius_pt < 1) DWMWCP_DONOTROUND else if (radius_pt < 6) DWMWCP_ROUNDSMALL else DWMWCP_ROUND;
     _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    // No border and no caption colour, as the main window has none (`clearCaptionColors`): DWM
+    // treats the window as framed (its caption taken away, `WM_NCCALCSIZE`) and tinted the strip
+    // where a title bar would be — the accent colour, where Windows shows it on title bars — so
+    // each popped-out window had a title bar of another colour than the main window's (the user).
     const none: u32 = dwm.DWMWA_COLOR_NONE;
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_CAPTION_COLOR, &none, @sizeOf(u32));
     const dark_value: u32 = @intFromBool(dark);
     _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
     const no_transitions: u32 = 1;
