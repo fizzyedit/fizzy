@@ -138,42 +138,72 @@ def installed(profile: str, plugin_id: str) -> str:
     return os.path.join(profile, "plugins", plugin_id, plugin_id + EXT)
 
 
-def wait_mtime_change(path: str, before: int, timeout: float) -> bool:
+def wait_rebuilt(path: str, before: int, timeout: float, proc: subprocess.Popen) -> str:
+    """Wait for `path` to change while `proc` (the watcher) runs: "rebuilt", "exited" or "timeout".
+    A watcher that has exited will never write it, so that ends the wait at once."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             if os.stat(path).st_mtime_ns != before:
-                return True
+                return "rebuilt"
         except FileNotFoundError:
             pass
+        if proc.poll() is not None:
+            return "exited"
         time.sleep(0.01)
-    return False
+    return "timeout"
+
+
+def watch_failed(report: Report, label: str, outcome: str, proc: subprocess.Popen, log_path: str, timeout: float) -> None:
+    """A row for a watcher that stopped rebuilding, and its log, so the reason is in the job's output."""
+    with open(log_path, errors="replace") as f:
+        lines = f.read().splitlines()
+    print(f"--- zig build --watch log ({label}), last 40 lines:\n" + "\n".join(lines[-40:]) + "\n---", flush=True)
+    errors = [l.strip() for l in lines if "error:" in l]
+    if outcome == "exited":
+        detail = f"zig build --watch exited ({proc.returncode})" + (f": {errors[0]}" if errors else "")
+    else:
+        detail = f"no rebuild within {timeout:.0f} s" + (f": {errors[-1]}" if errors else "")
+    report.add(label, "failed", detail[:200].replace("|", "/"))
+
+
+# The first pass under --watch compiles everything the incremental cache lacks: a cold build. An
+# edit after it is the number being measured, seconds when it works, so a minute is a failure.
+WATCH_FIRST_PASS_TIMEOUT = 300
+WATCH_EDIT_TIMEOUT = 60
 
 
 def bench_watch(report: Report, plugin_dir: str, optimize: str, profile: str, backend: str, edits: int, plugin_id: str) -> None:
     target = installed(profile, plugin_id)
     build(plugin_dir, optimize, profile, backend)  # installed once, so each edit is a change to it
-    log = open(os.path.join(profile, "watch.log"), "w")
+    log_path = os.path.join(profile, "watch.log")
+    log = open(log_path, "w")
     proc = subprocess.Popen(
         ["zig", "build", "--watch", "-fincremental", f"-Doptimize={optimize}"],
         cwd=plugin_dir, env=env_for(profile, backend), stdout=log, stderr=subprocess.STDOUT,
         start_new_session=True,
     )
     try:
-        # The first pass under --watch builds what the incremental cache does not have yet.
-        wait_mtime_change(target, os.stat(target).st_mtime_ns, 300)
+        # The plugin's install step rewrites the binary on every pass, so the first pass shows too.
+        outcome = wait_rebuilt(target, os.stat(target).st_mtime_ns, WATCH_FIRST_PASS_TIMEOUT, proc)
+        if outcome != "rebuilt":
+            watch_failed(report, f"{optimize}, {backend}: --watch -fincremental first pass", outcome, proc, log_path, WATCH_FIRST_PASS_TIMEOUT)
+            return
         time.sleep(1)
         for n in range(1, edits + 1):
             before = os.stat(target).st_mtime_ns
             start = time.monotonic()
             edit(plugin_dir, 100 + n)
-            if not wait_mtime_change(target, before, 300):
-                report.add(f"{optimize}, {backend}: watch edit {n}", "timeout", "no rebuild within 300 s")
-                continue
+            outcome = wait_rebuilt(target, before, WATCH_EDIT_TIMEOUT, proc)
+            if outcome != "rebuilt":
+                # The rest would wait out the same timeout each: one row says it.
+                watch_failed(report, f"{optimize}, {backend}: --watch -fincremental edit {n}", outcome, proc, log_path, WATCH_EDIT_TIMEOUT)
+                return
             report.add(f"{optimize}, {backend}: --watch -fincremental edit {n}", fmt((time.monotonic() - start) * 1000), "save to installed")
             time.sleep(0.5)
     finally:
-        os.killpg(proc.pid, signal.SIGTERM)
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGTERM)
         proc.wait()
         log.close()
 

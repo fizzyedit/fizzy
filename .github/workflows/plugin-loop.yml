@@ -40,7 +40,7 @@ jobs:
   measure:
     name: Measure (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -70,6 +70,7 @@ jobs:
             echo
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Measure
+        timeout-minutes: 20
         run: |
           python3 scripts/plugin-loop/bench.py \
             --plugin plugins/image --id image \
