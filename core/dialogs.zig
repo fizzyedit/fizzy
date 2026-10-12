@@ -52,7 +52,7 @@ pub const Style = extern struct {
     /// How much of a dialog is its own colour rather than the glass behind it, 0…1: the window's
     /// opacity (`glass_look`).
     opacity: f32 = 0.3,
-    /// The frost's blur radius (`FloatingWindowWidget.Frost.radius`), the window's roughness
+    /// The frost's blur radius (`FloatingWindowWidget.Frost.radius`), the window's frost
     /// (`glass_look.frosted`); under `BlurBackdrop.min_blur` the glass is clear.
     blur: f32 = 20,
     /// What a bare stretch of the app's chrome is on screen — the window base (the content
@@ -63,7 +63,7 @@ pub const Style = extern struct {
     chrome: [4]u8 = .{ 0, 0, 0, 0 },
     has_chrome: bool = false,
     /// A light lift over the whole pane, 0…1: white added on top of frost and tint. 1 adds ~15%
-    /// white. The host writes 0 — the window's two sliders are the glass now — and keeps the field
+    /// white. The host writes 0 — the window's opacity is the glass now — and keeps the field
     /// for the layout plugins were built against.
     lift: f32 = 0.3,
     /// Unused: once how much of what is behind the frost stayed readable. The host writes 0; the
@@ -120,7 +120,7 @@ pub fn dialogFrost() ?widgets.FloatingWindowWidget.Frost {
 const refraction_key = "fizzy_dialog_refraction";
 
 /// Host only, each frame: how far the glass's edge refracts, 0 to 1 (0.5 as designed) — the
-/// window's roughness (`glass_look.frosted`).
+/// window's frost (`glass_look.frosted`).
 pub fn publishRefraction(setting: f32) void {
     const cw = dvui.currentWindow();
     dvui.dataSet(null, cw.data().id, refraction_key, std.math.clamp(setting, 0, 1));

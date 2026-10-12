@@ -49,15 +49,14 @@ font_title_size: f32 = 9,
 font_heading_size: f32 = 8,
 font_mono_size: f32 = 8,
 
-/// The window's glass, per theme (`core.glass_look`): its opacity — the window's colour over the
-/// glass, 0 (none: clear) to 1 (the window's fill, opaque) — and its roughness — 0 clear, shiny
-/// glass to 1 wholly blurred. On macOS and Windows the window itself is that glass, and every glass
-/// the app draws (dialogs, menus, drops) is too; elsewhere, where the window is opaque, the glass
-/// the app draws.
+/// The window's glass, per theme (`core.glass_look`): its opacity — above 0 frosted glass at one
+/// frost, the window's colour over it from a little to the window's fill, opaque, at 1; 0 a clear
+/// window, no glass at all, which the settings pane does not offer. On macOS and Windows the window
+/// itself is that glass, and every glass the app draws (dialogs, menus, drops) is too; elsewhere,
+/// where the window is opaque, the glass the app draws. (A `window_roughness_*` from before there
+/// was one value is read past and dropped.)
 window_opacity_dark: f32 = default_glass.opacity_dark,
 window_opacity_light: f32 = default_glass.opacity_light,
-window_roughness_dark: f32 = default_glass.roughness_dark,
-window_roughness_light: f32 = default_glass.roughness_light,
 
 /// Opacity of the content area (also drives plugin panes that match fizzy chrome).
 content_opacity: f32 = 0.7,
@@ -121,11 +120,11 @@ plugin_update_mode: PluginUpdateMode = .prompt,
 /// fizzy's windows have been: mostly the window's colour in a dark theme, little in a light one,
 /// frosted. Where the window is opaque (the web, Linux), the glass the app draws over it: little
 /// colour, well frosted — the dialogs' glass as it was.
-pub const GlassDefaults = struct { opacity_dark: f32, opacity_light: f32, roughness_dark: f32, roughness_light: f32 };
+pub const GlassDefaults = struct { opacity_dark: f32, opacity_light: f32 };
 pub const default_glass: GlassDefaults = if (builtin.target.cpu.arch == .wasm32 or (builtin.os.tag != .macos and builtin.os.tag != .windows))
-    .{ .opacity_dark = 0.2, .opacity_light = 0.2, .roughness_dark = 0.75, .roughness_light = 0.75 }
+    .{ .opacity_dark = 0.2, .opacity_light = 0.2 }
 else
-    .{ .opacity_dark = 0.7, .opacity_light = 0.3, .roughness_dark = 1.0, .roughness_light = 0.45 };
+    .{ .opacity_dark = 0.7, .opacity_light = 0.3 };
 
 fn default(allocator: std.mem.Allocator) !Settings {
     return .{

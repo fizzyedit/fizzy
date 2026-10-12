@@ -72,7 +72,7 @@ mix: f32 = 0,
 /// White over the whole of it after the mix, where it has a tint.
 lift: f32 = 0,
 /// How far the edge refracts, 0 (none) to 2 (`liquid_glass.Look.refraction`): the window's
-/// roughness (`core.dialogs.refraction`).
+/// frost (`core.dialogs.refraction`).
 refraction: f32 = 1,
 /// It carries text — a dialog, a menu — and takes the window's colour as the opacity has it
 /// (`glass_look.forText`).
@@ -274,9 +274,9 @@ fn opaqueWindow() bool {
     return dvui.dataGet(null, enabled_id, "_liquid_opaque_window", bool) orelse false;
 }
 
-/// The app's glass at the window's opacity and roughness this frame (`glass_look.inApp`), published
+/// The app's glass at the window's opacity this frame (`glass_look.inApp`), published
 /// by the app before anything draws where there is OS glass beside it to match (macOS): every
-/// field — dialogs, menus, drops — is drawn as it says, Apple's lens on the two sliders. Null
+/// field — dialogs, menus, drops — is drawn as it says, Apple's lens at that opacity. Null
 /// (nothing published: the web, a plugin's own window): the earlier glass, as each field's own
 /// tint, lift and blur say. Every form of the program draws the lens — the GLSL, the Metal, and the
 /// SPIR-V and DXIL compiled from the HLSL — as long as the last two are compiled again whenever the

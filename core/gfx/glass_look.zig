@@ -1,17 +1,20 @@
-//! One material on two sliders, the window's (`plans/NATIVE_WINDOWS_PLAN.md`): what every glass
-//! surface is at the window's opacity and roughness.
+//! One material on one value, the window's opacity (`plans/WINDOW_GLASS_PLAN.md`): what every glass
+//! surface is at it.
 //!
-//! - **Roughness** is the glass. At 0 it is clear, shiny glass, a lens bending what is behind it
-//!   toward a bright rim; going up it frosts, and at 1 it is wholly blurred. The lens's bend and
-//!   shine fade as it roughens, as frosted glass's do: the refraction once set on its own is here.
-//! - **Opacity** is the window's colour over it: none at 0, the window's fill at 1. From
-//!   `shine_start` the colour covers the edge too and the glass's shine goes, so at 1 the glass is
-//!   opaque all over with a little of its shine left at the edge.
+//! - **0 is a clear window**: no material, no colour — an overlay, the drag's glass layer, a window
+//!   the app draws every pixel of. Not the end of the ramp but a mode of its own; an app's own
+//!   slider stops at `min_opacity`.
+//! - **Above 0 the glass is always frosted**, at one frost (`frost_level`), the same at every
+//!   opacity: transparent always comes with blur. Over it the window's colour ramps from a little
+//!   (still reading as glass) to the window's fill at 1. From `shine_start` the colour covers the
+//!   edge too and the glass's shine goes, so at 1 the glass is opaque all over with a little of its
+//!   shine left at the edge.
+//! - **Where nothing can blur** (`base`, no material), above 0 is opaque.
 //!
-//! Two forms read them on macOS: the OS's glass (`native`, `window`; Liquid Glass on macOS 26) and
+//! Two forms read it on macOS: the OS's glass (`native`, `window`; Liquid Glass on macOS 26) and
 //! the app's own beside it (`inApp`, the glass program of `LiquidField`), on the same curves, so a
 //! surface looks alike in either. Where there is no OS glass to match — the web, Linux, Windows —
-//! the app's glass is its own frosted pane (`frosted`), on the same two sliders.
+//! the app's glass is its own frosted pane (`frosted`), on the same value.
 //!
 //! Every glass is frosted glass with a clearing bevel: its middle takes the frost and the window's
 //! colour, which fade out across a band along its edge (`band`) so the edge stays clear glass,
@@ -22,28 +25,47 @@
 //! (`LiquidField.publishLook`, macOS); fizzy's pop-out overlay reads the native one.
 const std = @import("std");
 
+/// The one frost every glass has above 0, as a share of the way from a clear lens (0) to wholly
+/// blurred (1): the lens's bend and shine fading as it frosts, as frosted glass's do. Tuned once,
+/// here, rather than set by each person (it was a second slider, roughness).
+pub const frost_level: f32 = 0.75;
+
+/// The least opacity an app's own slider offers: 0 is a clear window, not glass (fizzy's settings).
+pub const min_opacity: f32 = 0.05;
+
 /// Where the colour starts covering the edge too, and the glass's shine starts going…
 pub const shine_start: f32 = 0.8;
 /// …to this much at 1.
 pub const shine_min: f32 = 0.25;
 
-/// What the two sliders make of the glass.
+/// What the opacity makes of the glass.
 pub const Way = struct {
-    /// How rough the glass is: frost over the lens, 0…1 (roughness).
+    /// Frost over the lens, 0…1: `frost_level`'s above 0, none at it.
     frost: f32,
-    /// The window's colour over the frost, 0…1 (opacity).
+    /// The window's colour over the frost, 0…1.
     tint: f32,
-    /// The glass's shine, 1 until `shine_start`, `shine_min` at 1.
+    /// The glass's shine, 1 until `shine_start`, `shine_min` at 1; none at 0, where there is no glass.
     shine: f32,
     /// The colour over everything, the edge too: 0 until `shine_start`, 1 at 1.
     top: f32,
 };
 
-pub fn way(opacity: f32, roughness: f32) Way {
-    const o = std.math.clamp(opacity, 0, 1);
+/// Whether `opacity` is a clear window, no glass at all.
+pub fn clear(opacity: f32) bool {
+    return !(opacity > 0);
+}
+
+/// How rough the glass is at `opacity`: `frost_level` above 0, none at it.
+fn roughness(opacity: f32) f32 {
+    return if (clear(opacity)) 0 else frost_level;
+}
+
+pub fn way(opacity: f32) Way {
+    if (clear(opacity)) return .{ .frost = 0, .tint = 0, .shine = 0, .top = 0 };
+    const o = @min(opacity, 1);
     const top = smoothstep(std.math.clamp((o - shine_start) / (1 - shine_start), 0, 1));
     return .{
-        .frost = smoothstep(std.math.clamp(roughness, 0, 1)),
+        .frost = smoothstep(frost_level),
         .tint = o,
         .shine = 1 - (1 - shine_min) * top,
         .top = top,
@@ -111,7 +133,7 @@ pub const Native = struct {
 /// checkerboard gone from under it (the user). Mostly blur, a little of the picture through it.
 pub const drop_frost: f32 = 0.75;
 
-/// The least frost a drop keeps, at the bottom of the slider: every drop carries something to read
+/// The least frost a drop keeps, with no frost of the window's: every drop carries something to read
 /// — a drop zone's icon — and over a busy background a clear lens left it hard to make out (the
 /// user). Still water, the lens bending what is under it, softened.
 pub const drop_frost_min: f32 = 0.45;
@@ -136,15 +158,16 @@ pub const drop_photo_blur: f32 = 1.25;
 /// lens has a bright rim of its own, which the app's glass draws across its whole band.
 pub const drop_bevel: f32 = 0.22;
 
-pub fn native(opacity: f32, roughness: f32) Native {
-    const w = way(opacity, roughness);
+/// A drop is glass at any opacity, a clear window's drag included: it carries something to read
+/// (`drop_frost_min`), so at 0 it is the lens at its least frost, not nothing.
+pub fn native(opacity: f32) Native {
+    const w = way(@max(opacity, min_opacity));
     return .{ .under = lens_material, .over = frost_material, .over_share = std.math.lerp(drop_frost_min, drop_frost, w.frost), .fill = w.top, .glass = w.shine, .top_fill = w.top, .blur = std.math.lerp(drop_blur_min, drop_blur, w.frost) };
 }
 
-/// A window of the OS's glass — the main window, a float's own. Clear, shiny glass at no roughness;
-/// roughening, the glass frost comes first (`window_frost_by`), then the plain blur behind the
-/// window (the vibrancy fizzy's windows wore before) goes on past it, smooth and heavy, whole at the
-/// top. Over the lens its body takes the frost, the blur over that, and the window's colour over
+/// A window of the OS's glass — the main window, a float's own. Nothing at 0, a clear window. Above
+/// it the frost at `frost_level`: the glass frost first (whole by `window_frost_by`), then the plain
+/// blur behind the window (the vibrancy fizzy's windows wore before) on past it, whole at 1. Over the lens its body takes the frost, the blur over that, and the window's colour over
 /// both — all fading out across its clearing bevel (`band`), so its edge stays the clear lens bending
 /// the desktop. The frost is under the blur and the colour: over them its light lifted the whole
 /// window. Near full opacity the colour comes in under the lens too (`top_fill`), all over — the
@@ -166,14 +189,14 @@ pub const Window = struct {
     top_fill: f32,
 };
 
-/// The roughness by which a window's glass frost is whole; the plain blur over it is whole at 1.
+/// The frost level by which a window's glass frost is whole; the plain blur over it is whole at 1.
 pub const window_frost_by: f32 = 0.3;
-/// The roughness the plain blur starts at.
+/// The frost level the plain blur starts at.
 pub const window_blur_from: f32 = 0.1;
 
-pub fn window(opacity: f32, roughness: f32) Window {
-    const r = std.math.clamp(roughness, 0, 1);
-    const w = way(opacity, r);
+pub fn window(opacity: f32) Window {
+    const r = roughness(opacity);
+    const w = way(opacity);
     const going = 1 - w.top;
     return .{
         .under = lens_material,
@@ -188,7 +211,7 @@ pub fn window(opacity: f32, roughness: f32) Window {
 
 // ── The app's glass ─────────────────────────────────────────────────────────────────────────────
 
-/// The app's glass at the two sliders, as the glass program (`shaders/liquid_glass.glsl`) reads it. Shaped
+/// The app's glass at the opacity, as the glass program (`shaders/liquid_glass.glsl`) reads it. Shaped
 /// after Apple's lens, measured over a striped pattern: the backdrop pulled *inward* from a band
 /// near the rim — `bevel` of the shape's shorter half, at most `bevel_cap` points — by up to `bend`
 /// times that band, which magnifies it and, past 1, folds it into a mirrored, darker band just
@@ -224,8 +247,8 @@ pub const InApp = struct {
     dispersion: f32,
 };
 
-pub fn inApp(opacity: f32, roughness: f32) InApp {
-    const w = way(opacity, roughness);
+pub fn inApp(opacity: f32) InApp {
+    const w = way(opacity);
     return .{
         .frost = w.frost,
         .mix = w.top,
@@ -243,7 +266,7 @@ pub fn inApp(opacity: f32, roughness: f32) InApp {
 }
 
 /// `look` for a drop — a drop zone's bubble, the carried view: frosted at least as much as the OS's
-/// glass keeps at the bottom of the slider (`native`, `drop_frost_min`), on the same way up.
+/// glass keeps with no frost of the window's (`native`, `drop_frost_min`), on the same way up.
 pub fn forDrops(look: InApp) InApp {
     var l = look;
     l.frost = std.math.lerp(drop_frost_min / drop_frost, 1, l.frost);
@@ -251,8 +274,7 @@ pub fn forDrops(look: InApp) InApp {
 }
 
 /// `look` for a surface carrying text — a dialog, a menu: the window's colour as the opacity has it
-/// (`text_mix`), over glass as rough as the roughness — clear at 0, as the user asked of the bottom
-/// of the slider.
+/// (`text_mix`), over the frost.
 pub fn forText(look: InApp) InApp {
     var l = look;
     l.mix = l.text_mix;
@@ -261,10 +283,10 @@ pub fn forText(look: InApp) InApp {
 
 /// `look` for a lens over a picture of the caller's own — a magnifier's zoom, a loupe — rather than
 /// over what is behind it (`LiquidField.drawPicture`): the picture is what it shows, as it is, so
-/// its middle takes no frost, none of the window's colour and no lift, at any point on the sliders
+/// its middle takes no frost, none of the window's colour and no lift, at any opacity
 /// — a colour picked through it is the colour under it. Only the band along its edge is glass,
-/// bending the picture toward its rim and lit there, and that follows the sliders as every glass
-/// does: a clear lens at the bottom, its shine going at the top.
+/// bending the picture toward its rim and lit there, and that follows the opacity as every glass
+/// does, its shine going at the top.
 pub fn forLens(look: InApp) InApp {
     var l = look;
     l.frost = 0;
@@ -277,9 +299,9 @@ pub fn forLens(look: InApp) InApp {
 // ── The app's frosted pane ──────────────────────────────────────────────────────────────────────
 
 /// The app's own glass where there is no OS glass to match (the web, Linux, Windows): what is behind
-/// blurred, the window's colour mixed over it (`core.dialogs.Style`). The roughness is the blur —
-/// clear glass, unblurred, below the least blur a pane draws (`BlurBackdrop.min_blur`) — and the lens's bend fades as it grows,
-/// half gone at the top; the opacity is the colour as it is.
+/// blurred, the window's colour mixed over it (`core.dialogs.Style`). The blur is the frost level's
+/// share of `max_blur`, the lens's bend fading as it grows (half gone at full frost), none of either
+/// at 0; the opacity is the colour as it is.
 pub const Frosted = struct {
     /// The window's colour over the frost, 0…1.
     mix: f32,
@@ -289,27 +311,36 @@ pub const Frosted = struct {
     refraction: f32,
 };
 
-/// The blur at full roughness: a heavy frost, colour and shape gone (`BlurBackdrop.Pane.radius`).
+/// The blur at full frost: a heavy frost, colour and shape gone (`BlurBackdrop.Pane.radius`).
 pub const max_blur: f32 = 40;
 
-pub fn frosted(opacity: f32, roughness: f32) Frosted {
-    const r = std.math.clamp(roughness, 0, 1);
-    return .{ .mix = std.math.clamp(opacity, 0, 1), .blur = r * max_blur, .refraction = std.math.lerp(1, 0.5, r) };
+pub fn frosted(opacity: f32) Frosted {
+    const r = roughness(opacity);
+    return .{ .mix = std.math.clamp(opacity, 0, 1), .blur = r * max_blur, .refraction = if (clear(opacity)) 0 else std.math.lerp(1, 0.5, r) };
 }
 
-// ── Settings from before the two sliders ────────────────────────────────────────────────────────
+// ── The window's own base ───────────────────────────────────────────────────────────────────────
 
-/// The roughness a window had at the one slider's `t`, for settings written before there were two
-/// (`SettingsMigration.windowGlass`): its plain blur came in from 0.1 and was whole by 0.65, so the
-/// window looks as it did. Its opacity stays the slider as it was.
-pub fn roughnessFromOneSlider(t: f32) f32 {
-    return std.math.clamp(window_blur_from + (1 - window_blur_from) * (t - 0.1) / 0.55, 0, 1);
-}
+/// What a window draws under everything where the OS's glass is not its base (`window` is, on
+/// macOS 26): the window's colour at `alpha`, `lighten` lighter — so the material behind reads as
+/// the same tone as it goes see-through — over the OS's material (vibrancy, Acrylic, the
+/// compositor's blur) where it has one.
+pub const Base = struct {
+    /// Whether the OS's material is behind the window.
+    material: bool,
+    alpha: f32,
+    /// Percent lighter (`dvui.Color.lighten`).
+    lighten: f32,
+};
 
-/// The roughness the dialogs' blur radius was, for the same settings where the app's glass is its
-/// frosted pane (`frosted`).
-pub fn roughnessFromBlur(radius: f32) f32 {
-    return std.math.clamp(radius / max_blur, 0, 1);
+/// The base at `opacity`, where the OS can put a material behind the window (`material`) or not:
+/// clear at 0 either way; above it the colour's ramp over the material, or opaque with none to blur
+/// what shows through.
+pub fn base(opacity: f32, material: bool) Base {
+    if (clear(opacity)) return .{ .material = false, .alpha = 0, .lighten = 0 };
+    if (!material) return .{ .material = false, .alpha = 1, .lighten = 0 };
+    const o = @min(opacity, 1);
+    return .{ .material = true, .alpha = o, .lighten = (1 - o) * 4 };
 }
 
 fn smoothstep(x: f32) f32 {
@@ -322,133 +353,93 @@ fn at(i: usize, n: usize) f32 {
     return @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(n));
 }
 
-test "the bottom of both sliders is clear, shiny glass: lens, no colour, a drop only softened" {
-    const n = native(0, 0);
-    try std.testing.expectEqual(lens_material, n.under);
-    try std.testing.expectApproxEqAbs(drop_frost_min, n.over_share, 1e-6);
-    try std.testing.expectApproxEqAbs(drop_frost_min, forDrops(inApp(0, 0)).frost * drop_frost, 1e-6);
-    try std.testing.expectEqual(@as(f32, 0), n.fill);
-    try std.testing.expectEqual(@as(f32, 1), n.glass);
-    const a = inApp(0, 0);
-    try std.testing.expectEqual(@as(f32, 0), a.frost);
-    try std.testing.expectEqual(@as(f32, 0), a.mix);
-    try std.testing.expect(a.bend > 1); // folds, as Apple's lens does
-    const win = window(0, 0);
+test "opacity 0 is a clear window: no material, no colour, no shine" {
+    const win = window(0);
     try std.testing.expectEqual(@as(f32, 0), win.frost);
     try std.testing.expectEqual(@as(f32, 0), win.blur);
     try std.testing.expectEqual(@as(f32, 0), win.fill);
-    try std.testing.expectEqual(@as(f32, 1), win.glass);
-}
-
-test "roughness is the frost alone, opacity the colour alone" {
-    var i: usize = 0;
-    while (i <= 20) : (i += 1) {
-        try std.testing.expectEqual(@as(f32, 0), way(0, at(i, 20)).tint);
-        try std.testing.expectEqual(@as(f32, 0), way(at(i, 20), 0).frost);
-        try std.testing.expectEqual(at(i, 20), way(at(i, 20), 0.5).tint);
+    try std.testing.expectEqual(@as(f32, 0), win.glass);
+    try std.testing.expectEqual(@as(f32, 0), win.top_fill);
+    const a = inApp(0);
+    try std.testing.expectEqual(@as(f32, 0), a.frost);
+    try std.testing.expectEqual(@as(f32, 0), a.mix);
+    try std.testing.expectEqual(@as(f32, 0), a.rim);
+    try std.testing.expectEqual(@as(f32, 0), frosted(0).blur);
+    try std.testing.expectEqual(@as(f32, 0), frosted(0).mix);
+    for ([_]bool{ false, true }) |material| {
+        const b = base(0, material);
+        try std.testing.expectEqual(@as(f32, 0), b.alpha);
+        try std.testing.expect(!b.material);
     }
+    try std.testing.expect(clear(0) and clear(-1) and !clear(min_opacity));
 }
 
-test "full roughness is a wholly blurred window; full opacity the window's colour all over" {
-    const rough = window(0, 1);
-    try std.testing.expectEqual(@as(f32, 1), rough.frost);
-    try std.testing.expectEqual(@as(f32, 1), rough.blur);
-    try std.testing.expectEqual(@as(f32, 0), rough.fill);
-    var i: usize = 0;
-    while (i <= 10) : (i += 1) {
-        const r = at(i, 10);
-        const top = window(1, r);
-        try std.testing.expectEqual(@as(f32, 1), top.fill);
-        try std.testing.expectEqual(@as(f32, 1), top.top_fill);
-        try std.testing.expectEqual(shine_min, top.glass);
-        // The blur shows the desktop whatever is under it: gone at the top, so nothing does.
-        try std.testing.expectEqual(@as(f32, 0), top.blur);
-        try std.testing.expectEqual(@as(f32, 1), native(1, r).fill);
-        try std.testing.expectEqual(@as(f32, 1), inApp(1, r).mix);
-        try std.testing.expect(inApp(1, r).rim > 0 and inApp(1, r).rim < 0.3);
-    }
-}
-
-test "each slider only goes one way: frost and colour come in, the shine only goes" {
+test "above 0 the frost is the same at every opacity; only the colour ramps" {
     var i: usize = 1;
+    while (i <= 20) : (i += 1) {
+        const o = at(i, 20);
+        // The window's own frost and blur go under the colour only near the top, as it covers them.
+        if (o <= shine_start) try std.testing.expectEqual(window(min_opacity).frost, window(o).frost);
+        try std.testing.expectEqual(smoothstep(frost_level), way(o).frost);
+        try std.testing.expectEqual(frost_level * max_blur, frosted(o).blur);
+        try std.testing.expectEqual(o, way(o).tint);
+        try std.testing.expect(window(o).glass > 0);
+    }
+    // Some frost, some blur: transparent always comes with blur.
+    try std.testing.expect(window(min_opacity).frost > 0 and window(min_opacity).blur > 0);
+}
+
+test "where nothing can blur, above 0 is opaque; over a material the colour ramps" {
+    try std.testing.expectEqual(@as(f32, 1), base(min_opacity, false).alpha);
+    try std.testing.expectEqual(@as(f32, 1), base(0.5, false).alpha);
+    try std.testing.expectEqual(@as(f32, 0.5), base(0.5, true).alpha);
+    try std.testing.expect(base(0.5, true).material);
+    try std.testing.expectEqual(@as(f32, 1), base(1, true).alpha);
+    try std.testing.expectEqual(@as(f32, 0), base(1, true).lighten);
+}
+
+test "full opacity is the window's colour all over, the frost gone under it" {
+    const top = window(1);
+    try std.testing.expectEqual(@as(f32, 1), top.fill);
+    try std.testing.expectEqual(@as(f32, 1), top.top_fill);
+    try std.testing.expectEqual(shine_min, top.glass);
+    // The blur shows the desktop whatever is under it: gone at the top, so nothing does.
+    try std.testing.expectEqual(@as(f32, 0), top.blur);
+    try std.testing.expectEqual(@as(f32, 1), native(1).fill);
+    try std.testing.expectEqual(@as(f32, 1), inApp(1).mix);
+    try std.testing.expect(inApp(1).rim > 0 and inApp(1).rim < 0.3);
+}
+
+test "the opacity only goes one way: colour comes in, the shine only goes" {
+    var i: usize = 2;
     while (i <= 100) : (i += 1) {
-        const a = way(at(i - 1, 100), 0.5);
-        const b = way(at(i, 100), 0.5);
+        const a = way(at(i - 1, 100));
+        const b = way(at(i, 100));
         try std.testing.expect(b.tint >= a.tint and b.top >= a.top and b.shine <= a.shine);
-        const c = way(0.5, at(i - 1, 100));
-        const d = way(0.5, at(i, 100));
-        try std.testing.expect(d.frost >= c.frost);
-        const wa = window(0.3, at(i - 1, 100));
-        const wb = window(0.3, at(i, 100));
-        try std.testing.expect(wb.frost >= wa.frost and wb.blur >= wa.blur);
+        try std.testing.expect(base(at(i, 100), true).alpha >= base(at(i - 1, 100), true).alpha);
     }
 }
 
-test "a lens over a picture leaves its middle as it is, everywhere on the sliders" {
-    var i: usize = 0;
+test "a lens over a picture leaves its middle as it is, at every opacity" {
+    var i: usize = 1;
     while (i <= 20) : (i += 1) {
-        const t = @as(f32, @floatFromInt(i)) / 20;
-        const l = forLens(inApp(t, 0));
+        const t = at(i, 20);
+        const l = forLens(inApp(t));
         try std.testing.expectEqual(@as(f32, 0), l.frost);
         try std.testing.expectEqual(@as(f32, 0), l.mix);
         try std.testing.expectEqual(@as(f32, 0), l.lift);
-        // Its edge is the sliders' glass all the same.
-        try std.testing.expectEqual(inApp(t, 0).bend, l.bend);
-        try std.testing.expectEqual(inApp(t, 0).rim, l.rim);
-    }
-    // A clear lens at the bottom, folding at its rim as Apple's does.
-    try std.testing.expect(forLens(inApp(0, 0)).bend > 1);
-}
-
-test "the lens bends less as the glass roughens: the refraction is the roughness's" {
-    try std.testing.expect(inApp(0, 1).bend < inApp(0, 0).bend);
-    try std.testing.expect(inApp(0, 1).clarity < inApp(0, 0).clarity);
-    try std.testing.expect(inApp(0, 1).dispersion < inApp(0, 0).dispersion);
-}
-
-test "a surface carrying text is as rough as the roughness: clear at the bottom" {
-    try std.testing.expectEqual(@as(f32, 0), forText(inApp(0, 0)).frost);
-    try std.testing.expectEqual(inApp(1, 0.5).frost, forText(inApp(1, 0.5)).frost);
-}
-
-test "the frosted pane: the roughness its blur, the opacity its colour" {
-    const clear = frosted(0, 0);
-    try std.testing.expectEqual(@as(f32, 0), clear.blur);
-    try std.testing.expectEqual(@as(f32, 0), clear.mix);
-    try std.testing.expectEqual(@as(f32, 1), clear.refraction);
-    const rough = frosted(1, 1);
-    try std.testing.expectEqual(max_blur, rough.blur);
-    try std.testing.expectEqual(@as(f32, 1), rough.mix);
-    try std.testing.expectEqual(@as(f32, 0.5), rough.refraction);
-    try std.testing.expectEqual(@as(f32, 0.3), frosted(0.3, 0.7).mix);
-}
-
-test "a drop's plain blur is light, growing with the roughness" {
-    try std.testing.expectApproxEqAbs(drop_blur_min, native(0, 0).blur, 1e-6);
-    try std.testing.expectApproxEqAbs(drop_blur, native(0, 1).blur, 1e-6);
-    var prev = native(0, 0).blur;
-    var i: usize = 1;
-    while (i <= 20) : (i += 1) {
-        const b = native(0, at(i, 20)).blur;
-        try std.testing.expect(b >= prev);
-        prev = b;
+        // Its edge is the glass all the same.
+        try std.testing.expectEqual(inApp(t).bend, l.bend);
+        try std.testing.expectEqual(inApp(t).rim, l.rim);
     }
 }
 
-test "a drop is glass until the top, not a disc of colour; text takes the opacity's colour" {
-    try std.testing.expectEqual(@as(f32, 0), native(0.7, 0.5).fill);
-    try std.testing.expectEqual(@as(f32, 0), inApp(0.7, 0.5).mix);
-    try std.testing.expectApproxEqAbs(drop_frost, native(0.7, 1).over_share, 1e-6);
-    try std.testing.expectEqual(@as(f32, 0.7), forText(inApp(0.7, 0.5)).mix);
-}
-
-test "settings from one slider keep their window's blur, and a dialog's blur its radius" {
-    try std.testing.expectEqual(@as(f32, 1), roughnessFromOneSlider(0.7));
-    try std.testing.expectApproxEqAbs(@as(f32, 0.427), roughnessFromOneSlider(0.3), 1e-3);
-    try std.testing.expectEqual(window_blur_from, roughnessFromOneSlider(0.1));
-    try std.testing.expectEqual(@as(f32, 0), roughnessFromOneSlider(0));
-    try std.testing.expectEqual(@as(f32, 0.75), roughnessFromBlur(30));
-    try std.testing.expectEqual(@as(f32, 1), roughnessFromBlur(48));
+test "a drop is glass until the top, not a disc of colour, and glass even in a clear window" {
+    try std.testing.expectEqual(@as(f32, 0), native(0.7).fill);
+    try std.testing.expectEqual(@as(f32, 0), inApp(0.7).mix);
+    try std.testing.expectEqual(@as(f32, 0.7), forText(inApp(0.7)).mix);
+    try std.testing.expectEqual(native(min_opacity), native(0));
+    try std.testing.expect(native(0).glass > 0 and native(0).over_share >= drop_frost_min);
 }
 
 test "the clearing bevel hugs the rim of small glass and stops growing on large" {
@@ -461,11 +452,10 @@ test "the clearing bevel hugs the rim of small glass and stops growing on large"
 }
 
 test "both forms share the way" {
-    var i: usize = 0;
+    var i: usize = 1;
     while (i <= 20) : (i += 1) {
         const o = at(i, 20);
-        const r = at(20 - i, 20);
-        try std.testing.expectApproxEqAbs(native(o, r).over_share, forDrops(inApp(o, r)).frost * drop_frost, 1e-6);
-        try std.testing.expectEqual(native(o, r).fill, inApp(o, r).mix);
+        try std.testing.expectApproxEqAbs(native(o).over_share, forDrops(inApp(o)).frost * drop_frost, 1e-6);
+        try std.testing.expectEqual(native(o).fill, inApp(o).mix);
     }
 }

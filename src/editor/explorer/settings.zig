@@ -264,22 +264,12 @@ const window_items = [_]Item{
         .label = "Window opacity",
         .key = "window_opacity_dark",
         .key_light = "window_opacity_light",
-        .description = "How much of the window's colour lies over its glass — the window's own " ++
-            "where it is glass, and every dialog's, menu's and drop zone's. 0 is clear glass; 1 " ++
-            "is the window's colour, opaque. Dark and light themes are remembered separately.",
-        .keywords = "transparency alpha glass tint colour color translucent clear",
+        .description = "How much of the window's colour lies over its frosted glass — the " ++
+            "window's own where it is glass, and every dialog's, menu's and drop zone's. At the " ++
+            "left the glass shows through, frosted; at the right the window's colour is opaque. " ++
+            "Dark and light themes are remembered separately.",
+        .keywords = "transparency alpha glass tint colour color translucent frost blur rough",
         .draw = drawWindowOpacity,
-    },
-    .{
-        .label = "Window roughness",
-        .key = "window_roughness_dark",
-        .key_light = "window_roughness_light",
-        .description = "How rough the window's glass is, and every dialog's, menu's and drop " ++
-            "zone's. 0 is clear, shiny glass bending what is behind it; 1 blurs what is behind " ++
-            "it away. Its edge bends less as it roughens. Dark and light themes are remembered " ++
-            "separately.",
-        .keywords = "blur frost glass refraction bevel edge lens liquid rough smooth",
-        .draw = drawWindowRoughness,
     },
     .{
         .label = "Content opacity",
@@ -432,26 +422,14 @@ fn drawWindowOpacity() void {
         .value = &if (dvui.themeGet().dark) fizzy.editor().app.settings.window_opacity_dark else fizzy.editor().app.settings.window_opacity_light,
         .interval = 0.01,
         .max = 1.0,
-        .min = 0.0,
+        // 0 is a clear window, no glass at all (`core.glass_look`): not a look for the app's own.
+        .min = fizzy.core.glass_look.min_opacity,
     }, .{ .expand = .horizontal })) {
         fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) fizzy.editor().app.settings.window_opacity_dark else fizzy.editor().app.settings.window_opacity_light));
         fizzy.editor().markSettingsDirty();
         dvui.refresh(null, @src(), null);
     }
-    sliderMarks(@src(), &.{ "Clear", "Opaque" }, &.{ 0, 1 });
-}
-
-fn drawWindowRoughness() void {
-    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &if (dvui.themeGet().dark) fizzy.editor().app.settings.window_roughness_dark else fizzy.editor().app.settings.window_roughness_light,
-        .interval = 0.01,
-        .max = 1.0,
-        .min = 0.0,
-    }, .{ .expand = .horizontal })) {
-        fizzy.editor().markSettingsDirty();
-        dvui.refresh(null, @src(), null);
-    }
-    sliderMarks(@src(), &.{ "Clear", "Frosted" }, &.{ 0, 1 });
+    sliderMarks(@src(), &.{ "Frosted", "Opaque" }, &.{ 0, 1 });
 }
 
 /// Names under a slider, each at its place along it (0 the left end, 1 the right).
