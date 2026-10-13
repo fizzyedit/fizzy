@@ -1,7 +1,7 @@
 name: CI
 
-# Every run, a push to main included: three native test jobs (no skipped rows) and the Windows
-# cross-build.
+# Every run, a push to main included: three native test jobs (no skipped rows), the example
+# repos, the integration tests, a verdict run and the Windows cross-build, side by side.
 #
 # `ci-ok` is the one check `main`'s ruleset requires (`.github/rulesets/main.json`), so the
 # workflow runs for every change. A workflow-level `paths-ignore` would never start for a
@@ -102,7 +102,10 @@ jobs:
       - name: Zig cache key
         id: zig-cache-key
         shell: bash
-        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=$prefix${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -121,14 +124,23 @@ jobs:
       # it rebuilt: Linux's grew from 3.7 GB to 6-7 GB in one run, passed the size limit, and
       # was cleared and saved empty, and the run after it started cold. Every other run on
       # main built from nothing, and the near-duplicates filled the repo's 10 GB. Here the key
-      # is fixed and a key can't be overwritten, so only a run that missed saves, and only if
-      # it succeeded: a run cancelled or failed mid-build never leaves a partial cache behind.
+      # is fixed and a key can't be overwritten, so only a run that restored nothing saves, and
+      # only if it succeeded: a run cancelled or failed mid-build never leaves a partial cache
+      # behind.
+      #
+      # A pull request that changes a `build.zig.zon` has a key main never saved, and used to
+      # build cold on every push. It falls back to main's newest cache for the same job
+      # (`restore-keys`, the key's prefix): Zig's cache is content-addressed, so what still
+      # matches is reused and the rest is never read. It saves nothing then: a cache saved on top
+      # of a restored one holds both, the growth described above. Main never falls back, so the
+      # merge that changes a dependency builds it cold and saves a cache of only what it uses.
       - name: Restore Zig cache
         id: zig-cache
         uses: actions/cache/restore@v4
         with:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
       - name: Pre-create Zig cache tmp/
         shell: bash
         run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
@@ -151,11 +163,15 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build test --summary all
 
+      # Not on Windows: the wasm it compiles is the same from any host, Linux and macOS compile it
+      # too, and Windows is the matrix's longest job.
       - name: Fetch wasm dependencies (with retries)
+        if: matrix.name != 'Windows'
         shell: bash
         run: bash scripts/ci-retry.sh zig build --fetch -Dtarget=wasm32-freestanding
 
       - name: Compile web (wasm) build
+        if: matrix.name != 'Windows'
         shell: bash
         run: bash scripts/ci-retry.sh zig build check-web
 
@@ -170,23 +186,63 @@ jobs:
         if: matrix.name == 'macOS'
         run: bash scripts/ci-retry.sh zig build -Dnative-backend=sdl3 -Dno-emit --summary all
 
-      # Fizzy consumed from outside: fizzyedit/example-app (fizzy as a library, in every shape)
-      # and fizzyedit/example-plugin (the plugin template), built against this tree fetched as a
-      # URL dependency would be. The only checks that catch a path resolving against the
-      # consumer's cwd instead of fizzy's build root (`.cwd_relative = "src/App.zig"` once), or a
-      # file missing from `build.zig.zon`'s `.paths` (`VERSION`, `app/`) — both invisible when
-      # fizzy builds itself. Linux only: neither bug is a platform's, and each app compiles its
-      # own SDL3.
-      - name: Build the example repos against this tree
-        if: matrix.name == 'Linux'
-        run: bash scripts/ci-retry.sh bash scripts/check-examples.sh
-
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash
         run: bash scripts/ci-retry.sh zig build test-sdk-version --summary all
 
       - name: Save Zig cache
-        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        if: success() && steps.zig-cache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+
+  # Fizzy consumed from outside: fizzyedit/example-app (fizzy as a library, in every shape) and
+  # fizzyedit/example-plugin (the plugin template), built against this tree fetched as a URL
+  # dependency would be (`scripts/check-examples.sh`). The only checks that catch a path resolving
+  # against the consumer's cwd instead of fizzy's build root (`.cwd_relative = "src/App.zig"`
+  # once), or a file missing from `build.zig.zon`'s `.paths` (`VERSION`, `app/`) — both invisible
+  # when fizzy builds itself. Linux only: neither bug is a platform's. A job of its own: its
+  # eight builds of a tree that changes every commit were the Linux test job's six minutes,
+  # and every run's longest step.
+  examples:
+    name: Example repos (Linux)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The Zig cache as in the test job.
+      - name: Zig cache key
+        id: zig-cache-key
+        shell: bash
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=$prefix${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
+      - name: Pre-create Zig cache tmp/
+        shell: bash
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch dependencies (with retries)
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Build the example repos against this tree
+        shell: bash
+        run: bash scripts/ci-retry.sh bash scripts/check-examples.sh
+
+      - name: Save Zig cache
+        if: success() && steps.zig-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: .zig-cache
@@ -212,7 +268,10 @@ jobs:
       - name: Zig cache key
         id: zig-cache-key
         shell: bash
-        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=$prefix${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -223,6 +282,7 @@ jobs:
         with:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
       - name: Pre-create Zig cache tmp/
         shell: bash
         run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
@@ -234,7 +294,7 @@ jobs:
         run: bash scripts/ci-retry.sh zig build test-integration --summary all
 
       - name: Save Zig cache
-        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        if: success() && steps.zig-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: .zig-cache
@@ -257,7 +317,10 @@ jobs:
       - name: Zig cache key
         id: zig-cache-key
         shell: bash
-        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=$prefix${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -268,6 +331,7 @@ jobs:
         with:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
       - name: Pre-create Zig cache tmp/
         shell: bash
         run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
@@ -288,7 +352,7 @@ jobs:
         run: bash scripts/ci-retry.sh zig build --summary all
       # Saved once the build is, not after the run: a verdict that fails still leaves the cache.
       - name: Save Zig cache
-        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        if: success() && steps.zig-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: .zig-cache
@@ -351,7 +415,10 @@ jobs:
       - name: Zig cache key
         id: zig-cache-key
         shell: bash
-        run: echo "key=zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=$prefix${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -362,6 +429,7 @@ jobs:
         with:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
       - name: Pre-create Zig cache tmp/
         run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
       - name: Fetch dependencies (with retries)
@@ -370,7 +438,7 @@ jobs:
         run: bash scripts/ci-retry.sh zig build -Dtarget=x86_64-windows-gnu -Dnative-backend=fizzy -Dno-emit --summary all
 
       - name: Save Zig cache
-        if: success() && steps.zig-cache.outputs.cache-hit != 'true'
+        if: success() && steps.zig-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: .zig-cache
@@ -382,7 +450,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, test, integration, verdict, windows-fizzy-backend]
+    needs: [changes, test, examples, integration, verdict, windows-fizzy-backend]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped
