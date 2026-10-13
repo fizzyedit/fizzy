@@ -245,9 +245,10 @@ pub const InApp = struct {
     rim: f32,
     /// How much darker the folded band is, 0…1.
     shade: f32,
-    /// Light across the bending band, lighter facing the top left and darker away — the glass's
-    /// bevel, which a full tint does not hide.
-    bevel_light: f32,
+    /// A drop's edge, measured beside the OS's: lit along the diagonal the light runs (top left,
+    /// bottom right), darkened across the other — this much at its brightest. 0 is a window's
+    /// edge instead: an even hairline (`forText`).
+    diagonal: f32,
     /// The colour fringe where the band bends hardest, 0…1.
     dispersion: f32,
 };
@@ -267,11 +268,12 @@ pub fn inApp(opacity: f32) InApp {
         .bend = 1.1 * w.shine,
         .clarity = 0.9 * w.shine,
         .rim = w.shine,
-        // No light or shade across the band: Liquid Glass's edge, measured beside a window of it, is
-        // a hairline (the glass program's), the band between it and the body unshaded. Lit toward
-        // the top left and darkened away, the band read as a bevel in shadow (the user).
+        // No light or shade across the band, only at the edge (the glass program's): lit toward the
+        // top left and darkened away, the band read as a bevel in shadow (the user). A drop's
+        // edge: highlights 110 to 130 over its body along the light's diagonal and 20 under it across
+        // the other, measured on the OS's drops (0–255).
         .shade = 0,
-        .bevel_light = 0,
+        .diagonal = 0.6 * w.shine,
         // A hint of colour fringe: whole, it was red and blue specks along the edge, which
         // Liquid Glass does not show.
         .dispersion = 0.25 * w.shine,
@@ -299,6 +301,8 @@ pub fn forText(look: InApp) InApp {
     // from far outside the edge, in streaks that drew the eye as it moved (the user).
     l.bend *= text_bend;
     l.bevel_cap = text_bevel_cap;
+    // A window's edge: the even hairline an OS window of Liquid Glass has, not a drop's diagonal.
+    l.diagonal = 0;
     return l;
 }
 

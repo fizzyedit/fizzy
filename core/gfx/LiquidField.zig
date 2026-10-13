@@ -166,8 +166,8 @@ pub const Uniforms = extern struct {
     dither: [4]f32,
     /// 1 where the window is opaque behind its content (`publishOpaqueWindow`): the glass is
     /// then opaque, whatever the alpha of the picture it covers. The window's, not the field's:
-    /// `draw` sets it, in the frame; `pack` leaves it 0. Then Apple's lens: its colour fringe, the
-    /// light across its band, the band's widest (physical pixels).
+    /// `draw` sets it, in the frame; `pack` leaves it 0. Then Apple's lens: its colour fringe,
+    /// a drop's diagonal light (0: a window's hairline), the band's widest (physical pixels).
     backdrop: [4]f32 = @splat(0),
     shapes: [max_shapes][shape_vec4s][4]f32,
 
@@ -299,7 +299,7 @@ fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
     u.dither[2] = l.bend * bend_scale;
     u.dither[3] = l.shade;
     u.backdrop[1] = l.dispersion;
-    u.backdrop[2] = l.bevel_light;
+    u.backdrop[2] = l.diagonal;
     u.backdrop[3] = l.bevel_cap * self.scale;
     u.rim[1] = l.clarity * bend_scale;
     u.rim[3] = l.rim;
