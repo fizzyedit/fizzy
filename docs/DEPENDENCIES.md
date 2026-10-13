@@ -23,7 +23,7 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    onto each upstream release.** Each change says what it does, why, its upstream PR if there is
    one, and when it can go. In jj: `jj rebase -s <first fizzy change> -d <new upstream tag>`; a
    conflict stays on the change that caused it. A fork keeps the stack as its branch; SDL's stack
-   is the patch files, exported from and imported into a jj checkout (`scripts/sdl-patches.sh`).
+   is the patch files, exported from and imported into a checkout (`scripts/sdl-patches.sh`).
 2. **Tag, then pin.** GitHub serves `/archive/<sha>.tar.gz` only while the commit is reachable from
    a ref, and a rebase leaves the old commits unreachable. Every pinned commit of a fork gets a tag
    that is never moved or deleted; branches rebase freely. (The dvui rule in `docs/PLUGINS.md`,
@@ -198,14 +198,17 @@ executable bits, which nothing SDL's build runs needs.
 
 **dvui:** as `docs/PLUGINS.md` "Repinning dvui" describes. SDL is not involved.
 
-**SDL, to a new release:** in a jj checkout of `fizzyedit/SDL` with libsdl-org as a remote
+**SDL, to a new release:** in a checkout of `fizzyedit/SDL` with libsdl-org as a remote
 (`jj git remote add upstream https://github.com/libsdl-org/SDL`, then
-`jj git fetch --remote upstream`):
+`jj git fetch --remote upstream`). The script drives it with jj where it is a jj repository and
+jj is installed, and with git otherwise (`git am`, `git format-patch`); git's commands are in
+brackets below.
 
 1. `scripts/sdl-patches.sh import <checkout> <old release>`: the patches as a stack of changes on
    the release they were made against, one each, as described and authored in their headers.
-2. `jj rebase -s <first imported change> -d <new release>`. Resolve each conflict on the change
-   that has it; abandon a change that comes out empty (upstream took it).
+2. `jj rebase -s <first imported change> -d <new release>` (`git rebase --onto <new release>
+   <old release>`). Resolve each conflict on the change that has it; drop a change that comes out
+   empty (upstream took it).
 3. `scripts/sdl-patches.sh export <checkout> <new release>`: the stack back over
    `backend/patches/sdl`. A re-export of an unchanged change is byte-for-byte the same file.
 4. In `fizzyedit/sdl_zig`: its source lists follow SDL's files, so for a release that adds or
@@ -218,7 +221,7 @@ A patch release that touches nothing the patches do needs only step 5 for `.sdl_
 hunk still applies once and the build passes, the patches came through.
 
 **A change to a patch, or a new one:** import, edit the change (`jj edit`, or `jj new` and
-`jj squash`) or add one, export. The export is the edit: build fizzy to try it.
+`jj squash`; `git rebase -i`, or a `--fixup` commit) or add one, export. The export is the edit: build fizzy to try it.
 
 **What fizzy relies on that SDL does not promise.** `GpuRenderer` compiles a Metal program's
 source on a thread of its own (`Compile`): SDL documents no thread for `SDL_CreateGPUShader`, and
