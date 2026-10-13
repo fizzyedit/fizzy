@@ -23,6 +23,7 @@ pub const ns_visual_effect_material: c_long = 15;
 // The window monitor (`FizzyWindowMonitor.m`), which follows the window through Spaces and zooms.
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_visible(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_transition_active(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_entering(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_space_fullness(cocoa_window: ?*anyopaque) f64;
@@ -179,6 +180,16 @@ pub fn windowMaximized(window: *c.SDL_Window) bool {
     }
     const flags = c.SDL_GetWindowFlags(window);
     return flags & (c.SDL_WINDOW_MAXIMIZED | c.SDL_WINDOW_FULLSCREEN) != 0;
+}
+
+/// Whether nothing of `window` is on screen: hidden, minimized, or occluded — on macOS, on
+/// another Space or wholly covered, as AppKit says now (`occlusionState`), not as SDL last heard.
+pub fn windowUnseen(window: *c.SDL_Window) bool {
+    const flags = c.SDL_GetWindowFlags(window);
+    if (flags & (c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) return true;
+    if (builtin.os.tag != .macos) return false;
+    const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    return fizzy_macos_window_visible(ns) == 0;
 }
 
 /// Whether `win` covers the desktop (`windowCovers`).

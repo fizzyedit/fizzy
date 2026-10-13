@@ -119,6 +119,8 @@ pub const automation = struct {
     pub const LiveDriver = @import("replay").LiveDriver;
     /// What is on screen, as text: roles, names, tags, rects (`replay.Snapshot`).
     pub const Snapshot = @import("replay").Snapshot;
+    /// A picture of the window as the app drew it, on screen or not (`replay.Capture`).
+    pub const Capture = @import("replay").Capture;
     /// The `automation` service a plugin plays live tapes through, over a `LiveDriver`.
     pub const Service = @import("automation/Service.zig");
     pub const overlay = @import("automation/overlay.zig");

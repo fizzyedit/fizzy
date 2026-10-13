@@ -2096,6 +2096,12 @@ pub fn deinit(self: *SDLBackend) void {
     self.* = undefined;
 }
 
+/// The main window shows nothing: hidden, minimized, occluded (macOS: on another Space, or wholly
+/// covered; `platform.window.windowUnseen`), or its last frame reached no drawable.
+pub fn unseen(self: *SDLBackend) bool {
+    return platform.window.windowUnseen(self.window) or !self.gpu.presented;
+}
+
 pub fn renderPresent(self: *SDLBackend) void {
     // First, so it runs last: after the viewports' own transaction below is committed into it.
     defer if (self.present_hook) |hook| hook(self);
@@ -3392,6 +3398,9 @@ pub fn appFrameOpen() bool {
 /// A frame is being run from inside an OS callback (`callbackFrames`), not by SDL's loop.
 var app_callback_frames = false;
 
+/// The least a frame takes while the window is unseen (`appIterate`): a 60 Hz display's interval.
+const hidden_frame_ns: u64 = 16_666_667;
+
 /// Frames run from here on are run from inside an OS callback — the macOS window monitor's pump,
 /// from AppKit's timers and notifications through a transition — until `on` is false. Such a
 /// frame never waits for events after it presents: the wait would be an event loop nested in
@@ -3558,7 +3567,8 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
     defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
 
-    Health.current.frameBegin(c.SDL_GetTicksNS());
+    const frame_start_ns = c.SDL_GetTicksNS();
+    Health.current.frameBegin(frame_start_ns);
     const trace = live_resize_trace.begin(&appState.back);
 
     // beginWait coordinates with waitTime below to run frames only when needed
@@ -3601,6 +3611,17 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     if (res != .ok) return c.SDL_APP_SUCCESS;
 
     const wait_event_micros = appState.win.waitTime(end_micros);
+    // Hidden, occluded or minimized, no display paces the frames: on another Space macOS still
+    // hands out drawables, and presents them at once to a window nobody sees. So a frame there
+    // takes a display interval at least, sleeping out the rest of it — rather than the loop
+    // spinning a core: an agent driving a window on another Space asked for a frame every frame,
+    // and got 261 a second. A sleep, not a longer wait: a plugin's `Host.refresh` wakes the wait at
+    // once. Nothing can be clicked meanwhile; the frames themselves go on, into the frame's own
+    // target, for whoever reads it.
+    if (appState.back.unseen()) {
+        const spent = c.SDL_GetTicksNS() - frame_start_ns;
+        if (spent < hidden_frame_ns) c.SDL_DelayNS(hidden_frame_ns - spent);
+    }
     if (trace) |t| live_resize_trace.end(t, &appState.back, wait_event_micros);
 
     const in_live_resize = appState.back.inLiveResize();

@@ -232,6 +232,15 @@ pub fn end(self: *FrameTarget) void {
     dvui.renderTexture(tex, .{ .r = at, .s = 1 }, .{ .uv = uv }) catch {};
 }
 
+/// The frame this one drew, once `end` has run: its target and the part of it drawn, top left
+/// (`drawn`; the target can be kept larger). Null in a frame nobody sees (`unseen`), or on a backend
+/// without targets. Read back by an agent's picture of the window (`replay.Capture`).
+pub fn picture(self: *const FrameTarget) ?struct { target: dvui.Texture.Target, w: u32, h: u32 } {
+    if (self.bound) return null;
+    const t = self.target orelse return null;
+    return .{ .target = t, .w = self.drawn[0], .h = self.drawn[1] };
+}
+
 /// Drop the targets. Only valid between `Window.begin` and `Window.end`.
 pub fn deinit(self: *FrameTarget) void {
     for (self.targets) |slot| if (slot) |t| t.destroyLater();

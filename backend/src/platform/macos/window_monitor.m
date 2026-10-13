@@ -936,6 +936,15 @@ void fizzy_macos_window_prefer_fullscreen_space(void *nswindow) {
     [window setCollectionBehavior:behavior];
 }
 
+/* Whether any of the window is visible on screen (AppKit's own `occlusionState`): not on another
+ * Space, not wholly covered, not minimized. Read each frame rather than from SDL's occlusion event,
+ * which a window never seen since it opened on another Space has never had. */
+int fizzy_macos_window_visible(void *nswindow) {
+    if (!nswindow) return 1;
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    return ([window occlusionState] & NSWindowOcclusionStateVisible) != 0 ? 1 : 0;
+}
+
 int fizzy_macos_window_chrome_hidden(void *nswindow) {
     if (!nswindow) return 0;
     return window_in_fullscreen_space((__bridge NSWindow *)nswindow) ? 1 : 0;

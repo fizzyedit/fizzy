@@ -18,6 +18,7 @@ const sdk = @import("fizzy_sdk");
 const Tape = @import("tape").Tape;
 const LiveDriver = @import("replay").LiveDriver;
 const Snapshot = @import("replay").Snapshot;
+const Capture = @import("replay").Capture;
 const Input = @import("replay").Input;
 
 const Api = sdk.services.automation.Api;
@@ -29,6 +30,9 @@ other: ?Other = null,
 /// What `snapshot` takes, framed by the app (`Snapshot.beginFrame` / `endFrame`). Null: no
 /// snapshots, and `snapshotText` is always null.
 snapshots: ?*Snapshot = null,
+/// What `capture` takes, read back by the app at the end of its frame (`Capture.endFrame`). Null:
+/// no pictures, and `captureImage` is always null.
+captures: ?*Capture = null,
 /// The value to register (`Host.registerService`), pointing back here.
 api: Api = undefined,
 /// The ticket the driver's current or last tape was played under.
@@ -64,6 +68,8 @@ const vtable: Api.VTable = .{
     .settled = settled,
     .snapshot = snapshot,
     .snapshotText = snapshotText,
+    .capture = capture,
+    .captureImage = captureImage,
 };
 
 fn from(ctx: *anyopaque) *Service {
@@ -153,4 +159,14 @@ fn snapshot(ctx: *anyopaque) Api.SnapshotTicket {
 fn snapshotText(ctx: *anyopaque, ticket: Api.SnapshotTicket) ?[]const u8 {
     const s = from(ctx).snapshots orelse return null;
     return s.get(@intFromEnum(ticket));
+}
+
+fn capture(ctx: *anyopaque) Api.CaptureTicket {
+    const c = from(ctx).captures orelse return @enumFromInt(0);
+    return @enumFromInt(c.request());
+}
+
+fn captureImage(ctx: *anyopaque, ticket: Api.CaptureTicket) ?[]const u8 {
+    const c = from(ctx).captures orelse return null;
+    return c.get(@intFromEnum(ticket));
 }

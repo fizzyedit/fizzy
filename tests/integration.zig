@@ -7244,3 +7244,49 @@ test "the output panel settles as lines arrive, in panes of every height" {
         }
     }
 }
+
+// ---- A picture of the window, for an agent ------------------------------------------------------
+
+var capture_under_test: automation.Capture = undefined;
+var capture_target: dvui.Texture.Target = undefined;
+
+/// A frame that ends as fizzy's does: the frame target read back for whoever asked.
+fn captureFrame() !dvui.App.Result {
+    capture_under_test.endFrame(capture_target, 3, 2);
+    return .ok;
+}
+
+test "a capture is the drawn part of the frame target, as a PNG, once taken" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 100, .h = 100 } });
+    defer t.deinit();
+    capture_under_test = .init(std.testing.allocator);
+    defer capture_under_test.deinit();
+
+    // A 4x2 target, premultiplied, of which the frame drew the left 3 columns.
+    var pixels: [4 * 2 * 4]u8 = @splat(0);
+    pixels[0..4].* = .{ 128, 0, 0, 128 }; // half-transparent red, premultiplied
+    pixels[4..8].* = .{ 0, 255, 0, 255 };
+    capture_target = .{ .ptr = &pixels, .width = 4, .height = 2, .format = .rgba_32, .interpolation = .nearest, .wrap_u = .clamp, .wrap_v = .clamp };
+
+    // Nothing asked: a frame takes no picture.
+    _ = try dvui.testing.step(captureFrame);
+    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(1));
+
+    const n = capture_under_test.request();
+    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
+    try std.testing.expectEqual(n, capture_under_test.request()); // asked again before it is taken
+    _ = try dvui.testing.step(captureFrame);
+    const png = capture_under_test.get(n) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, &.{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' }, png[0..8]);
+    // IHDR: the drawn part's width and height, not the target's.
+    try std.testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, png[16..20], .big));
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, png[20..24], .big));
+
+    // The next is a new picture; the last stays until it is taken.
+    const m = capture_under_test.request();
+    try std.testing.expect(m != n);
+    try std.testing.expect(capture_under_test.get(n) != null);
+    _ = try dvui.testing.step(captureFrame);
+    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
+    try std.testing.expect(capture_under_test.get(m) != null);
+}

@@ -10,6 +10,7 @@
 //!   idle.
 //! - `anchor` names widgets for a tape to aim at (`dvui.tag`, with names built from data).
 //! - `Snapshot` says what is on screen, as text: roles, names, tags, rects.
+//! - `Capture` is a picture of it, read back from the app's own frame target, on screen or not.
 //! - `overlay` draws the tape's pointer and its clicks, plainly — an app may draw its own.
 //!
 //! See `docs/AUTOMATION.md` and `plans/AUTOMATION_PLAN.md`.
@@ -19,6 +20,7 @@ pub const Input = @import("Input.zig");
 pub const Stage = @import("Stage.zig");
 pub const anchor = @import("anchor.zig");
 pub const Snapshot = @import("Snapshot.zig");
+pub const Capture = @import("Capture.zig");
 pub const overlay = @import("overlay.zig");
 
 test {
@@ -28,5 +30,6 @@ test {
     _ = Stage;
     _ = anchor;
     _ = Snapshot;
+    _ = Capture;
     _ = overlay;
 }

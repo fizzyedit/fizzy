@@ -224,6 +224,10 @@ swapchain: ?*c.SDL_GPUTexture = null,
 swapchain_w: u32 = 0,
 swapchain_h: u32 = 0,
 swapchain_state: enum { none, acquired, unavailable } = .none,
+/// Whether the last frame reached the window (`present`): false while it is hidden, occluded or
+/// minimized, where there is no drawable, and the app's frames are paced by nothing
+/// (`SDLBackend.appIterate`).
+presented: bool = false,
 /// The window keeps its last picture this frame (`SDLBackend.begin`): no drawable is waited for,
 /// and nothing is drawn to it, as when it is minimized. Its offscreen targets — a float window's
 /// picture among them — are drawn as ever.
@@ -587,6 +591,7 @@ pub fn present(self: *GpuRenderer, clear_if_empty: bool, finish: bool) void {
         self.windowPass() catch |err| log.err("present clear: {any}", .{err});
     }
     if (self.swapchain_state == .acquired) health.presents += 1 else health.presents_skipped += 1;
+    self.presented = self.swapchain_state == .acquired;
     if (finish) {
         self.submitAndWait() catch |err| log.err("present: {any}", .{err});
     } else {
