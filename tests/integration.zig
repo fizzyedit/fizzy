@@ -6830,6 +6830,19 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
         try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = true") != null);
         try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = false") != null);
+
+        // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
+        // closes once it lands.
+        try std.testing.expect(doc.owner.isDirty(doc));
+        try fizzy.Editor.Dialogs.UnsavedClose.saveAndClose(doc.id);
+        for (0..50) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (editor.docFromPath(main_zig) == null) break;
+        }
+        try std.testing.expect(editor.docFromPath(main_zig) == null);
+        const on_disk = try std.Io.Dir.cwd().readFileAlloc(dvui.io, main_zig, gpa, .limited(1024));
+        defer gpa.free(on_disk);
+        try std.testing.expectEqualStrings("// top\nconst a = 42;\nconst b = 3;\n", on_disk);
     }
 
     // New File's editor takes the keyboard: what is typed next lands in it, no click first.

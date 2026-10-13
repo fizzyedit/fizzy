@@ -5630,14 +5630,19 @@ pub fn save(editor: *Editor) !void {
         doc.owner.requestSaveConfirmation(doc, .editor_save, false);
         return;
     }
-    if (editor.hostWrites(doc)) {
-        try editor.saveThroughHost(doc);
-        return;
-    }
-    if (comptime builtin.target.cpu.arch == .wasm32) {
+    if (comptime builtin.target.cpu.arch == .wasm32) if (!editor.hostWrites(doc)) {
         editor.requestWebSaveDialog(.save);
         return;
-    }
+    };
+    try editor.writeDocument(doc);
+}
+
+/// Write `doc` where it is, once whatever asks first (an unrecognized extension, a conflict on
+/// disk, a confirmation) has been answered: fizzy writes it when it can (`hostWrites`: always on a
+/// mount, and whenever its owner serializes), else its owner does. Save, and Save and Close, both
+/// end here, so a document saves the same way whichever asked.
+pub fn writeDocument(editor: *Editor, doc: sdk.DocHandle) !void {
+    if (editor.hostWrites(doc)) return editor.saveThroughHost(doc);
     if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
     try doc.owner.saveDocument(doc);
     if (editor.document_watcher) |*w| w.noteSaved(doc.id);
@@ -5646,7 +5651,7 @@ pub fn save(editor: *Editor) !void {
 /// Whether the host writes this document (`DocumentIo`) rather than its owner: always on a
 /// mount, and on the disk whenever the owner can serialize. An owner without `documentBytes`
 /// writes its own files — and can only ever reach the disk.
-fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
+pub fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
     if (editor.doc_io.owns(doc.owner.documentPath(doc))) return true;
     if (comptime builtin.target.cpu.arch == .wasm32) return false; // the disk does not exist there
     return doc.owner.canSaveThroughHost();

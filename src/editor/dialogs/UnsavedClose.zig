@@ -76,7 +76,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (dialogButton(@src(), "Save and Close", .highlight, 2, 1)) {
-        try onSaveAndClose(file_id);
+        try saveAndClose(file_id);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (dialogButton(@src(), "Cancel", .control, 3, 2)) {
@@ -96,20 +96,23 @@ fn onCancel() void {
 }
 
 fn beginSaveAndClose(doc: fizzy.sdk.DocHandle, file_id: u64) !void {
-    if (doc.owner.isDocumentSaving(doc)) return;
-    if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+    if (fizzy.editor().docSaving(doc)) return;
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) if (!fizzy.editor().hostWrites(doc)) {
         const idx = fizzy.editor().app.open_files.getIndex(file_id) orelse return;
         fizzy.editor().workbench.setActiveDocIndex(idx);
         fizzy.editor().app.pending_close_file_id = file_id;
         fizzy.editor().requestWebSaveDialog(.save);
         return;
-    }
-    if (fizzy.editor().document_watcher) |*w| w.markPendingBaseline(file_id);
-    try doc.owner.saveDocumentAsync(doc);
+    };
+    // The same write Save makes: fizzy's when it writes this document (a mount, an owner that
+    // serializes), else its owner's. The tab closes once the write lands and the document is
+    // clean (`tickPendingSaveCloses`); a failed save leaves it open with its edits.
+    try fizzy.editor().writeDocument(doc);
     try fizzy.editor().app.pending_close_after_save.put(fizzy.entry().allocator, file_id, {});
 }
 
-fn onSaveAndClose(file_id: u64) !void {
+/// The dialog's Save: save `file_id` as Save would, then close it once the write lands.
+pub fn saveAndClose(file_id: u64) !void {
     const doc = fizzy.editor().app.docById(file_id) orelse return;
     if (!doc.owner.documentHasRecognizedSaveExtension(doc)) {
         const idx = fizzy.editor().app.open_files.getIndex(file_id) orelse return;
