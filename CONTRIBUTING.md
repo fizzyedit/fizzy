@@ -88,8 +88,10 @@ The open PR list is the board of who is working on what.
 - **Read the Build Summary, not the test count.** `test-integration` prints `failed command:`
   whenever a test logs a warning, even on a pass, and can show `N/N tests passed` beside a failed
   step. Only `N/N steps succeeded` is a pass.
-- **Know what a green run covered.** `addTest` collects tests from its root module only; check
-  the list in `build/app.zig` before citing a run for a file's tests.
+- **Know what a green run covered.** `addTest` collects tests from its root module only, and
+  only from files that module analyzes. `zig build check-tests-reached` (run in CI) fails when a
+  `test` block is compiled into no test binary, naming it; a new test file needs a root in
+  `build/app.zig` or a `test { _ = @import(...); }` from a file that has one.
 - **A plugin's plain `zig build` also installs** into the real plugins directory. For a sandbox
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its

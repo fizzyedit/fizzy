@@ -21,4 +21,7 @@ test {
     // Not a sizing file, but it needs what this root has — dvui and the icon sets — and no other
     // test root carries both. Its tests are the key table and the modifier order per platform.
     _ = @import("keycaps.zig");
+    // The smooth union the dialogs' and floats' bubbles run together with: its tests are
+    // arithmetic, but the file speaks in dvui's points.
+    _ = @import("gfx/liquid_blob.zig");
 }

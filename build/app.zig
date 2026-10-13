@@ -1079,6 +1079,26 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     test_integration_step.dependOn(&b.addRunArtifact(app_tests).step);
     check_integration_step.dependOn(&app_tests.step);
 
+    // The markdown preview's claims about what md4c parses: the AST built from its events and
+    // `[[wikilink]]` escaping. They need md4c linked, so they sit outside the std-only list;
+    // `wikilink_scan.zig` reaches `ast.zig`. The plugin's own `zig build test` runs the same.
+    {
+        const md_parser_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("plugins/markdown/src/md/wikilink_scan.zig"),
+        });
+        md_parser_module.addImport("fizzy_sdk", sdk_module_test);
+        plugins.markdown.addMd4zig(b, target, optimize, md_parser_module);
+        const md_parser_tests = b.addTest(.{
+            .name = "fizzy-md-parser-tests",
+            .root_module = md_parser_module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(md_parser_tests).step);
+        check_integration_step.dependOn(&md_parser_tests.step);
+    }
+
     // The frame profiler's own tests (`core/profile.zig`): it publishes itself through dvui's
     // window store and reads dvui's clock, so it is not one of the std-only roots above, and as
     // part of the named `core` module its tests were never collected. Rooted at the file, against
@@ -1274,6 +1294,38 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         }
     }
 
+    // The text plugin's own tests: its entry widget's buffer handling, against a real headless
+    // Window. The integration tests import the plugin as a module, and `addTest` collects only
+    // from its root module, so they never ran these.
+    {
+        const text_plugin_tests = b.addTest(.{
+            .name = "fizzy-text-plugin-tests",
+            .root_module = text_module_test,
+            .filters = test_filters,
+        });
+        text_plugin_tests.root_module.link_libcpp = !target_is_windows_msvc;
+        test_integration_step.dependOn(&b.addRunArtifact(text_plugin_tests).step);
+        check_integration_step.dependOn(&text_plugin_tests.step);
+    }
+
+    // Every `test` block in the repo is in a binary some step builds (`scripts/tests_reached.zig`):
+    // `test`, `test-integration`, a `bench-*`. The binaries come from the steps themselves, so a
+    // test root added to any of them is counted without being listed here.
+    {
+        const tool = b.addExecutable(.{
+            .name = "tests-reached",
+            .root_module = b.createModule(.{
+                .target = b.graph.host,
+                .root_source_file = b.path("scripts/tests_reached.zig"),
+            }),
+        });
+        const run = b.addRunArtifact(tool);
+        run.addDirectoryArg(b.path("."));
+        var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+        for (b.top_level_steps.values()) |top| try addTestBinaryArgs(b, run, &seen, &top.step);
+        b.step("check-tests-reached", "Check every test block is compiled into a test that runs").dependOn(&run.step);
+    }
+
     if (win_libc.needs_setup) if (msvcup_before_compile) |msvcup| {
         exe.step.dependOn(&msvcup.step);
         if (!velopack_enabled and velopack_supported_for_target) {
@@ -1371,6 +1423,25 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
                 for (roots[0..n]) |rc| rc.step.dependOn(fail);
             }
         }
+    }
+}
+
+/// Each test compile `step` depends on, through its run steps, as `<root source file> <binary>`
+/// arguments of `run`. A compile's own dependencies are other compiles, not tests, so the walk
+/// stops at one.
+fn addTestBinaryArgs(
+    b: *std.Build,
+    run: *std.Build.Step.Run,
+    seen: *std.AutoHashMapUnmanaged(*std.Build.Step, void),
+    step: *std.Build.Step,
+) !void {
+    for (step.dependencies.items) |dep| {
+        if ((try seen.getOrPut(b.allocator, dep)).found_existing) continue;
+        if (dep.cast(std.Build.Step.Compile)) |compile| {
+            if (compile.kind != .@"test") continue;
+            run.addFileArg(compile.root_module.root_source_file.?);
+            run.addArtifactArg(compile);
+        } else try addTestBinaryArgs(b, run, seen, dep);
     }
 }
 

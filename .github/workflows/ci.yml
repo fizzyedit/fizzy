@@ -337,6 +337,11 @@ jobs:
       - name: Run integration tests
         shell: bash
         run: bash scripts/ci-retry.sh zig build test-integration --summary all
+      # Every `test` block is in a test binary some step builds; one no root reaches compiles
+      # nowhere, and the green run above says nothing about it. Reuses the binaries just built.
+      - name: Every test is compiled
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build check-tests-reached --summary all
 
       - name: Save Zig cache
         if: success() && steps.zig-cache.outputs.cache-matched-key == ''
