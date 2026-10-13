@@ -4571,6 +4571,7 @@ test "motion: every level arrives on time, and passes through without a kink" {
 
 const automation = @import("app").automation;
 const ExecutableWatcher = @import("app").watch.ExecutableWatcher;
+const SettingsWatcher = @import("app").watch.SettingsWatcher;
 
 const DemoStage = struct {
     keyframes: usize = 0,
@@ -7034,6 +7035,50 @@ test "executable watcher: a rebuild is a replaced executable that has held still
     try std.testing.expect(!w.tick()); // settling
     w.pending_ns -= ExecutableWatcher.settle_ns;
     try std.testing.expect(w.tick());
+}
+
+// `SettingsWatcher` over the config folder while the app keeps its own state beside the settings:
+// a crash checkpoint, a restart's session. On Linux the watch is recursive by hand (nightwatch adds
+// an inotify watch for each folder it sees appear, on its own thread), so a folder made and
+// removed before that thread gets to it logs an error. The app's state folders are emptied, never
+// removed: none of them can vanish under it, however fast the writes come.
+test "settings watcher: the app's state folders come and go under it without an error" {
+    if (comptime !SettingsWatcher.have_impl) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const config = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+
+    var w = try SettingsWatcher.init(gpa, config);
+    try w.start();
+    defer w.stop();
+
+    const Checkpoint = fizzy.Editor.Checkpoint;
+    const KeptDocuments = fizzy.Editor.KeptDocuments;
+    const checkpoint = try Checkpoint.dir(gpa, config);
+    defer gpa.free(checkpoint);
+    const session = try KeptDocuments.sessionDir(gpa, config);
+    defer gpa.free(session);
+    var kept: KeptDocuments = .{ .gpa = gpa };
+    defer kept.deinit();
+    for (0..2000) |_| {
+        // A checkpoint written and recovered, one cut off before its `session.zon`, and one a
+        // restart's session supersedes: each the first thing the next launch reads.
+        try kept.saveGeneration(checkpoint, 1);
+        try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
+        try std.Io.Dir.cwd().createDirPath(dvui.io, checkpoint);
+        try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
+        try kept.saveGeneration(checkpoint, 2);
+        try std.testing.expect(Checkpoint.recover(gpa, config, true) == null);
+        // A restart's session, written and read once.
+        try kept.save(session);
+        var loaded = KeptDocuments.loadSession(gpa, session) orelse return error.TestUnexpectedResult;
+        loaded.deinit();
+    }
 }
 
 // ── The automation service ──────────────────────────────────────────────────────────────────────
