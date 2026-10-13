@@ -81,7 +81,7 @@ float4 main(PSInput input) : SV_Target0
     float4 g3 = uData[3];
     float4 g4 = uData[4];
     float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
-    float4 g6 = uData[6]; // opaque window; the lens: dispersion, bevel light, the band's cap
+    float4 g6 = uData[6]; // opaque window; the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
     bool inward = g5.y > 0.0;
 
     float d1 = 1e9; float d2 = 1e9; float4 m1 = float4(0.0, 0.0, 0.0, 0.0); float4 m2 = float4(0.0, 0.0, 0.0, 0.0);
@@ -135,15 +135,22 @@ float4 main(PSInput input) : SV_Target0
     }
     float4 frost = Frost.SampleLevel(FrostSampler, uv, 0.0);
     float4 sharp = g4.w > 0.5 ? Sharp.SampleLevel(SharpSampler, uv, 0.0) : frost;
+    // The colour fringe: red and blue from either side, each un-premultiplied by its own alpha and
+    // put back at the middle's. By the middle's alone, at the edge of a clear part of the window
+    // the two alphas differ widely, and the fringe came out as red and blue specks.
     if (inward && g6.y > 0.0 && disp > 0.5) {
         float2 du = outv * (disp * 0.04 * g6.y) * g0.zw;
         float2 uvr = clamp(uv + du, 0.0, 1.0);
         float2 uvb = clamp(uv - du, 0.0, 1.0);
-        frost.r = Frost.SampleLevel(FrostSampler, uvr, 0.0).r;
-        frost.b = Frost.SampleLevel(FrostSampler, uvb, 0.0).b;
+        float4 frost_r = Frost.SampleLevel(FrostSampler, uvr, 0.0);
+        frost.r = frost_r.r / max(frost_r.a, 1e-4) * frost.a;
+        float4 frost_b = Frost.SampleLevel(FrostSampler, uvb, 0.0);
+        frost.b = frost_b.b / max(frost_b.a, 1e-4) * frost.a;
         if (g4.w > 0.5) {
-            sharp.r = Sharp.SampleLevel(SharpSampler, uvr, 0.0).r;
-            sharp.b = Sharp.SampleLevel(SharpSampler, uvb, 0.0).b;
+            float4 sharp_r = Sharp.SampleLevel(SharpSampler, uvr, 0.0);
+            sharp.r = sharp_r.r / max(sharp_r.a, 1e-4) * sharp.a;
+            float4 sharp_b = Sharp.SampleLevel(SharpSampler, uvb, 0.0);
+            sharp.b = sharp_b.b / max(sharp_b.a, 1e-4) * sharp.a;
         } else {
             sharp.r = frost.r;
             sharp.b = frost.b;
@@ -160,6 +167,11 @@ float4 main(PSInput input) : SV_Target0
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
     float mixv = g4.z > 0.5 ? g4.x : 0.0;
+    // Apple's lens: the window's colour fades out across the band, as an OS window's does
+    // (`glass_look.window`, its feather: strong most of the way, gone at the edge), so the edge stays
+    // the lens bending what is behind it — unless the colour is near whole, when it covers the edge
+    // too (`glass_look.shine_start`, 0.8 to 1).
+    if (inward) mixv *= 1.0 - t * t * (1.0 - smoothstep(0.8, 1.0, mixv));
     float4 c = lerp(sharp, frost, b) * (1.0 - mixv);
     float a = clamp(g2.y * lens * (inward ? t : steepR * steepR) * (1.0 - mixv), 0.0, 1.0);
     c = sharp * a + c * (1.0 - sharp.a * a);
@@ -167,17 +179,42 @@ float4 main(PSInput input) : SV_Target0
     // A translucent tint lies over the frost, not over what is behind the window: the glass is
     // opaque here, and `under` alone says how much of the desktop's material shows through it.
     c += frost * (1.0 - c.a);
-    if (inward) c.rgb *= 1.0 - g5.w * t * t;
+    // The way the edge faces, against a light from the top left.
     float facing = dot(outv, float2(-0.70710678, -0.70710678));
     float toward = max(facing, 0.0);
     float away = max(-facing, 0.0);
-    float spec = 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + (inward ? 0.15 : 0.06);
-    float line_ = exp(-max(0.0, -D) / g2.z);
+    // Apple's lens has two edges, measured beside the OS's (`g6.z`, `glass_look.InApp.diagonal`):
+    // - a drop's (> 0): lit along the diagonal the light runs, top left and bottom right, about
+    //   three pixels in and only near the diagonal; darkened across the other, top right and
+    //   bottom left; nothing at the sides square to the light;
+    // - a window's (0): a dark hairline at the very edge and a bright one, two pixels, just inside
+    //   it, the same on every side (the OS window's own border, as Liquid Glass windows have).
+    // Nothing across the band in either. Shade is the glass's own, not the picture's: a dark layer
+    // over it, as whole where the picture is see-through as where it is not. `px` is a point, in
+    // pixels (the rim line's width is 0.8 of one, `LiquidField.rim_line_width`).
+    float px = g2.z * 1.25;
+    float af = abs(facing);
+    bool diagonal = inward && g6.z > 0.0;
+    float edge_dark = diagonal ? g6.z * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
+                               : 0.85 * (1.0 - smoothstep(0.0, 0.5 * px, -D));
+    float shade = inward ? max(g5.w * t * t, edge_dark) : 0.0;
+    float4 o = float4(c.rgb * (under * (1.0 - shade)), under * (1.0 - shade) + shade);
+    float spec = inward ? (diagonal ? g6.z * smoothstep(0.75, 1.0, af) : 0.25)
+                        : 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + 0.06;
+    float line_ = diagonal ? exp(-max(0.0, -D) / px)
+             : inward ? smoothstep(0.25 * px, 0.5 * px, -D) * (1.0 - smoothstep(1.2 * px, 1.6 * px, -D))
+                        : exp(-max(0.0, -D) / g2.z);
     float lit = line_ * spec + (inward ? 0.0 : 0.04 * steepL * toward);
     float lift = (g4.z > 0.5 ? g4.y : 0.0) + mat.z;
-    c += (float4)clamp(lift + lens * g2.w * lit, 0.0, 1.0);
-    if (inward) c.rgb += g6.z * lens * t * facing;
-    c = clamp(c, 0.0, 1.0);
-    c.rgb += (noise(p) - 0.5) * g5.x * c.a;
-    return clamp(c, 0.0, 1.0) * (under * cov);
+    // The glass's own light, added whole. Scaled with the picture, it went wherever the picture
+    // was see-through — over the explorer, which is the window's OS glass — and the glass all but
+    // vanished there, rim and all, where Liquid Glass keeps its bright rim over anything.
+    o.rgb += float3(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
+    o = clamp(o, 0.0, 1.0);
+    // Light over a see-through picture carries its own alpha: brighter than its alpha, a pixel is
+    // no colour premultiplied, and the frost captured from this frame next (`rgb / a`) blew it up
+    // into bright specks wherever the window is clear — over the explorer. Opaque, alpha is 1.
+    o.a = max(o.a, max(o.r, max(o.g, o.b)));
+    o.rgb += (noise(p) - 0.5) * g5.x * o.a;
+    return clamp(o, 0.0, 1.0) * cov;
 }

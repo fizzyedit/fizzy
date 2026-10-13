@@ -192,9 +192,8 @@ loading_jobs: std.StringHashMapUnmanaged(*FileLoadJob) = .empty,
 last_load_request_path: ?[]const u8 = null,
 
 /// The window's glass as the user set it for this theme (`Settings.window_opacity_dark`, …): its
-/// opacity, and its roughness (`core.glass_look`).
+/// opacity (`core.glass_look`).
 window_opacity: f32 = 1.0,
-window_roughness: f32 = 1.0,
 
 /// The window's opacity as drawn (`easeWindowOpacity`): toward the windowed target (translucent,
 /// the glass or vibrancy showing through) or opaque while it covers the desktop, fading with the
@@ -3342,8 +3341,6 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.font_mono_size = parsed.font_mono_size;
     editor.app.settings.window_opacity_dark = parsed.window_opacity_dark;
     editor.app.settings.window_opacity_light = parsed.window_opacity_light;
-    editor.app.settings.window_roughness_dark = parsed.window_roughness_dark;
-    editor.app.settings.window_roughness_light = parsed.window_roughness_light;
     editor.app.settings.content_opacity = parsed.content_opacity;
     editor.app.settings.modal_dim = parsed.modal_dim;
     editor.app.settings.corner_roundness = parsed.corner_roundness;
@@ -3730,13 +3727,13 @@ pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, fullness: 
     }
 }
 
-/// A window of Liquid Glass at `opacity` and `roughness` (`backend.windowGlass`), `size` points:
-/// the glass `core.glass_look.window` makes of them, in the content fill as the window's colour, its
+/// A window of Liquid Glass at `opacity` (`backend.windowGlass`), `size` points: the glass
+/// `core.glass_look.window` makes of it, in the content fill as the window's colour, its
 /// clearing bevel the one every glass has for its size (`core.glass_look.band`). The main window's
 /// and every float's own window's alike.
-pub fn windowGlassLook(opacity: f32, roughness: f32, size: dvui.Size.Natural) fizzy.backend.WindowGlassLook {
+pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.WindowGlassLook {
     const glass_look = fizzy.core.glass_look;
-    const look = glass_look.window(opacity, roughness);
+    const look = glass_look.window(opacity);
     const band = glass_look.band(@min(size.w, size.h) / 2);
     return .{
         .under_variant = look.under.variant,
@@ -3755,18 +3752,19 @@ pub fn windowGlassLook(opacity: f32, roughness: f32, size: dvui.Size.Natural) fi
     };
 }
 
-/// A window's base at `opacity`: the theme's content fill over the OS's material where the window
-/// has one (macOS, Windows; Linux where the compositor blurs behind it), lightened as it goes see-through so the material behind reads as the
-/// same tone; opaque where there is none. Every window fizzy draws stands on it — the main window,
-/// a float's own window, the carry window (`Popout.base`) — so side by side they are one colour.
+/// A window's base at `opacity` (`core.glass_look.base`): the theme's content fill over the OS's
+/// material where the window has one (macOS, Windows; Linux where the compositor blurs behind it),
+/// lightened as it goes see-through so the material behind reads as the same tone; opaque where
+/// there is none; clear at 0. Every window fizzy draws stands on it — the main window, a float's
+/// own window, the carry window (`Popout.base`) — so side by side they are one colour.
 pub fn windowBase(opacity: f32) dvui.Color {
-    const fill = dvui.themeGet().color(.content, .fill);
     const material = switch (builtin.os.tag) {
         .macos, .windows => true,
         .linux => fizzy.editor().blurred_behind,
         else => false,
     };
-    return if (material) fill.opacity(opacity).lighten((1.0 - opacity) * 4.0) else fill;
+    const b = fizzy.core.glass_look.base(opacity, material);
+    return dvui.themeGet().color(.content, .fill).opacity(b.alpha).lighten(b.lighten);
 }
 
 /// Whether a setting the app takes only at launch has been changed since (`Popout.restartPending`):
@@ -3790,21 +3788,20 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         const fill: dvui.Color = dvui.themeGet().color(.content, .fill);
         const chrome = fill;
         const dark = dvui.themeGet().dark;
-        const opacity = if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
-        const roughness = if (dark) editor.app.settings.window_roughness_dark else editor.app.settings.window_roughness_light;
         const glass_look = fizzy.core.glass_look;
-        // Every glass the app draws is the window's, on its two sliders as the user set them — not
-        // as the window eases to opaque when maximized (`core.glass_look`). On macOS, with the
-        // glass program, Apple's lens (`inApp`), as the OS's Liquid Glass beside it is: its frost
-        // over a blur at the full roughness, and its own colour and bend. Elsewhere — the web,
-        // Linux, Windows, where there is no OS glass to match — the app's frosted pane
-        // (`frosted`): the clear liquid glass the web has always had, the roughness its blur.
+        // Every glass the app draws is the window's, at its opacity as the user set it — not as the
+        // window eases to opaque when maximized (`core.glass_look`) — and glass even where the
+        // window is clear (0): a dialog or a menu always carries something to read. On macOS, with
+        // the glass program, Apple's lens (`inApp`), as the OS's Liquid Glass beside it is: its
+        // frost over a blur at the full frost, and its own colour and bend. Elsewhere — the web,
+        // Linux, Windows, where there is no OS glass to match — the app's frosted pane (`frosted`).
+        const opacity = @max(if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light, glass_look.min_opacity);
         const lens = builtin.os.tag == .macos and editor.app.settings.glass_shader;
-        const pane = glass_look.frosted(opacity, roughness);
+        const pane = glass_look.frosted(opacity);
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
             .opacity = pane.mix,
-            .blur = if (lens) glass_look.max_blur else pane.blur,
+            .blur = if (lens) glass_look.text_blur else pane.blur,
             .lift = 0,
             .detail = 0,
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
@@ -3812,7 +3809,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         });
         // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
         fizzy.core.dialogs.publishRefraction(if (lens) 1 else pane.refraction);
-        fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity, roughness) else null);
+        fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
@@ -3839,7 +3836,6 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.promoteEditedPreviews();
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
-    editor.window_roughness = if (dvui.themeGet().dark) editor.app.settings.window_roughness_dark else editor.app.settings.window_roughness_light;
 
     // The draw uses `window_opacity_anim`.
     const covers = fizzy.backend.coversDesktop(dvui.currentWindow());
@@ -3851,7 +3847,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (builtin.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
         const win = dvui.currentWindow();
         const radius: f32 = if (fizzy.backend.isMaximized(win)) 0 else Constants.linux_window_radius;
-        editor.blurred_behind = fizzy.backend.blurBehind(win, if (editor.window_opacity_anim.value < 1) radius else null);
+        editor.blurred_behind = fizzy.backend.blurBehind(win, if (editor.window_opacity_anim.value > 0 and editor.window_opacity_anim.value < 1) radius else null);
     }
     // Translucent over the desktop's material on macOS and Windows, and on Linux where the
     // compositor blurs behind the window; opaque elsewhere, where the window's alpha is only its
@@ -4070,9 +4066,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
         // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
-        // (macOS 26, `backend.windowGlass`) the base is the glass's, on the two sliders
+        // (macOS 26, `backend.windowGlass`) the base is the glass's at that opacity
         // (`core.glass_look.window`), and the frame draws none of its own.
-        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, editor.window_roughness, dvui.windowRect().size()));
+        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size()));
         const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
@@ -4291,7 +4287,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // or a live tape's pointer.
     @import("app").automation.overlay.draw(&editor.demo.player);
     @import("app").automation.overlay.drawLive(&editor.demo.live);
-    // A snapshot asked for is written out now: everything in the frame has drawn.
+    // A snapshot asked for is written out now: everything in the frame has drawn. Not later:
+    // `Window.drawRetained` (`Popout.endFrame`, dvui's own end) stops dvui's widget capture before
+    // it draws the dialogs, and a snapshot written after it finds no capture and is never written.
     editor.demo.snapshot.endFrame();
 
     // Every widget has drawn by now, so this is the frame's final answer about who holds

@@ -91,7 +91,7 @@ pub const Frost = struct {
     /// White added over the whole pane after the mix, 0…1 — a glass material's lift above
     /// whatever is behind it. Only with `tint`.
     lift: f32 = 0,
-    /// Clear glass, unblurred (`BlurBackdrop.Pane.clear`): the glass at no roughness.
+    /// Clear glass, unblurred (`BlurBackdrop.Pane.clear`): the glass at no frost.
     clear: bool = false,
     /// How far the glass's bevelled edge refracts, 0 (none) to 2 (`BlurBackdrop.Pane.refraction`).
     refraction: f32 = 1,

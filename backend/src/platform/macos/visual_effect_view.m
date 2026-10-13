@@ -1175,7 +1175,7 @@ int fizzy_macos_window_has_liquid_glass(void *nswindow) {
  * comes in only near full opacity; the clear lens over it; and over the lens the body —
  * frost, the plain blur behind the window, the colour again — fading out across the window's
  * clearing bevel, so its edge stays the lens bending the desktop.
- * `fizzy_macos_window_liquid_glass_look` sets them each frame from the window's two sliders. The
+ * `fizzy_macos_window_liquid_glass_look` sets them each frame from the window's opacity. The
  * window clear but for them, and a compact toolbar's corners — what macOS 26 rounds a window by is
  * whether it has a toolbar: none, 16 points; compact, 20 (and a 40-point title bar for 32);
  * unified, 27 (and 66).

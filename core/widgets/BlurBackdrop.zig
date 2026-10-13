@@ -1020,7 +1020,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // that far past the pane; flat glass needs none. As far as the whole edge reaches, however
     // much of it has formed: a capture growing with it was a new size, and new targets, a frame.
     // The whole edge on every pane, whatever its blur — clear glass is thick glass that happens
-    // not to be frosted, and how far the edge bends is the roughness's (`Pane.refraction`) — and
+    // not to be frosted, and how far the edge bends is the frost's (`Pane.refraction`) — and
     // whatever its size: the rim fits the pane (`liquid_glass.fit`).
     const lens_full = motion.liquid();
     const lens = lens_full * edge;

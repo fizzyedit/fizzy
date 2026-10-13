@@ -266,7 +266,7 @@ pub fn menuFrost() ?BlurBackdrop.Pane {
     return .{ .radius = f.radius, .refresh_ms = f.refresh_ms, .tint = f.tint, .mix = f.mix, .lift = f.lift, .refraction = f.refraction, .clear = f.clear };
 }
 
-/// The glass liquid shapes are made of (`LiquidField`): `menuFrost`, clear glass at no roughness
+/// The glass liquid shapes are made of (`LiquidField`): `menuFrost`, clear glass at no frost
 /// where the glass program is there to draw it (`dialogs.dialogFrost`). Null where neither is.
 pub fn liquidFrost() ?BlurBackdrop.Pane {
     return menuFrost();

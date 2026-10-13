@@ -7290,3 +7290,45 @@ test "a capture is the drawn part of the frame target, as a PNG, once taken" {
     try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
     try std.testing.expect(capture_under_test.get(m) != null);
 }
+
+// ---- A live tape drags ------------------------------------------------------------------------
+
+var live_driver: automation.LiveDriver = undefined;
+var live_float: dvui.Rect = .{ .x = 300, .y = 200, .w = 240, .h = 160 };
+
+fn liveDragFrame() !dvui.App.Result {
+    live_driver.frame();
+    var fw = dvui.floatingWindow(@src(), .{ .rect = &live_float }, .{ .tag = "live.float" });
+    defer fw.deinit();
+    fw.dragAreaSet(dvui.windowHeader("Drag me", "", null));
+    dvui.labelNoFmt(@src(), "body", .{}, .{});
+    return .ok;
+}
+
+test "a live tape drags a floating window by its header" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 800, .h = 600 } });
+    defer t.deinit();
+    demo_stage = .{};
+    live_driver = .init(demo_stage.stage());
+    defer live_driver.deinit();
+    live_float = .{ .x = 300, .y = 200, .w = 240, .h = 160 };
+    try dvui.testing.settle(liveDragFrame);
+
+    const tape =
+        \\.{ .name = "drag", .title = "drag", .ops = .{
+        \\    .{ .at = 0, .ms = 100, .do = .{ .move = .{ .tag = "", .x = 0.525, .y = 0.35 } } },
+        \\    .{ .at = 200, .do = .{ .press = .left } },
+        \\    .{ .at = 300, .ms = 500, .do = .{ .move = .{ .tag = "", .x = 0.3375, .y = 0.35 } } },
+        \\    .{ .at = 900, .do = .{ .release = .left } },
+        \\} }
+    ;
+    var check = automation.Input.check;
+    check.live = true;
+    try live_driver.play(try automation.Tape.parse(std.testing.allocator, tape, check));
+    var frames: usize = 0;
+    while (live_driver.playing() and frames < 400) : (frames += 1) _ = try dvui.testing.step(liveDragFrame);
+    try std.testing.expect(!live_driver.playing());
+    try std.testing.expectEqual(automation.LiveDriver.Outcome.finished, live_driver.outcome.?);
+    std.debug.print("float x {d:.1} (from 300) after {d} frames\n", .{ live_float.x, frames });
+    try std.testing.expectApproxEqAbs(@as(f32, 150), live_float.x, 2);
+}

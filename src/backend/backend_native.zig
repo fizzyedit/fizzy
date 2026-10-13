@@ -106,6 +106,14 @@ pub fn showWindow(win: *dvui.Window) void {
     platform.window.show(win, platform.geometry.restoredMaximized());
 }
 
+/// Show the window unseen, to draw its first frame before it is seen (`revealWindow`).
+pub fn showWindowUndrawn(win: *dvui.Window) void {
+    platform.window.showUndrawn(win, platform.geometry.restoredMaximized());
+}
+
+/// Its first frame is on screen: let it be seen.
+pub const revealWindow = platform.window.reveal;
+
 /// Style the window (macOS: frame == content first), put it back where it was left
 /// (`platform.geometry`, kept in fizzy's `layout.zon`), and follow it through Spaces, zooms and
 /// live resizes (`platform.macos_monitor`). Called from `AppInit` while the window is still hidden:

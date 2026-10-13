@@ -408,32 +408,39 @@ pub fn AppInit(win: *dvui.Window) !void {
     // window animations.
     fizzy.backend.macosLaunchComplete();
 
-    // Started by a restart's handover: up and hidden, the session read. The old instance goes
-    // now, and this window shows over its own at the same place (`restart`); the lock follows
-    // once the old one lets go of it (`Editor.tick`).
-    if (restart.startedByHandover()) {
-        restart.signalReady(dvui.io);
-        fizzy.core.profile.phase(dvui.io, "handover ready");
+    // Chrome and geometry are settled: the window shows, but unseen until its first frame has
+    // reached the screen (`revealOnceDrawn`), so it never appears as an empty window first.
+    fizzy.backend.showWindowUndrawn(win);
+}
+
+/// Where the window's reveal is (`revealOnceDrawn`): drawing its first frame, then seen.
+var reveal: enum { first_frame, next_frame, done } = .first_frame;
+
+/// At each frame's start, then its end: the first frame is drawn into the unseen window and
+/// presented as the frame ends, so the window is revealed as the next one begins, which the
+/// first asks for. Then a restart's handover tells the old instance this one is ready, now that it
+/// is on screen over the old one's window at the same place (`restart`); the lock follows once
+/// the old one lets go of it (`Editor.tick`).
+fn revealOnceDrawn(at_end: bool) void {
+    switch (reveal) {
+        .first_frame => if (at_end) {
+            fizzy.core.profile.phase(dvui.io, "first frame");
+            reveal = .next_frame;
+            dvui.refresh(null, @src(), null);
+        },
+        .next_frame => if (!at_end) {
+            fizzy.backend.revealWindow(fizzy.entry().window);
+            fizzy.core.profile.phase(dvui.io, "shown");
+            reveal = .done;
+            if (restart.startedByHandover()) {
+                restart.signalReady(dvui.io);
+                fizzy.core.profile.phase(dvui.io, "handover ready");
+            }
+            const ph = fizzy.core.profile.phases() orelse return;
+            std.log.info("startup: shown {d:.0} ms after main", .{ph.ms(ph.len - 1)});
+        },
+        .done => {},
     }
-
-    // Chrome and geometry are settled — reveal the window (created hidden).
-    fizzy.backend.showWindow(win);
-    fizzy.core.profile.phase(dvui.io, "shown");
-}
-
-/// The first frame has ended: the app is up. Says how long that took, once.
-var first_frame_done = false;
-fn noteFirstFrame() void {
-    if (first_frame_done) return;
-    first_frame_done = true;
-    fizzy.core.profile.phase(dvui.io, "first frame");
-    const ph = fizzy.core.profile.phases() orelse return;
-    std.log.info("startup: up {d:.0} ms after main (window shown at {d:.0} ms)", .{ ph.ms(ph.len - 1), shownMs(ph) });
-}
-
-fn shownMs(ph: *const fizzy.core.profile.Phases) f64 {
-    for (0..ph.len) |i| if (std.mem.eql(u8, ph.names[i], "shown")) return ph.ms(i);
-    return 0;
 }
 
 // Run as app is shutting down before dvui.Window.deinit()
@@ -468,7 +475,8 @@ pub fn AppFrame() !dvui.App.Result {
     _ = dvui.debug.logRefresh(refresh_log_active or fizzy.core.profile.recordingCauses());
     fizzy.core.profile.hostFrameBegin(lastSubmitNs());
     defer fizzy.core.profile.hostFrameEnd();
-    defer noteFirstFrame();
+    revealOnceDrawn(false);
+    defer revealOnceDrawn(true);
     singleton.drainPending();
     // Once, or — while a demo is seeking — again and again unseen until it lands (`frames`).
     const player = &fizzy.editor().demo.player;
