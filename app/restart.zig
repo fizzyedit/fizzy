@@ -248,9 +248,9 @@ pub fn startedByHandover() bool {
     return handed_from != null;
 }
 
-/// The new instance, up and hidden: tell the old one, which quits. The caller shows its window now,
-/// over the old one's at the same place, so a window is on screen throughout; the lock is taken
-/// once the old one has let go of it (`pollReleased`).
+/// The new instance, its window on screen over the old one's at the same place: tell the old one,
+/// which quits, so a window is on screen throughout; the lock is taken once the old one has let go
+/// of it (`pollReleased`).
 pub fn signalReady(io: std.Io) void {
     if (comptime !supported) return;
     const dir = handed_from orelse return;
@@ -269,6 +269,9 @@ var released_deadline_ns: i96 = 0;
 pub fn pollReleased(io: std.Io, gpa: std.mem.Allocator) bool {
     if (comptime !supported) return false;
     const dir = handed_from orelse return false;
+    // Not yet ready (`signalReady`, once the window is on screen): the old instance still holds
+    // the lock, and has not been asked to let go of it.
+    if (released_deadline_ns == 0) return false;
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const released = std.fmt.bufPrint(&buf, "{s}/released", .{dir}) catch return false;
     const done = if (std.Io.Dir.cwd().access(io, released, .{})) |_| true else |_| std.Io.Clock.awake.now(io).nanoseconds > released_deadline_ns;

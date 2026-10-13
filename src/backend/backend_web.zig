@@ -121,6 +121,8 @@ pub fn restoreWindowState(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: the web canvas is always visible.
 pub fn showWindow(_: *dvui.Window) void {}
+pub fn showWindowUndrawn(_: *dvui.Window) void {}
+pub fn revealWindow(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: no window geometry to persist on web.
 pub fn saveWindowGeometry(_: *dvui.Window) void {}

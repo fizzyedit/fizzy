@@ -158,6 +158,40 @@ pub fn show(win: *dvui.Window, maximized: bool) void {
     if (maximized) _ = c.SDL_MaximizeWindow(win.backend.impl.window);
 }
 
+/// Show the window without it being seen yet, so it can draw its first frame before anyone
+/// looks (`reveal`). A hidden window gets nothing to present into, so it cannot draw first and show
+/// after; shown but unseen, it can. On macOS the window is shown fully transparent (`alphaValue`);
+/// on Windows it is cloaked (`DWMWA_CLOAK`), shown and composited but not on screen, which keeps it
+/// out of layered windows (see `win32_titlebar`). Elsewhere it shows as it is, and `reveal` does
+/// nothing.
+pub fn showUndrawn(win: *dvui.Window, maximized: bool) void {
+    const window = win.backend.impl.window;
+    switch (builtin.os.tag) {
+        .macos => _ = c.SDL_SetWindowOpacity(window, 0),
+        .windows => setCloaked(win, true),
+        else => {},
+    }
+    show(win, maximized);
+}
+
+/// The first frame is on screen: let it be seen (`showUndrawn`).
+pub fn reveal(win: *dvui.Window) void {
+    switch (builtin.os.tag) {
+        .macos => _ = c.SDL_SetWindowOpacity(win.backend.impl.window, 1),
+        .windows => setCloaked(win, false),
+        else => {},
+    }
+}
+
+fn setCloaked(win: *dvui.Window, cloaked: bool) void {
+    if (comptime builtin.os.tag != .windows) return;
+    const hwnd = win32_titlebar.getWin32Hwnd(win) orelse return;
+    const win32 = @import("win32");
+    const value: u32 = @intFromBool(cloaked);
+    // DWMWA_CLOAK.
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(@ptrCast(hwnd), @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(13)), &value, @sizeOf(u32));
+}
+
 pub fn isMaximized(win: *dvui.Window) bool {
     return windowMaximized(win.backend.impl.window);
 }
