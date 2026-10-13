@@ -93,7 +93,6 @@ const AppInfo = @import("app").AppInfo;
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
 pub const sdk = fizzy.sdk;
-pub const Profiler = @import("Profiler.zig");
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
@@ -2085,6 +2084,18 @@ pub fn postInit(editor: *Editor) !void {
         break :blk &frozen;
     };
 
+    // Fizzy built-in: Output (owner = null; not a plugin). `persistent` keeps it visible
+    // even with no document open, since it's a diagnostic view, not a per-file one. Before the
+    // plugins, so it is the bottom panel's first view and a plugin's (the dashboard, a terminal)
+    // comes after it: a region shows its first view until someone picks another.
+    try editor.app.host.registerSurface(.{
+        .id = "fizzy.output",
+        .title = "Output",
+        .keywords = sdk.keywords.ide.panel,
+        .persistent = true,
+        .draw = OutputPanel.draw,
+    });
+
     inline for (bundled_plugins) |m| {
         const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;
         if (App.bundledDylibEnabled(editor.app.gpa, m.plugin_id)) {
@@ -2127,16 +2138,6 @@ pub fn postInit(editor: *Editor) !void {
         .title = "Settings",
         .keywords = sdk.keywords.ide.sidebar,
         .draw = drawSettingsPane,
-    });
-
-    // Fizzy built-in: Output (owner = null; not a plugin). `persistent` keeps it visible
-    // even with no document open, since it's a diagnostic view, not a per-file one.
-    try editor.app.host.registerSurface(.{
-        .id = "fizzy.output",
-        .title = "Output",
-        .keywords = sdk.keywords.ide.panel,
-        .persistent = true,
-        .draw = OutputPanel.draw,
     });
 
     // Menu bar contributions (non-macOS in-app bar). The File/Edit draw bodies still live
@@ -4276,8 +4277,6 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // look at demo() for examples of dvui widgets, shows in a floating window
     if (comptime dvui_demo) dvui.Examples.demo(.full);
 
-    // The profiler window, when open ("Toggle Profiler").
-    Profiler.draw();
 
     // Render any save-complete toasts in the same centered, content-fill-styled card system.
     // The dvui toast queue holds them with a 2.5s timeout; each toast's display function fades

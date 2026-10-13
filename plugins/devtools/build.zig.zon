@@ -1,0 +1,19 @@
+.{
+    .name = .devtools,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "plugin.zig",
+        "plugin.zig.zon",
+        "src",
+        "static",
+    },
+    .fingerprint = 0x19aed5dc28808330,
+    .dependencies = .{
+        .fizzy = .{
+            .path = "../../sdk",
+        },
+    },
+}

@@ -6853,6 +6853,35 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // The dashboard (`devtools`): Show Profiler reveals it in the bottom panel, where it records
+    // while drawn, and `devtools.stats` answers the plugins and the profiler's report as ZON.
+    {
+        const host = &editor.app.host;
+        try std.testing.expect(host.callCommand("devtools.show", "", host.arena()) == .ok);
+        // A few frames, not a settle: a live dashboard keeps asking for them.
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqualStrings("devtools.dashboard", host.selectionFor(sdk.keywords.ide.panel) orelse "");
+        try std.testing.expect((fizzy.core.profile.current() orelse return error.TestUnexpectedResult).enabled);
+        const zon = switch (host.callCommand("devtools.stats", ".{ .hitches = 1 }", host.arena())) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => return error.TestUnexpectedResult,
+        };
+        const Stats = struct {
+            plugins: []const struct { id: []const u8, link: sdk.services.plugins.Api.Link },
+            // The report as the profiler has it; its averages fill in once a half-second window
+            // has passed on screen, which a few test frames are not.
+            profile: struct { frame: struct { fps: f64 } },
+        };
+        const stats = try std.zon.parse.fromSliceAlloc(Stats, host.arena(), try host.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+        try std.testing.expect(for (stats.plugins) |pl| {
+            if (std.mem.eql(u8, pl.id, "devtools")) break pl.link == .bundled;
+        } else false);
+        // Off screen again, it stops recording the frame after.
+        _ = host.revealSurface("fizzy.output");
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!(fizzy.core.profile.current() orelse return error.TestUnexpectedResult).enabled);
+    }
+
     // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that
     // fails is reported without making a running plugin look broken.
     {

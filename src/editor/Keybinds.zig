@@ -173,7 +173,6 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.about", .title = "About Fizzy", .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.download },
     .{ .id = "fizzy.restart", .title = "Restart Fizzy", .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
-    .{ .id = "fizzy.toggleProfiler", .title = "Toggle Profiler", .bind = null, .run = cmdToggleProfiler, .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
 
@@ -510,10 +509,6 @@ fn cmdRestart(_: *anyopaque) anyerror!void {
 
 fn canRestart(_: *anyopaque) bool {
     return restart.supported;
-}
-
-fn cmdToggleProfiler(_: *anyopaque) anyerror!void {
-    Editor.Profiler.toggle();
 }
 
 const TraceArgs = sdk.Command.Params(struct {

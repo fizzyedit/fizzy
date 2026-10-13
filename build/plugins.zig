@@ -9,3 +9,4 @@ pub const text = @import("../plugins/text/static/integration.zig");
 pub const markdown = @import("../plugins/markdown/static/integration.zig");
 pub const image = @import("../plugins/image/static/integration.zig");
 pub const archive = @import("../plugins/archive/static/integration.zig");
+pub const devtools = @import("../plugins/devtools/static/integration.zig");
