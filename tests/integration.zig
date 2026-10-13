@@ -6839,6 +6839,20 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
     }
 
+    // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens
+    // the panel with Output selected, and a view no region shows is not revealed.
+    {
+        const panel = editor.regionFor(sdk.keywords.ide.panel) orelse return error.TestUnexpectedResult;
+        panel.close();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(panel.isClosed());
+        try std.testing.expect(editor.app.host.revealSurface("fizzy.output"));
+        try std.testing.expect(!panel.isClosed());
+        try std.testing.expectEqualStrings("fizzy.output", editor.app.host.selectionFor(sdk.keywords.ide.panel) orelse "");
+        try std.testing.expect(!editor.app.host.revealSurface("nothing.here"));
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that
     // fails is reported without making a running plugin look broken.
     {

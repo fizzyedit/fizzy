@@ -548,6 +548,27 @@ pub fn surface(self: *Layout, id: []const u8) ?*Surface {
     return self.host.surfaceById(id);
 }
 
+/// Bring `id` into sight wherever it lives: select it in the one region that shows it (the rule
+/// `claimedElsewhere` states: its assignment, else the place that accepts it best), and open that
+/// region if the user shut it or a narrow window folded it away. False when no region shows it:
+/// the shape has no place for it, or it is hidden.
+///
+/// What a plugin's "Show X" command asks for (`Host.revealSurface`): it names the view, never the
+/// place, so it lands wherever the user moved the view, in any shape.
+pub fn reveal(self: *Layout, id: []const u8) bool {
+    const s = self.surface(id) orelse return false;
+    if (s.hidden) return false;
+    var it = self.declaredRegions();
+    while (it.next()) |r| {
+        for (self.matchingIn(r)) |m| if (m == s) {
+            self.selectIn(r, id);
+            if (r.isClosed() or r.isFolded()) r.open();
+            return true;
+        };
+    }
+    return false;
+}
+
 /// Surfaces that appear in no region of the last completed shape — neither assigned to one nor
 /// attracted by keywords to an unassigned one. Never silently lost: the settings UI lists these
 /// so a user (or the plugin author) can see the gap and fix it.

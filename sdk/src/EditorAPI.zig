@@ -305,6 +305,9 @@ pub const VTable = struct {
     /// `regionSelect`, for a region the caller is not drawing right now: focusing the file a
     /// load just landed in whichever pane it landed in.
     selectInRegion: *const fn (ctx: *anyopaque, region: []const u8, id: []const u8) void,
+    /// Bring the surface `id` into sight wherever it lives: selected in the region showing it,
+    /// that region opened if it was shut. False when no region shows it.
+    revealSurface: *const fn (ctx: *anyopaque, id: []const u8) bool,
     /// Draw the app's glyph for a declared file kind ("image", "source", …), or return false if
     /// this app has no glyph for it.
     ///
@@ -630,6 +633,10 @@ pub fn assignedRegionNames(self: EditorAPI) []const []const u8 {
 
 pub fn selectInRegion(self: EditorAPI, region: []const u8, id: []const u8) void {
     self.vtable.selectInRegion(self.ctx, region, id);
+}
+
+pub fn revealSurface(self: EditorAPI, id: []const u8) bool {
+    return self.vtable.revealSurface(self.ctx, id);
 }
 
 pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) bool {

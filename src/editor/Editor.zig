@@ -2316,6 +2316,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .assignedSurfaces = fizzyAssignedSurfaces,
     .assignedRegionNames = fizzyAssignedRegionNames,
     .selectInRegion = fizzySelectInRegion,
+    .revealSurface = fizzyRevealSurface,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
@@ -4736,6 +4737,15 @@ fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void
         editor.app.host.setSelectionForKey(r.selectionKey(), id);
         return;
     };
+}
+
+fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {
+    const editor = fizzyCtx(ctx);
+    if (editor.app.frame_layout) |layout| return layout.reveal(id);
+    // A command between shapes (a keybind, the palette, an agent): the regions are last frame's,
+    // published for exactly this (`Layout.State.regions`).
+    var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
+    return layout.reveal(id);
 }
 
 fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {

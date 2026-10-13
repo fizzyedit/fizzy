@@ -549,6 +549,19 @@ pub fn selectInRegion(self: *Host, region_name: []const u8, id: []const u8) void
     if (self.fizzy_api) |a| a.selectInRegion(region_name, id);
 }
 
+/// Bring the surface `id` into sight wherever it lives: selected in the region that shows it (its
+/// default place, or wherever the user moved it, floats included), and that region opened if it
+/// was shut or folded away. False when no region shows it: the app's shape has no place for it,
+/// or it is hidden.
+///
+/// What a plugin's "Show X" command calls: it names its view, never a place, so it works in any
+/// app's shape. Consumers: the dashboard's "Toggle Profiler", `fizzy.reveal` (keybinds, tapes,
+/// agents), a terminal's or a chat list's "Show" command.
+pub fn revealSurface(self: *Host, id: []const u8) bool {
+    const a = self.fizzy_api orelse return false;
+    return a.revealSurface(id);
+}
+
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
 }
