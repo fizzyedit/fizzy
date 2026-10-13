@@ -1,11 +1,6 @@
-//! Vendored + trimmed from dvui `widgets/FloatingTooltipWidget.zig`. Fizzy's own styling
-//! (explorer-panel background, standard 8px corner radius, no border, soft drop shadow) is
-//! baked in directly here rather than left to caller-supplied `Options` — the upstream
-//! widget draws its background/border/box_shadow via an inner `ScaleWidget` fed from
-//! `self.options`, and overriding `color_fill`/`box_shadow` through that path did not
-//! reliably show up on screen. Painting via this widget's own top-level `WidgetData`
-//! instead (the same simple `register()` + `borderAndBackground()` pattern every plain
-//! `dvui.box` uses) sidesteps that entirely.
+//! Vendored + trimmed from dvui `widgets/FloatingTooltipWidget.zig`. It draws no surface of
+//! its own: `install` lays down the app's tooltip glass (`core.dialogs.tooltipBegin`), the same
+//! frost, corners and shadow as every other floating surface.
 //!
 //! Also drops generality this editor never needs: nested-tooltip chaining, horizontal/
 //! vertical/absolute positioning modes (always "sticky" — appears where the mouse is,
@@ -26,21 +21,15 @@
 //! after the mouse has failed every check for `close_delay_us` straight, fading out over
 //! that window (and snapping back to fully open if the mouse recovers before it finishes) —
 //! however imprecisely or slowly the mouse actually gets there, it has the whole grace
-//! window to arrive. Opening fades in over `open_delay_us` for the same reason real tooltips
-//! dwell before appearing: a quick pass-over shouldn't flash one open at all.
+//! window to arrive. Opening waits out `InitOptions.open_delay_ms` for the same reason real
+//! tooltips dwell before appearing (a quick pass-over shouldn't flash one open at all), then
+//! opens as every tooltip in the app does (`core.dialogs.tooltipBegin`).
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 
 const TooltipWidget = @This();
 
-/// Short cosmetic fade once the tooltip has actually committed to showing (see
-/// `InitOptions.open_delay_ms` for the real "don't flash on a quick pass" gate — this used to
-/// carry that job alone, fading in over 300ms while `install()`/the content fetch happened
-/// immediately regardless of the fade's progress, which is why rapid mouse movement across
-/// many terms could still feel "stuck": the expensive part (installing a subwindow, fetching
-/// hover content) fired on every momentary hover even though the fade made it barely visible).
-const open_delay_us: i32 = 100_000;
 /// How long the mouse gets, after failing every "still good" check, before the tooltip
 /// actually closes (fading out over the same window) — the real fix for "I can't reach the
 /// tooltip before it disappears": the mouse just needs to arrive within this window, not
@@ -277,25 +266,21 @@ pub fn install(self: *TooltipWidget) void {
         self.prev_scroll = dvui.ScrollContainerWidget.scrollSet(null);
     }
 
-    // Fade in on first appearance, fade out while closing (see `deinit`). Applies to
-    // everything drawn for this tooltip, background/shadow included, since it's a plain
-    // global alpha multiplier restored to its previous value below in `deinit`. Gated on
-    // `dvui.firstFrame` only — see `InitOptions.reanchor`'s doc comment for why it must not
-    // also restart this.
-    if (dvui.firstFrame(self.data().id)) {
-        dvui.animation(self.data().id, "_open", .{ .start_val = 0, .end_val = 1, .end_time = open_delay_us });
-    }
+    // Opens as every tooltip in the app does (`core.dialogs.tooltipBegin`): the glass grows out
+    // of the pointer on the menus' clock, contents fading in with it. A new showing is one drawn
+    // after a frame it was not, so a re-anchor (`InitOptions.reanchor`) never restarts it. The
+    // alpha is restored in `deinit`.
     const closing = dvui.dataGet(null, self.data().id, "_closing", bool) orelse false;
-    const a: f32 = if (closing)
-        // No `_close` entry should be reachable here (it's always started in the same
-        // `deinit` call that sets `_closing = true`) — if it somehow is, fail toward
-        // invisible rather than fully opaque.
-        (dvui.animationGet(self.data().id, "_close") orelse dvui.Animation{ .start_val = 0, .end_val = 0, .end_time = 0 }).value()
-    else
-        (dvui.animationGet(self.data().id, "_open") orelse dvui.Animation{ .start_val = 1, .end_val = 1, .end_time = 0 }).value();
-    // The surface forms with the same fade (`tooltipSurfaceFaded`: the frost replaces what it
-    // covers, so it cannot simply ride the global alpha below), drawn before that alpha so the
-    // shadow is not faded twice.
+    if (!closing) {
+        self.prev_alpha = core.dialogs.tooltipBegin(self.data(), 0);
+        return;
+    }
+    // Fading out over the close grace window (see `deinit`), the clock kept running so that a
+    // mouse arriving back in time finds the tooltip open, not opening again. No `_close` entry
+    // should be reachable here (it is started in the same `deinit` that sets `_closing`); if one
+    // is, fail toward invisible rather than fully opaque.
+    _ = core.dialogs.tooltipFade(self.data(), 0);
+    const a = (dvui.animationGet(self.data().id, "_close") orelse dvui.Animation{ .start_val = 0, .end_val = 0, .end_time = 0 }).value();
     core.dialogs.tooltipSurfaceFaded(self.data(), a);
     self.prev_alpha = dvui.alpha(a);
 }

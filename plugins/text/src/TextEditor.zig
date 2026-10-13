@@ -514,6 +514,9 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
 /// otherwise cover the very token it's describing, which fights the hover detection driving
 /// it (mouse ends up over the tooltip, not the source token, so it flickers open/closed).
 const hover_tooltip_max_size: dvui.Size = .{ .w = 480, .h = 320 };
+/// The width a hover's (or a completion's) markdown lays out at: the tooltip's, less room for
+/// its scroll bar. Drawn inline (`markdown.Api.renderInline`), on the tooltip's glass.
+const hover_text_width: f32 = hover_tooltip_max_size.w - 12;
 
 /// Drives the completion list (ghost text of the selected candidate + `drawCompletionList`'s
 /// dropdown) shown by `te.draw()`/the caller. Must run after `te.processEvents()` (so the
@@ -747,23 +750,13 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
         // appear with its bottom-right corner pinned to the cursor instead of its top-left.
         .from_gravity_x = 1,
         .from_gravity_y = 1,
-    }, .{
-        .id_extra = @intCast(id_extra + 0x9000),
-        .background = true,
-        .color_fill = .{ .color = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5) },
-        .corners = core.corners.all(core.corners.small),
-        .border = dvui.Rect.all(0),
-        .box_shadow = .{
-            .color = .black,
-            .shrink = 0,
-            .corners = core.corners.all(core.corners.small),
-            .offset = .{ .x = 0, .y = 2 },
-            .fade = 4,
-            .alpha = 0.2,
-        },
+    }, core.dialogs.tooltipOptions(@intCast(id_extra + 0x9000)).override(.{
         .min_size_content = .{ .w = completion_list_max_size.w, .h = 0 },
         .max_size_content = .size(completion_list_max_size),
-    });
+    }));
+    // The app's floating surface, growing out of the caret that opened it (a tooltip grows out
+    // of the pointer). Its fade is restored once the list is done, below.
+    const prev_alpha = core.dialogs.tooltipBeginAt(fw.data(), .{ .x = cursor_screen.x, .y = cursor_screen.y + cursor_screen.h });
     // Not deferred, unlike everything else here: the info panel drawn at the bottom of this
     // function is a *separate* floating widget positioned off this dropdown's on-screen rect
     // (captured below, right after layout fixes its width — both `min_size_content.w` and
@@ -824,7 +817,7 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
             .gravity_x = 0,
             .margin = dvui.Rect{},
             .border = dvui.Rect{},
-            .corners = dvui.CornerRect{},
+            .corners = core.dialogs.rowCorners(),
             .padding = .{ .x = 6, .y = 1, .w = 6, .h = 1 },
             .background = true,
             .id_extra = @intCast(i),
@@ -839,7 +832,7 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
         const is_selected = te.current_completion.?.selected == i;
 
         if (is_selected) {
-            bw.data().borderAndBackground(.{ .fill_color = .{ .color = dvui.themeGet().color(.window, .fill) } });
+            bw.data().borderAndBackground(.{ .fill_color = .{ .color = core.dialogs.rowHover() } });
         }
         const click = bw.clicked();
 
@@ -910,6 +903,7 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
 
     scroll.deinit();
     fw.deinit();
+    dvui.alphaSet(prev_alpha);
 
     // Info panel: documentation for whichever candidate is currently highlighted, positioned
     // off the dropdown's own on-screen rect and rendered identically to a hover tooltip's
@@ -940,32 +934,21 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
 
 /// A hover-tooltip-styled floating panel showing `candidate.documentation`, positioned flush
 /// against the right edge of the completion dropdown (`dropdown_screen_rect`) at the same top
-/// edge — same visual language as the dropdown itself (fill/corners/shadow), but with no dwell
-/// delay or fade: it should track the highlighted candidate exactly, appearing and updating
-/// the instant selection changes rather than easing in like a genuine mouse-hover tooltip.
+/// edge — the same glass as the dropdown itself, with no dwell delay: it tracks the highlighted
+/// candidate exactly, updating the instant selection changes.
 fn drawCompletionInfoPanel(ext: []const u8, candidate: TextEntryWidget.CompletionCandidate, dropdown_screen_rect: dvui.Rect.Physical, id_extra: u64, gpa: std.mem.Allocator) void {
     var panel: dvui.FloatingWidget = undefined;
     panel.init(@src(), .{
         .from = .{ .x = dropdown_screen_rect.x + dropdown_screen_rect.w, .y = dropdown_screen_rect.y },
         .from_gravity_x = 1,
         .from_gravity_y = 1,
-    }, .{
-        .id_extra = @intCast(id_extra + 0xA000),
-        .background = true,
-        .color_fill = .{ .color = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5) },
-        .corners = core.corners.all(core.corners.small),
-        .border = dvui.Rect.all(0),
-        .box_shadow = .{
-            .color = .black,
-            .shrink = 0,
-            .corners = core.corners.all(core.corners.small),
-            .offset = .{ .x = 0, .y = 2 },
-            .fade = 4,
-            .alpha = 0.2,
-        },
+    }, core.dialogs.tooltipOptions(@intCast(id_extra + 0xA000)).override(.{
         .max_size_content = .size(hover_tooltip_max_size),
-    });
+    }));
     defer panel.deinit();
+    // Growing out of the list's edge it hangs from.
+    const prev_alpha = core.dialogs.tooltipBeginAt(panel.data(), .{ .x = dropdown_screen_rect.x + dropdown_screen_rect.w, .y = dropdown_screen_rect.y });
+    defer dvui.alphaSet(prev_alpha);
 
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .max_size_content = .size(hover_tooltip_max_size),
@@ -987,19 +970,18 @@ fn drawCompletionInfoPanel(ext: []const u8, candidate: TextEntryWidget.Completio
     }
 
     if (candidate.documentation.len > 0) {
-        const md = sdk.host().getServiceTyped(sdk.services.markdown.Api);
-        if (md) |m| {
-            m.render(candidate.documentation, gpa, .{ .id_extra = id_extra + 0xA100 }) catch |err| {
+        var scroll = dvui.scrollArea(@src(), .{
+            .horizontal_bar = .hide,
+        }, .{
+            .expand = .both,
+            .background = false,
+        });
+        defer scroll.deinit();
+        if (sdk.host().getServiceTyped(sdk.services.markdown.Api)) |m| {
+            m.renderInline(candidate.documentation, gpa, .{ .width = hover_text_width, .id_extra = id_extra + 0xA100 }) catch |err| {
                 dvui.log.err("completion info: markdown render failed: {any}", .{err});
             };
         } else {
-            var scroll = dvui.scrollArea(@src(), .{
-                .horizontal_bar = .hide,
-            }, .{
-                .expand = .both,
-                .background = false,
-            });
-            defer scroll.deinit();
             var body_tl = dvui.textLayout(@src(), .{}, .{ .background = false });
             drawHoverBody(body_tl, candidate.documentation, ext);
             body_tl.deinit();
@@ -1353,7 +1335,7 @@ fn drawHoverInfoContent(ext: []const u8, hover_text: []const u8, id_extra: u64, 
                 drawCodeBlock(tl, trimmed, ext);
                 tl.deinit();
             } else {
-                m.render(trimmed, gpa, .{ .id_extra = id_extra + 0x7000 + seg_i }) catch |err| {
+                m.renderInline(trimmed, gpa, .{ .width = hover_text_width, .id_extra = id_extra + 0x7000 + seg_i }) catch |err| {
                     dvui.log.err("hover: markdown render failed: {any}", .{err});
                 };
             }

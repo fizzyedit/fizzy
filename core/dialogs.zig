@@ -466,6 +466,15 @@ pub fn tooltipBegin(wd: *dvui.WidgetData, duration_us: i32) f32 {
     return dvui.alpha(t);
 }
 
+/// `tooltipBegin` for a surface the keyboard opened, growing out of `origin` (physical) rather than
+/// the pointer: a completion list out of the caret.
+pub fn tooltipBeginAt(wd: *dvui.WidgetData, origin: dvui.Point.Physical) f32 {
+    if (dvui.dataGet(null, wd.id, "_tooltip_origin", dvui.Point.Physical) == null) {
+        dvui.dataSet(null, wd.id, "_tooltip_origin", origin);
+    }
+    return tooltipBegin(wd, 0);
+}
+
 /// `tooltipBegin` for a floating tooltip widget: `core.widgets.FloatingTooltipWidget` (the one that
 /// opens on the screen of the window it is in: a popped-out float's) or dvui's own, which a plugin
 /// built before core had one passes — the same `animate` and `data()`, so either compiles, and a
