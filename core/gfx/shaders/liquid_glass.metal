@@ -163,7 +163,10 @@ fragment main0_out main0(
     // A translucent tint lies over the frost, not over what is behind the window: the glass is
     // opaque here, and `under` alone says how much of the desktop's material shows through it.
     c += frost * (1.0 - c.a);
-    if (inward) c.rgb *= 1.0 - g5.w * t * t;
+    // Apple's lens: the folded band a little darker — the glass's own shade, not the picture's: a
+    // dark layer over it, as whole where the picture is see-through as where it is not.
+    float shade = inward ? g5.w * t * t : 0.0;
+    float4 o = float4(c.rgb * (under * (1.0 - shade)), under * (1.0 - shade) + shade);
     float facing = dot(outv, float2(-0.70710678, -0.70710678));
     float toward = max(facing, 0.0);
     float away = max(-facing, 0.0);
@@ -171,10 +174,13 @@ fragment main0_out main0(
     float line = exp(-max(0.0, -D) / g2.z);
     float lit = line * spec + (inward ? 0.0 : 0.04 * steepL * toward);
     float lift = (g4.z > 0.5 ? g4.y : 0.0) + mat.z;
-    c += float4(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
-    if (inward) c.rgb += g6.z * lens * t * facing;
-    c = clamp(c, 0.0, 1.0);
-    c.rgb += (noise(frag.xy) - 0.5) * g5.x * c.a;
-    out.color = clamp(c, 0.0, 1.0) * (under * cov);
+    // The glass's own light, added whole. Scaled with the picture, it went wherever the picture
+    // was see-through — over the explorer, which is the window's OS glass — and the glass all but
+    // vanished there, rim and all, where Liquid Glass keeps its bright rim over anything.
+    o.rgb += float3(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
+    if (inward) o.rgb += g6.z * lens * t * facing;
+    o = clamp(o, 0.0, 1.0);
+    o.rgb += (noise(frag.xy) - 0.5) * g5.x * o.a;
+    out.color = clamp(o, 0.0, 1.0) * cov;
     return out;
 }
