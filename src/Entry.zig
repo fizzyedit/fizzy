@@ -519,11 +519,6 @@ fn frameOnce() !dvui.App.Result {
         defer prof.end();
         frame_target.end();
     }
-    // A snapshot asked for (the `automation` service's, the agent's view of the screen) is written
-    // out last, after `Popout.endFrame`: dialogs shown in windows of their own are drawn there
-    // (`Window.drawRetained`), after the app's frame, and a snapshot taken at its end had none of
-    // them — a tape could neither see nor aim at anything in a popped-out dialog.
-    defer fizzy.editor().demo.snapshot.endFrame();
     // Before that replays the subwindows into the frame: a float out of the main window is
     // replayed into its own window instead.
     defer Editor.Popout.endFrame(&fizzy.editor().app.layout);
