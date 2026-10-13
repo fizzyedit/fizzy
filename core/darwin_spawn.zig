@@ -49,6 +49,10 @@ pub const Options = struct {
     stdin: StdIo = .pipe,
     stdout: StdIo = .pipe,
     stderr: StdIo = .pipe,
+    /// Start the child in a session of its own (`POSIX_SPAWN_SETSID`): no controlling terminal,
+    /// its own process group, so the hangup when this process's terminal closes never reaches
+    /// it. For a child meant to outlive whatever started this one, the way `open` would.
+    new_session: bool = false,
 };
 
 /// Environment variables forwarded to the child, looked up individually via `getenv()` rather
@@ -97,8 +101,13 @@ pub fn spawn(gpa: std.mem.Allocator, opts: Options, path_override: ?[]const u8) 
         }
     }
 
+    var attr: c.posix_spawnattr_t = undefined;
+    if (c.posix_spawnattr_init(&attr) != 0) return error.SpawnFailed;
+    defer _ = c.posix_spawnattr_destroy(&attr);
+    if (c.posix_spawnattr_setflags(&attr, .{ .SETSID = opts.new_session }) != 0) return error.SpawnFailed;
+
     var pid: posix.pid_t = undefined;
-    const rc = c.posix_spawn(&pid, argv_z[0].?, &actions, null, argv_z.ptr, envp_z.ptr);
+    const rc = c.posix_spawn(&pid, argv_z[0].?, &actions, &attr, argv_z.ptr, envp_z.ptr);
 
     // Parent closes the child-side end of every pipe it created, regardless of outcome.
     if (stdin_pipe) |p| closeFd(p[0]);

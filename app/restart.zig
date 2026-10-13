@@ -134,11 +134,24 @@ fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8) !void {
     argv.appendAssumeCapacity(buf[0..n]);
     if (profile_dir) |dir| argv.appendSliceAssumeCapacity(&.{ profile.flag, dir });
     if (handover_to) |dir| argv.appendSliceAssumeCapacity(&.{ handover_flag, dir });
+    // Out of reach of whatever started this instance: a terminal (a build task's `zig build run`)
+    // closes once this one quits, and its hangup would take the new one with it. macOS: a session
+    // of its own. Linux: a process group of its own, which std offers where it offers no setsid —
+    // out of the terminal's foreground group, which is what the hangup is sent to. Windows: a
+    // console of its own (no-op for a Release build, which has none), so closing the launcher's
+    // console does not close it.
     if (comptime builtin.os.tag.isDarwin()) {
-        _ = try core.darwin_spawn.spawn(gpa, .{ .argv = argv.items, .stdin = .discard, .stdout = .discard, .stderr = .discard }, null);
+        _ = try core.darwin_spawn.spawn(gpa, .{ .argv = argv.items, .stdin = .discard, .stdout = .discard, .stderr = .discard, .new_session = true }, null);
         return;
     }
-    _ = try std.process.spawn(io, .{ .argv = argv.items, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore });
+    _ = try std.process.spawn(io, .{
+        .argv = argv.items,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .pgid = if (builtin.os.tag == .windows) null else 0,
+        .create_no_window = true,
+    });
 }
 
 // ---- The handover: the old instance ------------------------------------------------------------
