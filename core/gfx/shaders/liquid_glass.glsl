@@ -177,15 +177,20 @@ void main() {
     c += frost * (1.0 - c.a);
     // Apple's lens: the folded band a little darker — the glass's own shade, not the picture's: a
     // dark layer over it, as whole where the picture is see-through as where it is not.
-    float shade = inward ? g5.w * t * t : 0.0;
+    // Liquid Glass's edge, measured beside a window of it: a dark hairline at the very edge and a
+    // bright one, two pixels, just inside it, the same on every side; nothing across the band.
+    // `px` is a point, in pixels (the rim line's width is 0.8 of one, `LiquidField.rim_line_width`).
+    float px = g2.z * 1.25;
+    float shade = inward ? max(g5.w * t * t, 0.85 * (1.0 - smoothstep(0.0, 0.5 * px, -D))) : 0.0;
     vec4 o = vec4(c.rgb * (under * (1.0 - shade)), under * (1.0 - shade) + shade);
     // The lift and the rim's light (`drawLift`), brightest facing the top left — for Apple's lens
     // bright all round, as its rim is.
     float facing = dot(outv, vec2(-0.70710678, -0.70710678));
     float toward = max(facing, 0.0);
     float away = max(-facing, 0.0);
-    float spec = 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + (inward ? 0.15 : 0.06);
-    float line = exp(-max(0.0, -D) / g2.z);
+    float spec = inward ? 0.25 : 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + 0.06;
+    float line = inward ? smoothstep(0.25 * px, 0.5 * px, -D) * (1.0 - smoothstep(1.2 * px, 1.6 * px, -D))
+                        : exp(-max(0.0, -D) / g2.z);
     float lit = line * spec + (inward ? 0.0 : 0.04 * steepL * toward);
     float lift = (g4.z > 0.5 ? g4.y : 0.0) + mat.z;
     // The glass's own light, added whole. Scaled with the picture, it went wherever the picture
