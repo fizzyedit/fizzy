@@ -158,7 +158,6 @@ fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvu
     return editor.explorer.draw(editor, f, keywords);
 }
 
-
 // ── Blur harness ───────────────────────────────────────────────────────────────────────────────
 //
 // `FIZZY_BLUR_DEMO=1` draws a draggable frosted card over the window: a `core.widgets`

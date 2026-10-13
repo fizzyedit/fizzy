@@ -10,7 +10,7 @@
     .content_opacity = 0,
     .plugins = .{
         .@"test.plugin" = .{
-            .surface_keywords = .{ .@"test.movable" = .{ } },
+            .surface_keywords = .{ .@"test.movable" = .{} },
         },
     },
 }

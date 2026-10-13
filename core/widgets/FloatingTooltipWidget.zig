@@ -287,4 +287,3 @@ pub fn deinit(self: *FloatingTooltipWidget) void {
 pub fn easing(t: f32) f32 {
     return @max(0, (t - 0.8) / 0.2);
 }
-

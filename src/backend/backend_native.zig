@@ -396,4 +396,3 @@ pub fn setDynamicNativeMenuShortcut(index: usize, key: ?[]const u8, modifier_mas
 pub fn setSdlAppMetadata(name: [*:0]const u8, version: [*:0]const u8, identifier: [*:0]const u8) void {
     _ = sdl3.SDL_SetAppMetadata(name, version, identifier);
 }
-

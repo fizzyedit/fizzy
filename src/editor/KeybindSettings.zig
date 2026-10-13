@@ -221,7 +221,6 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
 // ---- drawing ------------------------------------------------------------------------------
 
 pub fn draw(query: *const fuzzy.Query) void {
-
     const editor = fizzy.editor();
     const theme = dvui.themeGet();
     const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;

@@ -750,14 +750,6 @@ pub fn setExplorerNewFilePath(self: *Host, path: []const u8) !void {
     return if (self.fizzy_api) |a| try a.setExplorerNewFilePath(path) else error.FizzyApiNotInstalled;
 }
 
-
-
-
-
-
-
-
-
 /// How a document's saving stands (`EditorAPI.SaveState`): for an indicator. Not saving and
 /// never saved when fizzy isn't installed.
 pub fn saveState(self: *Host, doc_id: u64) EditorAPI.SaveState {

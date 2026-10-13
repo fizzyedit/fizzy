@@ -1093,13 +1093,13 @@ fn drawTabMenu(tabs: []const *const sdk.Surface, index: usize, doc: sdk.DocHandl
 
     // Only while it is one: a kept tab has nothing to keep.
     if (host.documentIsPreview(doc.id)) {
-        if (core.widgets.menuRow(@src(), "Keep Open", .{ .icon = icons.tvg.lucide.@"pin" }) != null) {
+        if (core.widgets.menuRow(@src(), "Keep Open", .{ .icon = icons.tvg.lucide.pin }) != null) {
             host.setDocumentPreview(doc.id, false);
             menu.close();
         }
         _ = dvui.separator(@src(), .{ .expand = .horizontal });
     }
-    if (core.widgets.menuRow(@src(), "Close", .{ .icon = icons.tvg.lucide.@"x" }) != null) close = .this;
+    if (core.widgets.menuRow(@src(), "Close", .{ .icon = icons.tvg.lucide.x }) != null) close = .this;
     if (tabs.len > 1) {
         if (core.widgets.menuRow(@src(), "Close Others", .{ .icon = icons.tvg.lucide.@"copy-x" }) != null) close = .others;
     }

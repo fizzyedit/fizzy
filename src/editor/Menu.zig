@@ -258,7 +258,6 @@ pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opt
     return ret;
 }
 
-
 /// Draw registered menu sections for an open parent menu.
 ///
 /// Matches through `menu_model.menuMatches` rather than a plain `eql`, so a plugin section

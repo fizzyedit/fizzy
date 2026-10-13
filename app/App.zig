@@ -764,8 +764,6 @@ pub fn pluginHasDirtyDocs(app: *App, plugin: *sdk.Plugin) bool {
     return false;
 }
 
-
-
 /// Open documents of extension `ext` whose owner is no longer the plugin that would open `ext`
 /// today — i.e. documents left behind by a reassignment. Reassigning never closes anything, so
 /// these keep working under their original owner; this is what lets the File Types table offer
@@ -1140,7 +1138,6 @@ pub fn syncLoadedPluginRenderBridge(app: *App) void {
         sdk.render_bridge.syncHostIntoPlugin(loaded.set_render_bridge);
     }
 }
-
 
 /// Whether a bundled plugin should be loaded from `{exe_dir}/plugins/<id>/` rather than the
 /// copy linked in: never on wasm, not when the build pinned it static

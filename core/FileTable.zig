@@ -1390,7 +1390,6 @@ test "a mount answers paths under its prefix; the disk keeps the rest" {
     try t.expect(table.isDir("mem://box"));
     try t.expect(!table.isDir("mem://box/a.txt"));
 
-
     // The disk still works beside it.
     try t.expect(table.listDir(fx.root) != null);
 }

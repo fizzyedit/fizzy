@@ -100,9 +100,9 @@ pub fn keyFace(name: []const u8) Face {
 
 fn glyphFor(name: []const u8) ?[]const u8 {
     const pairs = .{
-        .{ "enter", glyph.enter },     .{ "kp_enter", glyph.enter },   .{ "tab", glyph.tab },
-        .{ "backspace", glyph.backspace }, .{ "space", glyph.space }, .{ "up", glyph.up },
-        .{ "down", glyph.down },       .{ "left", glyph.left },         .{ "right", glyph.right },
+        .{ "enter", glyph.enter },         .{ "kp_enter", glyph.enter }, .{ "tab", glyph.tab },
+        .{ "backspace", glyph.backspace }, .{ "space", glyph.space },    .{ "up", glyph.up },
+        .{ "down", glyph.down },           .{ "left", glyph.left },      .{ "right", glyph.right },
         .{ "caps_lock", glyph.caps_lock },
     };
     inline for (pairs) |p| {
@@ -119,19 +119,18 @@ const upper = blk: {
 
 /// Keys whose label is not their tag.
 const named = .{
-    .{ "zero", "0" },          .{ "one", "1" },            .{ "two", "2" },         .{ "three", "3" },
-    .{ "four", "4" },          .{ "five", "5" },           .{ "six", "6" },         .{ "seven", "7" },
-    .{ "eight", "8" },         .{ "nine", "9" },           .{ "escape", "Esc" },    .{ "delete", "Del" },
-    .{ "insert", "Ins" },      .{ "home", "Home" },        .{ "end", "End" },       .{ "page_up", "PgUp" },
-    .{ "page_down", "PgDn" },  .{ "minus", "-" },          .{ "equal", "=" },       .{ "left_bracket", "[" },
-    .{ "right_bracket", "]" }, .{ "backslash", "\\" },     .{ "semicolon", ";" },   .{ "apostrophe", "'" },
-    .{ "comma", "," },         .{ "period", "." },         .{ "slash", "/" },       .{ "grave", "`" },
-    .{ "kp_add", "Num +" },    .{ "kp_subtract", "Num -" }, .{ "kp_multiply", "Num *" },
-    .{ "kp_divide", "Num /" }, .{ "kp_decimal", "Num ." }, .{ "kp_equal", "Num =" },
-    .{ "kp_0", "Num 0" },      .{ "kp_1", "Num 1" },       .{ "kp_2", "Num 2" },    .{ "kp_3", "Num 3" },
-    .{ "kp_4", "Num 4" },      .{ "kp_5", "Num 5" },       .{ "kp_6", "Num 6" },    .{ "kp_7", "Num 7" },
-    .{ "kp_8", "Num 8" },      .{ "kp_9", "Num 9" },       .{ "print", "PrtSc" },   .{ "pause", "Pause" },
-    .{ "menu", "Menu" },
+    .{ "zero", "0" },           .{ "one", "1" },             .{ "two", "2" },             .{ "three", "3" },
+    .{ "four", "4" },           .{ "five", "5" },            .{ "six", "6" },             .{ "seven", "7" },
+    .{ "eight", "8" },          .{ "nine", "9" },            .{ "escape", "Esc" },        .{ "delete", "Del" },
+    .{ "insert", "Ins" },       .{ "home", "Home" },         .{ "end", "End" },           .{ "page_up", "PgUp" },
+    .{ "page_down", "PgDn" },   .{ "minus", "-" },           .{ "equal", "=" },           .{ "left_bracket", "[" },
+    .{ "right_bracket", "]" },  .{ "backslash", "\\" },      .{ "semicolon", ";" },       .{ "apostrophe", "'" },
+    .{ "comma", "," },          .{ "period", "." },          .{ "slash", "/" },           .{ "grave", "`" },
+    .{ "kp_add", "Num +" },     .{ "kp_subtract", "Num -" }, .{ "kp_multiply", "Num *" }, .{ "kp_divide", "Num /" },
+    .{ "kp_decimal", "Num ." }, .{ "kp_equal", "Num =" },    .{ "kp_0", "Num 0" },        .{ "kp_1", "Num 1" },
+    .{ "kp_2", "Num 2" },       .{ "kp_3", "Num 3" },        .{ "kp_4", "Num 4" },        .{ "kp_5", "Num 5" },
+    .{ "kp_6", "Num 6" },       .{ "kp_7", "Num 7" },        .{ "kp_8", "Num 8" },        .{ "kp_9", "Num 9" },
+    .{ "print", "PrtSc" },      .{ "pause", "Pause" },       .{ "menu", "Menu" },
 };
 
 const function_keys = blk: {

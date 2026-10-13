@@ -812,8 +812,6 @@ const Pane = struct {
     lens: f32 = 1,
 };
 
-
-
 /// The frost under `panes` at strength `g`: one read of `area` and one blur for all of them,
 /// laid down as a bent mesh each, tinted and lifted like the dialogs' glass, the lit ones
 /// brighter. With the blur off it is the dialogs' fill, as much of it as `g`.

@@ -732,14 +732,6 @@ pub fn setExplorerNewFilePath(self: EditorAPI, path: []const u8) !void {
     return self.vtable.setExplorerNewFilePath(self.ctx, path) catch |err| self.failed("setExplorerNewFilePath", err);
 }
 
-
-
-
-
-
-
-
-
 pub fn saveState(self: EditorAPI, doc_id: u64) SaveState {
     return self.vtable.saveState(self.ctx, doc_id);
 }

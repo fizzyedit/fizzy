@@ -25,79 +25,79 @@ const DWMWCP_ROUND: u32 = 2;
 /// Apply the chrome to `win` (see `window.setStyle`): idempotent, cheap to call every frame.
 pub fn applyChrome(win: *dvui.Window) void {
     if (builtin.os.tag != .windows) return;
-        const hwnd = getWin32Hwnd(win) orelse return;
-        const hwnd_h = @as(win32.foundation.HWND, @ptrCast(hwnd));
-        const WS_SYSMENU: isize = 0x00080000;
-        const cur_style = win32.ui.windows_and_messaging.GetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE);
-        const zoomed = win32.ui.windows_and_messaging.IsZoomed(hwnd_h) != 0;
-        const first = win32_styled_hwnd != hwnd;
-        // Nothing SDL changes back: nothing to do.
-        if (!first and cur_style & WS_SYSMENU == 0 and zoomed == win32_styled_zoomed) return;
-        win32_styled_hwnd = hwnd;
-        win32_styled_zoomed = zoomed;
+    const hwnd = getWin32Hwnd(win) orelse return;
+    const hwnd_h = @as(win32.foundation.HWND, @ptrCast(hwnd));
+    const WS_SYSMENU: isize = 0x00080000;
+    const cur_style = win32.ui.windows_and_messaging.GetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE);
+    const zoomed = win32.ui.windows_and_messaging.IsZoomed(hwnd_h) != 0;
+    const first = win32_styled_hwnd != hwnd;
+    // Nothing SDL changes back: nothing to do.
+    if (!first and cur_style & WS_SYSMENU == 0 and zoomed == win32_styled_zoomed) return;
+    win32_styled_hwnd = hwnd;
+    win32_styled_zoomed = zoomed;
 
-        if (first) {
-            // Once per window: the subclass that keeps the frame extended (re-applied in
-            // WM_ACTIVATE, as DWM requires for the backdrop to show) and draws the custom
-            // non-client area, rounded corners, and the black class brush.
-            _ = win32.ui.shell.SetWindowSubclass(hwnd_h, win32MicaSubclassProc, win32_mica_subclass_id, 0);
+    if (first) {
+        // Once per window: the subclass that keeps the frame extended (re-applied in
+        // WM_ACTIVATE, as DWM requires for the backdrop to show) and draws the custom
+        // non-client area, rounded corners, and the black class brush.
+        _ = win32.ui.shell.SetWindowSubclass(hwnd_h, win32MicaSubclassProc, win32_mica_subclass_id, 0);
 
-            // Draw each step of a live resize from inside it and let the compositor show it before
-            // the next, so the window's new size and the frame drawn for it reach the screen
-            // together (fizzy's SDL patch 0006, docs/WINDOWS_LIVE_RESIZE.md).
-            // By name, not SDL's #define, so this builds against an SDL without it, which ignores
-            // it. `FIZZY_LIVE_RESIZE_TRACE` has SDL log each step; `SDL_VIDEO_WIN_SYNC_LIVE_RESIZE=0`
-            // in the environment turns the steps off.
-            const trace = c.SDL_getenv("FIZZY_LIVE_RESIZE_TRACE") != null;
-            _ = c.SDL_SetHint("SDL_VIDEO_WIN_SYNC_LIVE_RESIZE", if (trace) "2" else "1");
+        // Draw each step of a live resize from inside it and let the compositor show it before
+        // the next, so the window's new size and the frame drawn for it reach the screen
+        // together (fizzy's SDL patch 0006, docs/WINDOWS_LIVE_RESIZE.md).
+        // By name, not SDL's #define, so this builds against an SDL without it, which ignores
+        // it. `FIZZY_LIVE_RESIZE_TRACE` has SDL log each step; `SDL_VIDEO_WIN_SYNC_LIVE_RESIZE=0`
+        // in the environment turns the steps off.
+        const trace = c.SDL_getenv("FIZZY_LIVE_RESIZE_TRACE") != null;
+        _ = c.SDL_SetHint("SDL_VIDEO_WIN_SYNC_LIVE_RESIZE", if (trace) "2" else "1");
 
-            _ = win32.graphics.dwm.DwmSetWindowAttribute(
-                hwnd_h,
-                @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE)),
-                &DWMWCP_ROUND,
-                @sizeOf(u32),
-            );
-
-            // Per MSDN: for backdrop to render, the client area background must be transparent or a black brush.
-            // BLACK_BRUSH (4) lets DWM draw the backdrop material; a null brush can leave the area undefined.
-            const black_brush = win32.graphics.gdi.GetStockObject(win32.graphics.gdi.GET_STOCK_OBJECT_FLAGS.BLACK_BRUSH);
-            _ = win32.ui.windows_and_messaging.SetClassLongPtrW(
-                hwnd_h,
-                win32.ui.windows_and_messaging.GCLP_HBRBACKGROUND,
-                @as(isize, @bitCast(@intFromPtr(black_brush))),
-            );
-            // Do not set WS_EX_LAYERED here: a layered main window is a common cause of broken mouse input on
-            // native modal dialogs (SDL_ShowOpenFileDialog / tinyfd) when that window is the dialog owner.
-        }
-
-        // Windows 11: Apply Acrylic (frosted glass) backdrop so title bar and extended frame show blur. Requires Build 22621+.
-        // DWMSBT_TRANSIENTWINDOW = Acrylic is more visible than Mica; use MAINWINDOW for subtler Mica.
-        const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
         _ = win32.graphics.dwm.DwmSetWindowAttribute(
             hwnd_h,
-            @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_SYSTEMBACKDROP_TYPE)),
-            &backdrop_type,
+            @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE)),
+            &DWMWCP_ROUND,
             @sizeOf(u32),
         );
 
-        // Hide the OS-drawn caption buttons (min/max/close) so they don't show through our custom-drawn ones.
-        // Returning 0 from WM_NCCALCSIZE removes the non-client area, but on Win11 DWM still composites the
-        // system caption buttons whenever WS_SYSMENU is present. Strip just WS_SYSMENU — the min/max box
-        // styles only render buttons when WS_SYSMENU is also set, but they're still required for Aero Snap
-        // (drag-to-top maximize, drag-to-edge half-snap), so we keep them.
-        if (cur_style & WS_SYSMENU != 0) {
-            _ = win32.ui.windows_and_messaging.SetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE, cur_style & ~WS_SYSMENU);
-        }
+        // Per MSDN: for backdrop to render, the client area background must be transparent or a black brush.
+        // BLACK_BRUSH (4) lets DWM draw the backdrop material; a null brush can leave the area undefined.
+        const black_brush = win32.graphics.gdi.GetStockObject(win32.graphics.gdi.GET_STOCK_OBJECT_FLAGS.BLACK_BRUSH);
+        _ = win32.ui.windows_and_messaging.SetClassLongPtrW(
+            hwnd_h,
+            win32.ui.windows_and_messaging.GCLP_HBRBACKGROUND,
+            @as(isize, @bitCast(@intFromPtr(black_brush))),
+        );
+        // Do not set WS_EX_LAYERED here: a layered main window is a common cause of broken mouse input on
+        // native modal dialogs (SDL_ShowOpenFileDialog / tinyfd) when that window is the dialog owner.
+    }
 
-        // Extend the DWM frame (Acrylic) into the entire client area so the backdrop material shows there.
-        _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(hwnd_h, &win32_mica_margins);
+    // Windows 11: Apply Acrylic (frosted glass) backdrop so title bar and extended frame show blur. Requires Build 22621+.
+    // DWMSBT_TRANSIENTWINDOW = Acrylic is more visible than Mica; use MAINWINDOW for subtler Mica.
+    const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(
+        hwnd_h,
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_SYSTEMBACKDROP_TYPE)),
+        &backdrop_type,
+        @sizeOf(u32),
+    );
 
-        // Force WM_NCCALCSIZE so the client area extends over the title bar immediately (not only after maximize).
-        const SWP_NOMOVE: u32 = 0x0002;
-        const SWP_NOSIZE: u32 = 0x0001;
-        const SWP_FRAMECHANGED: u32 = 0x0020;
-        const swp_flags = @as(win32.ui.windows_and_messaging.SET_WINDOW_POS_FLAGS, @bitCast(SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED));
-        _ = win32.ui.windows_and_messaging.SetWindowPos(hwnd_h, null, 0, 0, 0, 0, swp_flags);
+    // Hide the OS-drawn caption buttons (min/max/close) so they don't show through our custom-drawn ones.
+    // Returning 0 from WM_NCCALCSIZE removes the non-client area, but on Win11 DWM still composites the
+    // system caption buttons whenever WS_SYSMENU is present. Strip just WS_SYSMENU — the min/max box
+    // styles only render buttons when WS_SYSMENU is also set, but they're still required for Aero Snap
+    // (drag-to-top maximize, drag-to-edge half-snap), so we keep them.
+    if (cur_style & WS_SYSMENU != 0) {
+        _ = win32.ui.windows_and_messaging.SetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE, cur_style & ~WS_SYSMENU);
+    }
+
+    // Extend the DWM frame (Acrylic) into the entire client area so the backdrop material shows there.
+    _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(hwnd_h, &win32_mica_margins);
+
+    // Force WM_NCCALCSIZE so the client area extends over the title bar immediately (not only after maximize).
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const swp_flags = @as(win32.ui.windows_and_messaging.SET_WINDOW_POS_FLAGS, @bitCast(SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED));
+    _ = win32.ui.windows_and_messaging.SetWindowPos(hwnd_h, null, 0, 0, 0, 0, swp_flags);
 }
 
 /// The backdrop's tint follows the app's theme: DWM draws Acrylic's dark or light variant by this
@@ -117,14 +117,13 @@ pub fn setDarkMode(win: *dvui.Window, dark: bool) void {
 /// No caption or border tint: the app draws its own title bar in the client area.
 pub fn clearCaptionColors(win: *dvui.Window) void {
     if (builtin.os.tag != .windows) return;
-        const hwnd = getWin32Hwnd(win) orelse return;
-        const hwnd_h = @as(win32.foundation.HWND, @ptrCast(hwnd));
+    const hwnd = getWin32Hwnd(win) orelse return;
+    const hwnd_h = @as(win32.foundation.HWND, @ptrCast(hwnd));
 
-
-        // No caption/border tint; we draw our own title bar in the extended client area (see WM_NCCALCSIZE in subclass).
-        const color_none: u32 = win32.graphics.dwm.DWMWA_COLOR_NONE;
-        _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_CAPTION_COLOR, &color_none, @sizeOf(u32));
-        _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_BORDER_COLOR, &color_none, @sizeOf(u32));
+    // No caption/border tint; we draw our own title bar in the extended client area (see WM_NCCALCSIZE in subclass).
+    const color_none: u32 = win32.graphics.dwm.DWMWA_COLOR_NONE;
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_CAPTION_COLOR, &color_none, @sizeOf(u32));
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_BORDER_COLOR, &color_none, @sizeOf(u32));
 }
 
 /// The window whose one-time Windows chrome is in place (`setWindowStyle`), and whether it was

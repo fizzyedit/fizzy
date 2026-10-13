@@ -4288,7 +4288,6 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // look at demo() for examples of dvui widgets, shows in a floating window
     if (comptime dvui_demo) dvui.Examples.demo(.full);
 
-
     // Render any save-complete toasts in the same centered, content-fill-styled card system.
     // The dvui toast queue holds them with a 2.5s timeout; each toast's display function fades
     // out and removes itself when the timer expires.

@@ -492,7 +492,6 @@ pub fn initWindow(init_options: InitOptions) !SDLBackend {
     return back;
 }
 
-
 fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !struct {
     win: *c.SDL_Window,
     gpu: *GpuRenderer,

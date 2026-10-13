@@ -234,4 +234,3 @@ pub fn freeRegions(gpa: std.mem.Allocator, regions: []SavedRegion) void {
     }
     gpa.free(regions);
 }
-

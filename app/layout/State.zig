@@ -721,7 +721,6 @@ pub fn swapFor(self: *State, gpa: std.mem.Allocator, key: u64) ?*core.anim.Trans
     return t;
 }
 
-
 /// Draw the surface `id` once, invisibly, in the place `key` — before it is ever shown there.
 /// A view that measures itself on its first draw (a large text document laying out every line)
 /// does that now, while it is not what anyone is waiting on, instead of on the click that

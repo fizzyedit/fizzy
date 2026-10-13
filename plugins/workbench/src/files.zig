@@ -290,7 +290,7 @@ fn rowMenu(
     defer fw2.deinit();
 
     if (is_root) {
-        if ((core.widgets.menuRow(@src(), "Close", .{ .icon = icons.tvg.lucide.@"x" })) != null) {
+        if ((core.widgets.menuRow(@src(), "Close", .{ .icon = icons.tvg.lucide.x })) != null) {
             runtime.host().closeProjectFolder();
 
             fw2.close();
@@ -300,7 +300,7 @@ fn rowMenu(
     }
 
     if (kind == .file) {
-        if ((core.widgets.menuRow(@src(), "Open", .{ .icon = icons.tvg.lucide.@"file" })) != null) {
+        if ((core.widgets.menuRow(@src(), "Open", .{ .icon = icons.tvg.lucide.file })) != null) {
             const arena = dvui.currentWindow().arena();
             const to_open = selectionTopMostOpenableFilesForOpenActions(arena) catch |err| blk: {
                 dvui.log.err("Failed to collect files to open: {any}", .{err});
@@ -387,7 +387,7 @@ fn rowMenu(
     }
 
     if (!is_root) {
-        if ((core.widgets.menuRow(@src(), "Rename", .{ .icon = icons.tvg.lucide.@"pencil" })) != null) {
+        if ((core.widgets.menuRow(@src(), "Rename", .{ .icon = icons.tvg.lucide.pencil })) != null) {
             edit_id = branch_id.asUsize();
             fw2.close();
         }

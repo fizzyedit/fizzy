@@ -128,7 +128,6 @@ pub const Viewport = struct {
     under_main: bool = false,
 };
 
-
 /// Out of the main window in an OS window the OS frames (`Viewport.os_frame`).
 fn osFramed(f: Float) bool {
     if (f.viewport) |vp| return vp.os_frame;

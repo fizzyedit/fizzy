@@ -90,6 +90,22 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "sdl=$sdl" >> "$GITHUB_OUTPUT"
 
+  # Every tracked .zig and .zon file as `zig fmt` writes it. Needs Zig and nothing else: no
+  # dependencies, no cache, a few seconds.
+  format:
+    name: Format
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: zig fmt --check
+        run: bash scripts/check-fmt.sh
+
   test:
     name: Tests (${{ matrix.name }})
     needs: changes
@@ -613,7 +629,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, test, examples, integration, verdict, windows-fizzy-backend, sdl]
+    needs: [changes, format, test, examples, integration, verdict, windows-fizzy-backend, sdl]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped

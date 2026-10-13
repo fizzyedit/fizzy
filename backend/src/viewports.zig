@@ -402,7 +402,6 @@ pub fn glass(vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
     return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
 }
 
-
 /// The OS asked to close `vp`'s window.
 pub fn closeRequested(vp: *const Viewport) bool {
     return vp.close_requested;

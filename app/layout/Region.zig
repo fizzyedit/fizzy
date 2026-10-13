@@ -211,7 +211,6 @@ pub fn isPeeking(self: Region) bool {
     return !self.isClosed();
 }
 
-
 /// How a region draws its own contents.
 ///
 /// Null means "draw the selected matching surface" — the "this region IS x" form. A function
