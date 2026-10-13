@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: foxnne <foxnne@gmail.com>
+Date: Fri, 9 Oct 2026 12:47:40 -0500
+Subject: [PATCH] wayland: Make xkb_keymap_mod_get_mask() optional at runtime
+
+Built against libxkbcommon 1.10 or newer, the Wayland driver required
+xkb_keymap_mod_get_mask() (new in 1.10) when it loaded libxkbcommon, so
+where the system's libxkbcommon is older the whole driver reported itself
+unavailable and SDL fell back to X11. libxkbcommon is loaded at runtime so
+that one binary runs across distributions, but Ubuntu 24.04 ships 1.6 and
+Debian 12 1.5. It only bites builds made against newer headers than the
+machines they run on, as fizzyedit/sdl_zig's are (1.13); distribution
+packages build against their own.
+
+The symbol is now SDL_WAYLAND_SYM_OPT, and the keymap handler uses it when
+it loaded, and otherwise falls back to the masks from
+xkb_keymap_mod_get_index(), which was already the path for builds against
+older headers. Both paths are compiled whenever the headers are 1.10 or
+newer. The WAYLAND_xkb_* names are function pointers in static builds too,
+so the pointer check needs no #ifdef.
+
+The fallback is the same as the 1.10 path for the standard keymaps:
+xkeyboard-config maps Alt to Mod1, Super to Mod4, NumLock to Mod2,
+LevelThree to Mod5 and LevelFive to Mod3. It differs where a keymap maps a
+virtual modifier elsewhere or to several real modifiers, and for
+LevelFive when nothing maps it (1.10 gives 0, the fallback Mod3), as it
+always has for builds against older headers.
+
+Test: test/testautomation_fizzy_xkb.c (fizzyedit/sdl_zig's test-fizzy-xkb
+job, Ubuntu 24.04 and 26.04). On 24.04 without this change the driver
+doesn't load.
+
+Upstream: not yet proposed; upstream main and release-3.4.x have the
+same code.
+
+Fixes fizzyedit/fizzy#289. Part of fizzyedit/fizzy#280.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/video/wayland/SDL_waylandevents.c | 44 +++++++++++++++------------
+ src/video/wayland/SDL_waylandsym.h    |  3 +-
+ 2 files changed, 27 insertions(+), 20 deletions(-)
+
+diff --git a/src/video/wayland/SDL_waylandevents.c b/src/video/wayland/SDL_waylandevents.c
+index 5970b18..5e27aa9 100644
+--- a/src/video/wayland/SDL_waylandevents.c
++++ b/src/video/wayland/SDL_waylandevents.c
+@@ -1677,38 +1677,44 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard,
+     for (xkb_layout_index_t i = 0; i < seat->keyboard.xkb.num_layouts; ++i) {
+         SDL_DestroyKeymap(seat->keyboard.sdl_keymap[i]);
+     }
+     SDL_free(seat->keyboard.sdl_keymap);
+     seat->keyboard.sdl_keymap = NULL;
+     seat->keyboard.xkb.num_layouts = 0;
+ 
+ #if SDL_XKBCOMMON_CHECK_VERSION(1, 10, 0)
+-    seat->keyboard.xkb.shift_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_MOD_NAME_SHIFT);
+-    seat->keyboard.xkb.ctrl_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_MOD_NAME_CTRL);
+-    seat->keyboard.xkb.alt_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_ALT);
+-    seat->keyboard.xkb.gui_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_SUPER);
+-    seat->keyboard.xkb.level3_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_LEVEL3);
+-    seat->keyboard.xkb.level5_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_LEVEL5);
+-    seat->keyboard.xkb.num_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_NUM);
+-    seat->keyboard.xkb.caps_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_MOD_NAME_CAPS);
+-#else
++    /* The libxkbcommon loaded at runtime may be older than the headers, and lack
++     * xkb_keymap_mod_get_mask(), so fall back to the modifier indices without it.
++     */
++    if (WAYLAND_xkb_keymap_mod_get_mask) {
++        seat->keyboard.xkb.shift_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_MOD_NAME_SHIFT);
++        seat->keyboard.xkb.ctrl_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_MOD_NAME_CTRL);
++        seat->keyboard.xkb.alt_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_ALT);
++        seat->keyboard.xkb.gui_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_SUPER);
++        seat->keyboard.xkb.level3_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_LEVEL3);
++        seat->keyboard.xkb.level5_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_LEVEL5);
++        seat->keyboard.xkb.num_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_VMOD_NAME_NUM);
++        seat->keyboard.xkb.caps_mask = WAYLAND_xkb_keymap_mod_get_mask(seat->keyboard.xkb.keymap, XKB_MOD_NAME_CAPS);
++    } else
++#endif
++    {
+ #define GET_MOD_INDEX(mod) \
+     WAYLAND_xkb_keymap_mod_get_index(seat->keyboard.xkb.keymap, XKB_MOD_NAME_##mod)
+-    seat->keyboard.xkb.shift_mask = 1 << GET_MOD_INDEX(SHIFT);
+-    seat->keyboard.xkb.ctrl_mask = 1 << GET_MOD_INDEX(CTRL);
+-    seat->keyboard.xkb.alt_mask = 1 << GET_MOD_INDEX(ALT);
+-    seat->keyboard.xkb.gui_mask = 1 << GET_MOD_INDEX(LOGO);
+-    // Note: This is correct: Mod3 is typically level 5 shift, and Mod5 is typically level 3 shift.
+-    seat->keyboard.xkb.level3_mask = 1 << GET_MOD_INDEX(MOD5);
+-    seat->keyboard.xkb.level5_mask = 1 << GET_MOD_INDEX(MOD3);
+-    seat->keyboard.xkb.num_mask = 1 << GET_MOD_INDEX(NUM);
+-    seat->keyboard.xkb.caps_mask = 1 << GET_MOD_INDEX(CAPS);
++        seat->keyboard.xkb.shift_mask = 1 << GET_MOD_INDEX(SHIFT);
++        seat->keyboard.xkb.ctrl_mask = 1 << GET_MOD_INDEX(CTRL);
++        seat->keyboard.xkb.alt_mask = 1 << GET_MOD_INDEX(ALT);
++        seat->keyboard.xkb.gui_mask = 1 << GET_MOD_INDEX(LOGO);
++        // Note: This is correct: Mod3 is typically level 5 shift, and Mod5 is typically level 3 shift.
++        seat->keyboard.xkb.level3_mask = 1 << GET_MOD_INDEX(MOD5);
++        seat->keyboard.xkb.level5_mask = 1 << GET_MOD_INDEX(MOD3);
++        seat->keyboard.xkb.num_mask = 1 << GET_MOD_INDEX(NUM);
++        seat->keyboard.xkb.caps_mask = 1 << GET_MOD_INDEX(CAPS);
+ #undef GET_MOD_INDEX
+-#endif
++    }
+ 
+     if (seat->keyboard.xkb.state != NULL) {
+         /* if there's already a state, throw it away rather than leaking it before
+          * trying to create a new one with the new keymap.
+          */
+         WAYLAND_xkb_state_unref(seat->keyboard.xkb.state);
+         seat->keyboard.xkb.state = NULL;
+     }
+diff --git a/src/video/wayland/SDL_waylandsym.h b/src/video/wayland/SDL_waylandsym.h
+index 4628f36..a639622 100644
+--- a/src/video/wayland/SDL_waylandsym.h
++++ b/src/video/wayland/SDL_waylandsym.h
+@@ -164,17 +164,18 @@ SDL_WAYLAND_SYM(const char *, xkb_keymap_layout_get_name, (struct xkb_keymap *,
+ #if SDL_XKBCOMMON_CHECK_VERSION(1, 0, 0)
+ SDL_WAYLAND_SYM(size_t, xkb_keymap_key_get_mods_for_level, (struct xkb_keymap *, xkb_keycode_t, xkb_layout_index_t, xkb_level_index_t, xkb_mod_mask_t *, size_t) )
+ #else
+ // Only needed in the fallback replacement for xkb_keymap_key_get_mods_for_level().
+ SDL_WAYLAND_SYM(xkb_level_index_t, xkb_state_key_get_level, (struct xkb_state *, xkb_keycode_t, xkb_layout_index_t) )
+ #endif
+ 
+ #if SDL_XKBCOMMON_CHECK_VERSION(1, 10, 0)
+-SDL_WAYLAND_SYM(xkb_mod_mask_t, xkb_keymap_mod_get_mask, (struct xkb_keymap *, const char *))
++// Optional, as the libxkbcommon loaded at runtime may be older than the headers.
++SDL_WAYLAND_SYM_OPT(xkb_mod_mask_t, xkb_keymap_mod_get_mask, (struct xkb_keymap *, const char *))
+ #endif
+ 
+ #ifdef HAVE_LIBDECOR_H
+ SDL_WAYLAND_MODULE(WAYLAND_LIBDECOR)
+ 
+ #if defined(SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_LIBDECOR) || SDL_LIBDECOR_CHECK_VERSION(0, 3, 0)
+ #define SDL_libdecor_constsince03 const
+ #else

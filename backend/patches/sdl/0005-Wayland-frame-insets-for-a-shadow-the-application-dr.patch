@@ -1,0 +1,604 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: foxnne <foxnne@gmail.com>
+Date: Fri, 2 Oct 2026 15:29:05 -0500
+Subject: [PATCH] Wayland: frame insets, for a shadow the application draws
+ round its own decorations
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An application that draws its own decorations on Wayland draws its drop shadow too, in a
+transparent margin of its surface, as GTK, libadwaita, Chromium, Firefox and libdecor do. The
+compositor has to be told which part of the surface is the window — xdg_surface.set_window_geometry
+— or it places, snaps and tiles the shadow with it, and the margin has to pass clicks through.
+SDL sets the window geometry to the whole surface (and only without a viewport), so an SDL
+application could not.
+
+Four creation properties, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_{LEFT,TOP,RIGHT,BOTTOM}_NUMBER,
+give the margins in window coordinates. While an xdg-shell toplevel floats:
+
+- the size the compositor configures is the frame's, and the surface grows by the insets round it;
+- the window geometry is the frame, with or without a viewport;
+- the input region is the frame and a band round it, where a hit test can answer the edges it
+  resizes from: SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER units (default 8, 0 for
+  the frame alone), at most each side's inset;
+- an opaque window's opaque region is the frame, not the shadow round it;
+- the min/max sizes sent are the frame's, and the toplevel bounds a compositor sends (which bound
+  the frame) are widened by the insets before SDL clamps a window to them;
+- popups are anchored to the parent's frame.
+
+Maximized, tiled or fullscreen the insets are zero. The insets in effect are published as
+SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_*_NUMBER from creation on (those asked for, zero for libdecor),
+and change with the window's state. libdecor windows are untouched: libdecor frames its own (an
+application drawing its own decorations sets SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR to 0).
+
+The insets asked for are also kept in the window's own properties (SDL.internal.wayland.
+frame_inset.*), so a window SDL makes again (SDL_RecreateWindow, for an OpenGL renderer or a
+reconnect) keeps them. Hiding a window destroys its xdg_surface and the window geometry with it,
+so hiding forgets the insets applied, and the configure that shows it again frames it again.
+
+Fizzy draws its Linux window's title bar and shadow with these (fizzy's linux_titlebar.zig).
+
+Upstream main (not release-3.4.x) gained its own version on 2026-09-24 (5d7167cb, with 86b89cff
+and dff05080): opted into with SDL_PROP_WINDOW_CREATE_WAYLAND_ENABLE_INSETS_BOOLEAN, the insets
+set as SDL_PROP_WINDOW_WAYLAND_BORDER_INSET_*_NUMBER and read at each configure, with no input
+band and the same opaque-region, bounds and recreate problems. At the update onto a release that
+has it, fizzy moves to upstream's API and keeps only what upstream lacks here.
+---
+ include/SDL3/SDL_video.h              |  42 ++++++
+ src/video/wayland/SDL_waylandwindow.c | 200 ++++++++++++++++++++++++--
+ src/video/wayland/SDL_waylandwindow.h |  11 ++
+ 3 files changed, 240 insertions(+), 13 deletions(-)
+
+diff --git a/include/SDL3/SDL_video.h b/include/SDL3/SDL_video.h
+index 2f06295..143ac14 100644
+--- a/include/SDL3/SDL_video.h
++++ b/include/SDL3/SDL_video.h
+@@ -1347,16 +1347,40 @@ extern SDL_DECLSPEC SDL_Window * SDLCALL SDL_CreatePopupWindow(SDL_Window *paren
+  *   surfaces.
+  * - `SDL_PROP_WINDOW_CREATE_WAYLAND_CREATE_EGL_WINDOW_BOOLEAN` - true if the
+  *   application wants an associated `wl_egl_window` object to be created and
+  *   attached to the window, even if the window does not have the OpenGL
+  *   property or `SDL_WINDOW_OPENGL` flag set.
+  * - `SDL_PROP_WINDOW_CREATE_WAYLAND_WL_SURFACE_POINTER` - the wl_surface
+  *   associated with the window, if you want to wrap an existing window. See
+  *   [README-wayland](README-wayland) for more information.
++ * - `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER`,
++ *   `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_TOP_NUMBER`,
++ *   `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_RIGHT_NUMBER` and
++ *   `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_BOTTOM_NUMBER` - margins, in
++ *   window coordinates, of the window's surface that lie outside its frame,
++ *   where an application that draws its own decorations draws its drop
++ *   shadow. While the window floats (neither maximized, tiled nor fullscreen)
++ *   the compositor is told the frame is the window
++ *   (`xdg_surface.set_window_geometry`), so it places, snaps and tiles the
++ *   frame; the surface grows by the margins around the size it configures;
++ *   only the frame and a band around it take input (see
++ *   `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER`), so the rest
++ *   of the shadow passes clicks through; and the opaque region of a window
++ *   that isn't `SDL_WINDOW_TRANSPARENT` is the frame. Maximized, tiled or
++ *   fullscreen, the margins are zero (see
++ *   `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER`). xdg-shell windows
++ *   only, not libdecor's. The window keeps them if SDL has to make it again
++ *   (as for an OpenGL renderer on a window made without `SDL_WINDOW_OPENGL`).
++ * - `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER` - the width, in
++ *   window coordinates, of the band around the frame that still takes input
++ *   while the window has frame insets, where the application's hit test (see
++ *   SDL_SetWindowHitTest()) can answer the edges it resizes from. Each side's
++ *   band is at most that side's inset. Defaults to 8; 0 leaves only the
++ *   frame taking input.
+  *
+  * These are additional supported properties on Windows:
+  *
+  * - `SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER`: the HWND associated with the
+  *   window, if you want to wrap an existing window.
+  * - `SDL_PROP_WINDOW_CREATE_WIN32_PIXEL_FORMAT_HWND_POINTER`: optional,
+  *   another window to share pixel format with, useful for OpenGL windows
+  *
+@@ -1436,16 +1460,21 @@ extern SDL_DECLSPEC SDL_Window * SDLCALL SDL_CreateWindowWithProperties(SDL_Prop
+ #define SDL_PROP_WINDOW_CREATE_X_NUMBER                            "SDL.window.create.x"
+ #define SDL_PROP_WINDOW_CREATE_Y_NUMBER                            "SDL.window.create.y"
+ #define SDL_PROP_WINDOW_CREATE_COCOA_WINDOW_POINTER                "SDL.window.create.cocoa.window"
+ #define SDL_PROP_WINDOW_CREATE_COCOA_VIEW_POINTER                  "SDL.window.create.cocoa.view"
+ #define SDL_PROP_WINDOW_CREATE_WINDOWSCENE_POINTER                 "SDL.window.create.uikit.windowscene"
+ #define SDL_PROP_WINDOW_CREATE_WAYLAND_SURFACE_ROLE_CUSTOM_BOOLEAN "SDL.window.create.wayland.surface_role_custom"
+ #define SDL_PROP_WINDOW_CREATE_WAYLAND_CREATE_EGL_WINDOW_BOOLEAN   "SDL.window.create.wayland.create_egl_window"
+ #define SDL_PROP_WINDOW_CREATE_WAYLAND_WL_SURFACE_POINTER          "SDL.window.create.wayland.wl_surface"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER     "SDL.window.create.wayland.frame_inset.left"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_TOP_NUMBER      "SDL.window.create.wayland.frame_inset.top"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_RIGHT_NUMBER    "SDL.window.create.wayland.frame_inset.right"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_BOTTOM_NUMBER   "SDL.window.create.wayland.frame_inset.bottom"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER   "SDL.window.create.wayland.frame_input_margin"
+ #define SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER                  "SDL.window.create.win32.hwnd"
+ #define SDL_PROP_WINDOW_CREATE_WIN32_PIXEL_FORMAT_HWND_POINTER     "SDL.window.create.win32.pixel_format_hwnd"
+ #define SDL_PROP_WINDOW_CREATE_X11_WINDOW_NUMBER                   "SDL.window.create.x11.window"
+ #define SDL_PROP_WINDOW_CREATE_EMSCRIPTEN_CANVAS_ID_STRING         "SDL.window.create.emscripten.canvas_id"
+ #define SDL_PROP_WINDOW_CREATE_EMSCRIPTEN_KEYBOARD_ELEMENT_STRING  "SDL.window.create.emscripten.keyboard_element"
+ 
+ /**
+  * Get the numeric ID of a window.
+@@ -1595,16 +1624,25 @@ extern SDL_DECLSPEC SDL_Window * SDLCALL SDL_GetWindowParent(SDL_Window *window)
+  * - `SDL_PROP_WINDOW_WAYLAND_XDG_TOPLEVEL_POINTER`: the xdg_toplevel role
+  *   associated with the window
+  * - 'SDL_PROP_WINDOW_WAYLAND_XDG_TOPLEVEL_EXPORT_HANDLE_STRING': the export
+  *   handle associated with the window
+  * - `SDL_PROP_WINDOW_WAYLAND_XDG_POPUP_POINTER`: the xdg_popup role
+  *   associated with the window
+  * - `SDL_PROP_WINDOW_WAYLAND_XDG_POSITIONER_POINTER`: the xdg_positioner
+  *   associated with the window, in popup mode
++ * - `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER`,
++ *   `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_TOP_NUMBER`,
++ *   `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_RIGHT_NUMBER` and
++ *   `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_BOTTOM_NUMBER`: the frame insets in
++ *   effect now, in window coordinates — those asked for at creation while the
++ *   window floats, zero while it is maximized, tiled or fullscreen. Set from
++ *   creation on: until the window is first shown, the ones it will float
++ *   with. They change with the window's size; read them on
++ *   `SDL_EVENT_WINDOW_RESIZED`.
+  *
+  * On X11:
+  *
+  * - `SDL_PROP_WINDOW_X11_DISPLAY_POINTER`: the X11 Display associated with
+  *   the window
+  * - `SDL_PROP_WINDOW_X11_SCREEN_NUMBER`: the screen number associated with
+  *   the window
+  * - `SDL_PROP_WINDOW_X11_WINDOW_NUMBER`: the X11 Window associated with the
+@@ -1654,16 +1692,20 @@ extern SDL_DECLSPEC SDL_PropertiesID SDLCALL SDL_GetWindowProperties(SDL_Window
+ #define SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER                     "SDL.window.wayland.surface"
+ #define SDL_PROP_WINDOW_WAYLAND_VIEWPORT_POINTER                    "SDL.window.wayland.viewport"
+ #define SDL_PROP_WINDOW_WAYLAND_EGL_WINDOW_POINTER                  "SDL.window.wayland.egl_window"
+ #define SDL_PROP_WINDOW_WAYLAND_XDG_SURFACE_POINTER                 "SDL.window.wayland.xdg_surface"
+ #define SDL_PROP_WINDOW_WAYLAND_XDG_TOPLEVEL_POINTER                "SDL.window.wayland.xdg_toplevel"
+ #define SDL_PROP_WINDOW_WAYLAND_XDG_TOPLEVEL_EXPORT_HANDLE_STRING   "SDL.window.wayland.xdg_toplevel_export_handle"
+ #define SDL_PROP_WINDOW_WAYLAND_XDG_POPUP_POINTER                   "SDL.window.wayland.xdg_popup"
+ #define SDL_PROP_WINDOW_WAYLAND_XDG_POSITIONER_POINTER              "SDL.window.wayland.xdg_positioner"
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER             "SDL.window.wayland.frame_inset.left"
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_TOP_NUMBER              "SDL.window.wayland.frame_inset.top"
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_RIGHT_NUMBER            "SDL.window.wayland.frame_inset.right"
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_BOTTOM_NUMBER           "SDL.window.wayland.frame_inset.bottom"
+ #define SDL_PROP_WINDOW_X11_DISPLAY_POINTER                         "SDL.window.x11.display"
+ #define SDL_PROP_WINDOW_X11_SCREEN_NUMBER                           "SDL.window.x11.screen"
+ #define SDL_PROP_WINDOW_X11_WINDOW_NUMBER                           "SDL.window.x11.window"
+ #define SDL_PROP_WINDOW_EMSCRIPTEN_CANVAS_ID_STRING                 "SDL.window.emscripten.canvas_id"
+ #define SDL_PROP_WINDOW_EMSCRIPTEN_KEYBOARD_ELEMENT_STRING          "SDL.window.emscripten.keyboard_element"
+ 
+ /**
+  * Get the window flags.
+diff --git a/src/video/wayland/SDL_waylandwindow.c b/src/video/wayland/SDL_waylandwindow.c
+index 56b9fc4..e0a7313 100644
+--- a/src/video/wayland/SDL_waylandwindow.c
++++ b/src/video/wayland/SDL_waylandwindow.c
+@@ -140,16 +140,106 @@ static void GetBufferSize(SDL_Window *window, int *width, int *height)
+     if (width) {
+         *width = buf_width;
+     }
+     if (height) {
+         *height = buf_height;
+     }
+ }
+ 
++/* The band around a frame with insets that still takes input by default, in window coordinates:
++ * where an application's hit test answers the edges it resizes from, as a decorated window's
++ * border would, while the rest of its shadow passes clicks through
++ * (SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER).
++ */
++#define WAYLAND_FRAME_INPUT_MARGIN 8
++
++/* The frame insets in effect for a toplevel in the given state: those asked for at creation
++ * while it floats, zero when it is maximized, tiled or fullscreen — the frame fills its space
++ * there and casts no shadow. xdg-shell only: libdecor draws, sizes and frames its own.
++ */
++static void GetFrameInsets(SDL_WindowData *wind, bool floating, int *left, int *top, int *right, int *bottom)
++{
++    const bool apply = floating && wind->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_TOPLEVEL;
++    *left = apply ? wind->frame_insets.left : 0;
++    *top = apply ? wind->frame_insets.top : 0;
++    *right = apply ? wind->frame_insets.right : 0;
++    *bottom = apply ? wind->frame_insets.bottom : 0;
++}
++
++static bool HasFrameInsets(SDL_WindowData *wind)
++{
++    return wind->frame_insets.left || wind->frame_insets.top || wind->frame_insets.right || wind->frame_insets.bottom;
++}
++
++/* The frame insets and input margin asked for at creation are kept in the window's properties
++ * as well, which outlive the window data: SDL_RecreateWindow makes the window again with no
++ * creation properties, and the window keeps its insets.
++ */
++#define WAYLAND_KEPT_FRAME_INSET_LEFT   "SDL.internal.wayland.frame_inset.left"
++#define WAYLAND_KEPT_FRAME_INSET_TOP    "SDL.internal.wayland.frame_inset.top"
++#define WAYLAND_KEPT_FRAME_INSET_RIGHT  "SDL.internal.wayland.frame_inset.right"
++#define WAYLAND_KEPT_FRAME_INSET_BOTTOM "SDL.internal.wayland.frame_inset.bottom"
++#define WAYLAND_KEPT_FRAME_INPUT_MARGIN "SDL.internal.wayland.frame_input_margin"
++
++static int GetKeptCreateNumber(SDL_PropertiesID create_props, SDL_PropertiesID window_props, const char *create_name, const char *kept_name, int default_value)
++{
++    const Sint64 kept = SDL_GetNumberProperty(window_props, kept_name, default_value);
++    const int value = SDL_max((int)SDL_GetNumberProperty(create_props, create_name, kept), 0);
++
++    SDL_SetNumberProperty(window_props, kept_name, value);
++    return value;
++}
++
++// Publishes the frame insets in effect (SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_*).
++static void PublishFrameInsets(SDL_Window *window, int left, int top, int right, int bottom)
++{
++    const SDL_PropertiesID props = SDL_GetWindowProperties(window);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER, left);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_TOP_NUMBER, top);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_RIGHT_NUMBER, right);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_BOTTOM_NUMBER, bottom);
++}
++
++/* Tells the compositor the frame is the window, takes input on the frame and a band around it
++ * only, and publishes the insets in effect. Called whenever the size or the insets change. A
++ * hidden window has no xdg_surface to frame; the configure that shows it applies them.
++ */
++static void ApplyFrameInsets(SDL_Window *window, int left, int top, int right, int bottom)
++{
++    SDL_WindowData *wind = window->internal;
++    const int frame_w = SDL_max(wind->current.logical_width - left - right, 1);
++    const int frame_h = SDL_max(wind->current.logical_height - top - bottom, 1);
++
++    if (!wind->shell_surface.xdg.surface) {
++        return;
++    }
++    xdg_surface_set_window_geometry(wind->shell_surface.xdg.surface, left, top, frame_w, frame_h);
++
++    if (left || top || right || bottom) {
++        const int ml = SDL_min(left, wind->frame_input_margin);
++        const int mt = SDL_min(top, wind->frame_input_margin);
++        const int mr = SDL_min(right, wind->frame_input_margin);
++        const int mb = SDL_min(bottom, wind->frame_input_margin);
++        struct wl_region *region = wl_compositor_create_region(wind->waylandData->compositor);
++        wl_region_add(region, left - ml, top - mt, frame_w + ml + mr, frame_h + mt + mb);
++        wl_surface_set_input_region(wind->surface, region);
++        wl_region_destroy(region);
++    } else {
++        wl_surface_set_input_region(wind->surface, NULL);
++    }
++
++    wind->applied_frame_insets.left = left;
++    wind->applied_frame_insets.top = top;
++    wind->applied_frame_insets.right = right;
++    wind->applied_frame_insets.bottom = bottom;
++
++    PublishFrameInsets(window, left, top, right, bottom);
++}
++
+ static void SetMinMaxDimensions(SDL_Window *window)
+ {
+     SDL_WindowData *wind = window->internal;
+     int min_width, min_height, max_width, max_height;
+ 
+     if ((window->flags & SDL_WINDOW_FULLSCREEN) || wind->fullscreen_deadline_count) {
+         min_width = 0;
+         min_height = 0;
+@@ -197,16 +287,31 @@ static void SetMinMaxDimensions(SDL_Window *window)
+                                                 max_height);
+         }
+     } else
+ #endif
+         if (wind->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_TOPLEVEL) {
+         if (!wind->shell_surface.xdg.toplevel.xdg_toplevel) {
+             return; // Can't do anything yet, wait for ShowWindow
+         }
++        // The limits are the frame's: the window geometry, without the insets around it.
++        int il, it, ir, ib;
++        GetFrameInsets(wind, wind->floating, &il, &it, &ir, &ib);
++        if (min_width) {
++            min_width = SDL_max(min_width - il - ir, 1);
++        }
++        if (min_height) {
++            min_height = SDL_max(min_height - it - ib, 1);
++        }
++        if (max_width) {
++            max_width = SDL_max(max_width - il - ir, 1);
++        }
++        if (max_height) {
++            max_height = SDL_max(max_height - it - ib, 1);
++        }
+         xdg_toplevel_set_min_size(wind->shell_surface.xdg.toplevel.xdg_toplevel,
+                                   min_width,
+                                   min_height);
+         xdg_toplevel_set_max_size(wind->shell_surface.xdg.toplevel.xdg_toplevel,
+                                   max_width,
+                                   max_height);
+     }
+ }
+@@ -255,16 +360,27 @@ static void AdjustPopupOffset(SDL_Window *popup, int *x, int *y)
+     if (popup->parent->internal->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_LIBDECOR) {
+         int adj_x, adj_y;
+         libdecor_frame_translate_coordinate(popup->parent->internal->shell_surface.libdecor.frame,
+                                             *x, *y, &adj_x, &adj_y);
+         *x = adj_x;
+         *y = adj_y;
+     }
+ #endif
++    // Positions are relative to the parent's window geometry: its frame, inside any insets.
++    *x -= popup->parent->internal->applied_frame_insets.left;
++    *y -= popup->parent->internal->applied_frame_insets.top;
++}
++
++// The parent's window geometry, which a popup's anchor rectangle is relative to.
++static void GetParentFrameSize(SDL_Window *popup, int *width, int *height)
++{
++    const SDL_WindowData *parent = popup->parent->internal;
++    *width = SDL_max(parent->current.logical_width - parent->applied_frame_insets.left - parent->applied_frame_insets.right, 1);
++    *height = SDL_max(parent->current.logical_height - parent->applied_frame_insets.top - parent->applied_frame_insets.bottom, 1);
+ }
+ 
+ static void RepositionPopup(SDL_Window *window, bool use_current_position)
+ {
+     SDL_WindowData *wind = window->internal;
+ 
+     if (wind->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_POPUP &&
+         wind->shell_surface.xdg.popup.xdg_positioner &&
+@@ -273,33 +389,39 @@ static void RepositionPopup(SDL_Window *window, bool use_current_position)
+         int y = use_current_position ? window->y : window->pending.y;
+ 
+         EnsurePopupPositionIsValid(window, &x, &y);
+         if (wind->scale_to_display) {
+             x = PixelToPoint(window->parent, x);
+             y = PixelToPoint(window->parent, y);
+         }
+         AdjustPopupOffset(window, &x, &y);
+-        xdg_positioner_set_anchor_rect(wind->shell_surface.xdg.popup.xdg_positioner, 0, 0, window->parent->internal->current.logical_width, window->parent->internal->current.logical_height);
++        int anchor_w, anchor_h;
++        GetParentFrameSize(window, &anchor_w, &anchor_h);
++        xdg_positioner_set_anchor_rect(wind->shell_surface.xdg.popup.xdg_positioner, 0, 0, anchor_w, anchor_h);
+         xdg_positioner_set_size(wind->shell_surface.xdg.popup.xdg_positioner, wind->current.logical_width, wind->current.logical_height);
+         xdg_positioner_set_offset(wind->shell_surface.xdg.popup.xdg_positioner, x, y);
+         xdg_popup_reposition(wind->shell_surface.xdg.popup.xdg_popup,
+                              wind->shell_surface.xdg.popup.xdg_positioner,
+                              0);
+     }
+ }
+ 
+ static void SetSurfaceOpaqueRegion(SDL_WindowData *wind, bool is_opaque)
+ {
+     SDL_VideoData *viddata = wind->waylandData;
+ 
+     if (is_opaque) {
++        // Only the frame: any frame insets around it hold a shadow, which is never opaque.
++        const int left = wind->applied_frame_insets.left;
++        const int top = wind->applied_frame_insets.top;
++        const int width = SDL_max(wind->current.logical_width - left - wind->applied_frame_insets.right, 0);
++        const int height = SDL_max(wind->current.logical_height - top - wind->applied_frame_insets.bottom, 0);
+         struct wl_region *region = wl_compositor_create_region(viddata->compositor);
+-        wl_region_add(region, 0, 0,
+-                      wind->current.logical_width, wind->current.logical_height);
++        wl_region_add(region, left, top, width, height);
+         wl_surface_set_opaque_region(wind->surface, region);
+         wl_region_destroy(region);
+     } else {
+         wl_surface_set_opaque_region(wind->surface, NULL);
+     }
+ }
+ 
+ static void ConfigureWindowGeometry(SDL_Window *window)
+@@ -410,22 +532,34 @@ static void ConfigureWindowGeometry(SDL_Window *window)
+             }
+         }
+     }
+ 
+     /*
+      * The surface geometry, opaque region and pointer confinement region only
+      * need to be recalculated if the output size has changed.
+      */
+-    if (window_size_changed) {
+-        /* XXX: This is a hack and only set on the xdg-toplevel path when viewports
+-         *      aren't supported to avoid a potential protocol violation if a buffer
+-         *      with an old size is committed.
+-         */
+-        if (!data->viewport && data->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_TOPLEVEL && data->shell_surface.xdg.surface) {
++    // Frame insets in effect for the window's state now; a change of them alone re-frames it.
++    int inset_l = 0, inset_t = 0, inset_r = 0, inset_b = 0;
++    bool insets_changed = false;
++    if (HasFrameInsets(data)) {
++        GetFrameInsets(data, data->floating, &inset_l, &inset_t, &inset_r, &inset_b);
++        insets_changed = inset_l != data->applied_frame_insets.left || inset_t != data->applied_frame_insets.top ||
++                         inset_r != data->applied_frame_insets.right || inset_b != data->applied_frame_insets.bottom;
++    }
++
++    if (window_size_changed || insets_changed) {
++        if (HasFrameInsets(data) && data->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_TOPLEVEL) {
++            // The frame is the window to the compositor, with or without a viewport.
++            ApplyFrameInsets(window, inset_l, inset_t, inset_r, inset_b);
++        } else if (!data->viewport && data->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_TOPLEVEL && data->shell_surface.xdg.surface) {
++            /* XXX: This is a hack and only set on the xdg-toplevel path when viewports
++             *      aren't supported to avoid a potential protocol violation if a buffer
++             *      with an old size is committed.
++             */
+             xdg_surface_set_window_geometry(data->shell_surface.xdg.surface, 0, 0, data->current.logical_width, data->current.logical_height);
+         }
+ 
+         SetSurfaceOpaqueRegion(data, !(window->flags & SDL_WINDOW_TRANSPARENT) && window->opacity == 1.0f);
+ 
+         // Ensure that child popup windows are still in bounds.
+         for (SDL_Window *child = window->first_child; child; child = child->next_sibling) {
+             RepositionPopup(child, true);
+@@ -863,37 +997,49 @@ static void handle_xdg_toplevel_configure(void *data,
+             if (width == 0 || height == 0) {
+                 /* This happens when the compositor indicates that the size is
+                  * up to the client, so use the cached window size here.
+                  */
+                 if (floating) {
+                     width = window->floating.w;
+                     height = window->floating.h;
+ 
+-                    // Clamp the window to the toplevel bounds, if any are set.
++                    /* Clamp the window to the toplevel bounds, if any are set. They bound the
++                     * frame, so the surface may be larger by its insets.
++                     */
+                     if (wind->shell_surface_status == WAYLAND_SHELL_SURFACE_STATUS_WAITING_FOR_CONFIGURE &&
+                         wind->toplevel_bounds.width && wind->toplevel_bounds.height) {
+-                        width = SDL_min(wind->toplevel_bounds.width, width);
+-                        height = SDL_min(wind->toplevel_bounds.height, height);
++                        int il, it, ir, ib;
++                        GetFrameInsets(wind, floating, &il, &it, &ir, &ib);
++                        width = SDL_min(wind->toplevel_bounds.width + il + ir, width);
++                        height = SDL_min(wind->toplevel_bounds.height + it + ib, height);
+                     }
+                 } else {
+                     width = window->windowed.w;
+                     height = window->windowed.h;
+                 }
+ 
+                 if (!wind->scale_to_display) {
+                     wind->requested.logical_width = width;
+                     wind->requested.logical_height = height;
+                 } else {
+                     wind->requested.pixel_width = width;
+                     wind->requested.pixel_height = height;
+                     width = wind->requested.logical_width = PixelToPoint(window, width);
+                     height = wind->requested.logical_height = PixelToPoint(window, height);
+                 }
+             } else {
++                /* The compositor sizes the frame; the surface is the frame and the insets around it
++                 * (SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_*).
++                 */
++                int il, it, ir, ib;
++                GetFrameInsets(wind, floating, &il, &it, &ir, &ib);
++                width += il + ir;
++                height += it + ib;
++
+                 /* Don't apply the supplied dimensions if they haven't changed from the last configuration
+                  * event, or a newer size set programmatically can be overwritten by old data.
+                  */
+                 if (width != wind->last_configure.width || height != wind->last_configure.height) {
+                     wind->requested.logical_width = width;
+                     wind->requested.logical_height = height;
+ 
+                     if (wind->scale_to_display) {
+@@ -1987,17 +2133,19 @@ void Wayland_ShowWindow(SDL_VideoDevice *_this, SDL_Window *window)
+             if (parent_data->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_TOPLEVEL ||
+                     parent_data->shell_surface_type == WAYLAND_SHELL_SURFACE_TYPE_XDG_POPUP) {
+                 parent_xdg_surface = parent_data->shell_surface.xdg.surface;
+             }
+ 
+             // Set up the positioner for the popup and configure the constraints
+             data->shell_surface.xdg.popup.xdg_positioner = xdg_wm_base_create_positioner(c->shell.xdg);
+             xdg_positioner_set_anchor(data->shell_surface.xdg.popup.xdg_positioner, XDG_POSITIONER_ANCHOR_TOP_LEFT);
+-            xdg_positioner_set_anchor_rect(data->shell_surface.xdg.popup.xdg_positioner, 0, 0, parent->internal->current.logical_width, parent->internal->current.logical_height);
++            int anchor_w, anchor_h;
++            GetParentFrameSize(window, &anchor_w, &anchor_h);
++            xdg_positioner_set_anchor_rect(data->shell_surface.xdg.popup.xdg_positioner, 0, 0, anchor_w, anchor_h);
+ 
+             const Uint32 constraint = window->constrain_popup ? (XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y) : XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_NONE;
+             xdg_positioner_set_constraint_adjustment(data->shell_surface.xdg.popup.xdg_positioner, constraint);
+             xdg_positioner_set_gravity(data->shell_surface.xdg.popup.xdg_positioner, XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+             xdg_positioner_set_size(data->shell_surface.xdg.popup.xdg_positioner, data->current.logical_width, data->current.logical_height);
+ 
+             // Set the popup initial position
+             position_x = window->last_position_pending ? window->pending.x : window->x;
+@@ -2279,16 +2427,21 @@ void Wayland_HideWindow(SDL_VideoDevice *_this, SDL_Window *window)
+             SDL_SetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_XDG_SURFACE_POINTER, NULL);
+         }
+     }
+ 
+     // Attach a null buffer to unmap the surface.
+     wl_surface_attach(wind->surface, NULL, 0, 0);
+     wl_surface_commit(wind->surface);
+ 
++    /* The window geometry went with the xdg_surface: forget the insets applied, so the next
++     * configure frames the window again even at the same size.
++     */
++    SDL_zero(wind->applied_frame_insets);
++
+     SDL_zero(wind->shell_surface);
+     wind->show_hide_sync_required = true;
+     struct wl_callback *cb = wl_display_sync(_this->internal->display);
+     wl_callback_add_listener(cb, &show_hide_sync_listener, (void *)((uintptr_t)window->id));
+ }
+ 
+ static void handle_xdg_activation_done(void *data,
+                                        struct xdg_activation_token_v1 *xdg_activation_token_v1,
+@@ -2729,16 +2882,28 @@ bool Wayland_CreateWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_Proper
+     }
+ 
+     data->waylandData = c;
+     data->sdlwindow = window;
+ 
+     // Default to all capabilities
+     data->wm_caps = WAYLAND_WM_CAPS_ALL;
+ 
++    /* Margins outside the frame for a shadow the application draws; toplevels only. A window
++     * made again by SDL_RecreateWindow has no creation properties, and keeps those it had.
++     */
++    if (!SDL_WINDOW_IS_POPUP(window) && !custom_surface_role) {
++        const SDL_PropertiesID window_props = SDL_GetWindowProperties(window);
++        data->frame_insets.left = GetKeptCreateNumber(create_props, window_props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER, WAYLAND_KEPT_FRAME_INSET_LEFT, 0);
++        data->frame_insets.top = GetKeptCreateNumber(create_props, window_props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_TOP_NUMBER, WAYLAND_KEPT_FRAME_INSET_TOP, 0);
++        data->frame_insets.right = GetKeptCreateNumber(create_props, window_props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_RIGHT_NUMBER, WAYLAND_KEPT_FRAME_INSET_RIGHT, 0);
++        data->frame_insets.bottom = GetKeptCreateNumber(create_props, window_props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_BOTTOM_NUMBER, WAYLAND_KEPT_FRAME_INSET_BOTTOM, 0);
++        data->frame_input_margin = GetKeptCreateNumber(create_props, window_props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER, WAYLAND_KEPT_FRAME_INPUT_MARGIN, WAYLAND_FRAME_INPUT_MARGIN);
++    }
++
+     data->scale_factor = 1.0;
+ 
+     if (SDL_WINDOW_IS_POPUP(window)) {
+         data->scale_to_display = window->parent->internal->scale_to_display;
+         data->scale_factor = window->parent->internal->scale_factor;
+         EnsurePopupPositionIsValid(window, &window->x, &window->y);
+     } else {
+         for (int i = 0; i < _this->num_displays; i++) {
+@@ -2882,16 +3047,25 @@ bool Wayland_CreateWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_Proper
+     }
+ 
+     SDL_PropertiesID props = SDL_GetWindowProperties(window);
+     SDL_SetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, data->waylandData->display);
+     SDL_SetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, data->surface);
+     SDL_SetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_VIEWPORT_POINTER, data->viewport);
+     SDL_SetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_EGL_WINDOW_POINTER, data->egl_window);
+ 
++    /* Until the compositor first configures the window, the insets in effect are those it will
++     * float with, so an application can lay itself out before showing it.
++     */
++    if (HasFrameInsets(data)) {
++        int il, it, ir, ib;
++        GetFrameInsets(data, true, &il, &it, &ir, &ib);
++        PublishFrameInsets(window, il, it, ir, ib);
++    }
++
+     data->hit_test_result = SDL_HITTEST_NORMAL;
+ 
+     return true;
+ }
+ 
+ void Wayland_SetWindowMinimumSize(SDL_VideoDevice *_this, SDL_Window *window)
+ {
+     // Will be committed when Wayland_SetWindowSize() is called by the video core.
+diff --git a/src/video/wayland/SDL_waylandwindow.h b/src/video/wayland/SDL_waylandwindow.h
+index 903d666..e788be3 100644
+--- a/src/video/wayland/SDL_waylandwindow.h
++++ b/src/video/wayland/SDL_waylandwindow.h
+@@ -196,16 +196,27 @@ struct SDL_WindowData
+     } text_input_props;
+ 
+     SDL_DisplayID last_displayID;
+     int fullscreen_deadline_count;
+     int maximized_restored_deadline_count;
+     Uint64 last_focus_event_time_ns;
+     int icc_fd;
+     Uint32 icc_size;
++    /* Margins of the surface outside the window's frame, for a shadow the application draws
++     * (SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_*): as asked for at creation, and as in
++     * effect now — those while the toplevel floats, zero otherwise. Window coordinates.
++     */
++    struct
++    {
++        int left, top, right, bottom;
++    } frame_insets, applied_frame_insets;
++    // The band round the frame that takes input (SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER).
++    int frame_input_margin;
++
+     bool floating;
+     bool suspended;
+     bool resizing;
+     bool active;
+     bool pending_config_ack;
+     bool is_fullscreen;
+     bool fullscreen_exclusive;
+     bool drop_fullscreen_requests;

@@ -18,6 +18,45 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
+
+    // The suites for fizzy's SDL patches (the `test:` patches in `patches/sdl`), on SDL's own test
+    // harness, against the patched library. Arguments after `--` reach the runner:
+    // `--filter <suite|test>`, `--require-gpu <driver>`.
+    const test_sdl_step = b.step("test-sdl", "Build and run the suites for fizzy's SDL patches");
+    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseFast else optimize;
+    if (sdlDependency(b, target, sdl_optimize, null)) |sdl| {
+        const source = patchedSdl(b).?;
+        const sdl_test = b.addLibrary(.{
+            .name = "SDL3_test",
+            .root_module = b.createModule(.{ .target = target, .optimize = sdl_optimize, .link_libc = true }),
+        });
+        sdl_test.root_module.addIncludePath(source.path(b, "include"));
+        sdl_test.root_module.addCSourceFiles(.{
+            .root = source.path(b, "src/test"),
+            .files = &.{
+                "SDL_test_assert.c", "SDL_test_common.c", "SDL_test_compare.c", "SDL_test_crc32.c",
+                "SDL_test_font.c",   "SDL_test_fuzzer.c", "SDL_test_harness.c", "SDL_test_log.c",
+                "SDL_test_md5.c",    "SDL_test_memory.c",
+            },
+        });
+        const suites = b.addExecutable(.{
+            .name = "testfizzy",
+            .root_module = b.createModule(.{ .target = target, .optimize = sdl_optimize, .link_libc = true }),
+        });
+        suites.root_module.addIncludePath(source.path(b, "include"));
+        suites.root_module.addCSourceFiles(.{
+            .root = source.path(b, "test"),
+            .files = &.{
+                "testfizzy.c",                "testautomation_fizzy_gpu.c",
+                "testautomation_fizzy_xkb.c", "testautomation_fizzy_wayland.c",
+            },
+        });
+        suites.root_module.linkLibrary(sdl_test);
+        suites.root_module.linkLibrary(sdl.artifact("SDL3"));
+        const run = b.addRunArtifact(suites);
+        if (b.args) |args| run.addArgs(args);
+        test_sdl_step.dependOn(&run.step);
+    }
 }
 
 /// The backend's std-only files with tests of their own, relative to this package: run by
@@ -69,16 +108,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     // window's way into full screen ran at half the display's rate in Debug alone. The app's own
     // code stays Debug; stepping into SDL's C is what a Debug app gives up.
     const sdl_optimize: std.builtin.OptimizeMode = if (opts.optimize == .Debug) .ReleaseFast else opts.optimize;
-    const sdl_dep = if (opts.macos_sdk) |p|
-        b.lazyDependency("sdl", .{
-            .target = opts.target,
-            .optimize = sdl_optimize,
-            .include_path = p.include,
-            .framework_path = p.framework,
-            .library_path = p.lib,
-        })
-    else
-        b.lazyDependency("sdl", .{ .target = opts.target, .optimize = sdl_optimize });
+    const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.macos_sdk);
 
     const sdl_translate_c = b.addTranslateC(.{
         .root_source_file = b.path("src/sdl3-c.h"),
@@ -107,6 +137,54 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     dvui_mod.addImport("backend", m);
     backend_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
     return m;
+}
+
+/// Upstream SDL with fizzy's patches applied: `patches/sdl/*.patch` in name order, by zig-patch.
+/// Null until the lazy dependencies are fetched. How the patches are made, and how SDL is
+/// updated: fizzy's docs/DEPENDENCIES.md.
+fn patchedSdl(b: *std.Build) ?std.Build.LazyPath {
+    const io = b.graph.io;
+    var names: std.ArrayList([]const u8) = .empty;
+    var dir = b.build_root.handle.openDir(io, "patches/sdl", .{ .iterate = true }) catch |err|
+        std.debug.panic("backend: open patches/sdl: {t}", .{err});
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch |err| std.debug.panic("backend: list patches/sdl: {t}", .{err})) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".patch")) continue;
+        names.append(b.allocator, b.dupe(entry.name)) catch @panic("OOM");
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lessThan(_: void, l: []const u8, r: []const u8) bool {
+            return std.mem.lessThan(u8, l, r);
+        }
+    }.lessThan);
+    const patches = b.allocator.alloc(std.Build.LazyPath, names.items.len) catch @panic("OOM");
+    for (patches, names.items) |*p, name| p.* = b.path(b.pathJoin(&.{ "patches/sdl", name }));
+
+    const upstream = b.lazyDependency("sdl_source", .{}) orelse return null;
+    const patch = b.lazyDependency("patch", .{ .source = upstream.path(""), .patches = patches }) orelse return null;
+    return patch.namedLazyPath("patched");
+}
+
+/// sdl_zig building `patchedSdl` instead of its own copy of the same release.
+fn sdlDependency(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    macos_sdk: ?MacosSdk,
+) ?*std.Build.Dependency {
+    const source = patchedSdl(b) orelse return null;
+    return if (macos_sdk) |p|
+        b.lazyDependency("sdl", .{
+            .target = target,
+            .optimize = optimize,
+            .sdl_source = source,
+            .include_path = p.include,
+            .framework_path = p.framework,
+            .library_path = p.lib,
+        })
+    else
+        b.lazyDependency("sdl", .{ .target = target, .optimize = optimize, .sdl_source = source });
 }
 
 /// The window and platform pieces (`src/platform`) for an app on `backend_mod`: this package's

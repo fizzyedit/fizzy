@@ -390,7 +390,7 @@ pub fn install(win: *dvui.Window) void {
     fizzy_macos_window_install_resize_observer(cocoa);
     // Draw each step of a live resize from inside it, presented with the Core Animation
     // transaction that resizes the window, so the new size and the frame drawn for it reach the
-    // screen together (fizzyedit/SDL's live-resize patches, `docs/MACOS_LIVE_RESIZE.md`). By name,
+    // screen together (fizzy's SDL patches 0003-0004, `docs/MACOS_LIVE_RESIZE.md`). By name,
     // not SDL's #define, so this builds against an SDL without them, which ignores it.
     _ = c.SDL_SetHint("SDL_VIDEO_MAC_SYNC_LIVE_RESIZE", "1");
     // Which one this build has is otherwise invisible until a drag looks wrong.

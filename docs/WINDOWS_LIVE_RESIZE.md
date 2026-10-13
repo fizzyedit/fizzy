@@ -1,10 +1,9 @@
 # Windows: a live resize whose frames fit the window
 
-**Status.** Shipped, not yet seen on GPU hardware. The SDL patch is fizzyedit/SDL patch 7
-(`fizzy-3.4.16-5`), built by fizzyedit/sdl_zig `fizzy-1.0.3+3.4.16-5`, which fizzy pins
-(`docs/DEPENDENCIES.md`). Measured only in a Windows 11 on Arm VM (UTM, D3D12 on WARP), which
-cannot judge the half that matters most (see "What the VM showed"); "Checking it on Windows
-hardware" below is the check still owed.
+**Status.** Shipped, not yet seen on GPU hardware. The SDL patch is fizzy's
+`backend/patches/sdl/0006` (`docs/DEPENDENCIES.md`). Measured only in a Windows 11 on Arm VM (UTM,
+D3D12 on WARP), which cannot judge the half that matters most (see "What the VM showed"); "Checking
+it on Windows hardware" below is the check still owed.
 The macOS counterpart is [`MACOS_LIVE_RESIZE.md`](MACOS_LIVE_RESIZE.md).
 
 ## The symptom, and where it comes from
@@ -12,7 +11,7 @@ The macOS counterpart is [`MACOS_LIVE_RESIZE.md`](MACOS_LIVE_RESIZE.md).
 Dragging a window's edge, its right and bottom sides run ahead of fizzy's drawing: growing, an edge
 with nothing drawn on it; shrinking, the frame cut off, the chrome at the edge missing. Nothing
 stretches, unlike macOS: fizzy's window is transparent, and SDL presents a transparent window
-through a DirectComposition swap chain (fizzyedit/SDL patch 2), which the compositor shows at its
+through a DirectComposition swap chain (fizzy's SDL patch 0002), which the compositor shows at its
 own size, unscaled, anchored at the top left.
 
 Windows resizes a window under the pointer from a modal loop of its own: each mouse move is a step

@@ -43,13 +43,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      sdl: ${{ steps.filter.outputs.sdl }}
     steps:
       # A pull request checks out its merge commit, whose first parent is the base: depth 2
       # holds both.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-      - name: Anything besides docs?
+      # `sdl`: SDL's patches, or the backend's build that applies them and pins SDL, changed, so
+      # the suites for those patches run (the `sdl` job, and a step of the macOS test job).
+      - name: Anything besides docs? Anything of SDL's?
         id: filter
         shell: bash
         env:
@@ -62,24 +65,30 @@ jobs:
             pull_request) base=HEAD^1 ;;
             merge_group) base=$QUEUE_BASE ;;
             push) base=$PUSH_BEFORE ;;
-            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            *) printf 'code=true\nsdl=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           # A base that can't be fetched (a force push's old tip) builds everything.
           if ! git cat-file -e "$base^{commit}" 2>/dev/null && ! git fetch --depth=1 origin "$base"; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
+            printf 'code=true\nsdl=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Assigned first, so a failing diff fails the job (and `ci-ok`) rather than reading as
           # "nothing changed".
           files=$(git diff --name-only "$base" HEAD)
           code=false
+          sdl=false
           while IFS= read -r f; do
             case "$f" in
               "" | *.md | doc/* | LICENSE*) ;;
               *) code=true; echo "builds: $f changed" ;;
             esac
+            case "$f" in
+              backend/patches/* | backend/build.zig | backend/build.zig.zon | .github/workflows/ci.yml)
+                sdl=true; echo "SDL's suites: $f changed" ;;
+            esac
           done <<< "$files"
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "sdl=$sdl" >> "$GITHUB_OUTPUT"
 
   test:
     name: Tests (${{ matrix.name }})
@@ -180,6 +189,42 @@ jobs:
       - name: Build the example repos against this tree
         if: matrix.name == 'Linux'
         run: bash scripts/ci-retry.sh bash scripts/check-examples.sh
+
+      # The suites for SDL's patches on macOS (FizzyGPU's Metal tests; the rest are Linux's), when
+      # SDL's patches or pins changed: see the `sdl` job. Is there a Metal device? The probe says,
+      # and the suite then requires Metal, so a runner with one can't skip the Metal tests. (On
+      # macos-14, MTLCreateSystemDefaultDevice() is nil from a command-line tool though
+      # MTLCopyAllDevices() lists the paravirtual GPU, and SDL's Metal driver works; hence the
+      # list.)
+      - name: Metal probe
+        id: metal
+        if: matrix.name == 'macOS' && needs.changes.outputs.sdl == 'true'
+        run: |
+          cat > "$RUNNER_TEMP/metal_probe.m" <<'EOF'
+          #import <Foundation/Foundation.h>
+          #import <Metal/Metal.h>
+          #include <stdio.h>
+          int main(void)
+          {
+              @autoreleasepool {
+                  id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+                  NSArray<id<MTLDevice>> *all = MTLCopyAllDevices();
+                  printf("MTLCreateSystemDefaultDevice: %s\n", device ? device.name.UTF8String : "nil");
+                  printf("MTLCopyAllDevices: %lu\n", (unsigned long)all.count);
+                  return all.count > 0 ? 0 : 1;
+              }
+          }
+          EOF
+          clang -fobjc-arc "$RUNNER_TEMP/metal_probe.m" -framework Foundation -framework Metal -o "$RUNNER_TEMP/metal_probe"
+          if "$RUNNER_TEMP/metal_probe"; then
+            echo "args=--require-gpu metal" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::no Metal device"
+          fi
+      - name: Run the suites for SDL's patches
+        if: matrix.name == 'macOS' && needs.changes.outputs.sdl == 'true'
+        working-directory: backend
+        run: bash ../scripts/ci-retry.sh zig build test-sdl --summary all -- ${{ steps.metal.outputs.args }}
 
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash
@@ -376,13 +421,131 @@ jobs:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
 
+  # The suites for SDL's patches (`backend/patches/sdl`, docs/DEPENDENCIES.md) on Linux, run
+  # only when SDL's patches or pins changed (`changes`' `sdl`); macOS runs its part in the test
+  # job. Vulkan is Mesa's software driver, lavapipe; displays have no screen: Xvfb for X11,
+  # headless weston for Wayland. No Zig cache: this job is rare, and a cold build of SDL costs
+  # less than one more cache held against the repository's 10 GB.
+  #
+  # Ubuntu 26.04 runs every suite: FizzyGPU on X11 and on Wayland, FizzyWayland (frame insets,
+  # read from libwayland's request trace) at output scale 1 and 2, and FizzyXkb. Ubuntu 24.04
+  # runs FizzyXkb alone: SDL is built against libxkbcommon 1.13's headers, and 24.04's 1.6 lacks
+  # `xkb_keymap_mod_get_mask` (1.10+), so there SDL's Wayland driver loads only through patch
+  # 0009's fallback, which builds the modifier masks from their indices. FizzyXkb runs weston's
+  # X11 backend inside Xvfb, not headless: the headless backend has no seat, and the X11 one has
+  # a keyboard with the X server's layout (German, whose levels the suite checks).
+  sdl:
+    name: SDL patch suites (${{ matrix.distro }})
+    needs: changes
+    if: needs.changes.outputs.sdl == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: "ubuntu:26.04", all: true }
+          - { distro: "ubuntu:24.04", all: false }
+    runs-on: ubuntu-latest
+    container: ${{ matrix.distro }}
+    # A window test that hangs fails the job here, rather than after six hours.
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: backend
+    steps:
+      - name: Install tools, lavapipe, Xvfb and weston
+        working-directory: /
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates git xz-utils \
+            mesa-vulkan-drivers libvulkan1 vulkan-tools \
+            xvfb xauth x11-xkb-utils x11-xserver-utils xkb-data weston \
+            libx11-6 libxext6 libxrandr2 libxcursor1 libxi6 libxfixes3 libxss1 libxtst6 \
+            libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0 libdecor-0-0 \
+            libegl1 libegl-mesa0 libgles2
+          dpkg-query -W libxkbcommon0 libwayland-client0 mesa-vulkan-drivers weston
+          # The manifest's name moves between Mesa releases (lvp_icd.json, lvp_icd.x86_64.json).
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Pre-create Zig cache tmp/
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Build the suites
+        run: bash ../scripts/ci-retry.sh zig build test-sdl --summary all -- --list
+
+      - name: Every suite on X11 (Xvfb)
+        if: matrix.all
+        env:
+          SDL_VIDEO_DRIVER: x11
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24" vulkaninfo --summary
+          xvfb-run -a -s "-screen 0 1280x1024x24" zig build test-sdl --summary all -- --require-gpu vulkan
+
+      # Lavapipe presents the frames that map the windows; Mesa's EGL (llvmpipe) draws for the test
+      # that makes a window again for an OpenGL ES renderer. Weston's default desktop shell
+      # maximizes and fullscreens. The insets are in window coordinates whatever the scale, so
+      # FizzyWayland runs again at scale 2.
+      - name: Every suite on Wayland (headless weston), FizzyWayland again at scale 2
+        if: matrix.all
+        env:
+          SDL_VIDEO_DRIVER: wayland
+          WAYLAND_DISPLAY: wayland-fizzy
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          status=0
+          for scale in 1 2; do
+            weston --backend=headless --scale=$scale --socket="$WAYLAND_DISPLAY" --idle-time=0 > "weston-$scale.log" 2>&1 &
+            weston_pid=$!
+            for i in $(seq 50); do [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && break; sleep 0.1; done
+            if [ $scale = 1 ]; then
+              vulkaninfo --summary
+              zig build test-sdl --summary all -- --require-gpu vulkan || status=$?
+            else
+              zig build test-sdl --summary all -- --filter FizzyWayland || status=$?
+            fi
+            kill "$weston_pid" || true
+            wait "$weston_pid" || true
+            echo "--- weston at scale $scale"
+            cat "weston-$scale.log"
+          done
+          exit "$status"
+
+      - name: FizzyXkb on Wayland (weston's X11 backend in Xvfb, German layout)
+        env:
+          DISPLAY: ":99"
+          WAYLAND_DISPLAY: wayland-fizzy-xkb
+          FIZZY_TEST_XKB_LAYOUT: de
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          Xvfb "$DISPLAY" -screen 0 1280x1024x24 -nolisten tcp -noreset &
+          xvfb_pid=$!
+          for i in $(seq 50); do xset q >/dev/null 2>&1 && break; sleep 0.1; done
+          # Weston's X11 backend builds its keymap from the layout setxkbmap sets on the root
+          # window. -noreset, or Xvfb resets the layout each time its last client disconnects.
+          setxkbmap -layout de
+          setxkbmap -query
+          weston --backend=x11 --renderer=pixman --width=1024 --height=768 \
+            --socket="$WAYLAND_DISPLAY" --idle-time=0 &
+          weston_pid=$!
+          for i in $(seq 50); do [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && break; sleep 0.1; done
+          status=0
+          zig build test-sdl --summary all -- --filter FizzyXkb || status=$?
+          kill "$weston_pid" "$xvfb_pid" || true
+          exit "$status"
+
   # The required check. Passes when every job above passed or was skipped (a docs-only change
   # skips the builds); fails on any failure or cancellation, `changes` included. A job added to
   # this workflow joins the gate by being added to `needs`.
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, test, integration, verdict, windows-fizzy-backend]
+    needs: [changes, test, integration, verdict, windows-fizzy-backend, sdl]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped

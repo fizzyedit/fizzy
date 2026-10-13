@@ -1,0 +1,246 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: foxnne <foxnne@gmail.com>
+Date: Sat, 3 Oct 2026 09:36:04 -0500
+Subject: [PATCH] Windows: draw each step of a live resize before the loop goes
+ on
+
+While the user drags a window's edge, Windows resizes the window step by step from inside a modal
+loop of its own, and SDL keeps the app drawing there from a USER_TIMER_MINIMUM timer, which fires
+only when the loop's queue is empty. The compositor shows the window at each new size at once,
+with whatever frame it holds: a window presented through a DirectComposition swap chain (a
+transparent one) shows that frame unscaled, so a window that grew shows an edge with nothing drawn
+on it and one that shrank cuts its frame off, until the timer's next frame arrives.
+
+SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE (default "0") draws each step instead. With "1":
+
+- WM_WINDOWPOSCHANGED, inside the modal loop and after it sends SDL_EVENT_WINDOW_RESIZED, runs the
+  app's frame for a step that changed the client size (SDL_OnWindowLiveResizeUpdate: SDL_AppIterate
+  with the main callbacks, SDL_EVENT_WINDOW_EXPOSED otherwise), then waits for the compositor to
+  show it (DwmFlush), so the loop's next step starts just after a composite and a size and the frame
+  drawn for it reach the screen together. A move changes no size and draws nothing; a frame that
+  moves or resizes the window itself does not start another.
+- The timer draws only while the pointer rests (no step shown for 50 ms): a frame of its own
+  between two steps is one more between a size and the frame for it.
+
+"2" also logs each step: its size, how long the frame took and how long the compositor took to
+show it. The compositor applies a window's size and its frame separately, so a composite that falls
+between the two still shows one mismatched frame; drawing each step right after a composite makes
+it rare on hardware that draws a frame well inside one.
+
+Fizzy sets the hint for its Windows windows (fizzy's win32_titlebar.zig), and finishes each frame
+of a live resize on the GPU before presenting it, so the compositor wait finds it done.
+Unconfirmed on hardware: a VM rendering through WARP, whose compositor takes 20-60 ms a composite,
+cannot show what it is worth.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/SDL3/SDL_hints.h              | 33 +++++++++++++++
+ src/video/windows/SDL_windowsevents.c | 58 ++++++++++++++++++++++++++-
+ src/video/windows/SDL_windowswindow.h |  7 ++++
+ 3 files changed, 97 insertions(+), 1 deletion(-)
+
+diff --git a/include/SDL3/SDL_hints.h b/include/SDL3/SDL_hints.h
+index a9f2755..efb5e60 100644
+--- a/include/SDL3/SDL_hints.h
++++ b/include/SDL3/SDL_hints.h
+@@ -3879,16 +3879,49 @@ extern "C" {
+  * transaction the window commits.
+  *
+  * This hint should be set before a live resize starts.
+  *
+  * \since This hint is available since SDL 3.4.16 with fizzy's patches.
+  */
+ #define SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE "SDL_VIDEO_MAC_SYNC_LIVE_RESIZE"
+ 
++/**
++ * A variable controlling whether a live resize on Windows draws each new
++ * window size before the resize takes its next step.
++ *
++ * While the user drags a window's edge, Windows resizes the window step by
++ * step from inside a modal loop of its own, and SDL keeps the app drawing
++ * there from a timer. The compositor shows the window at its new size with
++ * whatever frame it already has, unscaled: until the timer's next frame, a
++ * window that grew shows an edge with nothing drawn on it and one that shrank
++ * cuts its frame off.
++ *
++ * The variable can be set to the following values:
++ *
++ * - "0": Only the timer draws during a live resize. (default)
++ * - "1": Each step that changes the window's size draws a frame at the new
++ *   size before returning to the loop (SDL_AppIterate() when the app uses the
++ *   main callbacks, an SDL_EVENT_WINDOW_EXPOSED event otherwise), then waits
++ *   until the compositor has shown it (DwmFlush), so the loop's next step
++ *   starts just after a composite and a size and the frame drawn for it reach
++ *   the screen together. The timer then draws only while the pointer rests.
++ * - "2": As "1", with a line per step through SDL_Log: the size, how long the
++ *   frame took and how long the compositor took to show it.
++ *
++ * The compositor applies a window's size and its frame separately, so a
++ * composite that falls between the two still shows one mismatched frame;
++ * drawing each step right after a composite makes that rare.
++ *
++ * This hint should be set before a live resize starts.
++ *
++ * \since This hint is available since SDL 3.4.16 with fizzy's patches.
++ */
++#define SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE "SDL_VIDEO_WIN_SYNC_LIVE_RESIZE"
++
+ /**
+  * A variable indicating whether the metal layer drawable size should be
+  * updated for the SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED event on macOS.
+  *
+  * The variable can be set to the following values:
+  *
+  * - "0": the metal layer drawable size will not be updated on the
+  *   SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED event.
+diff --git a/src/video/windows/SDL_windowsevents.c b/src/video/windows/SDL_windowsevents.c
+index ae69f98..7bad8c0 100644
+--- a/src/video/windows/SDL_windowsevents.c
++++ b/src/video/windows/SDL_windowsevents.c
+@@ -1153,16 +1153,48 @@ static bool DispatchModalLoopMessageHook(HWND *hwnd, UINT *msg, WPARAM *wParam,
+         *msg = dummy.message;
+         *wParam = dummy.wParam;
+         *lParam = dummy.lParam;
+         return true;
+     }
+     return false;
+ }
+ 
++// SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE: 0 off, 1 on, 2 on and logged.
++static int WIN_SyncLiveResize(void)
++{
++    const char *hint = SDL_GetHint(SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE);
++    return hint ? SDL_atoi(hint) : 0;
++}
++
++/* One step of a live resize, drawn from inside it: the app's frame at the size the step set,
++ * before the sizing loop takes its next step, then a wait until the compositor has shown it, so
++ * the next step starts just after a composite and the window's size and the frame drawn for it
++ * reach the screen together (SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE).
++ */
++static void WIN_DrawLiveResizeStep(SDL_WindowData *data, int w, int h, bool log)
++{
++    const Uint64 start = SDL_GetTicksNS();
++    data->in_live_resize_step = true;
++    data->live_resize_w = w;
++    data->live_resize_h = h;
++    SDL_OnWindowLiveResizeUpdate(data->window);
++    const Uint64 drawn = SDL_GetTicksNS();
++    if (data->videodata->DwmFlush) {
++        data->videodata->DwmFlush();
++    }
++    const Uint64 shown = SDL_GetTicksNS();
++    data->live_resize_shown_ns = shown;
++    data->in_live_resize_step = false;
++    if (log) {
++        SDL_Log("live resize step %dx%d: drawn in %.2f ms, shown %.2f ms later",
++                w, h, (double)(drawn - start) / 1e6, (double)(shown - drawn) / 1e6);
++    }
++}
++
+ LRESULT CALLBACK WIN_WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+ {
+     SDL_WindowData *data;
+     LRESULT returnCode = -1;
+ 
+     // Get the window data for the window
+     data = WIN_GetWindowDataFromHWND(hwnd);
+ #if !defined(SDL_PLATFORM_XBOXONE) && !defined(SDL_PLATFORM_XBOXSERIES)
+@@ -1868,16 +1900,25 @@ LRESULT CALLBACK WIN_WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
+             }
+ 
+             // Moving the window from one display to another can change the size of the window (in the handling of SDL_EVENT_WINDOW_MOVED), so we need to re-query the bounds
+             if (GetClientRect(hwnd, &rect) && WIN_WindowRectValid(&rect)) {
+                 w = rect.right;
+                 h = rect.bottom;
+ 
+                 SDL_SendWindowEvent(data->window, SDL_EVENT_WINDOW_RESIZED, w, h);
++
++                // A step of a live resize that changed the size draws it before the loop goes on.
++                if (data->in_modal_loop && !data->in_live_resize_step &&
++                    (w != data->live_resize_w || h != data->live_resize_h)) {
++                    const int sync = WIN_SyncLiveResize();
++                    if (sync > 0) {
++                        WIN_DrawLiveResizeStep(data, w, h, sync > 1);
++                    }
++                }
+             }
+         }
+ 
+         WIN_UpdateClipCursor(data->window);
+ 
+         // Update the window display position
+         if (data->window->displayID != original_displayID) {
+             // Display changed, check ICC profile
+@@ -1911,27 +1952,42 @@ LRESULT CALLBACK WIN_WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
+             data->last_modal_width = rect.right - rect.left;
+             data->last_modal_height = rect.bottom - rect.top;
+ 
+             data->initial_size_rect.left = data->window->x;
+             data->initial_size_rect.right = data->window->x + data->window->w;
+             data->initial_size_rect.top = data->window->y;
+             data->initial_size_rect.bottom = data->window->y + data->window->h;
+ 
++            // The size a step must change to draw (SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE): a move draws none.
++            {
++                RECT client;
++                if (GetClientRect(data->hwnd, &client)) {
++                    data->live_resize_w = client.right;
++                    data->live_resize_h = client.bottom;
++                }
++            }
++
+             SetTimer(hwnd, (UINT_PTR)SDL_IterateMainCallbacks, USER_TIMER_MINIMUM, NULL);
+ 
+             // Reset the keyboard, as we won't get any key up events during the modal loop
+             SDL_ResetKeyboard();
+         }
+     } break;
+ 
+     case WM_TIMER:
+     {
+         if (wParam == (UINT_PTR)SDL_IterateMainCallbacks) {
+-            SDL_OnWindowLiveResizeUpdate(data->window);
++            /* While the steps draw (SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE) the timer draws only when
++             * the pointer rests: a frame of its own between two steps is one more for the GPU and
++             * the compositor between a size and the frame for it. */
++            if (WIN_SyncLiveResize() <= 0 ||
++                SDL_GetTicksNS() - data->live_resize_shown_ns > SDL_MS_TO_NS(50)) {
++                SDL_OnWindowLiveResizeUpdate(data->window);
++            }
+ 
+ #if !defined(SDL_PLATFORM_XBOXONE) && !defined(SDL_PLATFORM_XBOXSERIES)
+ #if 0 // This locks up the Windows compositor when called by Steam; disabling until we understand why
+             // Make sure graphics operations are complete for smooth refresh
+             if (data->videodata->DwmFlush) {
+                 data->videodata->DwmFlush();
+             }
+ #endif
+diff --git a/src/video/windows/SDL_windowswindow.h b/src/video/windows/SDL_windowswindow.h
+index 38d64f4..cd9c70e 100644
+--- a/src/video/windows/SDL_windowswindow.h
++++ b/src/video/windows/SDL_windowswindow.h
+@@ -82,16 +82,23 @@ struct SDL_WindowData
+     bool postpone_clipcursor;
+     bool clipcursor_queued;
+     bool windowed_mode_was_maximized;
+     bool in_window_deactivation;
+     bool force_ws_maximizebox;
+     bool disable_move_size_events;
+     bool showing_window;
+     int in_modal_loop;
++    /* SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE: the client size the last step of a live resize drew,
++     * when it was shown, and whether a step is drawing now (the app's frame may move the window
++     * itself, which must not draw another). */
++    int live_resize_w;
++    int live_resize_h;
++    Uint64 live_resize_shown_ns;
++    bool in_live_resize_step;
+     int last_modal_width;
+     int last_modal_height;
+     RECT initial_size_rect;
+     RECT cursor_clipped_rect; // last successfully committed clipping rect for this window
+     RECT cursor_ctrlock_rect; // this is Windows-specific, but probably does not need to be per-window
+     bool mouse_tracked;
+     bool destroy_parent_with_window;
+     WCHAR *ICMFileName;

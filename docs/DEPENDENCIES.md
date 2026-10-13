@@ -1,14 +1,15 @@
-# Forked dependencies
+# Forked and patched dependencies
 
-Fizzy builds on three forks of other people's code. Each carries a few changes of fizzy's own on top
-of an upstream release, and each has to keep taking upstream's releases. This file is the record of
-what each fork changes and how to bump it; keep it current whenever a pin or a patch moves.
+Fizzy builds on other people's code with changes of its own on top of an upstream release, and has
+to keep taking upstream's releases. dvui and sdl_zig are forks; SDL is upstream's release with
+fizzy's patches applied at build time. This file is the record of what each changes and how to
+bump it; keep it current whenever a pin or a patch moves.
 
-| Fork | Upstream | Fizzy's branch | Pinned in | Carries |
+| Dependency | Upstream | Fizzy's changes | Pinned in | Carries |
 |---|---|---|---|---|
-| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | `fizzy-dev` | `sdk/build.zig.zon` | dvui changes fizzy needs |
-| [`fizzyedit/SDL`](https://github.com/fizzyedit/SDL) | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) | `fizzy-3.4` | `fizzyedit/sdl_zig`'s `build.zig.zon` | SDL C patches (below) |
-| [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, pointed at `fizzyedit/SDL` |
+| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `fizzy-dev` | `sdk/build.zig.zon` | dvui changes fizzy needs |
+| SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
+| [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
 
 SDL is fizzy's own dependency, not dvui's: fizzy's native backend (the `backend/` package) pins it
 in `backend/build.zig.zon` and translates its own `sdl3-c.h`. dvui's SDL pin is used only by the
@@ -18,20 +19,22 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 
 ## Rules
 
-1. **A fork is upstream plus a short stack of described changes, rebased (not merged) onto each
-   upstream release.** Each change says what it does, why, its upstream PR if there is one, and
-   when it can go. In jj: `jj rebase -s <first fizzy change> -d <new upstream tag>`; a conflict
-   stays on the change that caused it.
+1. **Fizzy's changes are upstream plus a short stack of described changes, rebased (not merged)
+   onto each upstream release.** Each change says what it does, why, its upstream PR if there is
+   one, and when it can go. In jj: `jj rebase -s <first fizzy change> -d <new upstream tag>`; a
+   conflict stays on the change that caused it. A fork keeps the stack as its branch; SDL's stack
+   is the patch files, exported from and imported into a jj checkout (`scripts/sdl-patches.sh`).
 2. **Tag, then pin.** GitHub serves `/archive/<sha>.tar.gz` only while the commit is reachable from
-   a ref, and a rebase leaves the old commits unreachable. Every pinned commit gets a tag that is
-   never moved or deleted; branches rebase freely. (The dvui rule in `docs/PLUGINS.md`, "Repinning
-   dvui", for every fork.)
-3. **One pin per dependency, held by whoever uses it.** dvui in `sdk/build.zig.zon`, SDL (through
-   sdl_zig) in `backend/build.zig.zon`, with zig-objc and zigwin32, which fizzy's own code reaches
-   through the backend package (`objcModule`, `win32Module`). A fork pins at most its own source, as sdl_zig pins
-   `fizzyedit/SDL`.
-4. **Upstream first.** A patch that upstream would take goes up as a PR; once merged it comes out
-   empty at the next rebase and is abandoned.
+   a ref, and a rebase leaves the old commits unreachable. Every pinned commit of a fork gets a tag
+   that is never moved or deleted; branches rebase freely. (The dvui rule in `docs/PLUGINS.md`,
+   "Repinning dvui", for every fork.) Patch files live in this repository and need neither.
+3. **One pin per dependency, held by whoever uses it.** dvui in `sdk/build.zig.zon`; SDL, its
+   patches, sdl_zig and zig-patch in `backend/build.zig.zon`, with zig-objc and zigwin32, which
+   fizzy's own code reaches through the backend package (`objcModule`, `win32Module`). sdl_zig's
+   own `.sdl` is the same upstream release as `.sdl_source`: the same tarball, fetched once.
+4. **Upstream first.** A patch that upstream would take goes up as a PR, from a branch of
+   [`fizzyedit/SDL`](https://github.com/fizzyedit/SDL) (or of the fork); once merged it comes out
+   empty at the next rebase and is dropped.
 
 ## foxnne/dvui-dev
 
@@ -109,214 +112,113 @@ Fizzy adapts to two upstream behaviours rather than patching them:
   first frame, whatever width it was given. The markdown preview treats a block holding one as
   not yet measured (`render_ast.Stats.fresh_text_layouts`).
 
-## fizzyedit/SDL
+## SDL: `backend/patches/sdl`
 
-`fizzy-3.4` = `release-3.4.16` plus:
+Upstream `release-3.4.16`, patched at build time: `backend/build.zig` (`patchedSdl`) hands the
+release and `patches/sdl/*.patch`, in name order, to zig-patch, and sdl_zig builds the tree it
+writes (`-Dsdl_source`). Each patch is `git format-patch` output whose header is the change's
+description — what it does, why, how it was measured and whether it is worth proposing upstream —
+so the list here only names each and says what in fizzy uses it.
 
-1. **GPU: let each driver decide whether it can claim a transparent window** (`a4b021c`).
-   `SDL_ClaimWindowForGPUDevice` refused every `SDL_WINDOW_TRANSPARENT` window, though the Cocoa
-   Metal view is already made non-opaque for one and the Vulkan driver already picks a
-   premultiplied composite alpha for one. The refusal moves into `D3D12_ClaimWindow`, whose HWND
-   swapchain ignores alpha. Lets fizzy's backend claim its transparent window on macOS (where it
-   used to clear the flag in SDL's private window struct for the claim) and on Linux.
-   Upstream: not yet proposed.
+zig-patch ignores line numbers: each hunk's old lines must appear exactly once in the file, or the
+build stops (`HunkNotFound`, `HunkFoundMoreThanOnce`). Nothing is applied by guesswork. The patches
+are exported with 8 lines of context (6 is the least that makes every hunk unique today); a hunk an
+update makes ambiguous is fixed by exporting with more (`-U` in `scripts/sdl-patches.sh`).
 
-2. **GPU: D3D12 presents a transparent window through DirectComposition** (`3d6e802`). A
-   transparent window's swapchain is made with `CreateSwapChainForComposition` (premultiplied
-   alpha, stretch scaling, sequential flip, an explicit size) and shown as the content of a
-   DirectComposition visual on a topmost target for the HWND, so DWM composites its alpha over
-   the desktop or the Acrylic backdrop fizzy asks for (`win32_titlebar.zig`). `dcomp.dll` is loaded
-   with the first transparent window; `dcomp.h` is C++-only, so the three interfaces it calls are
-   declared by vtable slot. Resizes pass the window's pixel size; it never tears. Xbox and DXVK
-   still refuse. Compiled for x86, x64 and arm64 Windows; run on Windows 11 on Arm (D3D12 on
-   WARP, in a VM): the window's alpha reaches DWM, Acrylic shows through. Upstream: worth
-   proposing.
+- `0001` **GPU: let each driver decide whether it can claim a transparent window.** Fizzy's
+  backend claims its transparent window on macOS and Linux. Upstream: not yet proposed.
+- `0002` **GPU: D3D12 presents a transparent window through DirectComposition.** The Acrylic
+  backdrop fizzy asks for on Windows (`win32_titlebar.zig`). Upstream: worth proposing.
+- `0003` **Metal: present with the Core Animation transaction when the layer asks for it.** Needed
+  by `0004`; upstream with it.
+- `0004` **Cocoa: draw each step of a live resize in the transaction that commits it**
+  (`SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE`, set in `macos_monitor.install`;
+  `docs/MACOS_LIVE_RESIZE.md`). Was five changes of the fork (`displayLayer:`, and the ends of a
+  live resize AppKit never posts), one now. Upstream: once it has been run on a range of Macs.
+- `0005` **Wayland: frame insets, for a shadow the application draws round its own decorations**
+  (`linux_titlebar.zig`), with its fixes from #280 C2b (recreated windows, the opaque region,
+  toplevel bounds, the input band's property, insets published before show, framing after a hide).
+  Upstream `main` (not `release-3.4.x`) gained its own version on 2026-09-24 (`5d7167cb`): at the
+  update onto a release that has it, move `linux_titlebar.zig` to upstream's API and keep here only
+  what upstream lacks.
+- `0006` **Windows: draw each step of a live resize before the loop goes on**
+  (`SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE`, set in `win32_titlebar.zig`;
+  [`docs/WINDOWS_LIVE_RESIZE.md`](WINDOWS_LIVE_RESIZE.md)). Measured only in a Windows on Arm VM.
+- `0009` **Wayland: make `xkb_keymap_mod_get_mask()` optional at runtime** (#289): the Wayland
+  driver loads where the system's libxkbcommon is older than the headers SDL was built with
+  (Ubuntu 24.04, Debian 12). Upstream: worth proposing.
 
-3. **Metal: present with the Core Animation transaction when the layer asks for it** (`5882e2b`).
-   When a window's `CAMetalLayer` has `presentsWithTransaction` set, the GPU driver
-   (`METAL_Submit`) and the renderer (`METAL_RenderPresent`) commit the command buffer, wait until
-   it is scheduled and present the drawable on the calling thread, so it joins the Core Animation
-   transaction open there; otherwise exactly as before. SDL never sets the property itself.
-   Upstream: worth proposing with 4.
+`0007`, `0008` and `0010` are fizzy's suites on SDL's own test harness (`test/testfizzy.c`,
+`test/testautomation_fizzy_*.c`), test files only. Each checks one patch and fails on the release
+without it:
 
-4. **Cocoa: draw each step of a live resize in the transaction that commits it** (`80bdc7d`).
-   `SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE` (default off): for the length of a live resize the
-   window's Metal view gets the redraw policy `NSViewLayerContentsRedrawDuringViewResize`, and the
-   app's frame runs when AppKit displays the view at each step, presented with that step's
-   transaction (needs 3), so the window's new size and the frame drawn for it reach the screen
-   together. The 60 Hz timer only asks for a display while the pointer rests, and draws as before
-   if AppKit never displays the view. Fizzy turns it on in `macos_monitor.install`; the
-   measurements are in `docs/MACOS_LIVE_RESIZE.md`. Upstream: worth proposing once it has been run
-   on a range of Macs.
+- `0007` FizzyGPU (`0001`): a transparent window claimed and presented on Metal and Vulkan;
+- `0008` FizzyXkb (`0009`): the Wayland driver loads on an older libxkbcommon, and a German
+  keymap's Shift, Caps Lock and AltGr levels come out right;
+- `0010` FizzyWayland (`0005`): read from libwayland's request trace under headless weston, the
+  floating, maximized and fullscreen geometry, input and opaque regions, published insets, popup
+  anchoring, and each fix's case. Headless weston can't show a floating size the compositor
+  chooses, toplevel bounds, tiled states, fractional scale or xdg-decoration.
 
-5. **Cocoa: draw a live-resize step from the Metal view's `displayLayer:`, not `updateLayer`**
-   (`8455e58`). AppKit never calls `updateLayer` for a view whose layer is a `CAMetalLayer` it
-   makes itself, so 4 as first written never drew in a step. Squash into 4 at the next rebase.
+`cd backend && zig build test-sdl` builds and runs them against the patched library (`--
+--filter <suite|test>`, `--require-gpu <driver>`). On macOS the Metal tests run and the rest skip.
+CI runs them only when SDL's patches or the backend's build changed (`ci.yml`, `changes`' `sdl`
+output): on Linux in the `sdl` job (Ubuntu 26.04 runs every suite on X11 under Xvfb and on
+headless weston, FizzyWayland again at scale 2, and FizzyXkb; Ubuntu 24.04 runs FizzyXkb on its
+older libxkbcommon), and on macOS as a step of the test job.
 
-6. **Wayland: frame insets, for a shadow the application draws round its own decorations**
-   (`2d6efde`). `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_{LEFT,TOP,RIGHT,BOTTOM}_NUMBER` give the
-   margins of a window's surface outside its frame. While an xdg-shell toplevel floats the size
-   the compositor configures is the frame's and the surface grows by the insets round it, the
-   window geometry (`xdg_surface.set_window_geometry`) is the frame, the input region is the frame
-   and a band of up to 8 units round it, the min/max sizes are the frame's, and popups anchor to
-   the parent's frame; maximized, tiled or fullscreen the insets are zero. The insets in effect
-   are published as `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_*_NUMBER`. libdecor windows are
-   untouched. Fizzy draws its Linux window's shadow in them (`linux_titlebar.zig`).
-
-   Fixes on top, each to squash into 6 at the next rebase (#280 C2b, after the suite's test
-   commit `1eb90b7`):
-   - `9258288`: a window SDL makes again (`SDL_RecreateWindow`, e.g. for an OpenGL renderer)
-     keeps its insets. They are kept in the window's own properties, which outlive its data.
-   - `0ca75f2`: an opaque window's opaque region is its frame, not the shadow round it.
-   - `0426af9`: the toplevel bounds the compositor sends (in frame units) are widened by the
-     insets before the clamp. Weston never sends bounds, so no test shows this.
-   - `91b7a29`: the input band is
-     `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER` (default 8; 0 = only the frame
-     takes input), still capped at each side's inset.
-   - `883f5c8`: the insets are published from creation (zero for libdecor), and the first
-     configure corrects them for a window that comes up maximized, tiled or fullscreen.
-   - `011a2dc`: a window hidden and shown again is framed again. Hiding drops the xdg_surface and
-     its geometry, so the applied insets now reset on hide.
-
-   Upstream `main` (not `release-3.4.x`) gained its own version on 2026-09-24 (`5d7167cb`, with
-   `86b89cff` and `dff05080`): opted into with `SDL_PROP_WINDOW_CREATE_WAYLAND_ENABLE_INSETS_BOOLEAN`,
-   the insets set as `SDL_PROP_WINDOW_WAYLAND_BORDER_INSET_*_NUMBER` window properties and read at
-   each configure. It has no input band, the same opaque-region, bounds and recreate problems,
-   and it keeps insets on tiled windows. At the rebase onto a release that has it, move
-   `linux_titlebar.zig` to upstream's API, and keep only what upstream lacks as patches on top.
-
-7. **Windows: draw each step of a live resize before the loop goes on** (`ee721bf`).
-   `SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE` (default off): inside the modal size loop,
-   `WM_WINDOWPOSCHANGED` runs the app's frame for a step that changed the client size, then waits
-   for the compositor (`DwmFlush`); the loop's timer draws only while the pointer rests. Fizzy
-   sets it (`win32_titlebar.zig`; why, and what it measured, in
-   [`docs/WINDOWS_LIVE_RESIZE.md`](WINDOWS_LIVE_RESIZE.md)). Measured only in a Windows on Arm VM
-   so far, not on GPU hardware. Upstream: worth proposing with the macOS pair (3–5).
-
-8. **Wayland: make `xkb_keymap_mod_get_mask()` optional at runtime** (`36dda37`, #289). Built
-   against libxkbcommon 1.10 or newer headers (sdl_zig uses 1.13), SDL required that symbol, so
-   where the system's libxkbcommon is older (Ubuntu 24.04 ships 1.6, Debian 12 ships 1.5) the
-   whole Wayland driver reported itself unavailable and fizzy fell back to X11. It is now
-   `SDL_WAYLAND_SYM_OPT`, and the keymap handler builds the modifier masks from
-   `xkb_keymap_mod_get_index()` when it did not load, the path builds against older headers have
-   always taken. For the standard xkeyboard-config keymaps both paths give the same masks.
-   Upstream `main` has the same problem. Upstream: worth proposing; the PR text is in #289.
-
-9. **Cocoa: a live resize AppKit ends without saying so ends all the same** (`f57c7e5`). AppKit
-   can end a live resize without posting `NSWindowDidEndLiveResizeNotification`: on macOS 26 a
-   window dragged to the top of the screen to fill it starts one and never says it ended. 4's
-   timer then ran on, having the Metal view display and the app draw a frame from that display
-   every tick, and the app never got back to its events (a beachball, the user). The timer now
-   asks the window whether it is still in a live resize (`inLiveResize`), and ends it when it is
-   not. Squash into 4 at the next rebase.
-10. **Cocoa: a live resize that has gone still, with no button held, is over** (`629e976`). Tiled
-    to a side of the screen (macOS 26), a window could go on saying it was in a live resize, with
-    no button held and its size settled, and the end never came. A live resize that has gone still
-    with no button held for a second is over (`endLiveResizeIfOver`, from the timer and the
-    display): a drag holds a button, and an animated resize changes the size every tick. Since 11,
-    a last resort. Squash into 4 at the next rebase.
-11. **Cocoa: a live-resize frame that is not a step is drawn after the display, not inside it**
-    (`61e656f`). The root of 9 and 10. Every frame of a live resize was drawn inside a display —
-    the timer's while the pointer rests and the app's while it animates
-    (`fizzy_native_live_resize_next_frame`), not only the steps — so with a frame as long as a
-    refresh the main thread had nothing between frames, and AppKit could not finish a live resize
-    it was animating (a tile): it never posted its end. Only a step, where the size changed, is
-    drawn in its display now; any other frame just after it, outside the transaction. Measured
-    (`scripts/live-resize`, 120 Hz, a 4 s right-edge drag): 0 stretched frames of 428, every step
-    drawn in its display, 13 frames after one. AppKit ends a tile's live resize about 600 ms in,
-    before 10's second. Squash into 4 at the next rebase.
-
-On top of the patches, **the fork's own tests** (#280): `test/testfizzy.c` runs suites on SDL's
-test harness (`test/testautomation_fizzy*.c`), with no library code changed. Each suite checks one
-patch and must fail on the upstream release it is based on, or, for patch 8, on the fork without
-it. So far:
-
-- patch 1, `testautomation_fizzy_gpu.c` (`4839ede`): a transparent window claimed and presented on
-  Metal and Vulkan;
-- patch 8, `testautomation_fizzy_xkb.c` (`213751e`): the Wayland driver loads on an older
-  libxkbcommon, and a German keymap's Shift, Caps Lock and AltGr levels come out right;
-- patch 6, `testautomation_fizzy_wayland.c` (`a518aaf`): read from libwayland's own request trace
-  (`WAYLAND_DEBUG`) under headless weston, a floating window's geometry is its frame, its input
-  region the frame plus up to 8 units, its min/max sizes the frame's, and the published insets
-  what was asked; maximized and fullscreen the insets are zero; a popup anchors to the parent's
-  frame. Since `1eb90b7` it also checks the fixes above: insets kept across a recreate, the
-  opaque region, the input-margin property, the props before show, and framing after hide and
-  show. Headless weston can't show a floating size the compositor chooses, toplevel bounds, tiled
-  states, fractional scale or xdg-decoration.
-
-sdl_zig builds and runs them (`zig build test-fizzy`, below). A suite moves through a rebase with
-its patch, and goes upstream in that patch's PR.
-
-Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
-`fizzy-3.4.16-4` → `2d6efde`; `fizzy-3.4.16-5` → `ee721bf`; `fizzy-3.4.16-6` → `4839ede`;
-`fizzy-3.4.16-7` → `36dda37`; `fizzy-3.4.16-8` → `a518aaf`; `fizzy-3.4.16-9` → `011a2dc`;
-`fizzy-3.4.16-10` → `f57c7e5`; `fizzy-3.4.16-11` → `61e656f`, what sdl_zig pins now.
+[`fizzyedit/SDL`](https://github.com/fizzyedit/SDL) is where the patches are worked on and upstream
+PRs are made from; nothing pins it any more. Its `fizzy-3.4` branch and `fizzy-3.4.16-*` tags are
+the stack as it was before it moved here, which older fizzy commits still build.
 
 ## fizzyedit/sdl_zig
 
-`fizzy` = upstream `main` (`0a9d5c3`) plus:
+`fizzy` = upstream `main` (`0a9d5c3`, SDL 3.4.16) plus:
 
-1. **Build fizzyedit/SDL** (`3a1f74e`): the `sdl` dependency is `fizzyedit/SDL` at the commit
-   above instead of libsdl-org's `release-3.4.16` tarball. `.version` stays the SDL release it is
-   based on — `build.zig` reads it for the library's SO version. Fizzy-only.
-2. **macOS: take the SDK paths when they are given** (`60114a1`): `include_path`,
+1. **macOS: take the SDK paths when they are given** (`efc3583`): `include_path`,
    `framework_path` and `library_path` reached only the iOS and Android builds, so an explicit
    `-Dtarget=*-macos` (the other half of a universal build, `build/common.zig`'s
    `macosSdlPathsForExplicitTarget`) could not find Cocoa. Upstream: worth proposing.
+2. **build: the SDL source can be given (`-Dsdl_source`)** (`a99807d`): the library is built from
+   that tree instead of the `sdl` dependency, which must be the same release (it sets the SO
+   version). Upstream: worth proposing; with 1 upstream too, the fork goes.
 
-3. **Build fizzyedit/SDL `fizzy-3.4.16-2`** (`5950760`): the pin moves to SDL's second patch.
-   Squash into 1 at the next rebase.
-4. **Build fizzyedit/SDL `fizzy-3.4.16-3`** (`48468b7`): the pin moves to SDL's macOS live-resize
-   patches (3–5). Squash into 1 at the next rebase.
-5. **Build fizzyedit/SDL `fizzy-3.4.16-4`** (`58abe38`): the pin moves to SDL's Wayland frame
-   insets (6). Squash into 1 at the next rebase.
-6. **Build fizzyedit/SDL `fizzy-3.4.16-5`** (`8e88dba`, first described as a test pin): the pin
-   moves to SDL's Windows live-resize steps (7). Squash into 1 at the next rebase.
-7. **A `test-fizzy` step running fizzy's SDL patch suites** (`0f6a2a8`): `zig build test-fizzy --
-   <args>` builds SDL_test and the fork's suites against the library this package already builds
-   and runs them (`--filter`, `--require-gpu <driver>`); a plain `zig build` is unchanged. CI runs
-   them on Linux (lavapipe, under Xvfb and headless weston) and on the hosted macOS runners, which
-   have a Metal device. The pin moves to SDL's `fizzy-3.4.16-6`. Fizzy-only; squash the pin into 1
-   at the next rebase.
-8. **Run the Wayland keyboard suite on Ubuntu 24.04 and 26.04** (`264af2a`): CI job
-   `test-fizzy-xkb`, weston's X11 backend inside `Xvfb -noreset` with a German layout (weston's
-   headless backend has no keyboard), in `ubuntu:24.04` (libxkbcommon 1.6, the oldest we support)
-   and `ubuntu:26.04` (1.13), so both of patch 8's paths run. The pin moves to SDL's
-   `fizzy-3.4.16-7`; squash it into 1 at the next rebase.
-9. **Run the Wayland frame-insets suite under headless weston** (`a02dda8`): CI job
-   `test-fizzy-wayland-insets` at output scale 1 and 2, in `ubuntu:26.04`. The pin moves to SDL's
-   `fizzy-3.4.16-8`; squash it into 1 at the next rebase.
-10. **OpenGL ES and a timeout for the frame-insets suite** (`ed4ffea`): the recreate test attaches
-    an OpenGL ES renderer, and the suite's jobs stop after 20 minutes, writing progress to stderr
-    so a hang shows where it stopped. Then the pin moves to SDL's `fizzy-3.4.16-9` (`5e41c70`);
-    squash the pin into 1 at the next rebase.
-11. **Build fizzyedit/SDL `fizzy-3.4.16-10`** (`e8f4ac0`): the pin moves to SDL's live-resize fix
-    (9). Squash into 1 at the next rebase.
-12. **Build fizzyedit/SDL `fizzy-3.4.16-11`** (`d0c70fe`): the pin moves to SDL's 10 and 11.
-    Squash into 1 at the next rebase.
+Tags: `fizzy-1.0.3+3.4.16-1` to `-11` (`d0c70fe`) are the stack that built `fizzyedit/SDL`, kept
+for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`, what fizzy pins now.
 
-Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
-`fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`;
-`fizzy-1.0.3+3.4.16-5` → `8e88dba`; `fizzy-1.0.3+3.4.16-6` → `0f6a2a8`;
-`fizzy-1.0.3+3.4.16-7` → `264af2a`; `fizzy-1.0.3+3.4.16-8` → `a02dda8`;
-`fizzy-1.0.3+3.4.16-9` → `5e41c70`; `fizzy-1.0.3+3.4.16-10` → `e8f4ac0`;
-`fizzy-1.0.3+3.4.16-11` → `d0c70fe`, the commit fizzy pins now.
+## zig-patch
+
+[`marler8997/zig-patch`](https://github.com/marler8997/zig-patch), pinned by commit (`c3ad78b`):
+not fizzy's, so its archive lasts as long as upstream keeps that commit reachable. Zig 0.16 and
+0.17. It copies the source tree (once per cache miss) and applies git-style diffs: modifications,
+new files, copies and renames; not deletions, mode changes or binary patches, and its copy drops
+executable bits, which nothing SDL's build runs needs.
 
 ## Bumping
 
 **dvui:** as `docs/PLUGINS.md` "Repinning dvui" describes. SDL is not involved.
 
-**SDL, to a new 3.4.x release:**
+**SDL, to a new release:** in a jj checkout of `fizzyedit/SDL` with libsdl-org as a remote
+(`jj git remote add upstream https://github.com/libsdl-org/SDL`, then
+`jj git fetch --remote upstream`):
 
-1. In `fizzyedit/SDL` (with libsdl-org as a remote:
-   `jj git remote add upstream https://github.com/libsdl-org/SDL`): `jj git fetch --remote upstream`, then
-   `jj rebase -s <first fizzy change> -d release-3.4.N`, resolve, describe, move `fizzy-3.4`, push,
-   and tag the new tip `fizzy-3.4.N-1`.
-2. In `fizzyedit/sdl_zig`: if upstream sdl_zig has moved to the same SDL release (its source lists
-   follow SDL's files, so bump SDL when the wrapper does), rebase `fizzy` onto it. Point `.sdl` at
-   the new SDL commit's archive (`zig fetch <url>` prints the hash), push, tag.
-3. In fizzy's `backend/`: `zig fetch --save=sdl https://github.com/fizzyedit/sdl_zig/archive/<sha>.tar.gz`,
-   then build macOS, Linux and Windows.
+1. `scripts/sdl-patches.sh import <checkout> <old release>`: the patches as a stack of changes on
+   the release they were made against, one each, as described and authored in their headers.
+2. `jj rebase -s <first imported change> -d <new release>`. Resolve each conflict on the change
+   that has it; abandon a change that comes out empty (upstream took it).
+3. `scripts/sdl-patches.sh export <checkout> <new release>`: the stack back over
+   `backend/patches/sdl`. A re-export of an unchanged change is byte-for-byte the same file.
+4. In `fizzyedit/sdl_zig`: its source lists follow SDL's files, so for a release that adds or
+   removes any, rebase `fizzy` onto an upstream sdl_zig that has moved to it (or change
+   `src/sdl.zon` in a change of our own). Point its `.sdl` at the new release, push, tag.
+5. In `backend/build.zig.zon`, move `.sdl_source` (and `.sdl`, if it moved): `zig fetch <url>`
+   prints the hash. Build macOS, Linux and Windows, and run `zig build test-sdl` in `backend/`.
+
+A patch release that touches nothing the patches do needs only step 5 for `.sdl_source`: if every
+hunk still applies once and the build passes, the patches came through.
+
+**A change to a patch, or a new one:** import, edit the change (`jj edit`, or `jj new` and
+`jj squash`) or add one, export. The export is the edit: build fizzy to try it.
 
 **What fizzy relies on that SDL does not promise.** `GpuRenderer` compiles a Metal program's
 source on a thread of its own (`Compile`): SDL documents no thread for `SDL_CreateGPUShader`, and
@@ -325,28 +227,24 @@ fields and `METAL_CreateShader` calls `newLibraryWithSource` on the `MTLDevice` 
 own autorelease pool. On a bump, check both still hold in `src/gpu/SDL_gpu.c` and
 `src/gpu/metal/SDL_gpu_metal.m`.
 
-**A fizzy-only SDL change:** the same, with only step 1's new change instead of a rebase.
-
-**Where a rebase conflicts.** Patch 1 touches one check in `SDL_ClaimWindowForGPUDevice`. Patch 2
+**Where a rebase conflicts.** `0001` touches one check in `SDL_ClaimWindowForGPUDevice`. `0002`
 lives mostly in two functions of its own (`D3D12_INTERNAL_SetCompositionContent`,
 `D3D12_INTERNAL_ReleaseComposition`) and otherwise touches the D3D12 swapchain's create, resize,
 present and release paths in `src/gpu/d3d12/SDL_gpu_d3d12.c` — the code an upstream D3D12
-change is likeliest to move. Patch 3 touches `METAL_Submit`'s present loop and the tail of
-`METAL_RenderPresent`; 4 and 5 the window listener's live-resize notifications and the end of the
+change is likeliest to move. `0003` touches `METAL_Submit`'s present loop and the tail of
+`METAL_RenderPresent`; `0004` the window listener's live-resize notifications and the end of the
 Metal view (`SDL_cocoawindow.{h,m}`, `SDL_cocoametalview.m`, one hint in `SDL_hints.h`). For those,
-`clang -fsyntax-only -fobjc-arc` on the `.m` files with the macOS SDK is enough to push, and the
-real check is a drag on a Mac: `scripts/live-resize/run.sh` (`docs/MACOS_LIVE_RESIZE.md`). Patch 6
-touches `SDL_waylandwindow.c`'s toplevel configure, `ConfigureWindowGeometry`, the min/max sizes
-and the popup anchoring, beside two new fields in `SDL_waylandwindow.h`; its check is
-`test-fizzy-wayland-insets` in sdl_zig's CI, then a Linux build of fizzy and, on a GNOME desktop,
-a floating window whose shadow passes clicks through and whose frame maximizes to the work area
-(the parts headless weston can't show). Patch 8 touches one line of `SDL_waylandsym.h` and the
-modifier masks in `SDL_waylandevents.c`'s keymap handler; its check is `test-fizzy-xkb` in sdl_zig's
-CI. After resolving, compile the file for Windows before pushing; it
-needs no build of the rest of SDL:
-`zig cc -target x86_64-windows-gnu -Iinclude -Iinclude/build_config -Isrc -Isrc/video/khronos -c src/gpu/d3d12/SDL_gpu_d3d12.c -o /tmp/d3d12.o`.
+`clang -fsyntax-only -fobjc-arc` on the `.m` files with the macOS SDK is a quick first check, and
+the real one is a drag on a Mac: `scripts/live-resize/run.sh` (`docs/MACOS_LIVE_RESIZE.md`).
+`0005` touches `SDL_waylandwindow.c`'s toplevel configure, `ConfigureWindowGeometry`, the min/max
+sizes and the popup anchoring, beside new fields in `SDL_waylandwindow.h`; its check is
+FizzyWayland under headless weston, then a Linux build of fizzy and, on a GNOME desktop, a floating
+window whose shadow passes clicks through and whose frame maximizes to the work area (the parts
+headless weston can't show). `0009` touches one line of `SDL_waylandsym.h` and the modifier masks
+in `SDL_waylandevents.c`'s keymap handler; its check is FizzyXkb. After resolving `0002`, compile
+the file for Windows in the checkout; it needs no build of the rest of SDL:
+`zig cc -target x86_64-windows-gnu -Iinclude -Iinclude/build_config -Isrc -Isrc/video/khronos -c src/gpu/d3d12/SDL_gpu_d3d12.c -o /dev/null`.
 CI's Windows cross-build (`ci.yml`) then builds it into fizzy.
 
-For local work on either fork, point `backend/build.zig.zon`'s pin at a checkout with
-`.path = "../../sdl_zig"` (and the wrapper's `.sdl` at `../SDL`), as `sdk/build.zig.zon` does for
-`../dvui-dev`.
+For local work on sdl_zig, point `backend/build.zig.zon`'s `.sdl` at a checkout with
+`.path = "../../sdl_zig"`, as `sdk/build.zig.zon` does for `../dvui-dev`.

@@ -44,7 +44,7 @@ pub fn applyChrome(win: *dvui.Window) void {
 
             // Draw each step of a live resize from inside it and let the compositor show it before
             // the next, so the window's new size and the frame drawn for it reach the screen
-            // together (fizzyedit/SDL's Windows live-resize patch, docs/WINDOWS_LIVE_RESIZE.md).
+            // together (fizzy's SDL patch 0006, docs/WINDOWS_LIVE_RESIZE.md).
             // By name, not SDL's #define, so this builds against an SDL without it, which ignores
             // it. `FIZZY_LIVE_RESIZE_TRACE` has SDL log each step; `SDL_VIDEO_WIN_SYNC_LIVE_RESIZE=0`
             // in the environment turns the steps off.

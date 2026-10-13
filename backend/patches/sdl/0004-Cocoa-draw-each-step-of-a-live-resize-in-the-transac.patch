@@ -1,0 +1,403 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 2 Oct 2026 18:28:45 +0000
+Subject: [PATCH] Cocoa: draw each step of a live resize in the transaction
+ that commits it
+
+While the user drags a window's edge, AppKit resizes the window step by
+step inside its own tracking loop, and SDL keeps the app drawing there from
+a 60Hz timer. Each step's new window size is committed with that step's Core
+Animation transaction; the timer's frame is presented apart from it, by
+Metal's own thread, some time later. Between the two the window shows its
+old contents stretched to the new size, so a live resize jitters between
+stretched and correct frames.
+
+SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE (default off) draws each size in the
+transaction that commits it, the way Zed's GPUI does:
+
+- For the length of the resize the window's Metal view has the redraw
+  policy NSViewLayerContentsRedrawDuringViewResize, so AppKit displays it
+  at every step, inside the step's transaction.
+- The view's layer delegate method displayLayer: runs the app's frame there
+  (SDL_OnWindowLiveResizeUpdate: SDL_AppIterate with the main callbacks, an
+  EXPOSED event otherwise), after bringing SDL's sizes and the drawable up to
+  the window, with the layer set to present with the transaction for that
+  frame alone (needs "Metal: present with the Core Animation transaction" for
+  SDL's Metal presenters to honour it). Not updateLayer: AppKit never calls
+  that for a view whose layer is a CAMetalLayer it makes itself. Outside a
+  live resize displayLayer: draws nothing.
+- Only a step, where the window changed size, is drawn inside its display.
+  Any other frame of a live resize (the timer's while the pointer rests, the
+  app's own while it animates) is drawn just after the display, outside the
+  transaction: drawn inside, with a frame as long as a refresh, the main
+  thread had nothing between frames and AppKit could not finish a live
+  resize it was animating (a tile), so it never posted its end.
+- The timer no longer draws a step: while the pointer rests it asks the view
+  for a display. Should AppKit not display the view for a few ticks, the
+  timer draws as before and logs it once.
+- AppKit can end a live resize without posting
+  NSWindowDidEndLiveResizeNotification (macOS 26, a window dragged to the top
+  of the screen to fill it). The timer asks the window whether it is still in
+  a live resize (inLiveResize) and ends it when it is not; and a live resize
+  that has gone still for a second with no button held is over
+  (endLiveResizeIfOver), as a last resort.
+
+A frame is never run from inside one already running. Opt-in because the
+app must present on the main thread, inside the frame, through SDL's Metal
+paths.
+
+Measured on macOS 26 with fizzy's scripts/live-resize (120 Hz, a 4 s
+right-edge drag): 0 stretched frames of 428, every step drawn in its display;
+AppKit ends a tile's live resize about 600 ms in.
+
+Upstream: worth proposing once it has been run on a range of Macs, with the
+Metal patch it needs.
+---
+ include/SDL3/SDL_hints.h             |  32 ++++++
+ src/video/cocoa/SDL_cocoametalview.m |  26 +++++
+ src/video/cocoa/SDL_cocoawindow.h    |  12 ++
+ src/video/cocoa/SDL_cocoawindow.m    | 158 ++++++++++++++++++++++++++-
+ 4 files changed, 227 insertions(+), 1 deletion(-)
+
+diff --git a/include/SDL3/SDL_hints.h b/include/SDL3/SDL_hints.h
+index a38abf0..a9f2755 100644
+--- a/include/SDL3/SDL_hints.h
++++ b/include/SDL3/SDL_hints.h
+@@ -3847,16 +3847,48 @@ extern "C" {
+  *   bar. (default)
+  *
+  * This hint can be set anytime.
+  *
+  * \since This hint is available since SDL 3.2.0.
+  */
+ #define SDL_HINT_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY "SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"
+ 
++/**
++ * A variable controlling whether a live resize on macOS draws each new window
++ * size in the same screen update that shows it.
++ *
++ * While the user drags a window's edge, AppKit resizes the window step by
++ * step from inside its own event loop, and SDL keeps the app drawing there
++ * from a 60Hz timer. A frame drawn by the timer reaches the screen apart from
++ * the step that changed the window's size, so between the two the window
++ * shows its old contents stretched to the new size.
++ *
++ * The variable can be set to the following values:
++ *
++ * - "0": Only the timer draws during a live resize. (default)
++ * - "1": The window's Metal view draws each step from AppKit's display of it
++ *   (SDL_AppIterate() when the app uses the main callbacks, an
++ *   SDL_EVENT_WINDOW_EXPOSED event otherwise), with the view's layer set to
++ *   present with the Core Animation transaction
++ *   (CAMetalLayer.presentsWithTransaction) for that frame alone, so each
++ *   frame is committed together with the size it was drawn for. The timer
++ *   then only asks for a display, while the pointer rests.
++ *
++ * With "1" the app must present through the GPU API's Metal driver or SDL's
++ * Metal renderer, on the main thread, from inside the frame: a drawable
++ * presented later, from another thread, or by a Vulkan driver joins no
++ * transaction the window commits.
++ *
++ * This hint should be set before a live resize starts.
++ *
++ * \since This hint is available since SDL 3.4.16 with fizzy's patches.
++ */
++#define SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE "SDL_VIDEO_MAC_SYNC_LIVE_RESIZE"
++
+ /**
+  * A variable indicating whether the metal layer drawable size should be
+  * updated for the SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED event on macOS.
+  *
+  * The variable can be set to the following values:
+  *
+  * - "0": the metal layer drawable size will not be updated on the
+  *   SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED event.
+diff --git a/src/video/cocoa/SDL_cocoametalview.m b/src/video/cocoa/SDL_cocoametalview.m
+index 71ab9f6..dd7cbd5 100644
+--- a/src/video/cocoa/SDL_cocoametalview.m
++++ b/src/video/cocoa/SDL_cocoametalview.m
+@@ -127,16 +127,42 @@ static bool SDLCALL SDL_MetalViewEventWatch(void *userdata, SDL_Event *event)
+     metalLayer.drawableSize = NSSizeToCGSize(backingSize);
+ }
+ 
+ - (NSView *)hitTest:(NSPoint)point
+ {
+     return nil;
+ }
+ 
++/* During a live resize with SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE, AppKit
++ * displays this view at every resize step (the window listener sets its
++ * redraw policy for the length of the resize), and the frame is drawn here:
++ * inside the transaction that commits the step's new size. The layer presents
++ * with that transaction for this frame alone, so the frame and the size are
++ * shown together, and the drawable is handed back with the commit.
++ *
++ * This is the layer's delegate method, not -updateLayer: AppKit marks this
++ * view as needing display at every step but never calls -updateLayer for it;
++ * its CAMetalLayer is displayed only through the delegate's -displayLayer:,
++ * which NSView does not implement (seen on macOS 26). Outside a live resize
++ * there is nothing to draw here: the layer's contents are the drawables the
++ * app presents. */
++- (void)displayLayer:(CALayer *)layer
++{
++    SDL_Window *window = SDL_GetWindowFromID(self.sdlWindowID);
++    SDL_CocoaWindowData *data = window ? (__bridge SDL_CocoaWindowData *)window->internal : nil;
++    if (data != nil && [data.listener drawsLiveResizeInView:self]) {
++        CAMetalLayer *metalLayer = (CAMetalLayer *)layer;
++        const BOOL presentsWithTransaction = metalLayer.presentsWithTransaction;
++        metalLayer.presentsWithTransaction = YES;
++        [data.listener drawLiveResizeFrame];
++        metalLayer.presentsWithTransaction = presentsWithTransaction;
++    }
++}
++
+ @end
+ 
+ SDL_MetalView Cocoa_Metal_CreateView(SDL_VideoDevice *_this, SDL_Window *window)
+ {
+     @autoreleasepool {
+         SDL_CocoaWindowData *data = (__bridge SDL_CocoaWindowData *)window->internal;
+         NSView *view = data.nswindow.contentView;
+         BOOL highDPI = (window->flags & SDL_WINDOW_HIGH_PIXEL_DENSITY) != 0;
+diff --git a/src/video/cocoa/SDL_cocoawindow.h b/src/video/cocoa/SDL_cocoawindow.h
+index b2695be..aa6131e 100644
+--- a/src/video/cocoa/SDL_cocoawindow.h
++++ b/src/video/cocoa/SDL_cocoawindow.h
+@@ -55,16 +55,25 @@ typedef enum
+     BOOL inFullscreenTransition;
+     PendingWindowOperation pendingWindowOperation;
+     BOOL isMoving;
+     BOOL isMiniaturizing;
+     NSInteger focusClickPending;
+     float pendingWindowWarpX, pendingWindowWarpY;
+     BOOL isDragAreaRunning;
+     NSTimer *liveResizeTimer;
++    __weak NSView *liveResizeView;
++    NSViewLayerContentsRedrawPolicy liveResizeRedrawPolicy;
++    Uint64 liveResizeFrameNS;
++    BOOL liveResizeFellBack;
++    NSSize liveResizeSize;
++    Uint64 liveResizeStillNS;
++    NSSize liveResizeDrawnSize;
++    BOOL liveResizeRestPending;
++    BOOL inLiveResizeUpdate;
+ }
+ 
+ - (BOOL)isTouchFromTrackpad:(NSEvent *)theEvent;
+ - (void)listen:(SDL_CocoaWindowData *)data;
+ - (void)pauseVisibleObservation;
+ - (void)resumeVisibleObservation;
+ - (BOOL)setFullscreenSpace:(BOOL)state;
+ - (BOOL)isInFullscreenSpace;
+@@ -82,16 +91,19 @@ typedef enum
+ - (void)onMovingOrFocusClickPendingStateCleared;
+ 
+ // Window delegate functionality
+ - (BOOL)windowShouldClose:(id)sender;
+ - (void)windowDidExpose:(NSNotification *)aNotification;
+ - (void)windowDidChangeOcclusionState:(NSNotification *)aNotification;
+ - (void)windowWillStartLiveResize:(NSNotification *)aNotification;
+ - (void)windowDidEndLiveResize:(NSNotification *)aNotification;
++- (void)updateLiveResize;
++- (BOOL)drawsLiveResizeInView:(NSView *)view;
++- (void)drawLiveResizeFrame;
+ - (void)windowDidMove:(NSNotification *)aNotification;
+ - (void)windowDidResize:(NSNotification *)aNotification;
+ - (void)windowDidMiniaturize:(NSNotification *)aNotification;
+ - (void)windowDidDeminiaturize:(NSNotification *)aNotification;
+ - (void)windowDidBecomeKey:(NSNotification *)aNotification;
+ - (void)windowDidResignKey:(NSNotification *)aNotification;
+ - (void)windowDidChangeBackingProperties:(NSNotification *)aNotification;
+ - (void)windowDidChangeScreenProfile:(NSNotification *)aNotification;
+diff --git a/src/video/cocoa/SDL_cocoawindow.m b/src/video/cocoa/SDL_cocoawindow.m
+index 51eda93..6601063 100644
+--- a/src/video/cocoa/SDL_cocoawindow.m
++++ b/src/video/cocoa/SDL_cocoawindow.m
+@@ -1137,30 +1137,186 @@ static NSCursor *Cocoa_GetDesiredCursor(void)
+         SDL_SendWindowEvent(_data.window, SDL_EVENT_WINDOW_OCCLUDED, 0, 0);
+     }
+ }
+ 
+ - (void)windowWillStartLiveResize:(NSNotification *)aNotification
+ {
+     // We'll try to maintain 60 FPS during live resizing
+     const NSTimeInterval interval = 1.0 / 60.0;
++    const Uint64 intervalNS = SDL_NS_PER_SECOND / 60;
++
++    /* With SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE the Metal view draws the
++     * resize: AppKit displays it at every step (the redraw policy below), from
++     * inside the step's Core Animation transaction, and its displayLayer: runs
++     * the frame there (drawLiveResizeFrame). */
++    liveResizeView = nil;
++    if (SDL_GetHintBoolean(SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE, false)) {
++        NSView *view = [_data.nswindow.contentView viewWithTag:SDL_METALVIEW_TAG];
++        if (view != nil) {
++            liveResizeView = view;
++            liveResizeRedrawPolicy = view.layerContentsRedrawPolicy;
++            view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
++        }
++    }
++    liveResizeFrameNS = SDL_GetTicksNS();
++    liveResizeFellBack = NO;
++    liveResizeSize = _data.nswindow.frame.size;
++    liveResizeStillNS = liveResizeFrameNS;
++    liveResizeDrawnSize = liveResizeView ? [liveResizeView convertSizeToBacking:liveResizeView.bounds.size] : NSZeroSize;
++    liveResizeRestPending = NO;
++
+     liveResizeTimer = [NSTimer scheduledTimerWithTimeInterval:interval
+                                                       repeats:TRUE
+                                                         block:^(NSTimer *unusedTimer)
+     {
+-        SDL_OnWindowLiveResizeUpdate(_data.window);
++        if ([self endLiveResizeIfOver]) {
++            return;
++        }
++        NSView *view = self->liveResizeView;
++        if (view == nil) {
++            [self updateLiveResize];
++            return;
++        }
++        /* Steps draw from the view's display; the timer only keeps frames
++         * coming while the pointer rests, through the same display, so that
++         * every frame is presented with the transaction it was drawn in. */
++        const Uint64 sinceFrame = SDL_GetTicksNS() - self->liveResizeFrameNS;
++        if (sinceFrame < intervalNS) {
++            return;
++        }
++        [view setNeedsDisplay:YES];
++        /* No frame from the display for a few ticks: AppKit is not displaying
++         * the view, so draw from here as SDL always has (out of step again). */
++        if (sinceFrame > 4 * intervalNS) {
++            if (!self->liveResizeFellBack) {
++                self->liveResizeFellBack = YES;
++                SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "Live resize: the Metal view is not being displayed; drawing from the timer");
++            }
++            [self updateLiveResize];
++        }
+     }];
+ 
+     [[NSRunLoop currentRunLoop] addTimer:liveResizeTimer forMode:NSRunLoopCommonModes];
+ }
+ 
+ - (void)windowDidEndLiveResize:(NSNotification *)aNotification
+ {
+     [liveResizeTimer invalidate];
+     liveResizeTimer = nil;
++
++    NSView *view = liveResizeView;
++    if (view != nil) {
++        view.layerContentsRedrawPolicy = liveResizeRedrawPolicy;
++    }
++    liveResizeView = nil;
++}
++
++/* End a live resize that is over, whatever AppKit has said of it. Whether it
++ * was ended.
++ *
++ * AppKit can end a live resize without posting
++ * NSWindowDidEndLiveResizeNotification: a window dragged to the top of the
++ * screen to fill it (macOS 26) starts one and never says it ended. And it can
++ * leave one open after it is over: tiled to a side of the screen (macOS 26),
++ * the window still says it is in a live resize, with no button held and its
++ * size settled, for good. Either way the timer had the view display, and the
++ * app draw a frame from that display, every tick; the app never got back to
++ * its events. So a live resize the window no longer reports, or one that has
++ * gone still with no button held for a second, is over: a drag holds a
++ * button, and an animated resize changes the size every tick.
++ *
++ * Measured on macOS 26: a tile's live resize settles its size 70 to 240 ms in
++ * and AppKit ends it about 600 ms in, so a second leaves AppKit's own end
++ * first. It did not come while frames were drawn inside every display, which
++ * left AppKit no time on the main thread; now only a step is
++ * (`drawLiveResizeFrame`), and this is the last resort. */
++- (BOOL)endLiveResizeIfOver
++{
++    if (liveResizeTimer == nil) {
++        return NO;
++    }
++    if (!_data.nswindow.inLiveResize) {
++        [self windowDidEndLiveResize:nil];
++        return YES;
++    }
++    const NSSize size = _data.nswindow.frame.size;
++    const Uint64 now = SDL_GetTicksNS();
++    if (!NSEqualSizes(size, liveResizeSize) || [NSEvent pressedMouseButtons] != 0) {
++        liveResizeSize = size;
++        liveResizeStillNS = now;
++        return NO;
++    }
++    if (now - liveResizeStillNS > SDL_NS_PER_SECOND) {
++        [self windowDidEndLiveResize:nil];
++        return YES;
++    }
++    return NO;
++}
++
++/* Run the app's frame from inside a live resize: SDL_AppIterate() when the app
++ * uses the main callbacks, an SDL_EVENT_WINDOW_EXPOSED event otherwise. Never
++ * from inside one already running, where a frame that resizes the window would
++ * otherwise start another. */
++- (void)updateLiveResize
++{
++    if (inLiveResizeUpdate) {
++        return;
++    }
++    inLiveResizeUpdate = YES;
++    SDL_OnWindowLiveResizeUpdate(_data.window);
++    inLiveResizeUpdate = NO;
++}
++
++- (BOOL)drawsLiveResizeInView:(NSView *)view
++{
++    return liveResizeTimer != nil && view != nil && liveResizeView == view;
++}
++
++/* A live-resize frame, from the Metal view's displayLayer: while AppKit displays
++ * a resize step: inside the transaction that commits the step's new size, with
++ * the view's layer presenting with that transaction. */
++- (void)drawLiveResizeFrame
++{
++    if (inLiveResizeUpdate) {
++        return;
++    }
++    if ([self endLiveResizeIfOver]) {
++        return;
++    }
++    /* Not a step: nothing changed size, so nothing has to reach the screen with
++     * this display — the display was asked for to keep frames coming (the
++     * timer while the pointer rests, or the app animating). Drawn just after
++     * it instead, outside Core Animation's transaction. Drawn inside every
++     * display, a frame as long as a refresh left the main thread nothing
++     * between frames, and AppKit could not finish a live resize it was
++     * animating (a window tiled to a side of the screen, macOS 26). */
++    NSView *view = liveResizeView;
++    const NSSize drawn = view ? [view convertSizeToBacking:view.bounds.size] : NSZeroSize;
++    if (NSEqualSizes(drawn, liveResizeDrawnSize)) {
++        if (!liveResizeRestPending) {
++            liveResizeRestPending = YES;
++            dispatch_async(dispatch_get_main_queue(), ^{
++                self->liveResizeRestPending = NO;
++                if (self->liveResizeTimer == nil || self->inLiveResizeUpdate) {
++                    return;
++                }
++                self->liveResizeFrameNS = SDL_GetTicksNS();
++                [self updateLiveResize];
++            });
++        }
++        return;
++    }
++    liveResizeDrawnSize = drawn;
++    /* AppKit may display a step before it notifies of it: bring SDL's sizes,
++     * and with them the Metal view's drawable, up to the window first (a no-op
++     * when windowDidResize: has run for this step). */
++    [self windowDidResize:nil];
++    liveResizeFrameNS = SDL_GetTicksNS();
++    [self updateLiveResize];
+ }
+ 
+ - (void)windowWillMove:(NSNotification *)aNotification
+ {
+     if ([_data.nswindow isKindOfClass:[SDL3Window class]]) {
+         pendingWindowWarpX = pendingWindowWarpY = FLT_MAX;
+         isMoving = YES;
+     }

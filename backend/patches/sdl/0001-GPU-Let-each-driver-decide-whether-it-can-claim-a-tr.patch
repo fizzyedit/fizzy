@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 2 Oct 2026 16:45:54 +0000
+Subject: [PATCH] GPU: Let each driver decide whether it can claim a
+ transparent window
+
+SDL_ClaimWindowForGPUDevice refused every window created with
+SDL_WINDOW_TRANSPARENT, but two of the three drivers already handle one:
+the Cocoa Metal view is created non-opaque for a transparent window
+(SDL_cocoametalview.m), and the Vulkan driver picks a premultiplied or
+inherited composite alpha for one (VULKAN_INTERNAL_CreateSwapchain). The
+generic check made both unreachable.
+
+The refusal moves into D3D12_ClaimWindow, the one driver whose swapchain
+(a flip-model swapchain created for the HWND) ignores alpha.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VoomBKpLopEWb9fUR4Qi46
+---
+ src/gpu/SDL_gpu.c             | 6 ++----
+ src/gpu/d3d12/SDL_gpu_d3d12.c | 5 +++++
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/src/gpu/SDL_gpu.c b/src/gpu/SDL_gpu.c
+index 70a8656..df65e2b 100644
+--- a/src/gpu/SDL_gpu.c
++++ b/src/gpu/SDL_gpu.c
+@@ -3190,20 +3190,18 @@ bool SDL_ClaimWindowForGPUDevice(
+     SDL_Window *window)
+ {
+     CHECK_DEVICE_MAGIC(device, false);
+ 
+     CHECK_PARAM(window == NULL) {
+         return SDL_InvalidParamError("window");
+     }
+ 
+-    if ((window->flags & SDL_WINDOW_TRANSPARENT) != 0) {
+-        return SDL_SetError("The GPU API doesn't support transparent windows");
+-    }
+-
++    // Transparent windows are up to each driver: Metal and Vulkan composite the swapchain's
++    // alpha where the platform allows it.
+     return device->ClaimWindow(
+         device->driverData,
+         window);
+ }
+ 
+ void SDL_ReleaseWindowFromGPUDevice(
+     SDL_GPUDevice *device,
+     SDL_Window *window)
+diff --git a/src/gpu/d3d12/SDL_gpu_d3d12.c b/src/gpu/d3d12/SDL_gpu_d3d12.c
+index 43015c8..dba3c4a 100644
+--- a/src/gpu/d3d12/SDL_gpu_d3d12.c
++++ b/src/gpu/d3d12/SDL_gpu_d3d12.c
+@@ -7144,16 +7144,21 @@ static bool D3D12_INTERNAL_CreateSwapchain(
+ 
+ static bool D3D12_ClaimWindow(
+     SDL_GPURenderer *driverData,
+     SDL_Window *window)
+ {
+     D3D12Renderer *renderer = (D3D12Renderer *)driverData;
+     D3D12WindowData *windowData = D3D12_INTERNAL_FetchWindowData(window);
+ 
++    // A flip-model swapchain made for an HWND ignores alpha.
++    if ((window->flags & SDL_WINDOW_TRANSPARENT) != 0) {
++        SET_STRING_ERROR_AND_RETURN("The D3D12 GPU driver doesn't support transparent windows", false);
++    }
++
+     if (windowData == NULL) {
+         windowData = (D3D12WindowData *)SDL_calloc(1, sizeof(D3D12WindowData));
+         if (!windowData) {
+             return false;
+         }
+         windowData->window = window;
+         windowData->renderer = renderer;
+         windowData->refcount = 1;

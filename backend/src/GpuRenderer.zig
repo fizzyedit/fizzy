@@ -293,8 +293,8 @@ pub fn create(gpa: std.mem.Allocator, window: *c.SDL_Window, options: Options) !
     if (c.SDL_GetGPUDeviceDriver(device)) |name| log.info("GPU driver: {s}", .{name});
 
     // A transparent window is claimed as one where the driver composites the swapchain's alpha
-    // (Metal, Vulkan, D3D12 through DirectComposition): fizzyedit/SDL leaves that to each driver
-    // (docs/DEPENDENCIES.md).
+    // (Metal, Vulkan, D3D12 through DirectComposition): fizzy's SDL patch 0001 leaves that to each
+    // driver (docs/DEPENDENCIES.md).
     if (!c.SDL_ClaimWindowForGPUDevice(device, window)) {
         log.err("SDL_ClaimWindowForGPUDevice failed: {s}", .{c.SDL_GetError()});
         return error.GpuClaimWindow;

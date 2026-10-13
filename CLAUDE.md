@@ -199,7 +199,7 @@ access works from what the code and its public docs say.
   into OS windows (ImGui-style viewports, per-OS dressing, the dvui-dev replay hook) →
   [`plans/POPOUT_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/POPOUT_WINDOWS_PLAN.md).
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
-- The forks fizzy builds on (dvui-dev, SDL, sdl_zig): what each patches, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
+- The forks and patches fizzy builds on (dvui-dev, SDL's patches in `backend/patches/sdl`, sdl_zig): what each changes, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 - Native windows and glass: what Liquid Glass can do (measured), the drag's glass as one native
   overlay on macOS 26, and fizzy's backend owning its windows while taking SDL's releases →
   [`plans/NATIVE_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/NATIVE_WINDOWS_PLAN.md)

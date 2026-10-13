@@ -4,12 +4,24 @@
     .fingerprint = 0x2bf08855a368b9a8,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        // SDL3 for the window, its events and the GPU: fizzyedit/sdl_zig's `fizzy` branch,
-        // building fizzyedit/SDL's `fizzy-3.4` with the patches this backend needs (fizzy's
-        // docs/DEPENDENCIES.md). Pinned here, by the package that uses it, and nowhere else.
+        // SDL3 for the window, its events and the GPU: upstream SDL, patched at build time with
+        // `patches/sdl` (marler8997/zig-patch), built by fizzyedit/sdl_zig's `fizzy` branch, which
+        // takes the patched tree (`-Dsdl_source`). How the patches are made and how SDL is updated:
+        // fizzy's docs/DEPENDENCIES.md. Pinned here, by the package that uses them, and nowhere else.
         .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/d0c70fe0728a796b30177e126bc2816fd2235710.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0UwUqgAumuPOAWrVade5uk8wjzUyAxSLR-ceEoPk",
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/a99807da9b6217422449a824cb24de4d97f482a3.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0f8KqgC0YeoFofQA7ZnPQWkyEVe2MJ-jhVnFqYk9",
+            .lazy = true,
+        },
+        // The release sdl_zig's own `.sdl` pins: the same tarball, fetched once.
+        .sdl_source = .{
+            .url = "https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.4.16.tar.gz",
+            .hash = "N-V-__8AABHq9wIiTHGY4qR6mw45F_TX8FSvqsQQ-Wtq1tzY",
+            .lazy = true,
+        },
+        .patch = .{
+            .url = "https://github.com/marler8997/zig-patch/archive/c3ad78b305ba03bcd645c0bac004d1719407c6b8.tar.gz",
+            .hash = "patch-0.0.0-WCKjsxixAADfwXQv4Vugyxo6PFbDFuuyM7ly3OiqZRYR",
             .lazy = true,
         },
         // AppKit from Zig, for the macOS platform pieces (and an app's own, `objcModule`).
@@ -25,5 +37,5 @@
             .lazy = true,
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "patches" },
 }

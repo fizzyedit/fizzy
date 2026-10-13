@@ -70,13 +70,13 @@ static CAMetalLayer *find_metal_layer(NSView *view) {
     return found ? (CAMetalLayer *)found.layer : nil;
 }
 
-/* fizzyedit/SDL's window listener (the window's delegate), with its live-resize patches. */
+/* SDL's window listener (the window's delegate), with fizzy's live-resize patches. */
 @protocol FizzySDLLiveResizeListener
 - (BOOL)drawsLiveResizeInView:(NSView *)view;
 @end
 
 /* The Metal view, when SDL draws this window's live resize from AppKit's display of it
- * (`SDL_VIDEO_MAC_SYNC_LIVE_RESIZE` and fizzyedit/SDL's patches) and a live resize is running. */
+ * (`SDL_VIDEO_MAC_SYNC_LIVE_RESIZE` and fizzy's SDL patches) and a live resize is running. */
 static NSView *live_resize_drawn_view(void *nswindow) {
     if (!nswindow) return nil;
     NSWindow *window = (__bridge NSWindow *)nswindow;

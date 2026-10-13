@@ -1,0 +1,1563 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: foxnne <foxnne@gmail.com>
+Date: Fri, 9 Oct 2026 12:44:40 -0500
+Subject: [PATCH] test: a fizzy suite for Wayland frame insets, on the protocol
+ trace
+
+The suite for "Wayland: frame insets, for a shadow the application draws round its own
+decorations", `FizzyWayland` in test/testautomation_fizzy_wayland.c. Each test reconnects SDL to
+the compositor with libwayland's request trace on (WAYLAND_DEBUG=client), stderr captured to a
+file and libdecor off, makes a resizable borderless window with insets 24/6/30/40 round a 400x300
+surface, presents into it with the GPU API so it maps, then parses the requests SDL sent on its
+own objects (found by id with wl_proxy_get_id) at marks it wrote into the trace. The trace is read
+between two marks where a window's objects are made again, as libwayland reuses the ids of
+destroyed objects.
+
+- floating: xdg_surface.set_window_geometry is the frame, the input region one rectangle, the
+  frame and a band of min(inset, 8) round it, an opaque window's opaque region the frame, the
+  published SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_* are those asked for,
+  xdg_toplevel.set_min_size/set_max_size are the frame's, and all of it follows
+  SDL_SetWindowSize;
+- maximized and fullscreen: the published insets are 0, the surface is the configured size, the
+  window geometry and opaque region the whole surface and the input region nil; restored, the
+  insets come back;
+- a tooltip popup's positioner is anchored to the parent's frame, its offset less the parent's
+  left and top insets, and SDL reports the popup where it was asked for;
+- wayland_frameInsetsBeforeShow: a window made hidden publishes its insets before it is shown;
+- wayland_frameInsetsRecreated: after an OpenGL ES renderer makes the shown window again through
+  SDL_RecreateWindow, the new objects' window geometry, input region and opaque region are the
+  frame's;
+- wayland_frameInsetsShownAgain: hidden and shown again, the new xdg_surface gets the frame as its
+  window geometry;
+- wayland_frameInsetsInputMarginWide and ...None: the input band follows
+  SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER (12, and 0).
+
+On a release without the patch the properties are defined here, so the suite builds there and
+fails on its first checks: nothing is published and no window geometry is sent. Headless weston
+can't show a floating size the compositor chooses, toplevel bounds, tiled states, fractional scale
+or xdg-decoration.
+---
+ test/testautomation_fizzy.h         |    1 +
+ test/testautomation_fizzy_wayland.c | 1468 +++++++++++++++++++++++++++
+ test/testfizzy.c                    |    1 +
+ 3 files changed, 1470 insertions(+)
+ create mode 100644 test/testautomation_fizzy_wayland.c
+
+diff --git a/test/testautomation_fizzy.h b/test/testautomation_fizzy.h
+index 6f9d7c6..7c31166 100644
+--- a/test/testautomation_fizzy.h
++++ b/test/testautomation_fizzy.h
+@@ -9,16 +9,17 @@
+ #ifndef testautomation_fizzy_h_
+ #define testautomation_fizzy_h_
+ 
+ #include <SDL3/SDL_test.h>
+ 
+ /* Test collections */
+ extern SDLTest_TestSuiteReference fizzyGPUTestSuite;
+ extern SDLTest_TestSuiteReference fizzyXkbTestSuite;
++extern SDLTest_TestSuiteReference fizzyWaylandTestSuite;
+ 
+ /* Comma-separated GPU drivers ("metal,vulkan") a test must find: when one of
+  * them is missing the test fails instead of being skipped. Set by testfizzy's
+  * --require-gpu option, for CI runners that are known to have the driver.
+  */
+ extern const char *fizzyGPURequiredDrivers;
+ 
+ #endif /* testautomation_fizzy_h_ */
+diff --git a/test/testautomation_fizzy_wayland.c b/test/testautomation_fizzy_wayland.c
+new file mode 100644
+index 0000000..c02bcb9
+--- /dev/null
++++ b/test/testautomation_fizzy_wayland.c
+@@ -0,0 +1,1468 @@
++/**
++ * Wayland test suite for fizzy's patches
++ *
++ * "Wayland: frame insets, for a shadow the application draws round its own
++ * decorations": SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_*_NUMBER give the
++ * margins of an xdg-shell toplevel's surface outside its frame. While the
++ * window floats, the window geometry is the frame, the input region is the
++ * frame and a band round it (8 units, or
++ * SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER), an opaque
++ * window's opaque region is the frame, the min/max sizes are the frame's and
++ * popups anchor to the frame; maximized or fullscreen the insets are zero. The
++ * insets in effect are published as SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_*_NUMBER
++ * from creation on. A window SDL makes again (SDL_RecreateWindow) or shows
++ * again keeps all of it.
++ *
++ * What SDL asks of the compositor is read from libwayland's own trace of the
++ * requests it sends (WAYLAND_DEBUG=client), not from SDL's state: each test
++ * reconnects SDL to the compositor with the trace on and stderr captured to a
++ * file, does its window operations, then parses the requests sent on its own
++ * objects (found by id through wl_proxy_get_id).
++ *
++ * The tests run only on the Wayland video driver, and skip elsewhere. They need
++ * a GPU driver to present frames with (lavapipe will do), so the windows map,
++ * and wayland_frameInsetsRecreated needs OpenGL ES through EGL (Mesa's
++ * llvmpipe will do).
++ */
++#include <SDL3/SDL.h>
++#include <SDL3/SDL_test.h>
++#include "testautomation_fizzy.h"
++
++#ifdef SDL_PLATFORM_LINUX
++#include <stdio.h>
++#include <unistd.h>
++#define FIZZY_WAYLAND_TRACE 1
++#endif
++
++/* The patch's properties, for SDL releases without them: there, creating a
++ * window ignores them and none are published, so every test fails on its
++ * first check instead of failing to build.
++ */
++#ifndef SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER   "SDL.window.create.wayland.frame_inset.left"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_TOP_NUMBER    "SDL.window.create.wayland.frame_inset.top"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_RIGHT_NUMBER  "SDL.window.create.wayland.frame_inset.right"
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_BOTTOM_NUMBER "SDL.window.create.wayland.frame_inset.bottom"
++#endif
++#ifndef SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER   "SDL.window.wayland.frame_inset.left"
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_TOP_NUMBER    "SDL.window.wayland.frame_inset.top"
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_RIGHT_NUMBER  "SDL.window.wayland.frame_inset.right"
++#define SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_BOTTOM_NUMBER "SDL.window.wayland.frame_inset.bottom"
++#endif
++#ifndef SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER
++#define SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER "SDL.window.create.wayland.frame_input_margin"
++#endif
++
++#ifdef FIZZY_WAYLAND_TRACE
++
++/* Insets that differ on every side, one of them under the 8-unit input band,
++ * round a 400x300 surface: the frame is 346x254 at (24, 6).
++ */
++enum
++{
++    INSET_LEFT = 24,
++    INSET_TOP = 6,
++    INSET_RIGHT = 30,
++    INSET_BOTTOM = 40,
++    INPUT_BAND = 8,
++    SURFACE_W = 400,
++    SURFACE_H = 300
++};
++
++static const char *inset_names[4] = { "left", "top", "right", "bottom" };
++static const int insets_asked[4] = { INSET_LEFT, INSET_TOP, INSET_RIGHT, INSET_BOTTOM };
++static const int insets_zero[4] = { 0, 0, 0, 0 };
++
++typedef struct
++{
++    int x, y, w, h;
++} TraceRect;
++
++/* What the trace says SDL last asked of the compositor for one window. */
++typedef struct
++{
++    bool geometry_set;
++    TraceRect geometry; /* xdg_surface.set_window_geometry */
++
++    bool input_set;
++    bool input_infinite; /* wl_surface.set_input_region(nil) */
++    int input_rects;     /* wl_region.add calls on the region set */
++    bool input_subtracted;
++    TraceRect input; /* the first rectangle added */
++
++    bool opaque_set;
++    bool opaque_none; /* wl_surface.set_opaque_region(nil) */
++    int opaque_rects;
++    bool opaque_subtracted;
++    TraceRect opaque;
++
++    bool min_set, max_set;
++    int min_w, min_h, max_w, max_h; /* xdg_toplevel.set_{min,max}_size */
++
++    bool configured;
++    int configure_w, configure_h; /* the last xdg_toplevel.configure event */
++
++    bool anchor_set, offset_set;
++    TraceRect anchor; /* xdg_positioner.set_anchor_rect */
++    int offset_x, offset_y; /* xdg_positioner.set_offset */
++} TraceState;
++
++/* Wayland object ids of a window's objects, 0 where it has none. */
++typedef struct
++{
++    Uint32 surface, xdg_surface, toplevel, popup, positioner;
++} TraceIds;
++
++/* What SDL reports at a point the test marks in the trace. */
++typedef struct
++{
++    const char *mark;
++    int w, h; /* SDL_GetWindowSize: the surface, frame and insets */
++    Sint64 insets[4]; /* published, -1 where a property is missing */
++    SDL_WindowFlags flags;
++} Checkpoint;
++
++typedef Uint32(SDLCALL *wl_proxy_get_id_fn)(void *proxy);
++
++static FILE *trace_file = NULL;
++static int saved_stderr = -1;
++static char *trace_text = NULL;
++static int video_inits = 0; /* how many times video was initialized before the trace */
++static SDL_SharedObject *wayland_client = NULL;
++static wl_proxy_get_id_fn get_proxy_id = NULL;
++
++/* Private helpers */
++
++static void TraceFree(void)
++{
++    SDL_free(trace_text);
++    trace_text = NULL;
++    if (wayland_client) {
++        SDL_UnloadObject(wayland_client);
++        wayland_client = NULL;
++        get_proxy_id = NULL;
++    }
++}
++
++/* Reads the trace, reconnects SDL as it was and takes stderr back. */
++static void TraceStop(void)
++{
++    long length;
++
++    if (!trace_file) {
++        return;
++    }
++    /* Disconnect while the trace still goes to the file. */
++    SDL_QuitSubSystem(SDL_INIT_VIDEO);
++    fflush(stderr);
++    SDL_unsetenv_unsafe("WAYLAND_DEBUG");
++    SDL_ResetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR);
++
++    fseek(trace_file, 0, SEEK_END);
++    length = ftell(trace_file);
++    fseek(trace_file, 0, SEEK_SET);
++    trace_text = (char *)SDL_malloc((size_t)(length > 0 ? length : 0) + 1);
++    if (trace_text) {
++        const size_t got = length > 0 ? fread(trace_text, 1, (size_t)length, trace_file) : 0;
++        trace_text[got] = '\0';
++    }
++    fseek(trace_file, 0, SEEK_END);
++
++    /* Video as it was, for whatever runs after this suite, still into the file:
++     * libwayland keeps tracing a client once it has, whatever the environment
++     * says, and the reconnection's requests would flood the log. */
++    while (video_inits-- > 0) {
++        SDL_InitSubSystem(SDL_INIT_VIDEO);
++    }
++    video_inits = 0;
++
++    fflush(stderr);
++    dup2(saved_stderr, STDERR_FILENO);
++    close(saved_stderr);
++    saved_stderr = -1;
++    fclose(trace_file);
++    trace_file = NULL;
++}
++
++/**
++ * Reconnects SDL's video to the compositor with libwayland's request trace
++ * on, written to a file in place of stderr, and libdecor off so windows are
++ * plain xdg-shell toplevels.
++ *
++ * Returns TEST_COMPLETED to go on, TEST_SKIPPED off Wayland, or -1 after a
++ * failed check.
++ */
++static int TraceStart(void)
++{
++    const char *driver = SDL_GetCurrentVideoDriver();
++    bool ok;
++
++    if (!driver || SDL_strcmp(driver, "wayland") != 0) {
++        SDLTest_Log("Video driver is '%s', not 'wayland', skipping test", driver ? driver : "(none)");
++        return TEST_SKIPPED;
++    }
++
++    wayland_client = SDL_LoadObject("libwayland-client.so.0");
++    get_proxy_id = wayland_client ? (wl_proxy_get_id_fn)SDL_LoadFunction(wayland_client, "wl_proxy_get_id") : NULL;
++    if (!SDLTest_AssertCheck(get_proxy_id != NULL, "Validate that wl_proxy_get_id was found in libwayland-client.so.0, got error: %s", get_proxy_id ? "none" : SDL_GetError())) {
++        TraceFree();
++        return -1;
++    }
++
++    trace_file = tmpfile();
++    if (!SDLTest_AssertCheck(trace_file != NULL, "Validate that a file for the trace was made")) {
++        TraceFree();
++        return -1;
++    }
++
++    /* Video is reference counted: shut it down as many times as it was
++     * initialized (the harness and SDLTest_CommonInit both do), and bring it
++     * back as many times after. */
++    video_inits = 0;
++    while (SDL_WasInit(SDL_INIT_VIDEO) && video_inits < 16) {
++        SDL_QuitSubSystem(SDL_INIT_VIDEO);
++        ++video_inits;
++    }
++    if (!SDLTest_AssertCheck(!SDL_WasInit(SDL_INIT_VIDEO), "Validate that video was shut down to reconnect with the trace on")) {
++        fclose(trace_file);
++        trace_file = NULL;
++        while (video_inits-- > 0) {
++            SDL_InitSubSystem(SDL_INIT_VIDEO);
++        }
++        video_inits = 0;
++        TraceFree();
++        return -1;
++    }
++
++    fflush(stderr);
++    saved_stderr = dup(STDERR_FILENO);
++    dup2(fileno(trace_file), STDERR_FILENO);
++    SDL_setenv_unsafe("WAYLAND_DEBUG", "client", 1);
++    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0");
++
++    ok = SDL_InitSubSystem(SDL_INIT_VIDEO);
++    driver = ok ? SDL_GetCurrentVideoDriver() : NULL;
++    ok = ok && driver && SDL_strcmp(driver, "wayland") == 0;
++    if (!ok) {
++        char error[256];
++        SDL_strlcpy(error, SDL_GetError(), sizeof(error));
++        TraceStop();
++        SDLTest_AssertCheck(false, "Validate that video reconnected to Wayland with the trace on, got error: %s", error);
++        TraceFree();
++        return -1;
++    }
++    return TEST_COMPLETED;
++}
++
++/* A line in the trace, which a test's checkpoint names, and on the real stderr,
++ * so a test that hangs while the trace is on shows how far it got. */
++static void TraceMark(const char *mark)
++{
++    char line[160];
++    int length;
++
++    fprintf(stderr, "\nfizzy-mark: %s\n", mark);
++    fflush(stderr);
++    length = SDL_snprintf(line, sizeof(line), "fizzy-mark: %s\n", mark);
++    if (saved_stderr >= 0 && length > 0) {
++        (void)!write(saved_stderr, line, (size_t)SDL_min(length, (int)sizeof(line) - 1));
++    }
++}
++
++static const char *TraceFindMark(const char *mark)
++{
++    char line[128];
++    const char *found;
++
++    if (!trace_text) {
++        return NULL;
++    }
++    SDL_snprintf(line, sizeof(line), "fizzy-mark: %s\n", mark);
++    found = SDL_strstr(trace_text, line);
++    return found;
++}
++
++static Uint32 ProxyId(SDL_Window *window, const char *property)
++{
++    void *proxy = SDL_GetPointerProperty(SDL_GetWindowProperties(window), property, NULL);
++    return proxy && get_proxy_id ? get_proxy_id(proxy) : 0;
++}
++
++static void GetIds(SDL_Window *window, TraceIds *ids)
++{
++    ids->surface = ProxyId(window, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER);
++    ids->xdg_surface = ProxyId(window, SDL_PROP_WINDOW_WAYLAND_XDG_SURFACE_POINTER);
++    ids->toplevel = ProxyId(window, SDL_PROP_WINDOW_WAYLAND_XDG_TOPLEVEL_POINTER);
++    ids->popup = ProxyId(window, SDL_PROP_WINDOW_WAYLAND_XDG_POPUP_POINTER);
++    ids->positioner = ProxyId(window, SDL_PROP_WINDOW_WAYLAND_XDG_POSITIONER_POINTER);
++}
++
++/* Copies a trace line without terminal colour escapes. */
++static void CopyLine(const char *begin, const char *end, char *out, size_t size)
++{
++    size_t n = 0;
++
++    while (begin < end && n + 1 < size) {
++        if (*begin == '\033') {
++            /* ESC [ ... letter */
++            ++begin;
++            if (begin < end && *begin == '[') {
++                ++begin;
++                while (begin < end && !SDL_isalpha((unsigned char)*begin)) {
++                    ++begin;
++                }
++            }
++            if (begin < end) {
++                ++begin;
++            }
++            continue;
++        }
++        out[n++] = *begin++;
++    }
++    out[n] = '\0';
++}
++
++/* Parses up to `count` integers from a message's arguments. */
++static int ParseInts(const char *args, int *values, int count)
++{
++    int n = 0;
++    const char *p = args;
++
++    while (n < count && *p && *p != ')') {
++        char *end;
++        long v;
++
++        while (*p == ' ' || *p == ',') {
++            ++p;
++        }
++        v = SDL_strtol(p, &end, 10);
++        if (end == p) {
++            break;
++        }
++        values[n++] = (int)v;
++        p = end;
++    }
++    return n;
++}
++
++/* The id of an object argument ("wl_region#12", "wl_region@12", "new id
++ * wl_region#12"), or 0 for "nil". */
++static Uint32 ParseObjectArg(const char *args)
++{
++    const char *p = args;
++
++    while (*p && *p != ')' && *p != '#' && *p != '@') {
++        ++p;
++    }
++    if (*p == '#' || *p == '@') {
++        return (Uint32)SDL_strtoul(p + 1, NULL, 10);
++    }
++    return 0;
++}
++
++#define MAX_REGIONS 64
++
++typedef struct
++{
++    Uint32 id;
++    int rects;
++    bool subtracted;
++    TraceRect first;
++} TraceRegion;
++
++static TraceRegion *FindRegion(TraceRegion *regions, int *count, Uint32 id, bool reset)
++{
++    int i;
++
++    for (i = 0; i < *count; ++i) {
++        if (regions[i].id == id) {
++            if (reset) {
++                SDL_zero(regions[i]);
++                regions[i].id = id;
++            }
++            return &regions[i];
++        }
++    }
++    if (*count == MAX_REGIONS) {
++        /* Reuse the oldest; the window's region is made just before it is set */
++        SDL_memmove(regions, regions + 1, sizeof(*regions) * (MAX_REGIONS - 1));
++        --*count;
++    }
++    SDL_zero(regions[*count]);
++    regions[*count].id = id;
++    return &regions[(*count)++];
++}
++
++/**
++ * Reads the requests sent (and the toplevel configure events received) on a
++ * window's objects from the mark `from` (the start of the trace if NULL) up
++ * to `mark`, keeping the last of each. A window whose objects were made again
++ * (shown again, or recreated) is read from a mark set before that, as
++ * libwayland reuses the ids of destroyed objects.
++ */
++static bool ParseTrace(const char *from, const char *mark, const TraceIds *ids, TraceState *state)
++{
++    TraceRegion regions[MAX_REGIONS];
++    int region_count = 0;
++    const char *end = TraceFindMark(mark);
++    const char *p = from ? TraceFindMark(from) : trace_text;
++
++    SDL_zerop(state);
++    if (!end || !p || p > end) {
++        return false;
++    }
++
++    while (p < end) {
++        const char *eol = SDL_strchr(p, '\n');
++        char line[1024];
++        const char *msg;
++        char iface[64];
++        Uint32 id;
++        char name[64];
++        const char *args;
++        bool sent;
++        size_t n;
++        char *after;
++
++        if (!eol || eol > end) {
++            eol = end;
++        }
++        CopyLine(p, eol, line, sizeof(line));
++        p = eol + 1;
++
++        /* "[ 1234.567] {Default Queue}  -> wl_surface#3.attach(...)": requests
++         * have the arrow, events don't. The queue name is libwayland 1.23+. */
++        msg = SDL_strstr(line, "-> ");
++        sent = msg != NULL;
++        if (sent) {
++            msg += 3;
++        } else {
++            msg = SDL_strchr(line, ']');
++            if (!msg) {
++                continue;
++            }
++            ++msg;
++            if (SDL_strchr(msg, '}')) {
++                msg = SDL_strchr(msg, '}') + 1;
++            }
++        }
++        while (*msg == ' ') {
++            ++msg;
++        }
++
++        n = 0;
++        while (msg[n] && msg[n] != '#' && msg[n] != '@' && msg[n] != ' ' && n + 1 < sizeof(iface)) {
++            iface[n] = msg[n];
++            ++n;
++        }
++        iface[n] = '\0';
++        if (msg[n] != '#' && msg[n] != '@') {
++            continue;
++        }
++        id = (Uint32)SDL_strtoul(msg + n + 1, &after, 10);
++        if (*after != '.') {
++            continue;
++        }
++        ++after;
++        n = 0;
++        while (after[n] && after[n] != '(' && n + 1 < sizeof(name)) {
++            name[n] = after[n];
++            ++n;
++        }
++        name[n] = '\0';
++        if (after[n] != '(') {
++            continue;
++        }
++        args = after + n + 1;
++
++        if (!sent) {
++            if (ids->toplevel && id == ids->toplevel && SDL_strcmp(iface, "xdg_toplevel") == 0 && SDL_strcmp(name, "configure") == 0) {
++                int v[2];
++                if (ParseInts(args, v, 2) == 2) {
++                    state->configured = true;
++                    state->configure_w = v[0];
++                    state->configure_h = v[1];
++                }
++            }
++            continue;
++        }
++
++        if (SDL_strcmp(iface, "wl_compositor") == 0 && SDL_strcmp(name, "create_region") == 0) {
++            FindRegion(regions, &region_count, ParseObjectArg(args), true);
++        } else if (SDL_strcmp(iface, "wl_region") == 0 && SDL_strcmp(name, "add") == 0) {
++            TraceRegion *region = FindRegion(regions, &region_count, id, false);
++            int v[4];
++            if (ParseInts(args, v, 4) == 4) {
++                if (region->rects == 0) {
++                    region->first.x = v[0];
++                    region->first.y = v[1];
++                    region->first.w = v[2];
++                    region->first.h = v[3];
++                }
++                ++region->rects;
++            }
++        } else if (SDL_strcmp(iface, "wl_region") == 0 && SDL_strcmp(name, "subtract") == 0) {
++            FindRegion(regions, &region_count, id, false)->subtracted = true;
++        } else if (id == ids->surface && SDL_strcmp(iface, "wl_surface") == 0 && SDL_strcmp(name, "set_input_region") == 0) {
++            const Uint32 region_id = ParseObjectArg(args);
++            state->input_set = true;
++            state->input_infinite = region_id == 0;
++            state->input_rects = 0;
++            state->input_subtracted = false;
++            if (region_id) {
++                const TraceRegion *region = FindRegion(regions, &region_count, region_id, false);
++                state->input_rects = region->rects;
++                state->input_subtracted = region->subtracted;
++                state->input = region->first;
++            }
++        } else if (id == ids->surface && SDL_strcmp(iface, "wl_surface") == 0 && SDL_strcmp(name, "set_opaque_region") == 0) {
++            const Uint32 region_id = ParseObjectArg(args);
++            state->opaque_set = true;
++            state->opaque_none = region_id == 0;
++            state->opaque_rects = 0;
++            state->opaque_subtracted = false;
++            if (region_id) {
++                const TraceRegion *region = FindRegion(regions, &region_count, region_id, false);
++                state->opaque_rects = region->rects;
++                state->opaque_subtracted = region->subtracted;
++                state->opaque = region->first;
++            }
++        } else if (id == ids->xdg_surface && SDL_strcmp(iface, "xdg_surface") == 0 && SDL_strcmp(name, "set_window_geometry") == 0) {
++            int v[4];
++            if (ParseInts(args, v, 4) == 4) {
++                state->geometry_set = true;
++                state->geometry.x = v[0];
++                state->geometry.y = v[1];
++                state->geometry.w = v[2];
++                state->geometry.h = v[3];
++            }
++        } else if (id == ids->toplevel && SDL_strcmp(iface, "xdg_toplevel") == 0 && SDL_strcmp(name, "set_min_size") == 0) {
++            int v[2];
++            if (ParseInts(args, v, 2) == 2) {
++                state->min_set = true;
++                state->min_w = v[0];
++                state->min_h = v[1];
++            }
++        } else if (id == ids->toplevel && SDL_strcmp(iface, "xdg_toplevel") == 0 && SDL_strcmp(name, "set_max_size") == 0) {
++            int v[2];
++            if (ParseInts(args, v, 2) == 2) {
++                state->max_set = true;
++                state->max_w = v[0];
++                state->max_h = v[1];
++            }
++        } else if (id == ids->positioner && SDL_strcmp(iface, "xdg_positioner") == 0 && SDL_strcmp(name, "set_anchor_rect") == 0) {
++            int v[4];
++            if (ParseInts(args, v, 4) == 4) {
++                state->anchor_set = true;
++                state->anchor.x = v[0];
++                state->anchor.y = v[1];
++                state->anchor.w = v[2];
++                state->anchor.h = v[3];
++            }
++        } else if (id == ids->positioner && SDL_strcmp(iface, "xdg_positioner") == 0 && SDL_strcmp(name, "set_offset") == 0) {
++            int v[2];
++            if (ParseInts(args, v, 2) == 2) {
++                state->offset_set = true;
++                state->offset_x = v[0];
++                state->offset_y = v[1];
++            }
++        }
++    }
++    return true;
++}
++
++/* Logs the trace's lines about a window's shell objects and input region, and
++ * the marks, so a failure in CI can be read without rerunning it. */
++static void LogTrace(const TraceIds *ids)
++{
++    const char *p = trace_text;
++    char objects[5][48];
++    int count = 0;
++
++    if (!p) {
++        return;
++    }
++    if (ids->xdg_surface) {
++        SDL_snprintf(objects[count++], sizeof(objects[0]), "xdg_surface#%" SDL_PRIu32 ".", ids->xdg_surface);
++    }
++    if (ids->toplevel) {
++        SDL_snprintf(objects[count++], sizeof(objects[0]), "xdg_toplevel#%" SDL_PRIu32 ".", ids->toplevel);
++    }
++    if (ids->popup) {
++        SDL_snprintf(objects[count++], sizeof(objects[0]), "xdg_popup#%" SDL_PRIu32 ".", ids->popup);
++    }
++    if (ids->positioner) {
++        SDL_snprintf(objects[count++], sizeof(objects[0]), "xdg_positioner#%" SDL_PRIu32 ".", ids->positioner);
++    }
++    SDL_snprintf(objects[count++], sizeof(objects[0]), "wl_surface#%" SDL_PRIu32 ".set_", ids->surface);
++
++    while (*p) {
++        const char *eol = SDL_strchr(p, '\n');
++        char line[1024];
++        bool show;
++        int i;
++
++        if (!eol) {
++            eol = p + SDL_strlen(p);
++        }
++        CopyLine(p, eol, line, sizeof(line));
++        p = *eol ? eol + 1 : eol;
++
++        /* Older libwayland writes "@" for "#" */
++        for (i = 0; line[i]; ++i) {
++            if (line[i] == '@') {
++                line[i] = '#';
++            }
++        }
++        show = SDL_strstr(line, "fizzy-mark: ") != NULL || SDL_strstr(line, "wl_region#") != NULL;
++        for (i = 0; !show && i < count; ++i) {
++            show = SDL_strstr(line, objects[i]) != NULL;
++        }
++        if (show) {
++            SDLTest_Log("trace: %s", line);
++        }
++    }
++}
++
++static void TakeCheckpoint(SDL_Window *window, const char *mark, Checkpoint *checkpoint)
++{
++    const SDL_PropertiesID props = SDL_GetWindowProperties(window);
++
++    checkpoint->mark = mark;
++    SDL_GetWindowSize(window, &checkpoint->w, &checkpoint->h);
++    checkpoint->insets[0] = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER, -1);
++    checkpoint->insets[1] = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_TOP_NUMBER, -1);
++    checkpoint->insets[2] = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_RIGHT_NUMBER, -1);
++    checkpoint->insets[3] = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_BOTTOM_NUMBER, -1);
++    checkpoint->flags = SDL_GetWindowFlags(window);
++    TraceMark(mark);
++}
++
++/* Clears and presents one frame, so the window maps and keeps up. */
++static void Present(SDL_GPUDevice *device, SDL_Window *window)
++{
++    SDL_GPUCommandBuffer *cmdbuf = SDL_AcquireGPUCommandBuffer(device);
++    SDL_GPUTexture *swapchain = NULL;
++
++    if (!cmdbuf) {
++        return;
++    }
++    if (SDL_WaitAndAcquireGPUSwapchainTexture(cmdbuf, window, &swapchain, NULL, NULL) && swapchain) {
++        SDL_GPUColorTargetInfo target;
++        SDL_GPURenderPass *pass;
++
++        SDL_zero(target);
++        target.texture = swapchain;
++        target.clear_color.r = 0.2f;
++        target.clear_color.g = 0.3f;
++        target.clear_color.b = 0.4f;
++        target.clear_color.a = 1.0f;
++        target.load_op = SDL_GPU_LOADOP_CLEAR;
++        target.store_op = SDL_GPU_STOREOP_STORE;
++        pass = SDL_BeginGPURenderPass(cmdbuf, &target, 1, NULL);
++        if (pass) {
++            SDL_EndGPURenderPass(pass);
++        }
++    }
++    SDL_SubmitGPUCommandBuffer(cmdbuf);
++}
++
++/* Lets the compositor and SDL settle: sync, then pump events and present. */
++static void Settle(SDL_GPUDevice *device, SDL_Window *window)
++{
++    int i;
++
++    SDL_SyncWindow(window);
++    for (i = 0; i < 10; ++i) {
++        SDL_Event event;
++        while (SDL_PollEvent(&event)) {
++        }
++        Present(device, window);
++        SDL_Delay(5);
++    }
++    SDL_SyncWindow(window);
++}
++
++/* A test's window and the GPU device presenting it, made with the trace on. */
++typedef struct
++{
++    SDL_GPUDevice *device;
++    SDL_Window *window;
++    bool claimed;
++} TestWindow;
++
++/* The properties of a resizable, borderless window with the insets, as fizzy's
++ * Linux backend makes, and an input margin unless it is negative. */
++static SDL_PropertiesID TestWindowProperties(int input_margin)
++{
++    SDL_PropertiesID props = SDL_CreateProperties();
++
++    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "testautomation_fizzy_wayland");
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, SURFACE_W);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, SURFACE_H);
++    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
++    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER, INSET_LEFT);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_TOP_NUMBER, INSET_TOP);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_RIGHT_NUMBER, INSET_RIGHT);
++    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_BOTTOM_NUMBER, INSET_BOTTOM);
++    if (input_margin >= 0) {
++        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER, input_margin);
++    }
++    return props;
++}
++
++/* Makes the test window (with an input margin unless it is negative), shows
++ * it and presents into it. Nothing is asserted here, as stderr is the trace:
++ * the caller checks after TraceStop. */
++static void CreateTestWindowWithMargin(TestWindow *tw, int input_margin)
++{
++    SDL_PropertiesID props = TestWindowProperties(input_margin);
++
++    SDL_zerop(tw);
++    tw->device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_DXIL, false, NULL);
++    tw->window = SDL_CreateWindowWithProperties(props);
++    SDL_DestroyProperties(props);
++
++    if (tw->device && tw->window) {
++        tw->claimed = SDL_ClaimWindowForGPUDevice(tw->device, tw->window);
++    }
++    if (tw->claimed) {
++        Settle(tw->device, tw->window);
++    }
++}
++
++static void CreateTestWindow(TestWindow *tw)
++{
++    CreateTestWindowWithMargin(tw, -1);
++}
++
++/* Releases the window from the GPU device and destroys the device, keeping the
++ * window. */
++static void ReleaseTestWindowDevice(TestWindow *tw)
++{
++    if (tw->claimed) {
++        SDL_WaitForGPUIdle(tw->device);
++        SDL_ReleaseWindowFromGPUDevice(tw->device, tw->window);
++        tw->claimed = false;
++    }
++    if (tw->device) {
++        SDL_DestroyGPUDevice(tw->device);
++        tw->device = NULL;
++    }
++}
++
++static void DestroyTestWindow(TestWindow *tw)
++{
++    ReleaseTestWindowDevice(tw);
++    if (tw->window) {
++        SDL_DestroyWindow(tw->window);
++    }
++    SDL_zerop(tw);
++}
++
++/* Checks the window was made and mapped; after TraceStop. */
++static bool CheckTestWindow(bool made, bool device, bool claimed, const TraceIds *ids)
++{
++    SDLTest_AssertCheck(device, "Validate that a GPU device was made to present with");
++    SDLTest_AssertCheck(made, "Validate that the window was made");
++    SDLTest_AssertCheck(claimed, "Validate that the window was claimed for the GPU device");
++    SDLTest_AssertCheck(ids->surface != 0 && ids->xdg_surface != 0 && ids->toplevel != 0,
++                        "Validate that the window is an xdg-shell toplevel, got wl_surface %" SDL_PRIu32 ", xdg_surface %" SDL_PRIu32 ", xdg_toplevel %" SDL_PRIu32,
++                        ids->surface, ids->xdg_surface, ids->toplevel);
++    return made && device && claimed && ids->xdg_surface && ids->toplevel;
++}
++
++static void CheckPublishedInsets(const Checkpoint *checkpoint, const int expected[4])
++{
++    int i;
++
++    for (i = 0; i < 4; ++i) {
++        SDLTest_AssertCheck(checkpoint->insets[i] == expected[i],
++                            "%s: validate the published %s frame inset, expected: %d, got: %" SDL_PRIs64 "%s",
++                            checkpoint->mark, inset_names[i], expected[i], checkpoint->insets[i],
++                            checkpoint->insets[i] < 0 ? " (not published)" : "");
++    }
++}
++
++/* An opaque window's opaque region: one rectangle, the one given. */
++static void CheckOpaqueRegion(const Checkpoint *checkpoint, const TraceState *state, int x, int y, int w, int h, const char *what)
++{
++    SDLTest_AssertCheck(state->opaque_set && !state->opaque_none && state->opaque_rects == 1 && !state->opaque_subtracted,
++                        "%s: validate that the opaque region set is one rectangle, got: %s, %d rectangles%s",
++                        checkpoint->mark, !state->opaque_set ? "never set" : state->opaque_none ? "none (nil)" : "a region",
++                        state->opaque_rects, state->opaque_subtracted ? ", with subtractions" : "");
++    if (state->opaque_set && state->opaque_rects == 1) {
++        SDLTest_AssertCheck(state->opaque.x == x && state->opaque.y == y && state->opaque.w == w && state->opaque.h == h,
++                            "%s: validate the opaque region is %s, expected: (%d, %d, %d, %d), got: (%d, %d, %d, %d)",
++                            checkpoint->mark, what, x, y, w, h, state->opaque.x, state->opaque.y, state->opaque.w, state->opaque.h);
++    }
++}
++
++/* While floating: the window geometry is the frame, inside the insets, the
++ * input region the frame and a band of at most `band` units round it, and the
++ * opaque region (the test window is opaque) the frame, not its shadow. */
++static void CheckFloatingFrameWithBand(const Checkpoint *checkpoint, const TraceState *state, int band)
++{
++    const int frame_w = checkpoint->w - INSET_LEFT - INSET_RIGHT;
++    const int frame_h = checkpoint->h - INSET_TOP - INSET_BOTTOM;
++    const int band_l = SDL_min(INSET_LEFT, band);
++    const int band_t = SDL_min(INSET_TOP, band);
++    const int band_r = SDL_min(INSET_RIGHT, band);
++    const int band_b = SDL_min(INSET_BOTTOM, band);
++
++    CheckPublishedInsets(checkpoint, insets_asked);
++
++    SDLTest_AssertCheck(state->geometry_set, "%s: validate that xdg_surface.set_window_geometry was sent", checkpoint->mark);
++    if (state->geometry_set) {
++        SDLTest_AssertCheck(state->geometry.x == INSET_LEFT && state->geometry.y == INSET_TOP && state->geometry.w == frame_w && state->geometry.h == frame_h,
++                            "%s: validate the window geometry is the frame, expected: (%d, %d, %d, %d), got: (%d, %d, %d, %d)",
++                            checkpoint->mark, INSET_LEFT, INSET_TOP, frame_w, frame_h,
++                            state->geometry.x, state->geometry.y, state->geometry.w, state->geometry.h);
++    }
++
++    SDLTest_AssertCheck(state->input_set && !state->input_infinite && state->input_rects == 1 && !state->input_subtracted,
++                        "%s: validate that the input region set is one rectangle, got: %s, %d rectangles%s",
++                        checkpoint->mark, !state->input_set ? "never set" : state->input_infinite ? "the whole surface (nil)" : "a region",
++                        state->input_rects, state->input_subtracted ? ", with subtractions" : "");
++    if (state->input_set && state->input_rects == 1) {
++        const int x = INSET_LEFT - band_l, y = INSET_TOP - band_t;
++        const int w = frame_w + band_l + band_r, h = frame_h + band_t + band_b;
++        SDLTest_AssertCheck(state->input.x == x && state->input.y == y && state->input.w == w && state->input.h == h,
++                            "%s: validate the input region is the frame and a band of at most %d, expected: (%d, %d, %d, %d), got: (%d, %d, %d, %d)",
++                            checkpoint->mark, band, x, y, w, h, state->input.x, state->input.y, state->input.w, state->input.h);
++    }
++
++    CheckOpaqueRegion(checkpoint, state, INSET_LEFT, INSET_TOP, frame_w, frame_h, "the frame, without the shadow");
++}
++
++static void CheckFloatingFrame(const Checkpoint *checkpoint, const TraceState *state)
++{
++    CheckFloatingFrameWithBand(checkpoint, state, INPUT_BAND);
++}
++
++/* Maximized or fullscreen: no insets, the window geometry the whole surface
++ * (the size the compositor configured), input everywhere. */
++static void CheckFilledFrame(const Checkpoint *checkpoint, const TraceState *state)
++{
++    CheckPublishedInsets(checkpoint, insets_zero);
++
++    SDLTest_AssertCheck(state->configured, "%s: validate that the toplevel was configured", checkpoint->mark);
++    if (state->configured && state->configure_w && state->configure_h) {
++        SDLTest_AssertCheck(checkpoint->w == state->configure_w && checkpoint->h == state->configure_h,
++                            "%s: validate the surface is the configured size, expected: %dx%d, got: %dx%d",
++                            checkpoint->mark, state->configure_w, state->configure_h, checkpoint->w, checkpoint->h);
++    }
++    SDLTest_AssertCheck(state->geometry_set, "%s: validate that xdg_surface.set_window_geometry was sent", checkpoint->mark);
++    if (state->geometry_set) {
++        SDLTest_AssertCheck(state->geometry.x == 0 && state->geometry.y == 0 && state->geometry.w == checkpoint->w && state->geometry.h == checkpoint->h,
++                            "%s: validate the window geometry is the surface, expected: (0, 0, %d, %d), got: (%d, %d, %d, %d)",
++                            checkpoint->mark, checkpoint->w, checkpoint->h,
++                            state->geometry.x, state->geometry.y, state->geometry.w, state->geometry.h);
++    }
++    SDLTest_AssertCheck(state->input_set && state->input_infinite,
++                        "%s: validate that the input region is the whole surface (nil), got: %s",
++                        checkpoint->mark, !state->input_set ? "never set" : state->input_infinite ? "nil" : "a region");
++    CheckOpaqueRegion(checkpoint, state, 0, 0, checkpoint->w, checkpoint->h, "the whole surface");
++}
++
++static bool ParseAt(const Checkpoint *checkpoint, const TraceIds *ids, TraceState *state)
++{
++    return SDLTest_AssertCheck(ParseTrace(NULL, checkpoint->mark, ids, state), "Validate that the trace holds the mark '%s'", checkpoint->mark);
++}
++
++/* Reads the trace from the mark `from`: for a window whose objects were made
++ * again after it. */
++static bool ParseSince(const char *from, const Checkpoint *checkpoint, const TraceIds *ids, TraceState *state)
++{
++    return SDLTest_AssertCheck(ParseTrace(from, checkpoint->mark, ids, state), "Validate that the trace holds the marks '%s' and then '%s'", from, checkpoint->mark);
++}
++
++/* Maximizes (or fullscreens) a floating window and restores it. */
++static int frameInsetsFillAndRestore(bool fullscreen)
++{
++    TestWindow tw;
++    TraceIds ids;
++    Checkpoint floating = { 0 }, filled = { 0 }, restored = { 0 };
++    TraceState state;
++    bool made, device, claimed, ok;
++    int result = TraceStart();
++
++    if (result != TEST_COMPLETED) {
++        return result < 0 ? TEST_COMPLETED : result;
++    }
++    SDL_zero(state);
++
++    CreateTestWindow(&tw);
++    made = tw.window != NULL;
++    device = tw.device != NULL;
++    claimed = tw.claimed;
++    SDL_zero(ids);
++    if (claimed) {
++        GetIds(tw.window, &ids);
++        TakeCheckpoint(tw.window, "floating", &floating);
++
++        if (fullscreen) {
++            SDL_SetWindowFullscreen(tw.window, true);
++        } else {
++            SDL_MaximizeWindow(tw.window);
++        }
++        Settle(tw.device, tw.window);
++        TakeCheckpoint(tw.window, fullscreen ? "fullscreen" : "maximized", &filled);
++
++        if (fullscreen) {
++            SDL_SetWindowFullscreen(tw.window, false);
++        } else {
++            SDL_RestoreWindow(tw.window);
++        }
++        Settle(tw.device, tw.window);
++        TakeCheckpoint(tw.window, "restored", &restored);
++    }
++    DestroyTestWindow(&tw);
++    TraceStop();
++
++    ok = CheckTestWindow(made, device, claimed, &ids);
++    if (ok) {
++        const SDL_WindowFlags flag = fullscreen ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_MAXIMIZED;
++
++        if (ParseAt(&floating, &ids, &state)) {
++            CheckFloatingFrame(&floating, &state);
++        }
++
++        SDLTest_AssertCheck((filled.flags & flag) != 0, "%s: validate that the compositor %s the window", filled.mark, fullscreen ? "made fullscreen" : "maximized");
++        if (ParseAt(&filled, &ids, &state)) {
++            CheckFilledFrame(&filled, &state);
++        }
++
++        SDLTest_AssertCheck((restored.flags & flag) == 0, "%s: validate that the window floats again", restored.mark);
++        SDLTest_AssertCheck(restored.w == SURFACE_W && restored.h == SURFACE_H,
++                            "%s: validate the surface is back to its floating size, expected: %dx%d, got: %dx%d",
++                            restored.mark, SURFACE_W, SURFACE_H, restored.w, restored.h);
++        if (ParseAt(&restored, &ids, &state)) {
++            CheckFloatingFrame(&restored, &state);
++        }
++    }
++    LogTrace(&ids);
++    TraceFree();
++    return TEST_COMPLETED;
++}
++
++/* A floating window made with the input margin given: the input region is the
++ * frame and a band of min(inset, margin) on each side. */
++static int frameInsetsInputMargin(int margin)
++{
++    TestWindow tw;
++    TraceIds ids;
++    Checkpoint shown = { 0 };
++    TraceState state;
++    bool made, device, claimed;
++    int result = TraceStart();
++
++    if (result != TEST_COMPLETED) {
++        return result < 0 ? TEST_COMPLETED : result;
++    }
++    SDL_zero(state);
++
++    CreateTestWindowWithMargin(&tw, margin);
++    made = tw.window != NULL;
++    device = tw.device != NULL;
++    claimed = tw.claimed;
++    SDL_zero(ids);
++    if (claimed) {
++        GetIds(tw.window, &ids);
++        TakeCheckpoint(tw.window, "shown", &shown);
++    }
++    DestroyTestWindow(&tw);
++    TraceStop();
++
++    if (CheckTestWindow(made, device, claimed, &ids)) {
++        if (ParseAt(&shown, &ids, &state)) {
++            CheckFloatingFrameWithBand(&shown, &state, margin);
++        }
++    }
++    LogTrace(&ids);
++    TraceFree();
++    return TEST_COMPLETED;
++}
++
++#endif /* FIZZY_WAYLAND_TRACE */
++
++/* Test case functions */
++
++/**
++ * A floating window: the window geometry is the frame, the input region the
++ * frame and a band, the published insets those asked for, the min/max sizes
++ * the frame's, and all of it follows a resize.
++ */
++static int SDLCALL wayland_frameInsetsFloating(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    TestWindow tw;
++    TraceIds ids;
++    Checkpoint shown = { 0 }, limited = { 0 }, resized = { 0 };
++    TraceState state;
++    bool made, device, claimed;
++    int result = TraceStart();
++
++    if (result != TEST_COMPLETED) {
++        return result < 0 ? TEST_COMPLETED : result;
++    }
++    SDL_zero(state);
++
++    CreateTestWindow(&tw);
++    made = tw.window != NULL;
++    device = tw.device != NULL;
++    claimed = tw.claimed;
++    SDL_zero(ids);
++    if (claimed) {
++        GetIds(tw.window, &ids);
++        TakeCheckpoint(tw.window, "shown", &shown);
++
++        SDL_SetWindowMinimumSize(tw.window, 200, 150);
++        SDL_SetWindowMaximumSize(tw.window, 800, 600);
++        Settle(tw.device, tw.window);
++        TakeCheckpoint(tw.window, "limits", &limited);
++
++        SDL_SetWindowSize(tw.window, 500, 380);
++        Settle(tw.device, tw.window);
++        TakeCheckpoint(tw.window, "resized", &resized);
++    }
++    DestroyTestWindow(&tw);
++    TraceStop();
++
++    if (CheckTestWindow(made, device, claimed, &ids)) {
++        SDLTest_AssertCheck(shown.w == SURFACE_W && shown.h == SURFACE_H,
++                            "%s: validate the surface is the size made, expected: %dx%d, got: %dx%d",
++                            shown.mark, SURFACE_W, SURFACE_H, shown.w, shown.h);
++        if (ParseAt(&shown, &ids, &state)) {
++            CheckFloatingFrame(&shown, &state);
++        }
++
++        if (ParseAt(&limited, &ids, &state)) {
++            const int min_w = 200 - INSET_LEFT - INSET_RIGHT, min_h = 150 - INSET_TOP - INSET_BOTTOM;
++            const int max_w = 800 - INSET_LEFT - INSET_RIGHT, max_h = 600 - INSET_TOP - INSET_BOTTOM;
++            SDLTest_AssertCheck(state.min_set && state.min_w == min_w && state.min_h == min_h,
++                                "%s: validate xdg_toplevel.set_min_size is the frame's, expected: %dx%d, got: %s%dx%d",
++                                limited.mark, min_w, min_h, state.min_set ? "" : "(never sent) ", state.min_w, state.min_h);
++            SDLTest_AssertCheck(state.max_set && state.max_w == max_w && state.max_h == max_h,
++                                "%s: validate xdg_toplevel.set_max_size is the frame's, expected: %dx%d, got: %s%dx%d",
++                                limited.mark, max_w, max_h, state.max_set ? "" : "(never sent) ", state.max_w, state.max_h);
++        }
++
++        SDLTest_AssertCheck(resized.w == 500 && resized.h == 380,
++                            "%s: validate the surface took the new size, expected: 500x380, got: %dx%d",
++                            resized.mark, resized.w, resized.h);
++        if (ParseAt(&resized, &ids, &state)) {
++            CheckFloatingFrame(&resized, &state);
++        }
++    }
++    LogTrace(&ids);
++    TraceFree();
++    return TEST_COMPLETED;
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * Maximized: no insets, the window geometry and the input region the whole
++ * surface; restored: the insets come back.
++ */
++static int SDLCALL wayland_frameInsetsMaximized(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    return frameInsetsFillAndRestore(false);
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * Fullscreen: no insets, the window geometry and the input region the whole
++ * surface; back to windowed: the insets come back.
++ */
++static int SDLCALL wayland_frameInsetsFullscreen(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    return frameInsetsFillAndRestore(true);
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * A popup of a window with insets is placed relative to the parent's frame:
++ * the positioner's anchor rectangle is the frame and its offset is the popup's
++ * position less the parent's left and top insets.
++ */
++static int SDLCALL wayland_frameInsetsPopup(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    TestWindow tw;
++    SDL_Window *popup = NULL;
++    TraceIds parent_ids, popup_ids;
++    Checkpoint parent = { 0 }, shown = { 0 };
++    TraceState state;
++    bool made, device, claimed, popup_made = false;
++    int popup_x = 0, popup_y = 0;
++    int result = TraceStart();
++
++    if (result != TEST_COMPLETED) {
++        return result < 0 ? TEST_COMPLETED : result;
++    }
++    SDL_zero(state);
++
++    CreateTestWindow(&tw);
++    made = tw.window != NULL;
++    device = tw.device != NULL;
++    claimed = tw.claimed;
++    SDL_zero(parent_ids);
++    SDL_zero(popup_ids);
++    if (claimed) {
++        GetIds(tw.window, &parent_ids);
++        TakeCheckpoint(tw.window, "parent", &parent);
++
++        /* A tooltip: an xdg_popup without a grab, which needs no seat. */
++        popup = SDL_CreatePopupWindow(tw.window, 50, 60, 100, 40, SDL_WINDOW_TOOLTIP);
++        popup_made = popup != NULL;
++        if (popup) {
++            Settle(tw.device, tw.window);
++            GetIds(popup, &popup_ids);
++            SDL_GetWindowPosition(popup, &popup_x, &popup_y);
++            TakeCheckpoint(popup, "popup", &shown);
++            SDL_DestroyWindow(popup);
++        }
++    }
++    DestroyTestWindow(&tw);
++    TraceStop();
++
++    if (CheckTestWindow(made, device, claimed, &parent_ids)) {
++        const int frame_w = parent.w - INSET_LEFT - INSET_RIGHT;
++        const int frame_h = parent.h - INSET_TOP - INSET_BOTTOM;
++
++        CheckPublishedInsets(&parent, insets_asked);
++        SDLTest_AssertCheck(popup_made, "Validate that the popup was made, got error: %s", popup_made ? "none" : SDL_GetError());
++        SDLTest_AssertCheck(!popup_made || (popup_ids.popup != 0 && popup_ids.positioner != 0),
++                            "Validate that the popup is an xdg_popup with a positioner, got xdg_popup %" SDL_PRIu32 ", xdg_positioner %" SDL_PRIu32,
++                            popup_ids.popup, popup_ids.positioner);
++        if (popup_made && popup_ids.positioner && ParseAt(&shown, &popup_ids, &state)) {
++            SDLTest_AssertCheck(state.anchor_set && state.anchor.x == 0 && state.anchor.y == 0 && state.anchor.w == frame_w && state.anchor.h == frame_h,
++                                "%s: validate the anchor rectangle is the parent's frame, expected: (0, 0, %d, %d), got: %s(%d, %d, %d, %d)",
++                                shown.mark, frame_w, frame_h, state.anchor_set ? "" : "(never sent) ",
++                                state.anchor.x, state.anchor.y, state.anchor.w, state.anchor.h);
++            SDLTest_AssertCheck(state.offset_set && state.offset_x == 50 - INSET_LEFT && state.offset_y == 60 - INSET_TOP,
++                                "%s: validate the offset is from the parent's frame, expected: (%d, %d), got: %s(%d, %d)",
++                                shown.mark, 50 - INSET_LEFT, 60 - INSET_TOP, state.offset_set ? "" : "(never sent) ",
++                                state.offset_x, state.offset_y);
++            /* Back from the compositor, in the parent's coordinates again */
++            SDLTest_AssertCheck(popup_x == 50 && popup_y == 60,
++                                "%s: validate the popup's position, expected: (50, 60), got: (%d, %d)",
++                                shown.mark, popup_x, popup_y);
++        }
++    }
++    LogTrace(&popup_ids);
++    TraceFree();
++    return TEST_COMPLETED;
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * The insets are published from creation on: a window made hidden has them
++ * before it is ever shown, the ones it will float with.
++ */
++static int SDLCALL wayland_frameInsetsBeforeShow(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    SDL_PropertiesID props;
++    SDL_Window *window;
++    Checkpoint created = { 0 };
++    int result = TraceStart();
++
++    if (result != TEST_COMPLETED) {
++        return result < 0 ? TEST_COMPLETED : result;
++    }
++
++    props = TestWindowProperties(-1);
++    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
++    window = SDL_CreateWindowWithProperties(props);
++    SDL_DestroyProperties(props);
++    if (window) {
++        TakeCheckpoint(window, "created hidden", &created);
++        SDL_DestroyWindow(window);
++    }
++    TraceStop();
++
++    if (SDLTest_AssertCheck(window != NULL, "Validate that the window was made")) {
++        SDLTest_AssertCheck((created.flags & SDL_WINDOW_HIDDEN) != 0, "%s: validate that the window is hidden", created.mark);
++        CheckPublishedInsets(&created, insets_asked);
++    }
++    TraceFree();
++    return TEST_COMPLETED;
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * A window SDL makes again keeps its insets. SDL_RecreateWindow destroys the
++ * native window and makes it again with no creation properties; attaching an
++ * OpenGL renderer to a shown window made without SDL_WINDOW_OPENGL does so.
++ * After that the new objects' window geometry, input region and opaque region
++ * are the frame's again.
++ */
++static int SDLCALL wayland_frameInsetsRecreated(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    TestWindow tw;
++    SDL_Renderer *renderer = NULL;
++    TraceIds ids, recreated_ids;
++    Checkpoint shown = { 0 }, recreated = { 0 };
++    TraceState state;
++    bool made, device, claimed;
++    char renderer_error[256] = "none";
++    int result = TraceStart();
++
++    if (result != TEST_COMPLETED) {
++        return result < 0 ? TEST_COMPLETED : result;
++    }
++    SDL_zero(state);
++
++    CreateTestWindow(&tw);
++    made = tw.window != NULL;
++    device = tw.device != NULL;
++    claimed = tw.claimed;
++    SDL_zero(ids);
++    SDL_zero(recreated_ids);
++    if (claimed) {
++        int i;
++
++        GetIds(tw.window, &ids);
++        TakeCheckpoint(tw.window, "shown", &shown);
++
++        ReleaseTestWindowDevice(&tw);
++        TraceMark("recreating");
++        renderer = SDL_CreateRenderer(tw.window, "opengles2");
++        if (!renderer) {
++            SDL_strlcpy(renderer_error, SDL_GetError(), sizeof(renderer_error));
++        }
++        if (renderer) {
++            for (i = 0; i < 10; ++i) {
++                SDL_Event event;
++                while (SDL_PollEvent(&event)) {
++                }
++                SDL_SetRenderDrawColor(renderer, 51, 76, 102, 255);
++                SDL_RenderClear(renderer);
++                SDL_RenderPresent(renderer);
++                SDL_Delay(5);
++            }
++            SDL_SyncWindow(tw.window);
++            GetIds(tw.window, &recreated_ids);
++            TakeCheckpoint(tw.window, "recreated", &recreated);
++            SDL_DestroyRenderer(renderer);
++        }
++    }
++    DestroyTestWindow(&tw);
++    TraceStop();
++
++    if (CheckTestWindow(made, device, claimed, &ids)) {
++        if (ParseAt(&shown, &ids, &state)) {
++            CheckFloatingFrame(&shown, &state);
++        }
++
++        SDLTest_AssertCheck(renderer != NULL, "Validate that an OpenGL ES renderer was made for the window, got error: %s", renderer_error);
++        if (renderer) {
++            SDLTest_AssertCheck((recreated.flags & SDL_WINDOW_OPENGL) && !(recreated.flags & SDL_WINDOW_VULKAN),
++                                "%s: validate that the window was made again for OpenGL, got flags: 0x%" SDL_PRIx64,
++                                recreated.mark, (Uint64)recreated.flags);
++            SDLTest_AssertCheck(recreated_ids.xdg_surface != 0 && recreated_ids.toplevel != 0,
++                                "%s: validate that the window made again is an xdg-shell toplevel, got xdg_surface %" SDL_PRIu32 ", xdg_toplevel %" SDL_PRIu32,
++                                recreated.mark, recreated_ids.xdg_surface, recreated_ids.toplevel);
++            SDLTest_AssertCheck(recreated.w == SURFACE_W && recreated.h == SURFACE_H,
++                                "%s: validate the surface is the size made, expected: %dx%d, got: %dx%d",
++                                recreated.mark, SURFACE_W, SURFACE_H, recreated.w, recreated.h);
++            if (ParseSince("recreating", &recreated, &recreated_ids, &state)) {
++                CheckFloatingFrame(&recreated, &state);
++            }
++        }
++    }
++    LogTrace(&recreated_ids);
++    TraceFree();
++    return TEST_COMPLETED;
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * A window hidden and shown again gets a new xdg_surface, whose window
++ * geometry must be the frame again although the size and the insets have not
++ * changed.
++ */
++static int SDLCALL wayland_frameInsetsShownAgain(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    TestWindow tw;
++    TraceIds ids, again_ids;
++    Checkpoint shown = { 0 }, again = { 0 };
++    TraceState state;
++    bool made, device, claimed, reclaimed = false;
++    int result = TraceStart();
++
++    if (result != TEST_COMPLETED) {
++        return result < 0 ? TEST_COMPLETED : result;
++    }
++    SDL_zero(state);
++
++    CreateTestWindow(&tw);
++    made = tw.window != NULL;
++    device = tw.device != NULL;
++    claimed = tw.claimed;
++    SDL_zero(ids);
++    SDL_zero(again_ids);
++    if (claimed) {
++        SDL_Event event;
++
++        GetIds(tw.window, &ids);
++        TakeCheckpoint(tw.window, "shown", &shown);
++
++        /* Out of the GPU device while hidden: a swapchain waiting on frames of an unmapped
++         * surface can block for good. */
++        SDL_WaitForGPUIdle(tw.device);
++        SDL_ReleaseWindowFromGPUDevice(tw.device, tw.window);
++        tw.claimed = false;
++
++        SDL_HideWindow(tw.window);
++        SDL_SyncWindow(tw.window);
++        while (SDL_PollEvent(&event)) {
++        }
++        TraceMark("hidden");
++
++        SDL_ShowWindow(tw.window);
++        TraceMark("showing again");
++        tw.claimed = SDL_ClaimWindowForGPUDevice(tw.device, tw.window);
++        reclaimed = tw.claimed;
++        if (reclaimed) {
++            Settle(tw.device, tw.window);
++        }
++        GetIds(tw.window, &again_ids);
++        TakeCheckpoint(tw.window, "shown again", &again);
++    }
++    DestroyTestWindow(&tw);
++    TraceStop();
++
++    if (CheckTestWindow(made, device, claimed, &ids)) {
++        if (ParseAt(&shown, &ids, &state)) {
++            CheckFloatingFrame(&shown, &state);
++        }
++        SDLTest_AssertCheck(reclaimed, "%s: validate that the window was claimed for the GPU device again", again.mark);
++        SDLTest_AssertCheck((again.flags & SDL_WINDOW_HIDDEN) == 0, "%s: validate that the window is shown", again.mark);
++        SDLTest_AssertCheck(again_ids.xdg_surface != 0 && again_ids.toplevel != 0,
++                            "%s: validate that the window is an xdg-shell toplevel again, got xdg_surface %" SDL_PRIu32 ", xdg_toplevel %" SDL_PRIu32,
++                            again.mark, again_ids.xdg_surface, again_ids.toplevel);
++        if (again_ids.xdg_surface && ParseSince("hidden", &again, &again_ids, &state)) {
++            CheckFloatingFrame(&again, &state);
++        }
++    }
++    LogTrace(&again_ids);
++    TraceFree();
++    return TEST_COMPLETED;
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INPUT_MARGIN_NUMBER widens the input
++ * band past the default 8, up to each inset.
++ */
++static int SDLCALL wayland_frameInsetsInputMarginWide(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    return frameInsetsInputMargin(12);
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/**
++ * An input margin of 0: only the frame takes input.
++ */
++static int SDLCALL wayland_frameInsetsInputMarginNone(void *arg)
++{
++#ifdef FIZZY_WAYLAND_TRACE
++    return frameInsetsInputMargin(0);
++#else
++    SDLTest_Log("Wayland only, skipping test");
++    return TEST_SKIPPED;
++#endif
++}
++
++/* ================= Test References ================== */
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsFloating = {
++    wayland_frameInsetsFloating, "wayland_frameInsetsFloating", "A floating window's geometry, input region, published insets and min/max sizes are its frame's", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsMaximized = {
++    wayland_frameInsetsMaximized, "wayland_frameInsetsMaximized", "A maximized window has no insets, and gets them back when restored", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsFullscreen = {
++    wayland_frameInsetsFullscreen, "wayland_frameInsetsFullscreen", "A fullscreen window has no insets, and gets them back when windowed", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsPopup = {
++    wayland_frameInsetsPopup, "wayland_frameInsetsPopup", "A popup is anchored to its parent's frame", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsBeforeShow = {
++    wayland_frameInsetsBeforeShow, "wayland_frameInsetsBeforeShow", "A window's insets are published before it is shown", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsRecreated = {
++    wayland_frameInsetsRecreated, "wayland_frameInsetsRecreated", "A window SDL makes again (SDL_RecreateWindow) keeps its insets", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsShownAgain = {
++    wayland_frameInsetsShownAgain, "wayland_frameInsetsShownAgain", "A window hidden and shown again is framed again", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsInputMarginWide = {
++    wayland_frameInsetsInputMarginWide, "wayland_frameInsetsInputMarginWide", "The input band follows a wider input margin", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference waylandTestFrameInsetsInputMarginNone = {
++    wayland_frameInsetsInputMarginNone, "wayland_frameInsetsInputMarginNone", "With an input margin of 0 only the frame takes input", TEST_ENABLED
++};
++
++static const SDLTest_TestCaseReference *waylandTests[] = {
++    &waylandTestFrameInsetsFloating,
++    &waylandTestFrameInsetsMaximized,
++    &waylandTestFrameInsetsFullscreen,
++    &waylandTestFrameInsetsPopup,
++    &waylandTestFrameInsetsBeforeShow,
++    &waylandTestFrameInsetsRecreated,
++    &waylandTestFrameInsetsShownAgain,
++    &waylandTestFrameInsetsInputMarginWide,
++    &waylandTestFrameInsetsInputMarginNone,
++    NULL
++};
++
++/* Wayland test suite (global) */
++SDLTest_TestSuiteReference fizzyWaylandTestSuite = {
++    "FizzyWayland",
++    NULL,
++    waylandTests,
++    NULL
++};
+diff --git a/test/testfizzy.c b/test/testfizzy.c
+index 411711d..6305356 100644
+--- a/test/testfizzy.c
++++ b/test/testfizzy.c
+@@ -24,16 +24,17 @@
+ 
+ static SDLTest_CommonState *state;
+ static SDLTest_TestSuiteRunner *runner;
+ 
+ /* All test suites */
+ static SDLTest_TestSuiteReference *testSuites[] = {
+     &fizzyGPUTestSuite,
+     &fizzyXkbTestSuite,
++    &fizzyWaylandTestSuite,
+     NULL
+ };
+ 
+ /* Call this instead of exit(), so we can clean up SDL: atexit() is evil. */
+ static void
+ quit(int rc)
+ {
+     SDLTest_DestroyTestSuiteRunner(runner);
