@@ -77,8 +77,11 @@ pub fn start(self: *PluginReloads, editor: *Editor, id: []const u8) void {
 }
 
 fn work(job: *Job) void {
+    var name_buf: [64]u8 = undefined;
+    const timed = fizzy.core.profile.span(std.fmt.bufPrint(&name_buf, "plugin open {s}", .{job.id}) catch "plugin open");
     // The worker's own allocator: `open` only needs a scratch path from it.
     job.opened = PluginLoader.open(std.heap.smp_allocator, job.path, job.id);
+    timed.end();
     job.opened_ns = std.Io.Clock.boot.now(dvui.io).nanoseconds;
     job.done.store(true, .release);
     // Wake the app: the swap happens on its next frame.

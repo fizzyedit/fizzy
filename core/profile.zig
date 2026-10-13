@@ -30,6 +30,9 @@ pub const Lookback = @import("profile/Lookback.zig");
 /// Why each frame happened: its events, the `dvui.refresh` calls before it by place, or something
 /// else (a timer, an animation), kept while the profiler records (`frameCauses`).
 pub const FrameCauses = @import("profile/FrameCauses.zig");
+/// Spans on any thread, each occurrence kept, while the profiler records (`span`, `spans`,
+/// `writeTrace`).
+pub const Spans = @import("profile/Spans.zig");
 
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
@@ -306,15 +309,15 @@ pub const Profiler = struct {
         if (t - self.win_start < window_ns) return;
 
         const frames: f64 = @floatFromInt(@max(self.win_frames, 1));
-        const span: f64 = @floatFromInt(t - self.win_start);
+        const elapsed: f64 = @floatFromInt(t - self.win_start);
         self.stats = .{
             .interval_ns = @as(f64, @floatFromInt(self.win_interval_ns)) / frames,
             .work_ns = @as(f64, @floatFromInt(self.win_work_ns)) / frames,
             .submit_ns = if (self.win_submit_frames == 0) null else @as(f64, @floatFromInt(self.win_submit_ns)) / @as(f64, @floatFromInt(self.win_submit_frames)),
             .worst_work_ns = self.win_worst_work_ns,
-            .fps = @as(f64, @floatFromInt(self.win_frames)) / (span / std.time.ns_per_s),
+            .fps = @as(f64, @floatFromInt(self.win_frames)) / (elapsed / std.time.ns_per_s),
             .frames = self.win_frames,
-            .inputs_per_s = @as(f64, @floatFromInt(self.win_inputs)) / (span / std.time.ns_per_s),
+            .inputs_per_s = @as(f64, @floatFromInt(self.win_inputs)) / (elapsed / std.time.ns_per_s),
         };
         if (host_lookback) |lb| lb.foldWindow(.{
             .end_ns = t,
@@ -358,12 +361,18 @@ var host_lookback: ?*Lookback = null;
 /// starts recording, so they say what happened while someone looked.
 var host_causes: ?*FrameCauses = null;
 var was_active = false;
+/// The host's spans, made like `host_lookback`.
+var host_spans: ?*Spans = null;
+/// The host's span for the frame in progress, so a trace shows the UI thread's frames beside the
+/// work on other threads.
+var frame_span: OpenSpan = .{};
 
 const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7970_7266); // "fizzyprf"
 const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
 const lookback_key = std.fmt.comptimePrint("_profiler_lookback{d}", .{Lookback.abi});
 const causes_key = std.fmt.comptimePrint("_profiler_causes{d}", .{FrameCauses.abi});
 const phases_key = std.fmt.comptimePrint("_profiler_phases{d}", .{Phases.abi});
+const spans_key = std.fmt.comptimePrint("_profiler_spans{d}", .{Spans.abi});
 
 /// The moments the app's start took, stamped by the app as it reaches them (`phase`): process
 /// entry, the window, the plugins, the window shown, the first frame; and, for an instance a
@@ -522,11 +531,46 @@ pub fn hostFrameBegin(prev_submit_ns: ?u64) void {
         dvui.dataSet(null, publish_id, causes_key, @as(usize, @intFromPtr(c)));
     }
     was_active = active;
+    if (host_spans == null and active) host_spans = Spans.create(std.heap.page_allocator) catch null;
+    if (host_spans) |sp| {
+        sp.on.store(active, .monotonic);
+        sp.ui_thread.store(Spans.threadId(), .monotonic);
+        Spans.image.store(@intFromPtr(sp), .release);
+        dvui.dataSet(null, publish_id, spans_key, @as(usize, @intFromPtr(sp)));
+    }
+    frame_span = span("frame");
 }
 
 /// Host only, at the end of every frame.
 pub fn hostFrameEnd() void {
     host_profiler.frameEnd();
+    frame_span.end();
+    frame_span = .{};
+}
+
+/// A plugin image, on the UI thread before it draws (`sdk.dvui_context.inject`): find the host's
+/// spans, so this image's threads record into them.
+pub fn adopt() void {
+    if (Spans.image.load(.monotonic) != 0) return;
+    if (dvui.current_window == null) return;
+    const addr = dvui.dataGet(null, publish_id, spans_key, usize) orelse return;
+    Spans.image.store(addr, .release);
+}
+
+/// Time from here to `end` as `name`, on any thread, each occurrence kept (`Spans.span`).
+pub const span = Spans.span;
+pub const OpenSpan = Spans.Open;
+/// The spans this image records into, from any thread (`Spans.current`).
+pub const spans = Spans.current;
+
+/// The kept spans that ended in the last `ms` milliseconds (all kept, for 0), as a Chrome trace:
+/// JSON that Perfetto (ui.perfetto.dev) and chrome://tracing open, one row a thread.
+pub fn writeTrace(w: *std.Io.Writer, ms: u32) (std.Io.Writer.Error || error{OutOfMemory})!void {
+    const sp = spans() orelse return w.writeAll("{\"traceEvents\":[]}\n");
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const since: i64 = if (ms == 0) std.math.minInt(i64) else Spans.now() - @as(i64, ms) * std.time.ns_per_ms;
+    try Spans.writeTrace(w, try sp.collect(arena.allocator(), since), sp.ui_thread.load(.monotonic));
 }
 
 /// An open scope; `end` it (deferred) where the timed code ends.
@@ -587,6 +631,9 @@ pub const ReportOptions = struct {
     causes: usize = 8,
     /// Also the app's start (`Phases`): when it reached each phase.
     startup: bool = false,
+    /// Also the kept spans (`span`), summed by name: at most this many names, the most total
+    /// time first; 0 leaves them out.
+    spans: usize = 0,
 };
 
 /// Each entry's own time in a frame whose times (`ns`, indexed as `Profiler.slice`) are given:
@@ -659,14 +706,30 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
         try c.write(w, "    ", opts.causes);
         try w.writeAll(",\n");
     };
+    if (opts.spans > 0) if (spans()) |sp| try writeSpans(sp, w, opts.spans);
     try w.writeAll("}\n");
+}
+
+/// The kept spans summed by name: how many, their total and longest, on how many threads.
+fn writeSpans(sp: *const Spans, w: *std.Io.Writer, top: usize) std.Io.Writer.Error!void {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const kept = sp.collect(arena.allocator(), std.math.minInt(i64)) catch return;
+    const sums = Spans.summarize(arena.allocator(), kept) catch return;
+    try w.writeAll("    .spans = .{\n");
+    for (sums[0..@min(sums.len, top)]) |x| {
+        try w.print("        .{{ .name = \"{f}\", .count = {d}, .total_ms = {d:.3}, .max_ms = {d:.3}, .threads = {d} }},\n", .{
+            std.zig.fmtString(x.name), x.count, millis(@floatFromInt(x.total_ns)), millis(@floatFromInt(x.max_ns)), x.threads,
+        });
+    }
+    try w.writeAll("    },\n");
 }
 
 /// The costliest scopes over `opts.over_ms`, by their own time per frame.
 fn writeOver(p: *const Profiler, lb: *const Lookback, w: *std.Io.Writer, opts: ReportOptions) std.Io.Writer.Error!void {
     var costs: [max_entries]Lookback.Cost = undefined;
     const n = p.count;
-    const span = lb.costs(opts.over_ms, costs[0..n]);
+    const covered = lb.costs(opts.over_ms, costs[0..n]);
     var order: [max_entries]u16 = undefined;
     for (order[0..n], 0..) |*o, i| o.* = @intCast(i);
     std.mem.sort(u16, order[0..n], costs[0..n], struct {
@@ -675,7 +738,7 @@ fn writeOver(p: *const Profiler, lb: *const Lookback, w: *std.Io.Writer, opts: R
         }
     }.lt);
     try w.print("    .over = .{{ .seconds = {d:.1}, .frames = {d}, .work_ms = {d:.3}, .worst_work_ms = {d:.3}, .top = .{{\n", .{
-        @as(f64, @floatFromInt(span.ns)) / std.time.ns_per_s, span.frames, millis(span.work_ns), millis(@floatFromInt(span.worst_work_ns)),
+        @as(f64, @floatFromInt(covered.ns)) / std.time.ns_per_s, covered.frames, millis(covered.work_ns), millis(@floatFromInt(covered.worst_work_ns)),
     });
     for (order[0..@min(n, opts.top)]) |i| {
         const c = costs[i];

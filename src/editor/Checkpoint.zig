@@ -19,6 +19,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const Editor = @import("Editor.zig");
 const KeptDocuments = @import("KeptDocuments.zig");
+const core = @import("core");
 
 /// The soonest a checkpoint follows the last one, after input.
 const after_input_ns: i96 = 3 * std.time.ns_per_s;
@@ -172,6 +173,8 @@ fn start(self: *Checkpoint, editor: *Editor) !void {
 /// The worker: the next generation, written in place.
 fn write(job: *Job) void {
     defer job.done.store(true, .release);
+    const timed = core.profile.span("checkpoint write");
+    defer timed.end();
     job.kept.saveGeneration(job.dir, job.generation) catch return;
     job.ok = true;
 }

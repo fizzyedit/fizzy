@@ -567,6 +567,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The profiler's lookback: 30 seconds of windows a reader can sum over, and the frames
         // that went over budget.
         .{ "fizzy-profile-lookback-tests", "core/profile/Lookback.zig" },
+        // Spans on any thread: kept whole while threads write at once, summed by name, and
+        // written as a Chrome trace that reads back as JSON.
+        .{ "fizzy-profile-spans-tests", "core/profile/Spans.zig" },
         .{ "fizzy-profile-causes-tests", "core/profile/FrameCauses.zig" },
         // The login-shell PATH cache: it owns its string whatever allocator the first caller
         // passed, and threads that ask at once resolve once. The shell spawn itself is not run.

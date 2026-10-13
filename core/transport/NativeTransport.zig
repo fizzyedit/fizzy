@@ -166,7 +166,12 @@ fn request(ptr: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request,
 }
 
 fn worker(job: *Job) void {
+    // By its host alone: a URL's path and query can carry tokens, and a trace is for sharing.
+    var name_buf: [64]u8 = undefined;
+    const host = if (std.Uri.parse(job.url)) |u| (if (u.host) |h| h.percent_encoded else "") else |_| "";
+    const timed = @import("../profile/Spans.zig").span(std.fmt.bufPrint(&name_buf, "http {t} {s}", .{ job.method, host }) catch "http");
     const result = perform(job);
+    timed.end();
     const self = job.owner;
     const wake = self.wake;
     self.mutex.lock();

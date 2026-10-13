@@ -35,6 +35,8 @@ pub fn inject(
         applyDragThreshold();
         // This image's dvui animates, or does not, as the host's does (`core.motion.publish`).
         @import("core").motion.apply();
+        // This image's threads record spans into the host's (`core.profile.span`).
+        @import("core").profile.adopt();
     }
 }
 

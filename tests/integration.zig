@@ -6730,6 +6730,19 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, profiled, ".over = .{ .seconds = ") != null);
         try std.testing.expect(std.mem.indexOf(u8, profiled, ".hitch_budget_ms = 0.000") != null);
         try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, profiled, ".ago_s = "));
+        // Spans: the UI thread's frames, each kept, and as a Chrome trace that reads back.
+        var with_spans: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer with_spans.deinit();
+        try fizzy.core.profile.report(fizzy.core.profile.host(), &with_spans.writer, .{ .spans = 4 });
+        try std.testing.expect(std.mem.indexOf(u8, with_spans.written(), ".spans = .{\n        .{ .name = \"frame\", .count = ") != null);
+        var trace: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer trace.deinit();
+        try fizzy.core.profile.writeTrace(&trace.writer, 0);
+        const parsed = try std.json.parseFromSlice(struct { traceEvents: []const struct { ph: []const u8, name: []const u8 } }, std.testing.allocator, trace.written(), .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        var frames_traced: usize = 0;
+        for (parsed.value.traceEvents) |e| frames_traced += @intFromBool(std.mem.eql(u8, e.ph, "X") and std.mem.eql(u8, e.name, "frame"));
+        try std.testing.expect(frames_traced > 10);
         try std.testing.expect(std.mem.indexOf(u8, profiled, ".frame = .{ .fps = ") != null);
         try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"fizzy\"") != null);
         // The plugins drawing the tour, each under its own name.

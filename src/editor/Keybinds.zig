@@ -174,6 +174,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.restart", .title = "Restart Fizzy", .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.toggleProfiler", .title = "Toggle Profiler", .bind = null, .run = cmdToggleProfiler, .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
 
 /// Demo automation (`Editor.Demo`): one command per bundled demo, and the transport for whichever
@@ -513,6 +514,42 @@ fn canRestart(_: *anyopaque) bool {
 
 fn cmdToggleProfiler(_: *anyopaque) anyerror!void {
     Editor.Profiler.toggle();
+}
+
+const TraceArgs = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "Where to write the trace (JSON). Empty writes it in the config folder's traces/, named by the time." }) = .init(""),
+    ms: sdk.Command.Arg(u32, .{ .description = "Only the spans that ended in the last this many milliseconds; 0 for every one kept." }) = .init(0),
+});
+
+/// The spans the profiler kept (`core.profile.span`: the UI thread's frames and work on other
+/// threads) as a Chrome trace that Perfetto (ui.perfetto.dev) opens. They are kept while the
+/// profiler records: its window open, or someone asked (`core.profile.want`).
+fn cmdWriteTrace(state: *anyopaque) anyerror!void {
+    _ = try writeTraceFile(editorFromState(state), "", 0);
+}
+
+fn cmdWriteTraceTo(state: *anyopaque, args: TraceArgs.Args, call: *sdk.Command.Call) anyerror!void {
+    const path = writeTraceFile(editorFromState(state), args.path, args.ms) catch |err| return call.fail("could not write the trace: {t}", .{err});
+    try call.returns(.{ .path = path });
+}
+
+/// Write the trace to `path`, or a new file under `<config>/traces/` when it is empty; the path
+/// written, in the frame's arena.
+fn writeTraceFile(editor: *Editor, path: []const u8, ms: u32) ![]const u8 {
+    // The web has no file to write it to; its spans are read through `core.profile.report`.
+    if (comptime is_web) return error.NoFileSystem;
+    const arena = dvui.currentWindow().arena();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try fizzy.core.profile.writeTrace(&out.writer, ms);
+    const cwd = std.Io.Dir.cwd();
+    const file = if (path.len > 0) path else blk: {
+        const dir = try std.fs.path.join(arena, &.{ editor.app.config_folder, "traces" });
+        try cwd.createDirPath(dvui.io, dir);
+        break :blk try std.fmt.allocPrint(arena, "{s}/trace-{d}.json", .{ dir, std.Io.Clock.real.now(dvui.io).toSeconds() });
+    };
+    try cwd.writeFile(dvui.io, .{ .sub_path = file, .data = out.written() });
+    dvui.log.info("trace written to {s}", .{file});
+    return file;
 }
 
 fn cmdReportBug(_: *anyopaque) anyerror!void {
