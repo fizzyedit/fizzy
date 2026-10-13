@@ -322,8 +322,14 @@ fn orderName(self: *Layout, r: *const Region) []const u8 {
 /// `items` with the views `State.order` names for `name` first, in that order, and the rest
 /// after in the order they came. An order never adds or drops a view — which views a place
 /// holds is its assignment's or its keywords' business.
+///
+/// A place keeps its order: the first time it shows a view its order does not name, the view is
+/// written down at the end. So a view keeps its slot through its plugin's reload, update or
+/// reinstall (which register it again, last), and across machines; an order is never shortened,
+/// so a plugin that is away (disabled, reloading) comes back where it was.
 fn ordered(self: *Layout, name: []const u8, items: []*Surface) []*Surface {
     if (name.len == 0) return items;
+    self.remember(name, items);
     const order = self.state.order(name) orelse return items;
     const out = self.arena.alloc(*Surface, items.len) catch return items;
     var n: usize = 0;
@@ -343,6 +349,28 @@ fn ordered(self: *Layout, name: []const u8, items: []*Surface) []*Surface {
         n += 1;
     }
     return out[0..n];
+}
+
+/// Write down any of `items` that `name`'s order does not name yet, after the ones it does.
+fn remember(self: *Layout, name: []const u8, items: []const *Surface) void {
+    const known = self.state.order(name) orelse &.{};
+    var missing: usize = 0;
+    for (items) |s| missing += @intFromBool(!containsId(known, s.id));
+    if (missing == 0) return;
+    const ids = self.arena.alloc([]const u8, known.len + missing) catch return;
+    @memcpy(ids[0..known.len], known);
+    var n = known.len;
+    for (items) |s| if (!containsId(known, s.id)) {
+        ids[n] = s.id;
+        n += 1;
+    };
+    self.state.setOrder(self.gpa, name, ids) catch return;
+    self.state.markDirty();
+}
+
+fn containsId(ids: []const []const u8, id: []const u8) bool {
+    for (ids) |x| if (std.mem.eql(u8, x, id)) return true;
+    return false;
 }
 
 fn matchingWith(self: *Layout, keywords: []const []const u8, assigned: ?[]const []const u8, require_fit: bool, order_name: []const u8) []const *Surface {

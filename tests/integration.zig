@@ -1763,6 +1763,72 @@ test "a command dispatched between frames can still find and shut a region" {
     try std.testing.expect(!region.isClosed());
 }
 
+// -- a place keeps its order ------------------------------------------------------------------------
+
+// Registration order is load order, and a plugin's reload, update or reinstall registers its views
+// again, last. A place writes its order down as it shows views, so the views it has shown keep
+// their slots: a plugin's tools second in the sidebar stay second through its reload, and a new
+// plugin's views arrive at the end.
+test "a place keeps its views' order through a plugin's reload" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+
+    const sidebar = fizzy.sdk.keywords.ide.sidebar;
+    editor.app.layout.registerRegion(editor.app.gpa, .{ .name = "Sidebar", .keywords = sidebar, .id = .extendId(null, @src(), 1), .default_extent = 260 });
+    editor.app.layout.publishRegions();
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    const vtable: fizzy.sdk.Plugin.VTable = .{};
+    var files = fizzy.sdk.Plugin{ .state = undefined, .vtable = &vtable, .id = "files", .display_name = "Files" };
+    var tools = fizzy.sdk.Plugin{ .state = undefined, .vtable = &vtable, .id = "tools", .display_name = "Tools" };
+    var late = fizzy.sdk.Plugin{ .state = undefined, .vtable = &vtable, .id = "late", .display_name = "Late" };
+    const host = &editor.app.host;
+    try host.registerPlugin(&files);
+    try host.registerSurface(.{ .id = "files.view", .owner = &files, .title = "Files", .keywords = sidebar, .draw = draw });
+    try host.registerPlugin(&tools);
+    try host.registerSurface(.{ .id = "tools.view", .owner = &tools, .title = "Tools", .keywords = sidebar, .draw = draw });
+
+    var layout = fizzy.Editor.Layout.init(host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ids = struct {
+        fn of(l: *fizzy.Editor.Layout, k: []const []const u8) [3][]const u8 {
+            var out: [3][]const u8 = .{ "", "", "" };
+            for (l.matching(k), 0..) |s, i| if (i < 3) {
+                out[i] = s.id;
+            };
+            return out;
+        }
+    }.of;
+    try std.testing.expectEqualDeep([3][]const u8{ "files.view", "tools.view", "" }, ids(&layout, sidebar));
+    // Written down as it was shown, to be saved with the layout.
+    try std.testing.expectEqual(@as(usize, 2), editor.app.layout.order("Sidebar").?.len);
+
+    // Files reloads: gone for a moment, then registered again, after Tools. Still first.
+    host.unregisterPlugin(&files);
+    try std.testing.expectEqualDeep([3][]const u8{ "tools.view", "", "" }, ids(&layout, sidebar));
+    try host.registerPlugin(&files);
+    try host.registerSurface(.{ .id = "files.view", .owner = &files, .title = "Files", .keywords = sidebar, .draw = draw });
+    try std.testing.expectEqualDeep([3][]const u8{ "files.view", "tools.view", "" }, ids(&layout, sidebar));
+
+    // A plugin installed later arrives at the end.
+    try host.registerPlugin(&late);
+    try host.registerSurface(.{ .id = "late.view", .owner = &late, .title = "Late", .keywords = sidebar, .draw = draw });
+    try std.testing.expectEqualDeep([3][]const u8{ "files.view", "tools.view", "late.view" }, ids(&layout, sidebar));
+
+    host.unregisterPlugin(&late);
+    host.unregisterPlugin(&tools);
+    host.unregisterPlugin(&files);
+}
+
 // -- assigning surfaces to a region --------------------------------------------------------------
 
 // The payoff of keyword matching, and the reason free-form strings are safe here: a placement the

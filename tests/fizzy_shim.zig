@@ -26,6 +26,9 @@ pub const Ctx = struct {
         // host-owned list, so the host has to come down with the rest. Safe on the zeroed host
         // below: every registry in it is an empty `ArrayListUnmanaged`/`HashMapUnmanaged`.
         self.editor.app.host.deinit();
+        // A place writes its order down as it shows views (`Layout.ordered`), so any test that
+        // asked a place what it shows holds an order. Safe after a test freed them itself.
+        self.editor.app.layout.deinitAssignments(gpa);
         self.editor.app.arena.deinit();
         gpa.destroy(self.editor);
         gpa.destroy(self.app);

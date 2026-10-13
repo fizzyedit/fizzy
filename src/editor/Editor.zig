@@ -686,10 +686,28 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     // its slow threshold; this is the number to watch when "fizzy got slower to launch".
     const scan_start = std.Io.Clock.boot.now(dvui.io).nanoseconds;
 
+    // By id, not in the order the OS lists the folder (which differs between file systems): the
+    // same plugins load in the same order on every machine. Nothing a person sees depends on
+    // it (a place keeps its own order of views, `Layout.ordered`), but a run that can be
+    // repeated is one that can be debugged.
+    var ids: std.ArrayListUnmanaged([]u8) = .empty;
+    defer {
+        for (ids.items) |id| editor.app.gpa.free(id);
+        ids.deinit(editor.app.gpa);
+    }
     var iter = dir.iterate();
     while (iter.next(dvui.io) catch null) |entry| {
         if (entry.kind != .directory) continue;
-        const plugin_id = entry.name;
+        const id = editor.app.gpa.dupe(u8, entry.name) catch continue;
+        ids.append(editor.app.gpa, id) catch editor.app.gpa.free(id);
+    }
+    std.mem.sort([]u8, ids.items, {}, struct {
+        fn lt(_: void, a: []u8, b: []u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+
+    for (ids.items) |plugin_id| {
         // Skip `.load-tmp` and any other dotfile/directory — not a plugin id.
         if (plugin_id.len == 0 or plugin_id[0] == '.') continue;
 

@@ -831,9 +831,12 @@ pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {
         gpa.free(e.value_ptr.*);
     }
     self.assignments.deinit(gpa);
+    self.assignments = .empty;
     deinitShows(self, gpa);
+    self.shows = .empty;
     forgetOrders(self, gpa);
     self.orders.deinit(gpa);
+    self.orders = .empty;
 }
 
 fn forgetShows(self: *State, gpa: std.mem.Allocator) void {
