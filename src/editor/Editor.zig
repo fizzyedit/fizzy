@@ -4291,8 +4291,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // or a live tape's pointer.
     @import("app").automation.overlay.draw(&editor.demo.player);
     @import("app").automation.overlay.drawLive(&editor.demo.live);
-    // A snapshot asked for is written out now: everything in the frame has drawn.
-    editor.demo.snapshot.endFrame();
+    // A snapshot asked for is written out at the very end of the frame (`Entry.frameOnce`), once
+    // the dialogs popped out into windows of their own have drawn too (`Popout.endFrame`).
 
     // Every widget has drawn by now, so this is the frame's final answer about who holds
     // keyboard focus. Read next frame by the clipboard commands.
