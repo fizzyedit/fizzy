@@ -8,6 +8,7 @@ const workbench_plugin = plugins.workbench;
 const text_plugin = plugins.text;
 const image_plugin = plugins.image;
 const archive_plugin = plugins.archive;
+const devtools_plugin = plugins.devtools;
 const markdown_plugin = plugins.markdown;
 
 pub fn addSteps(
@@ -200,6 +201,11 @@ pub fn addSteps(
         .core = core_module_web,
         .sdk = sdk_module_web,
     }, web_exe.root_module);
+    const devtools_module_web = devtools_plugin.addStaticModule(b, web_target, optimize, .{
+        .dvui = dvui_web,
+        .core = core_module_web,
+        .sdk = sdk_module_web,
+    }, web_exe.root_module);
     var bundled_list: std.ArrayList(sdk.BundledPlugin) = .empty;
     bundled_list.appendSlice(b.allocator, &.{
         .{ .name = "workbench", .module = workbench_module_web },
@@ -207,6 +213,7 @@ pub fn addSteps(
         .{ .name = "image", .module = image_module_web },
         .{ .name = "archive", .module = archive_module_web },
         .{ .name = "markdown", .module = markdown_module_web },
+        .{ .name = "devtools", .module = devtools_module_web },
     }) catch @panic("OOM");
     // Out-of-tree plugins the web build links in: the application's own list (`buildApp`),
     // whose modules were made for the native target and are re-homed here, and the named

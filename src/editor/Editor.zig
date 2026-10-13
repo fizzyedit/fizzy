@@ -93,7 +93,6 @@ const AppInfo = @import("app").AppInfo;
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
 pub const sdk = fizzy.sdk;
-pub const Profiler = @import("Profiler.zig");
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
@@ -129,6 +128,8 @@ demo: Demo = .detached,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
+/// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
+black_box: @import("app").automation.BlackBox = .{},
 /// The documents a restart kept (`KeptDocuments.loadSession`), until the workbench has reopened
 /// last session's tabs: each one it asks for opens from here (`openPath`).
 session: ?KeptDocuments = null,
@@ -2085,6 +2086,18 @@ pub fn postInit(editor: *Editor) !void {
         break :blk &frozen;
     };
 
+    // Fizzy built-in: Output (owner = null; not a plugin). `persistent` keeps it visible
+    // even with no document open, since it's a diagnostic view, not a per-file one. Before the
+    // plugins, so it is the bottom panel's first view and a plugin's (the dashboard, a terminal)
+    // comes after it: a region shows its first view until someone picks another.
+    try editor.app.host.registerSurface(.{
+        .id = "fizzy.output",
+        .title = "Output",
+        .keywords = sdk.keywords.ide.panel,
+        .persistent = true,
+        .draw = OutputPanel.draw,
+    });
+
     inline for (bundled_plugins) |m| {
         const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;
         if (App.bundledDylibEnabled(editor.app.gpa, m.plugin_id)) {
@@ -2127,16 +2140,6 @@ pub fn postInit(editor: *Editor) !void {
         .title = "Settings",
         .keywords = sdk.keywords.ide.sidebar,
         .draw = drawSettingsPane,
-    });
-
-    // Fizzy built-in: Output (owner = null; not a plugin). `persistent` keeps it visible
-    // even with no document open, since it's a diagnostic view, not a per-file one.
-    try editor.app.host.registerSurface(.{
-        .id = "fizzy.output",
-        .title = "Output",
-        .keywords = sdk.keywords.ide.panel,
-        .persistent = true,
-        .draw = OutputPanel.draw,
     });
 
     // Menu bar contributions (non-macOS in-app bar). The File/Edit draw bodies still live
@@ -3352,6 +3355,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_glass = parsed.native_glass;
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
+    editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
@@ -4276,8 +4280,6 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // look at demo() for examples of dvui widgets, shows in a floating window
     if (comptime dvui_demo) dvui.Examples.demo(.full);
 
-    // The profiler window, when open ("Toggle Profiler").
-    Profiler.draw();
 
     // Render any save-complete toasts in the same centered, content-fill-styled card system.
     // The dvui toast queue holds them with a 2.5s timeout; each toast's display function fades
@@ -5186,7 +5188,7 @@ fn driveHandover(editor: *Editor) void {
             dvui.log.err("restart: the new instance did not come up; carrying on in this one", .{});
             if (KeptDocuments.sessionDir(editor.app.gpa, editor.app.config_folder)) |dir| {
                 defer editor.app.gpa.free(dir);
-                std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+                SettingsWatcher.emptyStateFolder(dvui.io, dir);
             } else |_| {}
             dvui.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
         },
@@ -5206,7 +5208,7 @@ fn keepSessionForRestart(editor: *Editor) bool {
     defer editor.app.gpa.free(dir);
     kept.save(dir) catch |err| {
         dvui.log.warn("restart: could not write the session ({t}); asking about unsaved changes", .{err});
-        std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+        SettingsWatcher.emptyStateFolder(dvui.io, dir);
         return false;
     };
     return true;
@@ -6019,6 +6021,7 @@ pub fn deinit(editor: *Editor) !void {
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
+    editor.black_box.deinit(editor.app.gpa);
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;

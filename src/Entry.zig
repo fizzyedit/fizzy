@@ -505,6 +505,13 @@ fn frameOnce() !dvui.App.Result {
     // its input after the real input, takes the real input it owns, and says whether this run is
     // seen (see `app.automation.Player.frame`).
     fizzy.editor().demo.frame();
+    // Then the black box keeps the frame's input, the player's included: exactly what the
+    // widgets below will see.
+    {
+        const editor = fizzy.editor();
+        editor.black_box.on = editor.app.settings.black_box;
+        editor.black_box.record(editor.app.gpa);
+    }
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);

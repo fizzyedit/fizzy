@@ -78,10 +78,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The Zig cache as in ci.yml's test job: a fixed key, one cold build saved once, a pull
+      # request falling back to main's. setup-zig's own cache saved a new copy every run.
+      - name: Zig cache key
+        id: zig-cache-key
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-web-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=${prefix}${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-          cache-key: ${{ hashFiles('**/build.zig.zon') }}
+          use-cache: false
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
       # As in ci.yml: leave setup-zig's cache dirs alone, pre-fetch in a retry loop, and retry
       # the build itself only on a fetch failure (a lazy dependency is fetched by the build).
       - name: Pre-create Zig cache tmp/
@@ -99,6 +114,13 @@ jobs:
           storage=fizzy
           if [ "$CHANNEL" = preview ]; then storage=fizzy-testapp; fi
           bash scripts/ci-retry.sh zig build web -Doptimize=ReleaseSmall -Dweb-storage="$storage"
+
+      - name: Save Zig cache
+        if: success() && steps.zig-cache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
 
       # What was built, beside it: fizzyed.it/testapp/build.json says which commit is up.
       - name: Note the build

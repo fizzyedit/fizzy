@@ -4571,6 +4571,7 @@ test "motion: every level arrives on time, and passes through without a kink" {
 
 const automation = @import("app").automation;
 const ExecutableWatcher = @import("app").watch.ExecutableWatcher;
+const SettingsWatcher = @import("app").watch.SettingsWatcher;
 
 const DemoStage = struct {
     keyframes: usize = 0,
@@ -6853,6 +6854,59 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // The dashboard (`devtools`): Show Profiler reveals it in the bottom panel, where it records
+    // while drawn, and `devtools.stats` answers the plugins and the profiler's report as ZON.
+    {
+        const host = &editor.app.host;
+        try std.testing.expect(host.callCommand("devtools.show", "", host.arena()) == .ok);
+        // A few frames, not a settle: a live dashboard keeps asking for them.
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqualStrings("devtools.dashboard", host.selectionFor(sdk.keywords.ide.panel) orelse "");
+        try std.testing.expect((fizzy.core.profile.current() orelse return error.TestUnexpectedResult).enabled);
+        const zon = switch (host.callCommand("devtools.stats", ".{ .hitches = 1 }", host.arena())) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => return error.TestUnexpectedResult,
+        };
+        const Stats = struct {
+            plugins: []const struct { id: []const u8, link: sdk.services.plugins.Api.Link },
+            // The report as the profiler has it; its averages fill in once a half-second window
+            // has passed on screen, which a few test frames are not.
+            profile: struct { frame: struct { fps: f64 } },
+        };
+        const stats = try std.zon.parse.fromSliceAlloc(Stats, host.arena(), try host.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+        try std.testing.expect(for (stats.plugins) |pl| {
+            if (std.mem.eql(u8, pl.id, "devtools")) break pl.link == .bundled;
+        } else false);
+        // Off screen again, it stops recording the frame after.
+        _ = host.revealSurface("fizzy.output");
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!(fizzy.core.profile.current() orelse return error.TestUnexpectedResult).enabled);
+    }
+
+    // The black box (`fizzy.capture`): the last frames' input written out exactly, and read back.
+    {
+        const host = &editor.app.host;
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 7, .y = 11 } });
+        _ = try dvui.testing.step(headlessFrame);
+        const zon = switch (host.callCommand("fizzy.capture", ".{ .seconds = 60, .why = \"test\" }", host.arena())) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => return error.TestUnexpectedResult,
+        };
+        const Written = struct { path: []const u8, frames: u64 };
+        const written = try std.zon.parse.fromSliceAlloc(Written, host.arena(), try host.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+        try std.testing.expect(written.frames > 0);
+        const input_path = try std.fs.path.join(host.arena(), &.{ written.path, "input.bin" });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, input_path, host.arena(), .unlimited);
+        const stretch = try app.automation.events.Ring.read(bytes);
+        try std.testing.expectEqual(written.frames, stretch.frames.len);
+        try std.testing.expect(for (stretch.records) |e| {
+            if (e.kind == .motion and e.x == 7 and e.y == 11) break true;
+        } else false);
+        // And what the capture says about itself.
+        const meta = try std.Io.Dir.cwd().readFileAlloc(dvui.io, try std.fs.path.join(host.arena(), &.{ written.path, "meta.zon" }), host.arena(), .unlimited);
+        try std.testing.expect(std.mem.indexOf(u8, meta, ".why = \"test\"") != null);
+    }
+
     // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that
     // fails is reported without making a running plugin look broken.
     {
@@ -6943,7 +6997,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.docFromPath(path) == null);
 
         editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
-        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
         _ = try editor.app.host.openFile(.{ .path = path, .grouping = grouping });
         const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
         try std.testing.expect(after.owner.isDirty(after));
@@ -6982,13 +7036,13 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(recovered.docs.items.len > 0);
         try std.testing.expect(recovered.docs.items[0].state != null);
         recovered.deinit();
-        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
         try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
 
         // Cut off before its first `session.zon`: nothing read, and nothing left.
-        try cwd.createDirPath(dvui.io, dir);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "checkpoint/1-0.state", .data = "cut off" });
         try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
-        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
 
         // A restart's session found: the checkpoint is older, and goes unread.
         {
@@ -6997,10 +7051,20 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try kept.saveGeneration(dir, 1);
         }
         try std.testing.expect(Checkpoint.recover(gpa, config, true) == null);
-        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
     }
 
     try editor.deinit();
+}
+
+/// A state folder read once (a restart's session, a checkpoint): still there, with nothing in it.
+/// It is emptied rather than removed, since the settings watcher may be watching it
+/// (`SettingsWatcher.emptyStateFolder`).
+fn expectEmptyFolder(path: []const u8) !void {
+    var d = try std.Io.Dir.cwd().openDir(dvui.io, path, .{ .iterate = true });
+    defer d.close(dvui.io);
+    var it = d.iterate();
+    try std.testing.expect(try it.next(dvui.io) == null);
 }
 
 // ── The app's own executable ────────────────────────────────────────────────────────────────────
@@ -7034,6 +7098,52 @@ test "executable watcher: a rebuild is a replaced executable that has held still
     try std.testing.expect(!w.tick()); // settling
     w.pending_ns -= ExecutableWatcher.settle_ns;
     try std.testing.expect(w.tick());
+}
+
+// `SettingsWatcher` over the config folder while the app keeps its own state beside the settings:
+// a crash checkpoint, a restart's session. On Linux the watch is recursive by hand (nightwatch adds
+// an inotify watch for each folder it sees appear, on its own thread), so a folder made and
+// removed before that thread gets to it logs an error. The app's state folders are emptied, never
+// removed: none of them can vanish under it, however fast the writes come.
+test "settings watcher: the app's state folders come and go under it without an error" {
+    if (comptime !SettingsWatcher.have_impl) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const config = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+
+    var w = try SettingsWatcher.init(gpa, config);
+    try w.start();
+    defer w.stop();
+
+    const Checkpoint = fizzy.Editor.Checkpoint;
+    const KeptDocuments = fizzy.Editor.KeptDocuments;
+    const checkpoint = try Checkpoint.dir(gpa, config);
+    defer gpa.free(checkpoint);
+    const session = try KeptDocuments.sessionDir(gpa, config);
+    defer gpa.free(session);
+    var kept: KeptDocuments = .{ .gpa = gpa };
+    defer kept.deinit();
+    for (0..2000) |_| {
+        // A checkpoint written and recovered, one cut off before its `session.zon`, and one a
+        // restart's session supersedes: each the first thing the next launch reads.
+        try kept.saveGeneration(checkpoint, 1);
+        try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "checkpoint/1-0.state", .data = "cut off" });
+        try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
+        try kept.saveGeneration(checkpoint, 2);
+        try std.testing.expect(Checkpoint.recover(gpa, config, true) == null);
+        try expectEmptyFolder(checkpoint);
+        // A restart's session, written and read once.
+        try kept.save(session);
+        var loaded = KeptDocuments.loadSession(gpa, session) orelse return error.TestUnexpectedResult;
+        loaded.deinit();
+        try expectEmptyFolder(session);
+    }
 }
 
 // ── The automation service ──────────────────────────────────────────────────────────────────────

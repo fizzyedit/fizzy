@@ -1,0 +1,8 @@
+.{
+    .id = "devtools",
+    .name = "Devtools",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+    .description = "Where the app's time goes: frames, plugins, the costliest scopes and the frames over budget, live, and as ZON for an agent.",
+    .tags = .{ "profiler", "development" },
+}

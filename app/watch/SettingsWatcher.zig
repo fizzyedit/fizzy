@@ -119,7 +119,24 @@ fn classify(config_folder: []const u8, path: []const u8) Kind {
 }
 
 /// Top-level folders of the config folder that hold the app's running state, not settings.
+/// Cleared with `emptyStateFolder`, never removed.
 const state_folders = [_][]const u8{ "checkpoint", "checkpoint.new", "session", "handover" };
+
+/// Clear one of the app's state folders: what is in it goes, the folder stays. On Linux nightwatch
+/// watches a tree by adding a watch for each folder it sees appear, on its own thread, and logs an
+/// error when the folder is gone by then (inotify's NOENT), with no way to keep a folder out of
+/// the watch. So a state folder, once made, is never removed: whatever runs on this profile may be
+/// watching it, this instance or the one a restart hands over to. Only files come and go in it.
+pub fn emptyStateFolder(io: std.Io, path: []const u8) void {
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| switch (entry.kind) {
+        // Not one the app makes; if a person did, it was there to be watched long before now.
+        .directory => dir.deleteTree(io, entry.name) catch {},
+        else => dir.deleteFile(io, entry.name) catch {},
+    };
+}
 
 test classify {
     const ext = switch (builtin.os.tag) {
