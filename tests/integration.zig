@@ -6951,6 +6951,22 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.startsWith(u8, (try read(host, notes_args)).text, "# Notes"));
         try std.testing.expect(host.callCommand("text.read", ".{ .path = \"/not/open.txt\" }", host.arena()) == .failed);
 
+        // A reveal (go to definition, a backlink): the owner's `text.goToLine`, into a document
+        // behind the one in front, which comes to the front with its caret there.
+        try std.testing.expect(try editor.revealPosition(notes, 2, 3, false));
+        try dvui.testing.settle(headlessFrame);
+        {
+            const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(notes, front.owner.documentPath(front));
+            const Caret = struct { caret: struct { line: u32, column: u32 } };
+            const out = host.callCommand("text.read", notes_args, host.arena()).ok.?;
+            const at = try std.zon.parse.fromSliceAlloc(Caret, host.arena(), try host.arena().dupeZ(u8, out), null, .{ .ignore_unknown_fields = true });
+            try std.testing.expectEqual(@as(u32, 3), at.caret.line);
+            try std.testing.expectEqual(@as(u32, 4), at.caret.column);
+        }
+        try std.testing.expect(try editor.revealPosition(main_zig, 0, 0, false));
+        try dvui.testing.settle(headlessFrame);
+
         // A write changes only what differs, as one edit, and one undo puts back exactly that.
         const write_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{main_zig});
         defer gpa.free(write_args);

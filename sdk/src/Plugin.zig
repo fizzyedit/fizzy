@@ -81,19 +81,6 @@ pub const SaveQuestion = struct {
     instead: []const u8 = "",
 };
 
-/// One thing a plugin can create from the New File flow, when it can create more than one.
-/// The host shows these instead of the plugin itself — `title` is what the user reads, `id` is
-/// what comes back to `requestNewDocumentDialog` as its `kind`.
-pub const NewDocumentKind = struct {
-    /// Stable, plugin-local identifier, handed back on dispatch. Never shown.
-    id: []const u8,
-    /// What the user reads in the chooser ("Sprite", "Palette", "Daily note").
-    title: []const u8,
-    /// Optional TVG icon bytes (e.g. `icons.tvg.lucide.file_plus`), as `Command.icon` takes.
-    /// Absent falls back to the plugin's own store icon, so a kind never draws a placeholder.
-    icon: ?[]const u8 = null,
-};
-
 // Every field below is an optional fn pointer, so the type system requires *nothing*. But to
 // function as an **editor** (open / draw / save files) a plugin must implement the document
 // cluster — the load+staging hooks (`documentStackSize`/`documentStackAlign`/
@@ -105,6 +92,15 @@ pub const NewDocumentKind = struct {
 //   [requested]  — only fires after the plugin asks for it via a `host.*` call
 // A plugin that is *not* an editor (the workbench file tree) implements none of the document
 // hooks; it contributes panes + a center provider instead.
+//
+// **Document verbs are commands, not hooks.** An owner registers `<id>.<action>` (with
+// `isEnabled`) and fizzy routes its own Copy, Paste, Undo, Redo, Delete, … to the active
+// document's owner: `copy`, `paste`, `undo`, `redo`, `deleteSelection` (see fizzy's
+// `Keybinds.document_verbs`). Revealing a position (go to definition, a backlink) calls
+// `<id>.goToLine` with `.{ .path, .line, .column }`, counted from 1. A plugin offers New File
+// entries with `<id>.new`, or `<id>.new.<kind>` once per kind of thing it makes (the command's
+// title and icon are the entry's), taking `.{ .parent_path = "" }`: the folder to create in, or
+// empty for an untitled document.
 //
 // **An `anyerror` here never reaches the caller as itself.** Zig numbers error values per
 // compilation, so the integer a plugin returns means something else in the host's own error set
@@ -202,10 +198,6 @@ pub const VTable = struct {
     /// snapshotted before, to catch a tape that does not replay exactly.
     documentFingerprint: ?*const fn (state: *anyopaque, doc: DocHandle) u64 = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    undo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
-    redo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
-    canUndo: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    canRedo: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
 
     /// Register a loaded/created document in the plugin's open-doc map. `file` points at
     /// the plugin's document type (for pixel art, `*Internal.File` on the caller's stack).
@@ -224,33 +216,10 @@ pub const VTable = struct {
     setDocumentGrouping: ?*const fn (state: *anyopaque, doc: DocHandle, grouping: u64) void = null,
     documentPath: ?*const fn (state: *anyopaque, doc: DocHandle) []const u8 = null,
     setDocumentPath: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
-    /// Move the caret to `line`/`character` (0-based; `character` a byte count within the
-    /// line, clamped to its actual length) in `doc`, applied on its next draw (mirrors the
-    /// `pending_cursor` pattern the text editor already uses internally for undo/redo/paste).
-    /// The owner resolves this against its own already-loaded buffer — see
-    /// `sdk.language.DefinitionLocation`'s doc comment for why the line/character-vs-byte-
-    /// offset split is deliberate. Used by `gotoDefinition` navigation via the workbench-api
-    /// `revealPosition` service.
-    revealPosition: ?*const fn (state: *anyopaque, doc: DocHandle, line: u32, character: u32) void = null,
     documentHasNativeExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     /// True when `saveDocument` can write the document without Save As (e.g. `.fiz` or flat image).
     documentHasRecognizedSaveExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     documentDefaultSaveAsFilename: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 = null,
-    /// The distinct kinds of document this plugin can create, when it can create more than one
-    /// — a sprite and a palette, a note and a daily note. Absent (or empty) means the plugin
-    /// creates one kind and the New File flow names it by the plugin itself.
-    ///
-    /// The host expands these into the New File chooser: one entry per kind rather than one per
-    /// plugin, so the user picks *what to make*, not *who makes it*. The returned slice must
-    /// outlive the call (a comptime literal is the usual answer).
-    newDocumentKinds: ?*const fn (state: *anyopaque) []const NewDocumentKind = null,
-    /// Open the owner's "new document" flow. Not doc-scoped — the host dispatches to a plugin
-    /// that provides one (see `Host.requestNewDocument`). `kind` is the `NewDocumentKind.id` the
-    /// user chose, or null for the plugin's only/default kind — a plugin that declares no kinds
-    /// can ignore it. `parent_path` (when set) creates the document on disk in that folder;
-    /// `id_extra` disambiguates per-explorer-row launches.
-    requestNewDocumentDialog: ?*const fn (state: *anyopaque, kind: ?[]const u8, parent_path: ?[]const u8, id_extra: usize) void = null,
-
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     // Sidebar/explorer panes and bottom-panel tabs are NOT vtable hooks — plugins
     // contribute them as named, owned `Surface`s via `Host.registerSurface`, and the app's
@@ -473,12 +442,6 @@ pub fn setDocumentPath(self: Plugin, doc: DocHandle, path: []const u8) !void {
     if (self.vtable.setDocumentPath) |f| f(self.state, doc, path) catch |err| return self.failed("setDocumentPath", err);
 }
 
-pub fn revealPosition(self: Plugin, doc: DocHandle, line: u32, character: u32) void {
-    const prof = core.profile.begin(self.id, "revealPosition");
-    defer prof.end();
-    if (self.vtable.revealPosition) |f| f(self.state, doc, line, character);
-}
-
 pub fn documentHasNativeExtension(self: Plugin, doc: DocHandle) bool {
     const prof = core.profile.begin(self.id, "documentHasNativeExtension");
     defer prof.end();
@@ -627,30 +590,6 @@ pub fn closeDocument(self: Plugin, doc: DocHandle) bool {
     return false;
 }
 
-pub fn undo(self: Plugin, doc: DocHandle) !void {
-    const prof = core.profile.begin(self.id, "undo");
-    defer prof.end();
-    if (self.vtable.undo) |f| f(self.state, doc) catch |err| return self.failed("undo", err);
-}
-
-pub fn redo(self: Plugin, doc: DocHandle) !void {
-    const prof = core.profile.begin(self.id, "redo");
-    defer prof.end();
-    if (self.vtable.redo) |f| f(self.state, doc) catch |err| return self.failed("redo", err);
-}
-
-pub fn canUndo(self: Plugin, doc: DocHandle) bool {
-    const prof = core.profile.begin(self.id, "canUndo");
-    defer prof.end();
-    return if (self.vtable.canUndo) |f| f(self.state, doc) else false;
-}
-
-pub fn canRedo(self: Plugin, doc: DocHandle) bool {
-    const prof = core.profile.begin(self.id, "canRedo");
-    defer prof.end();
-    return if (self.vtable.canRedo) |f| f(self.state, doc) else false;
-}
-
 // ---- render hook wrappers ----
 
 /// Draw an open document into the current dvui parent (the workbench sets up the
@@ -755,20 +694,6 @@ pub fn settingsChanged(self: Plugin, blob: []const u8) void {
     const prof = core.profile.begin(self.id, "settingsChanged");
     defer prof.end();
     if (self.vtable.settingsChanged) |f| f(self.state, blob);
-}
-
-pub fn requestNewDocumentDialog(self: Plugin, kind: ?[]const u8, parent_path: ?[]const u8, id_extra: usize) void {
-    const prof = core.profile.begin(self.id, "requestNewDocumentDialog");
-    defer prof.end();
-    if (self.vtable.requestNewDocumentDialog) |f| f(self.state, kind, parent_path, id_extra);
-}
-
-/// The kinds this plugin offers in the New File flow; empty when it declares none.
-pub fn newDocumentKinds(self: Plugin) []const NewDocumentKind {
-    const prof = core.profile.begin(self.id, "newDocumentKinds");
-    defer prof.end();
-    const f = self.vtable.newDocumentKinds orelse return &.{};
-    return f(self.state);
 }
 
 pub fn beginFrame(self: Plugin) void {

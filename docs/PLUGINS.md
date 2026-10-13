@@ -643,13 +643,11 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
 - **Document ownership** — `fileTypes()` (offer file extensions; see §3.11), `loadDocument` /
   `loadDocumentFromBytes` / `createDocument`, `saveDocument`, `reloadDocument` (optional — Fizzy's
   document watcher reloads clean open tabs when the file changes on disk), `closeDocument`,
-  `isDirty`, `undo`/`redo`/`canUndo`/`canRedo`, plus opaque document-buffer management for the
-  async load path.
+  `isDirty`, plus opaque document-buffer management for the async load path.
 - **Document metadata at the pane boundary** — `bindDocumentToPane`, `documentGrouping` /
   `setDocumentGrouping` / `setDocumentGroupingOnBuffer` (the pane a document is seated in — the
   app stamps the target grouping on the staging buffer before the load lands, which is what
-  makes "open to the side" work), `documentPath`, `setDocumentPath`, `revealPosition`,
-  dirty/save indicators. These keep `DocHandle` opaque so the plugin drawing tabs never sees a
+  makes "open to the side" work), `documentPath`, `setDocumentPath`, dirty/save indicators. These keep `DocHandle` opaque so the plugin drawing tabs never sees a
   plugin-specific type.
 - **Demo snapshots** (optional) — `captureDocumentState(doc, allocator) → []u8`,
   `restoreDocumentState(doc, bytes)` and `documentFingerprint(doc) → u64`. A demo seeking back
@@ -676,11 +674,22 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
 - Folder and file changes are **events**, not hooks (§3.10a): `fizzy.folder.opened` / `.closed`,
   `fizzy.files.changed`, `fizzy.document.changed`.
 - **Contributions** — `contributeMenu`, `contributeKeybinds`.
-- **New document** — `requestNewDocumentDialog(kind, parent_path, id_extra)`, plus
-  `newDocumentKinds` when the plugin creates more than one kind of thing. The host expands the
-  kinds into the New File chooser — one entry per kind, not per plugin, so the user picks what to
-  make rather than who makes it — and hands the chosen `NewDocumentKind.id` back as `kind`. A
-  plugin that declares no kinds is one entry and always receives `kind == null`.
+
+**Document verbs are commands, not hooks.** An owner registers `"<id>.<action>"` with `isEnabled`,
+and Fizzy's own entries (menu, keybind, palette) run the active document owner's:
+
+| Fizzy's | Owner's command | Arguments |
+|---|---|---|
+| Copy, Paste, Undo, Redo, Delete | `<id>.copy`, `.paste`, `.undo`, `.redo`, `.deleteSelection` | none; acts on the active document |
+| a reveal (go to definition, a backlink, `host.revealPosition`) | `<id>.goToLine` | `.{ .path, .line, .column }`, from 1 |
+| New File | `<id>.new`, or `<id>.new.<kind>` once per kind | `.{ .parent_path = "" }`: the folder, or empty for untitled |
+
+An owner without a verb's command simply doesn't take it: Undo is greyed out, a reveal only
+focuses the tab. The New File chooser lists every plugin's New File commands by their own title
+and icon (one entry per kind, so the user picks *what* to make, not who makes it), plus any
+document owner with no command (`createDocument` only, as the bundled `text` has), which opens
+an untitled document directly. The palette hides an owner's verb commands as duplicates of
+Fizzy's (`Keybinds.document_verbs`).
 
 #### Repinning dvui: tag the commit first
 

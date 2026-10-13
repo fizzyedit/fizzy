@@ -113,13 +113,11 @@ fn canSaveAll(editor: *Editor) bool {
 }
 
 fn canUndo(editor: *Editor) bool {
-    const doc = editor.activeDoc() orelse return false;
-    return doc.owner.canUndo(doc);
+    return editor.activeDocCommandEnabled("undo");
 }
 
 fn canRedo(editor: *Editor) bool {
-    const doc = editor.activeDoc() orelse return false;
-    return doc.owner.canRedo(doc);
+    return editor.activeDocCommandEnabled("redo");
 }
 
 /// No `visible` predicate alongside these: `native_always_enabled` below means the native side

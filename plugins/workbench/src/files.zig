@@ -373,7 +373,7 @@ fn rowMenu(
         defer fw2.close();
 
         const parent_dir: []const u8 = if (kind == .directory) abs_path else entry_dir;
-        runtime.host().requestNewDocument(parent_dir, branch_id.asUsize());
+        runtime.host().requestNewDocument(parent_dir);
     }
 
     if ((core.widgets.menuRow(@src(), "New Folder...", .{ .icon = icons.tvg.lucide.@"folder-plus" })) != null) {

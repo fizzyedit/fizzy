@@ -343,7 +343,7 @@ fn cmdClosePath(state: *anyopaque, args: ClosePath.Args, call: *sdk.Command.Call
 }
 
 fn cmdNewFile(state: *anyopaque) anyerror!void {
-    editorFromState(state).app.host.requestNewDocument(null, 0);
+    editorFromState(state).app.host.requestNewDocument(null);
 }
 fn cmdSave(state: *anyopaque) anyerror!void {
     try editorFromState(state).save();
@@ -435,12 +435,10 @@ fn cmdCancel(state: *anyopaque) anyerror!void {
 }
 
 fn cmdUndoEnabled(state: *anyopaque) bool {
-    const doc = editorFromState(state).activeDoc() orelse return false;
-    return doc.owner.canUndo(doc);
+    return editorFromState(state).activeDocCommandEnabled("undo");
 }
 fn cmdRedoEnabled(state: *anyopaque) bool {
-    const doc = editorFromState(state).activeDoc() orelse return false;
-    return doc.owner.canRedo(doc);
+    return editorFromState(state).activeDocCommandEnabled("redo");
 }
 /// Enabled when *either* target of `clipboardVerb` can act: the active document, or a focused
 /// text input that the synthetic event would reach. Gating on the document alone would grey out

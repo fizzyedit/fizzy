@@ -938,7 +938,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                 );
 
                 if (button.clicked()) {
-                    runtime.host().requestNewDocument(null, 0);
+                    runtime.host().requestNewDocument(null);
                 }
             }
 

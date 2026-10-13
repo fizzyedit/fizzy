@@ -111,7 +111,7 @@ scroll_y: f32 = 0,
 /// (`restoreState`), where the widget is drawn and `scroll_y` alone would wait for it to go.
 pending_scroll_y: ?f32 = null,
 /// 0-based source line the next `TextEditor.draw` should scroll into view, set by
-/// `revealPosition` (goto-definition) alongside `pending_cursor` and consumed once. A
+/// a reveal (`text.goToLine`: goto-definition, a backlink) alongside `pending_cursor` and consumed once. A
 /// separate field, not derived from `pending_cursor`, because the editor scrolls to it
 /// directly (`ScrollInfo.scrollToOffset`) rather than relying on the text layout's own
 /// cursor-rect-discovery scroll (`TextEntryWidget`'s `scroll_to_cursor`), which only fires

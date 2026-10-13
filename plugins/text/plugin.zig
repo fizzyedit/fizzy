@@ -53,7 +53,6 @@ const vtable: sdk.Plugin.VTable = .{
     .setDocumentGrouping = setDocumentGrouping,
     .documentPath = documentPath,
     .setDocumentPath = setDocumentPath,
-    .revealPosition = revealPosition,
     .bindDocumentToPane = bindDocumentToPane,
     .documentHasNativeExtension = documentHasNativeExtension,
     .documentHasRecognizedSaveExtension = documentHasRecognizedSaveExtension,
@@ -73,12 +72,7 @@ const vtable: sdk.Plugin.VTable = .{
     .encodeSnapshot = encodeSnapshot,
     .releaseSnapshot = releaseSnapshot,
     .documentWritten = documentWritten,
-    // text saves are small and synchronous, so the async path just saves in place
     .documentDefaultSaveAsFilename = documentDefaultSaveAsFilename,
-    .undo = undoDocument,
-    .redo = redoDocument,
-    .canUndo = canUndoDocument,
-    .canRedo = canRedoDocument,
 };
 
 comptime {
@@ -121,6 +115,20 @@ pub fn register(host: *sdk.Host) !void {
         .isEnabled = cmdPasteEnabled,
     });
     try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("text", "undo"),
+        .owner = &plugin,
+        .title = "Undo",
+        .run = cmdUndo,
+        .isEnabled = cmdUndoEnabled,
+    });
+    try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("text", "redo"),
+        .owner = &plugin,
+        .title = "Redo",
+        .run = cmdRedo,
+        .isEnabled = cmdRedoEnabled,
+    });
+    try host.registerCommand(.{
         .id = sdk.Plugin.commandId("text", "format"),
         .owner = &plugin,
         .title = "Format Document",
@@ -134,7 +142,7 @@ pub fn register(host: *sdk.Host) !void {
         .title = "Go to Line…",
         .params = GoToLine.params,
         .runWith = GoToLine.bind(cmdGoToLine),
-        .isEnabled = cmdGoToLineEnabled,
+        .isEnabled = anyTextDoc,
         .icon = icons.tvg.lucide.@"arrow-down-to-line",
     });
 
@@ -327,14 +335,6 @@ fn setDocumentPath(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!
     gpa.free(doc.path);
     doc.path = new_path;
 }
-fn revealPosition(_: *anyopaque, handle: DocHandle, line: u32, character: u32) void {
-    const doc = docFrom(handle) orelse return;
-    doc.pending_sel = .collapsed(doc.byteOffsetForLineCharacter(line, character));
-    doc.pending_scroll_line = line;
-    // Both panes show the same document, so a reveal means both. Set unconditionally — whether
-    // the extension has a preview, and whether it is on screen, is `TextEditor`'s to know.
-    doc.pending_preview_line = line;
-}
 fn bindDocumentToPane(_: *anyopaque, _: DocHandle, _: dvui.Id, _: *anyopaque, _: bool) void {
     // Text editing needs no pane/canvas binding; the text widget manages its own state.
 }
@@ -446,19 +446,23 @@ fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: st
 
 // ---- undo / redo --------------------------------------------------------------
 
-fn undoDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
-    (docFrom(handle) orelse return).undo();
-}
-fn redoDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
-    (docFrom(handle) orelse return).redo();
-}
-fn canUndoDocument(_: *anyopaque, handle: DocHandle) bool {
-    const doc = docFrom(handle) orelse return false;
+// ---- undo / redo commands ------------------------------------------------------
+//
+// What fizzy's Undo and Redo run for the active text document (`Keybinds.document_verbs`).
+
+fn cmdUndoEnabled(state: *anyopaque) bool {
+    const doc = activeTextDoc(state) orelse return false;
     return doc.history.canUndo();
 }
-fn canRedoDocument(_: *anyopaque, handle: DocHandle) bool {
-    const doc = docFrom(handle) orelse return false;
+fn cmdUndo(state: *anyopaque) anyerror!void {
+    (activeTextDoc(state) orelse return).undo();
+}
+fn cmdRedoEnabled(state: *anyopaque) bool {
+    const doc = activeTextDoc(state) orelse return false;
     return doc.history.canRedo();
+}
+fn cmdRedo(state: *anyopaque) anyerror!void {
+    (activeTextDoc(state) orelse return).redo();
 }
 
 // ---- copy / paste commands -----------------------------------------------------
@@ -494,14 +498,13 @@ fn cmdPaste(state: *anyopaque) anyerror!void {
 const GoToLine = sdk.Command.Params(struct {
     line: sdk.Command.Arg(u32, .{ .description = "The line to go to, counting from 1.", .min = 1 }),
     column: sdk.Command.Arg(u32, .{ .description = "The column on that line, counting from 1.", .min = 1 }) = .init(1),
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document to act on, by its path. Empty: the active one." }) = .init(""),
 });
-fn cmdGoToLineEnabled(state: *anyopaque) bool {
-    return activeTextDoc(state) != null;
-}
-/// Puts the caret at `line`:`column` of the active document, clamped to it, and returns where it
-/// landed (`.{ .line, .column }`, from 1).
+/// Puts the caret at `line`:`column` of the document, clamped to it, applied on its next draw (in
+/// the preview too), and returns where it landed (`.{ .line, .column }`, from 1). Also how fizzy
+/// reveals a position: go to definition, a backlink, a search result.
 fn cmdGoToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) anyerror!void {
-    const doc = activeTextDoc(state) orelse return call.fail("no text document is active", .{});
+    const doc = try targetDoc(state, args.path, call);
     const offset = doc.byteOffsetForLineCharacter(args.line -| 1, args.column -| 1);
     const at = doc.lineCharacterForByteOffset(offset);
     doc.pending_sel = .collapsed(offset);

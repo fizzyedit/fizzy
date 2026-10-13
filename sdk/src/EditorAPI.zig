@@ -228,7 +228,7 @@ pub const VTable = struct {
     /// **This is host state, not workbench state.** It used to live only on the `workbench-api`
     /// service, which meant a plugin doing goto-definition (text, markdown) depended on
     /// workbench being installed. But the implementation was already written almost entirely
-    /// against the host — `docFromPath`, `doc.owner.revealPosition`, `setActiveDocIndex`,
+    /// against the host — `docFromPath`, the owner's `<id>.goToLine`, `setActiveDocIndex`,
     /// `pluginForExtension` — with only a small pending-reveal queue that was workbench's by
     /// accident rather than by meaning. Moving it here is what lets those plugins load in any
     /// fizzy-based app, per the portability goal.

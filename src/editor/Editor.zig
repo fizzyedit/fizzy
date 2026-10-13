@@ -4590,8 +4590,8 @@ pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?Region {
 
 pub fn revealPosition(editor: *Editor, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     if (editor.docFromPath(path)) |doc| {
-        doc.owner.revealPosition(doc, line, character);
-        // `revealPosition` alone only sets `pending_cursor` on a possibly-background document —
+        editor.revealIn(doc, line, character);
+        // The reveal alone only sets the owner's pending caret on a possibly-background document —
         // nothing else made this path the *visible* one. Without this, jumping to a definition
         // in a non-active tab silently sets the caret and stops: the tab never gets focus, so
         // the document is never drawn to consume `pending_cursor`, and the jump looks like a
@@ -4633,13 +4633,33 @@ pub fn revealPosition(editor: *Editor, path: []const u8, line: u32, character: u
     return true;
 }
 
+/// Put `doc`'s caret at `line`/`character` (0-based; `character` a byte count within the line),
+/// applied on its next draw: its owner's `<id>.goToLine`, which counts from 1. An owner without
+/// one (a pixel editor) has no position to go to.
+fn revealIn(editor: *Editor, doc: sdk.DocHandle, line: u32, character: u32) void {
+    const arena = editor.app.arena.allocator();
+    const id = std.fmt.allocPrint(arena, "{s}.goToLine", .{doc.owner.id}) catch return;
+    if (!editor.app.host.hasCommand(id)) return;
+    var args: std.Io.Writer.Allocating = .init(arena);
+    std.zon.stringify.serialize(.{
+        .path = doc.owner.documentPath(doc),
+        .line = line + 1,
+        .column = character + 1,
+    }, .{ .whitespace = false }, &args.writer) catch return;
+    switch (editor.app.host.callCommand(id, args.written(), arena)) {
+        .ok => {},
+        .failed => |why| dvui.log.warn("reveal: {s}: {s}", .{ id, why }),
+        else => {},
+    }
+}
+
 pub fn pollPendingReveals(editor: *Editor) void {
     if (editor.app.pending_reveals.items.len == 0) return;
     var i: usize = 0;
     while (i < editor.app.pending_reveals.items.len) {
         const pr = editor.app.pending_reveals.items[i];
         if (editor.docFromPath(pr.path)) |doc| {
-            doc.owner.revealPosition(doc, pr.line, pr.character);
+            editor.revealIn(doc, pr.line, pr.character);
             editor.app.gpa.free(pr.path);
             _ = editor.app.pending_reveals.swapRemove(i);
         } else {
@@ -5892,13 +5912,11 @@ pub fn processPendingSaveAs(editor: *Editor) void {
 }
 
 pub fn undo(editor: *Editor) !void {
-    const doc = editor.activeDoc() orelse return;
-    try doc.owner.undo(doc);
+    try editor.runActiveDocCommand("undo");
 }
 
 pub fn redo(editor: *Editor) !void {
-    const doc = editor.activeDoc() orelse return;
-    try doc.owner.redo(doc);
+    try editor.runActiveDocCommand("redo");
 }
 
 pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {

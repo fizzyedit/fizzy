@@ -157,7 +157,7 @@ allocator: std.mem.Allocator,
 plugins: std.ArrayListUnmanaged(*Plugin) = .empty,
 
 /// The plugin whose "new document" dialog is currently open, set by `requestNewDocument`
-/// right before dispatching to that plugin's `requestNewDocumentDialog` and consumed
+/// right before running that plugin's New File command (`<id>.new`) and consumed
 /// (cleared) by the very next `Editor.newFile` call. Once more than one plugin implements
 /// `createDocument` (e.g. both `pixi` and the bundled `text` fallback), the dialog's own
 /// "OK" handler calling the generic `host.createDocument(path, grid)` is otherwise
@@ -1824,28 +1824,21 @@ pub fn pluginForExtension(self: *Host, raw_ext: []const u8) ?*Plugin {
     return self.fallback_editor;
 }
 
-/// Whether `plugin` should appear in the New File flow.
-///
-/// Two ways to qualify, because "can create a new document" and "owns documents" are not the
-/// same claim. A document owner (`createDocument`) creates one it will then own. A *utility*
-/// plugin (`assertUtilityVTable` forbids it `createDocument`) can still offer a New Document
-/// entry by implementing only `requestNewDocumentDialog` — atlas creating a `.md` note that the
-/// text plugin goes on to own is the case this exists for. Gating on `createDocument` alone shut
-/// those out of the chooser entirely.
-fn offersNewDocument(plugin: *const Plugin) bool {
-    return plugin.vtable.createDocument != null or plugin.vtable.requestNewDocumentDialog != null;
+/// Whether `id` is one of `owner`'s New File commands: `<owner>.new`, or `<owner>.new.<kind>`.
+fn isNewDocumentCommand(owner_id: []const u8, id: []const u8) bool {
+    if (!std.mem.startsWith(u8, id, owner_id)) return false;
+    const action = id[owner_id.len..];
+    return std.mem.eql(u8, action, ".new") or std.mem.startsWith(u8, action, ".new.");
 }
 
-/// Open a "new document" flow. `parent_path` (when set) targets an on-disk folder; `id_extra`
-/// disambiguates launches from distinct explorer rows.
+/// Open a "new document" flow. `parent_path` (when set) targets an on-disk folder.
 ///
-/// With no plugin offering one (`offersNewDocument`), this is a no-op — nothing can create a
-/// file. With exactly one, it's dispatched to directly — its own dialog if it has one (e.g.
-/// `pixi`), or straight to an untitled in-memory document if not (e.g. the bundled `text`
-/// fallback editor). With two or more, which plugin should handle the new file is ambiguous, so
-/// a picker (`showNewDocumentChooser`) is shown first; the user's choice is then dispatched the
-/// same way a lone candidate would be.
-pub fn requestNewDocument(self: *Host, parent_path: ?[]const u8, id_extra: usize) void {
+/// The entries are every plugin's New File commands (`<id>.new`, `<id>.new.<kind>`: a plugin
+/// offering a sprite and a palette is two entries, so the chooser asks what to make rather than
+/// who should make it), and a document owner with none (`createDocument` only, the bundled
+/// `text`) as itself. With none this is a no-op; with exactly one it runs directly; with two or
+/// more a picker (`showNewDocumentChooser`) asks first.
+pub fn requestNewDocument(self: *Host, parent_path: ?[]const u8) void {
     var only: ?Candidate = null;
     var count: usize = 0;
     var it = self.newDocumentCandidates();
@@ -1855,24 +1848,27 @@ pub fn requestNewDocument(self: *Host, parent_path: ?[]const u8, id_extra: usize
     }
 
     if (count >= 2) {
-        showNewDocumentChooser(parent_path, id_extra);
+        showNewDocumentChooser(parent_path);
         return;
     }
 
     const single = only orelse return;
-    self.dispatchNewDocumentToPlugin(single.plugin, single.kind, parent_path, id_extra);
+    self.dispatchNewDocument(single, parent_path);
 }
 
-/// One entry in the New File flow: a plugin, and which of its kinds this entry stands for.
-/// A plugin that declares no kinds contributes exactly one entry with `kind == null`.
+/// One entry in the New File flow: a plugin's New File command, or (`command == null`) a
+/// document owner that offers none, standing for itself.
 pub const Candidate = struct {
     plugin: *Plugin,
-    kind: ?Plugin.NewDocumentKind = null,
+    command: ?*const Command = null,
+
+    /// What the chooser calls it: the command's title, or the plugin's name.
+    pub fn title(self: Candidate) []const u8 {
+        return if (self.command) |c| c.title else self.plugin.display_name;
+    }
 };
 
-/// Walks every plugin that offers a new document, expanded by kind — so a plugin offering a
-/// sprite and a palette is two entries, and the chooser asks what to make rather than who
-/// should make it. Ordered by plugin registration, then by the plugin's own kind order.
+/// Walks every New File entry, in plugin registration order, then each plugin's command order.
 pub fn newDocumentCandidates(self: *Host) CandidateIterator {
     return .{ .host = self };
 }
@@ -1880,50 +1876,54 @@ pub fn newDocumentCandidates(self: *Host) CandidateIterator {
 pub const CandidateIterator = struct {
     host: *Host,
     plugin_index: usize = 0,
-    kind_index: usize = 0,
+    command_index: usize = 0,
+    /// Whether the current plugin has yielded a command yet.
+    found: bool = false,
 
     pub fn next(self: *CandidateIterator) ?Candidate {
         while (self.plugin_index < self.host.plugins.items.len) {
             const plugin = self.host.plugins.items[self.plugin_index];
-            if (!offersNewDocument(plugin)) {
-                self.plugin_index += 1;
-                continue;
+            const commands = self.host.commands.items;
+            while (self.command_index < commands.len) {
+                const c = &commands[self.command_index];
+                self.command_index += 1;
+                if (c.owner != plugin or !isNewDocumentCommand(plugin.id, c.id)) continue;
+                self.found = true;
+                return .{ .plugin = plugin, .command = c };
             }
-            const kinds = plugin.newDocumentKinds();
-            if (kinds.len == 0) {
-                self.plugin_index += 1;
-                return .{ .plugin = plugin };
-            }
-            if (self.kind_index < kinds.len) {
-                const kind = kinds[self.kind_index];
-                self.kind_index += 1;
-                return .{ .plugin = plugin, .kind = kind };
-            }
+            const stands_for_itself = !self.found and plugin.vtable.createDocument != null;
             self.plugin_index += 1;
-            self.kind_index = 0;
+            self.command_index = 0;
+            self.found = false;
+            if (stands_for_itself) return .{ .plugin = plugin };
         }
         return null;
     }
 };
 
-/// Hand the "new document" flow to a specific plugin: its own dialog if it has one, otherwise
-/// straight to an untitled in-memory document. `owner` must satisfy `offersNewDocument` (the
-/// only two callers — `requestNewDocument`'s single-candidate path and the chooser dialog's
-/// button handler — both filter on that already).
-fn dispatchNewDocumentToPlugin(self: *Host, owner: *Plugin, kind: ?Plugin.NewDocumentKind, parent_path: ?[]const u8, id_extra: usize) void {
+/// Run a New File entry: its command, with the folder to create in, or straight to an untitled
+/// in-memory document for an owner that offers no command.
+fn dispatchNewDocument(self: *Host, candidate: Candidate, parent_path: ?[]const u8) void {
+    const owner = candidate.plugin;
     // Only claim the pending slot for a plugin that can actually take the document back: it
     // exists to disambiguate a later `host.createDocument(path, grid)`, and a utility plugin
     // never makes that call. Leaving a stale owner parked here would misroute the *next*
     // create — the one a different plugin makes — to a plugin with no `createDocument` at all.
     self.pending_new_document_owner = if (owner.vtable.createDocument != null) owner else null;
 
-    if (owner.vtable.requestNewDocumentDialog) |f| {
-        f(owner.state, if (kind) |k| k.id else null, parent_path, id_extra);
+    const c = candidate.command orelse {
+        self.createUntitledDocumentDirect(parent_path) catch |err| {
+            dvui.log.err("New File: {s}", .{@errorName(err)});
+        };
         return;
-    }
-    self.createUntitledDocumentDirect(parent_path) catch |err| {
-        dvui.log.err("New File: {s}", .{@errorName(err)});
     };
+    var args: std.Io.Writer.Allocating = .init(self.arena());
+    std.zon.stringify.serialize(.{ .parent_path = parent_path orelse "" }, .{ .whitespace = false }, &args.writer) catch return;
+    switch (self.callCommand(c.id, args.written(), self.arena())) {
+        .ok => {},
+        .failed => |why| dvui.log.err("New File: {s}: {s}", .{ c.id, why }),
+        else => dvui.log.err("New File: {s} did not run", .{c.id}),
+    }
 }
 
 /// True if the chooser is already showing (guards repeated hotkey presses / menu clicks from
@@ -1941,7 +1941,7 @@ fn newDocumentChooserActive(win: *dvui.Window) bool {
 /// drop-shadowed button per candidate (its registered plugin-store icon, falling back to its
 /// name) via `core.dialogs.dialog` — the same chrome every other fizzy dialog uses. Picking one
 /// dispatches exactly as `requestNewDocument` would with a single candidate.
-fn showNewDocumentChooser(parent_path: ?[]const u8, id_extra: usize) void {
+fn showNewDocumentChooser(parent_path: ?[]const u8) void {
     if (newDocumentChooserActive(dvui.currentWindow())) return;
     var mutex = core.dialogs.dialog(@src(), .{
         .displayFn = newDocumentChooserDisplay,
@@ -1952,7 +1952,6 @@ fn showNewDocumentChooser(parent_path: ?[]const u8, id_extra: usize) void {
         .default = .cancel,
         .hide_footer = true,
     });
-    dvui.dataSet(null, mutex.id, "_nf_id_extra", id_extra);
     dvui.dataSet(null, mutex.id, "_nf_has_parent", parent_path != null);
     if (parent_path) |p| dvui.dataSetSlice(null, mutex.id, "_nf_parent_path", p);
     mutex.mutex.unlock(dvui.io);
@@ -1960,29 +1959,13 @@ fn showNewDocumentChooser(parent_path: ?[]const u8, id_extra: usize) void {
 
 fn newDocumentChooserDisplay(id: dvui.Id) anyerror!bool {
     const host = runtime.host();
-    const id_extra = dvui.dataGet(null, id, "_nf_id_extra", usize) orelse 0;
     const has_parent = dvui.dataGet(null, id, "_nf_has_parent", bool) orelse false;
     const parent_path: ?[]const u8 = if (has_parent) dvui.dataGetSlice(null, id, "_nf_parent_path", []u8) else null;
 
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(12) });
     defer outer.deinit();
 
-    var any_kind = false;
-    {
-        var probe = host.newDocumentCandidates();
-        while (probe.next()) |c| {
-            if (c.kind != null) {
-                any_kind = true;
-                break;
-            }
-        }
-    }
-    dvui.labelNoFmt(
-        @src(),
-        if (any_kind) "What would you like to create?" else "Which plugin should create the file?",
-        .{},
-        .{ .font = dvui.Font.theme(.body) },
-    );
+    dvui.labelNoFmt(@src(), "What would you like to create?", .{}, .{ .font = dvui.Font.theme(.body) });
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 16 } });
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
@@ -1995,12 +1978,12 @@ fn newDocumentChooserDisplay(id: dvui.Id) anyerror!bool {
         defer cell.deinit();
 
         if (newDocumentChooserButton(host, candidate, index)) {
-            host.dispatchNewDocumentToPlugin(candidate.plugin, candidate.kind, parent_path, id_extra);
+            host.dispatchNewDocument(candidate, parent_path);
             core.dialogs.closeFloatingDialogAnchored();
         }
 
         _ = dvui.spacer(@src(), .{ .id_extra = index, .min_size_content = .{ .w = 1, .h = 6 } });
-        dvui.labelNoFmt(@src(), if (candidate.kind) |k| k.title else candidate.plugin.display_name, .{}, .{
+        dvui.labelNoFmt(@src(), candidate.title(), .{}, .{
             .id_extra = index,
             .gravity_x = 0.5,
             .font = dvui.Font.theme(.body),
@@ -2022,7 +2005,7 @@ fn newDocumentChooserButton(host: *Host, candidate: Candidate, index: usize) boo
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{
         // Named by the caption drawn below it, outside the button.
-        .label = .{ .text = if (candidate.kind) |k| k.title else plugin.display_name },
+        .label = .{ .text = candidate.title() },
         .id_extra = index,
         .min_size_content = .{ .w = size, .h = size },
         .padding = .all(10),
@@ -2044,9 +2027,9 @@ fn newDocumentChooserButton(host: *Host, candidate: Candidate, index: usize) boo
     bw.drawFocus();
     bw.drawBackground();
 
-    const drew_kind_icon = if (candidate.kind) |k| blk: {
-        const bytes = k.icon orelse break :blk false;
-        core.icon.icon(@src(), k.id, bytes, .{}, .{
+    const drew_kind_icon = if (candidate.command) |c| blk: {
+        const bytes = c.icon orelse break :blk false;
+        core.icon.icon(@src(), c.id, bytes, .{}, .{
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .min_size_content = .{ .w = 32, .h = 32 },
@@ -2508,26 +2491,20 @@ test "several providers can share one name, which is what a hook is" {
     try testing.expectEqual(@as(u32, 1), first.id);
 }
 
-test "new-document candidates expand a plugin's kinds, one entry each" {
+test "new-document candidates: each New File command, else the owner itself" {
     const Fake = struct {
-        fn kinds(_: *anyopaque) []const Plugin.NewDocumentKind {
-            return &.{
-                .{ .id = "sprite", .title = "Sprite" },
-                .{ .id = "palette", .title = "Palette" },
-            };
-        }
-        fn dialog(_: *anyopaque, _: ?[]const u8, _: ?[]const u8, _: usize) void {}
+        fn run(_: *anyopaque) anyerror!void {}
         fn create(_: *anyopaque, _: []const u8, _: EditorAPI.NewDocGrid, _: *anyopaque) anyerror!void {}
     };
 
     var host = Host.init(testing.allocator);
     defer host.deinit();
 
-    // Offers two kinds through its own dialog.
-    const pixi_vt = Plugin.VTable{ .requestNewDocumentDialog = Fake.dialog, .newDocumentKinds = Fake.kinds };
-    // Creates documents but names no kinds: one entry, the plugin itself.
+    // Offers two kinds through commands of its own, and owns documents.
+    const pixi_vt = Plugin.VTable{ .createDocument = Fake.create };
+    // Creates documents but has no command: one entry, the plugin itself.
     const text_vt = Plugin.VTable{ .createDocument = Fake.create };
-    // Neither creates nor offers a dialog: not in the flow at all.
+    // A command that is not a New File one, and nothing to create: not in the flow at all.
     const viewer_vt = Plugin.VTable{};
     var pixi = Plugin{ .state = undefined, .vtable = &pixi_vt, .id = "pixi", .display_name = "Pixi" };
     var text = Plugin{ .state = undefined, .vtable = &text_vt, .id = "text", .display_name = "Text" };
@@ -2535,17 +2512,21 @@ test "new-document candidates expand a plugin's kinds, one entry each" {
     try host.registerPlugin(&pixi);
     try host.registerPlugin(&text);
     try host.registerPlugin(&viewer);
+    try host.registerCommand(.{ .id = "pixi.new.sprite", .owner = &pixi, .title = "Sprite", .run = Fake.run });
+    try host.registerCommand(.{ .id = "image.newer", .owner = &viewer, .title = "Not one", .run = Fake.run });
+    try host.registerCommand(.{ .id = "pixi.new.palette", .owner = &pixi, .title = "Palette", .run = Fake.run });
 
     var it = host.newDocumentCandidates();
     const first = it.next().?;
     try testing.expectEqual(&pixi, first.plugin);
-    try testing.expectEqualStrings("sprite", first.kind.?.id);
+    try testing.expectEqualStrings("Sprite", first.title());
     const second = it.next().?;
     try testing.expectEqual(&pixi, second.plugin);
-    try testing.expectEqualStrings("palette", second.kind.?.id);
+    try testing.expectEqualStrings("Palette", second.title());
     const third = it.next().?;
     try testing.expectEqual(&text, third.plugin);
-    try testing.expectEqual(@as(?Plugin.NewDocumentKind, null), third.kind);
+    try testing.expect(third.command == null);
+    try testing.expectEqualStrings("Text", third.title());
     try testing.expectEqual(@as(?Host.Candidate, null), it.next());
 }
 
