@@ -1193,6 +1193,38 @@ Resolution results are memoized by the caller against `wikilink.generation()`, w
 a link flip from broken to live when its target file appears — with no edit to the linking
 document, and so no re-parse of it.
 
+### 3.10a Events — announcing and listening
+
+Plugins meet on a name, never on each other (`plans/PLUGIN_INTERACTION_PLAN.md`). A plugin
+announces that something happened with `Host.emit`; any plugin may listen with `Host.subscribe`,
+and neither knows the other is there.
+
+```zig
+// Announce: the emitter's id first, a ZON payload (copied).
+host.emitZon("zig.build_finished", .{ .ok = true, .seconds = 1.8 });
+
+// Listen: by name, by prefix ("fizzy.document.*"), or to everything ("*").
+try host.subscribe(.{ .event = "fizzy.document.saved", .owner = &plugin, .handler = onSaved });
+fn onSaved(state: *anyopaque, e: sdk.events.Event) void { … e.payload is ZON … }
+
+// Say what you announce, so tooling and agents can list it (optional).
+try host.declareEvent(.{ .name = "zig.build_finished", .owner = &plugin,
+    .description = "A build of the open project finished.", .payload = ".{ .ok = true, .seconds = 1.8 }" });
+```
+
+- **Delivered once a frame, on the UI thread**, before plugins' `beginFrame`, in the order
+  emitted — never inside `emit`. So `emit` is safe from a worker thread (it wakes the app) and from
+  inside a handler (what it emits waits for the next delivery).
+- **An event no one listens for costs nothing**: `emit` returns before copying anything.
+- **Subscriptions go with their plugin** on unload, hot reload and quit, so a handler never
+  outlives its image.
+- **Payloads are bytes across the boundary, types on each side**, as command arguments are. Parse
+  with `std.zon.parse` and `.ignore_unknown_fields = true`, so an emitter can add fields.
+
+Fizzy announces `fizzy.document.opened`, `fizzy.document.saved`, `fizzy.document.closed` and
+`fizzy.folder.opened`, each `.{ .path = "…" }`. A plugin reload's detach and reattach of its own
+documents is neither a close nor an open, and announces nothing.
+
 ### 3.11 File-type ownership — `fileTypes` and the fallback editor
 
 **Which plugin opens a given extension is the user's decision, not the plugin author's.** There

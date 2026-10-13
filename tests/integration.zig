@@ -6574,6 +6574,29 @@ fn inlineMarkdownFrame() !dvui.App.Result {
     return .ok;
 }
 
+/// A listener's record of fizzy's events: each one's name and the path its payload names.
+const HeardEvents = struct {
+    events: std.ArrayListUnmanaged(struct { name: []u8, path: []u8 }) = .empty,
+
+    fn handler(state: *anyopaque, e: sdk.events.Event) void {
+        const self: *HeardEvents = @ptrCast(@alignCast(state));
+        const gpa = std.heap.smp_allocator;
+        const src = gpa.dupeZ(u8, e.payload) catch return;
+        defer gpa.free(src);
+        const payload = std.zon.parse.fromSliceAlloc(struct { path: []const u8 = "" }, gpa, src, null, .{ .ignore_unknown_fields = true }) catch return;
+        defer std.zon.parse.free(gpa, payload);
+        self.events.append(gpa, .{ .name = gpa.dupe(u8, e.name) catch return, .path = gpa.dupe(u8, payload.path) catch return }) catch {};
+    }
+
+    fn deinit(self: *HeardEvents) void {
+        for (self.events.items) |e| {
+            std.heap.smp_allocator.free(e.name);
+            std.heap.smp_allocator.free(e.path);
+        }
+        self.events.deinit(std.heap.smp_allocator);
+    }
+};
+
 fn headlessFrame() !dvui.App.Result {
     return fizzy.Entry.AppFrame();
 }
@@ -6653,6 +6676,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     // an agent calls them (`Host.callCommand`); each refuses what it cannot do, saying why.
     {
         const host = &editor.app.host;
+        // And fizzy announces each as an event (`Host.emit`), heard by a listener that knows
+        // nothing of who opened what.
+        var heard: HeardEvents = .{};
+        defer heard.deinit();
+        const listener_vtable: sdk.Plugin.VTable = .{};
+        var listener: sdk.Plugin = .{ .state = &heard, .vtable = &listener_vtable, .id = "listener", .display_name = "Listener" };
+        try host.subscribe(.{ .event = "fizzy.*", .owner = &listener, .handler = HeardEvents.handler });
+        defer host.withdrawPlugin(&listener);
         const call = struct {
             fn call(h: *sdk.Host, id: []const u8, args: []const u8) sdk.Host.CommandOutcome {
                 return h.callCommand(id, args, h.arena());
@@ -6716,6 +6747,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqual(before - 1, editor.app.open_files.count());
         try std.testing.expect(editor.docFromPath(b) == null);
         try std.testing.expect(editor.docFromPath(notes) != null);
+
+        // What the listener heard, in order: the folder, the document opening, its save as
+        // b.txt, and its close.
+        _ = try dvui.testing.step(headlessFrame);
+        const want = [_][2][]const u8{
+            .{ "fizzy.folder.opened", project },
+            .{ "fizzy.document.opened", a },
+            .{ "fizzy.document.saved", b },
+            .{ "fizzy.document.closed", b },
+        };
+        var at: usize = 0;
+        for (heard.events.items) |e| {
+            if (at < want.len and std.mem.eql(u8, e.name, want[at][0]) and std.mem.eql(u8, e.path, want[at][1])) at += 1;
+        }
+        if (at != want.len) {
+            for (heard.events.items) |e| std.debug.print("heard {s} {s}\n", .{ e.name, e.path });
+            return error.TestUnexpectedResult;
+        }
     }
 
     // The tour, every frame of it, on the testing backend's clock (100 ms a step): about a

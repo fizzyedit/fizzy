@@ -34,6 +34,7 @@ pub const RailItemContribution = @import("menus.zig").RailItemContribution;
 pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
+pub const events = @import("events.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
 /// meaning "remove this id's `.settings` section entirely" (R12's non-default-only persistence —
@@ -265,6 +266,16 @@ native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
 commands: std.ArrayListUnmanaged(Command) = .empty,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
+/// Who listens for which events (`subscribe`), and what plugins say they announce
+/// (`declareEvent`). See `events.zig`.
+subscriptions: std.ArrayListUnmanaged(events.Subscription) = .empty,
+event_declarations: std.ArrayListUnmanaged(events.Declaration) = .empty,
+/// Emitted and not yet delivered (`emit`, `deliverEvents`), under `event_lock`: `emit` may come
+/// from any thread. `listening` is whether anyone subscribes, read without the lock so an event no
+/// one hears costs nothing.
+event_queue: std.ArrayListUnmanaged(events.Queued) = .empty,
+event_lock: std.atomic.Mutex = .unlocked,
+listening: std.atomic.Value(bool) = .init(false),
 
 /// Every UI a plugin contributes, of every kind. A `Surface` carries keywords rather than a
 /// region name, so the app's layout decides where it lands and the SDK never has to grow a new
@@ -307,6 +318,10 @@ pub fn deinit(self: *Host) void {
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
     self.language_support.deinit(self.allocator);
+    self.subscriptions.deinit(self.allocator);
+    self.event_declarations.deinit(self.allocator);
+    for (self.event_queue.items) |e| freeQueued(self.allocator, e);
+    self.event_queue.deinit(self.allocator);
     self.file_row_fill_colors.deinit(self.allocator);
     self.file_row_decorators.deinit(self.allocator);
     self.painters.deinit(self.allocator);
@@ -908,6 +923,8 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     // Services: drop this plugin's entries before its image goes away — both the vtable pointer
     // and the name string live in it.
     removeOwned(ServiceEntry, &self.services, plugin);
+    // Its handlers too, and what it said it announces: both point into its image.
+    self.removeEventsOf(plugin);
 
     // Drop the plugin from the registry (pointer identity; no `owner` field here).
     for (self.plugins.items, 0..) |p, i| {
@@ -939,6 +956,13 @@ pub fn withdrawPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(ServiceEntry, &self.services, plugin);
     removeOwned(Command, &self.commands, plugin);
     removeOwned(LanguageSupport, &self.language_support, plugin);
+    self.removeEventsOf(plugin);
+}
+
+fn removeEventsOf(self: *Host, plugin: *Plugin) void {
+    removeOwned(events.Subscription, &self.subscriptions, plugin);
+    removeOwned(events.Declaration, &self.event_declarations, plugin);
+    self.listening.store(self.subscriptions.items.len > 0, .release);
 }
 
 fn removeOwned(comptime T: type, list: *std.ArrayListUnmanaged(T), plugin: *Plugin) void {
@@ -1511,6 +1535,93 @@ pub const CommandOutcome = union(enum) {
 /// returned. A
 /// command without `runWith` takes no arguments: it runs through `run` when `args` is empty, and
 /// is refused otherwise.
+// ---- events -------------------------------------------------------------------------------
+
+/// Listen for an event, a prefix of them (`"fizzy.document.*"`) or every one (`"*"`). The handler
+/// runs on the UI thread, once per event, in the order they were emitted (`events.zig`).
+/// `sub.event` and the handler live in the subscriber's image; they go with it.
+pub fn subscribe(self: *Host, sub: events.Subscription) !void {
+    try self.subscriptions.append(self.allocator, sub);
+    self.listening.store(true, .release);
+}
+
+/// Say what an event means and what its payload holds, for tooling and agents to list.
+pub fn declareEvent(self: *Host, decl: events.Declaration) !void {
+    try self.event_declarations.append(self.allocator, decl);
+}
+
+/// Announce `name` (`<emitter>.<event>`) with a ZON `payload`, copied. Delivered before the next
+/// frame's `beginFrame`, never inside this call, so it is safe from any thread and from inside a
+/// handler. An event no one listens for costs a load and a return.
+pub fn emit(self: *Host, name: []const u8, payload: []const u8) void {
+    if (!self.listening.load(.acquire)) return;
+    const n = self.allocator.dupe(u8, name) catch return;
+    const p = self.allocator.dupe(u8, payload) catch {
+        self.allocator.free(n);
+        return;
+    };
+    self.lockEvents();
+    self.event_queue.append(self.allocator, .{ .name = n, .payload = p }) catch {
+        self.event_lock.unlock();
+        freeQueued(self.allocator, .{ .name = n, .payload = p });
+        return;
+    };
+    self.event_lock.unlock();
+    // From a worker the app may be asleep: wake it for the delivery.
+    self.refresh();
+}
+
+/// Deliver what was emitted since the last delivery, each event to every subscription that takes
+/// it. The app calls this once a frame on the UI thread, before plugins' `beginFrame`. What a
+/// handler emits waits for the next delivery; a subscription added during delivery hears the
+/// events after it.
+pub fn deliverEvents(self: *Host) void {
+    if (self.event_queue.items.len == 0) return;
+    self.lockEvents();
+    var batch = self.event_queue;
+    self.event_queue = .empty;
+    self.event_lock.unlock();
+    defer {
+        for (batch.items) |e| freeQueued(self.allocator, e);
+        batch.deinit(self.allocator);
+    }
+    for (batch.items) |e| {
+        // By index, and bounded by what there was: a handler may subscribe while it runs.
+        const n = self.subscriptions.items.len;
+        var i: usize = 0;
+        while (i < @min(n, self.subscriptions.items.len)) : (i += 1) {
+            const sub = self.subscriptions.items[i];
+            if (!events.matches(sub.event, e.name)) continue;
+            const owner = sub.owner orelse continue;
+            const prof = core.profile.begin(owner.id, e.name);
+            defer prof.end();
+            sub.handler(owner.state, .{ .name = e.name, .payload = e.payload });
+        }
+    }
+}
+
+/// `emit` with `value` written as ZON, written only when someone listens.
+pub fn emitZon(self: *Host, name: []const u8, value: anytype) void {
+    if (!self.listening.load(.acquire)) return;
+    var out: std.Io.Writer.Allocating = .init(self.allocator);
+    defer out.deinit();
+    std.zon.stringify.serialize(value, .{ .whitespace = false }, &out.writer) catch return;
+    self.emit(name, out.written());
+}
+
+/// Held only for a list append or a swap. The web is one thread, so it is never contended there,
+/// and wasm has no yield.
+fn lockEvents(self: *Host) void {
+    while (!self.event_lock.tryLock()) {
+        if (comptime builtin.target.cpu.arch != .wasm32) std.Thread.yield() catch {};
+    }
+}
+
+fn freeQueued(allocator: std.mem.Allocator, e: events.Queued) void {
+    allocator.free(e.name);
+    allocator.free(e.payload);
+}
+
 pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.mem.Allocator) CommandOutcome {
     const c = self.command(id) orelse return .unknown;
     const owner = c.owner orelse return .unknown;
@@ -2282,6 +2393,85 @@ test "a withdrawn plugin is out of reach: its services, commands and highlightin
     try testing.expect(host.command("stays.cmd") != null);
     // Still registered: only what others reach it through is gone.
     try testing.expectEqual(@as(usize, 2), host.plugins.items.len);
+}
+
+const EventLog = struct {
+    seen: [16][48]u8 = undefined,
+    lens: [16]usize = @splat(0),
+    n: usize = 0,
+    /// Emit this from the handler, once, to see it wait for the next delivery.
+    echo: ?*Host = null,
+
+    fn handler(state: *anyopaque, e: events.Event) void {
+        const self: *EventLog = @ptrCast(@alignCast(state));
+        if (self.n == self.seen.len) return;
+        const text = std.fmt.bufPrint(&self.seen[self.n], "{s} {s}", .{ e.name, e.payload }) catch return;
+        self.lens[self.n] = text.len;
+        self.n += 1;
+        if (self.echo) |h| {
+            self.echo = null;
+            h.emit("test.echo", "");
+        }
+    }
+    fn at(self: *const EventLog, i: usize) []const u8 {
+        return self.seen[i][0..self.lens[i]];
+    }
+};
+
+test "events wait for delivery, then reach every subscription that takes them, in order" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var exact_log: EventLog = .{};
+    var prefix_log: EventLog = .{};
+    var all_log: EventLog = .{};
+    var exact = Plugin{ .state = &exact_log, .vtable = &vtable, .id = "exact", .display_name = "E" };
+    var prefix = Plugin{ .state = &prefix_log, .vtable = &vtable, .id = "prefix", .display_name = "P" };
+    var all = Plugin{ .state = &all_log, .vtable = &vtable, .id = "all", .display_name = "A" };
+
+    // No one listens: nothing is queued.
+    host.emit("fizzy.document.saved", ".{}");
+    try testing.expectEqual(@as(usize, 0), host.event_queue.items.len);
+
+    try host.subscribe(.{ .event = "fizzy.document.saved", .owner = &exact, .handler = EventLog.handler });
+    try host.subscribe(.{ .event = "fizzy.document.*", .owner = &prefix, .handler = EventLog.handler });
+    try host.subscribe(.{ .event = "*", .owner = &all, .handler = EventLog.handler });
+    all_log.echo = &host;
+    host.emit("fizzy.document.opened", ".{ .path = \"a\" }");
+    host.emitZon("fizzy.document.saved", .{ .path = "a" });
+    host.emit("chat.turn_ended", "");
+    // Nothing runs inside `emit`.
+    try testing.expectEqual(@as(usize, 0), all_log.n);
+
+    host.deliverEvents();
+    try testing.expectEqual(@as(usize, 1), exact_log.n);
+    try testing.expectEqualStrings("fizzy.document.saved .{.path=\"a\"}", exact_log.at(0));
+    try testing.expectEqual(@as(usize, 2), prefix_log.n);
+    try testing.expectEqualStrings("fizzy.document.opened .{ .path = \"a\" }", prefix_log.at(0));
+    try testing.expectEqual(@as(usize, 3), all_log.n);
+    try testing.expectEqualStrings("chat.turn_ended ", all_log.at(2));
+    // What a handler emitted waits for the next delivery.
+    try testing.expectEqual(@as(usize, 1), host.event_queue.items.len);
+    host.deliverEvents();
+    try testing.expectEqualStrings("test.echo ", all_log.at(3));
+
+    // From another thread: queued, and delivered on the UI thread's next delivery.
+    const t = try std.Thread.spawn(.{}, struct {
+        fn run(h: *Host) void {
+            h.emit("worker.done", ".{}");
+        }
+    }.run, .{&host});
+    t.join();
+    try testing.expectEqual(@as(usize, 4), all_log.n);
+    host.deliverEvents();
+    try testing.expectEqualStrings("worker.done .{}", all_log.at(4));
+
+    // A withdrawn plugin hears nothing more.
+    host.withdrawPlugin(&all);
+    host.emit("fizzy.document.saved", "");
+    host.deliverEvents();
+    try testing.expectEqual(@as(usize, 5), all_log.n);
+    try testing.expectEqual(@as(usize, 2), exact_log.n);
 }
 
 test "a service whose provider is a different version is refused, not cast" {

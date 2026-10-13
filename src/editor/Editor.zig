@@ -2043,6 +2043,13 @@ pub fn postInit(editor: *Editor) !void {
     // (per-frame arena, project folder, content opacity, settings dirty-mark) through
     // the Host instead of importing the concrete Editor.
     editor.app.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy_api_vtable });
+    // What fizzy itself announces (`Host.emit`), for whoever lists events.
+    inline for (.{
+        .{ "fizzy.document.opened", "A document finished opening in a tab." },
+        .{ "fizzy.document.saved", "A document's save landed on disk or its mount." },
+        .{ "fizzy.document.closed", "A document's tab closed and the document was unloaded." },
+        .{ "fizzy.folder.opened", "A project folder was opened." },
+    }) |e| editor.app.host.declareEvent(.{ .name = e[0], .description = e[1], .payload = ".{ .path = \"/absolute/path\" }" }) catch {};
 
     // Publish the shared file set. Same reason as the commands above: `env.ctx` is this
     // editor's final address. The table answers three questions it can't itself — where the
@@ -3987,6 +3994,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
         const t = fizzy.core.hitch.begin(.plugin_hooks);
         defer t.end();
+        // What was announced since last frame first, so a plugin's frame sees what it heard.
+        editor.app.host.deliverEvents();
         for (editor.app.host.plugins.items) |plugin| plugin.beginFrame();
     }
     if (fizzy.core.perf.record) fizzy.core.perf.beginFrame();
@@ -4982,6 +4991,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     // After `ignore` — `FolderWatcher.tick` filters through it, and arming first would let a
     // burst arrive while the rules still belong to the previous folder.
     if (editor.app.folder_watcher) |*w| w.setFolder(if (on_mount) null else editor.app.folder);
+    editor.app.host.emitZon("fizzy.folder.opened", .{ .path = path });
 }
 
 /// Perform a close queued by `closeProjectFolder` during an earlier frame.
@@ -5360,6 +5370,7 @@ pub fn openFileFromBytes(editor: *Editor, path_in: []u8, bytes: []const u8, grou
     owner.setDocumentGroupingOnBuffer(staging.buf.ptr, grouping);
     const id = owner.documentIdFromBuffer(staging.buf.ptr);
     try editor.insertOpenDoc(staging.buf.ptr, owner, id);
+    editor.documentOpened(id);
     return id;
 }
 
@@ -5400,6 +5411,7 @@ pub fn processLoadingJobs(editor: *Editor) void {
                     job.destroy(io);
                     continue;
                 };
+                editor.documentOpened(id);
 
                 const should_focus = editor.last_load_request_path != null and
                     std.mem.eql(u8, editor.last_load_request_path.?, job.path);
@@ -5523,6 +5535,7 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
 
     const id = owner.documentIdFromBuffer(staging.buf.ptr);
     try editor.insertOpenDoc(staging.buf.ptr, owner, id);
+    editor.documentOpened(id);
     editor.workbench.setActiveDocIndex(editor.app.open_files.count() - 1);
     editor.pending_composite_warmup = true;
 
@@ -5640,7 +5653,21 @@ pub fn save(editor: *Editor) !void {
     }
     if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
     try doc.owner.saveDocument(doc);
+    editor.documentSaved(doc);
+}
+
+/// A document finished opening (not a plugin reload's reattach): listeners hear
+/// `fizzy.document.opened`.
+fn documentOpened(editor: *Editor, id: u64) void {
+    const doc = editor.app.docById(id) orelse return;
+    editor.app.host.emitZon("fizzy.document.opened", .{ .path = doc.owner.documentPath(doc) });
+}
+
+/// A save of `doc` landed: the watcher takes what was written as the known state, and listeners
+/// hear `fizzy.document.saved`.
+pub fn documentSaved(editor: *Editor, doc: sdk.DocHandle) void {
     if (editor.document_watcher) |*w| w.noteSaved(doc.id);
+    editor.app.host.emitZon("fizzy.document.saved", .{ .path = doc.owner.documentPath(doc) });
 }
 
 /// Whether the host writes this document (`DocumentIo`) rather than its owner: always on a
@@ -5714,7 +5741,7 @@ pub fn saveAll(editor: *Editor) !void {
             dvui.log.err("Save All: file {s} failed — see {s}'s own log", .{ doc.owner.documentPath(doc), doc.owner.id });
             continue;
         };
-        if (editor.document_watcher) |*w| w.noteSaved(doc.id);
+        editor.documentSaved(doc);
     }
 }
 
@@ -5983,6 +6010,7 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     if (editor.document_watcher) |*w| w.untrack(doc.id);
     editor.doc_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
+    editor.app.host.emitZon("fizzy.document.closed", .{ .path = doc.owner.documentPath(doc) });
     editor.app.closeDocumentResources(doc);
     editor.app.open_files.orderedRemoveAt(index);
 }
@@ -6009,6 +6037,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     if (editor.document_watcher) |*w| w.untrack(doc.id);
     editor.doc_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
+    editor.app.host.emitZon("fizzy.document.closed", .{ .path = doc.owner.documentPath(doc) });
     editor.app.closeDocumentResources(doc);
     // A closed document is not a preview any more, and ids are handed out fresh — an entry left
     // here would eventually describe somebody else's tab.

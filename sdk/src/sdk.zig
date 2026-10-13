@@ -70,6 +70,8 @@ pub const MenuSectionContribution = menus.MenuSectionContribution;
 pub const NativeMenuItem = menus.NativeMenuItem;
 /// A named action fizzy invokes by id, without knowing what it does.
 pub const Command = @import("Command.zig");
+/// Events: a plugin announces, any plugin listens (`Host.emit`, `Host.subscribe`).
+pub const events = @import("events.zig");
 pub const menu = @import("menu.zig");
 
 /// Fizzy-provided read/utility surface plugins reach through the `Host`

@@ -344,8 +344,8 @@ const Save = struct {
         };
         if (renamed) editor.documentPathChanged(doc);
         if (!io.owns(job.path)) {
-            if (editor.document_watcher) |*w| w.noteSaved(job.doc_id);
-        }
+            editor.documentSaved(doc);
+        } else editor.app.host.emitZon("fizzy.document.saved", .{ .path = job.path });
         // What we just wrote is now the known state; the backend's own modified time is not
         // known until the next read, so a stat is asked for and the precondition waits on it.
         _ = io.known_mtime.swapRemove(job.doc_id);
