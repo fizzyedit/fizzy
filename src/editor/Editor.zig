@@ -5186,7 +5186,7 @@ fn driveHandover(editor: *Editor) void {
             dvui.log.err("restart: the new instance did not come up; carrying on in this one", .{});
             if (KeptDocuments.sessionDir(editor.app.gpa, editor.app.config_folder)) |dir| {
                 defer editor.app.gpa.free(dir);
-                std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+                SettingsWatcher.emptyStateFolder(dvui.io, dir);
             } else |_| {}
             dvui.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
         },
@@ -5206,7 +5206,7 @@ fn keepSessionForRestart(editor: *Editor) bool {
     defer editor.app.gpa.free(dir);
     kept.save(dir) catch |err| {
         dvui.log.warn("restart: could not write the session ({t}); asking about unsaved changes", .{err});
-        std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+        SettingsWatcher.emptyStateFolder(dvui.io, dir);
         return false;
     };
     return true;

@@ -6944,7 +6944,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.docFromPath(path) == null);
 
         editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
-        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
         _ = try editor.app.host.openFile(.{ .path = path, .grouping = grouping });
         const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
         try std.testing.expect(after.owner.isDirty(after));
@@ -6983,13 +6983,13 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(recovered.docs.items.len > 0);
         try std.testing.expect(recovered.docs.items[0].state != null);
         recovered.deinit();
-        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
         try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
 
         // Cut off before its first `session.zon`: nothing read, and nothing left.
-        try cwd.createDirPath(dvui.io, dir);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "checkpoint/1-0.state", .data = "cut off" });
         try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
-        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
 
         // A restart's session found: the checkpoint is older, and goes unread.
         {
@@ -6998,10 +6998,20 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try kept.saveGeneration(dir, 1);
         }
         try std.testing.expect(Checkpoint.recover(gpa, config, true) == null);
-        try std.testing.expectError(error.FileNotFound, cwd.access(dvui.io, dir, .{}));
+        try expectEmptyFolder(dir);
     }
 
     try editor.deinit();
+}
+
+/// A state folder read once (a restart's session, a checkpoint): still there, with nothing in it.
+/// It is emptied rather than removed, since the settings watcher may be watching it
+/// (`SettingsWatcher.emptyStateFolder`).
+fn expectEmptyFolder(path: []const u8) !void {
+    var d = try std.Io.Dir.cwd().openDir(dvui.io, path, .{ .iterate = true });
+    defer d.close(dvui.io);
+    var it = d.iterate();
+    try std.testing.expect(try it.next(dvui.io) == null);
 }
 
 // ── The app's own executable ────────────────────────────────────────────────────────────────────
@@ -7070,14 +7080,16 @@ test "settings watcher: the app's state folders come and go under it without an 
         // restart's session supersedes: each the first thing the next launch reads.
         try kept.saveGeneration(checkpoint, 1);
         try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
-        try std.Io.Dir.cwd().createDirPath(dvui.io, checkpoint);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "checkpoint/1-0.state", .data = "cut off" });
         try std.testing.expect(Checkpoint.recover(gpa, config, false) == null);
         try kept.saveGeneration(checkpoint, 2);
         try std.testing.expect(Checkpoint.recover(gpa, config, true) == null);
+        try expectEmptyFolder(checkpoint);
         // A restart's session, written and read once.
         try kept.save(session);
         var loaded = KeptDocuments.loadSession(gpa, session) orelse return error.TestUnexpectedResult;
         loaded.deinit();
+        try expectEmptyFolder(session);
     }
 }
 
