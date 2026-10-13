@@ -1063,7 +1063,9 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                             carryOut(tree, abs_path, if (tree.drag_branch_ids != null) unionRect(selection_rect_last, content).? else content);
 
                         if (doc) |d| {
-                            if (d.owner.showsSaveStatusIndicator(d)) {
+                            const save = runtime.host().saveState(d.id);
+                            const finish = core.dialogs.bubbleSaveFinish(save.saving, save.landed_ns_ago);
+                            if (save.saving or finish != null) {
                                 core.dialogs.bubbleSpinner(@src(), .{
                                     .id_extra = inner_id_extra.* +% 4001,
                                     .expand = .none,
@@ -1072,7 +1074,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                                     .gravity_y = 0.5,
                                     .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
                                 }, .{
-                                    .complete_elapsed_ns = d.owner.timeSinceSaveCompleteNs(d),
+                                    .complete_elapsed_ns = finish,
                                 });
                             }
                         }

@@ -129,9 +129,8 @@ pub fn saveAndClose(file_id: u64) !void {
             return;
         }
     }
-    if (doc.owner.saveNeedsConfirmation(doc)) {
+    if (fizzy.editor().askBeforeSaving(doc, .save_and_close)) {
         fizzy.core.dialogs.closeFloatingDialogAnchored();
-        doc.owner.requestSaveConfirmation(doc, .save_and_close, false);
         return;
     }
     try beginSaveAndClose(doc, file_id);

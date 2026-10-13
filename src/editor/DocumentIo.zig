@@ -39,6 +39,9 @@ known_mtime: std.AutoArrayHashMapUnmanaged(u64, i64) = .empty,
 /// Documents whose next save overwrites regardless: the user was told of the conflict and
 /// chose to save again.
 force_next: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
+/// When each document's last save landed (`dvui.frameTimeNS`): for the saved check an indicator
+/// shows after the spinner (`state`).
+landed: std.AutoArrayHashMapUnmanaged(u64, i128) = .empty,
 
 pub fn init(editor: *Editor) DocumentIo {
     return .{ .editor = editor };
@@ -58,12 +61,33 @@ pub fn deinit(self: *DocumentIo) void {
     self.saves.deinit(self.editor.app.gpa);
     self.known_mtime.deinit(self.editor.app.gpa);
     self.force_next.deinit(self.editor.app.gpa);
+    self.landed.deinit(self.editor.app.gpa);
 }
 
 /// A document is gone; forget what was known about its file.
 pub fn documentClosed(self: *DocumentIo, doc_id: u64) void {
     _ = self.known_mtime.swapRemove(doc_id);
     _ = self.force_next.swapRemove(doc_id);
+    _ = self.landed.swapRemove(doc_id);
+}
+
+/// How `doc_id`'s saving stands, for a tab's or a file row's indicator.
+pub fn state(self: *const DocumentIo, doc_id: u64) sdk.EditorAPI.SaveState {
+    return .{
+        .saving = self.saves.contains(doc_id),
+        .landed_ns_ago = if (self.landed.get(doc_id)) |t| dvui.frameTimeNS() - t else null,
+    };
+}
+
+/// `plugin` is about to be unloaded: its saves still encoding run its code on their workers.
+/// Wait for each, and take it on to its write, which needs nothing of the plugin's.
+pub fn settle(self: *DocumentIo, plugin: *sdk.Plugin) void {
+    var mine: std.ArrayListUnmanaged(*Save) = .empty;
+    defer mine.deinit(self.editor.app.gpa);
+    for (self.saves.values()) |job| {
+        if (job.owner == plugin and job.stage == .encoding) mine.append(self.editor.app.gpa, job) catch {};
+    }
+    for (mine.items) |job| job.encoded();
 }
 
 /// Whether `path` is one this file handles. Everything else is the disk's.
@@ -438,6 +462,7 @@ const Save = struct {
         if (!io.owns(job.path)) {
             editor.documentSaved(doc);
         } else editor.app.host.emitZon("fizzy.document.saved", .{ .path = job.path });
+        io.landed.put(editor.app.gpa, job.doc_id, dvui.frameTimeNS()) catch {};
         // What we just wrote is now the known state; the backend's own modified time is not
         // known until the next read, so a stat is asked for and the precondition waits on it.
         _ = io.known_mtime.swapRemove(job.doc_id);

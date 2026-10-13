@@ -74,9 +74,7 @@ const vtable: sdk.Plugin.VTable = .{
     .releaseSnapshot = releaseSnapshot,
     .documentWritten = documentWritten,
     // text saves are small and synchronous, so the async path just saves in place
-    .saveDocumentAsync = saveDocument,
     .documentDefaultSaveAsFilename = documentDefaultSaveAsFilename,
-    .saveDocumentAs = saveDocumentAs,
     .undo = undoDocument,
     .redo = redoDocument,
     .canUndo = canUndoDocument,
@@ -444,10 +442,6 @@ fn documentWritten(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!
 fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     return allocator.dupe(u8, std.fs.path.basename(doc.path));
-}
-fn saveDocumentAs(_: *anyopaque, handle: DocHandle, path: []const u8, _: *dvui.Window) anyerror!void {
-    const doc = docFrom(handle) orelse return error.DocumentNotFound;
-    try doc.saveAs(path);
 }
 
 // ---- undo / redo --------------------------------------------------------------

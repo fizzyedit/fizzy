@@ -96,10 +96,19 @@ pub fn failed(self: Plugin, what: []const u8, err: anyerror) error{PluginFailed}
     return error.PluginFailed;
 }
 
-/// Mode for an owner's pre-save confirmation (`requestSaveConfirmation`). `editor_save` is a
-/// plain in-place save; `save_and_close` is part of a close/quit flow and resumes fizzy
-/// close walk once the save settles.
-pub const SaveConfirmMode = enum { editor_save, save_and_close };
+/// A question an owner wants asked before fizzy saves a document (`saveQuestion`): a save that
+/// would flatten layers, drop data, change an encoding. fizzy asks it wherever a save starts
+/// (Save, Save All, Save and Close, the quit walk) and goes on by itself with the answer.
+pub const SaveQuestion = struct {
+    title: []const u8,
+    message: []const u8,
+    /// The button that saves as asked ("Save Flattened").
+    proceed: []const u8,
+    /// An offer to save in another format instead, as Save As with the name kept and this
+    /// extension (".pixi"), and its button. Empty `extension`: not offered.
+    instead_extension: []const u8 = "",
+    instead: []const u8 = "",
+};
 
 /// One thing a plugin can create from the New File flow, when it can create more than one.
 /// The host shows these instead of the plugin itself — `title` is what the user reads, `id` is
@@ -256,13 +265,7 @@ pub const VTable = struct {
     documentHasNativeExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     /// True when `saveDocument` can write the document without Save As (e.g. `.fiz` or flat image).
     documentHasRecognizedSaveExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    showsSaveStatusIndicator: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    isDocumentSaving: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    saveDocumentAsync: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
-    timeSinceSaveCompleteNs: ?*const fn (state: *anyopaque, doc: DocHandle) ?i128 = null,
     documentDefaultSaveAsFilename: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 = null,
-    saveDocumentAs: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, window: *dvui.Window) anyerror!void = null,
-    resetDocumentSaveUIState: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
     /// The distinct kinds of document this plugin can create, when it can create more than one
     /// — a sprite and a palette, a note and a daily note. Absent (or empty) means the plugin
     /// creates one kind and the New File flow names it by the plugin itself.
@@ -404,14 +407,11 @@ pub const VTable = struct {
     folderPathsChanged: ?*const fn (state: *anyopaque, changes: PathChanges) void = null,
 
     // ---- save protocol ----
-    /// [active-doc] True when the owner wants a confirmation before `saveDocument` (e.g. a save
-    /// that would flatten lossy data, change encoding, or overwrite an on-disk change). When
-    /// true fizzy calls `requestSaveConfirmation` instead of saving directly.
-    saveNeedsConfirmation: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    /// [active-doc] Open the owner's pre-save confirmation dialog for `doc` (only called when
-    /// `saveNeedsConfirmation(doc)` is true). The dialog drives the save through fizzy
-    /// save/close API. `from_save_all_quit` marks requests issued during the quit walk.
-    requestSaveConfirmation: ?*const fn (state: *anyopaque, doc: DocHandle, mode: SaveConfirmMode, from_save_all_quit: bool) void = null,
+    /// A question to ask before fizzy saves `doc` to `path` (`SaveQuestion`), or null to save
+    /// straight away. Strings in `allocator` (the frame's arena), copied by fizzy. fizzy asks it,
+    /// shows the saving and its end, and once the person has said to go ahead it does not ask
+    /// again while the document stays open. The owner never drives a save itself.
+    saveQuestion: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) ?SaveQuestion = null,
 
     // ---- settings ----
     /// [requested] This plugin's persisted settings blob changed while the plugin is loaded —
@@ -598,35 +598,10 @@ pub fn documentHasRecognizedSaveExtension(self: Plugin, doc: DocHandle) bool {
     return if (self.vtable.documentHasRecognizedSaveExtension) |f| f(self.state, doc) else false;
 }
 
-pub fn showsSaveStatusIndicator(self: Plugin, doc: DocHandle) bool {
-    const prof = core.profile.begin(self.id, "showsSaveStatusIndicator");
-    defer prof.end();
-    return if (self.vtable.showsSaveStatusIndicator) |f| f(self.state, doc) else false;
-}
 
-pub fn isDocumentSaving(self: Plugin, doc: DocHandle) bool {
-    const prof = core.profile.begin(self.id, "isDocumentSaving");
-    defer prof.end();
-    return if (self.vtable.isDocumentSaving) |f| f(self.state, doc) else false;
-}
 
-pub fn saveNeedsConfirmation(self: Plugin, doc: DocHandle) bool {
-    const prof = core.profile.begin(self.id, "saveNeedsConfirmation");
-    defer prof.end();
-    return if (self.vtable.saveNeedsConfirmation) |f| f(self.state, doc) else false;
-}
 
-pub fn saveDocumentAsync(self: Plugin, doc: DocHandle) !void {
-    const prof = core.profile.begin(self.id, "saveDocumentAsync");
-    defer prof.end();
-    if (self.vtable.saveDocumentAsync) |f| f(self.state, doc) catch |err| return self.failed("saveDocumentAsync", err);
-}
 
-pub fn timeSinceSaveCompleteNs(self: Plugin, doc: DocHandle) ?i128 {
-    const prof = core.profile.begin(self.id, "timeSinceSaveCompleteNs");
-    defer prof.end();
-    return if (self.vtable.timeSinceSaveCompleteNs) |f| f(self.state, doc) else null;
-}
 
 // ---- document lifecycle wrappers (operate on a DocHandle this plugin owns) ----
 
@@ -873,22 +848,14 @@ pub fn documentDefaultSaveAsFilename(self: Plugin, doc: DocHandle, allocator: st
     return if (self.vtable.documentDefaultSaveAsFilename) |f| (f(self.state, doc, allocator) catch |err| return self.failed("documentDefaultSaveAsFilename", err)) else error.Unsupported;
 }
 
-pub fn saveDocumentAs(self: Plugin, doc: DocHandle, path: []const u8, window: *dvui.Window) !void {
-    const prof = core.profile.begin(self.id, "saveDocumentAs");
-    defer prof.end();
-    if (self.vtable.saveDocumentAs) |f| (f(self.state, doc, path, window) catch |err| return self.failed("saveDocumentAs", err)) else return error.Unsupported;
-}
 
-pub fn resetDocumentSaveUIState(self: Plugin, doc: DocHandle) void {
-    const prof = core.profile.begin(self.id, "resetDocumentSaveUIState");
-    defer prof.end();
-    if (self.vtable.resetDocumentSaveUIState) |f| f(self.state, doc);
-}
 
-pub fn requestSaveConfirmation(self: Plugin, doc: DocHandle, mode: SaveConfirmMode, from_save_all_quit: bool) void {
-    const prof = core.profile.begin(self.id, "requestSaveConfirmation");
+
+pub fn saveQuestion(self: Plugin, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) ?SaveQuestion {
+    const prof = core.profile.begin(self.id, "saveQuestion");
     defer prof.end();
-    if (self.vtable.requestSaveConfirmation) |f| f(self.state, doc, mode, from_save_all_quit);
+    const f = self.vtable.saveQuestion orelse return null;
+    return f(self.state, doc, path, allocator);
 }
 
 pub fn settingsChanged(self: Plugin, blob: []const u8) void {

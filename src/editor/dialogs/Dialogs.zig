@@ -6,6 +6,7 @@ const Dialogs = @This();
 // Only fizzy-level dialogs. Plugin-owned dialogs (New File, Export, …) are reached through
 // plugin vtable hooks / `Host.requestNewDocument`; fizzy never names a plugin's dialog.
 pub const UnsavedClose = @import("UnsavedClose.zig");
+pub const SaveQuestion = @import("SaveQuestion.zig");
 pub const FileChangedOnDisk = @import("FileChangedOnDisk.zig");
 pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
 pub const AboutFizzy = @import("AboutFizzy.zig");

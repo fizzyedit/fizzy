@@ -100,7 +100,13 @@ pub const NewDocGrid = struct {
 };
 
 /// Web save-dialog kind (wasm only; native ignores).
-pub const WebSaveKind = enum { save, save_as };
+/// How a document's saving stands (`saveState`).
+pub const SaveState = struct {
+    /// A save of it is in flight.
+    saving: bool = false,
+    /// How long ago its last save landed, in nanoseconds; null when none has this session.
+    landed_ns_ago: ?i128 = null,
+};
 
 /// Resolved canvas zoom/pan control style (mouse: scroll zooms, middle-button pans;
 /// trackpad: scroll pans, ctrl/cmd+scroll zooms). Matches `core.widgets.CanvasWidget.PanZoomScheme`.
@@ -368,15 +374,10 @@ pub const VTable = struct {
     /// Hint the files tree to scroll/highlight a path just created (e.g. New File dialog).
     setExplorerNewFilePath: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
 
-    // ---- save / quit flow ----
-    requestSaveAs: *const fn (ctx: *anyopaque) void,
-    requestWebSave: *const fn (ctx: *anyopaque, kind: WebSaveKind) void,
-    cancelPendingSaveDialog: *const fn (ctx: *anyopaque) void,
-    setPendingCloseDocId: *const fn (ctx: *anyopaque, id: u64) void,
-    queueCloseAfterSave: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
-    trackQuitSaveInFlight: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
-    resumeSaveAllQuit: *const fn (ctx: *anyopaque) void,
-    abortSaveAllQuit: *const fn (ctx: *anyopaque) void,
+    // ---- saving ----
+    /// How a document's saving stands, as fizzy runs it (`SaveState`): for a tab's or a file
+    /// row's indicator. fizzy saves every document; an owner never drives a save itself.
+    saveState: *const fn (ctx: *anyopaque, doc_id: u64) SaveState,
 
     /// Append a line to fizzy's "Output" bottom panel. `scope` and `message` are plain
     /// runtime strings (not `comptime`, unlike `std.log`) — a plugin builds `.dylib`/`.so`
@@ -731,36 +732,16 @@ pub fn setExplorerNewFilePath(self: EditorAPI, path: []const u8) !void {
     return self.vtable.setExplorerNewFilePath(self.ctx, path) catch |err| self.failed("setExplorerNewFilePath", err);
 }
 
-pub fn requestSaveAs(self: EditorAPI) void {
-    self.vtable.requestSaveAs(self.ctx);
-}
 
-pub fn requestWebSave(self: EditorAPI, kind: WebSaveKind) void {
-    self.vtable.requestWebSave(self.ctx, kind);
-}
 
-pub fn cancelPendingSaveDialog(self: EditorAPI) void {
-    self.vtable.cancelPendingSaveDialog(self.ctx);
-}
 
-pub fn setPendingCloseDocId(self: EditorAPI, id: u64) void {
-    self.vtable.setPendingCloseDocId(self.ctx, id);
-}
 
-pub fn queueCloseAfterSave(self: EditorAPI, id: u64) !void {
-    return self.vtable.queueCloseAfterSave(self.ctx, id) catch |err| self.failed("queueCloseAfterSave", err);
-}
 
-pub fn trackQuitSaveInFlight(self: EditorAPI, id: u64) !void {
-    return self.vtable.trackQuitSaveInFlight(self.ctx, id) catch |err| self.failed("trackQuitSaveInFlight", err);
-}
 
-pub fn resumeSaveAllQuit(self: EditorAPI) void {
-    self.vtable.resumeSaveAllQuit(self.ctx);
-}
 
-pub fn abortSaveAllQuit(self: EditorAPI) void {
-    self.vtable.abortSaveAllQuit(self.ctx);
+
+pub fn saveState(self: EditorAPI, doc_id: u64) SaveState {
+    return self.vtable.saveState(self.ctx, doc_id);
 }
 
 pub fn logLine(self: EditorAPI, level: std.log.Level, scope: []const u8, message: []const u8) void {

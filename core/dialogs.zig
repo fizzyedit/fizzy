@@ -1222,6 +1222,17 @@ const bubble_check_grow_ns: i128 = 400 * std.time.ns_per_ms;
 pub const bubble_save_transition_ns: i128 = bubble_gather_ns + bubble_swell_ns + bubble_check_delay_ns;
 
 /// True when save-complete feedback is showing the check (tab close may appear on hover).
+/// How long a save's finish shows after it lands: the bubbles gather, swell, pop and leave a check.
+pub const bubble_save_flash_ns: i128 = 2 * std.time.ns_per_s;
+
+/// The finish to show for a document's save (`bubbleSpinner`'s `complete_elapsed_ns`), from how its
+/// saving stands: none while it saves or once the flash is over, else how long ago it landed.
+pub fn bubbleSaveFinish(saving: bool, landed_ns_ago: ?i128) ?i128 {
+    if (saving) return null;
+    const ago = landed_ns_ago orelse return null;
+    return if (ago < bubble_save_flash_ns) ago else null;
+}
+
 pub fn bubbleSpinnerSaveInCheckPhase(complete_elapsed_ns: i128) bool {
     return complete_elapsed_ns >= bubble_save_transition_ns;
 }

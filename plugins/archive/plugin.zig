@@ -53,7 +53,6 @@ const vtable: sdk.Plugin.VTable = .{
     .closeDocument = closeDocument,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
-    .saveDocumentAs = saveDocumentAs,
     .documentSnapshot = documentSnapshot,
     .encodeSnapshot = encodeSnapshot,
     .releaseSnapshot = releaseSnapshot,
@@ -265,10 +264,6 @@ fn saveDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     defer gpa.free(bytes);
     try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = doc.path, .data = bytes });
     doc.markClean();
-}
-fn saveDocumentAs(state: *anyopaque, handle: DocHandle, path: []const u8, _: *dvui.Window) anyerror!void {
-    try setDocumentPath(state, handle, path);
-    try saveDocument(state, handle);
 }
 /// A save's snapshot: the archive packed as it stands. Packing reads the in-memory file system,
 /// which only the UI thread may, so it happens here; copying the files out to pack on the worker

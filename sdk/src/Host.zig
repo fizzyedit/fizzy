@@ -750,36 +750,18 @@ pub fn setExplorerNewFilePath(self: *Host, path: []const u8) !void {
     return if (self.fizzy_api) |a| try a.setExplorerNewFilePath(path) else error.FizzyApiNotInstalled;
 }
 
-pub fn requestSaveAs(self: *Host) void {
-    if (self.fizzy_api) |a| a.requestSaveAs();
-}
 
-pub fn requestWebSave(self: *Host, kind: EditorAPI.WebSaveKind) void {
-    if (self.fizzy_api) |a| a.requestWebSave(kind);
-}
 
-pub fn cancelPendingSaveDialog(self: *Host) void {
-    if (self.fizzy_api) |a| a.cancelPendingSaveDialog();
-}
 
-pub fn setPendingCloseDocId(self: *Host, id: u64) void {
-    if (self.fizzy_api) |a| a.setPendingCloseDocId(id);
-}
 
-pub fn queueCloseAfterSave(self: *Host, id: u64) !void {
-    if (self.fizzy_api) |a| return a.queueCloseAfterSave(id);
-}
 
-pub fn trackQuitSaveInFlight(self: *Host, id: u64) !void {
-    if (self.fizzy_api) |a| return a.trackQuitSaveInFlight(id);
-}
 
-pub fn resumeSaveAllQuit(self: *Host) void {
-    if (self.fizzy_api) |a| a.resumeSaveAllQuit();
-}
 
-pub fn abortSaveAllQuit(self: *Host) void {
-    if (self.fizzy_api) |a| a.abortSaveAllQuit();
+
+/// How a document's saving stands (`EditorAPI.SaveState`): for an indicator. Not saving and
+/// never saved when fizzy isn't installed.
+pub fn saveState(self: *Host, doc_id: u64) EditorAPI.SaveState {
+    return if (self.fizzy_api) |a| a.saveState(doc_id) else .{};
 }
 
 /// Append a line to fizzy's "Output" bottom panel. No-op if fizzy isn't installed

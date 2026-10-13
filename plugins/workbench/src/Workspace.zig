@@ -356,15 +356,14 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         // Saving has priority over hover/close/dirty indicators: the user wants visible
         // confirmation that the save is in flight, and the slot's size matches the close button
         // so the layout doesn't shift when saving starts/ends.
-        const save_flash_elapsed = if (doc_opt) |doc| doc.owner.timeSinceSaveCompleteNs(doc) else null;
+        // fizzy saves every document and says how it stands (`Host.saveState`).
+        const save = if (doc_opt) |doc| runtime.host().saveState(doc.id) else @TypeOf(runtime.host().saveState(0)){};
+        const save_flash_elapsed = core.dialogs.bubbleSaveFinish(save.saving, save.landed_ns_ago);
         const save_in_check_phase = if (save_flash_elapsed) |elapsed|
             core.dialogs.bubbleSpinnerSaveInCheckPhase(elapsed)
         else
             false;
-        const save_blocks_tab_close = if (doc_opt) |doc|
-            doc.owner.isDocumentSaving(doc) or (doc.owner.showsSaveStatusIndicator(doc) and !save_in_check_phase)
-        else
-            false;
+        const save_blocks_tab_close = save.saving or (save_flash_elapsed != null and !save_in_check_phase);
 
         if (save_blocks_tab_close or (save_in_check_phase and !tab_hovered)) {
             core.dialogs.bubbleSpinner(@src(), .{

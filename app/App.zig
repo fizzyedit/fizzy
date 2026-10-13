@@ -764,20 +764,7 @@ pub fn pluginHasDirtyDocs(app: *App, plugin: *sdk.Plugin) bool {
     return false;
 }
 
-/// True if `plugin` owns any document with an async save still in flight.
-pub fn pluginHasSavingDocs(app: *App, plugin: *sdk.Plugin) bool {
-    for (app.open_files.values()) |doc| {
-        if (doc.owner == plugin and doc.owner.isDocumentSaving(doc)) return true;
-    }
-    return false;
-}
 
-pub fn saving(app: *App) bool {
-    for (app.open_files.values()) |doc| {
-        if (doc.owner.isDocumentSaving(doc)) return true;
-    }
-    return false;
-}
 
 /// Open documents of extension `ext` whose owner is no longer the plugin that would open `ext`
 /// today — i.e. documents left behind by a reassignment. Reassigning never closes anything, so
@@ -1154,17 +1141,6 @@ pub fn syncLoadedPluginRenderBridge(app: *App) void {
     }
 }
 
-/// Spin until none of `plugin`'s open documents report `isDocumentSaving`. Called from
-/// `unloadPlugin` on the GUI thread while the save-queue worker runs concurrently.
-///
-/// Nothing to wait for on the web, and nothing to wait *with*: there are no threads there, so a
-/// save either finished inline or is a frame-driven task this spin would deadlock against.
-pub fn waitForPluginSaves(app: *App, plugin: *sdk.Plugin) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    while (app.pluginHasSavingDocs(plugin)) {
-        std.Thread.yield() catch {};
-    }
-}
 
 /// Whether a bundled plugin should be loaded from `{exe_dir}/plugins/<id>/` rather than the
 /// copy linked in: never on wasm, not when the build pinned it static

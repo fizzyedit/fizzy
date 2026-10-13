@@ -241,6 +241,11 @@ document_watcher: ?DocumentWatcher = null,
 /// on a mount. `undefined` until `init` has a stable `*Editor` to hand it (it calls back into
 /// the editor on completion).
 doc_io: DocumentIo = undefined,
+/// The question an owner asked before a save, while it is on screen (`Dialogs.SaveQuestion`).
+save_question: ?Dialogs.SaveQuestion.Pending = null,
+/// Documents whose owner's question the person has answered "go ahead" to: not asked again while
+/// they stay open.
+save_answered: std.AutoHashMapUnmanaged(u64, void) = .empty,
 /// Documents on their way, each with a placeholder tab until it lands (`Openings`).
 openings: Openings = undefined,
 
@@ -1828,7 +1833,8 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) Unload
     if (!opts.force and !opts.keep and editor.app.pluginHasDirtyDocs(plugin)) return error.DirtyDocuments;
 
     // Let in-flight async saves finish while the owning `File` records still exist.
-    editor.app.waitForPluginSaves(plugin);
+    // Its saves still encoding run its code on their workers: finish them before it goes.
+    editor.doc_io.settle(plugin);
 
     // Cancel + await any in-flight file loads owned by this plugin so no worker calls into
     // the dylib after we `dlclose` it below.
@@ -2364,14 +2370,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .allocUntitledPath = fizzyAllocUntitledPath,
     .createDocument = fizzyCreateDocument,
     .setExplorerNewFilePath = fizzySetExplorerNewFilePath,
-    .requestSaveAs = fizzyRequestSaveAs,
-    .requestWebSave = fizzyRequestWebSave,
-    .cancelPendingSaveDialog = fizzyCancelPendingSaveDialog,
-    .setPendingCloseDocId = fizzySetPendingCloseDocId,
-    .queueCloseAfterSave = fizzyQueueCloseAfterSave,
-    .trackQuitSaveInFlight = fizzyTrackQuitSaveInFlight,
-    .resumeSaveAllQuit = fizzyResumeSaveAllQuit,
-    .abortSaveAllQuit = fizzyAbortSaveAllQuit,
+    .saveState = fizzySaveState,
     .logLine = fizzyLogLine,
     .panic = fizzyPanic,
     .drawMenuItem = fizzyDrawMenuItem,
@@ -2715,35 +2714,8 @@ fn fizzySetExplorerNewFilePath(ctx: *anyopaque, path: []const u8) anyerror!void 
     // and "the user can see and rename it".
     editor.app.file_table.invalidateAll();
 }
-fn fizzyRequestSaveAs(ctx: *anyopaque) void {
-    fizzyCtx(ctx).requestSaveAs();
-}
-fn fizzyRequestWebSave(ctx: *anyopaque, kind: sdk.EditorAPI.WebSaveKind) void {
-    const native_kind: Dialogs.WebSaveAs.Kind = switch (kind) {
-        .save => .save,
-        .save_as => .save_as,
-    };
-    fizzyCtx(ctx).requestWebSaveDialog(native_kind);
-}
-fn fizzyCancelPendingSaveDialog(ctx: *anyopaque) void {
-    fizzyCtx(ctx).cancelPendingSaveDialog();
-}
-fn fizzySetPendingCloseDocId(ctx: *anyopaque, id: u64) void {
-    fizzyCtx(ctx).app.pending_close_file_id = id;
-}
-fn fizzyQueueCloseAfterSave(ctx: *anyopaque, id: u64) anyerror!void {
-    const editor = fizzyCtx(ctx);
-    try fizzyCtx(ctx).app.pending_close_after_save.put(editor.app.gpa, id, {});
-}
-fn fizzyTrackQuitSaveInFlight(ctx: *anyopaque, id: u64) anyerror!void {
-    const editor = fizzyCtx(ctx);
-    try fizzyCtx(ctx).app.quit_saves_in_flight.put(editor.app.gpa, id, {});
-}
-fn fizzyResumeSaveAllQuit(ctx: *anyopaque) void {
-    fizzyCtx(ctx).app.pending_quit_continue = true;
-}
-fn fizzyAbortSaveAllQuit(ctx: *anyopaque) void {
-    fizzyCtx(ctx).app.abortSaveAllQuit();
+fn fizzySaveState(ctx: *anyopaque, doc_id: u64) sdk.EditorAPI.SaveState {
+    return fizzyCtx(ctx).doc_io.state(doc_id);
 }
 
 /// Store a loaded/created document in the plugin registry and register its handle.
@@ -4858,11 +4830,10 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             editor.requestSaveAs();
             return;
         }
-        if (doc.owner.saveNeedsConfirmation(doc)) {
-            // Flat-raster prompt is a modal dialog — same reason as Save As, do
-            // it serially and rejoin afterwards.
+        if (editor.askBeforeSaving(doc, .quit)) {
+            // The owner's question is a modal dialog: as Save As, one at a time, and the answer
+            // rejoins the walk (`Dialogs.SaveQuestion`).
             if (editor.app.open_files.getIndex(id)) |idx| editor.workbench.setActiveDocIndex(idx);
-            doc.owner.requestSaveConfirmation(doc, .save_and_close, true);
             return;
         }
         if (editor.document_watcher) |*w| {
@@ -4875,15 +4846,9 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             w.markPendingBaseline(id);
         }
 
-        // Async-safe path: kick off, move to in-flight, drop from queue. A mounted document's
-        // write is async by nature and `docSaving` below waits on it.
-        if (editor.hostWrites(doc)) {
-            editor.saveThroughHost(doc) catch |err| {
-                dvui.log.err("Save all quit kickoff: {s}", .{@errorName(err)});
-                editor.app.abortSaveAllQuit();
-                return;
-            };
-        } else doc.owner.saveDocumentAsync(doc) catch |err| {
+        // Kick off, move to in-flight, drop from queue: fizzy's save lands off the UI thread and
+        // `docSaving` below waits on it; an owner that writes its own files is done at once.
+        editor.writeDocument(doc) catch |err| {
             dvui.log.err("Save all quit kickoff: {s}", .{@errorName(err)});
             editor.app.abortSaveAllQuit();
             return;
@@ -5659,15 +5624,22 @@ pub fn save(editor: *Editor) !void {
             return;
         }
     }
-    if (doc.owner.saveNeedsConfirmation(doc)) {
-        doc.owner.requestSaveConfirmation(doc, .editor_save, false);
-        return;
-    }
+    if (editor.askBeforeSaving(doc, .save)) return;
     if (comptime builtin.target.cpu.arch == .wasm32) if (!editor.hostWrites(doc)) {
         editor.requestWebSaveDialog(.save);
         return;
     };
     try editor.writeDocument(doc);
+}
+
+/// Whether the owner's question has to be asked before saving `doc` (`Plugin.saveQuestion`): asks
+/// it, and the answer goes on with the save it was part of. False when there is none, or the
+/// person already said to go ahead while this document has been open.
+pub fn askBeforeSaving(editor: *Editor, doc: sdk.DocHandle, then: Dialogs.SaveQuestion.Then) bool {
+    if (editor.save_answered.contains(doc.id)) return false;
+    const q = doc.owner.saveQuestion(doc, doc.owner.documentPath(doc), editor.app.host.arena()) orelse return false;
+    Dialogs.SaveQuestion.request(doc.id, q, then);
+    return true;
 }
 
 /// Write `doc` where it is, once whatever asks first (an unrecognized extension, a conflict on
@@ -5731,7 +5703,7 @@ fn downloadDocument(editor: *Editor, doc: sdk.DocHandle, path: []const u8) !void
 
 /// Whether a save is in flight for `doc`, whichever side is doing the writing.
 pub fn docSaving(editor: *Editor, doc: sdk.DocHandle) bool {
-    return doc.owner.isDocumentSaving(doc) or editor.doc_io.saving(doc.id);
+    return editor.doc_io.saving(doc.id);
 }
 
 /// Browser: pick download filename/extension before encoding (`processPendingSaveAs`).
@@ -5751,7 +5723,8 @@ pub fn saveAll(editor: *Editor) !void {
     for (editor.app.open_files.values()) |doc| {
         if (!doc.owner.isDirty(doc)) continue;
         if (!doc.owner.documentHasRecognizedSaveExtension(doc)) continue;
-        if (doc.owner.saveNeedsConfirmation(doc)) continue;
+        // A question to answer is asked by a save of that document alone.
+        if (!editor.save_answered.contains(doc.id) and doc.owner.saveQuestion(doc, doc.owner.documentPath(doc), editor.app.host.arena()) != null) continue;
         if (editor.document_watcher) |*w| {
             if (w.hasDiskConflict(doc.id)) continue;
         }
@@ -5817,14 +5790,7 @@ pub fn cancelPendingSaveDialog(editor: *Editor) void {
     const file_id = editor.app.pending_close_file_id orelse if (editor.activeDoc()) |doc| doc.id else null;
     editor.app.pending_close_file_id = null;
 
-    if (file_id) |id| {
-        _ = editor.app.pending_close_after_save.swapRemove(id);
-        if (editor.app.docById(id)) |doc| {
-            doc.owner.resetDocumentSaveUIState(doc);
-        }
-    } else if (editor.activeDoc()) |doc| {
-        doc.owner.resetDocumentSaveUIState(doc);
-    }
+    if (file_id) |id| _ = editor.app.pending_close_after_save.swapRemove(id);
 
     if (editor.app.quit_save_all_ids.items.len > 0 or editor.app.quit_in_progress) {
         editor.app.abortSaveAllQuit();
@@ -5901,35 +5867,20 @@ pub fn processPendingSaveAs(editor: *Editor) void {
             return;
         }
     }
-    const host_writes_here = editor.doc_io.owns(path) or (builtin.target.cpu.arch != .wasm32 and doc.owner.canSaveThroughHost());
-    if (host_writes_here) {
-        // The owner adopts the new path when the write lands (`documentWritten`), and
-        // `documentPathChanged` runs there; nothing below applies until then.
-        editor.doc_io.save(doc, path) catch |err| switch (err) {
-            error.OwnerCannotSaveToMount => dvui.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." }),
+    // fizzy writes it: the owner adopts the new path when the write lands (`documentWritten`), and
+    // `documentPathChanged` runs there. A Save As that was part of a close or the quit (an
+    // untitled document) closes once it has landed clean.
+    editor.doc_io.save(doc, path) catch |err| {
+        switch (err) {
+            error.OwnerCannotSaveToMount => dvui.toast(@src(), .{ .message = "This editor cannot save to another file." }),
             else => dvui.log.err("Save As: {any}", .{err}),
-        };
+        }
         return;
-    }
-    // The owner has already said why, in its own words.
-    doc.owner.saveDocumentAs(doc, path, dvui.currentWindow()) catch return;
-    // The path and dirty flag both just changed, part-way through a frame that several
-    // consumers have already drawn with the old values; this re-keys what the path names and
-    // asks for the frame that shows the new one.
-    editor.documentPathChanged(doc);
-
+    };
     if (editor.app.pending_close_file_id) |cid| {
         if (doc.id == cid) {
             editor.app.pending_close_file_id = null;
-            editor.rawCloseFileID(cid) catch |err| {
-                dvui.log.err("Failed to close file after Save As: {s}", .{@errorName(err)});
-            };
-            if (editor.app.quit_save_all_ids.items.len > 0) {
-                if (std.mem.indexOfScalar(u64, editor.app.quit_save_all_ids.items, cid)) |ix| {
-                    _ = editor.app.quit_save_all_ids.swapRemove(ix);
-                }
-                editor.app.pending_quit_continue = true;
-            }
+            editor.app.pending_close_after_save.put(editor.app.gpa, cid, {}) catch {};
         }
     }
 }
@@ -6036,6 +5987,7 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     editor.doc_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
     editor.app.host.emitZon("fizzy.document.closed", .{ .path = doc.owner.documentPath(doc) });
+    _ = editor.save_answered.remove(doc.id);
     editor.app.closeDocumentResources(doc);
     editor.app.open_files.orderedRemoveAt(index);
 }
@@ -6063,6 +6015,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     editor.doc_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
     editor.app.host.emitZon("fizzy.document.closed", .{ .path = doc.owner.documentPath(doc) });
+    _ = editor.save_answered.remove(doc.id);
     editor.app.closeDocumentResources(doc);
     // A closed document is not a preview any more, and ids are handed out fresh — an entry left
     // here would eventually describe somebody else's tab.
