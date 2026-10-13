@@ -6853,6 +6853,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // The black box (`fizzy.capture`): the last frames' input written out exactly, and read back.
+    {
+        const host = &editor.app.host;
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 7, .y = 11 } });
+        _ = try dvui.testing.step(headlessFrame);
+        const zon = switch (host.callCommand("fizzy.capture", ".{ .seconds = 60, .why = \"test\" }", host.arena())) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => return error.TestUnexpectedResult,
+        };
+        const Written = struct { path: []const u8, frames: u64 };
+        const written = try std.zon.parse.fromSliceAlloc(Written, host.arena(), try host.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+        try std.testing.expect(written.frames > 0);
+        const input_path = try std.fs.path.join(host.arena(), &.{ written.path, "input.bin" });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, input_path, host.arena(), .unlimited);
+        const stretch = try app.automation.events.Ring.read(bytes);
+        try std.testing.expectEqual(written.frames, stretch.frames.len);
+        try std.testing.expect(for (stretch.records) |e| {
+            if (e.kind == .motion and e.x == 7 and e.y == 11) break true;
+        } else false);
+        // And what the capture says about itself.
+        const meta = try std.Io.Dir.cwd().readFileAlloc(dvui.io, try std.fs.path.join(host.arena(), &.{ written.path, "meta.zon" }), host.arena(), .unlimited);
+        try std.testing.expect(std.mem.indexOf(u8, meta, ".why = \"test\"") != null);
+    }
+
     // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that
     // fails is reported without making a running plugin look broken.
     {

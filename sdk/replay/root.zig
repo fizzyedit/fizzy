@@ -12,6 +12,8 @@
 //! - `Snapshot` says what is on screen, as text: roles, names, tags, rects.
 //! - `Capture` is a picture of it, read back from the app's own frame target, on screen or not.
 //! - `overlay` draws the tape's pointer and its clicks, plainly — an app may draw its own.
+//! - `BlackBox` keeps the last minute of the app's input, frame by frame, for a capture that
+//!   replays exactly (`tape.events`, over `tape.ring`).
 //!
 //! See `docs/AUTOMATION.md` and `plans/AUTOMATION_PLAN.md`.
 pub const Player = @import("Player.zig");
@@ -22,6 +24,8 @@ pub const anchor = @import("anchor.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Capture = @import("Capture.zig");
 pub const overlay = @import("overlay.zig");
+/// The last minute of what the app was handed, frame by frame, written out on demand.
+pub const BlackBox = @import("BlackBox.zig");
 
 test {
     _ = Player;
@@ -32,4 +36,5 @@ test {
     _ = Snapshot;
     _ = Capture;
     _ = overlay;
+    _ = BlackBox;
 }

@@ -14,6 +14,11 @@ pub const Tape = @import("Tape.zig");
 pub const Sequencer = @import("Sequencer.zig");
 pub const Script = @import("Script.zig");
 pub const binary = @import("binary.zig");
+/// A recorder's rings: any stream of fixed records stamped to frames, kept for the last stretch of
+/// a run and written out as a file that reads back in place.
+pub const ring = @import("ring.zig");
+/// What a dvui app was handed, frame by frame, exactly: the black box's stream over `ring`.
+pub const events = @import("events.zig");
 /// How a tape spells a key and a chord (`"mod+shift+p"`, `"cmd+k cmd+s"`) — the keymap's spelling
 /// too, which takes it from here.
 pub const chord = @import("chord.zig");
@@ -24,6 +29,8 @@ test {
     _ = Sequencer;
     _ = Script;
     _ = binary;
+    _ = ring;
+    _ = events;
     _ = chord;
     _ = key;
 }

@@ -121,6 +121,9 @@ pub const automation = struct {
     pub const Snapshot = @import("replay").Snapshot;
     /// A picture of the window as the app drew it, on screen or not (`replay.Capture`).
     pub const Capture = @import("replay").Capture;
+    /// The last minute of the app's input, frame by frame (`replay.BlackBox`, `tape.events`).
+    pub const BlackBox = @import("replay").BlackBox;
+    pub const events = @import("tape").events;
     /// The `automation` service a plugin plays live tapes through, over a `LiveDriver`.
     pub const Service = @import("automation/Service.zig");
     pub const overlay = @import("automation/overlay.zig");

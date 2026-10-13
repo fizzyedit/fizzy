@@ -103,6 +103,11 @@ native_menus: bool = true,
 /// `FIZZY_NATIVE_DIALOGS` overrides it.
 native_dialogs: bool = true,
 
+/// Whether the black box keeps the last minute of input, frame by frame, in memory, for a capture
+/// that replays exactly (`fizzy.capture`). Nothing of it is written except a capture someone asks
+/// for. A copy of each frame's events: nanoseconds.
+black_box: bool = true,
+
 /// Whether a rebuild of the app's own executable restarts the app into it, keeping every open
 /// document (`ExecutableWatcher`). On in a source build, which is what rebuilds; off in a release
 /// built to update itself (Velopack), whose binary only changes through its own updater.

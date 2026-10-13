@@ -15,6 +15,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const fizzy = @import("../fizzy.zig");
+const captures = @import("captures.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const sdk = @import("fizzy_sdk");
@@ -174,6 +175,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.restart", .title = "Restart Fizzy", .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.toggleProfiler", .title = "Toggle Profiler", .bind = null, .run = cmdToggleProfiler, .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.capture", .title = "Capture the Last 30 Seconds", .bind = null, .run = cmdCapture, .params = CaptureArgs.params, .runWith = CaptureArgs.bind(cmdCaptureWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
 
@@ -514,6 +516,22 @@ fn canRestart(_: *anyopaque) bool {
 
 fn cmdToggleProfiler(_: *anyopaque) anyerror!void {
     Editor.Profiler.toggle();
+}
+
+const CaptureArgs = sdk.Command.Params(struct {
+    seconds: sdk.Command.Arg(u32, .{ .description = "How much of the run to keep, back from now: at most the black box's minute.", .min = 1 }) = .init(30),
+    why: sdk.Command.Arg([]const u8, .{ .description = "Why it was made, in its name: \"asked\", \"hitch\", a word of the caller's." }) = .init("asked"),
+});
+
+/// The black box's last seconds as a capture (`captures`): the input frame by frame, the
+/// profiler's report over it, and what the app was built from, under `<config>/captures/`.
+fn cmdCapture(state: *anyopaque) anyerror!void {
+    _ = try captures.write(editorFromState(state), 30, "asked");
+}
+
+fn cmdCaptureWith(state: *anyopaque, args: CaptureArgs.Args, call: *sdk.Command.Call) anyerror!void {
+    const written = captures.write(editorFromState(state), args.seconds, args.why) catch |err| return call.fail("could not write the capture: {t}", .{err});
+    try call.returns(written);
 }
 
 const TraceArgs = sdk.Command.Params(struct {
