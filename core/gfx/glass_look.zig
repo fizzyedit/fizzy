@@ -294,8 +294,21 @@ pub fn forText(look: InApp) InApp {
     var l = look;
     l.mix = l.text_mix;
     if (l.frost > 0) l.frost = 1;
+    // A window's lens, not a drop's: shallower, in a narrower band. Beside an OS window of Liquid
+    // Glass moving over the same code, the drop's deep lens across a 20-point band pulled text in
+    // from far outside the edge, in streaks that drew the eye as it moved (the user).
+    l.bend *= text_bend;
+    l.bevel_cap = text_bevel_cap;
     return l;
 }
+
+/// How much of a drop's bend a surface carrying text keeps (`forText`)…
+pub const text_bend: f32 = 0.5;
+/// …and the most its bending band is, in points.
+pub const text_bevel_cap: f32 = 12;
+/// The blur under a surface carrying text, in points (`BlurBackdrop.Pane.radius`): less than
+/// `max_blur`, as an OS window of Liquid Glass's body is less blurred than fizzy's was beside it.
+pub const text_blur: f32 = 24;
 
 /// `look` for a lens over a picture of the caller's own — a magnifier's zoom, a loupe — rather than
 /// over what is behind it (`LiquidField.drawPicture`): the picture is what it shows, as it is, so

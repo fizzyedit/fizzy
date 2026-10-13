@@ -3801,7 +3801,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
             .opacity = pane.mix,
-            .blur = if (lens) glass_look.max_blur else pane.blur,
+            .blur = if (lens) glass_look.text_blur else pane.blur,
             .lift = 0,
             .detail = 0,
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
