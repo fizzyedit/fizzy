@@ -670,10 +670,11 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   `tickActiveDocument`, `drawOverlay`, `endFrame`, `needsContinuousRepaint`. A plugin does its own
   domain work *inside* these generic phases (see the lifecycle table below for exactly when each
   fires).
-- **Folder lifecycle** — `onFolderClose` / `onFolderOpen`.
-- **Filesystem** — `folderPathsChanged` (files changed on disk under the open folder, from Fizzy's
-  own recursive watch; see below).
-- **Save protocol** — `saveNeedsConfirmation(doc)` + `requestSaveConfirmation(doc, mode, …)`.
+- **Saving** — `documentSnapshot` / `encodeSnapshot` / `releaseSnapshot` (a snapshot on the UI
+  thread, encoded on Fizzy's worker), `documentWritten`, and `saveQuestion` (asked before a save,
+  e.g. "flatten layers?"). Fizzy runs every save itself.
+- Folder and file changes are **events**, not hooks (§3.10a): `fizzy.folder.opened` / `.closed`,
+  `fizzy.files.changed`, `fizzy.document.changed`.
 - **Contributions** — `contributeMenu`, `contributeKeybinds`.
 - **New document** — `requestNewDocumentDialog(kind, parent_path, id_extra)`, plus
   `newDocumentKinds` when the plugin creates more than one kind of thing. The host expands the
@@ -774,30 +775,27 @@ paired `host.*` request. Call sites are in `src/editor/Editor.zig` (verify line 
 | `tickKeybinds` | broadcast | after the center draw, before Fizzy's global keybinds |
 | `drawOverlay` | broadcast | right after `tickKeybinds`, on top of the frame |
 
-Outside the frame loop: `onFolderClose` / `onFolderOpen` fire `[broadcast]` from
-`setProjectFolder` / `closeProjectFolder`; `documentContentChanged` fires `[broadcast]` from
-`host.notifyDocumentContentChanged`, which a document's **owner** calls when its buffer settles
-after an edit (debounced — a lull in typing, and on save; never per keystroke). That hook is how a
-plugin that owns no documents observes *unsaved* text: nothing else in the SDK exposes another
-plugin's live buffer. Treat it as an overlay on what's on disk, not a reason to write anything
-through. `saveNeedsConfirmation` / `requestSaveConfirmation`
-fire `[active-doc]` from the save / close / quit-all paths; `loadDocument` runs on a **background
+Outside the frame loop: `saveQuestion` is asked `[active-doc]` from the save / close / quit-all
+paths; `encodeSnapshot` runs on a **Fizzy worker thread**, and `loadDocument` on a **background
 load-worker thread** (touch only the host allocator + the given buffer, no dvui).
 
-#### `folderPathsChanged` — on-disk changes under the open folder
+#### `fizzy.files.changed` — on-disk changes under the open folder
 
-`documentContentChanged` covers buffers *this editor* has open. `folderPathsChanged` covers the
-rest of the tree: a note an agent wrote, a `git checkout`, a file deleted in Finder. It fires
-`[broadcast]` from `app/watch/FolderWatcher.zig` on the UI thread, with a coalesced batch:
+`fizzy.document.changed` says an open buffer is in flux. `fizzy.files.changed` covers the disk: a
+note an agent wrote, a `git checkout`, a file deleted in Finder, files nothing has open included.
+Fizzy emits it from `app/watch/FolderWatcher.zig`'s tick with a coalesced batch, `sdk.events.FilesChanged`:
 
 ```zig
-fn folderPathsChanged(state: *anyopaque, changes: sdk.Plugin.PathChanges) void {
+try host.subscribe(.{ .event = "fizzy.files.changed", .owner = &plugin, .handler = filesChanged });
+
+fn filesChanged(state: *anyopaque, e: sdk.events.Event) void {
     const st: *State = @ptrCast(@alignCast(state));
+    const changes = sdk.events.parse(sdk.events.FilesChanged, sdk.host().arena(), e) catch return st.rescanEverything();
     if (changes.truncated) return st.rescanEverything();
-    for (changes.events) |e| switch (e.kind) {
-        .created, .modified => st.reindex(e.path),
-        .deleted => st.forget(e.path),
-        .renamed => { st.forget(e.old_path); st.reindex(e.path); },
+    for (changes.events) |c| switch (c.kind) {
+        .created, .modified => st.reindex(c.path),
+        .deleted => st.forget(c.path),
+        .renamed => { st.forget(c.old_path); st.reindex(c.path); },
     };
 }
 ```
@@ -806,8 +804,7 @@ Fizzy runs **one** watch over the folder and hands out the results, so a plugin 
 files does not pin a watcher library or stand up a thread of its own. Four things about the
 contract are worth knowing before you rely on it:
 
-- **The slices live for the call only.** `changes`, every `event.path`, and every `old_path` are
-  borrowed. Copy anything you keep.
+- **Parsed into the frame's arena.** Copy anything you keep past the handler.
 - **Already filtered.** Events are run through Fizzy's `IgnoreRules` first, so `.git`, build
   output and gitignored paths never arrive. You do not need to re-derive that with
   `host.isPathIgnored`.
@@ -1115,10 +1112,10 @@ Then:
 1. Call `configure()` once from your `register(host)` — that's the earliest point
    `sdk.allocator()`/`sdk.host()` are valid; `Config` can't be a comptime default on the
    file-scope `var client: Client = .{};` every plugin declares for exactly that reason.
-2. Wire `client.onFolderOpen` / `client.onFolderClose` / `client.deinit` into your `Plugin`
-   vtable's `onFolderOpen` / `onFolderClose` / `deinit` — the client updates/restarts against
-   the project root on folder open (spawn itself is lazy / warm-up-driven) and tears down on
-   close/unload.
+2. Subscribe to `fizzy.folder.opened` / `fizzy.folder.closed` and call `client.onFolderOpen` /
+   `client.onFolderClose` from them, and `client.deinit` from your `deinit`: the client
+   updates/restarts against the project root on folder open (spawn itself is lazy /
+   warm-up-driven) and tears down on close/unload.
 3. Register a `LanguageSupport` whose hooks are thin wrappers: gate on your extension list,
    then delegate straight to the matching `client.*` method. Implement `documentOpened` as
    `client.warmUp(path, bytes)` so the server starts when a matching file is opened (not on
@@ -1221,9 +1218,25 @@ try host.declareEvent(.{ .name = "zig.build_finished", .owner = &plugin,
 - **Payloads are bytes across the boundary, types on each side**, as command arguments are. Parse
   with `std.zon.parse` and `.ignore_unknown_fields = true`, so an emitter can add fields.
 
-Fizzy announces `fizzy.document.opened`, `fizzy.document.saved`, `fizzy.document.closed` and
-`fizzy.folder.opened`, each `.{ .path = "…" }`. A plugin reload's detach and reattach of its own
-documents is neither a close nor an open, and announces nothing.
+Fizzy announces, each `.{ .path = "…" }` (`sdk.events.Path`):
+
+- `fizzy.document.opened`, `.saved`, `.closed`. A plugin reload's detach and reattach of its own
+  documents is neither a close nor an open, and announces nothing.
+- `fizzy.document.changed`: an open document's unsaved contents settled after an edit. Its
+  **owner** reports it with `host.notifyDocumentContentChanged(path)` after a lull in typing and on
+  save, never per keystroke. It names the document only; the disk still holds the saved version.
+  A listener that wants the unsaved text asks the owner for it, for the documents it cares about:
+  `host.docFromPath(path)`, then `doc.owner.documentBytes(doc, path, allocator)`.
+- `fizzy.folder.opened`, `fizzy.folder.closed`. When one folder replaces another, closed comes
+  first and names the folder that was open. By the time it is heard `host.folder()` is already the
+  next one (or null), so save state kept for the old folder to the payload's `path`. A plugin
+  loaded while a folder is open reads `host.folder()` at registration; it was not listening when
+  that folder opened.
+
+And `fizzy.files.changed` (`sdk.events.FilesChanged`, above). The workbench announces
+`workbench.pane.closed` (`.{ .grouping }`) when a document pane closes, for a plugin that keeps
+state per pane. Parse a payload with `sdk.events.parse(T, arena, event)`, which skips fields `T`
+lacks.
 
 ### 3.11 File-type ownership — `fileTypes` and the fallback editor
 
@@ -1729,7 +1742,7 @@ drop straight into the plugins directory, exactly like §2.6.
 | `app/layout/` | The region registry, picker and assignment persistence (`layout.zon`) — app-side, not part of the SDK |
 | `app/settings/SettingsPluginsZon.zig` | ZON-AST byte-span surgery for `settings.zon`'s merged `.plugins.<id>` fields — fizzy-only, not part of the SDK |
 | `app/watch/SettingsWatcher.zig` | Thin nightwatch adapter for live external `settings.zon` / dropped-in plugin reconciliation (see above) — fizzy-only, not part of the SDK |
-| `app/watch/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, fanned out to plugins as `folderPathsChanged` (§3.2). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |
+| `app/watch/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, announced to plugins as `fizzy.files.changed` (§3.10a). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |
 | `sdk/plugin_sdk.zig` | `fizzy.plugin.create` / `.install` / `.addCModule` — the build-side API a plugin's `build.zig` calls |
 | `plugins/text/` | Canonical document-owning editor plugin (and the fallback editor) — copy to start a new editor plugin |
 | `plugins/image/` | Read-only image viewer (PNG/JPG/JPEG) with zoom/pan — the smallest document-owning plugin |

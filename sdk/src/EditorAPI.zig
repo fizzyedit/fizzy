@@ -342,7 +342,7 @@ pub const VTable = struct {
         kind: std.Io.File.Kind,
     ) bool,
     /// True when fizzy has a live filesystem watcher on the open root folder, i.e. when
-    /// `Plugin.VTable.folderPathsChanged` can be relied on to fire. False with no folder open,
+    /// `fizzy.files.changed` can be relied on to be emitted. False with no folder open,
     /// on a platform with no watcher backend, or when starting one failed.
     folderWatchActive: *const fn (ctx: *anyopaque) bool,
     /// Explorer tree branch expanded state.

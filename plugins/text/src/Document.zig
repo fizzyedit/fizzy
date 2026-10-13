@@ -348,15 +348,14 @@ pub fn isDirty(self: *const Document) bool {
     return self.history.topOpId() != self.clean_op_id;
 }
 
-/// Broadcast this document's live contents to every plugin, now.
+/// Announce, now, that this document's unsaved contents settled (`fizzy.document.changed`).
 ///
 /// The text plugin owns `.md` (and everything else nothing claimed), so a plugin that indexes
-/// markdown links, counts words, or previews structure can only see unsaved text if we hand it
-/// over — nothing in the SDK exposes another plugin's buffer.
+/// markdown links or counts words learns a buffer is in flux only from us.
 pub fn notifyContentChanged(self: *Document) void {
     self.notify_seen_op_id = self.history.topOpId();
     self.notify_sent_op_id = self.notify_seen_op_id;
-    sdk.host().notifyDocumentContentChanged(self.path, self.text.items);
+    sdk.host().notifyDocumentContentChanged(self.path);
 }
 
 /// Per-frame half of the debounce. Returns true while a notification is still pending, which

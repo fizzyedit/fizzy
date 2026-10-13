@@ -6649,9 +6649,18 @@ const HeardEvents = struct {
         const gpa = std.heap.smp_allocator;
         const src = gpa.dupeZ(u8, e.payload) catch return;
         defer gpa.free(src);
-        const payload = std.zon.parse.fromSliceAlloc(struct { path: []const u8 = "" }, gpa, src, null, .{ .ignore_unknown_fields = true }) catch return;
-        defer std.zon.parse.free(gpa, payload);
-        self.events.append(gpa, .{ .name = gpa.dupe(u8, e.name) catch return, .path = gpa.dupe(u8, payload.path) catch return }) catch {};
+        // A batch of disk changes is heard by its first path, everything else by its `.path`.
+        const path = if (std.mem.eql(u8, e.name, "fizzy.files.changed")) files: {
+            const changed = std.zon.parse.fromSliceAlloc(sdk.events.FilesChanged, gpa, src, null, .{ .ignore_unknown_fields = true }) catch return;
+            defer std.zon.parse.free(gpa, changed);
+            if (changed.events.len == 0) return;
+            break :files gpa.dupe(u8, changed.events[0].path) catch return;
+        } else plain: {
+            const payload = std.zon.parse.fromSliceAlloc(sdk.events.Path, gpa, src, null, .{ .ignore_unknown_fields = true }) catch return;
+            defer std.zon.parse.free(gpa, payload);
+            break :plain gpa.dupe(u8, payload.path) catch return;
+        };
+        self.events.append(gpa, .{ .name = gpa.dupe(u8, e.name) catch return, .path = path }) catch gpa.free(path);
     }
 
     fn deinit(self: *HeardEvents) void {
@@ -6814,14 +6823,22 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.docFromPath(b) == null);
         try std.testing.expect(editor.docFromPath(notes) != null);
 
-        // What the listener heard, in order: the folder, the document opening, its save as
-        // b.txt, and its close.
+        // Disk changes from fizzy's watcher, and a buffer settling as its owner reports it.
+        host.notifyFolderPathsChanged(.{ .events = &.{.{ .path = a, .kind = .renamed, .object = .file, .old_path = b }} });
+        host.notifyDocumentContentChanged(notes);
+
+        // What the listener heard, in order: the folder closing and opening again (the project was
+        // already open), the document opening, its save as b.txt, its close, the disk changing and
+        // the notes settling.
         _ = try dvui.testing.step(headlessFrame);
         const want = [_][2][]const u8{
+            .{ "fizzy.folder.closed", project },
             .{ "fizzy.folder.opened", project },
             .{ "fizzy.document.opened", a },
             .{ "fizzy.document.saved", b },
             .{ "fizzy.document.closed", b },
+            .{ "fizzy.files.changed", a },
+            .{ "fizzy.document.changed", notes },
         };
         var at: usize = 0;
         for (heard.events.items) |e| {

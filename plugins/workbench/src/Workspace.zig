@@ -70,13 +70,12 @@ pub fn init(grouping: u64) Workspace {
     return .{ .grouping = grouping };
 }
 
-/// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed and for each
-/// pane at shutdown.
+/// Called when a pane is removed and for each pane at shutdown. Announces `workbench.pane.closed`
+/// (`.{ .grouping }`), so a plugin keeping state per pane (pixi's canvas view) lets it go; at
+/// shutdown nothing delivers it, and each plugin frees its own in `deinit`.
 pub fn deinit(self: *Workspace) void {
     self.dropSnapshot();
-    for (runtime.host().plugins.items) |plugin| {
-        plugin.removeCanvasPane(self.grouping, runtime.allocator());
-    }
+    runtime.host().emitZon("workbench.pane.closed", .{ .grouping = self.grouping });
 }
 
 /// The document a surface draws, if it is one. By the id's convention rather than a field on

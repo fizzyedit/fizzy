@@ -197,8 +197,8 @@ folder: ?[]const u8 = null,
 /// workbench's retired directory listings).
 folder_retired: std.ArrayListUnmanaged([]const u8) = .empty,
 
-/// Set by `closeProjectFolder`; the teardown itself runs at the top of the next frame so plugin
-/// `onFolderClose` hooks and the ignore-rule teardown never fire mid-draw either.
+/// Set by `closeProjectFolder`; the teardown itself runs at the top of the next frame so the
+/// ignore-rule teardown never runs mid-draw.
 pending_folder_close: bool = false,
 
 open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
@@ -261,7 +261,7 @@ settings_watcher: ?SettingsWatcher = null,
 /// `SettingsWatcher` would be.
 executable_watcher: ?ExecutableWatcher = null,
 
-/// Recursive watch on the open root folder, fanned out to plugins as `folderPathsChanged`.
+/// Recursive watch on the open root folder, announced to plugins as `fizzy.files.changed`.
 /// Same final-address constraint as the two above — started in `postInit`, retargeted whenever
 /// the root folder changes.
 folder_watcher: ?FolderWatcher = null,

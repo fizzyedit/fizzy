@@ -6,7 +6,7 @@
 //! to test directly. Same reasoning as `keymap.zig` and `reveal.zig`.
 //!
 //! `Ring` is generic over the event enums rather than importing them: the real ones live on
-//! `sdk.Plugin.PathEvent`, and `Plugin.zig` imports dvui, which would drag this file back out of
+//! `sdk.events.PathEvent`, and the SDK imports dvui, which would drag this file back out of
 //! std-only territory and into the module whose tests never run.
 const std = @import("std");
 

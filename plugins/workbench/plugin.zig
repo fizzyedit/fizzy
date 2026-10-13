@@ -69,6 +69,12 @@ pub fn register(host: *sdk.Host) !void {
         .keywords = sdk.keywords.ide.main,
         .draw = drawCenter,
     });
+    try host.declareEvent(.{
+        .name = "workbench.pane.closed",
+        .owner = &plugin,
+        .description = "A document pane closed; per-pane state kept under its grouping can go.",
+        .payload = ".{ .grouping = 0 }",
+    });
 }
 
 /// What the file tree holds across frames lives in this copy of the plugin's globals — the

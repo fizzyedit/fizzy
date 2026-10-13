@@ -677,7 +677,7 @@ pub fn isPathIgnored(
 }
 
 /// True when fizzy has a live filesystem watcher on the open root folder — i.e. when
-/// `Plugin.VTable.folderPathsChanged` will actually fire. A plugin that must stay correct
+/// `fizzy.files.changed` (`events.FilesChanged`) will actually be emitted. A plugin that must stay correct
 /// (an index, a file tree) should keep a slow rescan for when this is false, and can skip it
 /// entirely when it is true.
 pub fn folderWatchActive(self: *Host) bool {
@@ -981,33 +981,26 @@ pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
     return null;
 }
 
-/// Broadcast an open document's in-memory content change to every registered plugin.
-///
-/// Called by the document's **owner** when its buffer settles after an edit — see
-/// `Plugin.VTable.documentContentChanged` for the debouncing contract. This is how a plugin
-/// that owns nothing (a link indexer, a word counter) sees unsaved text at all: nothing else
-/// in the SDK exposes another plugin's live buffer.
-///
-/// The owner is included in the fan-out. That's deliberate — filtering it out would mean
-/// owners behave differently from everyone else for no reason, and an owner that doesn't want
-/// its own notification simply doesn't implement the hook.
-pub fn notifyDocumentContentChanged(self: *Host, path: []const u8, bytes: []const u8) void {
-    for (self.plugins.items) |plugin| plugin.documentContentChanged(path, bytes);
+/// An open document's unsaved contents settled after an edit: announces `fizzy.document.changed`
+/// (`events.Path`). Called by the document's **owner** after a short lull in typing (a few hundred
+/// ms) and on save, never per keystroke. This is how a plugin that owns nothing (a link indexer,
+/// a word counter) learns a buffer is in flux. It says which, not what it now holds: a listener
+/// that wants the text asks the owner (`Plugin.documentBytes`), so no buffer is copied for
+/// listeners that do not care about it.
+pub fn notifyDocumentContentChanged(self: *Host, path: []const u8) void {
+    self.emitZon("fizzy.document.changed", events.Path{ .path = path });
 }
 
-/// Broadcast a coalesced batch of on-disk changes under the open root folder to every plugin,
-/// after applying it to the shared file set.
-///
-/// Called by `FolderWatcher.tick` on the UI thread, never from the watcher's own thread — see
-/// `Plugin.VTable.folderPathsChanged` for the contract this upholds.
+/// A coalesced batch of on-disk changes under the open root folder, from fizzy's watcher on the UI
+/// thread: applied to the shared file set, then announced as `fizzy.files.changed`
+/// (`events.FilesChanged`).
 ///
 /// The file set is reconciled here rather than by whichever plugin happens to draw a tree: the
-/// host owns both the watcher and the table, so no plugin should have to subscribe to disk
-/// events just to keep shared state honest. A plugin's own hook is for what it *additionally*
-/// wants to do with a change.
-pub fn notifyFolderPathsChanged(self: *Host, changes: Plugin.PathChanges) void {
+/// host owns both the watcher and the table, so no plugin should have to listen to disk events
+/// just to keep shared state honest. A listener is for what it *additionally* wants to do.
+pub fn notifyFolderPathsChanged(self: *Host, changes: events.FilesChanged) void {
     if (self.files) |files| applyPathChanges(files, changes);
-    for (self.plugins.items) |plugin| plugin.folderPathsChanged(changes);
+    self.emitZon("fizzy.files.changed", changes);
 }
 
 /// Drop exactly the listings a batch of disk events invalidates.
@@ -1015,7 +1008,7 @@ pub fn notifyFolderPathsChanged(self: *Host, changes: Plugin.PathChanges) void {
 /// Only the *parent* of each changed path is dropped: a file appearing in `a/b/c.md` says
 /// nothing about `a`. A truncated batch means the event list is an incomplete picture, so the
 /// whole cache goes instead.
-fn applyPathChanges(files: *core.FileTable, changes: Plugin.PathChanges) void {
+fn applyPathChanges(files: *core.FileTable, changes: events.FilesChanged) void {
     if (changes.truncated) {
         files.invalidateListings();
         return;

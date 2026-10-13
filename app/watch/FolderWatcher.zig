@@ -1,5 +1,5 @@
-//! Watches the open root folder (recursive) for on-disk changes and broadcasts them to every
-//! plugin via `Plugin.VTable.folderPathsChanged`.
+//! Watches the open root folder (recursive) for on-disk changes and announces them to plugins as
+//! the `fizzy.files.changed` event (`sdk.events.FilesChanged`).
 //!
 //! The third nightwatch adapter in this directory, and the only one whose output leaves fizzy.
 //! `SettingsWatcher` reconciles `settings.zon`; `DocumentWatcher` reloads open tabs. Neither
@@ -11,7 +11,7 @@
 //!
 //! 1. **Thread hop.** Nightwatch calls its handler on its own thread. Plugins are dylibs; a
 //!    callback arriving on a thread the plugin never created — possibly mid-unload — is a
-//!    crash. Events are buffered here and fan out from `tick`, on the UI thread.
+//!    crash. Events are buffered here and handed over from `tick`, on the UI thread.
 //! 2. **Ignore rules.** Only fizzy knows them (`IgnoreRules`). Filtering here means `.git`,
 //!    build output and gitignored paths never reach a plugin, instead of every plugin
 //!    re-deriving the same filter from `Host.isPathIgnored` one path at a time.
@@ -19,7 +19,7 @@
 //!    and three sets of fds or event streams over the same tree.
 //!
 //! Nightwatch is deliberately not exposed: it is an implementation detail behind
-//! `folderPathsChanged`, so it can be swapped, forked, or replaced with per-platform code
+//! `fizzy.files.changed`, so it can be swapped, forked, or replaced with per-platform code
 //! without any plugin noticing.
 //!
 //! `have_impl` is false on wasm and any unsupported OS — the watcher is simply not started
@@ -33,14 +33,14 @@ const wake = @import("wake.zig");
 const dvui = @import("dvui");
 const Allocator = std.mem.Allocator;
 
-const Plugin = sdk.Plugin;
+const PathEvent = sdk.events.PathEvent;
 const folder_events = @import("folder_events.zig");
 const underDotSegment = folder_events.underDotSegment;
 
 /// One side of the double buffer. The watcher thread fills `shared`; `tick` swaps it with
 /// `staging` under the mutex and then reads at leisure, so no plugin call ever runs with the
 /// lock held or races the producer.
-const Buf = folder_events.Ring(Plugin.PathEvent.Kind, Plugin.PathEvent.ObjectType);
+const Buf = folder_events.Ring(PathEvent.Kind, PathEvent.ObjectType);
 
 const FolderWatcher = @This();
 
@@ -49,7 +49,7 @@ const FolderWatcher = @This();
 /// being written.
 const debounce_ns: i128 = 200 * std.time.ns_per_ms;
 
-/// Ring capacity. Overflow is reported as `PathChanges.truncated` rather than grown: a branch
+/// Ring capacity. Overflow is reported as `FilesChanged.truncated` rather than grown: a branch
 /// switch or an `npm install` emits events by the tens of thousands, and the honest answer for
 /// a consumer at that point is "rescan", not a longer list it still has to walk.
 const max_events: usize = 512;
@@ -93,7 +93,7 @@ staging: Buf,
 /// Main-thread coalesce deadline (`perf.nanoTimestamp()`); 0 = nothing pending.
 coalesce_deadline_ns: i128 = 0,
 /// Scratch for the fan-out, sized once so `tick` never allocates.
-out: []Plugin.PathEvent,
+out: []PathEvent,
 
 const Impl = if (have_impl) struct {
     const nightwatch = @import("nightwatch");
@@ -115,7 +115,7 @@ const Impl = if (have_impl) struct {
         .rename = onRename,
     };
 
-    fn kindOf(ev: nightwatch.EventType) Plugin.PathEvent.Kind {
+    fn kindOf(ev: nightwatch.EventType) PathEvent.Kind {
         return switch (ev) {
             .created => .created,
             .modified, .closed => .modified,
@@ -123,7 +123,7 @@ const Impl = if (have_impl) struct {
         };
     }
 
-    fn objectOf(obj: nightwatch.ObjectType) Plugin.PathEvent.ObjectType {
+    fn objectOf(obj: nightwatch.ObjectType) PathEvent.ObjectType {
         return switch (obj) {
             .file => .file,
             .dir => .dir,
@@ -135,8 +135,8 @@ const Impl = if (have_impl) struct {
         h: *Handler,
         path: []const u8,
         old_path: []const u8,
-        kind: Plugin.PathEvent.Kind,
-        object: Plugin.PathEvent.ObjectType,
+        kind: PathEvent.Kind,
+        object: PathEvent.ObjectType,
     ) void {
         const impl: *Impl = @fieldParentPtr("handler", h);
         const self = impl.owner orelse return;
@@ -174,7 +174,7 @@ pub fn init(gpa: Allocator) !FolderWatcher {
     errdefer gpa.free(staging_paths);
     const staging_events = try gpa.alloc(Buf.Event, max_events);
     errdefer gpa.free(staging_events);
-    const out = try gpa.alloc(Plugin.PathEvent, max_events);
+    const out = try gpa.alloc(PathEvent, max_events);
 
     return .{
         .gpa = gpa,
@@ -194,7 +194,7 @@ pub fn deinit(self: *FolderWatcher) void {
     self.* = undefined;
 }
 
-/// True when a watch is live, i.e. when `folderPathsChanged` can be relied on to fire. Backs
+/// True when a watch is live, i.e. when `fizzy.files.changed` can be relied on. Backs
 /// `Host.folderWatchActive`.
 pub fn active(self: *const FolderWatcher) bool {
     if (comptime !have_impl) return false;
@@ -264,7 +264,7 @@ pub const Sink = struct {
     wanted: *const fn (ctx: *anyopaque, path: []const u8, name: []const u8, kind: std.Io.File.Kind) bool,
     /// A settled batch. `truncated` means events were dropped before anything could inspect
     /// them, which is why an all-ignored batch still has to be delivered.
-    changed: *const fn (ctx: *anyopaque, events: []const Plugin.PathEvent, truncated: bool) void,
+    changed: *const fn (ctx: *anyopaque, events: []const PathEvent, truncated: bool) void,
 };
 
 /// Call once per frame. Cheap no-op unless the watcher thread actually buffered something.

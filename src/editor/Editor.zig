@@ -2072,8 +2072,15 @@ pub fn postInit(editor: *Editor) !void {
         .{ "fizzy.document.opened", "A document finished opening in a tab." },
         .{ "fizzy.document.saved", "A document's save landed on disk or its mount." },
         .{ "fizzy.document.closed", "A document's tab closed and the document was unloaded." },
+        .{ "fizzy.document.changed", "An open document's unsaved contents settled after an edit." },
         .{ "fizzy.folder.opened", "A project folder was opened." },
+        .{ "fizzy.folder.closed", "The project folder closed, or another replaced it; names the one that was open." },
     }) |e| editor.app.host.declareEvent(.{ .name = e[0], .description = e[1], .payload = ".{ .path = \"/absolute/path\" }" }) catch {};
+    editor.app.host.declareEvent(.{
+        .name = "fizzy.files.changed",
+        .description = "Files under the project folder changed on disk (coalesced, ignore rules applied); truncated means rescan.",
+        .payload = ".{ .events = .{ .{ .path = \"/abs\", .kind = .created, .object = .file, .old_path = \"\" } }, .truncated = false }",
+    }) catch {};
 
     // Publish the shared file set. Same reason as the commands above: `env.ctx` is this
     // editor's final address. The table answers three questions it can't itself — where the
@@ -2277,7 +2284,7 @@ pub fn postInit(editor: *Editor) !void {
             };
         }
 
-        // Project-wide on-disk change broadcast for plugins (`folderPathsChanged`). Only the
+        // Project-wide on-disk changes for plugins (`fizzy.files.changed`). Only the
         // buffers are set up here; the watch itself is armed by `setProjectFolder`, which may
         // already have run — hence the catch-up call below.
         editor.app.folder_watcher = FolderWatcher.init(editor.app.gpa) catch |err| blk: {
@@ -4946,7 +4953,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
 
     if (editor.app.folder != null) {
         editor.ignore.deinit(editor.app.gpa);
-        for (editor.app.host.plugins.items) |plugin| plugin.onFolderClose();
+        editor.app.host.emitZon("fizzy.folder.closed", .{ .path = editor.app.folder.? });
         // Not freed here: this runs from menus and plugin draws, and the outgoing string may
         // still be borrowed by whoever is mid-frame. See `folder_retired`.
         editor.app.retireFolder();
@@ -4969,7 +4976,6 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
         editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, s.id);
     }
 
-    for (editor.app.host.plugins.items) |plugin| plugin.onFolderOpen(editor.app.gpa);
     // `.gitignore` and the folder watcher are the disk's; a mount's freshness is its plugin's
     // (a drive's change feed), and its listings hide nothing.
     editor.ignore = if (on_mount) .{} else try IgnoreRules.load(editor.app.gpa, path);
@@ -4986,7 +4992,7 @@ fn applyPendingFolderClose(editor: *Editor) void {
     if (editor.app.folder == null) return;
     if (editor.app.folder_watcher) |*w| w.setFolder(null);
     editor.ignore.deinit(editor.app.gpa);
-    for (editor.app.host.plugins.items) |plugin| plugin.onFolderClose();
+    editor.app.host.emitZon("fizzy.folder.closed", .{ .path = editor.app.folder.? });
     editor.app.retireFolder();
 }
 
@@ -6066,9 +6072,7 @@ pub fn deinit(editor: *Editor) !void {
         editor.app.folder_watcher = null;
     }
 
-    // Tear workspaces down first: `Workspace.deinit` calls back into the owning plugin
-    // (e.g. `removeCanvasPane`), so it must run while plugin state is still alive — i.e. before
-    // the plugin `deinit` loop below frees it.
+    // Tear workspaces down first, while the plugins whose documents they hold are still alive.
     editor.workbench.deinitWorkspaces();
 
     // Drain & join the save-queue worker before tearing anything else down. Any
@@ -6230,7 +6234,7 @@ fn folderEventWanted(ctx: *anyopaque, path: []const u8, name: []const u8, kind: 
     return !editor.ignore.isIgnored(folder, path, name, kind);
 }
 
-fn folderPathsChanged(ctx: *anyopaque, events: []const sdk.Plugin.PathEvent, truncated: bool) void {
+fn folderPathsChanged(ctx: *anyopaque, events: []const sdk.events.PathEvent, truncated: bool) void {
     const editor: *Editor = @ptrCast(@alignCast(ctx));
     editor.app.host.notifyFolderPathsChanged(.{ .events = events, .truncated = truncated });
 }
