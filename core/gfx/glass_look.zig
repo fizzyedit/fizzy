@@ -28,7 +28,7 @@ const std = @import("std");
 /// The one frost every glass has above 0, as a share of the way from a clear lens (0) to wholly
 /// blurred (1): the lens's bend and shine fading as it frosts, as frosted glass's do. Tuned once,
 /// here, rather than set by each person (it was a second slider, roughness).
-pub const frost_level: f32 = 0.9;
+pub const frost_level: f32 = 0.82;
 
 /// The least opacity an app's own slider offers: 0 is a clear window, not glass (fizzy's settings).
 pub const min_opacity: f32 = 0.05;
@@ -193,11 +193,16 @@ pub const Window = struct {
 pub const window_frost_by: f32 = 0.3;
 /// The frost level the plain blur starts at.
 pub const window_blur_from: f32 = 0.1;
+/// The opacity a window's frost and blur start going at, gone at 1, under a colour that by then
+/// all but covers them. Under them is the clear lens, showing the desktop sharp: going from
+/// `shine_start` with the edge's colour, they were half gone at 0.9 while the colour covered only
+/// 90%, and the window grew clearer just before it was opaque (the user).
+pub const window_frost_out: f32 = 0.95;
 
 pub fn window(opacity: f32) Window {
     const r = roughness(opacity);
     const w = way(opacity);
-    const going = 1 - w.top;
+    const going = 1 - smoothstep(std.math.clamp((@min(opacity, 1) - window_frost_out) / (1 - window_frost_out), 0, 1));
     return .{
         .under = lens_material,
         .over = frost_material,
@@ -378,8 +383,8 @@ test "above 0 the frost is the same at every opacity; only the colour ramps" {
     var i: usize = 1;
     while (i <= 20) : (i += 1) {
         const o = at(i, 20);
-        // The window's own frost and blur go under the colour only near the top, as it covers them.
-        if (o <= shine_start) try std.testing.expectEqual(window(min_opacity).frost, window(o).frost);
+        // The window's own frost and blur go under the colour only at the very top, once it covers them.
+        if (o <= window_frost_out) try std.testing.expectEqual(window(min_opacity).frost, window(o).frost);
         try std.testing.expectEqual(smoothstep(frost_level), way(o).frost);
         try std.testing.expectEqual(frost_level * max_blur, frosted(o).blur);
         try std.testing.expectEqual(o, way(o).tint);
@@ -408,6 +413,18 @@ test "full opacity is the window's colour all over, the frost gone under it" {
     try std.testing.expectEqual(@as(f32, 1), native(1).fill);
     try std.testing.expectEqual(@as(f32, 1), inApp(1).mix);
     try std.testing.expect(inApp(1).rim > 0 and inApp(1).rim < 0.3);
+}
+
+test "the window grows no clearer on its way to opaque: frost and blur go only once covered" {
+    var i: usize = 1;
+    while (i <= 100) : (i += 1) {
+        const o = at(i, 100);
+        const w = window(o);
+        // What of the frost and blur shows through the colour over them never rises.
+        const prev = window(at(i - 1, 100) + 1e-4);
+        try std.testing.expect(w.blur * (1 - w.fill) <= prev.blur * (1 - prev.fill) + 1e-6);
+        if (o <= window_frost_out) try std.testing.expectEqual(window(min_opacity).blur, w.blur);
+    }
 }
 
 test "the opacity only goes one way: colour comes in, the shine only goes" {
