@@ -28,7 +28,7 @@ const std = @import("std");
 /// The one frost every glass has above 0, as a share of the way from a clear lens (0) to wholly
 /// blurred (1): the lens's bend and shine fading as it frosts, as frosted glass's do. Tuned once,
 /// here, rather than set by each person (it was a second slider, roughness).
-pub const frost_level: f32 = 0.75;
+pub const frost_level: f32 = 0.9;
 
 /// The least opacity an app's own slider offers: 0 is a clear window, not glass (fizzy's settings).
 pub const min_opacity: f32 = 0.05;
