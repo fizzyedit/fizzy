@@ -68,11 +68,13 @@ jobs:
       github.event_name != 'release' &&
       (github.event_name != 'pull_request' ||
         (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft))
-    # On the job, not the workflow: a run whose build is skipped (a draft's) must not cancel the
-    # test copy another pull request is building.
-    concurrency:
-      group: web-${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && 'preview' || 'main' }}
-      cancel-in-progress: true
+    # No concurrency group: one build cancelling another left a red X on whichever pull request's
+    # commit it cancelled (GitHub counts a cancelled check as failed), for nothing that was wrong
+    # with it. Every build runs to its end and passes; only the newest of a channel publishes
+    # ("Is this the newest build?"), so a superseded one still never overwrites a newer one.
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +112,36 @@ jobs:
           cat zig-out/web/build.json
           (cd zig-out/web && zip -qr "$GITHUB_WORKSPACE/web.zip" .)
 
+      # Newer runs of this workflow for the same channel whose build has not been skipped (a
+      # draft's) and has not failed: still running, or done. One of those publishes, so this one
+      # does not. A newer one that then fails leaves the copy before it served; the next push
+      # builds again.
+      - name: Is this the newest build?
+        id: newest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mine=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/web.yml/runs?per_page=50" --jq "
+            .workflow_runs[]
+            | select(.id != $GITHUB_RUN_ID and .created_at > \"$mine\" and .event != \"release\")
+            | select((if (.event == \"pull_request\" or .head_branch != \"main\") then \"preview\" else \"main\" end) == \"$CHANNEL\")
+            | select(.conclusion == null or .conclusion == \"success\")
+            | .id")
+          newer=""
+          for id in $runs; do
+            live=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --jq '[.jobs[] | select(.name == "build" and .conclusion != "skipped" and .conclusion != "failure" and .conclusion != "cancelled")] | length')
+            if [ "$live" != "0" ]; then newer="$id"; break; fi
+          done
+          if [ -n "$newer" ]; then
+            echo "A newer $CHANNEL build is on its way ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$newer): this one does not publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Hand the build to the website
+        if: steps.newest.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
