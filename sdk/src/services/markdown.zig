@@ -10,7 +10,7 @@ const std = @import("std");
 pub const Api = struct {
     /// Bump whenever this struct's layout changes: `getServiceTyped` refuses a provider whose
     /// version differs rather than reinterpreting one shape as another across `dlopen`.
-    pub const service_version: u32 = 1;
+    pub const service_version: u32 = 2;
     pub const service_name = "markdown";
 
     ctx: *anyopaque,
@@ -33,8 +33,20 @@ pub const Api = struct {
         id_extra: u64 = 0,
     };
 
+    pub const InlineOptions = struct {
+        /// The width the blocks lay out at. A caller that wants its box to hug short text (a chat
+        /// bubble) measures the text and passes the smaller of that and its limit.
+        width: f32,
+        image_base_dir: []const u8 = ".",
+        /// What keeps this render's parse and layout apart from every other, and what
+        /// `release` names. One per thing rendered (a message), stable across frames.
+        id_extra: u64 = 0,
+    };
+
     pub const VTable = struct {
         render: *const fn (ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: RenderOptions) anyerror!void,
+        renderInline: *const fn (ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: InlineOptions) anyerror!void,
+        release: *const fn (ctx: *anyopaque, id_extra: u64) void,
         defaultView: *const fn (ctx: *anyopaque) DefaultView,
         setDefaultView: *const fn (ctx: *anyopaque, view: DefaultView) void,
     };
@@ -43,6 +55,18 @@ pub const Api = struct {
     /// the current dvui parent.
     pub fn render(self: Api, bytes: []const u8, gpa: std.mem.Allocator, opts: RenderOptions) !void {
         return self.vtable.render(self.ctx, bytes, gpa, opts);
+    }
+
+    /// Render `bytes` into the current dvui parent with no scroll area of its own, as tall as it
+    /// needs at `opts.width`: inside a chat message, a hover, anything that already scrolls. The
+    /// parse and the blocks' heights are kept per `opts.id_extra` until `release`.
+    pub fn renderInline(self: Api, bytes: []const u8, gpa: std.mem.Allocator, opts: InlineOptions) !void {
+        return self.vtable.renderInline(self.ctx, bytes, gpa, opts);
+    }
+
+    /// Forget what was kept for `id_extra`'s render (a message deleted, a chat closed).
+    pub fn release(self: Api, id_extra: u64) void {
+        self.vtable.release(self.ctx, id_extra);
     }
 
     pub fn defaultView(self: Api) DefaultView {

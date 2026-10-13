@@ -33,8 +33,10 @@ const Command = @This();
 
 id: []const u8,
 owner: ?*Plugin = null,
-/// User-facing label (menus / future command palette).
+/// User-facing label (menus / command palette), and what logs and an agent's listing call it.
 title: []const u8,
+/// Who sees the command (`Visibility`).
+visibility: Visibility = .external,
 /// Invoke the command with no arguments. `state` is the owning plugin's opaque state
 /// (`owner.state`). May be absent when `runWith` is set: `Host.runCommand` then runs `runWith`
 /// with no arguments, or — when a parameter is required — has the app ask for them. Every
@@ -55,6 +57,18 @@ params: []const Param = &.{},
 /// `Params(…).bind`, which parses the arguments into the plugin's own struct and reports a
 /// mismatch as `call.bad_args`. Absent = the command takes no arguments.
 runWith: ?*const fn (state: *anyopaque, call: *Call) anyerror!void = null,
+
+/// Who sees a command.
+pub const Visibility = enum(u8) {
+    /// Listed where a person finds commands (the palette, menus, Keyboard Shortcuts), and
+    /// callable by id by plugins and agents too.
+    external,
+    /// Called by id only (`Host.callCommand`), by other plugins and agents; never listed for a
+    /// person. A plugin's contract with the plugins that work with it, kept in its commands
+    /// rather than in the SDK (the chat plugin's conversations), and reads like `text.read`
+    /// whose result only a program wants.
+    internal,
+};
 
 /// One parameter, as fizzy and any caller see it — the same description a setting carries
 /// (`settings.Setting`), plus whether it must be given.

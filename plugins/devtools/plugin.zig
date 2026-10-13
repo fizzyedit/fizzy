@@ -61,6 +61,8 @@ pub fn register(host: *sdk.Host) !void {
         .id = sdk.Plugin.commandId(plugin_id, "stats"),
         .owner = &plugin,
         .title = "Profiler Stats",
+        // Its answer is ZON for an agent; a person has the dashboard.
+        .visibility = .internal,
         .params = Stats.params,
         .runWith = Stats.bind(cmdStats),
     });

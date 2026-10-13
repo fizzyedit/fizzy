@@ -6562,6 +6562,18 @@ fn expectButtonsNamed(frame: fn () anyerror!dvui.App.Result) !void {
 // brings it up, over dvui's testing backend in a profile of its own.
 
 /// The app's frame as `Entry` runs it: the demo player, the frame target, the editor.
+var inline_md: ?sdk.services.markdown.Api = null;
+var inline_md_text: []const u8 = "A *short* paragraph.";
+var inline_md_height: f32 = 0;
+fn inlineMarkdownFrame() !dvui.App.Result {
+    var box = dvui.box(@src(), .{ .dir = .vertical }, .{});
+    try inline_md.?.renderInline(inline_md_text, dvui.currentWindow().gpa, .{ .width = 300, .id_extra = 0x1d1e });
+    const id = box.data().id;
+    box.deinit();
+    inline_md_height = dvui.minSizeGet(id).?.h;
+    return .ok;
+}
+
 fn headlessFrame() !dvui.App.Result {
     return fizzy.Entry.AppFrame();
 }
@@ -6905,6 +6917,20 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // And what the capture says about itself.
         const meta = try std.Io.Dir.cwd().readFileAlloc(dvui.io, try std.fs.path.join(host.arena(), &.{ written.path, "meta.zon" }), host.arena(), .unlimited);
         try std.testing.expect(std.mem.indexOf(u8, meta, ".why = \"test\"") != null);
+    }
+
+    // The markdown service's inline render: no scroll area of its own, as tall as its text at the
+    // width it is given, and laid out again only when that changes.
+    {
+        inline_md = (editor.app.host.getServiceTyped(sdk.services.markdown.Api) orelse return error.TestUnexpectedResult).*;
+        defer inline_md = null;
+        for (0..3) |_| _ = try dvui.testing.step(inlineMarkdownFrame);
+        try std.testing.expect(inline_md_height > 20);
+        const one_para = inline_md_height;
+        inline_md_text = "**One** paragraph.\n\nAnd another, with `code`.\n\n- and\n- a list";
+        for (0..3) |_| _ = try dvui.testing.step(inlineMarkdownFrame);
+        try std.testing.expect(inline_md_height > one_para * 2);
+        inline_md.?.release(0x1d1e);
     }
 
     // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that

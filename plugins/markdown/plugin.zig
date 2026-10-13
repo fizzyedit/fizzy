@@ -63,6 +63,8 @@ var markdown_api: sdk.services.markdown.Api = .{
 
 const markdown_service_vtable: sdk.services.markdown.Api.VTable = .{
     .render = svcRender,
+    .renderInline = svcRenderInline,
+    .release = svcRelease,
     .defaultView = svcDefaultView,
     .setDefaultView = svcSetDefaultView,
 };
@@ -141,6 +143,21 @@ fn svcRender(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: s
         .image_base_dir = opts.image_base_dir,
         .id_extra = opts.id_extra,
     });
+}
+
+fn svcRenderInline(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: sdk.services.markdown.Api.InlineOptions) !void {
+    const st: *State = @ptrCast(@alignCast(ctx));
+    md.drawInline(st.previewFor(gpa, opts.id_extra), bytes, gpa, .{
+        .io = dvui.io,
+        .image_base_dir = opts.image_base_dir,
+        .id_extra = opts.id_extra,
+        .width = opts.width,
+    });
+}
+
+fn svcRelease(ctx: *anyopaque, id_extra: u64) void {
+    const st: *State = @ptrCast(@alignCast(ctx));
+    st.release(id_extra);
 }
 
 fn svcDefaultView(ctx: *anyopaque) sdk.services.markdown.Api.DefaultView {

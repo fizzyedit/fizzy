@@ -136,6 +136,8 @@ fn collectGroups(
     var any_row = false;
 
     for (editor.app.host.commands.items, 0..) |c, ci| {
+        // For plugins and agents, not something a person binds (`Command.visibility`).
+        if (c.visibility != .external) continue;
         const owner = ownerPrefix(c.id);
         const group = blk: {
             for (groups.items) |*g| {
@@ -171,7 +173,7 @@ fn collectGroups(
         for (groups.items) |*g| {
             g.score = s;
             for (editor.app.host.commands.items, 0..) |c, ci| {
-                if (!std.mem.eql(u8, ownerPrefix(c.id), g.owner)) continue;
+                if (c.visibility != .external or !std.mem.eql(u8, ownerPrefix(c.id), g.owner)) continue;
                 const keys = if (shortcutFor(editor, c.id, platform)) |sc| sc.keys else "";
                 g.rows.append(arena, .{ .cmd = c, .keys = keys, .score = s, .tie = ci }) catch {};
             }

@@ -503,7 +503,7 @@ fn collectCommandRows(editor: *Editor, query: *const fuzzy.Query) []Row {
     const Hit = struct { item: usize, score: f64, recency: ?usize };
     var hits: std.ArrayListUnmanaged(Hit) = .empty;
     for (editor.app.host.commands.items, 0..) |c, i| {
-        if (!shouldShowCommand(editor, c.id)) continue;
+        if (c.visibility != .external or !shouldShowCommand(editor, c.id)) continue;
         // Match against the title, the id, *and* the owning plugin's name, so "Save All",
         // "fizzy.saveAll" and "pixi" (to list everything pixi contributes) all find rows.
         const score = if (query.isEmpty())

@@ -162,6 +162,8 @@ pub fn register(host: *sdk.Host) !void {
         .id = sdk.Plugin.commandId("text", "read"),
         .owner = &plugin,
         .title = "Read Text",
+        // Its result is the text, which only a program wants.
+        .visibility = .internal,
         .params = Read.params,
         .runWith = Read.bind(cmdRead),
         .isEnabled = anyTextDoc,
@@ -171,6 +173,9 @@ pub fn register(host: *sdk.Host) !void {
         .id = sdk.Plugin.commandId("text", "write"),
         .owner = &plugin,
         .title = "Write Text…",
+        // Replaces the whole document with the text given: for agents and plugins (a chat writing
+        // through the editor), not something a person types into a palette.
+        .visibility = .internal,
         .params = Write.params,
         .runWith = Write.bind(cmdWrite),
         .isEnabled = anyTextDoc,

@@ -53,6 +53,14 @@ pub fn previewFor(self: *State, gpa: std.mem.Allocator, id: u64) *Preview {
     return gop.value_ptr;
 }
 
+/// Drop what was kept for `id`'s render: its AST, block heights and images.
+pub fn release(self: *State, id: u64) void {
+    if (self.previews.fetchSwapRemove(id)) |kv| {
+        var p = kv.value;
+        p.deinit();
+    }
+}
+
 pub fn registerSettings(self: *State, host: *sdk.Host, plugin: *sdk.Plugin) !void {
     try Schema.register(host, plugin, .{
         .title = "Markdown",

@@ -258,6 +258,20 @@ pub const Preview = struct {
         self.parseSync(content, gpa, h);
     }
 
+    /// `ensureParsed` without the worker: the AST is current when this returns.
+    fn ensureParsedNow(self: *Preview, content: []const u8, gpa: std.mem.Allocator) void {
+        self.gpa = gpa;
+        var hasher = std.hash.XxHash3.init(0);
+        hasher.update(content);
+        const h = hasher.final();
+        if (self.content_hash == h and self.ast_root != null) return;
+        if (self.parse_job) |job| {
+            job.destroy();
+            self.parse_job = null;
+        }
+        self.parseSync(content, gpa, h);
+    }
+
     fn parseSync(self: *Preview, content: []const u8, gpa: std.mem.Allocator, hash: u64) void {
         // `scanNode` needs the original source, not just the AST: text nodes have had
         // backslash escapes applied and adjacent runs merged, so `\[\[A]]` is indistinguishable
@@ -615,6 +629,43 @@ pub fn drawPreview(
     // after `deinit` and holds this frame's final viewport/virtual size/offset. Horizontal
     // overflow only happens below the min column width.
     core.draw.drawScrollEdgeShadows(scroll_rs, scroll_rs, &state.scroll, .{});
+}
+
+pub const InlineOptions = struct {
+    io: std.Io,
+    image_base_dir: []const u8 = ".",
+    id_extra: u64 = 0,
+    /// The width the blocks lay out at.
+    width: f32,
+};
+
+/// Render `bytes` into the current dvui parent with no scroll area of its own, laid out at
+/// `opts.width` and as tall as it needs: a chat message, a hover's docs. Parsed on this frame (a
+/// short text, so no worker), and again only when the bytes change; the blocks' heights are kept
+/// while the width holds.
+pub fn drawInline(state: *Preview, bytes: []const u8, gpa: std.mem.Allocator, opts: InlineOptions) void {
+    state.ensureParsedNow(bytes, gpa);
+    const rp = state.ast_root orelse return;
+    const root = treeOf(rp).node();
+    render_ast.preloadImages(root, .{ .image_base_dir = opts.image_base_dir, .io = opts.io, .gpa = gpa, .rs = &state.rs });
+    var v = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .min_size_content = .{ .w = opts.width },
+        .max_size_content = .width(opts.width),
+        .id_extra = @truncate(opts.id_extra +% 1),
+    });
+    defer v.deinit();
+    render_ast.renderDocument(root, .{
+        .image_base_dir = opts.image_base_dir,
+        .io = opts.io,
+        .gpa = gpa,
+        .rs = &state.rs,
+        .id_base = @truncate(opts.id_extra << 16),
+        // The caller's surface shows through: a bubble's fill, a tooltip's.
+        .background = false,
+        // No viewport: every block is drawn, which is what a caller with no scroll area wants.
+        .viewport = .{},
+        .column_width = opts.width,
+    });
 }
 
 /// Like `drawPreview`, but resolves `![alt](path)` relative to `document_path`.
