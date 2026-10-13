@@ -25,6 +25,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const update_install = @import("update/update_install.zig");
 const profile = @import("profile.zig");
+const emptyStateFolder = @import("watch/SettingsWatcher.zig").emptyStateFolder;
 
 /// A browser tab has nothing to start again.
 pub const supported = builtin.target.cpu.arch != .wasm32;
@@ -175,9 +176,9 @@ pub fn beginHandover(io: std.Io, gpa: std.mem.Allocator, dir: []const u8) !void 
     if (comptime !supported) return;
     handover = .declined;
     if (dir.len > handover_buf.len) return error.NameTooLong;
-    const cwd = std.Io.Dir.cwd();
-    cwd.deleteTree(io, dir) catch {};
-    try cwd.createDirPath(io, dir);
+    // Emptied, never removed: a state folder under the watched config folder (`emptyStateFolder`).
+    emptyStateFolder(io, dir);
+    try std.Io.Dir.cwd().createDirPath(io, dir);
     @memcpy(handover_buf[0..dir.len], dir);
     handover_dir = handover_buf[0..dir.len];
     try start(io, gpa, handover_dir);
@@ -212,7 +213,7 @@ pub fn pollHandover(io: std.Io) Poll {
     if (std.Io.Clock.awake.now(io).nanoseconds > handover_deadline_ns) {
         handover = .none;
         requested_ = false;
-        std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+        emptyStateFolder(io, dir);
         return .failed;
     }
     dvui.refresh(null, @src(), null);
@@ -279,7 +280,7 @@ pub fn pollReleased(io: std.Io, gpa: std.mem.Allocator) bool {
         dvui.refresh(null, @src(), null);
         return false;
     }
-    std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    emptyStateFolder(io, dir);
     gpa.free(dir);
     handed_from = null;
     return true;

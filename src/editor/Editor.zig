@@ -128,6 +128,8 @@ demo: Demo = .detached,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
+/// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
+black_box: @import("app").automation.BlackBox = .{},
 /// The documents a restart kept (`KeptDocuments.loadSession`), until the workbench has reopened
 /// last session's tabs: each one it asks for opens from here (`openPath`).
 session: ?KeptDocuments = null,
@@ -3353,6 +3355,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_glass = parsed.native_glass;
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
+    editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
@@ -5185,7 +5188,7 @@ fn driveHandover(editor: *Editor) void {
             dvui.log.err("restart: the new instance did not come up; carrying on in this one", .{});
             if (KeptDocuments.sessionDir(editor.app.gpa, editor.app.config_folder)) |dir| {
                 defer editor.app.gpa.free(dir);
-                std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+                SettingsWatcher.emptyStateFolder(dvui.io, dir);
             } else |_| {}
             dvui.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
         },
@@ -5205,7 +5208,7 @@ fn keepSessionForRestart(editor: *Editor) bool {
     defer editor.app.gpa.free(dir);
     kept.save(dir) catch |err| {
         dvui.log.warn("restart: could not write the session ({t}); asking about unsaved changes", .{err});
-        std.Io.Dir.cwd().deleteTree(dvui.io, dir) catch {};
+        SettingsWatcher.emptyStateFolder(dvui.io, dir);
         return false;
     };
     return true;
@@ -6018,6 +6021,7 @@ pub fn deinit(editor: *Editor) !void {
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
+    editor.black_box.deinit(editor.app.gpa);
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;

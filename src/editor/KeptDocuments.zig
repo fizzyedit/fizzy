@@ -30,6 +30,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const Editor = @import("Editor.zig");
 const sdk = Editor.sdk;
+const emptyStateFolder = @import("app").watch.SettingsWatcher.emptyStateFolder;
 
 gpa: std.mem.Allocator,
 docs: std.ArrayListUnmanaged(Kept) = .empty,
@@ -247,11 +248,12 @@ pub fn sessionDir(gpa: std.mem.Allocator, config_folder: []const u8) ![]u8 {
     return std.fs.path.join(gpa, &.{ config_folder, "session" });
 }
 
-/// Write these documents to `dir`, replacing any session there. Only documents with state are
-/// worth keeping: the rest open from disk as any launch does.
+/// Write these documents to `dir`, replacing any session there (the folder is emptied, not
+/// removed: `emptyStateFolder`). Only documents with state are worth keeping: the rest open from
+/// disk as any launch does.
 pub fn save(self: *const KeptDocuments, dir: []const u8) !void {
     const cwd = std.Io.Dir.cwd();
-    cwd.deleteTree(dvui.io, dir) catch {};
+    emptyStateFolder(dvui.io, dir);
     try cwd.createDirPath(dvui.io, dir);
     const text = try self.writeFiles(dir, 0);
     defer self.gpa.free(text);
@@ -340,11 +342,11 @@ fn readBlob(gpa: std.mem.Allocator, dir: []const u8, generation: u32, i: usize, 
     return std.Io.Dir.cwd().readFileAlloc(dvui.io, file, gpa, .unlimited);
 }
 
-/// The session a restart left in `dir`, read once: the directory is deleted whether or not it
-/// could be read, so a later launch never applies it again. Null when there is none.
+/// The session a restart left in `dir`, read once: the folder is emptied whether or not it could
+/// be read, so a later launch never applies it again. Null when there is none.
 pub fn loadSession(gpa: std.mem.Allocator, dir: []const u8) ?KeptDocuments {
     const cwd = std.Io.Dir.cwd();
-    defer cwd.deleteTree(dvui.io, dir) catch {};
+    defer emptyStateFolder(dvui.io, dir);
     const file = std.fs.path.join(gpa, &.{ dir, "session.zon" }) catch return null;
     defer gpa.free(file);
     const text = cwd.readFileAllocOptions(dvui.io, file, gpa, .limited(1 << 20), .of(u8), 0) catch return null;

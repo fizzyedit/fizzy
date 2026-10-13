@@ -10,8 +10,9 @@
 //! thread of its own, so a large document never costs a frame its write. Each checkpoint is a new
 //! generation of files in the same folder (`KeptDocuments.saveGeneration`), counted from when
 //! `session.zon` is renamed over the last: a crash mid-write leaves the last whole one. The folder
-//! is never swapped: the settings watcher watches the config folder, and a folder that appears
-//! and is renamed away before it is watched made it log an error on Linux (inotify's NOENT).
+//! is never swapped or removed, only emptied (`SettingsWatcher.emptyStateFolder`): the settings
+//! watcher watches the config folder, and on Linux a folder that vanishes before its watch is
+//! added is an error.
 const Checkpoint = @This();
 
 const std = @import("std");
@@ -20,6 +21,7 @@ const dvui = @import("dvui");
 const Editor = @import("Editor.zig");
 const KeptDocuments = @import("KeptDocuments.zig");
 const core = @import("core");
+const emptyStateFolder = @import("app").watch.SettingsWatcher.emptyStateFolder;
 
 /// The soonest a checkpoint follows the last one, after input.
 const after_input_ns: i96 = 3 * std.time.ns_per_s;
@@ -62,25 +64,20 @@ pub fn dir(gpa: std.mem.Allocator, config_folder: []const u8) ![]u8 {
 }
 
 /// At launch: the documents a run that did not end cleanly left, read once (the folder is
-/// deleted). Null when the last run quit cleanly, or `skip` (a restart's session, which is newer,
-/// was found) — the checkpoint is deleted either way.
+/// emptied). Null when the last run quit cleanly, or `skip` (a restart's session, which is newer,
+/// was found) — the checkpoint is emptied either way.
 pub fn recover(gpa: std.mem.Allocator, config_folder: []const u8, skip: bool) ?KeptDocuments {
     if (comptime !supported) return null;
     const path = dir(gpa, config_folder) catch return null;
     defer gpa.free(path);
     const next = std.fmt.allocPrint(gpa, "{s}.new", .{path}) catch return null;
     defer gpa.free(next);
-    const cwd = std.Io.Dir.cwd();
-    if (skip) {
-        cwd.deleteTree(dvui.io, path) catch {};
-        cwd.deleteTree(dvui.io, next) catch {};
-        return null;
-    }
-    // An older build wrote the next checkpoint here before swapping it in.
-    cwd.deleteTree(dvui.io, next) catch {};
+    // An older build wrote the next checkpoint here before swapping it in. This build never makes
+    // it, so removing it cannot race a watcher that has just seen it appear.
+    std.Io.Dir.cwd().deleteTree(dvui.io, next) catch {};
     // Without its `session.zon`, the first checkpoint was cut off mid-write: of no use to anyone.
-    if (!complete(path)) {
-        cwd.deleteTree(dvui.io, path) catch {};
+    if (skip or !complete(path)) {
+        emptyStateFolder(dvui.io, path);
         return null;
     }
     var kept = KeptDocuments.loadSession(gpa, path) orelse return null;
@@ -186,21 +183,17 @@ fn freeJob(self: *Checkpoint, editor: *Editor, job: *Job) void {
     self.job = null;
 }
 
-/// Empty the checkpoint: its files go, and the folder stays, for the same reason it is never
-/// swapped (a folder that vanishes under the settings watcher as it is noticed). Empty, it is
-/// nothing to recover; the next launch deletes it before any watcher starts (`recover`).
+/// Empty the checkpoint: its files go, and the folder stays (`emptyStateFolder`). Empty, it is
+/// nothing to recover.
 fn remove(self: *Checkpoint, editor: *Editor) void {
     const path = dir(editor.app.gpa, editor.app.config_folder) catch return;
     defer editor.app.gpa.free(path);
     self.written = false;
-    var d = std.Io.Dir.cwd().openDir(dvui.io, path, .{ .iterate = true }) catch return;
-    defer d.close(dvui.io);
     // `session.zon` first: without it, what is left is not a checkpoint.
-    d.deleteFile(dvui.io, "session.zon") catch {};
-    var it = d.iterate();
-    while (it.next(dvui.io) catch null) |entry| {
-        if (entry.kind == .file) d.deleteFile(dvui.io, entry.name) catch {};
-    }
+    const zon = std.fs.path.join(editor.app.gpa, &.{ path, "session.zon" }) catch return;
+    defer editor.app.gpa.free(zon);
+    std.Io.Dir.cwd().deleteFile(dvui.io, zon) catch {};
+    emptyStateFolder(dvui.io, path);
 }
 
 /// A clean quit: wait for a write in flight, then empty the checkpoint, so the next launch
