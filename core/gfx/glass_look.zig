@@ -284,10 +284,13 @@ pub fn forDrops(look: InApp) InApp {
 }
 
 /// `look` for a surface carrying text — a dialog, a menu: the window's colour as the opacity has it
-/// (`text_mix`), over the frost.
+/// (`text_mix`), over the whole frost, as a window of the OS's glass has (`window`: its glass frost
+/// whole, its blur nearly so). At the frost level the sharp picture kept a tenth of the body, and
+/// the code behind a dialog read through it, where the OS's window beside it showed none.
 pub fn forText(look: InApp) InApp {
     var l = look;
     l.mix = l.text_mix;
+    if (l.frost > 0) l.frost = 1;
     return l;
 }
 
@@ -483,6 +486,12 @@ test "the clearing bevel hugs the rim of small glass and stops growing on large"
     try std.testing.expectApproxEqAbs(bevel_cap, large.clear + large.feather, 1e-4);
     try std.testing.expect(large.clear <= large.feather);
     try std.testing.expectEqual(@as(f32, 0), band(0).feather);
+}
+
+test "glass carrying text is wholly frosted: nothing sharp shows through a dialog" {
+    var i: usize = 1;
+    while (i <= 20) : (i += 1) try std.testing.expectEqual(@as(f32, 1), forText(inApp(at(i, 20))).frost);
+    try std.testing.expectEqual(@as(f32, 0), forText(inApp(0)).frost);
 }
 
 test "both forms share the way" {
