@@ -160,6 +160,11 @@ float4 main(PSInput input) : SV_Target0
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
     float mixv = g4.z > 0.5 ? g4.x : 0.0;
+    // Apple's lens: the window's colour fades out across the band, as an OS window's does
+    // (`glass_look.window`, its feather: strong most of the way, gone at the edge), so the edge stays
+    // the lens bending what is behind it — unless the colour is near whole, when it covers the edge
+    // too (`glass_look.shine_start`, 0.8 to 1).
+    if (inward) mixv *= 1.0 - t * t * (1.0 - smoothstep(0.8, 1.0, mixv));
     float4 c = lerp(sharp, frost, b) * (1.0 - mixv);
     float a = clamp(g2.y * lens * (inward ? t : steepR * steepR) * (1.0 - mixv), 0.0, 1.0);
     c = sharp * a + c * (1.0 - sharp.a * a);

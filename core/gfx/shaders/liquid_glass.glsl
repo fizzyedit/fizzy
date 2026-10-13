@@ -160,6 +160,11 @@ void main() {
     // The frost at its share of a frost / tint mix, the blur coming in from sharp. The window's
     // colour comes in whatever the blur: the opacity is the colour, under clear glass too.
     float mixv = g4.z > 0.5 ? g4.x : 0.0;
+    // Apple's lens: the window's colour fades out across the band, as an OS window's does
+    // (`glass_look.window`, its feather: strong most of the way, gone at the edge), so the edge stays
+    // the lens bending what is behind it — unless the colour is near whole, when it covers the edge
+    // too (`glass_look.shine_start`, 0.8 to 1).
+    if (inward) mixv *= 1.0 - t * t * (1.0 - smoothstep(0.8, 1.0, mixv));
     vec4 c = mix(sharp, frost, b) * (1.0 - mixv);
     // The rim's clearer glass over it (`drawClear`): for Apple's lens, the band, so the rim stays
     // clear glass while the middle frosts.
