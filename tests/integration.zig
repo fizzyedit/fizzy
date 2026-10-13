@@ -6737,6 +6737,44 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try std.testing.expect(std.mem.indexOf(u8, text, ".name=\"FILES\"") == null);
     // A markdown file opens on its preview.
     try std.testing.expect(std.mem.indexOf(u8, text, ".tag=\"text.preview:") != null);
+    // The windows first, the main one alone here: the testing backend opens no others.
+    try std.testing.expect(std.mem.startsWith(u8, text, ".{\n    .{.role=\"window\",.name=\"fizzy\",.tag=\"fizzy.window:main\""));
+
+    // A dialog is on screen too, though dvui shows dialogs after it has stopped capturing the
+    // frame, and its buttons have names a tape clicks: About, shut from its own Close button by a
+    // live tape, as an agent shuts it.
+    {
+        const about_close = "fizzy.dialog:About Fizzy:Close";
+        const shotOf = struct {
+            fn shotOf(api: *const sdk.services.automation.Api) ![]const u8 {
+                const n = api.snapshot();
+                for (0..4) |_| {
+                    if (api.snapshotText(n)) |got| return got;
+                    _ = try dvui.testing.step(headlessFrame);
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.shotOf;
+        fizzy.Editor.Dialogs.AboutFizzy.request();
+        try dvui.testing.settle(headlessFrame);
+        const open = try shotOf(automation_api);
+        try std.testing.expect(std.mem.indexOf(u8, open, ".name=\"About Fizzy\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, open, ".role=\"button\",.name=\"Close\",.tag=\"" ++ about_close ++ "\"") != null);
+
+        var s: automation.Script = .init(gpa, "close-about", "");
+        s.check = automation.Input.check;
+        s.check.live = true;
+        try s.click(.{ .tag = about_close }, .{});
+        try editor.demo.live.play(try s.finish());
+        for (0..200) |_| {
+            if (!editor.demo.live.playing()) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expect(editor.demo.live.outcome.? == .finished);
+        try dvui.testing.settle(headlessFrame);
+        const shut = try shotOf(automation_api);
+        try std.testing.expect(std.mem.indexOf(u8, shut, "About Fizzy") == null);
+    }
 
     // Open, open folder, save as and close, told a path, as a keybind with arguments, a tape or
     // an agent calls them (`Host.callCommand`); each refuses what it cannot do, saying why.
@@ -7554,9 +7592,15 @@ test "the output panel settles as lines arrive, in panes of every height" {
 var capture_under_test: automation.Capture = undefined;
 var capture_target: dvui.Texture.Target = undefined;
 
-/// A frame that ends as fizzy's does: the frame target read back for whoever asked.
+var capture_dialog: dvui.Texture.Target = undefined;
+
+/// A frame that ends as fizzy's does: each window's target read back for whoever asked — the main
+/// window's, and a dialog's lying 2 pixels right of the main window's corner.
 fn captureFrame() !dvui.App.Result {
-    capture_under_test.endFrame(capture_target, 3, 2);
+    capture_under_test.endFrame(&.{
+        .{ .tag = "fizzy.window:main", .target = capture_target, .w = 3, .h = 2 },
+        .{ .tag = "fizzy.window:dialog:Ask", .target = capture_dialog, .w = 2, .h = 1, .at = .{ .x = 2, .y = 0 } },
+    });
     return .ok;
 }
 
@@ -7571,14 +7615,17 @@ test "a capture is the drawn part of the frame target, as a PNG, once taken" {
     pixels[0..4].* = .{ 128, 0, 0, 128 }; // half-transparent red, premultiplied
     pixels[4..8].* = .{ 0, 255, 0, 255 };
     capture_target = .{ .ptr = &pixels, .width = 4, .height = 2, .format = .rgba_32, .interpolation = .nearest, .wrap_u = .clamp, .wrap_v = .clamp };
+    // The dialog's window: opaque blue, then clear.
+    var dialog_pixels: [2 * 1 * 4]u8 = .{ 0, 0, 255, 255, 0, 0, 0, 0 };
+    capture_dialog = .{ .ptr = &dialog_pixels, .width = 2, .height = 1, .format = .rgba_32, .interpolation = .nearest, .wrap_u = .clamp, .wrap_v = .clamp };
 
     // Nothing asked: a frame takes no picture.
     _ = try dvui.testing.step(captureFrame);
     try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(1));
 
-    const n = capture_under_test.request();
+    const n = capture_under_test.request("");
     try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
-    try std.testing.expectEqual(n, capture_under_test.request()); // asked again before it is taken
+    try std.testing.expectEqual(n, capture_under_test.request("")); // asked again before it is taken
     _ = try dvui.testing.step(captureFrame);
     const png = capture_under_test.get(n) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualSlices(u8, &.{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' }, png[0..8]);
@@ -7587,12 +7634,28 @@ test "a capture is the drawn part of the frame target, as a PNG, once taken" {
     try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, png[20..24], .big));
 
     // The next is a new picture; the last stays until it is taken.
-    const m = capture_under_test.request();
+    const m = capture_under_test.request("fizzy.window:dialog:Ask");
     try std.testing.expect(m != n);
     try std.testing.expect(capture_under_test.get(n) != null);
     _ = try dvui.testing.step(captureFrame);
     try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
-    try std.testing.expect(capture_under_test.get(m) != null);
+    // A window by its tag: its own picture, its size.
+    const dialog_png = capture_under_test.get(m) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, dialog_png[16..20], .big));
+    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, dialog_png[20..24], .big));
+
+    // Every window, where each lies round the main one: the main window's 3 columns, and the
+    // dialog's 2 from the third on — 4 wide.
+    const every = capture_under_test.request(automation.Capture.all);
+    _ = try dvui.testing.step(captureFrame);
+    const all_png = capture_under_test.get(every) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 4), std.mem.readInt(u32, all_png[16..20], .big));
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, all_png[20..24], .big));
+
+    // No window by that name: taken, and empty.
+    const none = capture_under_test.request("fizzy.window:dialog:Nobody");
+    _ = try dvui.testing.step(captureFrame);
+    try std.testing.expectEqual(@as(usize, 0), (capture_under_test.get(none) orelse return error.TestUnexpectedResult).len);
 }
 
 // ---- A live tape drags ------------------------------------------------------------------------

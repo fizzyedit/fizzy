@@ -102,6 +102,8 @@ const Out = struct {
     drawn: [2]u32 = .{ 0, 0 },
     /// The part of the frame its picture shows this frame, once drawn (`overlaysFrame`).
     part: ?viewports.Rect = null,
+    /// Its float's subwindow, as last drawn.
+    subwindow: dvui.Id = .zero,
     /// What its window is called now: the float's title, as its header says (`Floats.Float.titleText`).
     title_buf: [96]u8 = undefined,
     title_len: u8 = 0,
@@ -323,6 +325,52 @@ fn release(o: *Out) void {
     o.target = null;
     if (o.grow) |*g| releaseCarry(&g.carry);
     o.grow = null;
+}
+
+/// One of the app's OS windows besides the main one, as this frame left it (`windowsShown`): what
+/// an agent lists, aims into and pictures (`Demo.windows`).
+pub const Shown = struct {
+    kind: enum { float, dialog, menu },
+    /// What its window is called: the float's view, the dialog's title; a menu, nothing.
+    title: []const u8,
+    /// The part of the frame it shows, physical.
+    part: dvui.Rect.Physical,
+    /// The subwindow it shows: the float's, the dialog's, the menu's.
+    subwindow: dvui.Id,
+    /// Its picture this frame, `w` by `h` from the target's top left.
+    target: dvui.Texture.Target,
+    w: u32,
+    h: u32,
+    /// Where its window lies over the main window's frame, physical pixels from its top left.
+    in_main: dvui.Point.Physical,
+};
+
+/// Each OS window shown this frame besides the main one, into `buf`, bottom to top as the OS
+/// stacks them: the floats, then the dialogs and menus. After `endFrame`.
+pub fn windowsShown(buf: []Shown) []Shown {
+    var n: usize = 0;
+    for (outs) |slot| {
+        const o = slot orelse continue;
+        const p = o.part orelse continue;
+        const t = o.target orelse continue;
+        if (n == buf.len) break;
+        buf[n] = .{ .kind = .float, .title = o.title_buf[0..o.title_len], .part = physical(p), .subwindow = o.subwindow, .target = t, .w = o.drawn[0], .h = o.drawn[1], .in_main = physical(viewports.inMain(o.viewport)).topLeft() };
+        n += 1;
+    }
+    for (menus) |slot| {
+        const m = slot orelse continue;
+        const p = m.part orelse continue;
+        const t = m.target orelse continue;
+        if (n == buf.len) break;
+        const title = if (m.dialog) fizzy.core.dialogs.dialogTitle(m.id) orelse "" else "";
+        buf[n] = .{ .kind = if (m.dialog) .dialog else .menu, .title = title, .part = physical(p), .subwindow = m.id, .target = t, .w = t.width, .h = t.height, .in_main = physical(viewports.inMain(m.viewport)).topLeft() };
+        n += 1;
+    }
+    return buf[0..n];
+}
+
+fn physical(r: viewports.Rect) dvui.Rect.Physical {
+    return .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
 }
 
 /// After the frame has drawn and before dvui replays the subwindows into the main window's frame
@@ -1093,6 +1141,7 @@ fn windowFrame(state: *State, o: *Out) void {
     const picture: viewports.Picture = .begin(target, shown);
     defer picture.end();
     o.part = shown;
+    o.subwindow = f.win_id;
     // Zoomed or full screen there is no desktop behind it: opaque, eased there and back with the
     // OS's transitions as the main window's base is. Where it has no material it is opaque
     // throughout.

@@ -148,6 +148,9 @@ user's motion settings, timed in demo time.
 | `fizzy.menu:<title>` | a menu-bar menu (the in-app bar; macOS uses the native one) |
 | `fizzy.command:<command id>` | a menu row that runs a command |
 | `fizzy.dialog.close` | the close button in a dialog's header |
+| `fizzy.dialog:<title>:<label>` | a button in a dialog: its footer's, or one drawn with `core.dialogs.bodyButton` (`fizzy.dialog:About Fizzy:Close`) |
+| `fizzy.window:main` | the main window |
+| `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
 | `region:<name>` | a layout region (`Main`, `Panel`, …) |
 
 A demo's files live under its keyframe's `root`, so a path is `demo://tour/src/main.zig`.
@@ -158,6 +161,16 @@ To make something new targetable, mark it where it is drawn:
 ```zig
 core.anchor.mark(button.data(), "myplugin.thing:{s}", .{name});
 ```
+
+A dialog with buttons of its own (`hide_footer`) draws them with `core.dialogs.bodyButton`, which names
+each for its dialog's title and its label.
+
+**Other windows.** Where dialogs, menus and popped-out views are OS windows of their own (macOS),
+each still draws in fizzy's one frame — a dialog over the main window's part of it, a float in a
+band of its own past the window's edge — and its OS window shows that part. A tape's points are in
+that frame, so a click aimed at a dialog's button lands in the dialog's window. A window's tag aims
+into it: `.{ .tag = "fizzy.window:dialog:Unsaved changes", .dx = 40, .dy = 60 }` is 40 by 60
+natural pixels from its top left.
 
 ## Writing a demo
 
@@ -327,6 +340,25 @@ try editor.demo.playLive(try s.finish());               // fizzy: refused while 
   one plays (`error.Busy`).
 
 The overlay does not draw a live tape's pointer yet.
+
+### What a plugin sees
+
+The `automation` service (`sdk.services.automation`) is how a plugin plays a live tape, and reads
+the app back:
+
+- **`snapshot`**: what is on screen as ZON, a node a line (`replay.Snapshot`): role, name, tag,
+  rect (physical pixels of the frame) and the node it sits in. The app's OS windows come first,
+  each `.role = "window"` with its title and tag, the main window first; a node in any other
+  window says which (`.window = 2`, by index). Dialogs are in it: dvui shows them after it stops
+  capturing the frame, so each dialog captures its own widgets in a frame being taken
+  (`Snapshot.scopeBegin`, in `core.dialogs.dialogWindow`), and the snapshot is written at the very
+  end of the frame (`Demo.frameEnd`).
+- **`capture(window)`**: a PNG of a window as fizzy drew it, read back from what it drew it into,
+  on screen or not: the main window for `""`, a window by its tag, or every window laid out as
+  they lie round the main one for `"*"`. Empty when no window has that tag.
+
+Naming the windows costs nothing unless someone is looking: a snapshot, a picture or anchors
+asked for this frame.
 
 ## A run that ends in a verdict
 

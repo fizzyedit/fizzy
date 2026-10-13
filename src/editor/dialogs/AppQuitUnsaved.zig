@@ -39,29 +39,7 @@ fn dirtyCount() usize {
     return n;
 }
 
-fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
-    const opts: dvui.Options = .{
-        .tab_index = tab_idx,
-        .style = style,
-        .id_extra = id_extra,
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.25,
-            .offset = .{ .x = -4, .y = 4 },
-            .fade = 8,
-        },
-    };
-    var button: dvui.ButtonWidget = undefined;
-    button.init(src, .{}, opts);
-    defer button.deinit();
-    button.processEvents();
-    button.drawFocus();
-    button.drawBackground();
-    dvui.labelNoFmt(src, label_text, .{}, opts.strip().override(button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
-    return button.clicked();
-}
-
-pub fn dialog(_: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) anyerror!bool {
     const n = dirtyCount();
 
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(8) });
@@ -82,15 +60,15 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     var btn_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .gravity_x = 0.5 });
     defer btn_row.deinit();
 
-    if (dialogButton(@src(), "Quit without saving", .control, 1, 0)) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Quit without saving", .control, 1, 0)) {
         try onQuitWithoutSaving();
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
-    if (dialogButton(@src(), "Save all and quit", .highlight, 2, 1)) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Save all and quit", .highlight, 2, 1)) {
         try onSaveAllAndQuit();
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
-    if (dialogButton(@src(), "Cancel", .control, 3, 2)) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Cancel", .control, 3, 2)) {
         onCancel();
     }
 

@@ -17,13 +17,18 @@
 //! **What is on screen** (`snapshot`, `snapshotText`): every visible widget a person acts on or a
 //! tape aims at, a line each, as ZON — its role, its name, its tag, its rect and what it sits in
 //! (`replay.Snapshot`). The names a person reads, so a caller can find "the Close Tab button" and
-//! aim a tape at its tag, or at its rect, without a picture.
+//! aim a tape at its tag, or at its rect, without a picture. Dialogs included, and every OS window
+//! the app draws: each window is a node first (`.role = "window"`), and a node in any but the main
+//! window says which (`.window`). Rects are in the app's one frame, where a tape's points are, so a
+//! click aimed at a rect in a dialog's window lands there; a window's tag aims into it, at a
+//! fraction of it or at natural pixels from its corner.
 //!
-//! **A picture of it** (`capture`, `captureImage`): the main window as the app drew it, a PNG,
-//! read back from the app's own frame target — so it is there whether or not the window is on
-//! screen (on another Space, occluded, minimized), and no screen recording is asked for. Only what
-//! the app draws: what the OS composites over or behind the window (its materials, Liquid Glass)
-//! is not in it, and shows as transparency.
+//! **A picture of it** (`capture`, `captureImage`): a window as the app drew it, a PNG, read back
+//! from what the app drew it into — so it is there whether or not the window is on screen (on
+//! another Space, occluded, minimized), and no screen recording is asked for. The main window, a
+//! window a snapshot names by its tag, or all of them as they lie round the main one. Only what
+//! the app draws: what the OS composites over or behind a window (its materials, Liquid Glass) is
+//! not in it, and shows as transparency.
 //!
 //! **One tape at a time.** A tape is refused (`busy`) while another plays or a demo is loaded. A
 //! person's click, key, scroll or typed text stops it (`interrupted`), and a wait in the tape that
@@ -43,7 +48,7 @@
 pub const Api = struct {
     /// Bump whenever this struct's layout changes: `getServiceTyped` refuses a provider whose
     /// version differs rather than reinterpreting one shape as another across `dlopen`.
-    pub const service_version: u32 = 3;
+    pub const service_version: u32 = 4;
     pub const service_name = "automation";
 
     ctx: *anyopaque,
@@ -86,7 +91,7 @@ pub const Api = struct {
         settled: *const fn (ctx: *anyopaque) bool,
         snapshot: *const fn (ctx: *anyopaque) SnapshotTicket,
         snapshotText: *const fn (ctx: *anyopaque, ticket: SnapshotTicket) ?[]const u8,
-        capture: *const fn (ctx: *anyopaque) CaptureTicket,
+        capture: *const fn (ctx: *anyopaque, window: []const u8) CaptureTicket,
         captureImage: *const fn (ctx: *anyopaque, ticket: CaptureTicket) ?[]const u8,
     };
 
@@ -135,14 +140,21 @@ pub const Api = struct {
         return self.vtable.snapshotText(self.ctx, ticket);
     }
 
-    /// Ask for a picture of the main window. It is taken over the next frame (the app wakes for
-    /// it, on screen or not); asking again before then returns the same ticket.
-    pub fn capture(self: Api) CaptureTicket {
-        return self.vtable.capture(self.ctx);
+    /// The name that asks `capture` for every window at once.
+    pub const all_windows = "*";
+
+    /// Ask for a picture of `window`: the main window for none, a window by the tag a snapshot
+    /// gives it (`.role = "window"`), or every window, as they lie round the main one, for
+    /// `all_windows`. It is taken over the next frame (the app wakes for it, on screen or not);
+    /// asking again before then returns the same ticket, for the window first asked for. The bytes
+    /// are read before this returns.
+    pub fn capture(self: Api, window: []const u8) CaptureTicket {
+        return self.vtable.capture(self.ctx, window);
     }
 
-    /// The picture `ticket` names, as a PNG, once it has been taken: null before, and null again
-    /// once a later one has been. The app's memory, valid until the next is taken: copy it.
+    /// The picture `ticket` names, as a PNG, once it has been taken — empty when no window had the
+    /// name it was asked for by: null before, and null again once a later one has been. The app's
+    /// memory, valid until the next is taken: copy it.
     pub fn captureImage(self: Api, ticket: CaptureTicket) ?[]const u8 {
         return self.vtable.captureImage(self.ctx, ticket);
     }

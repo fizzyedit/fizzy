@@ -27,28 +27,6 @@ fn fileBasename(file_id: u64) []const u8 {
     return std.fs.path.basename(doc.owner.documentPath(doc));
 }
 
-fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
-    const opts: dvui.Options = .{
-        .tab_index = tab_idx,
-        .style = style,
-        .id_extra = id_extra,
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.25,
-            .offset = .{ .x = -4, .y = 4 },
-            .fade = 8,
-        },
-    };
-    var button: dvui.ButtonWidget = undefined;
-    button.init(src, .{}, opts);
-    defer button.deinit();
-    button.processEvents();
-    button.drawFocus();
-    button.drawBackground();
-    dvui.labelNoFmt(src, label_text, .{}, opts.strip().override(button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
-    return button.clicked();
-}
-
 pub fn dialog(id: dvui.Id) anyerror!bool {
     const file_id = dvui.dataGet(null, id, "_unsaved_file_id", u64) orelse return false;
     const name = fileBasename(file_id);
@@ -71,15 +49,15 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     var btn_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .gravity_x = 0.5 });
     defer btn_row.deinit();
 
-    if (dialogButton(@src(), "Close", .control, 1, 0)) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Close", .control, 1, 0)) {
         try onDiscard(file_id);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
-    if (dialogButton(@src(), "Save and Close", .highlight, 2, 1)) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Save and Close", .highlight, 2, 1)) {
         try saveAndClose(file_id);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
-    if (dialogButton(@src(), "Cancel", .control, 3, 2)) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Cancel", .control, 3, 2)) {
         onCancel();
     }
 

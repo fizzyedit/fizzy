@@ -161,9 +161,9 @@ fn snapshotText(ctx: *anyopaque, ticket: Api.SnapshotTicket) ?[]const u8 {
     return s.get(@intFromEnum(ticket));
 }
 
-fn capture(ctx: *anyopaque) Api.CaptureTicket {
+fn capture(ctx: *anyopaque, window: []const u8) Api.CaptureTicket {
     const c = from(ctx).captures orelse return @enumFromInt(0);
-    return @enumFromInt(c.request());
+    return @enumFromInt(c.request(window));
 }
 
 fn captureImage(ctx: *anyopaque, ticket: Api.CaptureTicket) ?[]const u8 {

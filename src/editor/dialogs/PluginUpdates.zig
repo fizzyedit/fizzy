@@ -60,29 +60,7 @@ pub fn request() void {
     mutex.mutex.unlock(dvui.io);
 }
 
-fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
-    const opts: dvui.Options = .{
-        .tab_index = tab_idx,
-        .style = style,
-        .id_extra = id_extra,
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.25,
-            .offset = .{ .x = -4, .y = 4 },
-            .fade = 8,
-        },
-    };
-    var button: dvui.ButtonWidget = undefined;
-    button.init(src, .{}, opts);
-    defer button.deinit();
-    button.processEvents();
-    button.drawFocus();
-    button.drawBackground();
-    dvui.labelNoFmt(src, label_text, .{}, opts.strip().override(button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
-    return button.clicked();
-}
-
-pub fn dialog(_: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) anyerror!bool {
     const theme = dvui.themeGet();
     const body = dvui.Font.theme(.body);
 
@@ -101,10 +79,10 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(8) });
     defer {
-        const id = outer.data().id;
+        const outer_id = outer.data().id;
         outer.deinit();
         // After `deinit`: a box totals its children only as it closes.
-        if (dvui.minSizeGet(id)) |ms| last_content = ms;
+        if (dvui.minSizeGet(outer_id)) |ms| last_content = ms;
     }
 
     const intro = if (count == 1)
@@ -156,7 +134,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 
     // Not "Cancel": the offer goes away for this session, nothing is undone, and anything already
     // downloading finishes.
-    if (dialogButton(@src(), "Not now", .control, 1, 0) and !closing) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Not now", .control, 1, 0) and !closing) {
         closing = true;
         // Put the offer away as the close button does — its `callAfter` never runs for this
         // button, and the list stayed populated behind a closed dialog.
@@ -165,7 +143,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     }
     if (PluginStore.anyPendingUpdateUnstarted()) {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
-        if (dialogButton(@src(), "Update all", .highlight, 2, 1)) {
+        if (fizzy.core.dialogs.bodyButton(@src(), id, "Update all", .highlight, 2, 1)) {
             PluginStore.applyAllPendingUpdates();
         }
     }

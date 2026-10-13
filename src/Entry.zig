@@ -525,9 +525,9 @@ fn frameOnce() !dvui.App.Result {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: onto the window");
         defer prof.end();
         frame_target.end();
-        // A picture an agent asked for (`automation` service, `capture`): the frame as drawn, read
-        // back from the target, whether or not the window is on screen to show it.
-        if (frame_target.picture()) |p| fizzy.editor().demo.picture.endFrame(p.target, p.w, p.h);
+        // What an agent asked for (`automation` service): the snapshot, now that every dialog has
+        // drawn, and a picture of a window as drawn, read back whether or not it is on screen.
+        fizzy.editor().demo.frameEnd(if (frame_target.picture()) |p| .{ .target = p.target, .w = p.w, .h = p.h } else null);
     }
     // Before that replays the subwindows into the frame: a float out of the main window is
     // replayed into its own window instead.

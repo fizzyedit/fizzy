@@ -7,28 +7,6 @@ const auto_update = @import("app").update.auto_update;
 const update_notify = @import("app").update.update_notify;
 const assets = @import("assets");
 
-fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
-    const opts: dvui.Options = .{
-        .tab_index = tab_idx,
-        .style = style,
-        .id_extra = id_extra,
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.25,
-            .offset = .{ .x = -4, .y = 4 },
-            .fade = 8,
-        },
-    };
-    var button: dvui.ButtonWidget = undefined;
-    button.init(src, .{}, opts);
-    defer button.deinit();
-    button.processEvents();
-    button.drawFocus();
-    button.drawBackground();
-    dvui.labelNoFmt(src, label_text, .{}, opts.strip().override(button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
-    return button.clicked();
-}
-
 /// True if the about dialog is already showing.
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
@@ -209,7 +187,7 @@ fn consumeCheckResult() void {
     check_outcome = .none;
 }
 
-pub fn dialog(_: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) anyerror!bool {
     // Drain a finished background check (if any) into `status_line` /
     // `update_ready_after_check` before laying out the dialog body, so the
     // result is visible this frame instead of next.
@@ -340,7 +318,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     if (comptime auto_update.impl) {
         // Suppress the buttons while the worker is running — re-clicking would
         // either no-op (already in flight) or queue duplicate worker threads.
-        if (!checking and dialogButton(@src(), "Check for updates", .highlight, 1, 0)) {
+        if (!checking and fizzy.core.dialogs.bodyButton(@src(), id, "Check for updates", .highlight, 1, 0)) {
             setStatus("Checking…");
             update_ready_after_check = false;
             check_window = dvui.currentWindow();
@@ -357,7 +335,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         if (!checking and update_ready_after_check) {
             _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
 
-            if (dialogButton(@src(), "Download and restart", .control, 2, 1)) {
+            if (fizzy.core.dialogs.bodyButton(@src(), id, "Download and restart", .control, 2, 1)) {
                 // Kick the background install (publishes phase + 0–100 progress
                 // through atomics) and close the dialog — the progress toast
                 // anchored above the infobar shows the rest.
@@ -371,7 +349,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
 
-    if (dialogButton(@src(), "Close", .control, 10, 2)) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Close", .control, 10, 2)) {
         fizzy.core.dialogs.closeFloatingDialogAnchored();
     }
 

@@ -19,6 +19,7 @@ const icons = @import("icons");
 const platform = @import("platform.zig");
 const widgets = @import("widgets.zig");
 const anchor = @import("replay").anchor;
+const Snapshot = @import("replay").Snapshot;
 const anim = @import("anim.zig");
 const draw = @import("draw.zig");
 const screens = @import("screens.zig");
@@ -687,6 +688,11 @@ pub fn closeFloatingDialogAnchored() void {
 }
 
 pub fn dialogWindow(id: dvui.Id) anyerror!void {
+    // Shown after dvui has stopped capturing the frame: in one an agent is taking a snapshot of,
+    // the dialog captures itself (`replay.Snapshot.scopeBegin`).
+    const scoped = Snapshot.scopeBegin();
+    defer Snapshot.scopeEnd(scoped);
+
     const modal = dvui.dataGet(null, id, "_modal", bool) orelse {
         dvui.log.err("dialogDisplay lost data for dialog {x}\n", .{id});
         dvui.dialogRemove(id);
@@ -748,6 +754,8 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         },
     });
     defer win.deinit();
+    // What its window is called, for whoever lists the app's windows (`dialogTitle`).
+    if (native) dvui.dataSetSlice(null, win.data().id, "_dialog_title", title);
 
     // Applied *before* the animation check, not as an `else if` to it: the OK handler below
     // starts the shrink-to-centre close immediately (so a dialog can never wedge open waiting
@@ -852,6 +860,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
 
                 dvui.dataSet(null, win.data().id, "_close_rect", close_rect);
             }
+            anchor.mark(&cancel_data, "fizzy.dialog:{s}:{s}", .{ title, cl });
             if (default != null and dvui.firstFrame(hbox.data().id) and default.? == .cancel and !valid) {
                 dvui.focusWidget(cancel_data.id, null, null);
             }
@@ -880,6 +889,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         ok_button.drawBackground();
 
         dvui.labelNoFmt(@src(), ok_label, .{}, ok_opts.strip().override(ok_button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+        anchor.mark(ok_button.data(), "fizzy.dialog:{s}:{s}", .{ title, ok_label });
 
         defer ok_button.deinit();
 
@@ -910,6 +920,38 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
             dvui.focusWidget(ok_data.id, null, null);
         }
     }
+}
+
+/// The title of the dialog drawn in subwindow `id` this frame, where dialogs are windows of their
+/// own (`screens.nativeDialogs`): what its window is called.
+pub fn dialogTitle(id: dvui.Id) ?[]const u8 {
+    return dvui.dataGetSlice(null, id, "_dialog_title", []u8);
+}
+
+/// A button in a dialog's body, as its footer's are: what a dialog with buttons of its own
+/// (`hide_footer`) draws them with. Named `fizzy.dialog:<title>:<label>` for a tape, a test or an
+/// agent to click (docs/AUTOMATION.md, "Anchors"); `dialog_id` is the id its `displayFn` was given.
+pub fn bodyButton(src: std.builtin.SourceLocation, dialog_id: dvui.Id, label: []const u8, look: dvui.Theme.Style.Name, tab_index: u16, id_extra: usize) bool {
+    const opts: dvui.Options = .{
+        .tab_index = tab_index,
+        .style = look,
+        .id_extra = id_extra,
+        .box_shadow = .{
+            .color = .black,
+            .alpha = 0.25,
+            .offset = .{ .x = -4, .y = 4 },
+            .fade = 8,
+        },
+    };
+    var b: dvui.ButtonWidget = undefined;
+    b.init(src, .{}, opts);
+    defer b.deinit();
+    b.processEvents();
+    b.drawFocus();
+    b.drawBackground();
+    dvui.labelNoFmt(src, label, .{}, opts.strip().override(b.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    anchor.mark(b.data(), "fizzy.dialog:{s}:{s}", .{ dvui.dataGetSlice(null, dialog_id, "_title", []u8) orelse "", label });
+    return b.clicked();
 }
 
 /// Margin on the circular close control in `windowHeader`. Keep in sync with title label padding in `windowHeader`.

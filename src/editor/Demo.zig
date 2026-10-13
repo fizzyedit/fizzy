@@ -37,6 +37,7 @@ const sdk = fizzy.sdk;
 const automation = @import("app").automation;
 const dvui_adapter = @import("app").keymap.dvui_adapter;
 const Editor = @import("Editor.zig");
+const Popout = @import("Popout.zig");
 const Keybinds = @import("Keybinds.zig");
 pub const catalog = @import("demos/catalog.zig");
 
@@ -50,9 +51,11 @@ live: automation.LiveDriver,
 service: automation.Service,
 /// What the service's `snapshot` takes: framed here (`frame`) and in the editor's frame end.
 snapshot: automation.Snapshot,
-/// What the service's `capture` takes: read back from the frame target at the frame's end
-/// (`Entry.frameOnce`).
+/// What the service's `capture` takes: read back from the frame target, and each OS window's, at
+/// the frame's very end (`frameEnd`).
 picture: automation.Capture,
+/// The app's OS windows as this frame left them, named (`frameEnd`): in the frame's arena.
+windows: []const automation.Snapshot.Window = &.{},
 /// A seek is replaying: animation is off until it arrives.
 fast: bool = false,
 /// The user's session, set aside while a demo is loaded.
@@ -120,6 +123,7 @@ pub fn attach(self: *Demo, editor: *Editor) void {
         .picture = .init(gpa),
     };
     self.service.bind();
+    self.snapshot.windows = .{ .ctx = self, .list = listWindows };
     // A seek's catch-up frames draw nothing where the backend can drop them (the web's).
     self.player.set_unseen = core.FrameTarget.setUnseen;
 }
@@ -268,6 +272,69 @@ pub fn frame(self: *Demo) void {
     self.snapshot.beginFrame();
     self.live.frame();
     self.player.frame();
+}
+
+// ---- windows -------------------------------------------------------------------------------
+
+/// The main window's picture this frame: the frame target (`core.FrameTarget.picture`).
+pub const Picture = struct { target: dvui.Texture.Target, w: u32, h: u32 };
+
+/// At the very end of the frame, after everything has drawn into every window — dialogs, floats
+/// and menus taken into theirs (`Popout.endFrame`), the frame onto the main window: each OS window
+/// named for a tape or an agent to aim into (`fizzy.window:<what>`), and the snapshot and the
+/// picture asked for written. Nothing while nobody is looking.
+pub fn frameEnd(self: *Demo, main: ?Picture) void {
+    const naming = core.anchor.wanted();
+    const taking = automation.Snapshot.taking();
+    if (!naming and !taking and !self.picture.wanted()) return;
+    // dvui's dialogs drawn, for the snapshot to have them, where the frame target has not drawn
+    // them already (a backend with no targets leaves them to `Window.end`).
+    if (taking) dvui.currentWindow().drawRetained(.{});
+    const arena = dvui.currentWindow().arena();
+    var shown_buf: [16]Popout.Shown = undefined;
+    const shown = Popout.windowsShown(&shown_buf);
+    const windows = arena.alloc(automation.Snapshot.Window, shown.len + 1) catch return;
+    const sources = arena.alloc(automation.Capture.Source, shown.len + 1) catch return;
+    windows[0] = .{ .tag = "fizzy.window:main", .title = "fizzy", .rect = dvui.windowRectPixels() };
+    if (main) |m| sources[0] = .{ .tag = windows[0].tag, .target = m.target, .w = m.w, .h = m.h };
+    for (shown, 1..) |w, i| {
+        const what = switch (w.kind) {
+            .float => "float",
+            .dialog => "dialog",
+            .menu => "menu",
+        };
+        windows[i] = .{
+            .tag = windowTag(arena, windows[0..i], what, w.title) catch return,
+            .title = w.title,
+            .rect = w.part,
+            .subwindow = w.subwindow,
+            // A float's window shows a band of the frame of its own: what opens in it is there.
+            .area = w.kind == .float,
+        };
+        // On the OS's material, which a picture has none of: its base, opaque, as it reads.
+        sources[i] = .{ .tag = windows[i].tag, .target = w.target, .w = w.w, .h = w.h, .at = w.in_main, .backing = Editor.windowBase(1) };
+    }
+    self.windows = windows;
+    defer self.windows = &.{};
+    if (naming) for (windows) |w| core.anchor.markRect(w.subwindow orelse .zero, w.rect, true, "{s}", .{w.tag});
+    self.snapshot.endFrame();
+    if (main != null) self.picture.endFrame(sources);
+}
+
+/// `fizzy.window:<what>:<title>` (no title, `fizzy.window:<what>`), and a number after where a
+/// window before it has the name.
+fn windowTag(arena: std.mem.Allocator, before: []const automation.Snapshot.Window, what: []const u8, title: []const u8) ![]const u8 {
+    const base = if (title.len > 0) try std.fmt.allocPrint(arena, "fizzy.window:{s}:{s}", .{ what, title }) else try std.fmt.allocPrint(arena, "fizzy.window:{s}", .{what});
+    var tag = base;
+    var n: usize = 2;
+    while (for (before) |w| {
+        if (std.mem.eql(u8, w.tag, tag)) break true;
+    } else false) : (n += 1) tag = try std.fmt.allocPrint(arena, "{s}:{d}", .{ base, n });
+    return tag;
+}
+
+fn listWindows(ctx: *anyopaque, _: std.mem.Allocator) []const automation.Snapshot.Window {
+    return from(ctx).windows;
 }
 
 // ---- the stage -----------------------------------------------------------------------------

@@ -19,11 +19,20 @@
 //! - `tag` from the frame's tags (`Options.tag`, and `anchor.mark`'s names built from data).
 //!
 //! A node is a visible widget with a role worth acting on (`acted`), a tag, or the focus; `parent`
-//! is the nearest such node it sits in, by index. Rects are physical pixels, rounded.
+//! is the nearest such node it sits in, by index. Rects are physical pixels of the frame, rounded.
+//!
+//! **Windows.** An app that shows parts of its one frame in OS windows of their own — a dialog, a
+//! menu, a view popped out — says which (`windows`): each is a node first, `.role = "window"`,
+//! named by its title, with the tag a tape aims into it by and the part of the frame it shows; the
+//! main window is the first. A node in any other window says which, by index (`.window = 2`); one
+//! in the main window says nothing. Its rect is still in the frame, as a tape's point is, so a
+//! click aimed at it lands in its window.
 //!
 //! **Taking one** spans a frame: `request` arms dvui's capture of the next, `beginFrame` asks for
-//! anchors in it, and `endFrame` writes it out as that frame ends. The app calls the two frame
-//! functions once a frame, at its start and its end; `get` reads the text back.
+//! anchors in it, and `endFrame` writes it out once that frame has drawn everything — its dialogs
+//! too. The app calls the two frame functions once a frame, at its start and at its very end
+//! (after `Window.drawRetained`); `get` reads the text back. dvui stops its capture before it shows
+//! dialogs, so a dialog's frame captures the dialog itself (`scopeBegin`).
 const Snapshot = @This();
 
 const std = @import("std");
@@ -33,8 +42,13 @@ const anchor = @import("anchor.zig");
 const CapturedWidget = dvui.Debug.CapturedWidget;
 
 gpa: std.mem.Allocator,
+/// The app's OS windows, when it has more than one. Null: everything is in the one window.
+windows: ?Windows = null,
 /// Asked for, and not yet taken: the frame dvui captures has not ended.
 pending: bool = false,
+/// The capture of the frame being taken (`Debug.CapturedFrame.index`), from its start
+/// (`beginFrame`) to its end: it, and each dialog's scope captured after it.
+frame: ?u64 = null,
 /// How many have been taken; the last one's text is `text`.
 taken: u32 = 0,
 text: std.ArrayListUnmanaged(u8) = .empty,
@@ -59,21 +73,27 @@ pub fn request(self: *Snapshot) u32 {
 }
 
 /// At the start of the app's frame, before anything draws: in the frame being captured, every
-/// widget that marks itself is named.
+/// widget that marks itself is named, and a dialog captures itself (`scopeBegin`).
 pub fn beginFrame(self: *Snapshot) void {
-    if (self.pending and dvui.debug.capturing) anchor.want();
+    if (!self.pending or self.frame != null or !dvui.debug.capturing) return;
+    const f = dvui.debug.lastCapture() orelse return;
+    self.frame = f.index;
+    anchor.want();
+    dvui.dataSet(null, taking_id, taking_key, dvui.currentWindow().frame_time_ns);
 }
 
-/// At the end of the app's frame, after everything has drawn: the captured frame is written out.
+/// At the very end of the app's frame, after everything has drawn — dvui's dialogs too
+/// (`Window.drawRetained`): the captured frame is written out.
 pub fn endFrame(self: *Snapshot) void {
-    if (!self.pending or !dvui.debug.capturing) return;
-    const frame = dvui.debug.lastCapture() orelse return;
+    const first = self.frame orelse return;
+    self.frame = null;
     self.pending = false;
     defer dvui.debug.clearCaptures(dvui.currentWindow().gpa);
 
     var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
     defer arena_state.deinit();
-    const nodes = build(arena_state.allocator(), frame.widgets.items) catch |err| {
+    const arena = arena_state.allocator();
+    const nodes = self.collect(arena, first) catch |err| {
         dvui.log.warn("snapshot: could not build: {t}", .{err});
         return;
     };
@@ -84,10 +104,88 @@ pub fn endFrame(self: *Snapshot) void {
     self.taken += 1;
 }
 
+/// The nodes of the frame whose capture is `first`: its build phase's widgets, then each dialog's,
+/// captured on its own after it.
+fn collect(self: *const Snapshot, arena: std.mem.Allocator, first: u64) ![]Node {
+    var widgets: std.ArrayListUnmanaged(CapturedWidget) = .empty;
+    for (dvui.debug.frames.items) |*f| {
+        if (f.index >= first) try widgets.appendSlice(arena, f.widgets.items);
+    }
+    const windows: []const Window = if (self.windows) |w| w.list(w.ctx, arena) else &.{};
+    return build(arena, widgets.items, windows);
+}
+
 /// Snapshot `n`'s text, while it is the last one taken; null before it is, or once another is.
 /// Valid until the next snapshot is taken.
 pub fn get(self: *const Snapshot, n: u32) ?[]const u8 {
     return if (n == self.taken and n != 0) self.text.items else null;
+}
+
+const taking_id: dvui.Id = @enumFromInt(0x6669_7a7a_736e_6170); // "fizzsnap"
+const taking_key = "_snapshot_at";
+
+/// Whether a snapshot is being taken of this frame (`beginFrame`). Shared through the window's
+/// data, so a plugin dylib's copy of this file agrees.
+pub fn taking() bool {
+    const cw = dvui.current_window orelse return false;
+    const at = dvui.dataGet(cw, taking_id, taking_key, i128) orelse return false;
+    return at == cw.frame_time_ns;
+}
+
+/// Around a dialog's drawing, in its display function: dvui shows dialogs after it has stopped
+/// capturing the frame (`Window.drawRetained`), so in a frame being taken a dialog captures its own
+/// widgets, a scope of dvui's (`Debug.captureScopeBegin`) that `endFrame` reads with the frame.
+/// True when one began: hand it to `scopeEnd`. Nothing, and false, in any other frame.
+pub fn scopeBegin() bool {
+    if (dvui.debug.capturing or !taking()) return false;
+    dvui.debug.captureScopeBegin(dvui.currentWindow().gpa);
+    return true;
+}
+
+/// End what `scopeBegin` began.
+pub fn scopeEnd(began: bool) void {
+    if (began) dvui.debug.captureScopeEnd();
+}
+
+/// One of the app's OS windows this frame (`Windows`).
+pub const Window = struct {
+    /// The tag that aims into it (`Tape.Target.tag`): a tape points at a fraction of it, or at
+    /// natural pixels from its corner. What a picture of it is asked for by, too.
+    tag: []const u8,
+    /// What it is called: its title.
+    title: []const u8 = "",
+    /// The part of the frame it shows, physical.
+    rect: dvui.Rect.Physical,
+    /// The subwindow it shows: every widget drawn in it is in this window, wherever it lies.
+    subwindow: ?dvui.Id = null,
+    /// Whatever is drawn in `rect` is in it too: a window showing a band of the frame of its own,
+    /// past the main window, where what opens in it lies (its tooltips). Not a window over the
+    /// main window's part of the frame — a dialog's, a menu's — which shows its subwindow only.
+    area: bool = false,
+};
+
+/// Where the app's OS windows come from, asked as a snapshot is written.
+pub const Windows = struct {
+    ctx: *anyopaque,
+    /// This frame's, in `arena`: the main window first, then the others bottom to top.
+    list: *const fn (ctx: *anyopaque, arena: std.mem.Allocator) []const Window,
+};
+
+/// Which of `windows` widget `id`, drawn in `subwindow` with its middle at `mid`, is in: by index,
+/// null for the main window. A subwindow's own widget is drawn in the one under it, and is in its
+/// own window.
+pub fn windowOf(windows: []const Window, id: ?dvui.Id, subwindow: ?dvui.Id, mid: dvui.Point.Physical) ?u32 {
+    if (windows.len < 2) return null;
+    for (windows[1..], 1..) |w, i| {
+        const sw = w.subwindow orelse continue;
+        if (sw == id or sw == subwindow) return @intCast(i);
+    }
+    var i = windows.len;
+    while (i > 1) {
+        i -= 1;
+        if (windows[i].area and windows[i].rect.contains(mid)) return @intCast(i);
+    }
+    return null;
 }
 
 /// One thing on screen.
@@ -102,6 +200,8 @@ pub const Node = struct {
     focused: bool = false,
     /// The node it sits in, by index; none at the top.
     parent: ?u32 = null,
+    /// The window it is in, by its node's index; none for the main window (`Window`).
+    window: ?u32 = null,
 
     pub const Rect = struct { x: i32, y: i32, w: i32, h: i32 };
 };
@@ -114,9 +214,9 @@ pub fn acted(role: dvui.AccessKit.Role) bool {
     };
 }
 
-/// The nodes of one captured frame, in tree order. Tags come from the window's tag table as the
-/// frame left it, so call this in the frame that was captured.
-pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget) ![]Node {
+/// The nodes of one captured frame, in tree order, after a node for each of `windows`. Tags come
+/// from the window's tag table as the frame left it, so call this in the frame that was captured.
+pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget, windows: []const Window) ![]Node {
     // Each widget's tag: `Options.tag`, or the name a mark gave it this frame. A mark on a place
     // within a widget (`anchor.markRect`) is a node of its own, inside it.
     var tags: std.AutoHashMapUnmanaged(dvui.Id, []const u8) = .empty;
@@ -127,6 +227,10 @@ pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget) ![]Node 
             const td = e.value_ptr.*;
             if (!td.visible) continue;
             const tag_name = e.key_ptr.*;
+            // A window's own: its node.
+            if (for (windows) |w| {
+                if (std.mem.eql(u8, w.tag, tag_name)) break true;
+            } else false) continue;
             const owner: ?*const CapturedWidget = for (widgets) |*w| {
                 if (w.id == td.id) break w;
             } else null;
@@ -144,6 +248,12 @@ pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget) ![]Node 
     }
 
     var nodes: std.ArrayListUnmanaged(Node) = .empty;
+    for (windows) |w| try nodes.append(arena, .{
+        .role = "window",
+        .name = if (w.title.len > 0) w.title else null,
+        .tag = w.tag,
+        .rect = round(w.rect),
+    });
     // The node each widget is, or sits in: by widget index.
     const node_of = try arena.alloc(?u32, widgets.len);
     var index_of: std.AutoHashMapUnmanaged(dvui.Id, usize) = .empty;
@@ -165,11 +275,14 @@ pub fn build(arena: std.mem.Allocator, widgets: []const CapturedWidget) ![]Node 
             .rect = round(w.rect_border),
             .focused = w.focused,
             .parent = up,
+            .window = windowOf(windows, w.id, w.subwindow_id, w.rect_border.center()),
         });
     }
     for (places.items) |p| {
-        const within = if (index_of.get(p.data.id)) |i| node_of[i] else null;
-        try nodes.append(arena, .{ .tag = p.name, .rect = round(p.data.rect), .parent = within });
+        const owner = index_of.get(p.data.id);
+        const within = if (owner) |i| node_of[i] else null;
+        const subwindow = if (owner) |i| widgets[i].subwindow_id else null;
+        try nodes.append(arena, .{ .tag = p.name, .rect = round(p.data.rect), .parent = within, .window = windowOf(windows, p.data.id, subwindow, p.data.rect.center()) });
     }
     return nodes.items;
 }
@@ -291,4 +404,97 @@ test "a snapshot names what a person acts on, and what a tape aims at" {
     try std.testing.expect(std.mem.indexOf(u8, text, "plain") == null);
     // The capture is let go once written.
     try std.testing.expectEqual(@as(usize, 0), dvui.debug.capturedFrameCount());
+}
+
+var test_dialog_window: dvui.Id = .zero;
+var test_band: dvui.Rect.Physical = .{};
+
+fn testDialog(id: dvui.Id) anyerror!void {
+    const began = scopeBegin();
+    defer scopeEnd(began);
+    var win = dvui.floatingWindow(@src(), .{}, .{ .id_extra = id.asUsize(), .rect = .{ .x = 10, .y = 10, .w = 80, .h = 40 } });
+    defer win.deinit();
+    test_dialog_window = win.data().id;
+    _ = dvui.button(@src(), "Go ahead", .{}, .{});
+}
+
+fn testWindowsFrame() !dvui.App.Result {
+    test_snapshot.beginFrame();
+    {
+        var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        defer box.deinit();
+        _ = dvui.button(@src(), "Main", .{}, .{});
+        // Drawn in a part of the frame another window shows: in that window, by where it is.
+        var band = dvui.floatingWindow(@src(), .{}, .{ .rect = .{ .x = 200, .y = 200, .w = 80, .h = 40 } });
+        defer band.deinit();
+        test_band = band.data().rectScale().r;
+        _ = dvui.button(@src(), "Banded", .{}, .{});
+    }
+    // dvui shows its dialogs here, its capture of the frame already stopped; the snapshot is
+    // written after.
+    dvui.currentWindow().drawRetained(.{});
+    test_snapshot.endFrame();
+    return .ok;
+}
+
+fn testWindows(_: *anyopaque, arena: std.mem.Allocator) []const Window {
+    const list = arena.dupe(Window, &.{
+        .{ .tag = "app.window:main", .title = "App", .rect = dvui.windowRectPixels() },
+        .{ .tag = "app.window:band", .rect = test_band, .area = true },
+        .{ .tag = "app.window:dialog", .title = "Ask", .rect = .{ .x = 0, .y = 0, .w = 100, .h = 100 }, .subwindow = test_dialog_window },
+    }) catch return &.{};
+    return list;
+}
+
+test "a snapshot has the dialogs dvui shows after its capture, and says which window each thing is in" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    test_snapshot = .init(std.testing.allocator);
+    defer test_snapshot.deinit();
+    var ctx: u8 = 0;
+    test_snapshot.windows = .{ .ctx = &ctx, .list = testWindows };
+
+    const id_mutex = dvui.dialogAdd(null, @src(), 0, testDialog);
+    id_mutex.mutex.unlock(dvui.io);
+    try dvui.testing.settle(testWindowsFrame);
+    const n = test_snapshot.request();
+    for (0..3) |_| {
+        if (test_snapshot.get(n) != null) break;
+        _ = try dvui.testing.step(testWindowsFrame);
+    }
+    const text = test_snapshot.get(n) orelse return error.TestUnexpectedResult;
+
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try std.zon.parse.fromSliceAlloc([]const Node, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    // The windows first, each a node.
+    try std.testing.expect(nodes.len > 3);
+    for (nodes[0..3], [_][]const u8{ "app.window:main", "app.window:band", "app.window:dialog" }) |node, tag| {
+        try std.testing.expectEqualStrings("window", node.role.?);
+        try std.testing.expectEqualStrings(tag, node.tag.?);
+    }
+    try std.testing.expectEqualStrings("Ask", nodes[2].name.?);
+    // Each button in the window it is drawn for: the dialog's, drawn after dvui's capture stopped,
+    // there at all.
+    var seen: usize = 0;
+    for (nodes[3..]) |node| {
+        // A floating window is in its window too, though dvui draws it in the one under it.
+        if (std.mem.eql(u8, node.role orelse "", "dialog")) try std.testing.expect(node.window != null);
+        if (!std.mem.eql(u8, node.role orelse "", "button")) continue;
+        const nm = node.name orelse continue;
+        if (std.mem.eql(u8, nm, "Main")) {
+            try std.testing.expectEqual(@as(?u32, null), node.window);
+            seen += 1;
+        } else if (std.mem.eql(u8, nm, "Banded")) {
+            try std.testing.expectEqual(@as(?u32, 1), node.window);
+            seen += 1;
+        } else if (std.mem.eql(u8, nm, "Go ahead")) {
+            try std.testing.expectEqual(@as(?u32, 2), node.window);
+            seen += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), seen);
+    try std.testing.expectEqual(@as(usize, 0), dvui.debug.capturedFrameCount());
+    // Taken, nothing more is captured: a dialog drawn in a frame nobody asked for is free.
+    try std.testing.expect(!taking());
 }

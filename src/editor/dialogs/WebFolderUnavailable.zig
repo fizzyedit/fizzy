@@ -29,28 +29,7 @@ pub fn active(win: *dvui.Window) bool {
     return false;
 }
 
-fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8) bool {
-    const opts: dvui.Options = .{
-        .tab_index = 1,
-        .style = .control,
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.25,
-            .offset = .{ .x = -4, .y = 4 },
-            .fade = 8,
-        },
-    };
-    var button: dvui.ButtonWidget = undefined;
-    button.init(src, .{}, opts);
-    defer button.deinit();
-    button.processEvents();
-    button.drawFocus();
-    button.drawBackground();
-    dvui.labelNoFmt(src, label_text, .{}, opts.strip().override(button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
-    return button.clicked();
-}
-
-pub fn dialog(_: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) anyerror!bool {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(12) });
     defer outer.deinit();
 
@@ -64,7 +43,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
     defer row.deinit();
 
-    if (dialogButton(@src(), "Cancel")) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Cancel", .control, 1, 0)) {
         fizzy.core.dialogs.closeFloatingDialogAnchored();
     }
 

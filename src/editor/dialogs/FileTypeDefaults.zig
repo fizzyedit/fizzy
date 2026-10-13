@@ -138,29 +138,7 @@ fn reset() void {
     plugin_name = "";
 }
 
-fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
-    const opts: dvui.Options = .{
-        .tab_index = tab_idx,
-        .style = style,
-        .id_extra = id_extra,
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.25,
-            .offset = .{ .x = -4, .y = 4 },
-            .fade = 8,
-        },
-    };
-    var button: dvui.ButtonWidget = undefined;
-    button.init(src, .{}, opts);
-    defer button.deinit();
-    button.processEvents();
-    button.drawFocus();
-    button.drawBackground();
-    dvui.labelNoFmt(src, label_text, .{}, opts.strip().override(button.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
-    return button.clicked();
-}
-
-pub fn dialog(_: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) anyerror!bool {
     const theme = dvui.themeGet();
     const body = dvui.Font.theme(.body);
     const arena = dvui.currentWindow().arena();
@@ -262,12 +240,12 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 
     // Not "Cancel": nothing is undone, nothing is written, and the plugin stays installed. The
     // question simply goes unanswered until this plugin next arrives (reinstall or first load).
-    if (dialogButton(@src(), "Not now", .control, 1, 0) and !closing) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Not now", .control, 1, 0) and !closing) {
         closing = true;
         fizzy.core.dialogs.closeFloatingDialogAnchored();
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
-    if (dialogButton(@src(), "Confirm", .highlight, 2, 1) and !closing) {
+    if (fizzy.core.dialogs.bodyButton(@src(), id, "Confirm", .highlight, 2, 1) and !closing) {
         confirm();
         closing = true;
         fizzy.core.dialogs.closeFloatingDialogAnchored();

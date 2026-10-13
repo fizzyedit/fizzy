@@ -1,10 +1,15 @@
-//! A picture of the window as the app drew it, read back from the app's own frame target: what an
-//! agent looks at, with or without the window on screen. A window on another Space, occluded or
-//! minimized is presented nowhere, but the app's frames still draw into the target, so the picture
+//! A picture of a window as the app drew it, read back from the target the app drew it into: what
+//! an agent looks at, with or without the window on screen. A window on another Space, occluded or
+//! minimized is presented nowhere, but the app's frames still draw into its target, so the picture
 //! is there to read; and nothing outside the app — no screen recording, no window list — is asked.
 //!
 //! Only what the app draws: what the OS composites over or behind the window (its materials, a
 //! window of Liquid Glass) is not in it, and shows as the target's own transparency.
+//!
+//! An app that shows parts of its frame in OS windows of their own — a dialog, a menu, a view
+//! popped out — hands each window's target over too (`Source`), named as a snapshot names the
+//! window (`Snapshot.Window.tag`). A picture is asked for by that name: the main window's by none,
+//! and every window at once, laid out as they lie on the desktop round the main one, by `all`.
 //!
 //! Asked for like a `Snapshot` (`request`, then `get` once taken): the next frame the app draws
 //! is read back at its end (`endFrame`), encoded as a PNG, and kept until the next is taken.
@@ -15,9 +20,33 @@ const dvui = @import("dvui");
 
 gpa: std.mem.Allocator,
 pending: bool = false,
+/// The window the pending picture is of (`request`).
+window_buf: [256]u8 = undefined,
+window_len: usize = 0,
 /// How many have been taken; the last is `taken`.
 taken: u32 = 0,
 png: std.ArrayListUnmanaged(u8) = .empty,
+
+/// The name that asks for every window at once (`request`).
+pub const all = "*";
+
+/// A window the app drew this frame, for a picture of it.
+pub const Source = struct {
+    /// The name it is asked for by: its window's tag in a snapshot. The main window is the first
+    /// source, and is asked for by none as well.
+    tag: []const u8,
+    target: dvui.Texture.Target,
+    /// The frame's part of the target, from its top left (a target can be kept larger).
+    w: u32,
+    h: u32,
+    /// Where the window lies over the main window, physical pixels from its top left: where it goes
+    /// in a picture of every window (`all`).
+    at: dvui.Point.Physical = .{},
+    /// What it stands on in a picture of every window: the colour the OS's material under it
+    /// reads as. A window on the OS's glass draws nothing there, and over the main window would
+    /// show the main window through it. Null: nothing under it.
+    backing: ?dvui.Color = null,
+};
 
 pub fn init(gpa: std.mem.Allocator) Capture {
     return .{ .gpa = gpa };
@@ -27,57 +56,127 @@ pub fn deinit(self: *Capture) void {
     self.png.deinit(self.gpa);
 }
 
-/// Ask for a picture of the next frame: the app wakes for it. Asking again before it is taken
-/// names the same one.
-pub fn request(self: *Capture) u32 {
+/// Ask for a picture of the next frame of `window` — a window's tag, none for the main window, or
+/// `all` — and the app wakes for it. Asking again before it is taken names the same one, of the
+/// window first asked for.
+pub fn request(self: *Capture, window: []const u8) u32 {
     if (!self.pending) {
         self.pending = true;
+        self.window_len = @min(window.len, self.window_buf.len);
+        @memcpy(self.window_buf[0..self.window_len], window[0..self.window_len]);
         dvui.refresh(null, @src(), null);
     }
     return self.taken + 1;
 }
 
-/// The frame drawn into `target`, its top-left `w` by `h` pixels (a target can be kept larger than
-/// the frame), read back and encoded: at the end of the app's frame, after everything has drawn
-/// into the target. Between `Window.begin` and `Window.end`.
-pub fn endFrame(self: *Capture, target: dvui.Texture.Target, w: u32, h: u32) void {
-    if (!self.pending) return;
+/// Whether a picture is waiting for this frame: the app need not name its windows otherwise.
+pub fn wanted(self: *const Capture) bool {
+    return self.pending;
+}
+
+/// At the end of the app's frame, after everything has drawn into the windows' targets: the
+/// picture asked for is read back and encoded — empty when no window has the name it was asked
+/// for by. `sources` are this frame's windows, the main one first. Between `Window.begin` and
+/// `Window.end`.
+pub fn endFrame(self: *Capture, sources: []const Source) void {
+    if (!self.pending or sources.len == 0) return;
     self.pending = false;
+    self.png.clearRetainingCapacity();
+    self.taken += 1;
     var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const all = dvui.Texture.readTarget(arena, target) catch |err| {
+
+    const window = self.window_buf[0..self.window_len];
+    const picture = (if (std.mem.eql(u8, window, all)) everyWindow(arena, sources) else one: {
+        const src = if (window.len == 0) sources[0] else for (sources) |s| {
+            if (std.mem.eql(u8, s.tag, window)) break s;
+        } else return;
+        break :one read(arena, src);
+    }) catch |err| {
         dvui.log.warn("capture: could not read the frame back: {t}", .{err});
         return;
     };
-    const cw = @min(w, target.width);
-    const ch = @min(h, target.height);
-    // The frame's pixels, premultiplied as drawn, as straight alpha for the PNG.
-    const rgba = arena.alloc(u8, @as(usize, cw) * ch * 4) catch return;
-    for (0..ch) |y| for (0..cw) |x| {
-        const p = all[y * target.width + x];
-        const o = (y * cw + x) * 4;
-        const a: u32 = p.a;
-        rgba[o + 0] = if (a == 0) 0 else @intCast(@min(255, (@as(u32, p.r) * 255 + a / 2) / a));
-        rgba[o + 1] = if (a == 0) 0 else @intCast(@min(255, (@as(u32, p.g) * 255 + a / 2) / a));
-        rgba[o + 2] = if (a == 0) 0 else @intCast(@min(255, (@as(u32, p.b) * 255 + a / 2) / a));
-        rgba[o + 3] = p.a;
-    };
+    // Premultiplied as drawn; straight alpha for the PNG.
+    const rgba = picture.pma;
+    var i: usize = 0;
+    while (i < rgba.len) : (i += 4) {
+        const a: u32 = rgba[i + 3];
+        for (rgba[i .. i + 3]) |*c| c.* = if (a == 0) 0 else @intCast(@min(255, (@as(u32, c.*) * 255 + a / 2) / a));
+    }
     // The encoder writes its chunks straight into the writer's buffer: it must hold one.
-    self.png.clearRetainingCapacity();
     self.png.ensureTotalCapacity(self.gpa, @max(dvui.PNGEncoder.min_buffer_size, 64 * 1024)) catch return;
     var out: std.Io.Writer.Allocating = .fromArrayList(self.gpa, &self.png);
-    dvui.PNGEncoder.write(&out.writer, rgba, cw, ch) catch |err| {
+    dvui.PNGEncoder.write(&out.writer, rgba, picture.w, picture.h) catch |err| {
         dvui.log.warn("capture: could not encode: {t}", .{err});
         self.png = out.toArrayList();
+        self.png.clearRetainingCapacity();
         return;
     };
     self.png = out.toArrayList();
-    self.taken += 1;
 }
 
-/// Picture `n` as a PNG, while it is the last one taken; null before it is, or once another is.
-/// Valid until the next is taken.
+/// Picture `n` as a PNG, while it is the last one taken — empty when no window had the name it was
+/// asked for by; null before it is taken, or once another is. Valid until the next is taken.
 pub fn get(self: *const Capture, n: u32) ?[]const u8 {
     return if (n == self.taken and n != 0) self.png.items else null;
+}
+
+/// A picture, premultiplied RGBA, row by row.
+const Pixels = struct { pma: []u8, w: u32, h: u32 };
+
+/// `src`'s part of its target.
+fn read(arena: std.mem.Allocator, src: Source) !Pixels {
+    const t = src.target;
+    const px = try dvui.Texture.readTarget(arena, t);
+    const w = @min(src.w, t.width);
+    const h = @min(src.h, t.height);
+    const out = try arena.alloc(u8, @as(usize, w) * h * 4);
+    for (0..h) |y| for (0..w) |x| {
+        const p = px[y * t.width + x];
+        out[(y * w + x) * 4 ..][0..4].* = .{ p.r, p.g, p.b, p.a };
+    };
+    return .{ .pma = out, .w = w, .h = h };
+}
+
+/// The most a picture of every window spans each way, physical pixels: a window far off the main
+/// one is cut off, rather than the picture taking in all the desktop between them.
+const max_side: f32 = 8192;
+
+/// Every window, each where it lies round the main window, a later one over an earlier.
+fn everyWindow(arena: std.mem.Allocator, sources: []const Source) !Pixels {
+    var span: dvui.Rect.Physical = .{ .w = @floatFromInt(sources[0].w), .h = @floatFromInt(sources[0].h) };
+    for (sources[1..]) |s| span = span.unionWith(.{ .x = s.at.x, .y = s.at.y, .w = @floatFromInt(s.w), .h = @floatFromInt(s.h) });
+    const w: u32 = @intFromFloat(@min(@round(span.w), max_side));
+    const h: u32 = @intFromFloat(@min(@round(span.h), max_side));
+    const out = try arena.alloc(u8, @as(usize, w) * h * 4);
+    @memset(out, 0);
+    for (sources) |s| {
+        const pic = try read(arena, s);
+        const ox: i64 = @intFromFloat(@round(s.at.x - span.x));
+        const oy: i64 = @intFromFloat(@round(s.at.y - span.y));
+        if (s.backing) |c| for (0..pic.h) |y| {
+            const cy = oy + @as(i64, @intCast(y));
+            if (cy < 0 or cy >= h) continue;
+            for (0..pic.w) |x| {
+                const cx = ox + @as(i64, @intCast(x));
+                if (cx < 0 or cx >= w) continue;
+                out[(@as(usize, @intCast(cy)) * w + @as(usize, @intCast(cx))) * 4 ..][0..4].* = .{ c.r, c.g, c.b, 255 };
+            }
+        };
+        for (0..pic.h) |y| {
+            const cy = oy + @as(i64, @intCast(y));
+            if (cy < 0 or cy >= h) continue;
+            for (0..pic.w) |x| {
+                const cx = ox + @as(i64, @intCast(x));
+                if (cx < 0 or cx >= w) continue;
+                const from = pic.pma[(y * pic.w + x) * 4 ..][0..4];
+                const into = out[(@as(usize, @intCast(cy)) * w + @as(usize, @intCast(cx))) * 4 ..][0..4];
+                // Over, premultiplied.
+                const keep: u32 = 255 - from[3];
+                for (into, from) |*d, sv| d.* = @intCast(@min(255, @as(u32, sv) + (@as(u32, d.*) * keep + 127) / 255));
+            }
+        }
+    }
+    return .{ .pma = out, .w = w, .h = h };
 }
