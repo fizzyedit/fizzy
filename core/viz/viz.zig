@@ -46,6 +46,9 @@ pub const LineOptions = struct {
     /// Report the slot under the pointer, and show it. On touch, only while the finger is down:
     /// the pointer stays where a finger lifted.
     hover: bool = true,
+    /// A slot drawn as picked (slots back from the newest), lit as the hovered one is: what a
+    /// caller locked with a click (`Line.clicked`).
+    selected: ?usize = null,
 
     pub const Style = enum { line, columns };
 };
@@ -55,6 +58,8 @@ pub const Line = struct {
     box: *dvui.BoxWidget,
     /// Slots back from the newest that the pointer is over (0 the newest), while it is.
     hovered: ?usize,
+    /// The slot pressed this frame, if one was: for a caller that locks a slot (`selected`).
+    clicked: ?usize = null,
 
     pub fn deinit(self: *Line) void {
         self.box.deinit();
@@ -101,7 +106,8 @@ pub fn line(src: std.builtin.SourceLocation, series: []const Series, opts: LineO
     const per_value: f32 = r.h / top;
     const slot_w = r.w / @as(f32, @floatFromInt(slots));
 
-    const hovered = if (opts.hover) hoveredSlot(box.data().id, r, slot_w, filled) else null;
+    const under: Pointed = if (opts.hover) pointed(box.data(), r, slot_w, filled) else .{};
+    const hovered = under.hovered;
 
     const text = dvui.themeGet().color(.window, .text);
     const lifo = dvui.currentWindow().lifo();
@@ -109,7 +115,7 @@ pub fn line(src: std.builtin.SourceLocation, series: []const Series, opts: LineO
     // Every column, mark and the hover marker as one batch of quads: one draw rather than one
     // fill (its own path, triangulation and draw call) each, so the chart stays out of the
     // numbers it shows.
-    const quads = (if (columns) series.len * filled else 0) + opts.marks.len + 1;
+    const quads = (if (columns) series.len * filled else 0) + opts.marks.len + 2;
     if (dvui.Triangles.Builder.init(lifo, quads * 4, quads * 6)) |builder| {
         var b = builder;
         defer b.deinit(lifo);
@@ -128,15 +134,16 @@ pub fn line(src: std.builtin.SourceLocation, series: []const Series, opts: LineO
                     var c = s.color orelse seriesColor(i).opacity(0.8);
                     // The slot under the pointer in the text colour: the bottom series solid, the
                     // ones on it as faint as they were, so a stack still reads as one.
-                    if (hovered != null and hovered.? == ago) c = text.opacity(if (i == 0) 1 else @as(f32, @floatFromInt(c.a)) / 255);
+                    const lit = (hovered != null and hovered.? == ago) or (opts.selected != null and opts.selected.? == ago);
+                    if (lit) c = text.opacity(if (i == 0) 1 else @as(f32, @floatFromInt(c.a)) / 255);
                     addQuad(&b, .{ .x = x, .y = r.y + r.h - base - h, .w = w, .h = h }, .fromColor(c));
                     if (opts.stacked) base += h;
                 }
             }
-        } else if (hovered) |h| {
+        } else for ([_]?usize{ hovered, opts.selected }) |slot| if (slot) |h| {
             const x = r.x + r.w - (@as(f32, @floatFromInt(h)) + 0.5) * slot_w;
             addQuad(&b, .{ .x = x - rs.s / 2, .y = r.y, .w = rs.s, .h = r.h }, .fromColor(text.opacity(0.4)));
-        }
+        };
         const mark_col: dvui.Color.PMA = .fromColor(dvui.themeGet().color(.control, .text).opacity(0.3));
         for (opts.marks) |m| {
             const y = r.y + r.h - m * per_value;
@@ -160,7 +167,7 @@ pub fn line(src: std.builtin.SourceLocation, series: []const Series, opts: LineO
         path.build().stroke(.{ .thickness = 1.5 * rs.s, .color = .{ .color = s.color orelse seriesColor(i) }, .join = .strip });
     };
 
-    return .{ .box = box, .hovered = hovered };
+    return .{ .box = box, .hovered = hovered, .clicked = under.clicked };
 }
 
 fn valueAgo(s: Series, ago: usize) f32 {
@@ -168,9 +175,14 @@ fn valueAgo(s: Series, ago: usize) f32 {
     return @max(0, s.values[s.values.len - 1 - ago]);
 }
 
-/// The slot under the pointer. A touch holds a slot only while the finger is down: the pointer
-/// stays where it lifted, and read as a hover it would hold the chart for good.
-fn hoveredSlot(id: dvui.Id, r: dvui.Rect.Physical, slot_w: f32, filled: usize) ?usize {
+const Pointed = struct { hovered: ?usize = null, clicked: ?usize = null };
+
+/// The slot under the pointer, and the one pressed this frame. A touch holds a slot only while
+/// the finger is down: the pointer stays where it lifted, and read as a hover it would hold the
+/// chart for good.
+fn pointed(wd: *dvui.WidgetData, r: dvui.Rect.Physical, slot_w: f32, filled: usize) Pointed {
+    const id = wd.id;
+    var out: Pointed = .{};
     var touch_pointer = dvui.dataGet(null, id, "touch_pointer", bool) orelse false;
     var touch_down = dvui.dataGet(null, id, "touch_down", bool) orelse false;
     for (dvui.events()) |*e| {
@@ -180,6 +192,12 @@ fn hoveredSlot(id: dvui.Id, r: dvui.Rect.Physical, slot_w: f32, filled: usize) ?
             .press => {
                 touch_pointer = me.button.touch();
                 if (touch_pointer) touch_down = true;
+                if (!e.handled and me.button.pointer() and r.contains(me.p) and dvui.clipGet().contains(me.p)) {
+                    if (scale.slotFromRight(r.x + r.w - me.p.x, slot_w, filled)) |slot| {
+                        out.clicked = slot;
+                        e.handle(@src(), wd);
+                    }
+                }
             },
             .release => if (me.button.touch()) {
                 touch_down = false;
@@ -194,9 +212,10 @@ fn hoveredSlot(id: dvui.Id, r: dvui.Rect.Physical, slot_w: f32, filled: usize) ?
     dvui.dataSet(null, id, "touch_down", touch_down);
 
     const mouse = dvui.currentWindow().mouse_pt;
-    if (touch_pointer and !touch_down) return null;
-    if (!r.contains(mouse) or !dvui.clipGet().contains(mouse)) return null;
-    return scale.slotFromRight(r.x + r.w - mouse.x, slot_w, filled);
+    if (touch_pointer and !touch_down) return out;
+    if (!r.contains(mouse) or !dvui.clipGet().contains(mouse)) return out;
+    out.hovered = scale.slotFromRight(r.x + r.w - mouse.x, slot_w, filled);
+    return out;
 }
 
 fn addQuad(b: *dvui.Triangles.Builder, q: dvui.Rect.Physical, col: dvui.Color.PMA) void {
@@ -258,4 +277,14 @@ pub fn stat(src: std.builtin.SourceLocation, label: []const u8, value: f64, opts
         dvui.labelNoFmt(@src(), text, .{}, .{ .font = mono, .padding = .{}, .gravity_x = 1 });
     }
     if (opts.unit.len > 0) dvui.labelNoFmt(@src(), opts.unit, .{}, .{ .font = mono, .color_text = .{ .color = dim }, .padding = .{ .x = 3 }, .gravity_y = 0.5 });
+}
+
+/// `text` cut to `max_w` (natural pixels) with an ellipsis, or whole if it fits.
+pub fn fit(arena: std.mem.Allocator, font: dvui.Font, text: []const u8, max_w: f32) []const u8 {
+    if (max_w <= 0) return "";
+    if (font.textSize(text).w <= max_w) return text;
+    const ellipsis = "…";
+    var end: usize = 0;
+    _ = font.textSizeEx(text, .{ .max_width = @max(0, max_w - font.textSize(ellipsis).w), .end_idx = &end });
+    return std.fmt.allocPrint(arena, "{s}{s}", .{ text[0..end], ellipsis }) catch text[0..end];
 }

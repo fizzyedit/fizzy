@@ -50,6 +50,21 @@ pub const Options = struct {
     leader_min: f32 = 0.025,
     /// Ease between values rather than jump.
     ease: bool = true,
+    labels: Labels = .leaders,
+
+    pub const Labels = enum {
+        /// Out from each slice to its name and value, on its side: the pie in the middle of a
+        /// place with room on both sides.
+        leaders,
+        /// A list beside the pie, a swatch, name and value a row: for a place short or narrow
+        /// enough that leaders on both sides would leave the names no room. Hovering a row is
+        /// hovering its slice.
+        legend,
+        /// None: the pie fills its box, and something beside it says which colour is what (a
+        /// table whose bars are in the pie's colours, `colors`). The hole still names the slice
+        /// under the pointer.
+        none,
+    };
 };
 
 /// What a slice was last drawn as, kept between frames for the easing.
@@ -62,6 +77,9 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
     const rs = box.data().contentRectScale();
     const r = rs.r;
     const s = rs.s;
+    // Its labels and its pulled-out slice stay inside its box, however small the place makes it.
+    const prev_clip = dvui.clip(r);
+    defer dvui.clipSet(prev_clip);
     const arena = dvui.currentWindow().arena();
     const text_col = dvui.themeGet().color(.control, .text);
     const dim = text_col.opacity(0.6);
@@ -95,11 +113,30 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
     var sum: f32 = 0;
     for (shares) |sh| sum += sh;
 
-    // Room for leaders and their labels on both sides; the pie takes the middle.
-    const radius = @max(8 * s, @min(r.h * 0.4, r.w * 0.2));
-    const inner = radius * opts.hole;
-    const c: dvui.Point.Physical = .{ .x = r.x + r.w / 2, .y = r.y + r.h / 2 };
+    const legend = opts.labels == .legend;
+    const bare = opts.labels == .none;
     const pop = 5 * s;
+    // With leaders, room for their labels on both sides, and the pie takes the middle; with a
+    // legend, the pie sits at the left and the list takes the rest.
+    const radius = @max(8 * s, if (bare) @min(r.h, r.w) / 2 - pop else if (legend) @min(r.h * 0.42, r.w * 0.24) else @min(r.h * 0.4, r.w * 0.2));
+    const inner = radius * opts.hole;
+    const c: dvui.Point.Physical = if (legend)
+        .{ .x = r.x + radius + pop, .y = r.y + r.h / 2 }
+    else
+        .{ .x = r.x + r.w / 2, .y = r.y + r.h / 2 };
+    const font = dvui.Font.theme(.body).withSize(dvui.Font.theme(.body).size * 0.9);
+    const mono = dvui.Font.theme(.mono);
+    const line_h = font.textHeight() * s;
+
+    // The legend's rows, the slices big enough to name, centred beside the pie.
+    var rows: std.ArrayList(usize) = .empty;
+    // Every slice: a list has the room leaders do not.
+    if (legend and total > 0) for (slices, 0..) |sl, i| {
+        if (sl.value > 0) rows.append(arena, i) catch {};
+    };
+    const row_h = line_h + 4 * s;
+    const legend_x = c.x + radius + pop + 12 * s;
+    const legend_y = std.math.clamp(c.y - @as(f32, @floatFromInt(rows.items.len)) * row_h / 2, r.y, @max(r.y, r.y + r.h - @as(f32, @floatFromInt(rows.items.len)) * row_h));
 
     // The slice under the pointer: inside the ring (and its pulled-out edge), at its angle.
     var hovered: ?usize = null;
@@ -109,6 +146,10 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
         const dy = mouse.y - c.y;
         const d = @sqrt(dx * dx + dy * dy);
         if (d >= inner and d <= radius + pop) hovered = scale.sliceAt(scale.angleFromTop(dx, dy), shares);
+        if (legend and mouse.x >= legend_x - 4 * s) for (rows.items, 0..) |i, n| {
+            const y = legend_y + @as(f32, @floatFromInt(n)) * row_h;
+            if (mouse.y >= y and mouse.y < y + row_h) hovered = i;
+        };
     }
 
     if (sum <= 0) {
@@ -136,17 +177,31 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
         if (hovered != null and hovered != i) col = col.opacity(0.4);
         _ = sl;
         ring(at, radius, inner, start + inset, start + sweep - inset, col, s);
-        if (shares[i] / sum >= opts.leader_min or hovered == i) {
+        if (opts.labels == .leaders and (shares[i] / sum >= opts.leader_min or hovered == i)) {
             const right = @sin(mid) >= 0;
             leaders.append(arena, .{ .i = i, .mid = mid, .y = c.y - @cos(mid) * (radius + 10 * s), .right = right }) catch {};
         }
     }
 
+    // The legend: a swatch, the name cut to the room left, and the value at the right edge.
+    for (rows.items, 0..) |i, n| {
+        const y = legend_y + @as(f32, @floatFromInt(n)) * row_h + 2 * s;
+        const faded = hovered != null and hovered != i;
+        const sw = 8 * s;
+        const swatch: dvui.Rect.Physical = .{ .x = legend_x, .y = y + (line_h - sw) / 2, .w = sw, .h = sw };
+        swatch.fill(.all(2 * s), .{ .color = .{ .color = if (faded) colors[i].opacity(0.4) else colors[i] }, .fade = 1 });
+        var buf: [32]u8 = undefined;
+        const value = std.fmt.bufPrint(&buf, "{[v]d:.[p]} {[u]s}", .{ .v = slices[i].value, .p = opts.decimals, .u = opts.unit }) catch "";
+        const value_w = mono.textSize(value).w * s;
+        const name_x = legend_x + sw + 6 * s;
+        const name = viz.fit(arena, font, slices[i].label, (r.x + r.w - value_w - 8 * s - name_x) / s);
+        const name_w = font.textSize(name).w * s;
+        dvui.renderText(.{ .font = font, .text = name, .rs = .{ .r = .{ .x = name_x, .y = y, .w = name_w, .h = line_h }, .s = s }, .color = if (faded) text_col.opacity(0.4) else text_col }) catch {};
+        dvui.renderText(.{ .font = mono, .text = value, .rs = .{ .r = .{ .x = r.x + r.w - value_w, .y = y, .w = value_w, .h = line_h }, .s = s }, .color = text_col.opacity(if (faded) 0.3 else 0.75) }) catch {};
+    }
+
     // Leaders: out from the rim, then level to a label on that side, the labels on each side
     // pushed apart so none overlap.
-    const font = dvui.Font.theme(.body).withSize(dvui.Font.theme(.body).size * 0.9);
-    const mono = dvui.Font.theme(.mono);
-    const line_h = font.textHeight() * s;
     // A label is two lines: the name, and under it the value.
     const label_h = 2 * line_h;
     for ([_]bool{ false, true }) |side| {
@@ -182,7 +237,7 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
             var buf: [32]u8 = undefined;
             const value = std.fmt.bufPrint(&buf, "{[v]d:.[p]} {[u]s}", .{ .v = sl.value, .p = opts.decimals, .u = opts.unit }) catch "";
             const room = (if (side) r.x + r.w - end.x else end.x - r.x) - 6 * s;
-            const name = fit(arena, font, sl.label, room / s);
+            const name = viz.fit(arena, font, sl.label, room / s);
             const name_w = font.textSize(name).w * s;
             const value_w = mono.textSize(value).w * s;
             const ty = y - line_h;
@@ -207,7 +262,7 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
             opts.caption,
         };
         const vs = big.textSize(value).scale(s, dvui.Size.Physical);
-        const cap = fit(arena, font, caption, inner * 1.7 / s);
+        const cap = viz.fit(arena, font, caption, inner * 1.7 / s);
         const cs = font.textSize(cap).scale(s, dvui.Size.Physical);
         const top = c.y - (vs.h + cs.h) / 2;
         dvui.renderText(.{ .font = big, .text = value, .rs = .{ .r = .{ .x = c.x - vs.w / 2, .y = top, .w = vs.w, .h = vs.h }, .s = s }, .color = text_col }) catch {};
@@ -250,30 +305,56 @@ fn assignColors(arena: std.mem.Allocator, slices: []const Slice, keys: []const u
     }
 }
 
-/// A ring's arc from `a0` to `a1` (clockwise from the top) between `inner` and `outer`, filled
-/// with its edge anti-aliased.
+/// A ring's arc from `a0` to `a1` (clockwise from the top) between `inner` and `outer`, as a mesh
+/// of its own: across the ring four rows of points, a pixel's fade outside each edge, and along it
+/// the same fade past each end. Every edge is anti-aliased alike, the round ones and the cuts
+/// between slices, where a stroke's ends were hard and showed jagged; and nothing overlaps, so a
+/// faded slice is evenly faded.
 fn ring(c: dvui.Point.Physical, outer: f32, inner: f32, a0: f32, a1: f32, col: dvui.Color, s: f32) void {
     if (a1 <= a0) return;
-    var path: dvui.Path.Builder = .init(dvui.currentWindow().arena());
-    // Fine enough that the rim reads as a curve at any size: a step of about 3 pixels.
-    const steps: usize = @max(2, @as(usize, @intFromFloat(@ceil((a1 - a0) * outer / (3 * s)))));
-    for (0..steps + 1) |n| {
-        const a = a0 + (a1 - a0) * @as(f32, @floatFromInt(n)) / @as(f32, @floatFromInt(steps));
-        path.addPoint(.{ .x = c.x + @sin(a) * outer, .y = c.y - @cos(a) * outer });
+    const f = s; // the fade: a pixel
+    const mid = (outer + inner) / 2;
+    // Half the fade as an angle at the ring's middle: the solid part starts half a pixel inside
+    // each end, the fade reaches half a pixel past it.
+    const half = f / 2 / mid;
+    const sweep = a1 - a0;
+    // A sliver thinner than its fade is drawn at the alpha its width earns.
+    const thin = @min(1, sweep / (2 * half));
+    const steps: usize = @max(1, @as(usize, @intFromFloat(@ceil(sweep * outer / (2 * s)))));
+    const cols = steps + 3;
+    const radii = [4]f32{ inner - f / 2, inner + f / 2, outer - f / 2, outer + f / 2 };
+    const row_alpha = [4]f32{ 0, 1, 1, 0 };
+    const lifo = dvui.currentWindow().lifo();
+    var b = dvui.Triangles.Builder.init(lifo, cols * 4, (cols - 1) * 3 * 6) catch return;
+    defer b.deinit(lifo);
+    for (0..cols) |k| {
+        const angle, const col_alpha = if (k == 0)
+            .{ a0 - half, 0 }
+        else if (k == cols - 1)
+            .{ a1 + half, 0 }
+        else blk: {
+            const t = @as(f32, @floatFromInt(k - 1)) / @as(f32, @floatFromInt(steps));
+            const lo = a0 + @min(half, sweep / 2);
+            const hi = a1 - @min(half, sweep / 2);
+            break :blk .{ lo + (hi - lo) * t, thin };
+        };
+        const sin = @sin(angle);
+        const cos = @cos(angle);
+        for (radii, row_alpha) |radius, ra| {
+            b.appendVertex(.{
+                .pos = .{ .x = c.x + sin * radius, .y = c.y - cos * radius },
+                .col = .fromColor(col.opacity(ra * col_alpha)),
+                .uv = .{ 0, 0 },
+            });
+        }
     }
-    for (0..steps + 1) |n| {
-        const a = a1 - (a1 - a0) * @as(f32, @floatFromInt(n)) / @as(f32, @floatFromInt(steps));
-        path.addPoint(.{ .x = c.x + @sin(a) * inner, .y = c.y - @cos(a) * inner });
+    for (0..cols - 1) |k| {
+        const here: dvui.Vertex.Index = @intCast(k * 4);
+        const next: dvui.Vertex.Index = @intCast((k + 1) * 4);
+        for (0..3) |j| {
+            const jj: dvui.Vertex.Index = @intCast(j);
+            b.appendTriangles(&.{ here + jj, here + jj + 1, next + jj + 1, here + jj, next + jj + 1, next + jj });
+        }
     }
-    dvui.Path.fill(&.{path.build()}, .{ .color = .{ .color = col }, .fade = 1 });
-}
-
-/// `text` cut to `max_w` (natural pixels) with an ellipsis, or whole if it fits.
-fn fit(arena: std.mem.Allocator, font: dvui.Font, text: []const u8, max_w: f32) []const u8 {
-    if (max_w <= 0) return "";
-    if (font.textSize(text).w <= max_w) return text;
-    const ellipsis = "…";
-    var end: usize = 0;
-    _ = font.textSizeEx(text, .{ .max_width = @max(0, max_w - font.textSize(ellipsis).w), .end_idx = &end });
-    return std.fmt.allocPrint(arena, "{s}{s}", .{ text[0..end], ellipsis }) catch text[0..end];
+    dvui.renderTriangles(b.build_unowned(), null) catch {};
 }
