@@ -84,7 +84,7 @@ jobs:
         id: zig-cache-key
         run: |
           prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-web-${{ runner.os }}-${{ runner.arch }}-"
-          echo "key=$prefix${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+          echo "key=${prefix}${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
       - uses: mlugg/setup-zig@v2
         with:
