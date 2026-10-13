@@ -26,8 +26,8 @@
 const std = @import("std");
 
 /// The one frost every glass has above 0, as a share of the way from a clear lens (0) to wholly
-/// blurred (1): the lens's bend and shine fading as it frosts, as frosted glass's do. Tuned once,
-/// here, rather than set by each person (it was a second slider, roughness).
+/// blurred (1), in the glass's body; its edge stays the clear lens, as Liquid Glass's does. Tuned
+/// once, here, rather than set by each person (it was a second slider, roughness).
 pub const frost_level: f32 = 0.82;
 
 /// The least opacity an app's own slider offers: 0 is a clear window, not glass (fizzy's settings).
@@ -261,12 +261,17 @@ pub fn inApp(opacity: f32) InApp {
         .lift = 0.03 * w.shine,
         .bevel = bevel,
         .bevel_cap = bevel_cap,
-        .bend = std.math.lerp(1.1, 0.55, w.frost) * w.shine,
-        .clarity = std.math.lerp(0.9, 0.3, w.frost) * w.shine,
-        .rim = std.math.lerp(1.0, 0.8, w.frost) * w.shine,
-        .shade = std.math.lerp(0.15, 0.05, w.frost) * w.shine,
+        // The lens whole at its edge whatever the frost, as Liquid Glass's is (and the OS's drops,
+        // `native`): the frost is the body's. Softened with the frost, it went with the one frost
+        // level (`frost_level`), and the edge stopped bending (the user).
+        .bend = 1.1 * w.shine,
+        .clarity = 0.9 * w.shine,
+        .rim = w.shine,
+        .shade = 0.15 * w.shine,
         .bevel_light = 0.08 * w.shine,
-        .dispersion = std.math.lerp(1.0, 0.25, w.frost) * w.shine,
+        // A hint of colour fringe: whole, it was red and blue specks along the edge, which
+        // Liquid Glass does not show.
+        .dispersion = 0.25 * w.shine,
     };
 }
 
@@ -305,8 +310,8 @@ pub fn forLens(look: InApp) InApp {
 
 /// The app's own glass where there is no OS glass to match (the web, Linux, Windows): what is behind
 /// blurred, the window's colour mixed over it (`core.dialogs.Style`). The blur is the frost level's
-/// share of `max_blur`, the lens's bend fading as it grows (half gone at full frost), none of either
-/// at 0; the opacity is the colour as it is.
+/// share of `max_blur`, the edge refracting whole (the frost is the body's, as `inApp`'s), none of
+/// either at 0; the opacity is the colour as it is.
 pub const Frosted = struct {
     /// The window's colour over the frost, 0…1.
     mix: f32,
@@ -321,7 +326,7 @@ pub const max_blur: f32 = 40;
 
 pub fn frosted(opacity: f32) Frosted {
     const r = roughness(opacity);
-    return .{ .mix = std.math.clamp(opacity, 0, 1), .blur = r * max_blur, .refraction = if (clear(opacity)) 0 else std.math.lerp(1, 0.5, r) };
+    return .{ .mix = std.math.clamp(opacity, 0, 1), .blur = r * max_blur, .refraction = if (clear(opacity)) 0 else 1 };
 }
 
 // ── The window's own base ───────────────────────────────────────────────────────────────────────
@@ -448,6 +453,18 @@ test "a lens over a picture leaves its middle as it is, at every opacity" {
         // Its edge is the glass all the same.
         try std.testing.expectEqual(inApp(t).bend, l.bend);
         try std.testing.expectEqual(inApp(t).rim, l.rim);
+    }
+}
+
+test "the lens's edge is whole whatever the frost: it bends and folds as the clear lens does" {
+    var i: usize = 1;
+    while (i <= 16) : (i += 1) {
+        const l = inApp(at(i, 20)); // up to `shine_start`
+        try std.testing.expectEqual(@as(f32, 1.1), l.bend);
+        try std.testing.expectEqual(@as(f32, 0.9), l.clarity);
+        try std.testing.expectEqual(@as(f32, 1), l.rim);
+        try std.testing.expect(l.frost > 0.5);
+        try std.testing.expectEqual(@as(f32, 1), frosted(at(i, 20)).refraction);
     }
 }
 
