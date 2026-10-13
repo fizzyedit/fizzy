@@ -47,6 +47,10 @@ pub const Catalog = struct {
     summary_url: []const u8,
     shard_url: []const u8,
     status_value: std.atomic.Value(u8) = .init(@intFromEnum(Status.idle)),
+    /// Called from the worker once a native refresh has its answer (ready or failed), so the app
+    /// draws it then rather than at its next input. Safe from any thread is the caller's promise
+    /// (`Host.refresh` is).
+    wake: ?*const fn () void = null,
     mutex: std.Io.Mutex = .init,
     summary: ?ParsedSummary = null,
     shard: ?ParsedShard = null,
@@ -199,8 +203,10 @@ pub const Catalog = struct {
     /// mid-fetch — lands on `.failed`, which is also the right resting state for a canceled
     /// refresh: the app is on its way down, and a later `refresh` would overwrite it anyway.
     fn worker(self: *Catalog) void {
-        const fresh_summary = registry.fetchSummary(self.allocator, self.io, self.summary_url) catch {
+        const fresh_summary = registry.fetchSummary(self.allocator, self.io, self.summary_url) catch |err| {
             self.status_value.store(@intFromEnum(Status.failed), .release);
+            // A cancel is the app shutting down: nothing to draw.
+            if (err != error.Canceled) if (self.wake) |w| w();
             return;
         };
         // Best-effort: any failure (network, 404 for a brand-new fingerprint nobody has
@@ -217,6 +223,7 @@ pub const Catalog = struct {
         }
         self.mutex.unlock(self.io);
         self.status_value.store(@intFromEnum(Status.ready), .release);
+        if (self.wake) |w| w();
     }
 
     /// A joined view of the latest summary + this host's release shard, for the duration the

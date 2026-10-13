@@ -411,6 +411,11 @@ pub fn register(manager: PluginManager) !void {
     const fp_hex = try std.fmt.allocPrint(manager.gpa, "0x{x}", .{dylib.abi_fingerprint});
     defer manager.gpa.free(fp_hex);
     catalog = try store.Catalog.init(manager.gpa, dvui.io, url, fp_hex);
+    catalog.?.wake = struct {
+        fn wake() void {
+            app.host.refresh();
+        }
+    }.wake;
     // The owner of `store://…` pages, and the mount they live on. Registered before the store's
     // own surface so a layout restored with a page open finds its owner already there.
     try Page.register(host, .{

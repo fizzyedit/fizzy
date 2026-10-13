@@ -1233,7 +1233,9 @@ pub fn bubbleSpinnerSaveInCheckPhase(complete_elapsed_ns: i128) bool {
 ///
 /// When `init.complete_elapsed_ns` is set, plays the finish (gather → swell → pop → check) instead.
 /// `options.color(.text)` is the bubbles' colour. Runs at the motion speed; with motion off it
-/// stands still, and the finish is the check.
+/// stands still, and the finish is the check. Out of sight (a row scrolled away, a clipped card) it
+/// draws nothing and asks for no frames; the boiling looks the same from any `t`, so it picks up
+/// again unnoticed.
 pub fn bubbleSpinner(
     src: std.builtin.SourceLocation,
     opts: dvui.Options,
@@ -1248,7 +1250,7 @@ pub fn bubbleSpinner(
     wd.register();
     wd.minSizeSetAndRefresh();
     wd.minSizeReportToParent();
-    if (wd.rect.empty()) return;
+    if (wd.rect.empty() or !wd.visible()) return;
 
     const rs = wd.contentRectScale();
     const still = motion.off();
