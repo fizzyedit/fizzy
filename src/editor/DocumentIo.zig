@@ -1,6 +1,7 @@
-//! The host reads and writes documents, wherever they live: an owner serializes
-//! (`documentBytes`) and hears back (`documentWritten`); the file table's filesystem for the
-//! path — the disk, a zip, a drive — does the I/O. One save path for every backend, so an
+//! The host reads and writes documents, wherever they live: an owner snapshots on the UI thread
+//! (`documentSnapshot`), a worker encodes (`encodeSnapshot`) and, for the disk, writes, and the
+//! owner hears back (`documentWritten`); the file table's filesystem for the path — the disk, a
+//! zip, a drive — does the I/O. One save path for every backend, so an
 //! owner never knows what a `gdrive://` path is, and a `.pixi` on a drive saves the way it
 //! does on the disk.
 //!
@@ -9,9 +10,13 @@
 //! through `FileLoadJob` — a worker thread for large files — which is a performance path, not
 //! a second policy: the bytes end up in `loadDocumentFromBytes` either way.
 //!
-//! Completions arrive through the filesystem's `pump`: the disk's inline (so a local save is
-//! done when the call returns, as it always was), a mount's on the host's per-frame pump.
+//! A save's UI-thread cost is its snapshot. The encode and the disk write run on a thread of the
+//! save's own and land in `tick`, once a frame; a mount's upload then goes through its
+//! filesystem, whose completions arrive on the host's per-frame pump. The web has no threads: there
+//! the encode runs inline. The document stays editable while it saves; the owner's snapshot says
+//! which edit the save stood for.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
 const core = @import("core");
@@ -47,7 +52,7 @@ pub fn deinit(self: *DocumentIo) void {
     }
     self.loads.deinit(self.editor.app.gpa);
     for (self.saves.values()) |pending| {
-        files.resolve(pending.path).fs.cancel(pending.job);
+        if (pending.stage == .writing) files.resolve(pending.path).fs.cancel(pending.job);
         pending.destroy();
     }
     self.saves.deinit(self.editor.app.gpa);
@@ -94,10 +99,22 @@ pub fn unmounting(self: *DocumentIo, prefix: []const u8) void {
             i += 1;
             continue;
         }
-        files.resolve(pending.path).fs.cancel(pending.job);
+        if (pending.stage == .writing) files.resolve(pending.path).fs.cancel(pending.job);
         self.saves.swapRemoveAt(i);
         pending.destroy();
     }
+}
+
+/// Once a frame, on the UI thread: saves whose worker has finished go on to their write (a
+/// mount's upload) or their end (the disk's, already written).
+pub fn tick(self: *DocumentIo) void {
+    if (self.saves.count() == 0) return;
+    var ready: std.ArrayListUnmanaged(*Save) = .empty;
+    defer ready.deinit(self.editor.app.gpa);
+    for (self.saves.values()) |job| {
+        if (job.stage == .encoding and job.done.load(.acquire)) ready.append(self.editor.app.gpa, job) catch return;
+    }
+    for (ready.items) |job| job.encoded();
 }
 
 fn onPrefix(path: []const u8, prefix: []const u8) bool {
@@ -209,17 +226,18 @@ const Load = struct {
 
 // ---- save ----------------------------------------------------------------------------------
 
-/// Serialize `doc` and write it through the mount at `path` — the document's own path, or a
-/// new one for Save As, which the owner adopts when the write lands. The owner is told only
-/// on success; a failed write leaves it dirty, which is the truth.
+/// Save `doc` to `path`: its own path, or a new one for Save As, which the owner adopts when the
+/// write lands. The snapshot is taken now; the encode and write happen off the UI thread and land
+/// in `tick`. The owner is told only on success; a failed save leaves it dirty, which is the truth.
 pub fn save(self: *DocumentIo, doc: sdk.DocHandle, path: []const u8) !void {
     const editor = self.editor;
     const gpa = editor.app.gpa;
     if (self.saves.contains(doc.id)) return error.SaveInProgress;
-    const bytes = (try doc.owner.documentBytes(doc, gpa)) orelse return error.OwnerCannotSaveToMount;
-    errdefer gpa.free(bytes);
-
-    const job = try Save.create(self, doc.id, path, bytes);
+    const snapshot = (try doc.owner.documentSnapshot(doc, path, gpa)) orelse return error.OwnerCannotSaveToMount;
+    const job = Save.create(self, doc, path, snapshot) catch |err| {
+        doc.owner.releaseSnapshot(snapshot);
+        return err;
+    };
     errdefer job.destroy();
     // The precondition: the file as it was when this document read (or last wrote) it. A
     // Save As to another path has no such history; nor does a save the user chose to force.
@@ -231,38 +249,112 @@ pub fn save(self: *DocumentIo, doc: sdk.DocHandle, path: []const u8) !void {
     errdefer _ = self.saves.swapRemove(doc.id);
 
     const target = editor.app.file_table.resolve(path);
+    job.disk = target.mount == null;
     // Our own write must not read as an outside change to the folder watcher.
-    if (target.mount == null) {
+    if (job.disk) {
         if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
     }
-    job.job = try target.fs.writeFile(target.rel, job.bytes, .{ .if_unmodified_ms = job.if_unmodified_ms }, Save.onWritten, job);
-    // The disk answers inside the call, as every disk mutation does; a mount on the frame pump.
-    if (target.mount == null) target.fs.pump();
+    if (comptime is_wasm) {
+        job.work();
+        job.encoded();
+        return;
+    }
+    job.thread = try std.Thread.spawn(.{}, Save.work, .{job});
 }
+
+const is_wasm = builtin.target.cpu.arch == .wasm32;
 
 const Save = struct {
     io: *DocumentIo,
     doc_id: u64,
+    /// The plugin whose snapshot this is: it encodes and frees it.
+    owner: *sdk.Plugin,
     path: []u8,
-    bytes: []u8,
+    snapshot: ?*anyopaque,
+    stage: Stage = .encoding,
+    /// The disk's: written on the worker. A mount's is uploaded through its filesystem after.
+    disk: bool = false,
+    /// The worker; the web has none, and encodes inline.
+    thread: if (is_wasm) void else ?std.Thread = if (is_wasm) {} else null,
+    /// Set by the worker, last: everything below it is the worker's until then.
+    done: std.atomic.Value(bool) = .init(false),
+    bytes: []u8 = &.{},
+    encode_error: ?anyerror = null,
+    disk_result: core.vfs.Error!void = {},
+    /// The I/O the worker writes with: the app's, taken on the UI thread.
+    file_io: std.Io,
     job: core.vfs.Job = .{ .id = 0 },
     /// The write came back `NotFound` once and the file has been created since.
     created: bool = false,
     if_unmodified_ms: ?i64 = null,
 
-    fn create(io: *DocumentIo, doc_id: u64, path: []const u8, bytes: []u8) !*Save {
+    const Stage = enum { encoding, writing };
+
+    fn create(io: *DocumentIo, doc: sdk.DocHandle, path: []const u8, snapshot: *anyopaque) !*Save {
         const gpa = io.editor.app.gpa;
         const save_job = try gpa.create(Save);
         errdefer gpa.destroy(save_job);
-        save_job.* = .{ .io = io, .doc_id = doc_id, .path = try gpa.dupe(u8, path), .bytes = bytes };
+        save_job.* = .{ .io = io, .doc_id = doc.id, .owner = doc.owner, .path = try gpa.dupe(u8, path), .snapshot = snapshot, .file_io = dvui.io };
         return save_job;
     }
 
     fn destroy(job: *Save) void {
         const gpa = job.io.editor.app.gpa;
+        if (!is_wasm) if (job.thread) |t| t.join();
+        job.release();
         gpa.free(job.path);
         gpa.free(job.bytes);
         gpa.destroy(job);
+    }
+
+    /// Hand the snapshot back to its owner, on the UI thread: unless the owner has been unloaded
+    /// meanwhile, whose code is no longer there to free it (a leak, not a crash).
+    fn release(job: *Save) void {
+        const snapshot = job.snapshot orelse return;
+        job.snapshot = null;
+        for (job.io.editor.app.host.plugins.items) |p| if (p == job.owner) {
+            job.owner.releaseSnapshot(snapshot);
+            return;
+        };
+    }
+
+    /// The worker: encode, and write when the target is the disk. Touches only the job and the
+    /// snapshot, then says it is done and wakes the app for `tick`.
+    fn work(job: *Save) void {
+        const gpa = job.io.editor.app.gpa;
+        if (job.owner.encodeSnapshot(job.snapshot.?, job.path, gpa)) |bytes| {
+            job.bytes = bytes;
+            if (!is_wasm and job.disk) job.disk_result = core.LocalFs.writeChecked(job.file_io, job.path, bytes, .{ .if_unmodified_ms = job.if_unmodified_ms });
+        } else |err| job.encode_error = err;
+        job.done.store(true, .release);
+        job.io.editor.app.host.refresh();
+    }
+
+    /// Back on the UI thread with the worker done.
+    fn encoded(job: *Save) void {
+        if (!is_wasm) {
+            if (job.thread) |t| t.join();
+            job.thread = null;
+        }
+        job.release();
+        const io = job.io;
+        const editor = io.editor;
+        if (job.encode_error) |err| {
+            _ = io.saves.swapRemove(job.doc_id);
+            dvui.log.err("{s}: could not encode {s}: {s}", .{ job.owner.id, job.path, job.owner.errorName(err) });
+            couldNotSave(editor, job.path);
+            job.destroy();
+            return;
+        }
+        job.stage = .writing;
+        if (!is_wasm and job.disk) return job.finish(job.disk_result);
+        const target = editor.app.file_table.resolve(job.path);
+        job.job = target.fs.writeFile(target.rel, job.bytes, .{ .if_unmodified_ms = job.if_unmodified_ms }, Save.onWritten, job) catch {
+            _ = io.saves.swapRemove(job.doc_id);
+            job.destroy();
+            return;
+        };
+        if (target.mount == null) target.fs.pump();
     }
 
     fn onCreated(ctx: ?*anyopaque, answer: core.vfs.Result(void)) void {
@@ -286,8 +378,12 @@ const Save = struct {
     }
 
     fn onWritten(ctx: ?*anyopaque, answer: core.vfs.Result(void)) void {
-        const result = answer.get();
         const job: *Save = @ptrCast(@alignCast(ctx.?));
+        job.finish(answer.get());
+    }
+
+    /// How the write went, on the UI thread, wherever it was made.
+    fn finish(job: *Save, result: core.vfs.Error!void) void {
         const io = job.io;
         const editor = io.editor;
         // The retry path below re-queues the job; only a final outcome frees it.
@@ -297,18 +393,18 @@ const Save = struct {
 
         result catch |err| {
             if (err == error.Conflict) {
-                // Someone else's edit is on the drive. Nothing was written; the document
-                // stays dirty, and the next save from the user goes through regardless.
+                // Someone else's edit is there. Nothing was written; the document stays dirty,
+                // and the next save from the user goes through regardless.
                 io.force_next.put(editor.app.gpa, job.doc_id, {}) catch {};
-                dvui.log.warn("{s} changed on the drive since it was opened", .{job.path});
+                dvui.log.warn("{s} changed since it was opened", .{job.path});
                 dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
                     editor.app.arena.allocator(),
-                    "{s} changed on the drive since you opened it. Save again to overwrite it, or Save As to keep both.",
+                    "{s} changed since you opened it. Save again to overwrite it, or Save As to keep both.",
                     .{std.fs.path.basename(job.path)},
-                ) catch "The file changed on the drive since you opened it. Save again to overwrite." });
+                ) catch "The file changed since you opened it. Save again to overwrite." });
                 return;
             }
-            if (err == error.NotFound and !job.created) {
+            if (err == error.NotFound and !job.created and !job.disk) {
                 // Save As onto a mount: the file is not there yet. Create it, then write again
                 // — the backend's `writeFile` is replace, not create.
                 job.created = true;
@@ -327,14 +423,10 @@ const Save = struct {
                 return;
             }
             dvui.log.err("Failed to save {s}: {t}", .{ job.path, err });
-            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
-                editor.app.arena.allocator(),
-                "Could not save {s}.",
-                .{std.fs.path.basename(job.path)},
-            ) catch "Could not save file." });
+            couldNotSave(editor, job.path);
             return;
         };
-        // The document may have been closed while the write was in flight; the bytes still
+        // The document may have been closed while the save was in flight; the bytes still
         // landed, there is just nobody left to tell.
         const doc = editor.app.docById(job.doc_id) orelse return;
         const renamed = !std.mem.eql(u8, doc.owner.documentPath(doc), job.path);
@@ -359,6 +451,14 @@ const Save = struct {
         editor.app.host.refresh();
     }
 };
+
+fn couldNotSave(editor: *Editor, path: []const u8) void {
+    dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+        editor.app.arena.allocator(),
+        "Could not save {s}.",
+        .{std.fs.path.basename(path)},
+    ) catch "Could not save file." });
+}
 
 /// After a write: ask the backend when the file is now modified, so the next save's
 /// precondition is the write we made rather than the read before it.

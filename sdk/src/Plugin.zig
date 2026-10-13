@@ -172,14 +172,27 @@ pub const VTable = struct {
     setDocumentGroupingOnBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque, grouping: u64) void = null,
     createDocument: ?*const fn (state: *anyopaque, path: []const u8, grid: EditorAPI.NewDocGrid, out_doc: *anyopaque) anyerror!void = null,
     saveDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
-    /// The document's saved form as bytes, for the host to write wherever the document lives —
-    /// a cloud mount, or the browser's download. Owned by the caller, allocated with
-    /// `allocator`. With `documentWritten` this is the storage-agnostic half of saving: an
-    /// owner that implements both never has to know what a `gdrive://` path is, and
-    /// `saveDocument` stays the disk-only path for owners that write files themselves.
-    documentBytes: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 = null,
-    /// The host wrote what `documentBytes` returned, to `path`. Clear dirty state as
-    /// `saveDocument` would; when `path` differs from the document's own, adopt it (Save As).
+    /// Saving, in two halves, so the UI thread does only the first (plans/PLUGIN_INTERACTION_PLAN.md,
+    /// "Every save is a snapshot then an encode"). fizzy writes the bytes wherever the document
+    /// lives (the disk, a mounted drive, a zip, the browser's download), so an owner never knows
+    /// what a `gdrive://` path is. `saveDocument` stays the disk-only path for an owner that writes
+    /// its files itself.
+    ///
+    /// On the UI thread, as a save of `doc` to `path` starts: take what the save needs and nothing
+    /// more (a text buffer's copy, a canvas's layers, a composite read back from the GPU), quickly:
+    /// the person is waiting on this frame. Remember which edit it stands for, so
+    /// `documentWritten` cleans the document up to that edit and not past it. `path` is where it
+    /// is going: a Save As may change the format. Owned by the plugin until `releaseSnapshot`.
+    documentSnapshot: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) anyerror!*anyopaque = null,
+    /// On a fizzy worker thread: `snapshot` encoded as `path`'s format (its extension says which).
+    /// Touches nothing but the snapshot: no dvui, no GPU, no document, no plugin state another
+    /// thread changes. The bytes are allocated with `allocator` and owned by the caller.
+    encodeSnapshot: ?*const fn (state: *anyopaque, snapshot: *anyopaque, path: []const u8, allocator: std.mem.Allocator) anyerror![]u8 = null,
+    /// On the UI thread, once the encode is done or the save abandoned: free a snapshot.
+    releaseSnapshot: ?*const fn (state: *anyopaque, snapshot: *anyopaque) void = null,
+    /// fizzy wrote a snapshot's bytes to `path`. Clean the document up to the edit that snapshot
+    /// stood for, as `saveDocument` would; when `path` differs from the document's own, adopt it
+    /// (Save As).
     documentWritten: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
     closeDocument: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
     /// Reload `doc` from its on-disk path, replacing in-memory contents and clearing dirty
@@ -653,13 +666,31 @@ pub fn saveDocument(self: Plugin, doc: DocHandle) !void {
     if (self.vtable.saveDocument) |f| f(self.state, doc) catch |err| return self.failed("saveDocument", err);
 }
 
-/// Null when the owner has no storage-agnostic save (`documentBytes`), in which case the host
-/// cannot write it anywhere but the disk.
-pub fn documentBytes(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) !?[]u8 {
-    const prof = core.profile.begin(self.id, "documentBytes");
+/// The first half of a save, on the UI thread. Null when the owner has no storage-agnostic save,
+/// in which case fizzy cannot write it anywhere but the disk (`saveDocument`).
+pub fn documentSnapshot(self: Plugin, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) !?*anyopaque {
+    if (!self.canSaveThroughHost()) return null;
+    const prof = core.profile.begin(self.id, "documentSnapshot");
     defer prof.end();
-    const f = self.vtable.documentBytes orelse return null;
-    return f(self.state, doc, allocator) catch |err| self.failed("documentBytes", err);
+    return self.vtable.documentSnapshot.?(self.state, doc, path, allocator) catch |err| self.failed("documentSnapshot", err);
+}
+
+/// The second half, on a worker. No profiler scope and no logging here: neither is the worker's
+/// to touch. The caller reports a failure from the UI thread.
+pub fn encodeSnapshot(self: Plugin, snapshot: *anyopaque, path: []const u8, allocator: std.mem.Allocator) anyerror![]u8 {
+    return self.vtable.encodeSnapshot.?(self.state, snapshot, path, allocator);
+}
+
+pub fn releaseSnapshot(self: Plugin, snapshot: *anyopaque) void {
+    if (self.vtable.releaseSnapshot) |f| f(self.state, snapshot);
+}
+
+/// Both halves at once, on the calling thread: for the few who need the bytes now (a crash
+/// recovery file, the browser's download). Null as `documentSnapshot`.
+pub fn documentBytes(self: Plugin, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) !?[]u8 {
+    const snapshot = (try self.documentSnapshot(doc, path, allocator)) orelse return null;
+    defer self.releaseSnapshot(snapshot);
+    return try self.encodeSnapshot(snapshot, path, allocator);
 }
 
 pub fn documentWritten(self: Plugin, doc: DocHandle, path: []const u8) !void {
@@ -669,7 +700,7 @@ pub fn documentWritten(self: Plugin, doc: DocHandle, path: []const u8) !void {
 }
 
 pub fn canSaveThroughHost(self: Plugin) bool {
-    return self.vtable.documentBytes != null;
+    return self.vtable.documentSnapshot != null and self.vtable.encodeSnapshot != null;
 }
 
 /// Reload from disk. Returns whether the plugin handled it (`false` = no hook).

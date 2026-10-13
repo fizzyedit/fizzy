@@ -259,11 +259,22 @@ fn readFile(ptr: *anyopaque, allocator: std.mem.Allocator, path: []const u8, cb:
 }
 
 fn writeImpl(self: *LocalFs, path: []const u8, bytes: []const u8, opts: vfs.WriteOptions) vfs.Error!void {
+    return writeChecked(self.io, path, bytes, opts);
+}
+
+/// `writeFile`'s write, on whatever thread calls it: the precondition checked (`Conflict` when
+/// the file changed since `opts.if_unmodified_ms`, or is gone), then the bytes written. For a
+/// worker that saves to the disk without going back to the UI thread for the write
+/// (`DocumentIo`); `writeFile` is this, answered through `pump`.
+pub fn writeChecked(io: std.Io, path: []const u8, bytes: []const u8, opts: vfs.WriteOptions) vfs.Error!void {
     if (opts.if_unmodified_ms) |expected| {
-        const st = self.statImpl(path) catch |err| return if (err == error.NotFound) error.Conflict else err;
-        if (st.modified_ms != expected) return error.Conflict;
+        const st = std.Io.Dir.cwd().statFile(io, path, .{}) catch |err| {
+            const mapped = mapErr(err);
+            return if (mapped == error.NotFound) error.Conflict else mapped;
+        };
+        if (@as(i64, @intCast(@divTrunc(st.mtime.nanoseconds, std.time.ns_per_ms))) != expected) return error.Conflict;
     }
-    std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = bytes }) catch |err| return mapErr(err);
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes }) catch |err| return mapErr(err);
 }
 
 fn writeFile(ptr: *anyopaque, path: []const u8, bytes: []const u8, opts: vfs.WriteOptions, cb: vfs.DoneFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {

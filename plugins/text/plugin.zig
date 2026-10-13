@@ -69,7 +69,9 @@ const vtable: sdk.Plugin.VTable = .{
     .documentFingerprint = documentFingerprint,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
-    .documentBytes = documentBytes,
+    .documentSnapshot = documentSnapshot,
+    .encodeSnapshot = encodeSnapshot,
+    .releaseSnapshot = releaseSnapshot,
     .documentWritten = documentWritten,
     // text saves are small and synchronous, so the async path just saves in place
     .saveDocumentAsync = saveDocument,
@@ -411,14 +413,29 @@ fn saveDocument(state: *anyopaque, handle: DocHandle) anyerror!void {
     if (st.settings.format_on_save.get()) formatDocument(doc);
     try doc.save();
 }
-/// The storage-agnostic half of saving: the host writes these wherever the document lives
-/// (a mounted drive) and reports back through `documentWritten`. Format-on-save applies here
-/// exactly as it does in `saveDocument`.
-fn documentBytes(state: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
+/// A save's snapshot: the text as it stands, which is also its encoding.
+const Snapshot = struct { bytes: []u8, allocator: std.mem.Allocator };
+
+/// The storage-agnostic half of saving: fizzy writes the snapshot wherever the document lives
+/// (the disk, a mounted drive) and reports back through `documentWritten`. Format-on-save applies
+/// here exactly as it does in `saveDocument`; `savedBytes` remembers which edit this is.
+fn documentSnapshot(state: *anyopaque, handle: DocHandle, _: []const u8, allocator: std.mem.Allocator) anyerror!*anyopaque {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     const st: *State = @ptrCast(@alignCast(state));
     if (st.settings.format_on_save.get()) formatDocument(doc);
-    return doc.savedBytes(allocator);
+    const snap = try allocator.create(Snapshot);
+    errdefer allocator.destroy(snap);
+    snap.* = .{ .bytes = try doc.savedBytes(allocator), .allocator = allocator };
+    return snap;
+}
+fn encodeSnapshot(_: *anyopaque, snapshot: *anyopaque, _: []const u8, allocator: std.mem.Allocator) anyerror![]u8 {
+    const snap: *Snapshot = @ptrCast(@alignCast(snapshot));
+    return allocator.dupe(u8, snap.bytes);
+}
+fn releaseSnapshot(_: *anyopaque, snapshot: *anyopaque) void {
+    const snap: *Snapshot = @ptrCast(@alignCast(snapshot));
+    snap.allocator.free(snap.bytes);
+    snap.allocator.destroy(snap);
 }
 fn documentWritten(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;

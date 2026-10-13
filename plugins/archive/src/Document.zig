@@ -18,6 +18,9 @@ grouping: u64 = 0,
 mem: *core.vfs.Mem,
 /// `mem.generation` when the archive was last read or written, so dirty is "changed since".
 clean_generation: u64,
+/// The generation the last save's snapshot packed: what the archive is clean up to once that
+/// save lands, whatever was changed while it was in flight.
+serialized_generation: u64 = 0,
 mounted: bool = false,
 /// Whether the archive has been written since it was read: what "changed since" counts from.
 saved_once: bool = false,
@@ -118,6 +121,7 @@ pub fn pack(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
 
 pub fn markClean(self: *Document) void {
     self.clean_generation = self.mem.generation;
+    self.serialized_generation = self.mem.generation;
     self.saved_once = true;
     self.snapshotClean() catch |err| dvui.log.err("archive: could not record {s} as saved: {t}", .{ self.prefix, err });
 }

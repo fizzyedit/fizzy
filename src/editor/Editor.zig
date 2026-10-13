@@ -3863,6 +3863,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Mounted filesystems deliver here — a cloud listing that landed since last frame is in
     // the table's cache before the tree asks for it.
     editor.app.file_table.pump();
+    // Saves whose encode finished on their worker: on to their write, or done.
+    editor.doc_io.tick();
     editor.promoteEditedPreviews();
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
@@ -5720,7 +5722,7 @@ fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
 /// then tell the owner it was written under that name.
 fn downloadDocument(editor: *Editor, doc: sdk.DocHandle, path: []const u8) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) return error.Unsupported;
-    const bytes = (try doc.owner.documentBytes(doc, editor.app.gpa)) orelse return error.Unsupported;
+    const bytes = (try doc.owner.documentBytes(doc, path, editor.app.gpa)) orelse return error.Unsupported;
     defer editor.app.gpa.free(bytes);
     try dvui.backend.downloadData(std.fs.path.basename(path), bytes);
     try doc.owner.documentWritten(doc, path);

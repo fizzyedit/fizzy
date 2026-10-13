@@ -6958,6 +6958,32 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const on_disk = try std.Io.Dir.cwd().readFileAlloc(dvui.io, main_zig, gpa, .limited(1024));
         defer gpa.free(on_disk);
         try std.testing.expectEqualStrings("// top\nconst a = 42;\nconst b = 3;\n", on_disk);
+
+        // A save is a snapshot on the UI thread, then an encode and a write on a worker: an edit
+        // made while it is in flight is not in the file, and leaves the document dirty.
+        {
+            const c_txt = try std.fs.path.join(gpa, &.{ project, "c.txt" });
+            defer gpa.free(c_txt);
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/c.txt", .data = "" });
+            _ = try editor.openFilePath(c_txt, editor.workbench.currentGroupingID());
+            for (0..200) |_| {
+                _ = try dvui.testing.step(headlessFrame);
+                const d = editor.activeDoc() orelse continue;
+                if (std.mem.eql(u8, d.owner.documentPath(d), c_txt)) break;
+            }
+            const c_doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"one\\n\", .line = 1 }", host.arena()) == .ok);
+            try editor.save();
+            try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"two\\n\", .line = 2 }", host.arena()) == .ok);
+            for (0..100) |_| {
+                _ = try dvui.testing.step(headlessFrame);
+                if (!editor.docSaving(c_doc)) break;
+            }
+            const written = try std.Io.Dir.cwd().readFileAlloc(dvui.io, c_txt, gpa, .limited(1024));
+            defer gpa.free(written);
+            try std.testing.expectEqualStrings("one\n", written);
+            try std.testing.expect(c_doc.owner.isDirty(c_doc));
+        }
     }
 
     // New File's editor takes the keyboard: what is typed next lands in it, no click first.

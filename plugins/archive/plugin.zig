@@ -54,7 +54,9 @@ const vtable: sdk.Plugin.VTable = .{
     .isDirty = isDirty,
     .saveDocument = saveDocument,
     .saveDocumentAs = saveDocumentAs,
-    .documentBytes = documentBytes,
+    .documentSnapshot = documentSnapshot,
+    .encodeSnapshot = encodeSnapshot,
+    .releaseSnapshot = releaseSnapshot,
     .documentWritten = documentWritten,
 };
 
@@ -268,15 +270,37 @@ fn saveDocumentAs(state: *anyopaque, handle: DocHandle, path: []const u8, _: *dv
     try setDocumentPath(state, handle, path);
     try saveDocument(state, handle);
 }
-/// The storage-agnostic half: the host writes these (a web download, another mount).
-fn documentBytes(_: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
+/// A save's snapshot: the archive packed as it stands. Packing reads the in-memory file system,
+/// which only the UI thread may, so it happens here; copying the files out to pack on the worker
+/// is the seam if a large archive's save shows up in a frame.
+const Snapshot = struct { bytes: []u8, allocator: std.mem.Allocator };
+
+/// The storage-agnostic half: fizzy writes the snapshot (the disk, a web download, another mount).
+fn documentSnapshot(_: *anyopaque, handle: DocHandle, _: []const u8, allocator: std.mem.Allocator) anyerror!*anyopaque {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
-    return doc.pack(allocator);
+    const snap = try allocator.create(Snapshot);
+    errdefer allocator.destroy(snap);
+    snap.* = .{ .bytes = try doc.pack(allocator), .allocator = allocator };
+    doc.serialized_generation = doc.mem.generation;
+    return snap;
+}
+fn encodeSnapshot(_: *anyopaque, snapshot: *anyopaque, _: []const u8, allocator: std.mem.Allocator) anyerror![]u8 {
+    const snap: *Snapshot = @ptrCast(@alignCast(snapshot));
+    return allocator.dupe(u8, snap.bytes);
+}
+fn releaseSnapshot(_: *anyopaque, snapshot: *anyopaque) void {
+    const snap: *Snapshot = @ptrCast(@alignCast(snapshot));
+    snap.allocator.free(snap.bytes);
+    snap.allocator.destroy(snap);
 }
 fn documentWritten(state: *anyopaque, handle: DocHandle, path: []const u8) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     if (!std.mem.eql(u8, path, doc.path)) try setDocumentPath(state, handle, path);
+    // Clean up to what was packed, not past it: a change made while the save was in flight
+    // is still unsaved.
+    const saved = doc.serialized_generation;
     doc.markClean();
+    doc.clean_generation = saved;
 }
 
 fn docBuf(buf: *anyopaque) *Document {

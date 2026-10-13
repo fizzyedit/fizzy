@@ -97,7 +97,7 @@ pub fn capture(editor: *Editor, plugin: ?*sdk.Plugin) CaptureError!KeptDocuments
         const state = owner.captureDocumentState(doc, gpa);
         errdefer if (state) |s| gpa.free(s);
         if (dirty and state == null) return error.UnsavedNotCarried;
-        const unsaved: ?[]u8 = if (dirty) owner.documentBytes(doc, gpa) catch null else null;
+        const unsaved: ?[]u8 = if (dirty) owner.documentBytes(doc, owner.documentPath(doc), gpa) catch null else null;
         errdefer if (unsaved) |u| gpa.free(u);
         const sid = sdk.document.surfaceId(editor.app.host.arena(), owner.id, path) catch return error.OutOfMemory;
         if (active) |a| {
