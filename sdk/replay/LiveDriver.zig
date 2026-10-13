@@ -19,7 +19,8 @@
 //!
 //! **Pacing.** Authored times are ignored: each frame the driver asks the sequencer for the next
 //! moment anything happens (`Sequencer.nextAt`) and applies it, and goes on only while the stage
-//! is idle — nothing it was asked to load still loading. The sequencer still yields after
+//! is idle — nothing it was asked to load still loading. Except a drag: a glide with a button
+//! held plays at its authored pace, a frame at a time, as a hand moves (`drag_step_ms`). The sequencer still yields after
 //! everything the app has to draw before the next op can land (a press, a key, the end of a
 //! glide), so a click on a menu the last click opened finds it open. A tape's own waits hold as
 //! they do in a demo, and one that gives up stops the tape: a live tape that has lost its place
@@ -150,10 +151,22 @@ pub fn frame(self: *LiveDriver) void {
     if (!self.seq.holding and !self.stage.idle()) return;
 
     const wall_ms = @min(dvui.secondsSinceLastFrame() * 1000, 1000);
-    _ = self.seq.advance(self.seq.nextAt(), wall_ms, self.sink());
+    // A glide with a button held is a drag: played at its own pace, a frame's worth at a time, as
+    // a hand moves, never in one jump. Jumped to its end it reached the app as one motion event,
+    // and a drag needs the pointer past its threshold first and then moving — a floating window
+    // dragged 150 points by a tape moved 2.5. Everything else still goes as soon as it can.
+    const until = if (self.seq.glide != null and self.input.held.count() > 0)
+        @min(self.seq.nextAt(), self.seq.now + @max(wall_ms, drag_step_ms))
+    else
+        self.seq.nextAt();
+    _ = self.seq.advance(until, wall_ms, self.sink());
     if (self.gave_up_at) |at| return self.finish(.{ .timed_out = at });
     if (self.seq.done()) self.finish(.finished);
 }
+
+/// The least of a drag's glide a frame plays (`frame`): a 60th of a second, so a drag has a motion
+/// event a frame however fast the app draws, and where no time passes between frames (a test).
+const drag_step_ms: f64 = 1000.0 / 60.0;
 
 /// A person's click, tap, scroll, key or text stops the tape and goes on to do what they meant;
 /// their pointer motion is held off. True when it stopped.
