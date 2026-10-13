@@ -133,15 +133,22 @@ void main() {
     vec4 sharp = g4.w > 0.5 ? TEX(uTex1, uv) : frost;
     // A little colour fringe where the band bends hardest: red from a touch less far in, blue a
     // touch further.
+    // The colour fringe: red and blue from either side, each un-premultiplied by its own alpha and
+    // put back at the middle's. By the middle's alone, at the edge of a clear part of the window
+    // the two alphas differ widely, and the fringe came out as red and blue specks.
     if (inward && g6.y > 0.0 && disp > 0.5) {
         vec2 du = outv * (disp * 0.04 * g6.y) * g0.zw;
         vec2 uvr = clamp(uv + du, 0.0, 1.0);
         vec2 uvb = clamp(uv - du, 0.0, 1.0);
-        frost.r = TEX(uSampler, uvr).r;
-        frost.b = TEX(uSampler, uvb).b;
+        vec4 frost_r = TEX(uSampler, uvr);
+        frost.r = frost_r.r / max(frost_r.a, 1e-4) * frost.a;
+        vec4 frost_b = TEX(uSampler, uvb);
+        frost.b = frost_b.b / max(frost_b.a, 1e-4) * frost.a;
         if (g4.w > 0.5) {
-            sharp.r = TEX(uTex1, uvr).r;
-            sharp.b = TEX(uTex1, uvb).b;
+            vec4 sharp_r = TEX(uTex1, uvr);
+            sharp.r = sharp_r.r / max(sharp_r.a, 1e-4) * sharp.a;
+            vec4 sharp_b = TEX(uTex1, uvb);
+            sharp.b = sharp_b.b / max(sharp_b.a, 1e-4) * sharp.a;
         } else {
             sharp.r = frost.r;
             sharp.b = frost.b;
@@ -201,6 +208,10 @@ void main() {
     // glass's bevel, which shows through a full tint.
     if (inward) o.rgb += g6.z * lens * t * facing;
     o = clamp(o, 0.0, 1.0);
+    // Light over a see-through picture carries its own alpha: brighter than its alpha, a pixel is
+    // no colour premultiplied, and the frost captured from this frame next (`rgb / a`) blew it up
+    // into bright specks wherever the window is clear — over the explorer. Opaque, alpha is 1.
+    o.a = max(o.a, max(o.r, max(o.g, o.b)));
     o.rgb += (noise(gl_FragCoord.xy) - 0.5) * g5.x * o.a;
     FRAG_COLOR = clamp(o, 0.0, 1.0) * cov;
 }

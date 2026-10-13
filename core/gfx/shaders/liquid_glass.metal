@@ -131,15 +131,22 @@ fragment main0_out main0(
     }
     float4 frost = Frost.sample(FrostSampler, uv);
     float4 sharp = g4.w > 0.5 ? Sharp.sample(SharpSampler, uv) : frost;
+    // The colour fringe: red and blue from either side, each un-premultiplied by its own alpha and
+    // put back at the middle's. By the middle's alone, at the edge of a clear part of the window
+    // the two alphas differ widely, and the fringe came out as red and blue specks.
     if (inward && g6.y > 0.0 && disp > 0.5) {
         float2 du = outv * (disp * 0.04 * g6.y) * g0.zw;
         float2 uvr = clamp(uv + du, 0.0, 1.0);
         float2 uvb = clamp(uv - du, 0.0, 1.0);
-        frost.r = Frost.sample(FrostSampler, uvr).r;
-        frost.b = Frost.sample(FrostSampler, uvb).b;
+        float4 frost_r = Frost.sample(FrostSampler, uvr);
+        frost.r = frost_r.r / max(frost_r.a, 1e-4) * frost.a;
+        float4 frost_b = Frost.sample(FrostSampler, uvb);
+        frost.b = frost_b.b / max(frost_b.a, 1e-4) * frost.a;
         if (g4.w > 0.5) {
-            sharp.r = Sharp.sample(SharpSampler, uvr).r;
-            sharp.b = Sharp.sample(SharpSampler, uvb).b;
+            float4 sharp_r = Sharp.sample(SharpSampler, uvr);
+            sharp.r = sharp_r.r / max(sharp_r.a, 1e-4) * sharp.a;
+            float4 sharp_b = Sharp.sample(SharpSampler, uvb);
+            sharp.b = sharp_b.b / max(sharp_b.a, 1e-4) * sharp.a;
         } else {
             sharp.r = frost.r;
             sharp.b = frost.b;
@@ -190,6 +197,10 @@ fragment main0_out main0(
     o.rgb += float3(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
     if (inward) o.rgb += g6.z * lens * t * facing;
     o = clamp(o, 0.0, 1.0);
+    // Light over a see-through picture carries its own alpha: brighter than its alpha, a pixel is
+    // no colour premultiplied, and the frost captured from this frame next (`rgb / a`) blew it up
+    // into bright specks wherever the window is clear — over the explorer. Opaque, alpha is 1.
+    o.a = max(o.a, max(o.r, max(o.g, o.b)));
     o.rgb += (noise(frag.xy) - 0.5) * g5.x * o.a;
     out.color = clamp(o, 0.0, 1.0) * cov;
     return out;
