@@ -267,8 +267,11 @@ pub fn inApp(opacity: f32) InApp {
         .bend = 1.1 * w.shine,
         .clarity = 0.9 * w.shine,
         .rim = w.shine,
-        .shade = 0.15 * w.shine,
-        .bevel_light = 0.08 * w.shine,
+        // No light or shade across the band: Liquid Glass's edge, measured beside a window of it, is
+        // a hairline (the glass program's), the band between it and the body unshaded. Lit toward
+        // the top left and darkened away, the band read as a bevel in shadow (the user).
+        .shade = 0,
+        .bevel_light = 0,
         // A hint of colour fringe: whole, it was red and blue specks along the edge, which
         // Liquid Glass does not show.
         .dispersion = 0.25 * w.shine,
