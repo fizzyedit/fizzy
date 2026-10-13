@@ -931,6 +931,16 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
 
 /// Compact a registry in place, dropping every entry whose `owner` is `plugin`.
 /// `T` must have an `owner: ?*Plugin` field (all contribution structs do).
+/// `plugin` has been torn down (`Plugin.deinit`) while its image stays loaded, as at quit: drop
+/// what other plugins reach it through, its services, commands and language support, so a plugin
+/// torn down after it finds it gone rather than calling into freed state. `unregisterPlugin` does
+/// this and more for a plugin that is going away while the app runs.
+pub fn withdrawPlugin(self: *Host, plugin: *Plugin) void {
+    removeOwned(ServiceEntry, &self.services, plugin);
+    removeOwned(Command, &self.commands, plugin);
+    removeOwned(LanguageSupport, &self.language_support, plugin);
+}
+
 fn removeOwned(comptime T: type, list: *std.ArrayListUnmanaged(T), plugin: *Plugin) void {
     var w: usize = 0;
     for (list.items) |item| {
@@ -2243,6 +2253,35 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try testing.expect(host.selectionFor(keywords.ide.sidebar) == null);
     try testing.expect(host.selectionFor(keywords.ide.panel) == null);
     try testing.expect(host.selectionFor(keywords.ide.main) == null);
+}
+
+test "a withdrawn plugin is out of reach: its services, commands and highlighting" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var gone = Plugin{ .state = undefined, .vtable = &vtable, .id = "gone", .display_name = "Gone" };
+    var stays = Plugin{ .state = undefined, .vtable = &vtable, .id = "stays", .display_name = "Stays" };
+    try host.registerPlugin(&stays);
+    try host.registerPlugin(&gone);
+    const Svc = struct {
+        pub const service_name = "gone.svc";
+        pub const service_version: u32 = 1;
+        value: u32 = 0,
+    };
+    var svc: Svc = .{};
+    try host.registerService(Svc, &svc, &gone);
+    const noopRun = struct {
+        fn f(_: *anyopaque) anyerror!void {}
+    }.f;
+    try host.registerCommand(.{ .id = "gone.cmd", .owner = &gone, .title = "G", .run = noopRun });
+    try host.registerCommand(.{ .id = "stays.cmd", .owner = &stays, .title = "S", .run = noopRun });
+
+    host.withdrawPlugin(&gone);
+    try testing.expect(host.getServiceTyped(Svc) == null);
+    try testing.expect(host.command("gone.cmd") == null);
+    try testing.expect(host.command("stays.cmd") != null);
+    // Still registered: only what others reach it through is gone.
+    try testing.expectEqual(@as(usize, 2), host.plugins.items.len);
 }
 
 test "a service whose provider is a different version is refused, not cast" {

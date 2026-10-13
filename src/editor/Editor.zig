@@ -6066,7 +6066,18 @@ pub fn deinit(editor: *Editor) !void {
 
     // Drain & join the save-queue worker before tearing anything else down. Any
     // queued jobs need to finish writing or be dropped before File data is freed.
-    for (editor.app.host.plugins.items) |plugin| plugin.deinit();
+    // Last registered first: a plugin that uses another (the chat drawing through markdown's
+    // inline render) goes while what it uses is still there. And each takes its services, commands
+    // and language support with it, so nothing torn down after it calls into its freed state.
+    {
+        var i = editor.app.host.plugins.items.len;
+        while (i > 0) {
+            i -= 1;
+            const plugin = editor.app.host.plugins.items[i];
+            plugin.deinit();
+            editor.app.host.withdrawPlugin(plugin);
+        }
+    }
     // Signal cancel to any in-flight load workers. They check the flag after `fromPath` returns
     // and discard the result; we deliberately don't await their `Future`s here — `.cancel()`
     // still blocks until the worker's current `loadDocument` call returns (cancellation is
