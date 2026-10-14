@@ -220,6 +220,8 @@ fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) 
         for (tape.keysAt(player.seq.cursor, player.seq.now, keys_ms, &keys_buf)) |i| {
             if (stack.items.len == stack.capacity) break;
             const op = tape.ops[i];
+            // A command shows on the pane it edits (`ActivityFeed`); the keys pressed show here.
+            if (op.do == .command) continue;
             if (keysLabel(player, op) == null) continue;
             const at: f64 = @floatFromInt(op.at);
             stack.appendAssumeCapacity(.{

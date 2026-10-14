@@ -265,6 +265,19 @@ account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
 /// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
 commands: std.ArrayListUnmanaged(Command) = .empty,
+/// The commands run on documents lately, oldest first and at most `activity_cap`, for each
+/// document's panes to show as they run: by whoever ran them (a person, a tape, an agent). Titles
+/// are copies, so an entry outlives the plugin that ran it.
+activity: std.ArrayListUnmanaged(Activity) = .empty,
+activity_seq: u64 = 0,
+/// No activity is noted while set: a tape seeking replays its commands where nobody watches.
+activity_muted: bool = false,
+/// The command whose body is running, if any: the edits made meanwhile are its (`documentEdited`).
+running_command: ?*const Command = null,
+/// Counts command runs, so one run that edits several times shows once.
+command_runs: u64 = 0,
+activity_run: u64 = 0,
+
 /// Documents held by a plugin while it works on them (`Claim`).
 claims: std.ArrayListUnmanaged(Claim) = .empty,
 next_claim_id: u32 = 1,
@@ -304,6 +317,9 @@ pub fn init(allocator: std.mem.Allocator) Host {
 }
 
 pub fn deinit(self: *Host) void {
+    for (self.activity.items) |a| self.allocator.free(a.title);
+    self.activity.deinit(self.allocator);
+
     for (self.claims.items) |c| self.allocator.free(c.label);
     self.claims.deinit(self.allocator);
     self.plugins.deinit(self.allocator);
@@ -1540,6 +1556,49 @@ fn claimRefusing(self: *Host, c: *const Command) ?Claim {
     return self.documentClaim(doc.id);
 }
 
+// ---- activity --------------------------------------------------------------------------------
+
+/// A command that edited a document (`activity`).
+pub const Activity = struct {
+    /// Increasing: a reader keeps the last it saw and takes those after it.
+    seq: u64,
+    doc_id: u64,
+    /// The command's title, as a person reads it: `Draw`, `Undo`. Owned by the host.
+    title: []const u8,
+};
+
+const activity_cap = 32;
+
+/// An open document was just edited (an undo step was recorded, or undone): its **owner** calls
+/// this for every edit. When a command is running, the edit is that command's, and the document's
+/// panes show it (`activity`), once per run of the command.
+pub fn documentEdited(self: *Host, doc_id: u64) void {
+    const c = self.running_command orelse return;
+    if (self.activity_muted) return;
+    if (self.activity.getLastOrNull()) |last| {
+        if (self.activity_run == self.command_runs and last.doc_id == doc_id) return;
+    }
+    const title = self.allocator.dupe(u8, std.mem.trimEnd(u8, c.title, "…")) catch return;
+    if (self.activity.items.len == activity_cap) {
+        self.allocator.free(self.activity.items[0].title);
+        _ = self.activity.orderedRemove(0);
+    }
+    self.activity_seq += 1;
+    self.activity_run = self.command_runs;
+    self.activity.append(self.allocator, .{ .seq = self.activity_seq, .doc_id = doc_id, .title = title }) catch {
+        self.allocator.free(title);
+        return;
+    };
+    self.refresh();
+}
+
+/// Run a command's body as the running command, so the edits it makes are its own.
+fn running(self: *Host, c: *const Command) ?*const Command {
+    const outer = self.running_command;
+    self.running_command = c;
+    self.command_runs += 1;
+    return outer;
+}
 /// Run the command `id` with no arguments (no-op when unknown), as a menu row or a keybind
 /// does. The owner's opaque `state` is passed to `run`. A command with only `runWith` runs it
 /// with no arguments, unless a parameter is required: then the app is asked to collect them
@@ -1557,6 +1616,8 @@ pub fn runCommand(self: *Host, id: []const u8) !void {
     if (c.run) |run| {
         const prof = core.profile.begin(owner.id, c.id);
         defer prof.end();
+        const outer = self.running(c);
+        defer self.running_command = outer;
         run(owner.state) catch |err| return owner.failed(c.id, err);
         return;
     }
@@ -1696,10 +1757,14 @@ pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.m
     const run_with = c.runWith orelse {
         const trimmed = std.mem.trim(u8, args, " \t\r\n");
         if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .bad_args = "this command takes no arguments" };
+        const outer = self.running(c);
+        defer self.running_command = outer;
         c.run.?(owner.state) catch |err| return .{ .failed = owner.errorName(err) };
         return .{ .ok = null };
     };
     var call: Command.Call = .{ .args = args, .arena = results };
+    const outer = self.running(c);
+    defer self.running_command = outer;
     run_with(owner.state, &call) catch |err| {
         const msg = call.message orelse owner.errorName(err);
         return if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg };

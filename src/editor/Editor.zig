@@ -2733,6 +2733,8 @@ const DocSurface = struct {
     id: []u8,
     /// Whether a widget inside the document had focus last frame: its keys are the document's.
     focus_inside: bool = false,
+    /// The commands just run on it, shown on its pane.
+    feed: @import("app").ActivityFeed = .{},
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2768,6 +2770,7 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     ds.* = .{
         .editor = editor,
         .doc_id = doc.id,
+        .feed = .init(&editor.app.host),
         .id = try sdk.document.surfaceId(gpa, doc.owner.id, path),
     };
     errdefer gpa.free(ds.id);
@@ -2930,6 +2933,16 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const focus_before = dvui.lastFocusedIdInFrame();
     _ = try doc.owner.drawDocument(doc);
     ds.focus_inside = dvui.lastFocusedIdInFrameSince(focus_before) != null;
+
+    // The commands run on it, as they run; none while a tape seeks, which replays them unseen.
+    if (editor.app.host.activity_muted) ds.feed.clear() else {
+        const now = dvui.frameTimeNS();
+        ds.feed.take(&editor.app.host, doc.id, now);
+        // Above the pill, while someone holds the document.
+        var area = canvas.data().borderRectScale().r;
+        if (claim_pill) |pill| area.h = pill.physical.y - area.y + 6 * dvui.windowRectScale().s;
+        ds.feed.draw(area, @truncate(ds.doc_id), now);
+    }
 
     // A menu inside the document only when its owner names one. The context is created *after*
     // the document drew, and only for an owner that asked, because a right-click belongs to
@@ -4095,6 +4108,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         defer t.end();
         // What was announced since last frame first, so a plugin's frame sees what it heard.
         editor.app.host.deliverEvents();
+        // A seek replays a tape's commands where nobody watches: not shown as activity.
+        editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         for (editor.app.host.plugins.items) |plugin| plugin.beginFrame();
     }
     if (fizzy.core.perf.record) fizzy.core.perf.beginFrame();
