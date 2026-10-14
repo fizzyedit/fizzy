@@ -153,6 +153,12 @@ pub fn reattach(self: *KeptDocuments, editor: *Editor, plugin: *sdk.Plugin) void
             // The new build does not read the old one's state: the document is as on disk.
             dvui.log.warn("reload: {s} reopened as saved; the new build could not read its state", .{d.path});
             if (d.unsaved) |u| recover(editor, d.path, u);
+            // It was loaded empty for the state to fill: read it, or close it when there is
+            // nothing on disk to read (never saved).
+            if (!plugin.reloadDocument(doc)) {
+                editor.rawCloseFileID(doc.id) catch {};
+                continue;
+            }
         }
         if (d.preview) editor.setDocumentPreview(doc.id, true);
         if (d.selected) {
@@ -422,6 +428,9 @@ pub fn openKept(self: *KeptDocuments, editor: *Editor, path: []const u8, groupin
     if (!restored) {
         dvui.log.warn("restart: {s} reopened as saved; this build could not read its state", .{d.path});
         if (d.unsaved) |u| recover(editor, d.path, u);
+        // It was loaded empty for the state to fill: the caller opens it from disk instead.
+        editor.rawCloseFileID(doc.id) catch {};
+        return null;
     }
     if (d.preview) editor.setDocumentPreview(doc.id, true);
     if (d.selected) self.keepSelection(plugin.id, d.path, grouping) catch {};
