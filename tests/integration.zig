@@ -6197,12 +6197,21 @@ test "a frost never captures more than the picture it reads" {
     // Partly off the window, and smaller than it: kept whole, and so its capture size.
     const edge: Rect = .{ .x = 2300, .y = 10, .w = 400, .h = 300 };
     try std.testing.expectEqual(edge, within(edge, win).?);
-    // A view drag's drop zones across the main window and a float's band 100000 pixels on: cut to
-    // the window (it asked Metal for a texture 46424 pixels wide).
+    // A view drag's drop zones across the main window and a float's band 100000 pixels on: the
+    // window's width (it asked Metal for a texture 46424 pixels wide), its own height.
     const across = within(.{ .x = 1800, .y = 200, .w = 100600, .h = 900 }, win).?;
-    try std.testing.expectEqual(@as(f32, 1800), across.x);
-    try std.testing.expectEqual(@as(f32, 600), across.w);
+    try std.testing.expectEqual(@as(f32, 0), across.x);
+    try std.testing.expectEqual(@as(f32, 2400), across.w);
+    try std.testing.expectEqual(@as(f32, 200), across.y);
     try std.testing.expectEqual(@as(f32, 900), across.h);
+    // Taller than the window — a window-tall float, its capture bucketed past the frame — moving up
+    // and down: one size all the way, the window's height. Cut to what of it was on the window, it
+    // was a new height and a new pyramid every frame (Safari: half the frame rate).
+    var y: f32 = -300;
+    while (y < 600) : (y += 37) {
+        const tall = within(.{ .x = 100, .y = y, .w = 862, .h = 1900 }, win).?;
+        try std.testing.expectEqual(Rect{ .x = 100, .y = 0, .w = 862, .h = 1600 }, tall);
+    }
     // Wholly in the band: nothing of the window.
     try std.testing.expectEqual(@as(?Rect, null), within(.{ .x = 100000, .y = 0, .w = 3000, .h = 100 }, win));
     // Smaller than the picture but nowhere on it — the main window's drop zones replayed into a

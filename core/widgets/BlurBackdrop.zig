@@ -335,9 +335,12 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     return true;
 }
 
-/// Fizzy addition: `r` (whole pixels) as a capture of what lies in `span` may take it: `r` itself
-/// while it is no larger than `span` either way — a pane partly off the window keeps its whole
-/// rect, and so its capture size (`captureSize`) — else cut to `span`. Null when nothing is left.
+/// Fizzy addition: `r` (whole pixels) as a capture of what lies in `span` may take it. Each way,
+/// `r`'s own extent while it is no longer than `span` — a pane partly off the window keeps its whole
+/// rect, and so its capture size (`captureSize`) — else all of `span`. Never the overlap of the
+/// two: a pane taller than the window (a window-tall float, its capture bucketed past the frame)
+/// cut to the window was a new height every frame it moved up or down, and a new pyramid with it
+/// — on Safari, where each target is a Metal allocation, half the frame rate.
 /// A pane spanning places in two windows' parts of the frame (a view drag's drop zones, drawn
 /// across every screen, with a float out of the main window: `core.screens.markEverywhere`) asked
 /// for a capture the size of the gap between them, 46424 pixels wide, and Metal aborts at a
@@ -346,12 +349,15 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
 /// and one that stood in for the target it does lie in until `deinit` learned to capture again.
 pub fn within(r: Rect.Physical, span: Rect.Physical) ?Rect.Physical {
     if (r.x >= span.x + span.w or span.x >= r.x + r.w or r.y >= span.y + span.h or span.y >= r.y + r.h) return null;
-    if (r.w <= span.w and r.h <= span.h) return r;
-    var c = r.intersect(span);
-    c.x = @floor(c.x);
-    c.y = @floor(c.y);
-    c.w = @floor(c.w);
-    c.h = @floor(c.h);
+    var c = r;
+    if (r.w > span.w) {
+        c.x = @floor(span.x);
+        c.w = @floor(span.w);
+    }
+    if (r.h > span.h) {
+        c.y = @floor(span.y);
+        c.h = @floor(span.h);
+    }
     if (c.w < 1 or c.h < 1) return null;
     return c;
 }
