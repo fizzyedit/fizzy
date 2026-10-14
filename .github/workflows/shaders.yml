@@ -91,6 +91,7 @@ jobs:
           export LD_LIBRARY_PATH="$HOME/shadercross/lib:${{ steps.sdl.outputs.prefix }}/lib:$LD_LIBRARY_PATH"
           shadercross --help > /dev/null 2>&1 || { echo "shadercross does not run"; ldd "$HOME/shadercross/bin/shadercross"; exit 1; }
           stale=0
+          failed=0
           mkdir -p out
           while IFS= read -r hlsl; do
             dir=$(dirname "$hlsl"); name=$(basename "$hlsl" .hlsl)
@@ -99,25 +100,36 @@ jobs:
               [ -f "$committed" ] || continue
               fresh="out/$committed"
               mkdir -p "$(dirname "$fresh")"
-              (cd "$dir" && shadercross "$name.hlsl" -o "$GITHUB_WORKSPACE/$fresh")
-              if [ "$form" = spv ]; then spirv-val "$fresh"; fi
+              # One that does not compile is reported, and the rest still go.
+              if ! (cd "$dir" && shadercross "$name.hlsl" -o "$GITHUB_WORKSPACE/$fresh"); then
+                echo "::error file=$hlsl::$hlsl does not compile to $form"
+                failed=1
+                continue
+              fi
+              if [ "$form" = spv ] && ! spirv-val "$fresh"; then
+                echo "::error file=$hlsl::$fresh does not validate"
+                failed=1
+              fi
               if cmp -s "$committed" "$fresh"; then
                 echo "ok      $committed"
               else
                 echo "::error file=$hlsl::$committed is not what $hlsl compiles to: download the compiled-shaders artifact and commit it"
+                echo "        committed $(stat -c %s "$committed") bytes, compiled $(stat -c %s "$fresh"); first differences (offset, committed, compiled):"
+                cmp -l "$committed" "$fresh" | head -8 || true
                 stale=1
               fi
             done
           done < <(git ls-files '*.hlsl')
           echo "stale=$stale" >> "$GITHUB_ENV"
+          echo "failed=$failed" >> "$GITHUB_ENV"
 
       - name: Upload the fresh compiled shaders
-        if: env.stale == '1'
+        if: env.stale == '1' || env.failed == '1'
         uses: actions/upload-artifact@v4
         with:
           name: compiled-shaders
           path: out/
 
-      - name: Fail on stale compiled shaders
-        if: env.stale == '1'
+      - name: Fail on stale or broken compiled shaders
+        if: env.stale == '1' || env.failed == '1'
         run: exit 1

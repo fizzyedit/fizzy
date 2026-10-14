@@ -209,7 +209,7 @@ float4 main(PSInput input) : SV_Target0
     // The glass's own light, added whole. Scaled with the picture, it went wherever the picture
     // was see-through — over the explorer, which is the window's OS glass — and the glass all but
     // vanished there, rim and all, where Liquid Glass keeps its bright rim over anything.
-    o.rgb += float3(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
+    o.rgb += (float3)clamp(lift + lens * g2.w * lit, 0.0, 1.0);
     o = clamp(o, 0.0, 1.0);
     // Light over a see-through picture carries its own alpha: brighter than its alpha, a pixel is
     // no colour premultiplied, and the frost captured from this frame next (`rgb / a`) blew it up
