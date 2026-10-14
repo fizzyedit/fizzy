@@ -13,6 +13,13 @@
 # Nor does a draft pull request: it can run CI (ci.yml) without taking the one test copy from
 # whichever pull request has it. Marked ready for review, it builds and is served like any other.
 #
+# **The real app goes up only on a released plugin SDK.** Store plugins are built against the
+# released `sdk-v*` tarballs, and the app loads only those whose fingerprint matches its own. So a
+# push to main whose recorded fingerprint differs from the one at its `sdk-v<sdk_version>` tag (an
+# `sdk` pull request merged, its release not out yet) still builds, but does not publish: the site
+# keeps the last build every store plugin loads in, and the run says why. Publishing the release
+# (sdk-tag.yml) starts this workflow on main, which then goes up. The test copy is not held.
+#
 # A release published here asks for a redeploy too, without a build: the site links releases.
 #
 # Needs the secret WEBSITE_DISPATCH_TOKEN: a fine-grained token with Contents read/write on
@@ -134,6 +141,33 @@ jobs:
           cat zig-out/web/build.json
           (cd zig-out/web && zip -qr "$GITHUB_WORKSPACE/web.zip" .)
 
+      # The real app on an SDK no store plugin is built for loads none of them: hold it until the
+      # release is out (see the top of this file). The tag is fetched alone, as the checkout is
+      # shallow.
+      - name: Is its plugin SDK released?
+        id: released
+        if: env.CHANNEL == 'main'
+        run: |
+          block=$(awk '/pub const sdk_version = std\.SemanticVersion\{/,/\};/' sdk/sdk_version.zig)
+          version=$(for f in major minor patch; do grep -oE "\.$f = [0-9]+" <<<"$block" | grep -oE '[0-9]+'; done | paste -sd. -)
+          tag="sdk-v$version"
+          fingerprint() { grep -oE 'recorded_sdk_shape_fingerprint: u64 = 0x[0-9a-fA-F]+' | grep -oE '0x[0-9a-fA-F]+'; }
+          here=$(fingerprint < sdk/src/version.zig)
+          if git fetch -q --depth=1 origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null; then
+            released=$(git show "$tag:sdk/src/version.zig" | fingerprint)
+          else
+            released=""
+          fi
+          if [ -n "$here" ] && [ "$here" = "$released" ]; then
+            echo "Plugin SDK $tag is released with this fingerprint ($here): the app goes up."
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            why="this commit's plugin SDK fingerprint ($here) is not released (\`$tag\`: ${released:-no such tag yet})"
+            echo "::notice title=fizzyed.it/app held::Not published: $why. It goes up when that release is out."
+            printf '### fizzyed.it/app held\n\nNot published: %s. Store plugins would not load in it; the site keeps its last build. It goes up when the release is out (sdk-tag.yml starts this workflow on main).\n' "$why" >> "$GITHUB_STEP_SUMMARY"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Newer runs of this workflow for the same channel whose build has not been skipped (a
       # draft's) and has not failed: still running, or done. One of those publishes, so this one
       # does not. A newer one that then fails leaves the copy before it served; the next push
@@ -163,7 +197,7 @@ jobs:
           fi
 
       - name: Hand the build to the website
-        if: steps.newest.outputs.publish == 'true'
+        if: steps.newest.outputs.publish == 'true' && steps.released.outputs.released != 'false'
         env:
           GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

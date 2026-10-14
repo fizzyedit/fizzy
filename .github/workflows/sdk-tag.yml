@@ -36,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # To start web.yml on main once a release is out (a release this token makes fires no
+      # workflow of its own).
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -205,6 +208,15 @@ jobs:
 
           echo "Published $asset on $tag"
           gh release view "$tag" --json assets --jq '.assets[].name'
+
+      # fizzyed.it/app holds a main whose fingerprint is unreleased (web.yml): with this release
+      # out, build main and put it up. A dispatch is the one event this token can start.
+      - name: Put the web app up on this SDK
+        if: steps.tag.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh workflow run web.yml --ref main --repo "$GITHUB_REPOSITORY"
 
       # Each fizzyedit plugin in the store registry (fizzyedit/plugins, by its homepage) repins
       # itself: its sdk-repin.yml runs plugin-build-action's repin.yml, which builds it against

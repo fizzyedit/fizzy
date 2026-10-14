@@ -72,8 +72,8 @@ The open PR list is the board of who is working on what.
   unquoted heredoc, zsh runs every backticked name as a command.
 - **Push a branch:** `jj bookmark create <area>/<slug> -r @-`, then
   `jj git push --bookmark <area>/<slug>`. Pushing `main` publishes (the web app at
-  fizzyed.it/app, and an SDK release when the version moved), so `main` moves only by a merged
-  PR.
+  fizzyed.it/app when its plugin SDK is released, and an SDK release when the version moved), so
+  `main` moves only by a merged PR.
 - **When your PR has merged, forget its workspace, then fetch.** `jj workspace forget <task>`,
   then `jj git fetch`. GitHub deletes a merged branch, and the fetch abandons the changes only
   that branch held, so landed work doesn't linger in the next agent's `jj log` looking live.
@@ -118,9 +118,11 @@ tarball is pinned by hash, so it is never replaced.
   since the last `sdk-v*` tag. Two branches never race for the same number, and a morning's SDK
   changes cost one round of repinning instead of several. Changes to `core/` that plugins build
   in, with no fingerprint move, reach them the same way.
-- **Release soon after a merge that moved the fingerprint.** fizzyed.it/app is built from
-  `main`, and store plugins don't load there until the release is out and they are repinned.
-  Batch on purpose, not by forgetting.
+- **Merging an `sdk` PR does not break the site.** fizzyed.it/app goes up from `main` only while
+  `main`'s fingerprint is a released one (`web.yml`); after an `sdk` merge it holds the last build
+  every store plugin loads in, and the release puts `main` up. So `sdk` PRs can land as they are
+  ready and release in a batch. Batch on purpose, though: until the release, nothing else reaches
+  the site either.
 - **An app release never ships an unreleased fingerprint.** If it moved since the last `sdk-v*`
   tag, release the SDK first (`RELEASING.md`).
 
