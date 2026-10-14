@@ -184,7 +184,39 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.playPause", .title = "Demo: Play / Pause", .bind = null, .run = cmdDemoPlayPause, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.demo.restart", .title = "Demo: Restart", .bind = null, .run = cmdDemoRestart, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
+    .{ .id = "fizzy.demo.playTape", .title = "Demo: Play a Tape…", .bind = null, .run = cmdPlayTape, .params = TapePath.params, .runWith = TapePath.bind(cmdPlayTapePath), .icon = icons.tvg.lucide.@"circle-play" },
 } ++ demoCatalogCommands();
+
+const TapePath = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The tape to play, a .tape or .zon file, as an absolute path: a recording, an agent's session, a demo. Empty asks with the open dialog." }) = .init(""),
+});
+
+fn cmdPlayTape(_: *anyopaque) anyerror!void {
+    fizzy.backend.showOpenFileDialog(playTapeCallback, &.{.{ .name = "Tape", .pattern = "tape;zon" }}, "", null);
+}
+
+fn playTapeCallback(paths: ?[][:0]const u8) void {
+    const list = paths orelse return;
+    if (list.len == 0) return;
+    playTapeFile(fizzy.editor(), list[0]) catch |err| dvui.log.err("tape {s}: {t}", .{ list[0], err });
+}
+
+/// Plays a tape file in the player, with its transport: seek, chapters, play and pause. A tape
+/// that opens on a keyframe sets the person's session aside and gives it back when it ends.
+fn cmdPlayTapePath(state: *anyopaque, args: TapePath.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.path.len == 0) return cmdPlayTape(state);
+    if (comptime is_web) return call.fail("a page plays a tape from its address (?demo=<url>)", .{});
+    if (!std.fs.path.isAbsolute(args.path)) return call.fail("give an absolute path: {s}", .{args.path});
+    playTapeFile(editorFromState(state), args.path) catch |err| return call.fail("could not play {s}: {t}", .{ args.path, err });
+}
+
+fn playTapeFile(editor: *Editor, path: []const u8) !void {
+    if (comptime is_web) return error.Unsupported;
+    const gpa = editor.app.gpa;
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(256 << 20));
+    defer gpa.free(bytes);
+    editor.demo.playTapeSoon(bytes);
+}
 
 fn demoCatalogCommands() [Editor.Demo.catalog.entries.len]FizzyCommand {
     var out: [Editor.Demo.catalog.entries.len]FizzyCommand = undefined;
