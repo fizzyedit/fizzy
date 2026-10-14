@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/shadercross
-          key: shadercross-${{ env.SHADERCROSS_SHA }}-vendored-clang-1
+          key: shadercross-${{ env.SHADERCROSS_SHA }}-vendored-clang-2
 
       - name: Toolchain
         run: |
@@ -70,8 +70,12 @@ jobs:
         run: |
           git clone --filter=blob:none "https://github.com/$SHADERCROSS_REPO" sc
           git -C sc checkout "$SHADERCROSS_SHA"
-          git -C sc submodule update --init --recursive --depth 1 --jobs 4
+          # Whole histories, not `--depth 1`: DXC writes its version into every shader it compiles,
+          # counted from its git history, and a shallow clone counts 1 — every DXIL four bytes short
+          # and its hash different from the same compiler's elsewhere.
+          git -C sc submodule update --init --recursive --filter=blob:none --jobs 4
           git -C sc/external/DirectXShaderCompiler rev-parse HEAD
+          git -C sc/external/DirectXShaderCompiler rev-list --count HEAD
           cmake -S sc -B sc/build -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
             -DSDLSHADERCROSS_VENDORED=ON \
