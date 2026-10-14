@@ -11,6 +11,7 @@ zig build check                # compile unit tests, don't run
 zig build test --summary all   # show per-artifact pass/fail counts
 zig build test-integration     # headless dvui + SDK tests (needs MSVC on Windows)
 zig build test-all             # unit + integration + test-sdk-version
+zig build check-tests-reached  # every test block is compiled into some test binary
 ```
 
 To narrow down to a single failing test while you debug:
@@ -194,12 +195,10 @@ What's intentionally **not** here yet:
 
 ## CI
 
-`.github/workflows/ci.yml`: **push to `main`** runs only the fast
-Ubuntu job (`zig build test`, `zig build check-web`, `zig build
-test-sdk-version`). **Pull requests** and **manual**
-(`workflow_dispatch`) runs additionally matrix across Linux/Windows/macOS.
-Note `test-integration` / `test-all` are not run by CI at all today —
-run them locally before relying on integration or SDK coverage.
-`paths-ignore` skips doc-only changes on both `push` and
-`pull_request`. Releases are handled separately by
+`.github/workflows/ci.yml` runs on every pull request and every push to
+`main`: `zig build test` on Linux, Windows and macOS, `test-integration`
+and `check-tests-reached` on Linux, plus `check-web`, `test-sdk-version`,
+the example repos and the format check. Its header comment is the
+current list. A docs-only change skips the builds and still passes the
+one required check, `ci-ok`. Releases are handled separately by
 `.github/workflows/release.yml`, triggered by pushing a `v*` tag.

@@ -3,6 +3,8 @@
 Cross-platform, open-source general editor written in Zig, UI via [DVUI](https://github.com/david-vanderson/dvui). Targets native (macOS/Linux/Windows) and web (wasm32). Layout/UX is IDE-shaped (VSCode-like): sidebar rail + explorer, menubar, center tabs/splits, bottom panel, infobar.
 
 **Read this file first, then go deeper via the links below — don't re-derive the architecture from scratch.**
+`sdk/`, `app/`, `core/`, `backend/`, `plugins/` and `tests/` each have a short `CLAUDE.md` of
+their own: the rules that bite in that directory, loaded when you work there.
 
 **How we work** — one plan step per PR, claiming work before building it, jj, verifying, the SDK
 release train — is [`CONTRIBUTING.md`](CONTRIBUTING.md), imported here so every session reads it:
@@ -32,10 +34,10 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 - **`image`** — read-only PNG/JPG/GIF/BMP/TGA viewer with zoom/pan (fallback when pixi is not installed).
 - **`markdown`** — `.md` preview utility plugin.
 - **`archive`** — opens a `.zip` as a mounted folder (the web's "open a vault" path, too).
-- **`drive`** — Google Drive as a mount; OAuth in the browser and on the desktop.
+- **`devtools`** — the dashboard: where the app's time goes, from `core.profile`, for a person and an agent alike.
 - `shared` — build helpers used across plugins' `static/integration.zig` (not a plugin itself).
 
-**Pixi (pixel-art editor) lives outside this repo** as a third-party-style plugin ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), `~/dev/fizzyedit/pixi`) — it ships and updates purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. **Trust `ls plugins/` and `jj log` over any doc's plugin list.**
+**Pixi (pixel-art editor) and Drive (Google Drive as a mount) live outside this repo** as third-party-style plugins ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), [`fizzyedit/drive`](https://github.com/fizzyedit/drive)) — they ship and update purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. **Trust `ls plugins/` and `jj log` over any doc's plugin list.**
 
 ## Writing a plugin
 
