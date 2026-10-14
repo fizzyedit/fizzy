@@ -3936,7 +3936,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
     // A demo replaying to a seek wants every frame to land where it is going: no motion.
-    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast);
+    const playback: f32 = if (editor.demo.player.state == .playing) editor.demo.player.rate else 1;
+    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast, playback);
     fizzy.core.programs.publishHost();
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).

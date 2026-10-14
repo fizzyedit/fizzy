@@ -272,6 +272,9 @@ activity: std.ArrayListUnmanaged(Activity) = .empty,
 activity_seq: u64 = 0,
 /// No activity is noted while set: a tape seeking replays its commands where nobody watches.
 activity_muted: bool = false,
+/// How long the last command called with arguments goes on showing its work
+/// (`Command.Call.showing_ms`), for whoever called it.
+last_showing_ms: u32 = 0,
 /// The command whose body is running, if any: the edits made meanwhile are its (`documentEdited`).
 running_command: ?*const Command = null,
 /// Counts command runs, so one run that edits several times shows once.
@@ -1762,6 +1765,7 @@ pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.m
         c.run.?(owner.state) catch |err| return .{ .failed = owner.errorName(err) };
         return .{ .ok = null };
     };
+    self.last_showing_ms = 0;
     var call: Command.Call = .{ .args = args, .arena = results };
     const outer = self.running(c);
     defer self.running_command = outer;
@@ -1769,6 +1773,7 @@ pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.m
         const msg = call.message orelse owner.errorName(err);
         return if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg };
     };
+    self.last_showing_ms = call.showing_ms;
     return .{ .ok = call.result };
 }
 

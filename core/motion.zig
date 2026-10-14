@@ -54,10 +54,11 @@ const Published = struct {
 /// Host only, once a frame before anything animates: this frame's level and speed, where every
 /// image's copy of this file finds them, and dvui's own animations told whether to run at all.
 /// `level` and `speed` are the settings, each 0 to 1. A system that asks for reduced motion gets
-/// off, whatever the setting says.
-pub fn publish(level_setting: f32, speed_setting: f32, system_prefers_reduced: bool) void {
+/// off, whatever the setting says. `playback` multiplies the speed while a tape plays at other than
+/// its own pace, so what the app animates keeps time with it.
+pub fn publish(level_setting: f32, speed_setting: f32, system_prefers_reduced: bool, playback: f32) void {
     const v: f32 = if (system_prefers_reduced) 0 else std.math.clamp(level_setting, 0, 1);
-    dvui.dataSet(null, publish_id, publish_key, Published{ .level = v, .rate = rateFor(speed_setting) });
+    dvui.dataSet(null, publish_id, publish_key, Published{ .level = v, .rate = rateFor(speed_setting) * playback });
     apply();
 }
 
