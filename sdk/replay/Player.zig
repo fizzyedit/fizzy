@@ -74,8 +74,9 @@ after_seek: After = .pause,
 seek_target: f64 = 0,
 /// Where the seek replays from, for the overlay's progress.
 seek_from: f64 = 0,
-/// Demo time per wall time while playing.
+/// Demo time per wall time while playing: one of `speeds`, from the transport or `setRate`.
 rate: f32 = 1,
+
 /// Real input reached the app since the tape last put it in a known state.
 diverged: bool = false,
 /// Wall time one displayed frame may spend on silent frames while a seek catches up (`frames`).
@@ -202,6 +203,8 @@ pub const Transport = struct {
     next: dvui.Rect.Physical = .{},
     track: dvui.Rect.Physical = .{},
     close: dvui.Rect.Physical = .{},
+    /// The speed on the track (`rate`), which a press steps through `speeds`.
+    speed: dvui.Rect.Physical = .{},
     /// The demo time the scrubber is held at while a viewer drags it; the player seeks there as
     /// it moves (`frame`), and once more when it is let go.
     scrub: ?f64 = null,
@@ -254,6 +257,22 @@ pub fn wallNs(self: *const Player) i128 {
 }
 
 /// The demo time to show: the scrubber's while it is held, else the sequencer's.
+/// The speeds the transport steps through.
+pub const speeds = [_]f32{ 0.25, 0.5, 1, 2, 4 };
+
+/// Play at `rate` times the tape's own pace, clamped to the slowest and fastest of `speeds`.
+pub fn setRate(self: *Player, rate: f32) void {
+    self.rate = std.math.clamp(rate, speeds[0], speeds[speeds.len - 1]);
+}
+
+/// The next of `speeds` after the current one, round to the slowest.
+pub fn stepRate(self: *Player) void {
+    for (speeds) |sp| {
+        if (sp > self.rate + 0.001) return self.setRate(sp);
+    }
+    self.setRate(speeds[0]);
+}
+
 pub fn now(self: *const Player) f64 {
     if (self.transport.scrub) |t| return t;
     return if (self.state == .seeking) self.seek_target else self.seq.now;
@@ -857,6 +876,8 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     if (me.action == .press and me.button.pointer()) {
         if (tr.play.contains(me.p)) {
             self.toggle();
+        } else if (tr.speed.contains(me.p)) {
+            self.stepRate();
         } else if (tr.track.contains(me.p)) {
             tr.scrub = tr.timeAt(me.p.x, self.duration());
             self.scrub_after = if (self.state == .playing or (self.state == .seeking and self.after_seek == .play)) .play else .pause;

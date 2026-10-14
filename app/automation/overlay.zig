@@ -729,11 +729,25 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     const x0 = r.x + pad + time_w + 14;
     const x1 = r.x + r.w - pad;
     const small_font = dvui.Font.theme(.body).larger(-2);
+
+    // The speed, top right of the capsule: a press steps it (`Player.stepRate`).
+    var speed_buf: [8]u8 = undefined;
+    const speed = std.fmt.bufPrint(&speed_buf, "{d}\u{00D7}", .{player.rate}) catch "";
+    const speed_w = small_font.textSize(speed).w;
+    const speed_r: dvui.Rect = .{ .x = x1 - speed_w, .y = r.y + 5, .w = speed_w, .h = small_font.lineHeight() };
+    dvui.labelNoFmt(@src(), speed, .{}, .{
+        .rect = .{ .x = speed_r.x - bounds.x, .y = speed_r.y - bounds.y, .w = speed_r.w + 2, .h = speed_r.h },
+        .padding = .{},
+        .margin = .{},
+        .font = small_font,
+        .color_text = .{ .color = ink.opacity(if (player.rate == 1) 0.65 else 0.95) },
+    });
+    player.transport.speed = wrs.rectToPhysical(speed_r.outsetAll(4));
     const chapter = if (tape.chapterAt(now)) |i| tape.chapters[i].title else tape.title;
     const ch = small_font.lineHeight();
     if (x1 - x0 > 8) {
         dvui.labelNoFmt(@src(), chapter, .{}, .{
-            .rect = .{ .x = x0 - bounds.x, .y = r.y + 5 - bounds.y, .w = x1 - x0, .h = ch },
+            .rect = .{ .x = x0 - bounds.x, .y = r.y + 5 - bounds.y, .w = @max(0, x1 - x0 - speed_w - 10), .h = ch },
             .padding = .{},
             .margin = .{},
             .font = small_font,

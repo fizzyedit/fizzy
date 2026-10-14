@@ -185,6 +185,7 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.restart", .title = "Demo: Restart", .bind = null, .run = cmdDemoRestart, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
     .{ .id = "fizzy.demo.playTape", .title = "Demo: Play a Tape…", .bind = null, .run = cmdPlayTape, .params = TapePath.params, .runWith = TapePath.bind(cmdPlayTapePath), .icon = icons.tvg.lucide.@"circle-play" },
+    .{ .id = "fizzy.demo.speed", .title = "Demo: Speed…", .bind = null, .run = cmdDemoSpeedStep, .isEnabled = demoLoaded, .params = DemoSpeed.params, .runWith = DemoSpeed.bind(cmdDemoSpeed), .icon = icons.tvg.lucide.gauge },
 } ++ demoCatalogCommands();
 
 const TapePath = sdk.Command.Params(struct {
@@ -216,6 +217,21 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(256 << 20));
     defer gpa.free(bytes);
     editor.demo.playTapeSoon(bytes);
+}
+
+const DemoSpeed = sdk.Command.Params(struct {
+    rate: sdk.Command.Arg(f32, .{ .description = "How many times the tape's own pace: 0.25, 0.5, 1, 2 or 4. 0 steps to the next.", .min = 0, .max = 4 }) = .init(0),
+});
+
+fn cmdDemoSpeedStep(state: *anyopaque) anyerror!void {
+    editorFromState(state).demo.player.stepRate();
+}
+
+/// How fast the loaded tape plays, as the transport's speed does.
+fn cmdDemoSpeed(state: *anyopaque, args: DemoSpeed.Args, call: *sdk.Command.Call) anyerror!void {
+    const player = &editorFromState(state).demo.player;
+    if (args.rate == 0) player.stepRate() else player.setRate(args.rate);
+    try call.returns(.{ .rate = player.rate });
 }
 
 fn demoCatalogCommands() [Editor.Demo.catalog.entries.len]FizzyCommand {
