@@ -33,11 +33,13 @@ pub const FrameCauses = @import("profile/FrameCauses.zig");
 /// Spans on any thread, each occurrence kept, while the profiler records (`span`, `spans`,
 /// `writeTrace`).
 pub const Spans = @import("profile/Spans.zig");
+/// What a frame asked the GPU to make and unmake, counted by the backend (`hostFrameBegin`).
+pub const Gpu = @import("profile/Gpu.zig");
 
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 4;
+pub const abi: u32 = 5;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -89,6 +91,10 @@ pub const FrameStats = struct {
     worst_work_ns: u64 = 0,
     fps: f64 = 0,
     frames: u32 = 0,
+    /// Textures and render targets made and destroyed, and target switches, per frame: GPU work
+    /// no scope times, which can cost far more than the frame's own (`Gpu`). Null where the
+    /// backend does not count it.
+    gpu: ?Gpu.PerFrame = null,
     /// Pointer moves (mouse or touch) the app was given, per second (`countInput`). Where frames
     /// are drawn only when there is input, the frame rate can be no better than this.
     inputs_per_s: f64 = 0,
@@ -111,6 +117,8 @@ pub const Profiler = struct {
     /// calls in it.
     history_work: [history_len]u32 = @splat(0),
     history_submit: [history_len]u32 = @splat(0),
+    /// Each frame's GPU counts, landed like its submit.
+    history_gpu: [history_len]Gpu = @splat(.{}),
     history_ns: [history_len][max_entries]u32 = @splat(@splat(0)),
     history_calls: [history_len][max_entries]u16 = @splat(@splat(0)),
     history_head: usize = 0,
@@ -138,6 +146,12 @@ pub const Profiler = struct {
     win_submit_ns: u64 = 0,
     win_submit_frames: u32 = 0,
     win_inputs: u64 = 0,
+    win_gpu: Gpu.Sum = .{},
+    /// The backend's GPU totals at the last frame's start, for the next frame's difference. Kept
+    /// whether or not the frame records, so the first recorded frame counts only itself.
+    gpu_total: ?Gpu = null,
+    /// When the last recorded frame ended, the time it is kept under as a hitch (`Lookback`).
+    recorded_at_ns: i128 = 0,
     /// This frame's pointer moves (`countInput`).
     frame_inputs: u32 = 0,
     /// The history slot the last frame was recorded in, for its submit to land in when the
@@ -158,6 +172,7 @@ pub const Profiler = struct {
         self.win_submit_ns = 0;
         self.win_submit_frames = 0;
         self.win_inputs = 0;
+        self.win_gpu = .{};
         self.frame_inputs = 0;
         self.recorded_slot = null;
         self.stats = .{};
@@ -165,18 +180,19 @@ pub const Profiler = struct {
         self.history_filled = 0;
         self.history_work = @splat(0);
         self.history_submit = @splat(0);
+        self.history_gpu = @splat(.{});
         for (&self.history_ns) |*h| h.* = @splat(0);
         for (&self.history_calls) |*h| h.* = @splat(0);
         if (host_lookback) |lb| lb.reset();
     }
 
-    /// The frame `ago` frames back (0 the latest recorded): its work, its submit (0 until the
-    /// next frame reports it), and entries' times and calls, indexed as `slice`. Null past what
-    /// the history holds.
-    pub fn historyFrame(self: *Profiler, ago: usize) ?struct { work_ns: u32, submit_ns: u32, ns: []const u32, calls: []const u16 } {
+    /// The frame `ago` frames back (0 the latest recorded): its work, its submit and GPU counts
+    /// (0 until the next frame reports them), and entries' times and calls, indexed as `slice`.
+    /// Null past what the history holds.
+    pub fn historyFrame(self: *Profiler, ago: usize) ?struct { work_ns: u32, submit_ns: u32, gpu: Gpu, ns: []const u32, calls: []const u16 } {
         if (ago >= self.history_filled) return null;
         const slot = (self.history_head + history_len - 1 - ago) % history_len;
-        return .{ .work_ns = self.history_work[slot], .submit_ns = self.history_submit[slot], .ns = self.history_ns[slot][0..self.count], .calls = self.history_calls[slot][0..self.count] };
+        return .{ .work_ns = self.history_work[slot], .submit_ns = self.history_submit[slot], .gpu = self.history_gpu[slot], .ns = self.history_ns[slot][0..self.count], .calls = self.history_calls[slot][0..self.count] };
     }
 
     pub fn slice(self: *Profiler) []Entry {
@@ -248,7 +264,7 @@ pub const Profiler = struct {
         self.frame_inputs +|= n;
     }
 
-    fn frameBegin(self: *Profiler, prev_submit_ns: ?u64) void {
+    fn frameBegin(self: *Profiler, prev_submit_ns: ?u64, gpu_total: ?Gpu) void {
         const t = now();
         self.active = self.enabled or t < self.wanted_until_ns;
         if (self.prev_frame_start != 0 and self.active and !self.paused) {
@@ -260,6 +276,16 @@ pub const Profiler = struct {
             self.win_submit_ns += ns;
             self.win_submit_frames += 1;
         };
+        // So do its GPU counts: the backend's totals since the frame before's start.
+        if (gpu_total) |total| {
+            if (self.recorded_slot) |slot| if (self.gpu_total) |prev| {
+                const g = total.since(prev);
+                self.history_gpu[slot] = g;
+                self.win_gpu.add(g);
+                if (host_lookback) |lb| lb.noteGpu(self.recorded_at_ns, g);
+            };
+            self.gpu_total = total;
+        }
         self.recorded_slot = null;
         self.prev_frame_start = t;
         self.frame_start = t;
@@ -283,7 +309,9 @@ pub const Profiler = struct {
             const slot = self.history_head;
             self.history_work[slot] = @intCast(@min(work, std.math.maxInt(u32)));
             self.history_submit[slot] = 0;
+            self.history_gpu[slot] = .{};
             self.recorded_slot = slot;
+            self.recorded_at_ns = t;
             for (self.slice(), 0..) |e, i| {
                 self.history_ns[slot][i] = @intCast(@min(e.frame_ns, std.math.maxInt(u32)));
                 self.history_calls[slot][i] = @intCast(@min(e.frame_calls, std.math.maxInt(u16)));
@@ -318,6 +346,7 @@ pub const Profiler = struct {
             .fps = @as(f64, @floatFromInt(self.win_frames)) / (elapsed / std.time.ns_per_s),
             .frames = self.win_frames,
             .inputs_per_s = @as(f64, @floatFromInt(self.win_inputs)) / (elapsed / std.time.ns_per_s),
+            .gpu = self.win_gpu.perFrame(),
         };
         if (host_lookback) |lb| lb.foldWindow(.{
             .end_ns = t,
@@ -343,6 +372,7 @@ pub const Profiler = struct {
         self.win_submit_ns = 0;
         self.win_submit_frames = 0;
         self.win_inputs = 0;
+        self.win_gpu = .{};
     }
 };
 
@@ -515,10 +545,11 @@ pub fn host() *Profiler {
 /// Host only, at the start of every frame, before anything is timed: start the frame, and
 /// publish the profiler to the plugins through the shared window. `prev_submit_ns` is how long
 /// the backend took to end the last frame after fizzy's part of it (`FrameStats.submit_ns`),
-/// where the backend measures that.
-pub fn hostFrameBegin(prev_submit_ns: ?u64) void {
+/// where the backend measures that; `gpu_total` the backend's running GPU totals (`Gpu`), where
+/// it counts them.
+pub fn hostFrameBegin(prev_submit_ns: ?u64, gpu_total: ?Gpu) void {
     is_host = true;
-    host_profiler.frameBegin(prev_submit_ns);
+    host_profiler.frameBegin(prev_submit_ns, gpu_total);
     dvui.dataSet(null, publish_id, publish_key, @as(usize, @intFromPtr(&host_profiler)));
     if (host_lookback == null and host_profiler.active) host_lookback = Lookback.create(std.heap.page_allocator, max_entries) catch null;
     if (host_lookback) |lb| dvui.dataSet(null, publish_id, lookback_key, @as(usize, @intFromPtr(lb)));
@@ -657,6 +688,7 @@ pub fn report(p: *const Profiler, w: *std.Io.Writer, opts: ReportOptions) std.Io
         st.fps, millis(st.interval_ns), millis(st.work_ns), millis(@floatFromInt(st.worst_work_ns)),
     });
     if (st.submit_ns) |sub| try w.print(".submit_ms = {d:.3}, ", .{millis(sub)});
+    if (st.gpu) |g| try w.print(".gpu = .{{ .textures = {d:.2}, .targets = {d:.2}, .destroyed = {d:.2}, .target_switches = {d:.2} }}, ", .{ g.textures, g.targets, g.destroyed, g.target_switches });
     try w.print(".frames = {d}, .inputs_per_s = {d:.1} }},\n", .{ st.frames, st.inputs_per_s });
 
     // Each owner's own time: the self time of every scope it owns.
@@ -768,8 +800,8 @@ fn writeHitches(p: *const Profiler, lb: *const Lookback, w: *std.Io.Writer, opts
                 return ss[a] > ss[b];
             }
         }.lt);
-        try w.print("        .{{ .ago_s = {d:.1}, .work_ms = {d:.3}, .top = .{{\n", .{
-            @as(f64, @floatFromInt(t - h.at_ns)) / std.time.ns_per_s, millis(@floatFromInt(h.work_ns)),
+        try w.print("        .{{ .ago_s = {d:.1}, .work_ms = {d:.3}, .gpu = .{{ .textures = {d}, .targets = {d}, .destroyed = {d}, .target_switches = {d} }}, .top = .{{\n", .{
+            @as(f64, @floatFromInt(t - h.at_ns)) / std.time.ns_per_s, millis(@floatFromInt(h.work_ns)), h.gpu.textures, h.gpu.targets, h.gpu.destroyed, h.gpu.target_switches,
         });
         for (order[0..@min(n, opts.top)]) |i| {
             if (millis(@floatFromInt(self_ns[i])) < opts.min_ms) break;
@@ -813,7 +845,7 @@ test "a report says what each owner and scope cost, as ZON that reads back" {
     var p: Profiler = .{ .wanted_until_ns = std.math.maxInt(i96) };
     // Two frames a window apart, so the second publishes averages.
     for (0..2) |_| {
-        p.frameBegin(null);
+        p.frameBegin(null, null);
         const outer = p.open("fizzy", "draw").?;
         const inner = p.open("text", "surface").?;
         const until = now() + 2 * std.time.ns_per_ms;
@@ -829,7 +861,7 @@ test "a report says what each owner and scope cost, as ZON that reads back" {
     const text = w.buffered();
 
     const Report = struct {
-        frame: struct { fps: f64, interval_ms: f64, work_ms: f64, worst_work_ms: f64, submit_ms: ?f64 = null, frames: u32, inputs_per_s: f64 },
+        frame: struct { fps: f64, interval_ms: f64, work_ms: f64, worst_work_ms: f64, submit_ms: ?f64 = null, gpu: ?Gpu.PerFrame = null, frames: u32, inputs_per_s: f64 },
         owners: []const struct { owner: []const u8, self_ms: f64 },
         scopes: []const struct { owner: []const u8, name: []const u8, avg_ms: f64, self_ms: f64, max_ms: f64, calls: f64, parent: ?u16 = null },
     };
@@ -847,16 +879,16 @@ test "a report says what each owner and scope cost, as ZON that reads back" {
 test "nothing records unless the window is open or someone asked" {
     dvui.io = std.testing.io;
     var p: Profiler = .{};
-    p.frameBegin(null);
+    p.frameBegin(null, null);
     try std.testing.expect(!p.active);
     p.wanted_until_ns = now() + std.time.ns_per_s;
-    p.frameBegin(null);
+    p.frameBegin(null, null);
     try std.testing.expect(p.active);
 }
 
 test "scopes nest, and a frame's time folds into the window's averages" {
     var p: Profiler = .{ .enabled = true };
-    p.frameBegin(null);
+    p.frameBegin(null, null);
     const a = p.open("pixi", "draw").?;
     const b = p.open("pixi", "bubbles").?;
     p.close(b);
@@ -874,7 +906,7 @@ test "scopes nest, and a frame's time folds into the window's averages" {
 
 test "a scope whose end was skipped does not strand the ones after it" {
     var p: Profiler = .{ .enabled = true };
-    p.frameBegin(null);
+    p.frameBegin(null, null);
     const a = p.open("fizzy", "frame").?;
     _ = p.open("x", "lost").?; // never closed
     p.close(a);
@@ -883,18 +915,39 @@ test "a scope whose end was skipped does not strand the ones after it" {
 
 test "a frame's submit lands in its own slot when the next frame begins" {
     var p: Profiler = .{ .enabled = true };
-    p.frameBegin(null);
+    p.frameBegin(null, null);
     p.countInput(3);
     p.frameEnd();
     try std.testing.expectEqual(@as(u32, 0), p.historyFrame(0).?.submit_ns);
-    p.frameBegin(5 * std.time.ns_per_ms);
+    p.frameBegin(5 * std.time.ns_per_ms, null);
     try std.testing.expectEqual(@as(u32, 5 * std.time.ns_per_ms), p.historyFrame(0).?.submit_ns);
     try std.testing.expectEqual(@as(u64, 3), p.win_inputs);
     // Paused, a frame is not recorded and its submit goes nowhere.
     p.frameEnd();
     p.paused = true;
-    p.frameBegin(null);
+    p.frameBegin(null, null);
     p.frameEnd();
-    p.frameBegin(7 * std.time.ns_per_ms);
+    p.frameBegin(7 * std.time.ns_per_ms, null);
     try std.testing.expectEqual(@as(u32, 0), p.historyFrame(0).?.submit_ns);
+}
+
+test "a frame's GPU counts land in its own slot and the window's average, not before it records" {
+    dvui.io = std.testing.io;
+    var p: Profiler = .{};
+    // Closed: the totals are followed, nothing is kept.
+    p.frameBegin(null, .{ .targets = 100 });
+    p.frameEnd();
+    p.enabled = true;
+    p.frameBegin(null, .{ .targets = 103 });
+    p.frameEnd();
+    try std.testing.expectEqual(@as(u32, 0), p.historyFrame(0).?.gpu.targets);
+    // The frame recorded made 4 targets and switched 6 times, counted as the next one begins.
+    p.frameBegin(null, .{ .targets = 107, .target_switches = 6 });
+    try std.testing.expectEqual(@as(u32, 4), p.historyFrame(0).?.gpu.targets);
+    try std.testing.expectEqual(@as(u32, 6), p.historyFrame(0).?.gpu.target_switches);
+    p.frameEnd();
+    p.frameBegin(null, .{ .targets = 107, .target_switches = 6 });
+    p.win_start -= window_ns;
+    p.frameEnd();
+    try std.testing.expectEqual(@as(f64, 2), p.stats.gpu.?.targets);
 }

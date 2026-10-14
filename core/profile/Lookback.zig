@@ -10,10 +10,11 @@
 const Lookback = @This();
 
 const std = @import("std");
+const Gpu = @import("Gpu.zig");
 
 /// Bumped whenever the layout changes: part of the key the profiler publishes it under, so a
 /// plugin built against another layout finds none.
-pub const abi: u32 = 1;
+pub const abi: u32 = 2;
 /// Half-second windows kept: 30 seconds.
 pub const windows = 60;
 /// Frames over budget kept, the newest replacing the oldest.
@@ -57,6 +58,9 @@ pub const Hitch = struct {
     work_ns: u64 = 0,
     /// How many entries it recorded (the profiler's count then).
     count: u16 = 0,
+    /// What it asked the GPU to make and unmake, its submit included: known only once the next
+    /// frame has begun (`noteGpu`), zero until then.
+    gpu: Gpu = .{},
 };
 
 pub fn create(gpa: std.mem.Allocator, entries: usize) error{OutOfMemory}!*Lookback {
@@ -145,6 +149,14 @@ pub fn noteFrame(self: *Lookback, at_ns: i128, work_ns: u64, ns: []const u32, ca
     self.hitch_filled = @min(self.hitch_filled + 1, hitches_kept);
 }
 
+/// The GPU counts of the frame that ended at `at_ns`, now that the next one has begun: kept with
+/// it if it was kept as a hitch (the newest), dropped otherwise.
+pub fn noteGpu(self: *Lookback, at_ns: i128, gpu: Gpu) void {
+    if (self.hitch_filled == 0) return;
+    const newest = &self.hitch[(self.hitch_head + hitches_kept - 1) % hitches_kept];
+    if (newest.at_ns == at_ns) newest.gpu = gpu;
+}
+
 /// An entry's cost per frame over a span of windows.
 pub const Cost = struct {
     avg_ns: f64 = 0,
@@ -203,12 +215,12 @@ pub fn costs(self: *const Lookback, ms: u32, out: []Cost) Span {
 }
 
 /// A kept hitch, `ago` back (0 the newest): its frame's work, and each entry's time and calls.
-pub fn hitchAt(self: *const Lookback, ago: usize) ?struct { at_ns: i128, work_ns: u64, ns: []const u32, calls: []const u16 } {
+pub fn hitchAt(self: *const Lookback, ago: usize) ?struct { at_ns: i128, work_ns: u64, gpu: Gpu, ns: []const u32, calls: []const u16 } {
     if (ago >= self.hitch_filled) return null;
     const slot = (self.hitch_head + hitches_kept - 1 - ago) % hitches_kept;
     const h = self.hitch[slot];
     const at = slot * self.entries;
-    return .{ .at_ns = h.at_ns, .work_ns = h.work_ns, .ns = self.hitch_ns[at..][0..h.count], .calls = self.hitch_calls[at..][0..h.count] };
+    return .{ .at_ns = h.at_ns, .work_ns = h.work_ns, .gpu = h.gpu, .ns = self.hitch_ns[at..][0..h.count], .calls = self.hitch_calls[at..][0..h.count] };
 }
 
 fn clamp32(v: u64) u32 {
@@ -269,4 +281,20 @@ test "only frames over budget are kept as hitches, newest first" {
     try std.testing.expectEqual(@as(?@TypeOf(h), null), lb.hitchAt(2));
     lb.reset();
     try std.testing.expectEqual(@as(?@TypeOf(h), null), lb.hitchAt(0));
+}
+
+test "a hitch keeps the GPU counts its frame reports late, and no other frame's" {
+    const lb = try create(std.testing.allocator, 1);
+    defer lb.destroy();
+    lb.budget_ns = 10;
+    lb.noteFrame(5, 20, &.{1}, &.{1});
+    lb.noteGpu(5, .{ .targets = 6 });
+    // A frame under budget is not kept, and its counts do not land on the hitch before it.
+    lb.noteFrame(6, 1, &.{1}, &.{1});
+    lb.noteGpu(6, .{ .targets = 9 });
+    try std.testing.expectEqual(@as(u32, 6), lb.hitchAt(0).?.gpu.targets);
+}
+
+test {
+    _ = Gpu;
 }

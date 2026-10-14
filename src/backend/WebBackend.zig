@@ -74,6 +74,25 @@ pub var last_submit_ns: u64 = 0;
 /// frame now whatever `end` said. fizzy's `automation` service uses it: it notes whether dvui
 /// went quiet (`settled`), and runs one more frame when a caller was told "not yet", so the caller
 /// sees the answer change without asking for frames itself.
+/// What the backend has asked WebGL to make and unmake since it started: textures from pixels,
+/// render targets (each a texture, and a framebuffer once drawn into), either destroyed, and the
+/// switches between targets. Running totals, an integer add beside each call into `web.js`; the
+/// profiler reads them each frame (`gpuTotals`, `core.profile.Gpu`). Every image's textures —
+/// the plugins' side modules' too — are made here.
+const GpuTotals = struct {
+    textures: u32 = 0,
+    targets: u32 = 0,
+    destroyed: u32 = 0,
+    target_switches: u32 = 0,
+};
+var gpu_totals: GpuTotals = .{};
+/// The target the stream draws into, for counting switches: 0 the screen.
+var gpu_target: usize = 0;
+
+pub fn gpuTotals() GpuTotals {
+    return gpu_totals;
+}
+
 pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
 
 pub var win: dvui.Window = undefined;
@@ -735,6 +754,7 @@ pub fn begin(_: *WebBackend, arena_in: std.mem.Allocator) !void {
     batch = .{};
     // `web.js` starts every frame on the screen, in dvui's own program.
     target_is_fb = false;
+    gpu_target = 0;
     program = null;
     blend_override = null;
 }
@@ -950,6 +970,7 @@ pub fn textureCreate(_: *WebBackend, pixels: [*]const u8, options: dvui.Texture.
     };
 
     const id = wasm.wasm_textureCreate(pixels, options.width, options.height, wasm_interp, wasm_wrap_u, wasm_wrap_v);
+    gpu_totals.textures +%= 1;
     return dvui.Texture{
         .ptr = @ptrFromInt(id),
         .width = options.width,
@@ -1015,6 +1036,7 @@ pub fn textureCreateTarget(_: *WebBackend, options: dvui.Texture.CreateOptions) 
         wasm.wasm_textureCreatePreciseTarget(options.width, options.height, wasm_interp, wasm_wrap_u, wasm_wrap_v)
     else
         wasm.wasm_textureCreateTarget(options.width, options.height, wasm_interp, wasm_wrap_u, wasm_wrap_v);
+    gpu_totals.targets +%= 1;
     return dvui.TextureTarget{
         .ptr = @ptrFromInt(id),
         .width = options.width,
@@ -1043,8 +1065,11 @@ pub fn textureFromTargetTemp(_: *WebBackend, texture: dvui.TextureTarget) !dvui.
 }
 
 pub fn renderTarget(_: *WebBackend, texture: ?dvui.TextureTarget) !void {
-    try marker(Command.switch_target, if (texture) |tex| @intCast(@intFromPtr(tex.ptr)) else 0);
+    const id: usize = if (texture) |tex| @intFromPtr(tex.ptr) else 0;
+    try marker(Command.switch_target, @intCast(id));
     target_is_fb = texture != null;
+    if (id != gpu_target) gpu_totals.target_switches +%= 1;
+    gpu_target = id;
 }
 
 pub fn textureReadTarget(_: *WebBackend, texture: dvui.TextureTarget, pixels_out: [*]u8) !void {
@@ -1056,12 +1081,14 @@ pub fn textureDestroy(_: *WebBackend, texture: dvui.Texture) void {
     if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
     _ = blends.remove(@intFromPtr(texture.ptr));
     wasm.wasm_textureDestroy(@intCast(@intFromPtr(texture.ptr)));
+    gpu_totals.destroyed +%= 1;
 }
 
 pub fn textureDestroyTarget(_: *WebBackend, texture: dvui.Texture.Target) void {
     if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
     _ = blends.remove(@intFromPtr(texture.ptr));
     wasm.wasm_textureDestroy(@intCast(@intFromPtr(texture.ptr)));
+    gpu_totals.destroyed +%= 1;
 }
 
 pub fn textInputRect(_: *WebBackend, rect: ?dvui.Rect.Natural) void {

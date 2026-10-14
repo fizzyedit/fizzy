@@ -1017,6 +1017,7 @@ pub fn textureCreate(self: *GpuRenderer, pixels: [*]const u8, options: dvui.Text
         .sampler = self.samplerFor(options.interpolation, options.wrap_u, options.wrap_v),
     };
     try self.upload(tex, pixels, options.format, options.width, 0, 0, options.width, options.height);
+    health.counts.textures += 1;
 
     return .{ .ptr = tex, .width = options.width, .height = options.height, .format = options.format, .interpolation = options.interpolation, .wrap_u = options.wrap_u, .wrap_v = options.wrap_v };
 }
@@ -1093,6 +1094,7 @@ pub fn textureCreateTarget(self: *GpuRenderer, options: dvui.Texture.CreateOptio
         // Starts transparent (`Texture.Target.create`).
         .needs_clear = true,
     };
+    health.counts.targets += 1;
     return .{ .ptr = tex, .width = options.width, .height = options.height, .format = options.format, .interpolation = options.interpolation, .wrap_u = .clamp, .wrap_v = .clamp };
 }
 
@@ -1119,6 +1121,7 @@ pub fn textureDestroy(self: *GpuRenderer, ptr: *anyopaque) void {
     // Released once the command buffers using it are done (SDL defers it).
     c.SDL_ReleaseGPUTexture(self.device, tex.texture);
     self.tex_pool.destroy(tex);
+    health.counts.destroyed += 1;
 }
 
 pub fn readPixels(self: *GpuRenderer, rect: dvui.Rect.Physical, pixels_out: [*]u8) !void {

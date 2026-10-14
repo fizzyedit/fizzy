@@ -194,12 +194,14 @@ fn drawStats(p: *profile.Profiler) void {
         run.stat("frame", "{d}", .{-@as(i64, @intCast(ago))}, "");
         run.stat("work", "{d:>6.2}", .{ms(@floatFromInt(f.work_ns))}, "ms");
         if (s.submit_ns != null) run.stat("submit", "{d:>6.2}", .{ms(@floatFromInt(f.submit_ns))}, "ms");
+        if (s.gpu != null) run.gpuMade(f.gpu);
         run.note(if (locked != null) "locked" else "under the pointer");
         return;
     };
     if (picked_last.held) |h| {
         run.stat("hitch", "{d:.0}", .{secondsAgo(h.at_ns)}, "s ago");
         run.stat("work", "{d:>6.2}", .{ms(@floatFromInt(h.work_ns))}, "ms");
+        if (s.gpu != null) run.gpuMade(h.gpu);
         return;
     }
     run.stat("", "{d:>3.0}", .{s.fps}, "fps");
@@ -207,6 +209,12 @@ fn drawStats(p: *profile.Profiler) void {
     run.stat("work", "{d:>6.2}", .{ms(s.work_ns)}, "ms");
     if (s.submit_ns) |ns| run.stat("submit", "{d:>6.2}", .{ms(ns)}, "ms");
     run.stat("worst", "{d:>6.2}", .{ms(@floatFromInt(s.worst_work_ns))}, "ms");
+    // What no scope times: GPU allocations, which a frame that only draws makes none of.
+    if (s.gpu) |g| {
+        run.stat("textures", "{d:>4.1}", .{g.textures}, "/f");
+        run.stat("targets", "{d:>4.1}", .{g.targets}, "/f");
+        run.stat("switches", "{d:>4.1}", .{g.target_switches}, "/f");
+    }
     run.stat("input", "{d:>3.0}", .{s.inputs_per_s}, "/s");
     run.stat("", "{d:>3}", .{s.frames}, "frames");
 }
@@ -223,6 +231,14 @@ const Runs = struct {
         self.tl.addText(std.fmt.bufPrint(&buf, " " ++ fmt, args) catch "", .{ .font = mono });
         if (unit.len > 0) self.tl.addText(std.fmt.bufPrint(&buf, " {s}", .{unit}) catch "", .{ .font = mono, .color_text = .{ .color = dim } });
         self.tl.addText("   ", .{ .font = mono });
+    }
+
+    /// One frame's GPU allocations, said only when there were any: "made 6 targets".
+    fn gpuMade(self: Runs, g: profile.Gpu) void {
+        if (g.textures > 0) self.stat("made", "{d}", .{g.textures}, "textures");
+        if (g.targets > 0) self.stat("made", "{d}", .{g.targets}, "targets");
+        if (g.destroyed > 0) self.stat("destroyed", "{d}", .{g.destroyed}, "");
+        self.stat("switches", "{d}", .{g.target_switches}, "");
     }
 
     fn note(self: Runs, text: []const u8) void {
@@ -392,7 +408,7 @@ fn secondsAgo(at_ns: i128) f64 {
     return @as(f64, @floatFromInt(core.perf.nanoTimestamp() - at_ns)) / std.time.ns_per_s;
 }
 
-const Held = struct { at_ns: i128, work_ns: u64, ns: []const u32, calls: []const u16 };
+const Held = struct { at_ns: i128, work_ns: u64, gpu: profile.Gpu, ns: []const u32, calls: []const u16 };
 
 /// The kept hitches as a row of chips, newest first, each saying when and how long; a click holds
 /// one (and another click lets it go). The held one, while it is still kept.
@@ -401,7 +417,7 @@ fn heldHitch() ?Held {
     const lb = profile.lookback() orelse return null;
     var ago: usize = 0;
     while (lb.hitchAt(ago)) |h| : (ago += 1) {
-        if (h.at_ns == at) return .{ .at_ns = h.at_ns, .work_ns = h.work_ns, .ns = h.ns, .calls = h.calls };
+        if (h.at_ns == at) return .{ .at_ns = h.at_ns, .work_ns = h.work_ns, .gpu = h.gpu, .ns = h.ns, .calls = h.calls };
     }
     // Fell out of the list: let it go.
     held_hitch = null;
@@ -427,7 +443,11 @@ fn drawHitchChips() void {
     var ago: usize = 0;
     while (lb.hitchAt(ago)) |h| : (ago += 1) {
         const is_held = held_hitch != null and held_hitch.? == h.at_ns;
-        const text = std.fmt.bufPrint(&buf, "{d:.0} s ago · {d:.1} ms", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms }) catch "";
+        const made = h.gpu.textures + h.gpu.targets;
+        const text = (if (made > 0)
+            std.fmt.bufPrint(&buf, "{d:.0} s ago · {d:.1} ms · made {d}", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms, made })
+        else
+            std.fmt.bufPrint(&buf, "{d:.0} s ago · {d:.1} ms", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms })) catch "";
         if (dvui.button(@src(), text, .{}, .{ .id_extra = ago, .style = if (is_held) .highlight else .control, .margin = .all(2), .padding = .{ .x = 6, .w = 6, .y = 2, .h = 2 } })) {
             held_hitch = if (is_held) null else h.at_ns;
         }

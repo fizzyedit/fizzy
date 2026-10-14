@@ -473,7 +473,7 @@ pub fn AppFrame() !dvui.App.Result {
     // dvui's refresh records, while someone reads them: the profiler, as frame causes, or a
     // `FIZZY_LOG_REFRESH` run.
     _ = dvui.debug.logRefresh(refresh_log_active or fizzy.core.profile.recordingCauses());
-    fizzy.core.profile.hostFrameBegin(lastSubmitNs());
+    fizzy.core.profile.hostFrameBegin(lastSubmitNs(), gpuTotals());
     defer fizzy.core.profile.hostFrameEnd();
     revealOnceDrawn(false);
     defer revealOnceDrawn(true);
@@ -497,6 +497,17 @@ fn frameEnded(end_micros: ?u32) bool {
 fn lastSubmitNs() ?u64 {
     if (comptime @hasDecl(dvui.backend, "last_submit_ns")) return dvui.backend.last_submit_ns;
     return null;
+}
+
+/// The backend's running GPU totals — textures and targets made and destroyed, target switches —
+/// as the profiler counts them (`core.profile.Gpu`), where the backend keeps them. Every image's
+/// textures pass through the host's backend, so these cover the plugins' too.
+fn gpuTotals() ?fizzy.core.profile.Gpu {
+    if (comptime !@hasDecl(dvui.backend, "gpuTotals")) return null;
+    const t = dvui.backend.gpuTotals();
+    var out: fizzy.core.profile.Gpu = .{};
+    inline for (std.meta.fields(fizzy.core.profile.Gpu)) |f| @field(out, f.name) = @truncate(@field(t, f.name));
+    return out;
 }
 
 /// One run of the app's frame.

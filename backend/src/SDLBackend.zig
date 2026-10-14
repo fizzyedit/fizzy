@@ -355,6 +355,12 @@ pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
 /// whether or not anyone reads them; reading them sorts the frame times and asks SDL (and AppKit)
 /// for their windows, so it is for a run's end or a once-a-second readout, not every frame. Main
 /// thread.
+/// What every frame so far asked the GPU for, summed (`Health.total`): the profiler reads its
+/// textures, targets and target switches at each frame's start (`core.profile.Gpu`).
+pub fn gpuTotals() Health.Counts {
+    return Health.current.total;
+}
+
 pub fn health() Health.Snapshot {
     var s = Health.current.snapshot();
     var n: c_int = 0;
