@@ -42,10 +42,13 @@ while IFS= read -r hlsl; do
             --output "$dest.raw"; then
           echo "::error file=$hlsl::$hlsl does not cross-compile to GLSL"; failed=1; continue
         fi
-        # The uniforms by the name the web binds (`uData`; spirv-cross names a flattened block for
-        # its type), and floats high precision by default, as the web's own programs are: a
-        # program reads pixel positions.
+        # The names the web binds: the samplers by unit (spirv-cross names a texture and sampler it
+        # combines after both), the uniforms `uData` (it names a flattened block for its type). And
+        # floats high precision by default, as the web's own programs are: a program reads pixel
+        # positions.
         sed -E \
+          -e 's/\bSPIRV_Cross_CombinedFrostFrostSampler\b/uSampler/g' \
+          -e 's/\bSPIRV_Cross_CombinedSharpSharpSampler\b/uTex1/g' \
           -e 's/\btype_Uniforms\b/uData/g' \
           -e 's/^precision mediump float;$/precision highp float;/' \
           "$dest.raw" > "$dest"

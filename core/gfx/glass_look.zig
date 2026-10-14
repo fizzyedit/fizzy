@@ -216,7 +216,7 @@ pub fn window(opacity: f32) Window {
 
 // ── The app's glass ─────────────────────────────────────────────────────────────────────────────
 
-/// The app's glass at the opacity, as the glass program (`shaders/liquid_glass.glsl`) reads it. Shaped
+/// The app's glass at the opacity, as the glass program (`shaders/liquid_glass.fragment.hlsl`) reads it. Shaped
 /// after Apple's lens, measured over a striped pattern: the backdrop pulled *inward* from a band
 /// near the rim — `bevel` of the shape's shorter half, at most `bevel_cap` points — by up to `bend`
 /// times that band, which magnifies it and, past 1, folds it into a mirrored, darker band just

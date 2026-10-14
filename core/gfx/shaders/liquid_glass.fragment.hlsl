@@ -1,13 +1,19 @@
-// `liquid_glass.glsl` in HLSL, for fizzy's native backend on Vulkan and D3D12: the same program
-// line for line as it and `liquid_glass.metal` — change all three together, and
-// `LiquidField.sample` with them. shadercross compiles it to the two forms `LiquidField` embeds:
+// Liquid glass (`core/gfx/LiquidField.zig`): rounded boxes run together by a smooth minimum,
+// frosted and refracting, in one pass at every pixel.
 //
-//   shadercross liquid_glass.fragment.hlsl -o compiled/spv/liquid_glass.fragment.spv
-//   shadercross liquid_glass.fragment.hlsl -o compiled/dxil/liquid_glass.fragment.dxil
+// The one source of the program: written here, in HLSL, and generated from it for every backend
+// by `scripts/compile-shaders.sh` — SPIR-V (Vulkan) and DXIL (D3D12) for fizzy's native backend,
+// Metal for it on macOS, GLSL ES 3.00 for the web — into `compiled/`, which CI checks against this
+// (`.github/workflows/shaders.yml`). Never edit those by hand: change this, and commit what CI
+// compiles. `LiquidField.sample` mirrors the field on the CPU, line for line; change it with this.
+//
+// Each quad's vertex colour says what it draws: r the pass (0 punches the glass's coverage out
+// of what is there, 1 adds the glass), g and b the first of its shapes and how many.
 //
 // To the interface the native backend's programs take (`program_example.fragment.hlsl`): the
 // default vertex shader's outputs as inputs, the draw's own texture (the frost) at slot 0, the
-// sharp picture at 1, the uniforms as one array.
+// sharp picture at 1, the uniforms as one array. On the web the same, by the names
+// `core.gfx.programs` gives them (the generator renames them).
 
 #define G 7
 #define MAX_SHAPES 16
@@ -32,6 +38,8 @@ cbuffer Uniforms : register(b0, space3)
     float4 uData[G + 3 * MAX_SHAPES];
 };
 
+// Signed distance to a box of half-size `b` at the origin, its corners rounded `r`
+// (top-left, top-right, bottom-right, bottom-left; y down), and which way is out.
 float sdRoundBox(float2 p, float2 b, float4 r, out float2 g)
 {
     float rr = p.x > 0.0 ? (p.y > 0.0 ? r.z : r.y) : (p.y > 0.0 ? r.w : r.x);
@@ -47,6 +55,8 @@ float sdRoundBox(float2 p, float2 b, float4 r, out float2 g)
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - rr;
 }
 
+// `liquid_glass.fieldAt`: a soft minimum of the distances to the box's four sides, so the way
+// out turns smoothly round a corner and never folds along a diagonal. Negative inside.
 float softBox(float2 p, float4 s, float k, out float2 o)
 {
     float4 d = float4(p.x - s.x + s.z, s.x + s.z - p.x, p.y - s.y + s.w, s.y + s.w - p.y);
@@ -57,6 +67,7 @@ float softBox(float2 p, float4 s, float k, out float2 o)
     return k * log(sum) - m;
 }
 
+// iq's quadratic smooth minimum, and how much of `b` is in it.
 float smin(float a, float b, float k, out float m)
 {
     float h = max(k - abs(a - b), 0.0) / k;
@@ -82,8 +93,11 @@ float4 main(PSInput input) : SV_Target0
     float4 g4 = uData[4];
     float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
     float4 g6 = uData[6]; // opaque window; the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
+    // Apple's lens (`glass_look.inApp`): the picture pulled inward from a band near the rim,
+    // magnified and, past a bend of 1, folded there. Off, the earlier glass: pulled from outside.
     bool inward = g5.y > 0.0;
 
+    // The two nearest shapes, for the outline and for the way out.
     float d1 = 1e9; float d2 = 1e9; float4 m1 = float4(0.0, 0.0, 0.0, 0.0); float4 m2 = float4(0.0, 0.0, 0.0, 0.0);
     float h1 = 1e9; float h2 = 1e9;
     float f1 = 1e9; float f2 = 1e9; float2 o1 = float2(0.0, 0.0); float2 o2 = float2(0.0, 0.0);
@@ -122,6 +136,10 @@ float4 main(PSInput input) : SV_Target0
 
     // Level 0 explicitly: the frost has no mips, and an implicit level after `discard` is a
     // derivative in divergent control flow, which Metal and GLSL let pass and HLSL does not.
+// What the glass shows here. Apple's lens: from further in, within the band near the rim — `t`
+// 1 at the edge, 0 a band in — by `bend` bands at the edge, falling off as t², so the picture
+// magnifies toward the rim and folds where the slope passes 1. The earlier glass: further out
+// along the way out, as steep as it is (`seen`).
     float t = 0.0;
     float disp = 0.0;
     float2 uv;
@@ -166,6 +184,8 @@ float4 main(PSInput input) : SV_Target0
     frost = float4(frost.rgb / max(frost.a, 1e-4), 1.0);
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
+// The frost at its share of a frost / tint mix, the blur coming in from sharp. The window's
+// colour comes in whatever the blur: the opacity is the colour, under clear glass too.
     float mixv = g4.z > 0.5 ? g4.x : 0.0;
     // Apple's lens: the window's colour fades out across the band, as an OS window's does
     // (`glass_look.window`, its feather: strong most of the way, gone at the edge), so the edge stays
@@ -173,8 +193,11 @@ float4 main(PSInput input) : SV_Target0
     // too (`glass_look.shine_start`, 0.8 to 1).
     if (inward) mixv *= 1.0 - t * t * (1.0 - smoothstep(0.8, 1.0, mixv));
     float4 c = lerp(sharp, frost, b) * (1.0 - mixv);
+// The rim's clearer glass over it (`drawClear`): for Apple's lens, the band, so the rim stays
+// clear glass while the middle frosts.
     float a = clamp(g2.y * lens * (inward ? t : steepR * steepR) * (1.0 - mixv), 0.0, 1.0);
     c = sharp * a + c * (1.0 - sharp.a * a);
+// The tint (`addTint`).
     c += g3 * mixv;
     // A translucent tint lies over the frost, not over what is behind the window: the glass is
     // opaque here, and `under` alone says how much of the desktop's material shows through it.
@@ -199,6 +222,7 @@ float4 main(PSInput input) : SV_Target0
                                : 0.85 * (1.0 - smoothstep(0.0, 0.5 * px, -D));
     float shade = inward ? max(g5.w * t * t, edge_dark) : 0.0;
     float4 o = float4(c.rgb * (under * (1.0 - shade)), under * (1.0 - shade) + shade);
+// The lift and the rim's light (`drawLift`), brightest facing the top left.
     float spec = inward ? (diagonal ? g6.z * smoothstep(0.75, 1.0, af) : 0.25)
                         : 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + 0.06;
     float line_ = diagonal ? exp(-max(0.0, -D) / px)

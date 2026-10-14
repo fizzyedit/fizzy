@@ -1,5 +1,5 @@
 //! One layer of liquid glass: rounded boxes that run together where they come close, drawn as
-//! frosted, refracting glass in one pass at every pixel (`shaders/liquid_glass.glsl`).
+//! frosted, refracting glass in one pass at every pixel (`shaders/liquid_glass.fragment.hlsl`).
 //!
 //! **What it is.** Each shape is a rounded box — a circle is a square rounded all the way, a
 //! capsule a rect rounded across its short side. Their outlines are joined by a smooth minimum
@@ -148,7 +148,7 @@ pub fn clusters(self: *const LiquidField) Clusters {
 
 pub const uniform_vec4s = header_vec4s + shape_vec4s * max_shapes;
 
-/// What the program reads, `uData` in `shaders/liquid_glass.glsl`.
+/// What the program reads, `uData` in `shaders/liquid_glass.fragment.hlsl`.
 pub const Uniforms = extern struct {
     /// Where the frost starts, and 1 / its size: physical pixels to its uv.
     frost_map: [4]f32,
@@ -231,17 +231,18 @@ const rim_line_width: f32 = 0.8;
 
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
 
-/// The program for the native backend on Vulkan and D3D12, compiled by shadercross from
-/// `shaders/liquid_glass.fragment.hlsl` (the commands are at its top). Copied out of the embed to
-/// be aligned: Vulkan takes SPIR-V as 32-bit words.
+/// The program, written once in `shaders/liquid_glass.fragment.hlsl` and compiled from it for every
+/// backend (`scripts/compile-shaders.sh`, checked in CI): SPIR-V and DXIL for the native backend on
+/// Vulkan and D3D12, Metal for it on macOS, GLSL ES 3.00 for the web. The binary forms are copied
+/// out of the embed to be aligned: Vulkan takes SPIR-V as 32-bit words.
 const compiled = struct {
     const spirv align(8) = @embedFile("shaders/compiled/spv/liquid_glass.fragment.spv").*;
     const dxil align(8) = @embedFile("shaders/compiled/dxil/liquid_glass.fragment.dxil").*;
 };
 
 var program: programs.Program = .from(.{
-    .glsl = @embedFile("shaders/liquid_glass.glsl"),
-    .msl = @embedFile("shaders/liquid_glass.metal"),
+    .glsl = @embedFile("shaders/compiled/glsl/liquid_glass.fragment.glsl"),
+    .msl = @embedFile("shaders/compiled/msl/liquid_glass.fragment.msl"),
     .spirv = &compiled.spirv,
     .dxil = &compiled.dxil,
 }, .{ .textures = 1, .uniform_vec4s = uniform_vec4s });
@@ -431,7 +432,7 @@ pub const Sample = struct {
     light: f32,
 };
 
-/// `shaders/liquid_glass.glsl`'s field, line for line, over every shape: for hit tests and tests.
+/// `shaders/liquid_glass.fragment.hlsl`'s field, line for line, over every shape: for hit tests and tests.
 pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
     const big = std.math.floatMax(f32);
     var d1: f32 = big;
