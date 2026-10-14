@@ -166,7 +166,8 @@ fn capture(ctx: *anyopaque, window: []const u8) Api.CaptureTicket {
     return @enumFromInt(c.request(window));
 }
 
-fn captureImage(ctx: *anyopaque, ticket: Api.CaptureTicket) ?[]const u8 {
+fn captureImage(ctx: *anyopaque, ticket: Api.CaptureTicket) ?Api.Image {
     const c = from(ctx).captures orelse return null;
-    return c.get(@intFromEnum(ticket));
+    const image = c.get(@intFromEnum(ticket)) orelse return null;
+    return .{ .pixels = image.pixels, .width = image.width, .height = image.height };
 }

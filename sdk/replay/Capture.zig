@@ -12,7 +12,9 @@
 //! and every window at once, laid out as they lie on the desktop round the main one, by `all`.
 //!
 //! Asked for like a `Snapshot` (`request`, then `get` once taken): the next frame the app draws
-//! is read back at its end (`endFrame`), encoded as a PNG, and kept until the next is taken.
+//! is read back at its end (`endFrame`) and kept, as the raw premultiplied pixels it drew, until the
+//! next is taken. Nothing is encoded here: the frame pays for one read back and one copy, and
+//! whoever wants an image file (the agent's bridge, in its own process) scales and encodes it.
 const Capture = @This();
 
 const std = @import("std");
@@ -25,7 +27,10 @@ window_buf: [256]u8 = undefined,
 window_len: usize = 0,
 /// How many have been taken; the last is `taken`.
 taken: u32 = 0,
-png: std.ArrayListUnmanaged(u8) = .empty,
+/// The last picture taken: premultiplied RGBA, row by row, `width` by `height`.
+pixels: std.ArrayListUnmanaged(u8) = .empty,
+width: u32 = 0,
+height: u32 = 0,
 
 /// The name that asks for every window at once (`request`).
 pub const all = "*";
@@ -53,7 +58,7 @@ pub fn init(gpa: std.mem.Allocator) Capture {
 }
 
 pub fn deinit(self: *Capture) void {
-    self.png.deinit(self.gpa);
+    self.pixels.deinit(self.gpa);
 }
 
 /// Ask for a picture of the next frame of `window` — a window's tag, none for the main window, or
@@ -75,13 +80,15 @@ pub fn wanted(self: *const Capture) bool {
 }
 
 /// At the end of the app's frame, after everything has drawn into the windows' targets: the
-/// picture asked for is read back and encoded — empty when no window has the name it was asked
-/// for by. `sources` are this frame's windows, the main one first. Between `Window.begin` and
+/// picture asked for is read back and kept — empty when no window has the name it was asked for
+/// by. `sources` are this frame's windows, the main one first. Between `Window.begin` and
 /// `Window.end`.
 pub fn endFrame(self: *Capture, sources: []const Source) void {
     if (!self.pending or sources.len == 0) return;
     self.pending = false;
-    self.png.clearRetainingCapacity();
+    self.pixels.clearRetainingCapacity();
+    self.width = 0;
+    self.height = 0;
     self.taken += 1;
     var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
     defer arena_state.deinit();
@@ -97,29 +104,23 @@ pub fn endFrame(self: *Capture, sources: []const Source) void {
         dvui.log.warn("capture: could not read the frame back: {t}", .{err});
         return;
     };
-    // Premultiplied as drawn; straight alpha for the PNG.
-    const rgba = picture.pma;
-    var i: usize = 0;
-    while (i < rgba.len) : (i += 4) {
-        const a: u32 = rgba[i + 3];
-        for (rgba[i .. i + 3]) |*c| c.* = if (a == 0) 0 else @intCast(@min(255, (@as(u32, c.*) * 255 + a / 2) / a));
-    }
-    // The encoder writes its chunks straight into the writer's buffer: it must hold one.
-    self.png.ensureTotalCapacity(self.gpa, @max(dvui.PNGEncoder.min_buffer_size, 64 * 1024)) catch return;
-    var out: std.Io.Writer.Allocating = .fromArrayList(self.gpa, &self.png);
-    dvui.PNGEncoder.write(&out.writer, rgba, picture.w, picture.h) catch |err| {
-        dvui.log.warn("capture: could not encode: {t}", .{err});
-        self.png = out.toArrayList();
-        self.png.clearRetainingCapacity();
-        return;
-    };
-    self.png = out.toArrayList();
+    self.pixels.appendSlice(self.gpa, picture.pma) catch return;
+    self.width = picture.w;
+    self.height = picture.h;
 }
 
-/// Picture `n` as a PNG, while it is the last one taken — empty when no window had the name it was
+/// A picture as it was drawn: premultiplied RGBA, row by row.
+pub const Image = struct {
+    pixels: []const u8,
+    width: u32,
+    height: u32,
+};
+
+/// Picture `n`, while it is the last one taken — empty (0 by 0) when no window had the name it was
 /// asked for by; null before it is taken, or once another is. Valid until the next is taken.
-pub fn get(self: *const Capture, n: u32) ?[]const u8 {
-    return if (n == self.taken and n != 0) self.png.items else null;
+pub fn get(self: *const Capture, n: u32) ?Image {
+    if (n != self.taken or n == 0) return null;
+    return .{ .pixels = self.pixels.items, .width = self.width, .height = self.height };
 }
 
 /// A picture, premultiplied RGBA, row by row.
@@ -131,11 +132,12 @@ fn read(arena: std.mem.Allocator, src: Source) !Pixels {
     const px = try dvui.Texture.readTarget(arena, t);
     const w = @min(src.w, t.width);
     const h = @min(src.h, t.height);
-    const out = try arena.alloc(u8, @as(usize, w) * h * 4);
-    for (0..h) |y| for (0..w) |x| {
-        const p = px[y * t.width + x];
-        out[(y * w + x) * 4 ..][0..4].* = .{ p.r, p.g, p.b, p.a };
-    };
+    // `Color.PMA` is four bytes in RGBA order, so a row of the target is a row of the picture.
+    const bytes = std.mem.sliceAsBytes(px);
+    const row = @as(usize, w) * 4;
+    if (w == t.width) return .{ .pma = bytes[0 .. row * h], .w = w, .h = h };
+    const out = try arena.alloc(u8, row * h);
+    for (0..h) |y| @memcpy(out[y * row ..][0..row], bytes[y * @as(usize, t.width) * 4 ..][0..row]);
     return .{ .pma = out, .w = w, .h = h };
 }
 
