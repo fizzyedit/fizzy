@@ -135,7 +135,11 @@ fn rasterize(name: []const u8, tvg_bytes: []const u8, w: u32, h: u32, scale: f32
     const cw = dvui.currentWindow();
     const prev_rendering = dvui.renderingSet(true);
     defer _ = dvui.renderingSet(prev_rendering);
-    const prev_alpha = dvui.alpha(1);
+    // At full alpha, whatever the alpha it is first drawn under: the texture is kept and drawn
+    // again under each frame's own. (`dvui.alpha` multiplies; `alpha(1)` changed nothing, and an
+    // icon first drawn fading in — the demo transport's glyphs — was cached that faint for good.)
+    const prev_alpha = dvui.currentWindow().alpha;
+    dvui.alphaSet(1);
     defer dvui.alphaSet(prev_alpha);
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);
