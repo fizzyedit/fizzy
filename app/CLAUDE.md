@@ -17,3 +17,19 @@ each directory is.
   `RecentCommands.zig`, …) each have a root in `build/app.zig`'s unit list. Pure decisions go in
   such a file, so they test without a Window. Everything else is reached from `root.zig`'s
   `test` block (`fizzy-app-tests`, under `zig build test-integration`).
+
+## Pitfalls
+
+- **macOS charges ~110–140 ms for the first `dlopen` of a newly written file,** whatever its size,
+  and caches the result per file. The loader therefore maps a stable per-build copy
+  (`.load-copy/{mtime}-{size}-{name}`) and copies again only on a genuine re-open. It never maps
+  the installed file: Windows couldn't rename an update into place, and on POSIX a rebuild would
+  rewrite bytes under a live mapping (SIGBUS). Startup that looks like N × 120 ms is this.
+- **Motion handing over to an OS window must be at rest on the window's rect when it shows.** An
+  OS window can't animate its size per frame cheaply, so an overshoot still swinging then gets
+  cut. Use `core.motion.arrive(t, swing)`, and size any overshoot in points, not as a share of the
+  window.
+- **The dragged view's glass moves only as the hand does** (`ViewDrag`'s `holdHand`, 3 pt). No
+  springs, easing or trails driven by the pointer: merged Liquid Glass necks re-form visibly
+  under tremor. A one-shot, time-driven curve started by a discrete event (the aimed bubble
+  changing) is fine.

@@ -7637,7 +7637,7 @@ fn captureFrame() !dvui.App.Result {
     return .ok;
 }
 
-test "a capture is the drawn part of the frame target, as a PNG, once taken" {
+test "a capture is the drawn part of the frame target, as drawn, once taken" {
     var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 100, .h = 100 } });
     defer t.deinit();
     capture_under_test = .init(std.testing.allocator);
@@ -7654,41 +7654,44 @@ test "a capture is the drawn part of the frame target, as a PNG, once taken" {
 
     // Nothing asked: a frame takes no picture.
     _ = try dvui.testing.step(captureFrame);
-    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(1));
+    try std.testing.expect(capture_under_test.get(1) == null);
 
     const n = capture_under_test.request("");
-    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
+    try std.testing.expect(capture_under_test.get(n) == null);
     try std.testing.expectEqual(n, capture_under_test.request("")); // asked again before it is taken
     _ = try dvui.testing.step(captureFrame);
-    const png = capture_under_test.get(n) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualSlices(u8, &.{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' }, png[0..8]);
-    // IHDR: the drawn part's width and height, not the target's.
-    try std.testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, png[16..20], .big));
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, png[20..24], .big));
+    const main = capture_under_test.get(n) orelse return error.TestUnexpectedResult;
+    // The drawn part's width and height, not the target's; its pixels as drawn, premultiplied,
+    // row by row: nothing is encoded or converted in the app's frame.
+    try std.testing.expectEqual(@as(u32, 3), main.width);
+    try std.testing.expectEqual(@as(u32, 2), main.height);
+    try std.testing.expectEqual(@as(usize, 3 * 2 * 4), main.pixels.len);
+    try std.testing.expectEqualSlices(u8, &.{ 128, 0, 0, 128, 0, 255, 0, 255 }, main.pixels[0..8]);
 
     // The next is a new picture; the last stays until it is taken.
     const m = capture_under_test.request("fizzy.window:dialog:Ask");
     try std.testing.expect(m != n);
     try std.testing.expect(capture_under_test.get(n) != null);
     _ = try dvui.testing.step(captureFrame);
-    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
+    try std.testing.expect(capture_under_test.get(n) == null);
     // A window by its tag: its own picture, its size.
-    const dialog_png = capture_under_test.get(m) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, dialog_png[16..20], .big));
-    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, dialog_png[20..24], .big));
+    const dialog = capture_under_test.get(m) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 2), dialog.width);
+    try std.testing.expectEqual(@as(u32, 1), dialog.height);
+    try std.testing.expectEqualSlices(u8, &dialog_pixels, dialog.pixels);
 
     // Every window, where each lies round the main one: the main window's 3 columns, and the
     // dialog's 2 from the third on — 4 wide.
     const every = capture_under_test.request(automation.Capture.all);
     _ = try dvui.testing.step(captureFrame);
-    const all_png = capture_under_test.get(every) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u32, 4), std.mem.readInt(u32, all_png[16..20], .big));
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, all_png[20..24], .big));
+    const all = capture_under_test.get(every) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 4), all.width);
+    try std.testing.expectEqual(@as(u32, 2), all.height);
 
     // No window by that name: taken, and empty.
     const none = capture_under_test.request("fizzy.window:dialog:Nobody");
     _ = try dvui.testing.step(captureFrame);
-    try std.testing.expectEqual(@as(usize, 0), (capture_under_test.get(none) orelse return error.TestUnexpectedResult).len);
+    try std.testing.expectEqual(@as(u32, 0), (capture_under_test.get(none) orelse return error.TestUnexpectedResult).width);
 }
 
 // ---- A live tape drags ------------------------------------------------------------------------

@@ -23,12 +23,15 @@
 //! click aimed at a rect in a dialog's window lands there; a window's tag aims into it, at a
 //! fraction of it or at natural pixels from its corner.
 //!
-//! **A picture of it** (`capture`, `captureImage`): a window as the app drew it, a PNG, read back
+//! **A picture of it** (`capture`, `captureImage`): a window as the app drew it, its raw pixels
+//! (premultiplied RGBA), read back
 //! from what the app drew it into — so it is there whether or not the window is on screen (on
 //! another Space, occluded, minimized), and no screen recording is asked for. The main window, a
 //! window a snapshot names by its tag, or all of them as they lie round the main one. Only what
 //! the app draws: what the OS composites over or behind a window (its materials, Liquid Glass) is
-//! not in it, and shows as transparency.
+//! not in it, and shows as transparency. Nothing is encoded in the app: its frame pays for one
+//! read back and one copy, and a caller wanting an image file scales and encodes it, off the UI
+//! thread or in its own process (the agent's bridge does).
 //!
 //! **One tape at a time.** A tape is refused (`busy`) while another plays or a demo is loaded. A
 //! person's click, key, scroll or typed text stops it (`interrupted`), and a wait in the tape that
@@ -48,7 +51,7 @@
 pub const Api = struct {
     /// Bump whenever this struct's layout changes: `getServiceTyped` refuses a provider whose
     /// version differs rather than reinterpreting one shape as another across `dlopen`.
-    pub const service_version: u32 = 4;
+    pub const service_version: u32 = 5;
     pub const service_name = "automation";
 
     ctx: *anyopaque,
@@ -92,11 +95,19 @@ pub const Api = struct {
         snapshot: *const fn (ctx: *anyopaque) SnapshotTicket,
         snapshotText: *const fn (ctx: *anyopaque, ticket: SnapshotTicket) ?[]const u8,
         capture: *const fn (ctx: *anyopaque, window: []const u8) CaptureTicket,
-        captureImage: *const fn (ctx: *anyopaque, ticket: CaptureTicket) ?[]const u8,
+        captureImage: *const fn (ctx: *anyopaque, ticket: CaptureTicket) ?Image,
     };
 
     /// Names one `capture`. Never reused within a run of the app.
     pub const CaptureTicket = enum(u32) { _ };
+
+    /// A picture as the app drew it: premultiplied RGBA, row by row, `width` by `height`, in
+    /// physical pixels.
+    pub const Image = struct {
+        pixels: []const u8,
+        width: u32,
+        height: u32,
+    };
 
     /// Names one `snapshot`. Never reused within a run of the app.
     pub const SnapshotTicket = enum(u32) { _ };
@@ -152,10 +163,10 @@ pub const Api = struct {
         return self.vtable.capture(self.ctx, window);
     }
 
-    /// The picture `ticket` names, as a PNG, once it has been taken — empty when no window had the
+    /// The picture `ticket` names, once it has been taken — empty (0 by 0) when no window had the
     /// name it was asked for by: null before, and null again once a later one has been. The app's
-    /// memory, valid until the next is taken: copy it.
-    pub fn captureImage(self: Api, ticket: CaptureTicket) ?[]const u8 {
+    /// memory, valid until the next is taken: copy it, or write it out, in the frame it is read.
+    pub fn captureImage(self: Api, ticket: CaptureTicket) ?Image {
         return self.vtable.captureImage(self.ctx, ticket);
     }
 };

@@ -353,9 +353,11 @@ the app back:
   capturing the frame, so each dialog captures its own widgets in a frame being taken
   (`Snapshot.scopeBegin`, in `core.dialogs.dialogWindow`), and the snapshot is written at the very
   end of the frame (`Demo.frameEnd`).
-- **`capture(window)`**: a PNG of a window as fizzy drew it, read back from what it drew it into,
-  on screen or not: the main window for `""`, a window by its tag, or every window laid out as
-  they lie round the main one for `"*"`. Empty when no window has that tag.
+- **`capture(window)`**: a window as fizzy drew it, its raw premultiplied pixels read back from
+  what it drew it into, on screen or not: the main window for `""`, a window by its tag, or every
+  window laid out as they lie round the main one for `"*"`. Empty when no window has that tag.
+  Nothing is encoded in fizzy's frame (one read back, one copy); the agent's bridge crops, scales
+  and encodes in its own process (`plans/AGENTS_PLAN.md`, "Senses").
 
 Naming the windows costs nothing unless someone is looking: a snapshot, a picture or anchors
 asked for this frame.
