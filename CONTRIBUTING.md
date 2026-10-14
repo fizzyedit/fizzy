@@ -49,6 +49,10 @@ The open PR list is the board of who is working on what.
   `git commit` act on the last *git* commit, which can be far behind jj's working copy, and take
   undescribed work with them. If something is clobbered, `jj op log` and `jj undo` /
   `jj op restore` bring it back.
+- **Claude Code enforces some of this.** `.claude/settings.json` hooks refuse git write commands
+  in a jj repo and a workspace under `/tmp` (`.claude/hooks/guard-bash.sh`), and run `zig fmt` on
+  each `.zig` or `.zon` file an agent writes (`.claude/hooks/zig-fmt.sh`). Other agents have only
+  the written rules, and CI's format check.
 - **Work in a workspace of your own.** The default checkout is shared: the desktop app moves it
   between sessions' branches, and other sessions edit in it. For anything longer than a quick
   look, `jj workspace add --name <task> -r main@origin ../fizzy-<task>` and build, test and
