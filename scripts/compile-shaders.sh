@@ -34,17 +34,20 @@ while IFS= read -r hlsl; do
       glsl)
         spv="$OUT/$dir/compiled/spv/$name.spv"
         [ -f "$spv" ] || (cd "$dir" && shadercross "$name.hlsl" -o "$spv.tmp" && mv "$spv.tmp" "$spv")
-        if ! spirv-cross "$spv" --es --version 300 --flatten-ubo \
+        # NaN checks relaxed: HLSL's `min` and `max` came out wrapped in `isnan` tests, a cost the
+        # web's frame pays at every pixel for nothing the program relies on.
+        if ! spirv-cross "$spv" --es --version 300 --flatten-ubo --relax-nan-checks \
             --rename-interface-variable in 0 vColor \
             --rename-interface-variable in 1 vTextureCoord \
             --output "$dest.raw"; then
           echo "::error file=$hlsl::$hlsl does not cross-compile to GLSL"; failed=1; continue
         fi
-        # The names the web binds, for SPIRV-Cross's own (shown when they change: GLSL_RENAMES).
+        # The uniforms by the name the web binds (`uData`; spirv-cross names a flattened block for
+        # its type), and floats high precision by default, as the web's own programs are: a
+        # program reads pixel positions.
         sed -E \
-          -e 's/\bSPIRV_Cross_Combined(Frost)?FrostSampler\b/uSampler/g' \
-          -e 's/\bSPIRV_Cross_Combined(Sharp)?SharpSampler\b/uTex1/g' \
-          -e 's/\b(type_)?Uniforms_uData\b/uData/g' \
+          -e 's/\btype_Uniforms\b/uData/g' \
+          -e 's/^precision mediump float;$/precision highp float;/' \
           "$dest.raw" > "$dest"
         rm "$dest.raw" ;;
     esac
