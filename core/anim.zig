@@ -407,7 +407,8 @@ fn blitWith(tex: dvui.Texture, frost: ?*Frost, dest: dvui.Rect.Physical, inner: 
     if (mode == .lerp) if (lerpUnder(r, inner, alpha)) |under| {
         defer dvui.textureDestroyLater(under);
         const a = alpha * dvui.currentWindow().alpha;
-        const prev_alpha = dvui.alpha(1);
+        const prev_alpha = dvui.currentWindow().alpha;
+        dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
         if (!use_frost) {
             addOne(tex, r, inner, a);
@@ -440,7 +441,8 @@ fn lerpUnder(r: dvui.Rect.Physical, inner: ?dvui.Rect.Physical, alpha: f32) ?dvu
         dvui.textureDestroyLater(under);
         return null;
     };
-    const prev_alpha = dvui.alpha(1);
+    const prev_alpha = dvui.currentWindow().alpha;
+    dvui.alphaSet(1);
     defer dvui.alphaSet(prev_alpha);
     const keep = 1 - std.math.clamp(alpha * prev_alpha, 0, 1);
     // Across a feathered margin the frame is kept more and more, all of it at the outer edge.
@@ -468,7 +470,8 @@ fn copyFrame(r: dvui.Rect.Physical) ?dvui.Texture {
         const prev_clip = dvui.clipGet();
         defer dvui.clipSet(prev_clip);
         dvui.clipSet(.{ .w = r.w, .h = r.h });
-        const prev_alpha = dvui.alpha(1);
+        const prev_alpha = dvui.currentWindow().alpha;
+        dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
         const sw: f32 = @floatFromInt(src.width);
         const sh: f32 = @floatFromInt(src.height);
@@ -645,7 +648,8 @@ fn beginBackdropCapture(cf: *CrossFade, place: dvui.Rect.Physical, backdrop: ?Ba
     defer dvui.clipSet(prev_clip);
     if (under) |u| {
         defer dvui.textureDestroyLater(u);
-        const prev_alpha = dvui.alpha(1);
+        const prev_alpha = dvui.currentWindow().alpha;
+        dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
         dvui.renderTexture(u, .{ .r = rect, .s = 1 }, .{}) catch {};
         cf.opaque_snapshots = false;

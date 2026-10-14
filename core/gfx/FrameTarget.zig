@@ -215,7 +215,8 @@ pub fn end(self: *FrameTarget) void {
         all = p.all;
     };
     dvui.clipSet(all);
-    const prev_alpha = dvui.alpha(1);
+    const prev_alpha = dvui.currentWindow().alpha;
+    dvui.alphaSet(1);
     defer dvui.alphaSet(prev_alpha);
     // Written, not blended: the window was not cleared (see above), so the frame's own alpha
     // must land as it is — a see-through window blended over last frame's pixels would not be.
@@ -268,7 +269,8 @@ pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
 
     const prev_rendering = dvui.renderingSet(true);
     defer _ = dvui.renderingSet(prev_rendering);
-    const prev_alpha = dvui.alpha(1);
+    const prev_alpha = dvui.currentWindow().alpha;
+    dvui.alphaSet(1);
     defer dvui.alphaSet(prev_alpha);
     var rt = dvui.currentWindow().render_target;
     rt.texture = out;
