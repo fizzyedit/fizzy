@@ -2731,6 +2731,8 @@ const DocSurface = struct {
     doc_id: u64,
     /// `<owner>.doc:<path>`, gpa-owned; the surface's title is the basename, a slice of it.
     id: []u8,
+    /// Whether a widget inside the document had focus last frame: its keys are the document's.
+    focus_inside: bool = false,
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2812,6 +2814,78 @@ pub fn documentPathChanged(editor: *Editor, doc: sdk.DocHandle) void {
     dvui.refresh(null, @src(), null);
 }
 
+/// The pill on a held document saying who holds it, with Stop: where it sits, worked out
+/// before the document draws so the input held back from the document is not held from it.
+const ClaimPill = struct {
+    text: []const u8,
+    physical: dvui.Rect.Physical,
+
+    const pad: f32 = 12;
+    const height: f32 = 30;
+
+    fn init(canvas: *dvui.WidgetData, label: []const u8) ClaimPill {
+        const text = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s} is working here", .{label}) catch "Working here";
+        const font = dvui.themeGet().font_body;
+        const w = font.textSize(text).w + font.textSize("Stop").w + pad * 5;
+        const content = canvas.contentRect();
+        const rect: dvui.Rect = .{ .x = @max(0, (content.w - w) / 2), .y = pad, .w = w, .h = height };
+        return .{ .text = text, .physical = canvas.contentRectScale().rectToPhysical(rect) };
+    }
+};
+
+/// Hold back the person's input to a held document: presses, drags and scrolls over its panes
+/// (not over the pill, so Stop works, and not releases, so a gesture begun before the claim ends),
+/// and the keys of a widget inside it, which loses focus.
+fn holdInput(canvas: *dvui.WidgetData, ds: *DocSurface, keep: dvui.Rect.Physical) void {
+    const r = canvas.borderRectScale().r;
+    const focused = dvui.focusedWidgetId();
+    for (dvui.events()) |*e| {
+        if (e.handled) continue;
+        switch (e.evt) {
+            .mouse => |me| {
+                if (me.action == .release) continue;
+                if (me.floating_win != dvui.subwindowCurrentId()) continue;
+                if (!r.contains(me.p) or keep.contains(me.p)) continue;
+                e.handle(@src(), canvas);
+            },
+            .key, .text => if (ds.focus_inside and focused != null and e.target_widgetId == focused) e.handle(@src(), canvas),
+            else => {},
+        }
+    }
+    if (ds.focus_inside) dvui.focusWidget(null, null, null);
+}
+
+/// The held document's outline and its pill: who holds it, and Stop, which lets go for them.
+fn drawClaim(editor: *Editor, canvas: *dvui.WidgetData, claim: sdk.Claim, pill: ClaimPill, path: []const u8) void {
+    const theme = dvui.themeGet();
+    const accent = theme.color(.highlight, .fill);
+    const rs = canvas.borderRectScale();
+    rs.r.stroke(.all(8 * rs.s), .{ .thickness = 2 * rs.s, .color = .{ .color = accent } });
+
+    // A floating window of its own, above the document: its clicks are its own, whatever the
+    // document under it does with clicks.
+    const at = pill.physical.toNatural();
+    var float: dvui.FloatingWidget = undefined;
+    float.init(@src(), .{}, .{ .rect = .{ .x = at.x, .y = at.y, .w = at.w, .h = at.h }, .id_extra = claim.id });
+    defer float.deinit();
+    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .both,
+        .background = true,
+        .color_fill = .{ .color = theme.color(.window, .fill) },
+        .border = .all(1),
+        .color_border = .{ .color = accent },
+        .corners = .all(1000),
+        .padding = .{ .x = ClaimPill.pad, .w = ClaimPill.pad / 2 },
+        .id_extra = claim.id,
+    });
+    defer box.deinit();
+    dvui.labelNoFmt(@src(), pill.text, .{}, .{ .gravity_y = 0.5, .padding = .all(0) });
+    const tag = std.fmt.allocPrint(dvui.currentWindow().arena(), "fizzy.claim.stop:{s}", .{path}) catch null;
+    if (dvui.button(@src(), "Stop", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = ClaimPill.pad }, .corners = .all(1000), .style = .highlight, .tag = tag })) {
+        editor.app.host.releaseClaim(claim.id);
+    }
+}
+
 /// A document drawn as a surface: the canvas box around it, then the owner's `drawDocument`. The document is looked up by id each time — a plugin can unload
 /// between frames, and the handle in `open_files` is the one that is current.
 fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
@@ -2830,7 +2904,18 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // The handle is opaque to every plugin (pixi stores it, never reads through it); the canvas
     // box id is what a plugin keys its per-pane state on.
     doc.owner.bindDocumentToPane(doc, canvas.data().id, ds, false);
+
+    // Someone holds the document (`sdk.Claim`): the person's input to it waits, the rest of
+    // fizzy stays theirs.
+    const claim = editor.app.host.documentClaim(doc.id);
+    const claim_pill: ?ClaimPill = if (claim) |c| .init(canvas.data(), c.label) else null;
+    // A live tape plays its holder's input, not the person's: theirs stops the tape, and from
+    // the next frame is held here too.
+    if (claim_pill) |pill| if (!editor.demo.live.playing()) holdInput(canvas.data(), ds, pill.physical);
+
+    const focus_before = dvui.lastFocusedIdInFrame();
     _ = try doc.owner.drawDocument(doc);
+    ds.focus_inside = dvui.lastFocusedIdInFrameSince(focus_before) != null;
 
     // A menu inside the document only when its owner names one. The context is created *after*
     // the document drew, and only for an owner that asked, because a right-click belongs to
@@ -2852,6 +2937,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             }, false);
         }
     }
+    if (claim) |c| drawClaim(editor, canvas.data(), c, claim_pill.?, doc.owner.documentPath(doc));
     return .ok;
 }
 
@@ -4250,7 +4336,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // Recording a chord in settings blocks these for the same reason the palette does:
             // the keys are being captured, not invoked.
             if (!editor.command_palette.open and !KeybindSettings.isRecording()) {
+                // The active document's own keys wait while someone holds it (`sdk.Claim`).
+                const held_owner: ?*sdk.Plugin = if (editor.activeDoc()) |doc|
+                    if (editor.app.host.documentClaim(doc.id) != null) doc.owner else null
+                else
+                    null;
                 for (editor.app.host.plugins.items) |plugin| {
+                    if (plugin == held_owner) continue;
                     plugin.tickKeybinds() catch {
                         dvui.log.err("plugin '{s}': keybind tick failed — see its own log", .{plugin.id});
                     };
@@ -5966,6 +6058,11 @@ fn reapChild(pid: std.posix.pid_t) void {
 
 pub fn closeFileID(editor: *Editor, id: u64) !void {
     if (editor.app.open_files.get(id)) |doc| {
+        // Not out from under whoever holds it (`sdk.Claim`): Stop on its panes lets go first.
+        if (editor.app.host.documentClaim(id)) |claim| {
+            dvui.log.info("{s} is working on {s}: stop it before closing", .{ claim.label, std.fs.path.basename(doc.owner.documentPath(doc)) });
+            return;
+        }
         if (doc.owner.isDirty(doc)) {
             Dialogs.UnsavedClose.request(id);
             return;

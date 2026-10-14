@@ -34,6 +34,7 @@ pub const RailItemContribution = @import("menus.zig").RailItemContribution;
 pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
+pub const Claim = @import("Claim.zig");
 pub const events = @import("events.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
@@ -264,6 +265,9 @@ account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
 /// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
 commands: std.ArrayListUnmanaged(Command) = .empty,
+/// Documents held by a plugin while it works on them (`Claim`).
+claims: std.ArrayListUnmanaged(Claim) = .empty,
+next_claim_id: u32 = 1,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 /// Who listens for which events (`subscribe`), and what plugins say they announce
@@ -300,6 +304,8 @@ pub fn init(allocator: std.mem.Allocator) Host {
 }
 
 pub fn deinit(self: *Host) void {
+    for (self.claims.items) |c| self.allocator.free(c.label);
+    self.claims.deinit(self.allocator);
     self.plugins.deinit(self.allocator);
     self.services.deinit(self.allocator);
     self.selections.deinit(self.allocator);
@@ -886,6 +892,15 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
     removeOwned(Command, &self.commands, plugin);
+    {
+        var i: usize = 0;
+        while (i < self.claims.items.len) {
+            if (self.claims.items[i].owner == plugin) {
+                self.allocator.free(self.claims.items[i].label);
+                _ = self.claims.orderedRemove(i);
+            } else i += 1;
+        }
+    }
     removeOwned(LanguageSupport, &self.language_support, plugin);
     removeOwned(FileRowFillColor, &self.file_row_fill_colors, plugin);
     removeOwned(FileRowDecorator, &self.file_row_decorators, plugin);
@@ -1450,6 +1465,81 @@ pub fn commandEnabled(self: *Host, id: []const u8) bool {
     return if (c.isEnabled) |f| f(owner.state) else true;
 }
 
+// ---- claims ----------------------------------------------------------------------------------
+
+/// Hold `doc_id` for `owner` while it works on it (`Claim`): the person's input to the document is
+/// held back until `releaseClaim`, or until they stop it from its panes. `label` names the holder
+/// to the person. A document holds one claim: another plugin's is `error.DocumentClaimed`; the
+/// same plugin claiming again gets its claim back, relabelled.
+pub fn claimDocument(self: *Host, owner: *Plugin, doc_id: u64, label: []const u8) !u32 {
+    if (self.documentClaim(doc_id)) |c| {
+        if (c.owner != owner) return error.DocumentClaimed;
+        const i = self.claimIndex(c.id).?;
+        const owned = try self.allocator.dupe(u8, label);
+        self.allocator.free(self.claims.items[i].label);
+        self.claims.items[i].label = owned;
+        return c.id;
+    }
+    const owned = try self.allocator.dupe(u8, label);
+    errdefer self.allocator.free(owned);
+    const id = self.next_claim_id;
+    try self.claims.append(self.allocator, .{ .id = id, .doc_id = doc_id, .label = owned, .owner = owner });
+    self.next_claim_id +%= 1;
+    if (self.next_claim_id == 0) self.next_claim_id = 1;
+    self.refresh();
+    return id;
+}
+
+/// Let go of a claim. Unknown ids (already released, or stopped by the person) are a no-op.
+pub fn releaseClaim(self: *Host, id: u32) void {
+    const i = self.claimIndex(id) orelse return;
+    self.allocator.free(self.claims.items[i].label);
+    _ = self.claims.orderedRemove(i);
+    self.refresh();
+}
+
+/// The claim on `doc_id`, if one holds it. A holder that finds its claim gone was stopped.
+pub fn documentClaim(self: *const Host, doc_id: u64) ?Claim {
+    for (self.claims.items) |c| {
+        if (c.doc_id == doc_id) return c;
+    }
+    return null;
+}
+
+/// Whether claim `id` still holds.
+pub fn claimHolds(self: *const Host, id: u32) bool {
+    return self.claimIndex(id) != null;
+}
+
+/// Drop every claim on `doc_id`: the document closed.
+pub fn releaseDocumentClaims(self: *Host, doc_id: u64) void {
+    var i: usize = 0;
+    while (i < self.claims.items.len) {
+        if (self.claims.items[i].doc_id == doc_id) {
+            self.allocator.free(self.claims.items[i].label);
+            _ = self.claims.orderedRemove(i);
+        } else i += 1;
+    }
+}
+
+fn claimIndex(self: *const Host, id: u32) ?usize {
+    for (self.claims.items, 0..) |c, i| {
+        if (c.id == id) return i;
+    }
+    return null;
+}
+
+/// The claim that refuses the person command `c` on the active document: the document is claimed
+/// and `c` belongs to the plugin that draws it (Undo, Copy and Delete reach it as `<owner>.<verb>`).
+fn claimRefusing(self: *Host, c: *const Command) ?Claim {
+    // Nothing held, nothing to ask: a command costs no more than before.
+    if (self.claims.items.len == 0) return null;
+    const owner = c.owner orelse return null;
+    const doc = self.activeDoc() orelse return null;
+    if (doc.owner != owner) return null;
+    return self.documentClaim(doc.id);
+}
+
 /// Run the command `id` with no arguments (no-op when unknown), as a menu row or a keybind
 /// does. The owner's opaque `state` is passed to `run`. A command with only `runWith` runs it
 /// with no arguments, unless a parameter is required: then the app is asked to collect them
@@ -1458,6 +1548,12 @@ pub fn commandEnabled(self: *Host, id: []const u8) bool {
 pub fn runCommand(self: *Host, id: []const u8) !void {
     const c = self.command(id) orelse return;
     const owner = c.owner orelse return;
+    // A person's command on a document someone holds waits until they let go (`Claim`). The
+    // holder reaches it through `callCommand`.
+    if (self.claimRefusing(c)) |claim| {
+        std.log.info("{s}: {s} is working on this document", .{ id, claim.label });
+        return error.DocumentClaimed;
+    }
     if (c.run) |run| {
         const prof = core.profile.begin(owner.id, c.id);
         defer prof.end();

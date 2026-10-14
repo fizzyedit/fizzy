@@ -7075,6 +7075,58 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             else => return error.TestUnexpectedResult,
         };
         try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
+
+        // A document a plugin holds (`sdk.Claim`) takes none of the person's input: what they
+        // type waits, and so do the commands they run on it and its close, until the holder lets
+        // go or they press Stop on its panes. The holder's own calls still reach it.
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const path = doc.owner.documentPath(doc);
+        const docText = struct {
+            fn docText(h: *sdk.Host) ![]const u8 {
+                return switch (h.callCommand("text.read", "", h.arena())) {
+                    .ok => |r| r orelse error.TestUnexpectedResult,
+                    else => error.TestUnexpectedResult,
+                };
+            }
+        }.docText;
+        var holder_state: u8 = 0;
+        const holder_vtable: sdk.Plugin.VTable = .{};
+        var holder: sdk.Plugin = .{ .state = &holder_state, .vtable = &holder_vtable, .id = "holder", .display_name = "Holder" };
+        const claim = try host.claimDocument(&holder, doc.id, "Holder");
+        try std.testing.expectError(error.DocumentClaimed, host.claimDocument(editor.app.host.plugins.items[0], doc.id, "Other"));
+        try dvui.testing.settle(headlessFrame);
+
+        try dvui.testing.writeText("held");
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
+        try std.testing.expectError(error.DocumentClaimed, editor.undo());
+        try editor.closeFileID(doc.id);
+        try std.testing.expect(editor.docFromPath(path) != null);
+
+        // The holder's own edit lands.
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"!\", .line = 1 }", host.arena()) == .ok);
+        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"!typed\"") != null);
+
+        // Who holds it is on its panes, with Stop, which a person (or a tape) presses.
+        const stop_tag = try std.fmt.allocPrint(gpa, "fizzy.claim.stop:{s}", .{path});
+        defer gpa.free(stop_tag);
+        var s: automation.Script = .init(gpa, "stop-claim", "");
+        s.check = automation.Input.check;
+        s.check.live = true;
+        try s.click(.{ .tag = stop_tag }, .{});
+        try editor.demo.live.play(try s.finish());
+        for (0..200) |_| {
+            if (!editor.demo.live.playing()) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expect(editor.demo.live.outcome.? == .finished);
+        try std.testing.expect(!host.claimHolds(claim));
+        try std.testing.expect(host.documentClaim(doc.id) == null);
+
+        // Let go, the person's commands reach it again.
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
     }
 
     // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens

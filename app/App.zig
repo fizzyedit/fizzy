@@ -917,7 +917,9 @@ pub fn formatPluginProbeDetail(allocator: std.mem.Allocator, info: PluginLoader.
 /// Tear down a document via its owning plugin, falling back to a direct `deinit`.
 /// Removes the entry from the plugin's document registry; fizzy still removes
 /// the matching `DocHandle` from `open_files`.
-pub fn closeDocumentResources(_: *App, doc: sdk.DocHandle) void {
+pub fn closeDocumentResources(app: *App, doc: sdk.DocHandle) void {
+    // Whoever held it is holding nothing now (`sdk.Claim`).
+    app.host.releaseDocumentClaims(doc.id);
     _ = doc.owner.closeDocument(doc);
     doc.owner.unregisterDocument(doc.id);
 }
