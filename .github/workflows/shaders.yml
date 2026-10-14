@@ -7,11 +7,11 @@
 # commit them. Before this, nothing noticed when the HLSL changed and the compiled files did not,
 # and Windows and Linux quietly drew the previous glass (#242, #373).
 #
-# The toolchain is the one the committed files were made with: SDL_shadercross with the
-# DirectXShaderCompiler fork it vendors (libsdl-org/DirectXShaderCompiler at 2c84a1c5), built
-# with clang; built with GCC 13 that DXC corrupts its heap compiling DXIL. The shaders that have
-# not changed since they were compiled (the backend's defaults) reproduce byte for byte, which is
-# how a change of toolchain would show. The build takes a while, so it is cached by its pin.
+# The toolchain: SDL_shadercross, pinned, with the DirectXShaderCompiler release it pins itself
+# (Microsoft's prebuilt v1.9.2602, by SHA-256), as shadercross's own CI builds it. Nothing heavy is
+# built here: SPIRV-Cross and shadercross, a few minutes, cached by the pin. What was committed
+# before this came from a DXC built from source (libsdl-org's fork at 2c84a1c5): it was compiled
+# again once with this one, and is checked against it from then on.
 
 name: Shaders
 
@@ -31,7 +31,7 @@ on:
 
 env:
   SHADERCROSS_REPO: libsdl-org/SDL_shadercross
-  # Its `external/DirectXShaderCompiler` is libsdl-org/DirectXShaderCompiler at 2c84a1c5.
+  # Its build-scripts/download-prebuilt-DirectXShaderCompiler.cmake pins DXC v1.9.2602.
   SHADERCROSS_SHA: 1ff05bec573988a98ef9e0260b4da44f512b8367
 
 jobs:
@@ -46,12 +46,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/shadercross
-          key: shadercross-${{ env.SHADERCROSS_SHA }}-vendored-clang-2
+          key: shadercross-${{ env.SHADERCROSS_SHA }}-prebuilt-dxc-1
 
       - name: Toolchain
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y clang ninja-build cmake libjson-perl spirv-tools
+          sudo apt-get install -y ninja-build cmake spirv-tools
 
       # Every run: shadercross links SDL, cached or not (setup-sdl caches its own build).
       - name: SDL
@@ -62,32 +62,37 @@ jobs:
           cmake-generator: Ninja
           install-linux-dependencies: true
 
-      - name: Build shadercross (vendored DXC, clang)
+      - name: Build shadercross (prebuilt DXC)
         if: steps.cache.outputs.cache-hit != 'true'
-        env:
-          CC: clang
-          CXX: clang++
         run: |
           git clone --filter=blob:none "https://github.com/$SHADERCROSS_REPO" sc
           git -C sc checkout "$SHADERCROSS_SHA"
-          # Whole histories, not `--depth 1`: DXC writes its version into every shader it compiles,
-          # counted from its git history, and a shallow clone counts 1 — every DXIL four bytes short
-          # and its hash different from the same compiler's elsewhere.
-          git -C sc submodule update --init --recursive --filter=blob:none --jobs 4
-          git -C sc/external/DirectXShaderCompiler rev-parse HEAD
-          git -C sc/external/DirectXShaderCompiler rev-list --count HEAD
+          git -C sc submodule update --init --depth 1 external/SPIRV-Cross
+          # Microsoft's release of DXC, as shadercross pins it (version and SHA-256).
+          cmake -P sc/build-scripts/download-prebuilt-DirectXShaderCompiler.cmake
+          dxc_root="$PWD/sc/external/DirectXShaderCompiler-binaries"
+          cmake -S sc/external/SPIRV-Cross -B spirv_cross_build -GNinja \
+            -DCMAKE_BUILD_TYPE=Release -DSPIRV_CROSS_SHARED=ON -DSPIRV_CROSS_STATIC=ON \
+            -DCMAKE_INSTALL_PREFIX="$HOME/shadercross"
+          cmake --build spirv_cross_build
+          cmake --install spirv_cross_build
           cmake -S sc -B sc/build -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSDLSHADERCROSS_VENDORED=ON \
+            -DSDLSHADERCROSS_VENDORED=OFF \
             -DSDLSHADERCROSS_CLI=ON \
             -DSDLSHADERCROSS_SHARED=ON \
             -DSDLSHADERCROSS_STATIC=OFF \
             -DSDLSHADERCROSS_WERROR=OFF \
             -DSDLSHADERCROSS_INSTALL=ON \
             -DSDLSHADERCROSS_INSTALL_RUNTIME=ON \
+            -DDirectXShaderCompiler_ROOT="$dxc_root" \
+            -Dspirv_cross_c_shared_ROOT="$HOME/shadercross:$HOME/shadercross/share/spirv_cross_c_shared" \
             -DCMAKE_INSTALL_PREFIX="$HOME/shadercross"
           cmake --build sc/build --parallel
           cmake --install sc/build
+          # The compiler shadercross loads at run time, beside it.
+          find "$dxc_root" -name 'lib*.so*' -exec cp -L {} "$HOME/shadercross/lib/" \;
+          ls "$HOME/shadercross/lib"
 
       - name: Compile and compare
         run: |
