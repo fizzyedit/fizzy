@@ -3,8 +3,9 @@
 Cross-platform, open-source general editor written in Zig, UI via [DVUI](https://github.com/david-vanderson/dvui). Targets native (macOS/Linux/Windows) and web (wasm32). Layout/UX is IDE-shaped (VSCode-like): sidebar rail + explorer, menubar, center tabs/splits, bottom panel, infobar.
 
 **Read this file first, then go deeper via the links below — don't re-derive the architecture from scratch.**
-`sdk/`, `app/`, `core/`, `backend/`, `plugins/` and `tests/` each have a short `CLAUDE.md` of
-their own: the rules that bite in that directory, loaded when you work there.
+`sdk/`, `app/`, `core/`, `backend/`, `plugins/`, `web/` and `tests/` each have a short `CLAUDE.md`
+of their own: the rules and pitfalls of that directory, loaded when you work there. Pitfalls with
+no single home are in [`docs/PITFALLS.md`](docs/PITFALLS.md).
 
 **How we work** — one plan step per PR, claiming work before building it, jj, verifying, the SDK
 release train — is [`CONTRIBUTING.md`](CONTRIBUTING.md), imported here so every session reads it:

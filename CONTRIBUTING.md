@@ -74,6 +74,12 @@ The open PR list is the board of who is working on what.
   `jj git push --bookmark <area>/<slug>`. Pushing `main` publishes (the web app at
   fizzyed.it/app, and an SDK release when the version moved), so `main` moves only by a merged
   PR.
+- **Look before `jj abandon`.** Abandon only an id that `jj log` prints as `(empty)` that moment,
+  never one from memory, and never a change that is some workspace's working copy
+  (`jj workspace list`). `jj undo` brings back a wrong one.
+- **A local bookmark can hold another session's work.** `jj git push --bookmark X` pushes wherever
+  `X` points, whoever moved it. Before pushing a branch you didn't create, compare `X` with
+  `X@origin`, and check that `jj bookmark set` printed "Moved" rather than a hint.
 - **When your PR has merged, forget its workspace, then fetch.** `jj workspace forget <task>`,
   then `jj git fetch`. GitHub deletes a merged branch, and the fetch abandons the changes only
   that branch held, so landed work doesn't linger in the next agent's `jj log` looking live.
@@ -144,6 +150,15 @@ tarball is pinned by hash, so it is never replaced.
 - **A deferred feature gets a named seam.** When a plan leaves something for later, say what it
   will hook into, not just "not yet".
 - **No one-line wrapper functions.** Write the library call at the site.
+- **Speed over convenience.** Native performance is fizzy's edge. Nothing optional (automation,
+  agents, debug capture) may cost a frame when it is unused. Measure before calling a change
+  fast, and keep a benchmark once it is.
+- **Build the seam the next plugin needs.** When a plugin needs something from the host, add the
+  general primitive (an event its owner fires, a host-owned copy) rather than a fix for this one
+  plugin (a per-frame poll, a slice borrowed from plugin memory). Moving the fingerprint for the
+  clearer shape is fine.
+- **Pitfalls go where they bite.** A trap that cost real time is written down in the
+  `CLAUDE.md` of the directory it lives in, or `docs/PITFALLS.md` if it has none.
 
 ## The gate on `main`
 

@@ -17,3 +17,27 @@ Each directory is file for file the shape a third-party plugin has, and the temp
 - **Tests:** a std-only file (`text/src/textcore/`, `markdown/src/md/block_heights.zig`, …) gets a
   root in `build/app.zig`'s unit list. A test that needs the plugin's module runs from
   `test-integration` (`fizzy-text-plugin-tests`, `fizzy-md-parser-tests`).
+
+## Pitfalls
+
+- **Two copies, two sets of globals.** The static copy and the dylib each have their own module
+  variables. Host code that writes a plugin's global by symbol writes the static copy, which the
+  running dylib never sees. Reach plugin state through a service or a vtable hook.
+- **`sdk.host()` panics until the host installs the runtime,** which happens only on the plugin
+  load path. Code that also compiles into `test-integration`, where the plugin is a plain module
+  and nothing registers it, must take the host explicitly. See `render_ast.highlight_host`, set
+  from `register`.
+- **`Host.treeSitterHighlightFor` skips a provider with no `owner`.** A test that registers a fake
+  `LanguageSupport` must give it a `sdk.Plugin`, or the lookup silently returns null.
+- **A test build that overwrote a user's installed plugin is theirs to restore.** Say so. Don't
+  copy anything back from the loader's `.load-copy/`.
+- **An installed dylib refuses to load if its optimize mode differs from the app's**
+  (`AbiBuildEnvMismatch`). `zig build` defaults to Debug, and store plugins are built
+  ReleaseFast.
+- **A plugin built from the released SDK tarball ignores local `sdk/` and `core/` edits.** To
+  test an SDK change end to end, point its `build.zig.zon` `.fizzy` dependency at a *relative*
+  path (`../../fizzy/sdk`; absolute paths are rejected).
+- **On the web,** plugins are wasm side modules: `zig build -Dtarget=wasm32-freestanding
+  -Doptimize=ReleaseSmall`, loaded with `?plugin=<id>` (`web/CLAUDE.md`). The host must be the
+  same optimize class, and dvui on the web draws only on request, so a plugin with work in
+  flight calls `sdk.refresh()`.
