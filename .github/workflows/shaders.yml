@@ -1,8 +1,8 @@
 # The SPIR-V and DXIL fizzy's native backend embeds (Vulkan, D3D12), compiled from their HLSL here
 # rather than on someone's machine, and checked against what is committed.
 #
-# Each `X.hlsl` beside a `compiled/spv/X.spv` and `compiled/dxil/X.dxil` is compiled with
-# SDL_shadercross and compared byte for byte. A difference fails the job and uploads the fresh
+# Each `X.hlsl` beside compiled forms of it (`compiled/{spv,dxil,msl,glsl}/X.*`) is compiled by
+# `scripts/compile-shaders.sh` and compared byte for byte. A difference fails the job and uploads the fresh
 # files as the `compiled-shaders` artifact, laid out as the repository has them: download it and
 # commit them. Before this, nothing noticed when the HLSL changed and the compiled files did not,
 # and Windows and Linux quietly drew the previous glass (#242, #373).
@@ -20,12 +20,14 @@ on:
     paths:
       - "**/*.hlsl"
       - "**/shaders/compiled/**"
+      - "scripts/compile-shaders.sh"
       - ".github/workflows/shaders.yml"
   push:
     branches: [main]
     paths:
       - "**/*.hlsl"
       - "**/shaders/compiled/**"
+      - "scripts/compile-shaders.sh"
       - ".github/workflows/shaders.yml"
   workflow_dispatch:
 
@@ -99,36 +101,23 @@ jobs:
           export PATH="$HOME/shadercross/bin:$PATH"
           export LD_LIBRARY_PATH="$HOME/shadercross/lib:${{ steps.sdl.outputs.prefix }}/lib:$LD_LIBRARY_PATH"
           shadercross --help > /dev/null 2>&1 || { echo "shadercross does not run"; ldd "$HOME/shadercross/bin/shadercross"; exit 1; }
-          stale=0
+          command -v spirv-cross
           failed=0
-          mkdir -p out
-          while IFS= read -r hlsl; do
-            dir=$(dirname "$hlsl"); name=$(basename "$hlsl" .hlsl)
-            for form in spv dxil; do
-              committed="$dir/compiled/$form/$name.$form"
-              [ -f "$committed" ] || continue
-              fresh="out/$committed"
-              mkdir -p "$(dirname "$fresh")"
-              # One that does not compile is reported, and the rest still go.
-              if ! (cd "$dir" && shadercross "$name.hlsl" -o "$GITHUB_WORKSPACE/$fresh"); then
-                echo "::error file=$hlsl::$hlsl does not compile to $form"
-                failed=1
-                continue
-              fi
-              if [ "$form" = spv ] && ! spirv-val "$fresh"; then
-                echo "::error file=$hlsl::$fresh does not validate"
-                failed=1
-              fi
-              if cmp -s "$committed" "$fresh"; then
-                echo "ok      $committed"
-              else
-                echo "::error file=$hlsl::$committed is not what $hlsl compiles to: download the compiled-shaders artifact and commit it"
-                echo "        committed $(stat -c %s "$committed") bytes, compiled $(stat -c %s "$fresh"); first differences (offset, committed, compiled):"
-                cmp -l "$committed" "$fresh" | head -8 || true
-                stale=1
-              fi
-            done
-          done < <(git ls-files '*.hlsl')
+          bash scripts/compile-shaders.sh out || failed=1
+          stale=0
+          while IFS= read -r fresh; do
+            committed=${fresh#out/}
+            if cmp -s "$committed" "$fresh"; then
+              echo "ok      $committed"
+            else
+              echo "::error file=$committed::$committed is not what its HLSL compiles to: download the compiled-shaders artifact and commit it"
+              echo "        committed $(stat -c %s "$committed") bytes, compiled $(stat -c %s "$fresh")"
+              stale=1
+            fi
+            case $fresh in
+              *.spv) spirv-val "$fresh" || { echo "::error file=$committed::$fresh does not validate"; failed=1; } ;;
+            esac
+          done < <(find out -type f | sort)
           echo "stale=$stale" >> "$GITHUB_ENV"
           echo "failed=$failed" >> "$GITHUB_ENV"
 
