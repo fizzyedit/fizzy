@@ -9,7 +9,7 @@
 //! called from all five.
 //!
 //! Pure `std.Build` glue with no app-only dependencies — lives in the `sdk/` package so plugin
-//! builds never open the repo-root zon (see `CLAUDE.md`).
+//! builds never open the repo-root zon (see `AGENTS.md`).
 const std = @import("std");
 
 /// Add every import `core` needs to `mod`, and return the `icons` module when that lazy

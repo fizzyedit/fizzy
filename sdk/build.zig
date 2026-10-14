@@ -1,5 +1,5 @@
 //! Plugin-facing Fizzy package. Plugins depend on this directory (not the repo root) so
-//! app-only deps like Velopack never enter their zon graph — see CLAUDE.md.
+//! app-only deps like Velopack never enter their zon graph — see AGENTS.md.
 const std = @import("std");
 
 // Build-time surface of this package, for the app as well as third-party plugins. The app consumes

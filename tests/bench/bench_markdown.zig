@@ -34,7 +34,7 @@ const sample_huge = @embedFile("sample_huge"); // docs/PLUGINS.md
 /// integration tests' table sample); it stands in for a plan doc that stayed slow after block
 /// virtualization, which is exactly why a document of this shape is in here.
 const sample_prose = @embedFile("sample_prose"); // tests/data/markdown_sample_tables.md
-const sample_medium = @embedFile("sample_medium"); // CLAUDE.md
+const sample_medium = @embedFile("sample_medium"); // AGENTS.md
 const sample_small = @embedFile("sample_small"); // docs/MODULARIZATION_RELEASE_NOTES.md
 
 /// Live document + preview state for the frame function, which `dvui.App.frameFunction`
@@ -285,7 +285,7 @@ test "bench: markdown preview frame cost" {
     const cases = [_]struct { name: []const u8, text: []const u8 }{
         .{ .name = "huge (docs/PLUGINS.md)", .text = sample_huge },
         .{ .name = "prose (tests/data/markdown_sample_tables.md)", .text = sample_prose },
-        .{ .name = "medium (CLAUDE.md)", .text = sample_medium },
+        .{ .name = "medium (AGENTS.md)", .text = sample_medium },
         .{ .name = "small (release notes)", .text = sample_small },
     };
 

@@ -1176,7 +1176,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // benchmark.
         bench_module.addAnonymousImport("sample_huge", .{ .root_source_file = b.path("docs/PLUGINS.md") });
         bench_module.addAnonymousImport("sample_prose", .{ .root_source_file = b.path("tests/data/markdown_sample_tables.md") });
-        bench_module.addAnonymousImport("sample_medium", .{ .root_source_file = b.path("CLAUDE.md") });
+        bench_module.addAnonymousImport("sample_medium", .{ .root_source_file = b.path("AGENTS.md") });
         bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("docs/MODULARIZATION_RELEASE_NOTES.md") });
 
         const bench_markdown = b.addTest(.{ .name = "fizzy-bench-markdown", .root_module = bench_module });

@@ -731,7 +731,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             // static/dylib path (see `postInit` above) and may *also* have its dylib sitting in
             // this same shared plugins directory — built-ins compile "the same third-party
             // shape" a real third-party plugin would, and `zig build install` drops every
-            // plugin's dylib here alike (see CLAUDE.md). Rediscovering a built-in's own binary
+            // plugin's dylib here alike (see AGENTS.md). Rediscovering a built-in's own binary
             // here is expected, not a failure: recording it as one would surface the same id
             // twice in the settings pane (once as the loaded built-in, once as a "failed" user
             // plugin), which collides on the shared heading widget id. Only a genuine third-party

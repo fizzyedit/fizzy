@@ -219,7 +219,7 @@ pub fn isPeeking(self: Region) bool {
 ///
 /// This replaced a five-value `Chooser` enum, two of whose values (`explorer_chrome`,
 /// `panel_chrome`) named *fizzy's own* furniture from inside the generic layer. That is the
-/// case CLAUDE.md calls a bug in `Layout` rather than a special case: a shape is supposed to be
+/// case AGENTS.md calls a bug in `Layout` rather than a special case: a shape is supposed to be
 /// ordinary code over this API, and an app copying `src/editor/layout.zig` could not have written those two
 /// values itself. As a function pointer it is just `explorerPane` in `src/editor/layout.zig` —
 /// app code, passed in, replaceable by the app's own loop over `matching` / `selected` / `draw`,

@@ -1,7 +1,7 @@
 # Pitfalls
 
 Things that cost someone a day, written down so they cost the next person a minute. Most live
-beside the code they bite, in each area's `CLAUDE.md`: `sdk/`, `app/`, `core/`, `backend/`
+beside the code they bite, in each area's `AGENTS.md`: `sdk/`, `app/`, `core/`, `backend/`
 (macOS windows, full screen, autorelease pools), `plugins/`, `web/`, `tests/`. This file holds
 the ones that belong to no single area. A fix that settles a pitfall updates its entry; a new one
 goes beside the code if it has an area, here if not.
@@ -13,7 +13,7 @@ goes beside the code if it has an area, here if not.
   them. `Popout.envSwitch` read the first `FIZZY_*` switch for every name this way (#235). Fix:
   name the parameter inside the struct (`const variable = name;`) and use it. In review, look
   for function-local structs with `var`s inside generic functions.
-- **Tests run only from files their root module analyzes** (`tests/CLAUDE.md`).
+- **Tests run only from files their root module analyzes** (`tests/AGENTS.md`).
   `zig build check-tests-reached` names any that don't.
 
 ## Running a second fizzy
@@ -37,7 +37,7 @@ goes beside the code if it has an area, here if not.
 
 - **Frames happen only on input or a refresh.** To profile a still scene, add a temporary hook
   that calls `dvui.refresh` every frame, then `sample <pid> 6`. Read inclusive samples of the
-  frame function, not fps (`core/CLAUDE.md`, "Judge performance by main-thread CPU"). Revert the
+  frame function, not fps (`core/AGENTS.md`, "Judge performance by main-thread CPU"). Revert the
   hook.
 - **Debug builds SDL's C at `-O0`** with UBSan, which inflates renderer time in a Debug profile.
 - **A stripped release crash can still be placed.** In the `.ips` report (line 1 is a JSON

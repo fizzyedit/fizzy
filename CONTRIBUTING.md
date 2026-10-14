@@ -1,6 +1,6 @@
 # Working on fizzy
 
-`CLAUDE.md` says what fizzy is. This file says how a change gets from an idea to `main`, for
+`AGENTS.md` says what fizzy is. This file says how a change gets from an idea to `main`, for
 people and agents alike, on a laptop or in a cloud session. Several agents work on this repo at
 once, and these rules are what keep their work from colliding.
 
@@ -136,7 +136,7 @@ tarball is pinned by hash, so it is never replaced.
 
 | What | Where |
 |---|---|
-| What fizzy is, and its architecture rules | `CLAUDE.md` |
+| What fizzy is, and its architecture rules | `AGENTS.md` |
 | How we work | this file |
 | The plugin contract | `docs/PLUGINS.md` |
 | Plans | private, in [`fizzyedit/plans`](https://github.com/fizzyedit/plans): issues, and a long design as `plans/<NAME>_PLAN.md` opening with a status line (`Status: proposed`, `in progress, fizzyedit/fizzy#N`, or `done`) |
@@ -160,7 +160,7 @@ tarball is pinned by hash, so it is never replaced.
   plugin (a per-frame poll, a slice borrowed from plugin memory). Moving the fingerprint for the
   clearer shape is fine.
 - **Pitfalls go where they bite.** A trap that cost real time is written down in the
-  `CLAUDE.md` of the directory it lives in, or `docs/PITFALLS.md` if it has none.
+  `AGENTS.md` of the directory it lives in, or `docs/PITFALLS.md` if it has none.
 
 ## The gate on `main`
 

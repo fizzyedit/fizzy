@@ -1,7 +1,7 @@
 const std = @import("std");
 
 /// App-side re-export of the plugin build API (lives in `sdk/`). Plugins should depend on
-/// the `sdk/` package directly — see CLAUDE.md — not this root package.
+/// the `sdk/` package directly — see AGENTS.md — not this root package.
 ///
 /// Reached through the dependency rather than by path (`sdk/plugin_sdk.zig`): the app consumes
 /// `sdk/` as a package so the two can share one dvui pin, and a file may belong to only one module,
