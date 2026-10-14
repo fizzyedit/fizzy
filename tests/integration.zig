@@ -7101,8 +7101,19 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         var holder_state: u8 = 0;
         const holder_vtable: sdk.Plugin.VTable = .{};
         var holder: sdk.Plugin = .{ .state = &holder_state, .vtable = &holder_vtable, .id = "holder", .display_name = "Holder" };
+        const here = editor.workbench.open_workspace_grouping;
         const claim = try host.claimDocument(&holder, doc.id, "Holder");
         try std.testing.expectError(error.DocumentClaimed, host.claimDocument(editor.app.host.plugins.items[0], doc.id, "Other"));
+        try dvui.testing.settle(headlessFrame);
+
+        // It shows beside the person, who keeps the pane they were in (`Workbench.showBeside`).
+        try std.testing.expectEqual(here, editor.workbench.open_workspace_grouping);
+        const beside = for (editor.workbench.workspaces.values()) |ws| {
+            if (ws.grouping != here) if (ws.active) |a| if (a.id == doc.id) break true;
+        } else false;
+        try std.testing.expect(beside);
+        // The person goes to it there.
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(doc.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
 
         try dvui.testing.writeText("held");

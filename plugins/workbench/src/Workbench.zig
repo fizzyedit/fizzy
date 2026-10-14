@@ -358,6 +358,27 @@ fn focusIn(self: *Workbench, ws: *Workspace, doc: sdk.DocHandle, id: []const u8)
     ws.active = doc;
 }
 
+/// Show `doc` beside the pane the person is in, leaving them that pane and their focus: a
+/// document a plugin has taken to work on (`sdk.Claim`), seen as it changes while the person
+/// stays where they were. Left alone when another pane shows it already, or when it is all the
+/// person's pane holds.
+pub fn showBeside(self: *Workbench, doc: sdk.DocHandle) void {
+    const here = self.open_workspace_grouping;
+    for (self.workspaces.values()) |ws| {
+        if (ws.grouping != here) if (ws.active) |a| if (a.id == doc.id) return;
+    }
+    const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
+    if (self.workspaces.getPtr(here)) |ws| if (ws.hasTab(id) and ws.tabCount() == 1) return;
+    // Beside: a pane there is already, or else a new one on this one's right.
+    const target = for (self.workspaces.values()) |ws| {
+        if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
+    } else self.newGroupingID();
+    for (self.workspaces.values()) |*ws| if (ws.grouping != target) ws.removeTab(id);
+    const side = self.pane(target) catch return;
+    side.addTab(id, true);
+    self.open_workspace_grouping = here;
+}
+
 pub fn activeWorkspaceCanvasRectPhysical(self: *Workbench) ?dvui.Rect.Physical {
     const workspace = self.workspaces.getPtr(self.open_workspace_grouping) orelse return null;
     return workspace.canvas_rect_physical;

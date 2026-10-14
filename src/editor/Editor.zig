@@ -109,6 +109,8 @@ app: App,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
+/// The first claim id not yet shown beside the person (`showClaimed`).
+claims_seen: u32 = 1,
 
 /// Open documents that are *previews*: shown in italic and replaced by the next preview in
 /// their pane rather than kept (`EditorAPI.OpenMode`). A set of ids rather than a flag on the
@@ -2903,6 +2905,18 @@ fn drawClaim(editor: *Editor, claim: sdk.Claim, pill: ClaimPill, path: []const u
     if (stop.clicked()) editor.app.host.releaseClaim(claim.id);
 }
 
+/// A document a plugin has just taken (`sdk.Claim`) shows beside the person, so they watch the
+/// work without it taking the pane they are in. One compare a frame until a claim comes.
+fn showClaimed(editor: *Editor) void {
+    const host = &editor.app.host;
+    if (host.next_claim_id == editor.claims_seen) return;
+    for (host.claims.items) |c| {
+        if (c.id < editor.claims_seen) continue;
+        if (editor.app.docById(c.doc_id)) |doc| editor.workbench.showBeside(doc);
+    }
+    editor.claims_seen = host.next_claim_id;
+}
+
 /// A document drawn as a surface: the canvas box around it, then the owner's `drawDocument`. The document is looked up by id each time — a plugin can unload
 /// between frames, and the handle in `open_files` is the one that is current.
 fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
@@ -4111,6 +4125,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.app.host.deliverEvents();
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
+        editor.showClaimed();
         for (editor.app.host.plugins.items) |plugin| plugin.beginFrame();
     }
     if (fizzy.core.perf.record) fizzy.core.perf.beginFrame();
