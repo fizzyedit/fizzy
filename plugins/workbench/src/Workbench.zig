@@ -193,8 +193,9 @@ pub fn paneClosing(self: *Workbench, grouping: u64) bool {
     return self.panes.leafClosing(leaf);
 }
 
-pub fn deinitWorkspaces(self: *Workbench) void {
-    for (self.workspaces.values()) |*workspace| workspace.deinit();
+/// At shutdown, after the last frame: `backend` frees what a frame would have (`Workspace.deinitAtQuit`).
+pub fn deinitWorkspaces(self: *Workbench, backend: dvui.Backend) void {
+    for (self.workspaces.values()) |*workspace| workspace.deinitAtQuit(backend);
     self.workspaces.deinit(self.allocator);
     self.panes.deinit();
 }

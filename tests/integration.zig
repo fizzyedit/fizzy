@@ -7366,6 +7366,17 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try expectEmptyFolder(dir);
     }
 
+    // A quit straight after a pane slid shut (`snapshotClosingPane`): the pane still holds its
+    // picture, and the quit comes after the last frame, when nothing can be freed at a frame's end.
+    {
+        const pixels = [_]u8{0} ** (4 * 4 * 4);
+        const snap = try t.window.backend.textureCreate(&pixels, .{ .width = 4, .height = 4 });
+        editor.workbench.workspaces.values()[0].closing_snapshot = snap;
+    }
+    // The harness keeps its window current between frames; `appQuit` has none.
+    const harness_window = dvui.current_window;
+    dvui.current_window = null;
+    defer dvui.current_window = harness_window;
     try editor.deinit();
 }
 

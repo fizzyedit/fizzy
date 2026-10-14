@@ -70,12 +70,20 @@ pub fn init(grouping: u64) Workspace {
     return .{ .grouping = grouping };
 }
 
-/// Called when a pane is removed and for each pane at shutdown. Announces `workbench.pane.closed`
-/// (`.{ .grouping }`), so a plugin keeping state per pane (pixi's canvas view) lets it go; at
-/// shutdown nothing delivers it, and each plugin frees its own in `deinit`.
+/// Called when a pane is removed, during a frame. Announces `workbench.pane.closed`
+/// (`.{ .grouping }`), so a plugin keeping state per pane (pixi's canvas view) lets it go.
 pub fn deinit(self: *Workspace) void {
     self.dropSnapshot();
     runtime.host().emitZon("workbench.pane.closed", .{ .grouping = self.grouping });
+}
+
+/// Each pane at shutdown, after the last frame has ended. A pane that slid shut just before the
+/// quit still holds its `closing_snapshot`, and with no frame to free it at the end of, it goes
+/// now through `backend`. No `workbench.pane.closed`: nothing would deliver it, and each plugin
+/// frees its own per-pane state in `deinit`.
+pub fn deinitAtQuit(self: *Workspace, backend: dvui.Backend) void {
+    if (self.closing_snapshot) |t| backend.textureDestroy(t);
+    self.* = undefined;
 }
 
 /// The document a surface draws, if it is one. By the id's convention rather than a field on

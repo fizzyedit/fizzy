@@ -6212,7 +6212,7 @@ pub fn deinit(editor: *Editor) !void {
     }
 
     // Tear workspaces down first, while the plugins whose documents they hold are still alive.
-    editor.workbench.deinitWorkspaces();
+    editor.workbench.deinitWorkspaces(fizzy.entry().window.backend);
 
     // Drain & join the save-queue worker before tearing anything else down. Any
     // queued jobs need to finish writing or be dropped before File data is freed.
