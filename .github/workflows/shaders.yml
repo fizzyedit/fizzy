@@ -1,0 +1,123 @@
+# The SPIR-V and DXIL fizzy's native backend embeds (Vulkan, D3D12), compiled from their HLSL here
+# rather than on someone's machine, and checked against what is committed.
+#
+# Each `X.hlsl` beside a `compiled/spv/X.spv` and `compiled/dxil/X.dxil` is compiled with
+# SDL_shadercross and compared byte for byte. A difference fails the job and uploads the fresh
+# files as the `compiled-shaders` artifact, laid out as the repository has them: download it and
+# commit them. Before this, nothing noticed when the HLSL changed and the compiled files did not,
+# and Windows and Linux quietly drew the previous glass (#242, #373).
+#
+# The toolchain is the one the committed files were made with: SDL_shadercross with the
+# DirectXShaderCompiler fork it vendors (libsdl-org/DirectXShaderCompiler at 2c84a1c5), built
+# with clang; built with GCC 13 that DXC corrupts its heap compiling DXIL. The shaders that have
+# not changed since they were compiled (the backend's defaults) reproduce byte for byte, which is
+# how a change of toolchain would show. The build takes a while, so it is cached by its pin.
+
+name: Shaders
+
+on:
+  pull_request:
+    paths:
+      - "**/*.hlsl"
+      - "**/shaders/compiled/**"
+      - ".github/workflows/shaders.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.hlsl"
+      - "**/shaders/compiled/**"
+      - ".github/workflows/shaders.yml"
+  workflow_dispatch:
+
+env:
+  SHADERCROSS_REPO: libsdl-org/SDL_shadercross
+  # Its `external/DirectXShaderCompiler` is libsdl-org/DirectXShaderCompiler at 2c84a1c5.
+  SHADERCROSS_SHA: 1ff05bec573988a98ef9e0260b4da44f512b8367
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cached shadercross
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/shadercross
+          key: shadercross-${{ env.SHADERCROSS_SHA }}-vendored-clang-1
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang ninja-build cmake libjson-perl spirv-tools
+
+      # Every run: shadercross links SDL, cached or not (setup-sdl caches its own build).
+      - name: SDL
+        id: sdl
+        uses: libsdl-org/setup-sdl@main
+        with:
+          version: 3-latest
+          cmake-generator: Ninja
+          install-linux-dependencies: true
+
+      - name: Build shadercross (vendored DXC, clang)
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          git clone --filter=blob:none "https://github.com/$SHADERCROSS_REPO" sc
+          git -C sc checkout "$SHADERCROSS_SHA"
+          git -C sc submodule update --init --recursive --depth 1 --jobs 4
+          git -C sc/external/DirectXShaderCompiler rev-parse HEAD
+          cmake -S sc -B sc/build -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDLSHADERCROSS_VENDORED=ON \
+            -DSDLSHADERCROSS_CLI=ON \
+            -DSDLSHADERCROSS_SHARED=ON \
+            -DSDLSHADERCROSS_STATIC=OFF \
+            -DSDLSHADERCROSS_WERROR=OFF \
+            -DSDLSHADERCROSS_INSTALL=ON \
+            -DSDLSHADERCROSS_INSTALL_RUNTIME=ON \
+            -DCMAKE_INSTALL_PREFIX="$HOME/shadercross"
+          cmake --build sc/build --parallel
+          cmake --install sc/build
+
+      - name: Compile and compare
+        run: |
+          export PATH="$HOME/shadercross/bin:$PATH"
+          export LD_LIBRARY_PATH="$HOME/shadercross/lib:${{ steps.sdl.outputs.prefix }}/lib:$LD_LIBRARY_PATH"
+          shadercross --help > /dev/null 2>&1 || { echo "shadercross does not run"; ldd "$HOME/shadercross/bin/shadercross"; exit 1; }
+          stale=0
+          mkdir -p out
+          while IFS= read -r hlsl; do
+            dir=$(dirname "$hlsl"); name=$(basename "$hlsl" .hlsl)
+            for form in spv dxil; do
+              committed="$dir/compiled/$form/$name.$form"
+              [ -f "$committed" ] || continue
+              fresh="out/$committed"
+              mkdir -p "$(dirname "$fresh")"
+              (cd "$dir" && shadercross "$name.hlsl" -o "$GITHUB_WORKSPACE/$fresh")
+              if [ "$form" = spv ]; then spirv-val "$fresh"; fi
+              if cmp -s "$committed" "$fresh"; then
+                echo "ok      $committed"
+              else
+                echo "::error file=$hlsl::$committed is not what $hlsl compiles to: download the compiled-shaders artifact and commit it"
+                stale=1
+              fi
+            done
+          done < <(git ls-files '*.hlsl')
+          echo "stale=$stale" >> "$GITHUB_ENV"
+
+      - name: Upload the fresh compiled shaders
+        if: env.stale == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-shaders
+          path: out/
+
+      - name: Fail on stale compiled shaders
+        if: env.stale == '1'
+        run: exit 1
