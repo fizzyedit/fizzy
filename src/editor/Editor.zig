@@ -2814,21 +2814,27 @@ pub fn documentPathChanged(editor: *Editor, doc: sdk.DocHandle) void {
     dvui.refresh(null, @src(), null);
 }
 
-/// The pill on a held document saying who holds it, with Stop: where it sits, worked out
-/// before the document draws so the input held back from the document is not held from it.
+/// The pill on a held document saying who holds it, with Stop, at its pane's bottom right: where
+/// it sits, worked out before the document draws so the input held back from the document is not
+/// held from it.
 const ClaimPill = struct {
     text: []const u8,
     physical: dvui.Rect.Physical,
 
     const pad: f32 = 12;
-    const height: f32 = 30;
+    const height: f32 = 28;
+    /// The stop icon's side, and the press area round it.
+    const stop: f32 = 10;
+    const stop_pad: f32 = 6;
+    /// From the pane's edges.
+    const inset: f32 = 12;
 
     fn init(canvas: *dvui.WidgetData, label: []const u8) ClaimPill {
-        const text = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s} is working here", .{label}) catch "Working here";
-        const font = dvui.themeGet().font_body;
-        const w = font.textSize(text).w + font.textSize("Stop").w + pad * 5;
+        const text = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s} is working", .{label}) catch "Working";
+        const font = dvui.Font.theme(.body).larger(-1);
+        const w = font.textSize(text).w + stop + stop_pad * 2 + pad * 2;
         const content = canvas.contentRect();
-        const rect: dvui.Rect = .{ .x = @max(0, (content.w - w) / 2), .y = pad, .w = w, .h = height };
+        const rect: dvui.Rect = .{ .x = @max(0, content.w - w - inset), .y = @max(0, content.h - height - inset), .w = w, .h = height };
         return .{ .text = text, .physical = canvas.contentRectScale().rectToPhysical(rect) };
     }
 };
@@ -2855,35 +2861,43 @@ fn holdInput(canvas: *dvui.WidgetData, ds: *DocSurface, keep: dvui.Rect.Physical
     if (ds.focus_inside) dvui.focusWidget(null, null, null);
 }
 
-/// The held document's outline and its pill: who holds it, and Stop, which lets go for them.
-fn drawClaim(editor: *Editor, canvas: *dvui.WidgetData, claim: sdk.Claim, pill: ClaimPill, path: []const u8) void {
-    const theme = dvui.themeGet();
-    const accent = theme.color(.highlight, .fill);
-    const rs = canvas.borderRectScale();
-    rs.r.stroke(.all(8 * rs.s), .{ .thickness = 2 * rs.s, .color = .{ .color = accent } });
-
-    // A floating window of its own, above the document: its clicks are its own, whatever the
-    // document under it does with clicks.
+/// The held document's pill: who holds it, and Stop, which lets go for them. A bubble of glass, as
+/// the other controls floating over content are (`core.dialogs.glassBubbles`), on a floating layer
+/// of its own above the document, so its clicks are its own.
+fn drawClaim(editor: *Editor, claim: sdk.Claim, pill: ClaimPill, path: []const u8) void {
     const at = pill.physical.toNatural();
     var float: dvui.FloatingWidget = undefined;
     float.init(@src(), .{}, .{ .rect = .{ .x = at.x, .y = at.y, .w = at.w, .h = at.h }, .id_extra = claim.id });
     defer float.deinit();
-    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .both,
-        .background = true,
-        .color_fill = .{ .color = theme.color(.window, .fill) },
-        .border = .all(1),
-        .color_border = .{ .color = accent },
-        .corners = .all(1000),
-        .padding = .{ .x = ClaimPill.pad, .w = ClaimPill.pad / 2 },
-        .id_extra = claim.id,
-    });
-    defer box.deinit();
-    dvui.labelNoFmt(@src(), pill.text, .{}, .{ .gravity_y = 0.5, .padding = .all(0) });
+    core.dialogs.glassBubbles(float.data().id, &.{.{ .rect = pill.physical }}, dvui.windowRectScale().s, .{});
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both, .padding = .{ .x = ClaimPill.pad, .w = ClaimPill.pad / 2 } });
+    defer row.deinit();
+    const font = dvui.Font.theme(.body).larger(-1);
+    const ink = dvui.themeGet().color(.window, .text);
+    dvui.labelNoFmt(@src(), pill.text, .{}, .{ .gravity_y = 0.5, .padding = .all(0), .font = font, .color_text = .{ .color = ink.opacity(0.8) } });
     const tag = std.fmt.allocPrint(dvui.currentWindow().arena(), "fizzy.claim.stop:{s}", .{path}) catch null;
-    if (dvui.button(@src(), "Stop", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = ClaimPill.pad }, .corners = .all(1000), .style = .highlight, .tag = tag })) {
-        editor.app.host.releaseClaim(claim.id);
-    }
+    var stop: dvui.ButtonWidget = undefined;
+    stop.init(@src(), .{}, .{
+        .gravity_y = 0.5,
+        .margin = .{ .x = ClaimPill.pad / 2 },
+        .padding = .all(ClaimPill.stop_pad),
+        .background = false,
+        .label = .{ .text = "Stop" },
+        .tag = tag,
+    });
+    defer stop.deinit();
+    stop.processEvents();
+    const color = if (stop.hovered()) ink else ink.opacity(0.8);
+    // The stop glyph: a filled, slightly rounded square.
+    var glyph = dvui.box(@src(), .{}, .{
+        .min_size_content = .{ .w = ClaimPill.stop, .h = ClaimPill.stop },
+        .background = true,
+        .corners = .all(2),
+        .color_fill = .{ .color = color },
+    });
+    glyph.deinit();
+    if (stop.clicked()) editor.app.host.releaseClaim(claim.id);
 }
 
 /// A document drawn as a surface: the canvas box around it, then the owner's `drawDocument`. The document is looked up by id each time — a plugin can unload
@@ -2937,7 +2951,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             }, false);
         }
     }
-    if (claim) |c| drawClaim(editor, canvas.data(), c, claim_pill.?, doc.owner.documentPath(doc));
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc));
     return .ok;
 }
 
