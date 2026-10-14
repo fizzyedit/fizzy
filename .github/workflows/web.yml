@@ -11,9 +11,11 @@
 #
 # **Going live** is a person's step, once the plugins have repinned and released into the new SDK
 # (`CONTRIBUTING.md`, "Changing the SDK"): run this workflow on main with `go_live` set to an SDK version
-# (`gh workflow run web.yml --ref main -f go_live=0.2.27`). It moves the `web-live` tag to that
-# `sdk-v*` release and puts the app up: from `main` when `main` is on that SDK, else from the
-# release's own commit, so the app is always a clean release.
+# (`gh workflow run web.yml --ref main -f go_live=0.2.27`). It records that `sdk-v*` release as
+# live (a deployment to the `web-live` environment, its description the tag) and puts the app up:
+# from `main` when `main` is on that SDK, else from the release's own commit, so the app is always
+# a clean release. A record, not a tag: pointing a ref at a release commit whose workflows differ
+# from main's counts as changing workflows, which this workflow's token may never do.
 #
 # Each copy goes to a release in fizzyedit/website (`web-main` for the app, `web-preview` for the
 # test copy), its zip replaced every time, and the website is asked to redeploy. Pull requests
@@ -63,8 +65,9 @@ jobs:
   plan:
     if: github.event_name != 'release'
     permissions:
-      # To move the `web-live` tag when going live.
-      contents: write
+      contents: read
+      # To record the live SDK (a deployment to `web-live`) when going live.
+      deployments: write
     runs-on: ubuntu-latest
     outputs:
       copies: ${{ steps.plan.outputs.copies }}
@@ -78,32 +81,39 @@ jobs:
         if: inputs.go_live != ''
         env:
           VERSION: ${{ inputs.go_live }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$GITHUB_REF" != refs/heads/main ]; then
             echo "::error::Go live from main: gh workflow run web.yml --ref main -f go_live=$VERSION"; exit 1
           fi
           tag="sdk-v$VERSION"
           git rev-parse -q --verify "refs/tags/$tag" > /dev/null || { echo "::error::No release $tag."; exit 1; }
-          git tag -f web-live "$tag^{commit}"
-          git push -f origin refs/tags/web-live
+          printf '{"ref":"%s","environment":"web-live","description":"%s","auto_merge":false,"required_contexts":[]}' \
+            "$(git rev-parse "$tag^{commit}")" "$tag" \
+            | gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '"recorded deployment \(.id): \(.description)"'
           echo "fizzyed.it/app goes live on $tag."
 
       - name: Plan the copies
         id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           fingerprint() { grep -oE 'recorded_sdk_shape_fingerprint: u64 = 0x[0-9a-fA-F]+' | grep -oE '0x[0-9a-fA-F]+'; }
           here=$(fingerprint < sdk/src/version.zig)
-          live=$(git show web-live:sdk/src/version.zig 2>/dev/null | fingerprint || true)
+          # The live SDK: the latest deployment to `web-live` names its release tag.
+          live_tag=$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=web-live&per_page=1" --jq '.[0].description // ""')
+          live=""
+          if [ -n "$live_tag" ]; then live=$(git show "$live_tag:sdk/src/version.zig" 2>/dev/null | fingerprint || true); fi
           copies='[{"channel":"testapp","release":"web-preview","storage":"fizzy-testapp","ref":"'"$GITHUB_SHA"'"}'
           if [ -n "$live" ] && [ "$here" = "$live" ]; then
             echo "main is on the live plugin SDK ($live): the app goes up from it."
             copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","ref":"'"$GITHUB_SHA"'"}'
           elif [ -n "${{ inputs.go_live }}" ]; then
-            ref=$(git rev-parse 'web-live^{commit}')
+            ref=$(git rev-parse "$live_tag^{commit}")
             echo "main has moved past the live SDK: the app goes up from its release commit ($ref)."
             copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","ref":"'"$ref"'"}'
           else
-            why="main's plugin SDK fingerprint ($here) is not the live one (\`web-live\`: ${live:-no tag yet})"
+            why="main's plugin SDK fingerprint ($here) is not the live one (${live_tag:-nothing live yet}: ${live:-none})"
             echo "::notice title=fizzyed.it/app held::$why. It goes up when that SDK goes live (go_live)."
             printf '### fizzyed.it/app held\n\n%s. Store plugins are built for the live SDK; the app keeps its last build and goes up when the new SDK goes live (`gh workflow run web.yml --ref main -f go_live=<version>`). fizzyed.it/testapp has this commit.\n' "$why" >> "$GITHUB_STEP_SUMMARY"
           fi

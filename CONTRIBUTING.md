@@ -129,9 +129,10 @@ maintainer makes the SDK **live** on the site (below).
   fizzyed.it/app is the **live** SDK release, the one the store's plugins are built for, so every
   plugin loads there. It goes up from `main` only while `main` is on the live SDK; after an `sdk`
   merge it holds. Going live is the maintainer's step, once the repinned plugins are released and
-  the store holds them: `gh workflow run web.yml --ref main -f go_live=0.2.N` moves the `web-live`
-  tag to `sdk-v0.2.N` and puts the app up (from `main`, or from the release's own commit if `main`
-  has moved on). Until then non-SDK fixes reach testapp, not the app.
+  the store holds them: `gh workflow run web.yml --ref main -f go_live=0.2.N` records
+  `sdk-v0.2.N` as live (a deployment to the `web-live` environment) and puts the app up (from
+  `main`, or from the release's own commit if `main` has moved on). Until then non-SDK fixes
+  reach testapp, not the app.
 - **An app release never ships an unreleased fingerprint.** If it moved since the last `sdk-v*`
   tag, release the SDK first (`RELEASING.md`).
 
