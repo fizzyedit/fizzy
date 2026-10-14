@@ -1,24 +1,23 @@
-# The web app for fizzyed.it, built here and handed to fizzyedit/website to publish.
+# The web app for fizzyed.it, built here and handed to fizzyedit/website to publish. Two copies:
 #
-# Pushed to main, it is the real app, fizzyed.it/app/. Built for a pull request — or run by hand
-# on any branch but main — it is a test copy, fizzyed.it/testapp/, filing its browser storage under
-# a name of its own (`-Dweb-storage`) so it never reads or overwrites the real app's settings,
-# layout or plugins. Each build goes to a release in fizzyedit/website — `web-main` or
-# `web-preview`, its zip replaced every time — and the website is asked to redeploy, taking the
-# latest of each. There is one test copy: the last build for any pull request is the one served.
+# - **fizzyed.it/testapp/ is `main`**, every push. What is being built right now, an SDK change
+#   included: try a new SDK there while plugins catch up. It files its browser storage under a
+#   name of its own (`-Dweb-storage=fizzy-testapp`), so it never reads or overwrites the real
+#   app's settings, layout or plugins.
+# - **fizzyed.it/app/ is the live SDK release**, the one the store's plugins are built for, so
+#   every plugin loads there. It goes up from a push to `main` only while `main`'s plugin SDK
+#   fingerprint is the live one. After an `sdk` merge it holds its last build until that SDK goes
+#   live.
 #
-# A pull request from a fork builds nothing. The test copy is served from fizzyed.it itself, so
-# a fork's code must not be published there unreviewed (and a fork's run gets no secrets anyway).
+# **Going live** is a person's step, once the plugins have repinned and released into the new SDK
+# (`CONTRIBUTING.md`, "Changing the SDK"): run this workflow on main with `go_live` set to an SDK version
+# (`gh workflow run web.yml --ref main -f go_live=0.2.27`). It moves the `web-live` tag to that
+# `sdk-v*` release and puts the app up: from `main` when `main` is on that SDK, else from the
+# release's own commit, so the app is always a clean release.
 #
-# Nor does a draft pull request: it can run CI (ci.yml) without taking the one test copy from
-# whichever pull request has it. Marked ready for review, it builds and is served like any other.
-#
-# **The real app goes up only on a released plugin SDK.** Store plugins are built against the
-# released `sdk-v*` tarballs, and the app loads only those whose fingerprint matches its own. So a
-# push to main whose recorded fingerprint differs from the one at its `sdk-v<sdk_version>` tag (an
-# `sdk` pull request merged, its release not out yet) still builds, but does not publish: the site
-# keeps the last build every store plugin loads in, and the run says why. Publishing the release
-# (sdk-tag.yml) starts this workflow on main, which then goes up. The test copy is not held.
+# Each copy goes to a release in fizzyedit/website (`web-main` for the app, `web-preview` for the
+# test copy), its zip replaced every time, and the website is asked to redeploy. Pull requests
+# publish nothing: ci.yml compiles them for the web (`check-web`).
 #
 # A release published here asks for a redeploy too, without a build: the site links releases.
 #
@@ -45,54 +44,97 @@ on:
       - "build.zig.zon"
       - "web/**"
       - ".github/workflows/web.yml"
-  pull_request:
-    # The default three, and `ready_for_review` for a draft's first build.
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "src/**"
-      - "app/**"
-      - "core/**"
-      - "sdk/**"
-      - "plugins/**"
-      - "build/**"
-      - "build.zig"
-      - "build.zig.zon"
-      - "web/**"
-      - ".github/workflows/web.yml"
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      go_live:
+        description: "Make this SDK version live on fizzyed.it/app, e.g. 0.2.27 (empty: just rebuild)"
+        required: false
+        default: ""
 
 env:
   ZIG_VERSION: "0.16.0"
   WEBSITE: fizzyedit/website
-  # `main` for the real app, `preview` for the test copy.
-  CHANNEL: ${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && 'preview' || 'main' }}
 
 jobs:
+  # What this run publishes, and from which commit: the test copy from main, always; the app from
+  # a commit on the live SDK, or not at all.
+  plan:
+    if: github.event_name != 'release'
+    permissions:
+      # To move the `web-live` tag when going live.
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      copies: ${{ steps.plan.outputs.copies }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Go live
+        if: inputs.go_live != ''
+        env:
+          VERSION: ${{ inputs.go_live }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Go live from main: gh workflow run web.yml --ref main -f go_live=$VERSION"; exit 1
+          fi
+          tag="sdk-v$VERSION"
+          git rev-parse -q --verify "refs/tags/$tag" > /dev/null || { echo "::error::No release $tag."; exit 1; }
+          git tag -f web-live "$tag^{commit}"
+          git push -f origin refs/tags/web-live
+          echo "fizzyed.it/app goes live on $tag."
+
+      - name: Plan the copies
+        id: plan
+        run: |
+          fingerprint() { grep -oE 'recorded_sdk_shape_fingerprint: u64 = 0x[0-9a-fA-F]+' | grep -oE '0x[0-9a-fA-F]+'; }
+          here=$(fingerprint < sdk/src/version.zig)
+          live=$(git show web-live:sdk/src/version.zig 2>/dev/null | fingerprint || true)
+          copies='[{"channel":"testapp","release":"web-preview","storage":"fizzy-testapp","ref":"'"$GITHUB_SHA"'"}'
+          if [ -n "$live" ] && [ "$here" = "$live" ]; then
+            echo "main is on the live plugin SDK ($live): the app goes up from it."
+            copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","ref":"'"$GITHUB_SHA"'"}'
+          elif [ -n "${{ inputs.go_live }}" ]; then
+            ref=$(git rev-parse 'web-live^{commit}')
+            echo "main has moved past the live SDK: the app goes up from its release commit ($ref)."
+            copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","ref":"'"$ref"'"}'
+          else
+            why="main's plugin SDK fingerprint ($here) is not the live one (\`web-live\`: ${live:-no tag yet})"
+            echo "::notice title=fizzyed.it/app held::$why. It goes up when that SDK goes live (go_live)."
+            printf '### fizzyed.it/app held\n\n%s. Store plugins are built for the live SDK; the app keeps its last build and goes up when the new SDK goes live (`gh workflow run web.yml --ref main -f go_live=<version>`). fizzyed.it/testapp has this commit.\n' "$why" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "copies=$copies]" >> "$GITHUB_OUTPUT"
+
   build:
-    if: >-
-      github.event_name != 'release' &&
-      (github.event_name != 'pull_request' ||
-        (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft))
-    # No concurrency group: one build cancelling another left a red X on whichever pull request's
-    # commit it cancelled (GitHub counts a cancelled check as failed), for nothing that was wrong
-    # with it. Every build runs to its end and passes; only the newest of a channel publishes
-    # ("Is this the newest build?"), so a superseded one still never overwrites a newer one.
+    needs: plan
+    name: build ${{ matrix.channel }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.copies) }}
+    # No concurrency group: every build runs to its end; only the newest of a copy publishes
+    # ("Is this the newest build?"), so a superseded one never overwrites a newer one.
     permissions:
       contents: read
       actions: read
     runs-on: ubuntu-latest
+    env:
+      CHANNEL: ${{ matrix.channel }}
     steps:
       - uses: actions/checkout@v4
-      # The Zig cache as in ci.yml's test job: a fixed key, one cold build saved once, a pull
-      # request falling back to main's. setup-zig's own cache saved a new copy every run.
+        with:
+          ref: ${{ matrix.ref }}
+      # The Zig cache as in ci.yml's test job: a fixed key, one cold build saved once. setup-zig's
+      # own cache saved a new copy every run.
       - name: Zig cache key
         id: zig-cache-key
         run: |
           prefix="zig-${{ env.ZIG_VERSION }}-${{ github.job }}-web-${{ runner.os }}-${{ runner.arch }}-"
           echo "key=${prefix}${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
-          if [ "${{ github.event_name }}" = pull_request ]; then echo "fallback=$prefix" >> "$GITHUB_OUTPUT"; fi
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -103,7 +145,6 @@ jobs:
         with:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
-          restore-keys: ${{ steps.zig-cache-key.outputs.fallback }}
       # As in ci.yml: leave setup-zig's cache dirs alone, pre-fetch in a retry loop, and retry
       # the build itself only on a fetch failure (a lazy dependency is fetched by the build).
       - name: Pre-create Zig cache tmp/
@@ -117,10 +158,7 @@ jobs:
       # ReleaseSafe, the app asks the registry for a shard nobody publishes under, so every
       # plugin in a healthy store reads "No store build" and nothing can be installed.
       - name: Build web app
-        run: |
-          storage=fizzy
-          if [ "$CHANNEL" = preview ]; then storage=fizzy-testapp; fi
-          bash scripts/ci-retry.sh zig build web -Doptimize=ReleaseSmall -Dweb-storage="$storage"
+        run: bash scripts/ci-retry.sh zig build web -Doptimize=ReleaseSmall -Dweb-storage="${{ matrix.storage }}"
 
       - name: Save Zig cache
         if: success() && steps.zig-cache.outputs.cache-matched-key == ''
@@ -129,48 +167,19 @@ jobs:
           path: .zig-cache
           key: ${{ steps.zig-cache-key.outputs.key }}
 
-      # What was built, beside it: fizzyed.it/testapp/build.json says which commit is up.
+      # What was built, beside it: fizzyed.it/app/build.json and testapp/build.json say which
+      # commit is up.
       - name: Note the build
         env:
-          PR: ${{ github.event.pull_request.number }}
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          REF: ${{ github.head_ref || github.ref_name }}
+          SHA: ${{ matrix.ref }}
         run: |
-          printf '{"channel":"%s","ref":"%s","sha":"%s","pr":"%s","run":"%s/%s/actions/runs/%s"}\n' \
-            "$CHANNEL" "$REF" "$SHA" "$PR" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > zig-out/web/build.json
+          printf '{"channel":"%s","sha":"%s","run":"%s/%s/actions/runs/%s"}\n' \
+            "$CHANNEL" "$SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > zig-out/web/build.json
           cat zig-out/web/build.json
           (cd zig-out/web && zip -qr "$GITHUB_WORKSPACE/web.zip" .)
 
-      # The real app on an SDK no store plugin is built for loads none of them: hold it until the
-      # release is out (see the top of this file). The tag is fetched alone, as the checkout is
-      # shallow.
-      - name: Is its plugin SDK released?
-        id: released
-        if: env.CHANNEL == 'main'
-        run: |
-          block=$(awk '/pub const sdk_version = std\.SemanticVersion\{/,/\};/' sdk/sdk_version.zig)
-          version=$(for f in major minor patch; do grep -oE "\.$f = [0-9]+" <<<"$block" | grep -oE '[0-9]+'; done | paste -sd. -)
-          tag="sdk-v$version"
-          fingerprint() { grep -oE 'recorded_sdk_shape_fingerprint: u64 = 0x[0-9a-fA-F]+' | grep -oE '0x[0-9a-fA-F]+'; }
-          here=$(fingerprint < sdk/src/version.zig)
-          if git fetch -q --depth=1 origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null; then
-            released=$(git show "$tag:sdk/src/version.zig" | fingerprint)
-          else
-            released=""
-          fi
-          if [ -n "$here" ] && [ "$here" = "$released" ]; then
-            echo "Plugin SDK $tag is released with this fingerprint ($here): the app goes up."
-            echo "released=true" >> "$GITHUB_OUTPUT"
-          else
-            why="this commit's plugin SDK fingerprint ($here) is not released (\`$tag\`: ${released:-no such tag yet})"
-            echo "::notice title=fizzyed.it/app held::Not published: $why. It goes up when that release is out."
-            printf '### fizzyed.it/app held\n\nNot published: %s. Store plugins would not load in it; the site keeps its last build. It goes up when the release is out (sdk-tag.yml starts this workflow on main).\n' "$why" >> "$GITHUB_STEP_SUMMARY"
-            echo "released=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Newer runs of this workflow for the same channel whose build has not been skipped (a
-      # draft's) and has not failed: still running, or done. One of those publishes, so this one
-      # does not. A newer one that then fails leaves the copy before it served; the next push
+      # Newer runs of this workflow that build this copy and have not failed: still running, or
+      # done. One of those publishes, so this one does not. A newer one that then fails leaves the copy before it served; the next push
       # builds again.
       - name: Is this the newest build?
         id: newest
@@ -181,12 +190,11 @@ jobs:
           runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/web.yml/runs?per_page=50" --jq "
             .workflow_runs[]
             | select(.id != $GITHUB_RUN_ID and .created_at > \"$mine\" and .event != \"release\")
-            | select((if (.event == \"pull_request\" or .head_branch != \"main\") then \"preview\" else \"main\" end) == \"$CHANNEL\")
             | select(.conclusion == null or .conclusion == \"success\")
             | .id")
           newer=""
           for id in $runs; do
-            live=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --jq '[.jobs[] | select(.name == "build" and .conclusion != "skipped" and .conclusion != "failure" and .conclusion != "cancelled")] | length')
+            live=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --jq "[.jobs[] | select(.name == \"build $CHANNEL\" and .conclusion != \"skipped\" and .conclusion != \"failure\" and .conclusion != \"cancelled\")] | length")
             if [ "$live" != "0" ]; then newer="$id"; break; fi
           done
           if [ -n "$newer" ]; then
@@ -197,26 +205,22 @@ jobs:
           fi
 
       - name: Hand the build to the website
-        if: steps.newest.outputs.publish == 'true' && steps.released.outputs.released != 'false'
+        if: steps.newest.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          REF: ${{ github.head_ref || github.ref_name }}
+          RELEASE: ${{ matrix.release }}
+          SHA: ${{ matrix.ref }}
         run: |
-          tag="web-$CHANNEL"
-          if [ -n "$PR" ]; then
-            notes="Test build of $GITHUB_REPOSITORY#$PR ($REF @ $SHA), served at https://fizzyed.it/testapp/"
-          elif [ "$CHANNEL" = preview ]; then
-            notes="Test build of $REF @ $SHA, served at https://fizzyed.it/testapp/"
+          if [ "$CHANNEL" = app ]; then
+            notes="The app at https://fizzyed.it/app/, the live plugin SDK, built from $GITHUB_REPOSITORY@$SHA"
           else
-            notes="The app at https://fizzyed.it/app/, built from $GITHUB_REPOSITORY@$SHA"
+            notes="main, at https://fizzyed.it/testapp/, built from $GITHUB_REPOSITORY@$SHA"
           fi
-          if ! gh release view "$tag" --repo "$WEBSITE" > /dev/null 2>&1; then
-            gh release create "$tag" --repo "$WEBSITE" --prerelease --title "$tag" --notes "$notes"
+          if ! gh release view "$RELEASE" --repo "$WEBSITE" > /dev/null 2>&1; then
+            gh release create "$RELEASE" --repo "$WEBSITE" --prerelease --title "$RELEASE" --notes "$notes"
           fi
-          gh release upload "$tag" web.zip --clobber --repo "$WEBSITE"
-          gh release edit "$tag" --repo "$WEBSITE" --notes "$notes"
+          gh release upload "$RELEASE" web.zip --clobber --repo "$WEBSITE"
+          gh release edit "$RELEASE" --repo "$WEBSITE" --notes "$notes"
           gh api "repos/$WEBSITE/dispatches" -f event_type=fizzy-updated
 
   # A published release changes what the site links, not the app.

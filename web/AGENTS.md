@@ -2,7 +2,7 @@
 
 The page and its JavaScript (`index.html`, `web.js`, workers). The Zig half is
 `src/backend/WebBackend.zig` and `src/web_main.zig`. `zig build web` builds into `zig-out/web`, and
-`scripts/serve-web.sh` serves it on :8765. `main` deploys to fizzyed.it/app.
+`scripts/serve-web.sh` serves it on :8765. `main` deploys to fizzyed.it/testapp; fizzyed.it/app is the live SDK release (`web.yml`).
 
 - **The web backend is fizzy's,** begun from dvui's `web.zig`/`web.js` and linked through dvui's
   `custom` backend with dvui's web options passed explicitly (`build/web.zig`). A dvui bump that

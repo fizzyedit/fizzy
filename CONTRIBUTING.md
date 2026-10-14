@@ -37,8 +37,7 @@ The open PR list is the board of who is working on what.
    touches the same files or the same plan step, coordinate on it (comment, or stack on top of
    it) instead of starting a parallel version.
 2. **Open a draft PR on your first push** (`gh pr create --draft --body-file <file>`), with the
-   template filled in as far as you know it. A draft runs CI but doesn't take the one web test
-   copy (`web.yml`), so claim early.
+   template filled in as far as you know it. A draft runs CI, so claim early.
 3. **Mark it ready when it is done and verified.** Merging is the maintainer's. Never push to
    `main`, and never merge a PR you opened unless asked to.
 
@@ -71,9 +70,9 @@ The open PR list is the board of who is working on what.
   then `jj describe --stdin < file` or `gh pr create --body-file file`. With `-m "…"` or an
   unquoted heredoc, zsh runs every backticked name as a command.
 - **Push a branch:** `jj bookmark create <area>/<slug> -r @-`, then
-  `jj git push --bookmark <area>/<slug>`. Pushing `main` publishes (the web app at
-  fizzyed.it/app when its plugin SDK is released, and an SDK release when the version moved), so
-  `main` moves only by a merged PR.
+  `jj git push --bookmark <area>/<slug>`. Pushing `main` publishes (fizzyed.it/testapp
+  always, fizzyed.it/app while `main` is on the live SDK, and an SDK release when the version
+  moved), so `main` moves only by a merged PR.
 - **Look before `jj abandon`.** Abandon only an id that `jj log` prints as `(empty)` that moment,
   never one from memory, and never a change that is some workspace's working copy
   (`jj workspace list`). `jj undo` brings back a wrong one.
@@ -115,7 +114,8 @@ tags `sdk-v*` and publishes the tarball, then asks each `fizzyedit` store plugin
 builds against the new SDK and opens a `sdk: repin to fizzy SDK <version>` PR in its own repo
 when it needs a release (its fingerprint moved, or it no longer builds, as a draft); merge it and
 tag the version it names. A merge that leaves the version alone publishes nothing: a released
-tarball is pinned by hash, so it is never replaced.
+tarball is pinned by hash, so it is never replaced. Once the plugins have released into it, the
+maintainer makes the SDK **live** on the site (below).
 
 - **A feature PR records the fingerprint and leaves `sdk_version` alone.** When the shape moves,
   the build fails with the new value; record it, label the PR `sdk`, and say in the template's
@@ -124,11 +124,14 @@ tarball is pinned by hash, so it is never replaced.
   since the last `sdk-v*` tag. Two branches never race for the same number, and a morning's SDK
   changes cost one round of repinning instead of several. Changes to `core/` that plugins build
   in, with no fingerprint move, reach them the same way.
-- **Merging an `sdk` PR does not break the site.** fizzyed.it/app goes up from `main` only while
-  `main`'s fingerprint is a released one (`web.yml`); after an `sdk` merge it holds the last build
-  every store plugin loads in, and the release puts `main` up. So `sdk` PRs can land as they are
-  ready and release in a batch. Batch on purpose, though: until the release, nothing else reaches
-  the site either.
+- **The site has two copies, and merging an `sdk` PR breaks neither** (`web.yml`).
+  fizzyed.it/testapp is `main`, every push: a new SDK is there to try while plugins catch up.
+  fizzyed.it/app is the **live** SDK release, the one the store's plugins are built for, so every
+  plugin loads there. It goes up from `main` only while `main` is on the live SDK; after an `sdk`
+  merge it holds. Going live is the maintainer's step, once the repinned plugins are released and
+  the store holds them: `gh workflow run web.yml --ref main -f go_live=0.2.N` moves the `web-live`
+  tag to `sdk-v0.2.N` and puts the app up (from `main`, or from the release's own commit if `main`
+  has moved on). Until then non-SDK fixes reach testapp, not the app.
 - **An app release never ships an unreleased fingerprint.** If it moved since the last `sdk-v*`
   tag, release the SDK first (`RELEASING.md`).
 
