@@ -213,6 +213,73 @@ pub fn carriedFieldWhole(id: dvui.Id, field: widgets.LiquidField, scale: f32) bo
     return true;
 }
 
+// ---- glass controls -----------------------------------------------------------------------------
+
+/// A control floating over content as a bubble of glass — a round button, or a capsule holding a
+/// scrubber or a row of buttons. Physical pixels, window coordinates; rounded across its shorter
+/// side, so a square is a circle.
+pub const Bubble = struct {
+    rect: dvui.Rect.Physical,
+    /// White added over it, 0…1: `bubble_hover` under the pointer, `bubble_press` held.
+    light: f32 = 0,
+};
+pub const bubble_hover: f32 = 0.14;
+pub const bubble_press: f32 = 0.24;
+
+pub const BubblesOptions = struct {
+    /// Points: how near two bubbles come before their glass runs together (`LiquidField.merge_px`);
+    /// 0 never joins.
+    merge: f32 = 0,
+    /// The shadows' share, 0…1: bubbles still run together into one want none, a ring round each
+    /// lying dark across the bridges.
+    shadow: f32 = 1,
+    /// A signature of what lies under the bubbles, as `frostPaneKept`'s: the frost is read again
+    /// only when it changes. Null reads it every frame.
+    witness: ?u64 = null,
+};
+
+/// Controls of glass over content, one look wherever they float: the demo player's transport, a
+/// plugin's buttons over its canvas. Each bubble is drawn as a drop is (`LiquidField`, its edge
+/// bending along its own outline — a capsule's ends round, as a circle's are), lit by its
+/// `light`, whole from the first frame, with the floating surfaces' shadow as a ring round it.
+/// Where the glass program is not there to draw it, or the blur is off, each is frosted (or
+/// filled) on its own and lit with the menus' hover and press. `id` keys the frost.
+pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: BubblesOptions) void {
+    const bs = surfaceShadow();
+    // The ring after the glass, so the glass never blurs it in.
+    defer if (opts.shadow > 0) for (bubbles) |b| {
+        if (b.rect.w < 1 or b.rect.h < 1) continue;
+        glassShadow(b.rect, .round(@min(b.rect.w, b.rect.h) / 2 / scale), scale, bs, opts.shadow);
+    };
+    if (widgets.LiquidField.ready()) {
+        if (widgets.liquidFrost()) |frost| {
+            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale };
+            for (bubbles) |b| {
+                if (b.rect.w < 1 or b.rect.h < 1) continue;
+                field.add(.{ .rect = b.rect, .radii = @splat(@min(b.rect.w, b.rect.h)), .round = true, .light = b.light });
+            }
+            var pane = frost;
+            pane.form = 1;
+            pane.witness = opts.witness;
+            widgets.BlurBackdrop.fieldPane(id, field, scale, pane);
+            return;
+        }
+    }
+    for (bubbles, 0..) |b, i| {
+        if (b.rect.w < 1 or b.rect.h < 1) continue;
+        const round: dvui.CornerRect = .round(@min(b.rect.w, b.rect.h) / 2 / scale);
+        const physical = round.scale(scale, dvui.CornerRect.Physical);
+        const piece = id.update(std.mem.asBytes(&i));
+        const frosted = if (opts.witness) |w| frostPaneKept(piece, b.rect, round, scale, w) else frostPane(piece, b.rect, round, scale);
+        if (!frosted) b.rect.fill(physical, .{ .color = .{ .color = dialogFill() }, .fade = 1 });
+        if (b.light >= bubble_press) {
+            b.rect.fill(physical, .{ .color = .{ .color = rowPress() }, .fade = 1 });
+        } else if (b.light > 0) {
+            b.rect.fill(physical, .{ .color = .{ .color = rowHover() }, .fade = 1 });
+        }
+    }
+}
+
 /// Clear glass at the dialog style (`BlurBackdrop.Pane.clear`): its tint, lift and edge over what
 /// is behind, unblurred — glass for the blur off.
 pub fn clearFrost() widgets.BlurBackdrop.Pane {

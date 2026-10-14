@@ -669,39 +669,16 @@ fn barGeometry(center: dvui.Point, full_w: f32, p: f32, out: *[5]dvui.Rect) f32 
     return std.math.clamp(apart, 0, 1);
 }
 
-/// The bar's glass: its pieces as one liquid glass (`LiquidField`), running together where they
-/// are close, the hovered one lit; where the glass program is not there to draw it, or the blur is
-/// off, each piece frosted (or filled) on its own. Their shadows come in as they part — a ring
-/// round each piece would lie dark across the bridges while they are one.
+/// The bar's glass: its pieces as one liquid glass, running together where they are close, the
+/// hovered one lit (`core.dialogs.glassBubbles`). Their shadows come in as they part — a ring round
+/// each piece would lie dark across the bridges while they are one.
 fn barGlass(id: dvui.Id, pieces: []const dvui.Rect.Physical, s: f32, hovered: ?Piece, apart: f32) void {
-    const bs = core.dialogs.surfaceShadow();
-    defer for (pieces) |r| {
-        if (r.w < 1 or r.h < 1) continue;
-        core.dialogs.glassShadow(r, .round(r.h / 2 / s), s, bs, apart);
+    var bubbles: [5]core.dialogs.Bubble = undefined;
+    for (pieces, bubbles[0..pieces.len], 0..) |r, *b, i| b.* = .{
+        .rect = r,
+        .light = if (hovered != null and @intFromEnum(hovered.?) == i) core.dialogs.bubble_hover else 0,
     };
-    if (core.widgets.LiquidField.ready()) {
-        var field: core.widgets.LiquidField = .{ .merge_px = bar_merge * s, .scale = s };
-        for (pieces, 0..) |r, i| {
-            if (r.w < 1 or r.h < 1) continue;
-            field.add(.{
-                .rect = r,
-                .radii = @splat(r.h),
-                .round = i != @intFromEnum(Piece.track),
-                .light = if (hovered != null and @intFromEnum(hovered.?) == i) 0.14 else 0,
-            });
-        }
-        if (core.dialogs.carriedFieldWhole(id, field, s)) return;
-    }
-    for (pieces, 0..) |r, i| {
-        if (r.w < 1 or r.h < 1) continue;
-        const round: dvui.CornerRect = .round(r.h / 2 / s);
-        if (!core.dialogs.frostPane(id.update(@tagName(@as(Piece, @enumFromInt(i)))), r, round, s)) {
-            r.fill(round.scale(s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.dialogFill() } });
-        }
-        if (hovered != null and @intFromEnum(hovered.?) == i) {
-            r.fill(round.scale(s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.rowHover() } });
-        }
-    }
+    core.dialogs.glassBubbles(id, bubbles[0..pieces.len], s, .{ .merge = bar_merge, .shadow = apart });
 }
 
 /// A bar button's icon, in the middle of its bubble `r` (window-natural; `bounds` the layer's).
