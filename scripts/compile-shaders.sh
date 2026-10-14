@@ -17,6 +17,8 @@
 # Needs `shadercross` and `spirv-cross` on PATH. Exits non-zero if any shader does not compile.
 set -euo pipefail
 OUT=${1:?usage: compile-shaders.sh OUT}
+# Absolute: each shader compiles from its own directory (its `#include`s are relative).
+mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 failed=0
 while IFS= read -r hlsl; do
   dir=$(dirname "$hlsl"); name=$(basename "$hlsl" .hlsl)

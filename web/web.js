@@ -654,7 +654,18 @@ export class Dvui {
             },
             wasm_programCreate: (ptr, len, textures, uniform_vec4s) => {
                 const gl = this.gl;
-                const src = this.programPrelude(uniform_vec4s) + this.stringFromPointer(ptr, len);
+                const body = this.stringFromPointer(ptr, len);
+                // A complete source — one generated from a program's HLSL, GLSL ES 3.00
+                // (`scripts/compile-shaders.sh`) — is compiled as it is, on WebGL2 only. On WebGL1
+                // it fails, and whoever drew with it falls back (the glass to its meshes).
+                const complete = body.startsWith("#version");
+                if (complete && !this.webgl2) {
+                    const id = this.newProgramId;
+                    this.newProgramId += 1;
+                    this.programs.set(id, { prog: null, fs: null, loc: null, status: 0 });
+                    return id;
+                }
+                const src = complete ? body : this.programPrelude(uniform_vec4s) + body;
                 const vs = gl.createShader(gl.VERTEX_SHADER);
                 gl.shaderSource(vs, this.webgl2 ? vertexShaderSource_webgl2 : vertexShaderSource_webgl);
                 gl.compileShader(vs);
