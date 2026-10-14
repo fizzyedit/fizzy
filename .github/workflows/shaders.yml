@@ -9,9 +9,9 @@
 #
 # The toolchain: SDL_shadercross, pinned, with the DirectXShaderCompiler release it pins itself
 # (Microsoft's prebuilt v1.9.2602, by SHA-256), as shadercross's own CI builds it. Nothing heavy is
-# built here: SPIRV-Cross and shadercross, a few minutes, cached by the pin. What was committed
-# before this came from a DXC built from source (libsdl-org's fork at 2c84a1c5): it was compiled
-# again once with this one, and is checked against it from then on.
+# built here: SPIRV-Cross and shadercross, a few minutes, cached by the pin. The shaders that had
+# not changed since they were compiled (the backend's defaults) reproduce with it byte for byte,
+# SPIR-V and DXIL: it is the toolchain they were made with.
 
 name: Shaders
 
