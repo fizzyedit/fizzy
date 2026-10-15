@@ -149,7 +149,7 @@ pub fn attachMksquashfsToVpkRun(
 ) !void {
     if (target.result.os.tag != .linux) return;
     const built = (try buildMksquashfs(b, vz)) orelse return;
-    _ = built.bin_dir; // ZIG017: addPathDir gone in 0.17
+    _ = built.bin_dir; // ZIG017 (release packaging PR): Run.addPathDir is gone in 0.17
     run.step.dependOn(built.step);
 }
 

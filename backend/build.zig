@@ -145,7 +145,8 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
 fn patchedSdl(b: *std.Build) ?std.Build.LazyPath {
     const io = b.graph.io;
     var names: std.ArrayList([]const u8) = .empty;
-    var dir = b.root.root_dir.handle.openDir(io, "patches/sdl", .{ .iterate = true }) catch |err|
+    b.dependOnDirectoryContents(b.path("patches/sdl"));
+    var dir = b.root.openDir(io, "patches/sdl", .{ .iterate = true }) catch |err|
         std.debug.panic("backend: open patches/sdl: {t}", .{err});
     defer dir.close(io);
     var it = dir.iterate();

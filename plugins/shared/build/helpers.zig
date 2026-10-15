@@ -56,6 +56,7 @@ pub const IdentityManifest = @import("../../../sdk/src/manifest_identity.zig").I
 /// collide with the same file when the plugin is built standalone (its own `build.zig` already
 /// `@import`s it via `plugin_sdk.readManifest`). Panics clearly on a missing/invalid manifest.
 pub fn readManifestAt(b: *std.Build, zon_rel_path: []const u8) IdentityManifest {
+    b.dependOnFileContents(b.path(zon_rel_path));
     const raw = b.root.root_dir.handle.readFileAlloc(b.graph.io, zon_rel_path, b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
         std.debug.panic("fizzy: could not read {s}: {}", .{ zon_rel_path, e });
     const src = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");

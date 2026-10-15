@@ -8,7 +8,6 @@
         "build",
         "build.zig",
         "build.zig.zon",
-        "update.zig",
         "sdk",
         "backend",
         "assets",

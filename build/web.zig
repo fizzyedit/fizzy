@@ -234,7 +234,8 @@ pub fn addSteps(
     for (web_plugin_dirs) |wp| {
         const dir = wp.dir;
         const zon_path = b.pathJoin(&.{ dir, "plugin.zig.zon" });
-        b.root.root_dir.handle.access(b.graph.io, zon_path, .{}) catch {
+        dependOnPathExistence(b, zon_path);
+        b.root.access(b.graph.io, zon_path, .{}) catch {
             std.debug.print("fizzy web: plugin checkout '{s}' not found; the web build goes without it\n", .{dir});
             continue;
         };
@@ -329,7 +330,11 @@ pub fn addSteps(
     ).step);
     for (web_pages.items) |page| {
         const web_dir = b.pathJoin(&.{ page.dir, "web" });
-        var d = b.root.root_dir.handle.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch continue;
+        var d = b.root.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch {
+            dependOnPathExistence(b, web_dir);
+            continue;
+        };
+        b.dependOnDirectoryContents(b.path(web_dir));
         defer d.close(b.graph.io);
         var it = d.iterate();
         while (it.next(b.graph.io) catch null) |entry| {
@@ -381,6 +386,7 @@ fn stampStorage(b: *std.Build) std.Build.LazyPath {
         else => std.debug.panic("-Dweb-storage={s}: only a-z, 0-9, '-' and '_'", .{name}),
     };
     const token = "__FIZZY_WEB_STORAGE__";
+    b.dependOnFileContents(b.path("web/index.html"));
     const html = b.root.root_dir.handle.readFileAlloc(b.graph.io, "web/index.html", b.allocator, .unlimited) catch |err|
         std.debug.panic("web/index.html: {t}", .{err});
     if (std.mem.indexOf(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
@@ -416,4 +422,20 @@ fn rehome(
     m.addImport("fizzy_sdk", sdk_mod);
     if (icons_mod) |icons| m.addImport("icons", icons);
     return m;
+}
+
+/// Declare to Zig 0.17's configure cache that the build read whether `rel` exists: the file itself
+/// when it does, and otherwise the nearest directory that exists, since the maker cannot load a
+/// configuration that depends on a path inside a missing directory ("configuration failed:
+/// FileSystemFailure"). Making the file changes that directory, so the build still reconfigures.
+fn dependOnPathExistence(b: *std.Build, rel: []const u8) void {
+    b.root.access(b.graph.io, rel, .{}) catch {
+        var dir = std.fs.path.dirname(rel);
+        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
+            b.root.access(b.graph.io, d, .{}) catch continue;
+            return b.dependOnDirectoryMetadata(b.path(d));
+        }
+        return b.dependOnDirectoryMetadata(b.path("."));
+    };
+    b.dependOnFileMetadata(b.path(rel));
 }

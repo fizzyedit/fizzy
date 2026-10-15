@@ -12,6 +12,9 @@ pub fn build(b: *std.Build) !void {
     const windows_msvc_libc_opt = b.option([]const u8, "windows-msvc-libc", "zig libc manifest for *-windows-msvc when cross-compiling; forwarded by packageall for Windows children") orelse null;
     const fetch_msvc_opt = b.option(bool, "fetch-msvc", "If *-windows-msvc libc is missing under .velopack-msvc/, run msvcup-setup first (downloads MSVC+SDK; requires network). Defaults to true on Windows hosts targeting *-windows-msvc.") orelse null;
 
+    // ZIG017 (release packaging PR): the FIZZY_MACOS_* fallbacks below are read at configure, and
+    // 0.17 caches the configuration without regard to the environment; scripts/release.sh and
+    // release.yml pass the -D options instead.
     const macos_sign_app_identity = b.option([]const u8, "macos-sign-app", "macOS codesign identity for the app bundle (e.g. 'Developer ID Application: NAME (TEAMID)')") orelse
         b.graph.environ_map.get("FIZZY_MACOS_SIGN_APP");
     const macos_sign_install_identity = b.option([]const u8, "macos-sign-installer", "macOS codesign identity for the installer pkg (e.g. 'Developer ID Installer: NAME (TEAMID)')") orelse
