@@ -23,6 +23,11 @@ const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_616e_6368); // "fizzanch"
 /// rather than reading a value of another type.
 const want_key = "_anchors_at";
 
+/// What a widget that draws its own cursor where the pointer is (a paint tool's pencil, with the
+/// real one hidden) marks, on the frames it draws one: a tape's pointer gives way to it rather than
+/// showing a second pointer on top of it (`overlay`). The cursor's rect is the mark's.
+pub const own_cursor = "cursor";
+
 /// Ask for anchors this frame, before anything draws: every widget that marks itself is named
 /// for whoever is looking. Anyone may ask — the demo player and the live driver while a tape
 /// plays (`app.automation`), a recorder, a plugin's test through the `automation` service — and
