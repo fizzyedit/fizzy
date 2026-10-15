@@ -43,6 +43,21 @@ first_center: bool = true,
 second_center: bool = true,
 prev_parent_rect: dvui.Rect = .{},
 
+/// Fitted to its pane until the person moves the view: a wheel, a pinch, a pan over the canvas.
+/// While fitted, a pane that settles at another size (a document moved to a narrower pane
+/// beside, a window resized) refits it; once the person has moved it, nothing does, so their
+/// place is kept. `fitToView` fits it again; an owner that sets the view itself says whether it
+/// left it fitted.
+fit: bool = true,
+/// The pane size the canvas was last fitted to.
+fit_parent: dvui.Size = .{},
+/// `fitToView` asked: the next fit moves the view there rather than jumping (`fit_move`).
+fit_animate: bool = false,
+/// A fit on its way, from the view as it was: a zoom about the one point on screen the move leaves
+/// where it is, so every point of the content moves toward or away from it in step and both axes
+/// arrive together (`applyFitMove`). Null when none is; a pan or zoom of the person's ends it.
+fit_move: ?FitMove = null,
+
 /// Parent rect captured during the previous `install` call (regardless of whether
 /// `recenter` ran). Lets us detect "the workspace pane is mid-animation right now" so
 /// we can skip the pan-slack viewport/origin mutation in `processEvents` — running it
@@ -334,6 +349,51 @@ pub fn recenter(self: *CanvasWidget) void {
     self.prev_parent_rect = parent;
 }
 
+/// Fit the content to the pane again, moving the view there on the app's motion, and keep it
+/// fitted until the person moves the view.
+pub fn fitToView(self: *CanvasWidget) void {
+    self.fit = true;
+    self.fit_parent = .{};
+    self.fit_animate = true;
+    dvui.refresh(null, @src(), self.id);
+}
+
+const FitMove = struct { from_scale: f32, to_scale: f32, from_center: dvui.Point, to_center: dvui.Point };
+/// How long a fit takes to move the view there, before the app's motion speed.
+const fit_move_us: i32 = 450_000;
+
+/// One frame of a fit on its way (`fit_move`), `t` of the way there. The scale eases on a log
+/// scale, and the data point at the box's middle follows from the move's still point: the data
+/// point `P`, at `G` from the box's middle, that the start and end views both put in the same
+/// place. Every point of the content then moves toward or away from it by one shared factor, a
+/// zoom about it, so x and y move in step. (The middle's data point moved in a straight line
+/// instead, its screen edges moved at different rates on each axis.) With no zoom to speak of
+/// there is no still point: the middle slides in a line.
+fn applyFitMove(self: *CanvasWidget, m: FitMove, t: f32) void {
+    const box = dvui.parentGet().data().rect;
+    const data = self.init_opts.data_size;
+    const s = @exp(std.math.lerp(@log(m.from_scale), @log(m.to_scale), t));
+    const c: dvui.Point = if (@abs(m.from_scale - m.to_scale) < 1e-3 * m.to_scale) .{
+        .x = std.math.lerp(m.from_center.x, m.to_center.x, t),
+        .y = std.math.lerp(m.from_center.y, m.to_center.y, t),
+    } else c: {
+        const k = m.from_scale - m.to_scale;
+        const p: dvui.Point = .{
+            .x = (m.from_center.x * m.from_scale - m.to_center.x * m.to_scale) / k,
+            .y = (m.from_center.y * m.from_scale - m.to_center.y * m.to_scale) / k,
+        };
+        const g: dvui.Point = .{ .x = (p.x - m.from_center.x) * m.from_scale, .y = (p.y - m.from_center.y) * m.from_scale };
+        break :c .{ .x = p.x - g.x / s, .y = p.y - g.y / s };
+    };
+    self.prev_scale = self.scale;
+    self.scale = s;
+    self.scroll_info.virtual_size = .{ .w = data.w * s, .h = data.h * s };
+    // As `recenter` does: the scroll position zeroed with the origin, `deinit` adding the slack.
+    self.scroll_info.viewport.x = 0;
+    self.scroll_info.viewport.y = 0;
+    self.origin = .{ .x = c.x * s - box.w / 2, .y = c.y * s - box.h / 2 };
+}
+
 pub fn rescale(self: *CanvasWidget) void {
     const parent = dvui.parentGet().data().rect;
 
@@ -365,6 +425,7 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
         self.second_center = true;
         self.fade_started = false;
         self.fade_pending = false;
+        self.fit = true;
     }
     // While still in the settle phase, force another recenter whenever the parent rect
     // changed since last frame: the workspace layout may still be moving (e.g. status bar
@@ -397,7 +458,10 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
     // confirmed stable frame. This freezes the canvas's pan/zoom state during animations
     // so mid-frame mutations (scroll container bounce-back, scrollbar visibility flips
     // shrinking the viewport, etc.) don't accumulate drift.
-    if (self.settled() and !parent_is_stable and self.has_stable_snapshot) {
+    // Not while fitted: a fitted view is worked out afresh from the pane each frame (`refit`), so
+    // there is no drift to guard against, and the snapshot froze it at the old fit for as long as
+    // the pane moved.
+    if (self.settled() and !parent_is_stable and self.has_stable_snapshot and !self.fit) {
         self.scroll_info.viewport.x = self.stable_viewport.x;
         self.scroll_info.viewport.y = self.stable_viewport.y;
         self.scroll_info.virtual_size = self.stable_virtual_size;
@@ -420,10 +484,72 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
     // for many frames and `center` can stay true — ignore it once the canvas has settled so
     // reopening the explorer does not recenter an already-panned file.
     const explicit_center = self.init_opts.center and !self.settled();
-    if (size_changed or self.second_center or explicit_center or parent_changed_while_unsettled) {
-        self.rescale();
-        self.recenter();
+    // Still fitted, and the pane is at a size it was not fitted to: refit, every frame it changes,
+    // so a pane being dragged zooms the content with it live. (It waited for the pane to hold
+    // still, and the content caught up in a jump after the drag.)
+    const refit = self.fit and self.settled() and
+        (parent_rect_now.w != self.fit_parent.w or parent_rect_now.h != self.fit_parent.h);
+    if (size_changed or self.second_center or explicit_center or parent_changed_while_unsettled or refit) {
+        const only_refit = !(size_changed or self.second_center or explicit_center or parent_changed_while_unsettled);
+        if (only_refit and self.fit_animate and self.scale > 0) {
+            // Asked for (`fitToView`): moved there from where the view is. A pane changing size
+            // refits at once — a resize the fit trailed behind would lag the person's drag.
+            // Where the view is: the data point at the middle of the box, from the canvas's own
+            // state, the inverse of where `applyFitMove` puts it. Pans move the scroll position,
+            // pan slack moves it and the origin by opposite amounts, so their sum places it;
+            // a fitted view comes out at the data's exact middle. (Read off last frame's screen
+            // rects it was off by the scroll bar a zoomed view shows, and a view already fitted
+            // jumped and moved back.)
+            const box = dvui.parentGet().data().rect;
+            const from_center: dvui.Point = .{
+                .x = (self.origin.x + self.scroll_info.viewport.x + box.w / 2) / self.scale,
+                .y = (self.origin.y + self.scroll_info.viewport.y + box.h / 2) / self.scale,
+            };
+            const from_scale = self.scale;
+            self.rescale();
+            const to_scale = self.scale;
+            const data = self.init_opts.data_size;
+            // Already fitted (within a pixel on screen): nothing to move, and no motion to show.
+            // The view stays exactly as it is: no recenter, which would reset the scroll.
+            const there = @abs(to_scale - from_scale) * @max(data.w, data.h) < 1 and
+                @abs(from_center.x - data.w / 2) * to_scale < 1 and @abs(from_center.y - data.h / 2) * to_scale < 1;
+            if (there) {
+                self.fit_move = null;
+                self.scale = from_scale;
+            } else {
+                self.fit_move = .{ .from_scale = from_scale, .to_scale = to_scale, .from_center = from_center, .to_center = .{ .x = data.w / 2, .y = data.h / 2 } };
+                self.scale = from_scale;
+                // A camera move: eased in and out, never past where it is going. The app's
+                // `settle` arrives early and swings past and back, which on a view read as a
+                // lunge and an overshoot.
+                dvui.animation(self.id, "_fit", .{
+                    .start_val = 0,
+                    .end_val = 1,
+                    .end_time = core.motion.duration(fit_move_us),
+                    .easing = dvui.easing.inOutCubic,
+                });
+            }
+        } else {
+            self.fit_move = null;
+            self.rescale();
+            self.recenter();
+        }
+        self.fit_parent = .{ .w = parent_rect_now.w, .h = parent_rect_now.h };
         dvui.refresh(null, @src(), self.id);
+    }
+    self.fit_animate = false;
+    if (self.fit_move) |m| {
+        if (!self.fit) {
+            // The person took the view: it stays where the move had it.
+            self.fit_move = null;
+        } else if (dvui.animationGet(self.id, "_fit")) |a| {
+            self.applyFitMove(m, a.value());
+        } else {
+            // Done (or motion is off): exactly the fitted view.
+            self.fit_move = null;
+            self.rescale();
+            self.recenter();
+        }
     }
 
     // Wait one frame before starting the fade so the most-stale (frame 1) recenter is
@@ -952,6 +1078,7 @@ pub fn processEvents(self: *CanvasWidget) void {
     // and resize handle. The scale-around-point math here is identical to the wheel
     // and old inline pinch paths — only the timing changed.
     if (self.pending_pinch_zoom != 1.0) {
+        self.fit = false;
         const zoom = self.pending_pinch_zoom;
         const zoomP = self.pending_pinch_zoom_p;
         const prevP = self.dataFromScreenPoint(zoomP);
@@ -965,6 +1092,7 @@ pub fn processEvents(self: *CanvasWidget) void {
         self.pending_pinch_zoom = 1.0;
     }
     if (self.pending_trackpad) {
+        self.fit = false;
         const ratio = self.pending_trackpad_ratio;
         const cursor_phys = self.pending_trackpad_cursor;
         const prevP = self.dataFromScreenPoint(cursor_phys);
@@ -979,6 +1107,7 @@ pub fn processEvents(self: *CanvasWidget) void {
         self.pending_trackpad = false;
     }
     if (self.pending_touch_pan.x != 0 or self.pending_touch_pan.y != 0) {
+        self.fit = false;
         const pdx = self.pending_touch_pan.x;
         const pdy = self.pending_touch_pan.y;
         self.scroll_info.viewport.x += pdx;
@@ -1141,6 +1270,7 @@ pub fn processEvents(self: *CanvasWidget) void {
                             const ddy = -dps.y / rs.s;
                             self.scroll_info.viewport.x += ddx;
                             self.scroll_info.viewport.y += ddy;
+                            self.fit = false;
                             pan_dx += ddx;
                             pan_dy += ddy;
                             pan_motion = true;
@@ -1151,6 +1281,9 @@ pub fn processEvents(self: *CanvasWidget) void {
                         }
                     }
                 } else if (me.action == .wheel_y or me.action == .wheel_x) {
+                    // A wheel over the canvas moves the view, as a zoom here or a pan by the
+                    // scroll container: either way the person has placed it.
+                    self.fit = false;
                     switch (self.init_opts.pan_zoom_scheme) {
                         .mouse => {
                             const base: f32 = if (me.mod.matchBind("shift")) 1.005 else 1.005;

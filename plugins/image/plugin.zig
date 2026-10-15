@@ -68,6 +68,25 @@ pub fn register(host: *sdk.Host) !void {
 
     try host.registerPlugin(&plugin);
     try host.registerFileKind(.{ .owner = &plugin, .kind = fileKind });
+    try host.registerCommand(.{
+        .id = sdk.Plugin.commandId("image", "fitView"),
+        .owner = &plugin,
+        .title = "Fit to View",
+        .run = cmdFitView,
+        .isEnabled = cmdFitViewEnabled,
+    });
+}
+
+/// `fizzy.fitView` on an image: fitted to its pane, and kept fitted until the person moves it.
+fn cmdFitView(_: *anyopaque) anyerror!void {
+    const handle = sdk.host().activeDoc() orelse return;
+    if (handle.owner != &plugin) return;
+    const doc = docFrom(handle) orelse return;
+    doc.canvas.fitToView();
+}
+fn cmdFitViewEnabled(_: *anyopaque) bool {
+    const handle = sdk.host().activeDoc() orelse return false;
+    return handle.owner == &plugin;
 }
 
 pub fn pluginPtr() *sdk.Plugin {

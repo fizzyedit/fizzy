@@ -5707,7 +5707,7 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
 /// Dispatch a generic fizzy action to the active document owner's command (`<owner_id>.<action>`).
 /// No active doc, or an owner that registered no such command, is a clean no-op. This is how the
 /// fizzy's Edit menu / keybinds reach per-editor actions without naming any plugin.
-fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
+pub fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
     const doc = editor.activeDoc() orelse return;
     const id = try std.fmt.allocPrint(editor.app.arena.allocator(), "{s}.{s}", .{ doc.owner.id, action });
     try editor.app.host.runCommand(id);

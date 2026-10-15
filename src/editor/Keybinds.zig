@@ -162,6 +162,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
     .{ .id = "fizzy.resetLayout", .title = "Reset Layout", .bind = null, .run = cmdResetLayout, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.toggleFullScreen", .title = "Toggle Full Screen", .bind = null, .run = cmdToggleFullScreen, .icon = icons.tvg.lucide.maximize },
+    .{ .id = "fizzy.fitView", .title = "Fit to View", .bind = null, .run = cmdFitView, .isEnabled = cmdFitViewEnabled, .icon = icons.tvg.lucide.scan },
     .{ .id = "fizzy.deleteSelection", .title = "Delete Selection", .bind = "delete_selection_contents", .run = cmdDeleteSelection, .isEnabled = cmdDeleteSelectionEnabled, .icon = icons.tvg.lucide.@"trash-2" },
     .{ .id = "fizzy.accept", .title = "Accept", .bind = "activate", .run = cmdAccept, .isEnabled = cmdAcceptEnabled, .icon = icons.tvg.lucide.check },
     .{ .id = "fizzy.cancel", .title = "Cancel", .bind = "cancel", .run = cmdCancel, .isEnabled = cmdCancelEnabled, .icon = icons.tvg.lucide.x },
@@ -482,6 +483,14 @@ fn cmdCancel(state: *anyopaque) anyerror!void {
     try editorFromState(state).cancel();
 }
 
+/// The active document's view fitted to its pane again (`<owner>.fitView`): an image or a sprite
+/// the person has panned and zoomed, back where a new one opens.
+fn cmdFitView(state: *anyopaque) anyerror!void {
+    try editorFromState(state).runActiveDocCommand("fitView");
+}
+fn cmdFitViewEnabled(state: *anyopaque) bool {
+    return editorFromState(state).activeDocCommandEnabled("fitView");
+}
 fn cmdUndoEnabled(state: *anyopaque) bool {
     return editorFromState(state).activeDocCommandEnabled("undo");
 }
@@ -673,6 +682,7 @@ const vscode_defaults = [_]DefaultBind{
     .{ .command = "fizzy.commandPalette", .keys = "mod+shift+p" },
     // The platform's own: F11 in VSCode and browsers, ⌃⌘F in every macOS app.
     .{ .command = "fizzy.toggleFullScreen", .keys = "f11", .keys_mac = "ctrl+cmd+f" },
+    .{ .command = "fizzy.fitView", .keys = "mod+0" },
 } ++ open_folder_defaults ++ close_defaults;
 
 /// The web has no folder to open — a page cannot read a directory tree — so Open Folder does not
@@ -720,6 +730,7 @@ pub const document_verbs = [_]DocumentVerb{
     .{ .action = "undo", .fizzy_id = "fizzy.undo" },
     .{ .action = "redo", .fizzy_id = "fizzy.redo" },
     .{ .action = "deleteSelection", .fizzy_id = "fizzy.deleteSelection" },
+    .{ .action = "fitView", .fizzy_id = "fizzy.fitView" },
     .{ .action = "acceptEdit", .fizzy_id = "fizzy.accept" },
     .{ .action = "cancelEdit", .fizzy_id = "fizzy.cancel" },
     .{ .action = "transform", .fizzy_id = null },
