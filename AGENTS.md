@@ -68,7 +68,10 @@ every list must include it) and markdown (the store draws READMEs with it). An a
 fizzy lists every plugin it links with `defer-app` + `fizzy.buildApp(fizzy_dep, &.{
 fizzy.plugins.workbench, fizzy.plugins.text, .{ .name, .module = dep.module("plugin") } })`:
 fizzy's own are entries with no module, built for each executable (`build/plugins.zig`'s
-`link`), and only those listed register or get a dylib. See
+`link`), and only those listed register or get a dylib. `.@"dynamic-plugins" = false` (or
+`-Ddynamic-plugins=false`) makes an app link-only: no plugin dylib is built, and nothing loads
+at runtime (fizzy's dylibs, the user plugins directory, the store, a web page's `?plugin=`),
+all decided at comptime (`App.loads_plugins`). See
 [`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
 `fizzyedit/example-plugin`.
 

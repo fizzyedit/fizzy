@@ -667,7 +667,7 @@ pub const view_settings = "fizzy.settings";
 pub const workbench_files_view = workbench_mod.view_files;
 
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return;
 
     const plugins_dir = std.fs.path.join(editor.app.gpa, &.{ config_folder, "plugins" }) catch return;
     defer editor.app.gpa.free(plugins_dir);
@@ -1424,7 +1424,7 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 /// dvui/render-bridge sync path as `loadUserPlugins`. Caller ensures `id` is not already
 /// registered. On success the lib is appended to `loaded_plugin_libs`.
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
     const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
         editor.userPluginLoadFailed(id, path, err);
@@ -1632,7 +1632,7 @@ const WebPluginRequest = struct {
 /// The page asks for a plugin: `?plugin=<id>` on the URL (`plugins/<id>/<id>.wasm` beside
 /// the app), or one it remembered from a store install (by its URL).
 export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void {
-    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    if (comptime builtin.target.cpu.arch != .wasm32 or !App.loads_plugins) return;
     const editor = web_editor orelse return;
     const id = id_ptr[0..id_len];
     // The id reaches this from the page's query string, and with no URL it is interpolated

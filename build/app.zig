@@ -83,6 +83,7 @@ pub const Config = struct {
     static_workbench: bool,
     static_text: bool,
     static_image: bool,
+    dynamic_plugins: bool,
     workbench_opts: *std.Build.Step.Options,
     /// Null on the configure pass that fetches Velopack (see `readConfig`).
     msvcup_before_compile: ?*std.Build.Step.Run,
@@ -227,6 +228,11 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     build_opts.addOption([]const u8, "app_repo_url", app_repo_url);
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
+    // Off, the app runs only the plugins it links (`buildApp`'s list): no plugin dylib is built,
+    // and nothing loads at runtime — not fizzy's own dylibs, not the user plugins directory, not
+    // the store, not a web page's `?plugin=`. Comptime, so none of it is checked per frame.
+    const dynamic_plugins = b.option(bool, "dynamic-plugins", "Load plugins at runtime: fizzy's own dylibs, the user plugins directory, the store (default: true)") orelse true;
+    build_opts.addOption(bool, "dynamic_plugins", dynamic_plugins);
 
     // A consumer that wants its own shape passes `-Dapp-layout=` (a LazyPath to
     // `pub fn layout(?*anyopaque, *Layout)`). Fizzy itself uses `src/editor/layout.zig`.
@@ -303,6 +309,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .static_workbench = static_workbench,
         .static_text = static_text,
         .static_image = static_image,
+        .dynamic_plugins = dynamic_plugins,
         .workbench_opts = workbench_opts,
         .msvcup_before_compile = msvcup_before_compile,
         .accesskit = accesskit,
@@ -354,6 +361,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const static_workbench = cfg.static_workbench;
     const static_text = cfg.static_text;
     const static_image = cfg.static_image;
+    const dynamic_plugins = cfg.dynamic_plugins;
     const workbench_opts = cfg.workbench_opts;
     const msvcup_before_compile = cfg.msvcup_before_compile;
     const accesskit = cfg.accesskit;
@@ -377,7 +385,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs);
 
-    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins);
+    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
     const exe = main_fizzy.exe;
 
     const package_fizzy: FizzyExecutable = package_blk: {
@@ -399,8 +407,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
+        pack_opts.addOption(bool, "dynamic_plugins", dynamic_plugins);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
-        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins);
+        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
     };
     const exe_for_package = package_fizzy.exe;
 

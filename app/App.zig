@@ -1141,12 +1141,17 @@ pub fn syncLoadedPluginRenderBridge(app: *App) void {
     }
 }
 
+/// Whether this build loads plugins at runtime (`-Ddynamic-plugins`, default on): fizzy's own
+/// dylibs, the user plugins directory, the store, and on the web a page's `?plugin=`. Off, the
+/// app runs exactly the plugins it links.
+pub const loads_plugins = if (@hasDecl(build_opts, "dynamic_plugins")) build_opts.dynamic_plugins else true;
+
 /// Whether a bundled plugin should be loaded from `{exe_dir}/plugins/<id>/` rather than the
-/// copy linked in: never on wasm, not when the build pinned it static
+/// copy linked in: never on wasm or in a link-only build, not when the build pinned it static
 /// (`build_opts.static_<id>`), and not when `FIZZY_STATIC_<ID>=1` is set — the bisection
 /// switch for dylib loading trouble.
 pub fn bundledDylibEnabled(gpa: std.mem.Allocator, comptime id: []const u8) bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !loads_plugins) return false;
     if (comptime @hasDecl(build_opts, "static_" ++ id)) {
         if (comptime @field(build_opts, "static_" ++ id)) return false;
     }

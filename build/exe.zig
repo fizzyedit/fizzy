@@ -204,6 +204,8 @@ pub fn addFizzyExecutableForTarget(
     /// package (`plugin_dep.module("plugin")`). Listed in the generated `bundled_plugins` module
     /// under its plugin id.
     app_plugins: []const sdk.BundledPlugin,
+    /// False for a link-only app (`-Ddynamic-plugins=false`): no plugin dylib is built.
+    dynamic_plugins: bool,
 ) !FizzyExecutable {
     const native = nativeDvui(b, native_backend, resolved_target, optimize, accesskit, macos_sdl_paths);
     const dvui_dep = native.dep;
@@ -341,7 +343,7 @@ pub fn addFizzyExecutableForTarget(
         exe.root_module.addImport("app_layout", app_layout_mod);
     }
 
-    const workbench_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
+    const workbench_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk workbench_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
@@ -352,7 +354,7 @@ pub fn addFizzyExecutableForTarget(
         }, workbench_opts);
     } else null;
 
-    const text_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "text")) blk: {
+    const text_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "text")) blk: {
         break :blk text_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
@@ -362,7 +364,7 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const markdown_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "markdown")) blk: {
+    const markdown_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "markdown")) blk: {
         break :blk markdown_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
@@ -371,7 +373,7 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const image_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "image")) blk: {
+    const image_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "image")) blk: {
         break :blk image_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
