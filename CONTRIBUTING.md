@@ -150,6 +150,13 @@ maintainer makes the SDK **live** on the site (below).
 | Plans | private, in [`fizzyedit/plans`](https://github.com/fizzyedit/plans): issues, and a long design as `plans/<NAME>_PLAN.md` opening with a status line (`Status: proposed`, `in progress, fizzyedit/fizzy#N`, or `done`) |
 | The forks fizzy builds on | `docs/DEPENDENCIES.md` |
 | Releases | `RELEASING.md` |
+| Licensing, and the name | `LICENSING.md`, `TRADEMARKS.md` |
+
+## Licensing contributions
+
+Fizzy is MIT (`LICENSING.md`), and a contribution comes in under the license it goes out under:
+opening a PR offers its change under MIT. There is no contributor license agreement. Code
+copied from elsewhere must carry a license compatible with MIT, and keeps its notice.
 
 ## Habits reviewers ask for
 

@@ -44,5 +44,8 @@ By default, when you install fizzy, only builtin plugins are included. This give
 - [prime31](https://github.com/prime31) for all the help.
 - Any and all contributors
 
+## License
 
-     
+Fizzy is [MIT](LICENSE), and will stay free. Plugins and applications built on it may be
+commercial and closed-source. What that promises, and what it asks, is in
+[LICENSING.md](LICENSING.md); the name and logo are covered by [TRADEMARKS.md](TRADEMARKS.md).
