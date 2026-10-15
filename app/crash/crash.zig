@@ -11,10 +11,9 @@
 //! - a panic in the app's own code (`panic`, the root file's panic handler);
 //! - a fault anywhere in the process (`handleSegfault`, std's segfault handler, which the app
 //!   switches on in every build mode): SIGSEGV, SIGBUS, SIGILL, SIGFPE, or an access violation;
-//! - an abort or trap anywhere (SIGABRT, SIGTRAP; POSIX only). A plugin's panic lands here: its
-//!   dylib has its own std, whose panic handler prints the message and aborts. The message then
-//!   reaches stderr but not the report; carrying it is the dylib entry's `panic` forwarding to
-//!   the host's `panic` through an exported symbol, a follow-up.
+//! - a panic in a plugin dylib, which has its own std: the generated root's handler
+//!   (`sdk.dylib.panic`) forwards it through `EditorAPI.panic` to `panic`, message and frames;
+//! - an abort or trap anywhere (SIGABRT, SIGTRAP; POSIX only).
 //!
 //! After the report, each hands on to what would have run without it: std's own handler, which
 //! prints the symbolized stack trace, or the signal's default action.
