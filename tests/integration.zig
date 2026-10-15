@@ -7383,6 +7383,56 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         editor.session = null;
     }
 
+    // A document never saved comes back from its unsaved bytes (`Plugin.loadUntitledDocument`),
+    // kept as its owner would save them (`Plugin.bytesPath`), not from a file named by its title,
+    // which there is none of. Here it has no state (its owner might keep none): all it has is
+    // its bytes, and it is still untitled, dirty and whole.
+    {
+        const before = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!before.owner.documentHasRecognizedSaveExtension(before));
+        const path = try gpa.dupe(u8, before.owner.documentPath(before));
+        defer gpa.free(path);
+        const grouping = before.owner.documentGrouping(before);
+        const dir = try fizzy.Editor.KeptDocuments.sessionDir(gpa, editor.app.config_folder);
+        defer gpa.free(dir);
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            defer kept.deinit();
+            for (kept.docs.items) |d| if (std.mem.eql(u8, d.path, path)) {
+                try std.testing.expect(d.save_as != null and d.unsaved != null);
+            };
+            try kept.save(dir);
+        }
+        {
+            var d = try std.Io.Dir.cwd().openDir(dvui.io, dir, .{ .iterate = true });
+            defer d.close(dvui.io);
+            var it = d.iterate();
+            while (try it.next(dvui.io)) |file| {
+                if (std.mem.endsWith(u8, file.name, ".state")) try d.deleteFile(dvui.io, file.name);
+            }
+            const zon = try d.readFileAlloc(dvui.io, "session.zon", gpa, .unlimited);
+            defer gpa.free(zon);
+            const stateless = try std.mem.replaceOwned(u8, gpa, zon, ".has_state = true", ".has_state = false");
+            defer gpa.free(stateless);
+            try d.writeFile(dvui.io, .{ .sub_path = "session.zon", .data = stateless });
+        }
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer ids.deinit(gpa);
+        for (editor.app.open_files.values()) |d| try ids.append(gpa, d.id);
+        for (ids.items) |id| editor.detachFileID(id);
+
+        editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
+        _ = try editor.app.host.openFile(.{ .path = path, .grouping = grouping });
+        const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("text", after.owner.id);
+        try std.testing.expect(after.owner.isDirty(after));
+        try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
+        const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        if (editor.session) |*kept| kept.deinit();
+        editor.session = null;
+    }
+
     // A checkpoint (`Checkpoint`): what a run that did not quit cleanly left is read once at the
     // next launch. Each write is a generation of files in the same folder (`saveGeneration`), the
     // last one's removed once the new `session.zon` is in place; one cut off before any

@@ -18,6 +18,11 @@
 //!   file changed since (an agent's edit, a pull) opens from disk instead; a dirty one always
 //!   comes back as it was, since those edits are the person's.
 //!
+//! A document never saved (`untitled-1`) has no file to fall back on, so its unsaved contents are
+//! kept as its owner would save them (`Plugin.bytesPath`: under the name Save As offers), and it
+//! comes back from them, untitled, through its owner (`Plugin.loadUntitledDocument`), its state
+//! restored over them. It is never opened by its title as a path: no file has that name.
+//!
 //! A new build may not read an old build's state (its format changed): the owner refuses it
 //! (`restoreDocumentState` fails), the document opens as it is on disk, and any unsaved contents
 //! are written to a recovery file the person is told about. A document with unsaved changes whose
@@ -54,8 +59,11 @@ const Kept = struct {
     /// `captureDocumentState`, when the owner has the hook.
     state: ?[]u8,
     /// Unsaved contents (`documentBytes`), kept only for a dirty document: what a recovery file
-    /// holds if the new build cannot read `state`.
+    /// holds if the new build cannot read `state`, and what a document never saved reopens from.
     unsaved: ?[]u8,
+    /// A dirty document never saved: the name `unsaved` was encoded under (`Plugin.bytesPath`),
+    /// which says its format. `path` is then its title, naming no file.
+    save_as: ?[]const u8 = null,
     /// A clean document's file as it was when captured, so a restart can tell it changed since.
     stamp: Stamp = .{},
 };
@@ -97,13 +105,17 @@ pub fn capture(editor: *Editor, plugin: ?*sdk.Plugin) CaptureError!KeptDocuments
         const state = owner.captureDocumentState(doc, gpa);
         errdefer if (state) |s| gpa.free(s);
         if (dirty and state == null) return error.UnsavedNotCarried;
-        const unsaved: ?[]u8 = if (dirty) owner.documentBytes(doc, owner.documentPath(doc), gpa) catch null else null;
+        // Never saved: no file to name a format, so the bytes are encoded as a save would write
+        // them (`bytesPath`), and that name is kept to read them back by.
+        const save_as: ?[]const u8 = if (dirty and !owner.documentHasRecognizedSaveExtension(doc)) try owner.bytesPath(doc, gpa) else null;
+        errdefer if (save_as) |a| gpa.free(a);
+        const unsaved: ?[]u8 = if (dirty) owner.documentBytes(doc, save_as orelse owner.documentPath(doc), gpa) catch null else null;
         errdefer if (unsaved) |u| gpa.free(u);
         const sid = sdk.document.surfaceId(editor.app.host.arena(), owner.id, path) catch return error.OutOfMemory;
         if (active) |a| {
             if (a.id == doc.id) self.active = try gpa.dupe(u8, path);
         }
-        // Last: from here `self` owns `path`, `owner_id`, `state` and `unsaved`.
+        // Last: from here `self` owns `path`, `owner_id`, `state`, `unsaved` and `save_as`.
         try self.docs.append(gpa, .{
             .path = path,
             .owner = owner_id,
@@ -113,6 +125,7 @@ pub fn capture(editor: *Editor, plugin: ?*sdk.Plugin) CaptureError!KeptDocuments
             .dirty = dirty,
             .state = state,
             .unsaved = unsaved,
+            .save_as = save_as,
             .stamp = if (dirty) .{} else Stamp.of(path) orelse .{},
         });
     }
@@ -135,24 +148,26 @@ fn freeKept(gpa: std.mem.Allocator, d: Kept) void {
     gpa.free(d.owner);
     if (d.state) |s| gpa.free(s);
     if (d.unsaved) |u| gpa.free(u);
+    if (d.save_as) |a| gpa.free(a);
 }
 
 /// Bring each document back through `plugin` (the new build), into the tab waiting for it.
 pub fn reattach(self: *KeptDocuments, editor: *Editor, plugin: *sdk.Plugin) void {
     var host = &editor.app.host;
     for (self.docs.items) |d| {
-        const doc = load(editor, plugin, d) catch |err| {
+        const loaded = load(editor, plugin, d) catch |err| {
             dvui.log.err("reload: could not reopen {s}: {t}", .{ d.path, err });
-            if (d.unsaved) |u| recover(editor, d.path, u);
+            recover(editor, d);
             // Its tab waits for nothing now.
             if (sdk.document.surfaceId(host.arena(), plugin.id, d.path)) |sid| editor.workbench.tabClosed(sid) else |_| {}
             continue;
         };
-        const restored = if (d.state) |s| plugin.restoreDocumentState(doc, s) else true;
+        const doc = loaded.doc;
+        const restored = if (d.state) |s| plugin.restoreDocumentState(doc, s) or loaded.whole else true;
         if (!restored) {
             // The new build does not read the old one's state: the document is as on disk.
             dvui.log.warn("reload: {s} reopened as saved; the new build could not read its state", .{d.path});
-            if (d.unsaved) |u| recover(editor, d.path, u);
+            recover(editor, d);
             // It was loaded empty for the state to fill: read it, or close it when there is
             // nothing on disk to read (never saved).
             if (!plugin.reloadDocument(doc)) {
@@ -181,31 +196,41 @@ pub fn reattach(self: *KeptDocuments, editor: *Editor, plugin: *sdk.Plugin) void
 /// recovery files, and the tabs waiting for the documents go.
 pub fn abandon(self: *KeptDocuments, editor: *Editor, plugin_id: []const u8) void {
     for (self.docs.items) |d| {
-        if (d.unsaved) |u| recover(editor, d.path, u);
+        recover(editor, d);
         const sid = sdk.document.surfaceId(editor.app.host.arena(), plugin_id, d.path) catch continue;
         editor.workbench.tabClosed(sid);
     }
     editor.rebuildWorkspaces() catch {};
 }
 
-/// Open `d.path` through `plugin`, now, in its pane. One with state to restore starts empty, since
-/// the state fills it (and an untitled one has nothing on disk to read); only one without is read
-/// from disk.
-fn load(editor: *Editor, plugin: *sdk.Plugin, d: Kept) !sdk.DocHandle {
+const Loaded = struct {
+    doc: sdk.DocHandle,
+    /// Opened from its unsaved contents (a document never saved), so it is whole before any state
+    /// is restored: a state the owner refuses costs only what the bytes do not hold (the caret,
+    /// the scroll).
+    whole: bool,
+};
+
+/// Open `d.path` through `plugin`, now, in its pane. One never saved opens from its unsaved bytes
+/// when its owner can (`loadUntitledDocument`). Otherwise one with state to restore starts empty,
+/// since the state fills it (and an untitled one has nothing on disk to read); only one without is
+/// read from disk.
+fn load(editor: *Editor, plugin: *sdk.Plugin, d: Kept) !Loaded {
     return loadInto(editor, plugin, d, d.grouping);
 }
 
-fn loadInto(editor: *Editor, plugin: *sdk.Plugin, d: Kept, grouping: u64) !sdk.DocHandle {
+fn loadInto(editor: *Editor, plugin: *sdk.Plugin, d: Kept, grouping: u64) !Loaded {
     const gpa = editor.app.gpa;
     const staging = try sdk.document.allocStaging(plugin, gpa);
     defer staging.deinit(gpa);
-    if (d.state != null) {
+    const whole = if (d.save_as) |as| if (d.unsaved) |u| try plugin.loadUntitledDocument(d.path, as, u, staging.buf.ptr) else false else false;
+    if (whole) {} else if (d.state != null) {
         try sdk.document.loadBytesIntoStaging(plugin, d.path, "", staging);
     } else try sdk.document.loadIntoStaging(plugin, d.path, staging);
     const id = plugin.documentIdFromBuffer(staging.buf.ptr);
     plugin.setDocumentGroupingOnBuffer(staging.buf.ptr, grouping);
     try editor.insertOpenDoc(staging.buf.ptr, plugin, id);
-    return editor.app.docById(id) orelse error.DocumentNotFound;
+    return .{ .doc = editor.app.docById(id) orelse return error.DocumentNotFound, .whole = whole };
 }
 
 /// What `save` writes as `session.zon`, beside a file per document's state and unsaved contents
@@ -228,6 +253,8 @@ const Saved = struct {
         dirty: bool = false,
         has_state: bool = false,
         has_unsaved: bool = false,
+        /// `Kept.save_as`; empty for a document with a file.
+        save_as: []const u8 = "",
         size: u64 = 0,
         mtime_ns: i96 = 0,
     };
@@ -317,6 +344,7 @@ fn writeFiles(self: *const KeptDocuments, dir: []const u8, generation: u32) ![]u
             .dirty = d.dirty,
             .has_state = true,
             .has_unsaved = d.unsaved != null,
+            .save_as = d.save_as orelse "",
             .size = d.stamp.size,
             .mtime_ns = d.stamp.mtime_ns,
         });
@@ -387,6 +415,8 @@ fn readKept(gpa: std.mem.Allocator, dir: []const u8, generation: u32, i: usize, 
     const state: ?[]u8 = if (d.has_state) try readBlob(gpa, dir, generation, i, "state") else null;
     errdefer if (state) |s| gpa.free(s);
     const unsaved: ?[]u8 = if (d.has_unsaved) try readBlob(gpa, dir, generation, i, "unsaved") else null;
+    errdefer if (unsaved) |u| gpa.free(u);
+    const save_as: ?[]const u8 = if (d.save_as.len > 0) try gpa.dupe(u8, d.save_as) else null;
     return .{
         .path = path,
         .owner = owner,
@@ -396,48 +426,62 @@ fn readKept(gpa: std.mem.Allocator, dir: []const u8, generation: u32, i: usize, 
         .dirty = d.dirty,
         .state = state,
         .unsaved = unsaved,
+        .save_as = save_as,
         .stamp = .{ .size = d.size, .mtime_ns = d.mtime_ns },
     };
 }
 
+pub const Reopened = enum {
+    /// The session does not hold it (or a clean document's file changed since): the caller opens
+    /// it from disk as any launch does.
+    not_kept,
+    opened,
+    /// The session held a document never saved and could not bring it back. Its unsaved contents
+    /// are in a recovery file; there is no file to open instead.
+    lost,
+};
+
 /// Open `path` from the session, into pane `grouping`, when the session holds it: from its kept
-/// state, restored, with no disk read. Null when it does not (or a clean document's file changed
-/// since), and the caller opens it from disk as any launch does. A document the session held but
-/// could not bring back is opened from disk too, its unsaved contents kept in a recovery file.
-pub fn openKept(self: *KeptDocuments, editor: *Editor, path: []const u8, grouping: u64) ?sdk.DocHandle {
+/// state, restored, with no disk read. A document with a file that the session held but could not
+/// bring back is opened from disk by the caller (`not_kept`), its unsaved contents kept in a
+/// recovery file.
+pub fn openKept(self: *KeptDocuments, editor: *Editor, path: []const u8, grouping: u64) Reopened {
     const i = for (self.docs.items, 0..) |d, i| {
         if (std.mem.eql(u8, d.path, path)) break i;
-    } else return null;
+    } else return .not_kept;
     const d = self.docs.swapRemove(i);
     defer freeKept(self.gpa, d);
+    // A document never saved has no file to open in its place.
+    const instead: Reopened = if (d.save_as != null) .lost else .not_kept;
     if (!d.dirty) {
-        const now = Stamp.of(d.path) orelse return null;
-        if (now.size != d.stamp.size or now.mtime_ns != d.stamp.mtime_ns) return null;
+        const now = Stamp.of(d.path) orelse return .not_kept;
+        if (now.size != d.stamp.size or now.mtime_ns != d.stamp.mtime_ns) return .not_kept;
     }
     const plugin = editor.app.host.pluginById(d.owner) orelse {
-        dvui.log.warn("restart: {s} was open in '{s}', which is not loaded now; it opens from disk", .{ d.path, d.owner });
-        if (d.unsaved) |u| recover(editor, d.path, u);
-        return null;
+        dvui.log.warn("restart: {s} was open in '{s}', which is not loaded now", .{ d.path, d.owner });
+        recover(editor, d);
+        return instead;
     };
-    const doc = loadInto(editor, plugin, d, grouping) catch |err| {
+    const loaded = loadInto(editor, plugin, d, grouping) catch |err| {
         dvui.log.err("restart: could not reopen {s}: {t}", .{ d.path, err });
-        if (d.unsaved) |u| recover(editor, d.path, u);
-        return null;
+        recover(editor, d);
+        return instead;
     };
-    const restored = if (d.state) |s| plugin.restoreDocumentState(doc, s) else true;
+    const doc = loaded.doc;
+    const restored = if (d.state) |s| plugin.restoreDocumentState(doc, s) or loaded.whole else true;
     if (!restored) {
         dvui.log.warn("restart: {s} reopened as saved; this build could not read its state", .{d.path});
-        if (d.unsaved) |u| recover(editor, d.path, u);
+        recover(editor, d);
         // It was loaded empty for the state to fill: the caller opens it from disk instead.
         editor.rawCloseFileID(doc.id) catch {};
-        return null;
+        return instead;
     }
     if (d.preview) editor.setDocumentPreview(doc.id, true);
     if (d.selected) self.keepSelection(plugin.id, d.path, grouping) catch {};
     if (self.active) |a| if (std.mem.eql(u8, a, d.path)) {
         if (editor.app.open_files.getIndex(doc.id)) |idx| editor.workbench.setActiveDocIndex(idx);
     };
-    return doc;
+    return .opened;
 }
 
 fn keepSelection(self: *KeptDocuments, owner_id: []const u8, path: []const u8, grouping: u64) !void {
@@ -453,7 +497,7 @@ fn keepSelection(self: *KeptDocuments, owner_id: []const u8, path: []const u8, g
 /// typed is lost, written to recovery files. What is left is the panes' selections.
 pub fn finishDocuments(self: *KeptDocuments, editor: *Editor) void {
     for (self.docs.items) |d| {
-        if (d.unsaved) |u| recover(editor, d.path, u);
+        recover(editor, d);
         freeKept(self.gpa, d);
     }
     self.docs.clearRetainingCapacity();
@@ -466,8 +510,11 @@ pub fn applySelections(self: *KeptDocuments, editor: *Editor) void {
 }
 
 /// Unsaved contents the new build could not take, written beside fizzy's config so nothing typed
-/// is lost, and the person told where.
-fn recover(editor: *Editor, path: []const u8, unsaved: []const u8) void {
+/// is lost, and the person told where. One never saved is named by its title and the extension it
+/// was encoded under, so the file opens in its owner.
+fn recover(editor: *Editor, d: Kept) void {
+    const unsaved = d.unsaved orelse return;
+    const path = d.path;
     // A page has no folder to keep them in (and no reload to lose them to: a web plugin is a
     // side module, never swapped).
     if (comptime builtin.target.cpu.arch == .wasm32) {
@@ -478,7 +525,8 @@ fn recover(editor: *Editor, path: []const u8, unsaved: []const u8) void {
     const dir = std.fs.path.join(gpa, &.{ editor.app.config_folder, "recovered" }) catch return;
     defer gpa.free(dir);
     std.Io.Dir.cwd().createDirPath(dvui.io, dir) catch {};
-    const name = std.fmt.allocPrint(gpa, "{d}-{s}", .{ std.Io.Clock.real.now(dvui.io).toSeconds(), std.fs.path.basename(path) }) catch return;
+    const ext = if (d.save_as) |a| std.fs.path.extension(a) else "";
+    const name = std.fmt.allocPrint(gpa, "{d}-{s}{s}", .{ std.Io.Clock.real.now(dvui.io).toSeconds(), std.fs.path.basename(path), ext }) catch return;
     defer gpa.free(name);
     const out = std.fs.path.join(gpa, &.{ dir, name }) catch return;
     defer gpa.free(out);

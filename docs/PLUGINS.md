@@ -644,6 +644,11 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   `loadDocumentFromBytes` / `createDocument`, `saveDocument`, `reloadDocument` (optional — Fizzy's
   document watcher reloads clean open tabs when the file changes on disk), `closeDocument`,
   `isDirty`, plus opaque document-buffer management for the async load path.
+  `loadUntitledDocument(title, bytes_path, bytes)` (optional) opens a document that was never
+  saved from its unsaved bytes, as a crash checkpoint or a restart kept them: encoded under
+  `Plugin.bytesPath` (the name Save As offers, `untitled.pixi`), which says their format, and
+  given back its title (`untitled-1`), untitled and dirty. Without it, such a document comes
+  back only as far as `restoreDocumentState` fills an empty one, and otherwise as a recovery file.
 - **Document metadata at the pane boundary** — `bindDocumentToPane`, `documentGrouping` /
   `setDocumentGrouping` / `setDocumentGroupingOnBuffer` (the pane a document is seated in — the
   app stamps the target grouping on the staging buffer before the load lands, which is what

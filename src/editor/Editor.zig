@@ -5374,7 +5374,12 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement_in: P
     var placement = placement_in;
     placement.beside = placement.beside or editor.app.host.open_beside > 0;
     // Last session's document, as a restart kept it: from its state, not the disk.
-    if (comptime restart.supported) if (editor.session) |*kept| if (kept.openKept(editor, path_in, grouping) != null) return true;
+    // One never saved that it could not bring back has no file to open instead.
+    if (comptime restart.supported) if (editor.session) |*kept| switch (kept.openKept(editor, path_in, grouping)) {
+        .opened => return true,
+        .lost => return false,
+        .not_kept => {},
+    };
 
     const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
