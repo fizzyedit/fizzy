@@ -954,7 +954,8 @@ pub const Pane = struct {
     /// pane moves, resizes or forms), however many frames pass. For chrome that sits over
     /// something the caller can describe — a button over a canvas it knows the art, zoom and pan
     /// of — where a re-read every frame is a blur's worth of work for a picture that has not
-    /// changed.
+    /// changed. What the caller cannot describe — the host fading one view's photograph over
+    /// the next as a region swaps — is the host's to say (`underChanged`), and reads it again too.
     witness: ?u64 = null,
     /// Clear glass: what is behind it unblurred — bent at its edge, tinted and lit as frost is —
     /// for the blur turned off where the glass program draws (`LiquidField`), so liquid glass is
@@ -1067,6 +1068,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
         .refraction = pane.refraction,
         .field = field,
         .clear = pane.clear,
+        .kept = pane.witness != null,
     };
     dvui.deferRender(job, FrostJob.draw);
 }
@@ -1106,6 +1108,94 @@ fn selfForm(id: dvui.Id, now: i128) f32 {
     return std.math.clamp(t, 0, 1);
 }
 
+/// Fizzy addition: something no witness describes was drawn over `r` (physical) this frame — a
+/// region's swap fading the outgoing view's photograph over the incoming one (`anim.CrossFade`).
+/// A kept frost (`Pane.witness`) over any of it is read again, this frame and the next: the next
+/// for the frame it ends, when what was drawn over is gone. Without it, the glass over a view
+/// that had just come in kept the photograph of the view it replaced, faded in its frost for
+/// good, since the witness, describing only the view, held still as the photograph went.
+///
+/// Through the shared dvui window, so a plugin's glass hears what the host drew. Costs a lookup
+/// per kept frost a frame; nothing while no one marks.
+pub fn underChanged(r: Rect.Physical) void {
+    if (dvui.current_window == null) return;
+    const marks = dvui.dataGetPtrDefault(null, marks_id, marks_key, Marks, .{});
+    marks.roll(dvui.currentWindow().frame_time_ns);
+    marks.now.add(r);
+}
+
+/// Whether `r` is under anything `underChanged` marked this frame or the last.
+fn changedUnder(r: Rect.Physical) bool {
+    const marks = dvui.dataGetPtr(null, marks_id, marks_key, Marks) orelse return false;
+    marks.roll(dvui.currentWindow().frame_time_ns);
+    return marks.now.hits(r) or marks.last.hits(r);
+}
+
+const marks_id: dvui.Id = @enumFromInt(0x6669_7a7a_756e_6472); // "fizzundr"
+const marks_key = "_frost_under";
+
+/// The rects `underChanged` marked, this frame and the last. In the data store, so it lasts only
+/// while someone marks or reads it: unread for a frame, it goes, and a frost reading after that
+/// finds nothing.
+const Marks = struct {
+    /// The frame `now` holds.
+    frame: i128 = 0,
+    now: Span = .{},
+    last: Span = .{},
+
+    const Span = struct {
+        rects: [8]Rect.Physical = undefined,
+        len: u8 = 0,
+
+        /// Past eight, the last one grows to take it in: a frost too many re-reads, never one
+        /// too few.
+        fn add(self: *Span, r: Rect.Physical) void {
+            if (self.len < self.rects.len) {
+                self.rects[self.len] = r;
+                self.len += 1;
+            } else {
+                self.rects[self.len - 1] = self.rects[self.len - 1].unionWith(r);
+            }
+        }
+
+        fn hits(self: *const Span, r: Rect.Physical) bool {
+            for (self.rects[0..self.len]) |m| if (!m.intersect(r).empty()) return true;
+            return false;
+        }
+    };
+
+    /// Into frame `t`: what this frame held becomes the last frame's.
+    fn roll(self: *Marks, t: i128) void {
+        if (self.frame == t) return;
+        self.last = self.now;
+        self.now = .{};
+        self.frame = t;
+    }
+};
+
+test "a kept frost reads again under a mark, that frame and the next, then not" {
+    var m: Marks = .{};
+    const swap: Rect.Physical = .{ .x = 100, .y = 100, .w = 800, .h = 600 };
+    const glass: Rect.Physical = .{ .x = 120, .y = 120, .w = 40, .h = 40 };
+    const aside: Rect.Physical = .{ .x = 1000, .y = 100, .w = 40, .h = 40 };
+    m.roll(1);
+    m.now.add(swap);
+    try std.testing.expect(m.now.hits(glass));
+    try std.testing.expect(!m.now.hits(aside));
+    // The frame after the swap's last: nothing marked, the last frame's mark still counts.
+    m.roll(2);
+    try std.testing.expect(!m.now.hits(glass) and m.last.hits(glass));
+    m.roll(3);
+    try std.testing.expect(!m.now.hits(glass) and !m.last.hits(glass));
+}
+
+test "marks past the span's room widen its last rect" {
+    var span: Marks.Span = .{};
+    for (0..10) |i| span.add(.{ .x = @floatFromInt(i * 100), .y = 0, .w = 10, .h = 10 });
+    try std.testing.expectEqual(@as(u8, 8), span.len);
+    try std.testing.expect(span.hits(.{ .x = 905, .y = 0, .w = 2, .h = 2 }));
+}
+
 /// What `frostPane` hands to the replay. Lives in the data store under the owner's id, so the
 /// pointer is good until the frame ends.
 const FrostJob = struct {
@@ -1125,6 +1215,9 @@ const FrostJob = struct {
     field: ?LiquidField = null,
     /// Clear glass (`Pane.clear`): the picture before the blur.
     clear: bool = false,
+    /// Read only when its witness changes (`Pane.witness`), or what is under it changed in a way
+    /// no witness sees (`underChanged`).
+    kept: bool = false,
 
     fn draw(ctx: ?*anyopaque) void {
         const self: *FrostJob = @ptrCast(@alignCast(ctx orelse return));
@@ -1138,6 +1231,9 @@ const FrostJob = struct {
         const prev_alpha = dvui.currentWindow().alpha;
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
+        // Here, not at `queuePane`: a swap's photograph is drawn over the view after the view
+        // has queued its glass, and is on the target by now.
+        if (self.kept and changedUnder(self.backdrop.rect)) self.backdrop.markDirty();
         // The capture, now that everything below this pane is on the target (again, if it was
         // replayed into another target already this frame: `deinit`).
         self.backdrop.deinit();
