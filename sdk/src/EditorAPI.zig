@@ -36,6 +36,11 @@ pub const OpenOptions = struct {
     /// The pane. 0 is the one the user is in.
     grouping: u64 = 0,
     mode: OpenMode = .keep,
+    /// Beside the pane the person is in rather than in it, leaving them that pane and their
+    /// focus: a document a plugin is working on, seen as it changes while the person stays where
+    /// they were. An open document goes there now; one still to open, once it has loaded.
+    /// `grouping` is ignored.
+    beside: bool = false,
 };
 
 /// What a context menu is about, for whoever is drawing rows into it. Valid only during that

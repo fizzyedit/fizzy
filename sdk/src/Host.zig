@@ -277,6 +277,10 @@ activity_muted: bool = false,
 last_showing_ms: u32 = 0,
 /// The command whose body is running, if any: the edits made meanwhile are its (`documentEdited`).
 running_command: ?*const Command = null,
+/// While above 0, documents opened or created land beside the pane the person is in
+/// (`EditorAPI.OpenOptions.beside`), not in it: an agent's work opens where it will be seen,
+/// rather than over the person's document and then moved. Nested scopes count; UI thread only.
+open_beside: u32 = 0,
 /// Counts command runs, so one run that edits several times shows once.
 command_runs: u64 = 0,
 activity_run: u64 = 0,
@@ -604,6 +608,14 @@ pub fn revealSurface(self: *Host, id: []const u8) bool {
 
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
+}
+
+/// Open documents beside the person until `endOpenBeside` (`open_beside`).
+pub fn openBeside(self: *Host) void {
+    self.open_beside += 1;
+}
+pub fn endOpenBeside(self: *Host) void {
+    self.open_beside -|= 1;
 }
 
 /// Open a file — see `EditorAPI.OpenOptions`. Returns true when a new load started.
