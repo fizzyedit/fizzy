@@ -376,6 +376,7 @@ pub fn addFizzyExecutableForTarget(
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
             .sdk = sdk_proxy_module,
+            .icons = icons_module,
             .proxy_bridge = proxy_bridge_plugin_mod,
         });
     } else null;

@@ -54,6 +54,8 @@ pub const PopupWidget = @import("widgets/menu/Popup.zig");
 /// round that is tapped or clicked. Big enough to hit with a finger, small enough not to crowd
 /// what it sits over, so one size serves touch and mouse alike.
 pub const round_button_size: f32 = 32;
+/// Round buttons in liquid glass, and the viewport bubbles that float over a document.
+pub const glass_button = @import("widgets/glass_button.zig");
 /// A dropdown whose list is the menus' frosted surface — use this, not `dvui.DropdownWidget`.
 pub const DropdownWidget = @import("widgets/Dropdown.zig");
 

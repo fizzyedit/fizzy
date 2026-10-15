@@ -11,5 +11,9 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const plugin = fizzy.plugin.create(b, .{ .target = target, .optimize = optimize });
+
+    if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
+        plugin.module.addImport("icons", dep.module("icons"));
+    }
     fizzy.plugin.install(b, plugin.lib, .{});
 }

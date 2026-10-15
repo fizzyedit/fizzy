@@ -22,6 +22,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
+const icons = @import("icons");
 const sdk = @import("fizzy_sdk");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
@@ -650,8 +651,10 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 /// How close the pointer must be to a region's top-right corner, in points, before the button
 /// shows. Far enough that a glance toward the corner finds it; near enough that it never
 /// appears while the user is working in the middle of the region: the button and a margin round it.
-const corner_reach: f32 = core.widgets.round_button_size + 28;
-const corner_button_size: f32 = core.widgets.round_button_size;
+const corner_reach: f32 = core.widgets.glass_button.size + 28;
+const corner_button_size: f32 = core.widgets.glass_button.size;
+/// The button's distance in from the place's corner: room for the glass's shadow ring.
+const corner_inset: f32 = 8;
 
 /// The small button in a region's top-right corner that opens the picker for it. This is the
 /// piece that makes placement *visual*: a user looks at the place in the window they want to
@@ -736,19 +739,17 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         .label = .{ .text = "Arrange" },
         .tab_index = 0,
         .rect = .{
-            .x = content.w - corner_button_size - 4,
-            .y = 4,
+            .x = content.w - corner_button_size - corner_inset,
+            .y = corner_inset,
             .w = corner_button_size,
             .h = corner_button_size,
         },
-        // Entypo's grid draws its squares well inside its own box, so the glyph is given nearly
-        // all of the button.
-        .padding = dvui.Rect.all(2),
-        .corners = dvui.CornerRect.all(corner_button_size / 2),
-        .background = true,
-        .color_fill = .{ .color = theme.color(.control, .fill).opacity(@max(alpha, 0.35)) },
-        .border = dvui.Rect.all(1),
-        .color_border = .{ .color = theme.color(.control, .border).opacity(@max(alpha, 0.35)) },
+        .padding = .all(0),
+        .margin = .{},
+        .corners = .round(corner_button_size / 2),
+        .background = false,
+        .border = .all(0),
+        .box_shadow = null,
     });
     defer bw.deinit();
     bw.processEvents();
@@ -794,14 +795,25 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     }
 
     if (alpha > 0.01 and !dragged and !self.state.view_drag.active()) {
-        bw.drawBackground();
-        core.icon.icon(@src(), "regions", dvui.entypo.grid, .{
-            .fill_color = .{ .color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .fill).lerp(theme.color(.control, .text), alpha) },
-            // A clear stroke makes it one flat colour, which the icon cache tints rather than
-            // bakes: baked, every step of the fade (it comes and goes as a drag crosses a place)
-            // rasterized a new texture, two render-target switches a frame.
-            .stroke_color = .transparent,
-        }, .{ .expand = .both });
+        // A glass bubble, as the controls over a document are (`core.widgets.glass_button`). Glass
+        // has no opacity, so it fades by growing in from its centre, its shadow with it.
+        const br = bw.data().borderRectScale();
+        const grown = br.r.insetAll(br.r.w * (1 - alpha) / 2);
+        // An empty place's corner is its hatch, which does not change: read the frost once. A
+        // filled one's is the view's own content, read while the button shows.
+        const witness: ?u64 = if (filled) null else core.widgets.glass_button.witness(grown, 0);
+        core.dialogs.glassBubbles(bw.data().id, &.{.{ .rect = grown, .light = core.widgets.glass_button.light(&bw) }}, br.s, .{ .shadow = alpha, .witness = witness });
+        // White, tinted by the text colour: the icon cache tints a flat colour rather than baking
+        // it, and every step of the fade (it comes and goes as a drag crosses a place) would
+        // otherwise rasterize a new texture, two render-target switches a frame.
+        core.icon.icon(@src(), "regions", icons.tvg.lucide.@"layout-grid", .{ .fill_color = .white, .stroke_color = .white }, .{
+            .expand = .ratio,
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+            .min_size_content = .{ .w = 1, .h = 1 },
+            .padding = .all(corner_button_size * 0.3 * alpha + (1 - alpha) * corner_button_size / 2),
+            .color_text = .{ .color = theme.color(.content, .text).opacity(alpha) },
+        });
     }
     if (bw.clicked() and !dragged) {
         self.state.openPicker(self.gpa, opts.name, bw.data().rectScale().r.toNatural().bottomLeft());

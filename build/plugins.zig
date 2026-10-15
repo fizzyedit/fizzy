@@ -87,7 +87,7 @@ pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
         else if (std.mem.eql(u8, p.name, "text"))
             text.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk, .icons = w.icons }, w.consumer)
         else if (std.mem.eql(u8, p.name, "image"))
-            image.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
+            image.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk, .icons = w.icons }, w.consumer)
         else if (std.mem.eql(u8, p.name, "archive"))
             archive.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
         else if (std.mem.eql(u8, p.name, "devtools"))

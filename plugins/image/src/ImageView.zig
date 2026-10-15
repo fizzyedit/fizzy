@@ -3,6 +3,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
+const icons = @import("icons");
 const Document = @import("Document.zig");
 
 const CanvasWidget = core.widgets.CanvasWidget;
@@ -24,19 +25,39 @@ pub fn draw(doc: *Document) !void {
     // background, at the app's content opacity, the same as under pixi's canvas). Its edge
     // shadows are the canvas widget's own.
 
-    doc.canvas.install(@src(), .{
-        .id = doc.canvas.id,
-        .data_size = .{ .w = image_rect.w, .h = image_rect.h },
-        .pan_zoom_scheme = canvasPanZoomScheme(),
-    }, .{ .expand = .both, .background = false, .color_fill = .{ .color = .transparent } });
-    defer doc.canvas.deinit();
+    const view = view: {
+        doc.canvas.install(@src(), .{
+            .id = doc.canvas.id,
+            .data_size = .{ .w = image_rect.w, .h = image_rect.h },
+            .pan_zoom_scheme = canvasPanZoomScheme(),
+        }, .{ .expand = .both, .background = false, .color_fill = .{ .color = .transparent } });
+        defer doc.canvas.deinit();
 
-    drawShadow(&doc.canvas, image_rect);
-    drawFill(image_rect);
-    try drawCheckerboard(doc, image_rect);
-    try drawImage(doc);
-    drawOutline(&doc.canvas);
-    doc.canvas.processEvents();
+        drawShadow(&doc.canvas, image_rect);
+        drawFill(image_rect);
+        try drawCheckerboard(doc, image_rect);
+        try drawImage(doc);
+        drawOutline(&doc.canvas);
+        doc.canvas.processEvents();
+        break :view doc.canvas.scroll_container.data().contentRectScale().r.toNatural();
+    };
+    // Outside the canvas: a floating widget made inside it takes the canvas's zoom.
+    drawFitButton(doc, view);
+}
+
+/// Fit to View as a glass bubble at the viewport's top left, where pixi keeps its canvas controls.
+fn drawFitButton(doc: *Document, view: dvui.Rect.Natural) void {
+    const margin: f32 = 10;
+    const size = core.widgets.glass_button.size;
+    if (view.w < size + 2 * margin or view.h < size + 2 * margin) return;
+    // What is under it: the image, where it is and how big, and which of its frames shows.
+    var under = std.hash.Wyhash.init(0);
+    under.update(std.mem.asBytes(&.{ doc.canvas.screen_rect_scale.r.x, doc.canvas.screen_rect_scale.r.y, doc.canvas.screen_rect_scale.s }));
+    under.update(std.mem.asBytes(&.{ doc.width, doc.height, doc.frame }));
+    const rect: dvui.Rect = .{ .x = view.x + margin, .y = view.y + margin, .w = size, .h = size };
+    if (core.widgets.glass_button.bubble(@src(), rect, icons.tvg.lucide.scan, .{ .label = "Fit to View", .witness_under = under.final() })) {
+        doc.canvas.fitToView();
+    }
 }
 
 fn drawShadow(canvas: *CanvasWidget, image_rect: dvui.Rect) void {

@@ -170,11 +170,9 @@ pub fn draw(
 }
 
 fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
-    // Styled to match the floating Edit pill (see `Workspace.drawEditPill`): circular
-    // background, same content.fill / content.text color pair, same drop shadow.
-    const button_size: f32 = fizzy.core.widgets.round_button_size;
-    const btn_radius: f32 = button_size / 2;
-    const margin: f32 = 8;
+    // A glass bubble, as the controls over a document are (`core.widgets.glass_button`).
+    const button_size = fizzy.core.widgets.glass_button.size;
+    const margin: f32 = 12;
     const wr = dvui.windowRect();
 
     const r = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return;
@@ -196,57 +194,10 @@ fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
     const sized = button_size * s;
     if (sized < 0.5) return;
 
-    var fw: dvui.FloatingWidget = undefined;
-    fw.init(@src(), .{ .mouse_events = true }, .{
-        .rect = .{
-            .x = wr.w - margin - sized,
-            .y = wr.h - margin - sized,
-            .w = sized,
-            .h = sized,
-        },
-    });
-    defer fw.deinit();
-
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(@src(), .{}, .{
-        .label = .{ .text = "Collapse Explorer" },
-        .expand = .both,
-        .corners = dvui.CornerRect.all(btn_radius),
-        .background = true,
-        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
-        .color_fill_hover = .{ .color = dvui.themeGet().color(.content, .fill).lighten(if (dvui.themeGet().dark) 10.0 else -10.0) },
-        .color_border = .transparent,
-        .padding = .all(0),
-        .margin = .all(margin),
-        .min_size_content = .{ .w = button_size, .h = button_size },
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.2,
-            .fade = 4,
-            .offset = .{ .x = 0, .y = 2 },
-            .corners = dvui.CornerRect.all(btn_radius),
-        },
-    });
-    defer bw.deinit();
-    bw.processEvents();
-    bw.drawBackground();
-
-    const icon_color = dvui.themeGet().color(.content, .text);
-    fizzy.core.icon.icon(
-        @src(),
-        "collapse_explorer",
-        icons.tvg.lucide.@"panel-left-close",
-        .{ .stroke_color = .{ .color = icon_color }, .fill_color = .{ .color = icon_color } },
-        .{
-            .expand = .ratio,
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .min_size_content = .{ .w = 1.0, .h = 1.0 },
-            .padding = .all(6),
-        },
-    );
-
-    if (bw.clicked()) {
+    // Grows from its own centre.
+    const centre: dvui.Point = .{ .x = wr.w - margin - button_size / 2, .y = wr.h - margin - button_size / 2 };
+    const rect: dvui.Rect = .{ .x = centre.x - sized / 2, .y = centre.y - sized / 2, .w = sized, .h = sized };
+    if (fizzy.core.widgets.glass_button.bubble(@src(), rect, icons.tvg.lucide.@"panel-left-close", .{ .label = "Collapse Explorer" })) {
         explorer.peekClose(editor);
     }
 }
