@@ -46,6 +46,8 @@ pub const Options = struct {
     macos_sign_app_identity: ?[]const u8 = null,
     macos_sign_install_identity: ?[]const u8 = null,
     macos_notary_profile: ?[]const u8 = null,
+    /// `-Dmacos-sdk`: the macOS SDK for an explicit `-Dtarget=*-macos`; null asks `xcrun`.
+    macos_sdk: ?[]const u8 = null,
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options) !void {
@@ -120,7 +122,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // package dependency to resolve here. Their canonical `build.zig` is only for the
     // standalone (`cd plugins/<name> && zig build`) third-party-shape build.
 
-    const macos_sdl_paths = try common.macosSdlPathsForExplicitTarget(b, target);
+    const macos_sdl_paths = try common.macosSdlPathsForExplicitTarget(b, target, opts.macos_sdk);
     const zig_out_subdir = common.zigOutSubdirForTarget(b, target);
     const zig_out_install_dir: std.Build.InstallDir = .{ .custom = zig_out_subdir };
 
@@ -142,10 +144,8 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .fetch_if_missing = fetch_msvc,
     });
 
-    var effective_win_libc: ?[]const u8 = win_libc.libc_path;
-    if (effective_win_libc == null) {
-        if (cross_win_msvc) effective_win_libc = null; // ZIG017 (release packaging PR): 0.17 has no global --libc; becomes -Dwindows-libc
-    }
+    // Only `-Dwindows-msvc-libc` or the managed `.velopack-msvc/` tree: Zig 0.17 has no global `--libc`.
+    const effective_win_libc: ?[]const u8 = win_libc.libc_path;
 
     // Velopack in the dev/install exe is opt-in (`-Dvelopack=true`). Release
     // packaging (`zig build package`) still links Velopack when the ABI supports
@@ -334,8 +334,6 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const zig_out_subdir = cfg.zig_out_subdir;
     const zig_out_install_dir = cfg.zig_out_install_dir;
     const target_is_windows_msvc = cfg.target_is_windows_msvc;
-    const cross_win_msvc = cfg.cross_win_msvc;
-    _ = cross_win_msvc; // ZIG017 (release packaging PR)
     const effective_win_libc = cfg.effective_win_libc;
     const velopack_supported_for_target = cfg.velopack_supported_for_target;
     const velopack_enabled = cfg.velopack_enabled;
@@ -1043,7 +1041,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // off for the msvc ABI regardless of host (cross or native Windows).
     integration_tests.root_module.link_libcpp = !target_is_windows_msvc;
     if (velopack_enabled) if (vz) |v| {
-        try velopack.linkVelopack(b, v, integration_tests, .{ .target = target, .optimize = optimize });
+        try velopack.linkVelopack(b, v, integration_tests, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
     };
 
     test_integration_step.dependOn(&b.addRunArtifact(integration_tests).step);
@@ -1071,7 +1069,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (target.result.os.tag == .windows) demo_tests.root_module.linkSystemLibrary("comctl32", .{});
         demo_tests.root_module.link_libcpp = !target_is_windows_msvc;
         if (velopack_enabled) if (vz) |v| {
-            try velopack.linkVelopack(b, v, demo_tests, .{ .target = target, .optimize = optimize });
+            try velopack.linkVelopack(b, v, demo_tests, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
         };
         test_integration_step.dependOn(&b.addRunArtifact(demo_tests).step);
         check_integration_step.dependOn(&demo_tests.step);
@@ -1223,7 +1221,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             bench_replay.root_module.linkSystemLibrary("comctl32", .{});
         }
         if (velopack_enabled) if (vz) |v| {
-            try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize });
+            try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
         };
 
         const check_bench_replay_step = b.step("check-bench-replay", "Compile fizzy bench-replay without running it");
@@ -1403,12 +1401,13 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         };
 
         if (effective_win_libc) |ini| {
-            // ZIG017 (release packaging PR): no global --libc in 0.17
             const libc_lp: std.Build.LazyPath = .{ .cwd_relative = ini };
             velopack.applyWindowsMsvcLibcRecursive(b, roots[0..n], libc_lp);
 
+            // Absolute, and already declared to the configure cache where it was resolved
+            // (`velopack.resolveWindowsMsvcLibc`).
             const ini_exists = blk: {
-                b.root.root_dir.handle.access(b.graph.io, ini, .{}) catch break :blk false;
+                std.Io.Dir.cwd().access(b.graph.io, ini, .{}) catch break :blk false;
                 break :blk true;
             };
             if (ini_exists) {

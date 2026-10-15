@@ -12,15 +12,13 @@ pub fn build(b: *std.Build) !void {
     const windows_msvc_libc_opt = b.option([]const u8, "windows-msvc-libc", "zig libc manifest for *-windows-msvc when cross-compiling; forwarded by packageall for Windows children") orelse null;
     const fetch_msvc_opt = b.option(bool, "fetch-msvc", "If *-windows-msvc libc is missing under .velopack-msvc/, run msvcup-setup first (downloads MSVC+SDK; requires network). Defaults to true on Windows hosts targeting *-windows-msvc.") orelse null;
 
-    // ZIG017 (release packaging PR): the FIZZY_MACOS_* fallbacks below are read at configure, and
-    // 0.17 caches the configuration without regard to the environment; scripts/release.sh and
-    // release.yml pass the -D options instead.
-    const macos_sign_app_identity = b.option([]const u8, "macos-sign-app", "macOS codesign identity for the app bundle (e.g. 'Developer ID Application: NAME (TEAMID)')") orelse
-        b.graph.environ_map.get("FIZZY_MACOS_SIGN_APP");
-    const macos_sign_install_identity = b.option([]const u8, "macos-sign-installer", "macOS codesign identity for the installer pkg (e.g. 'Developer ID Installer: NAME (TEAMID)')") orelse
-        b.graph.environ_map.get("FIZZY_MACOS_SIGN_INSTALLER");
-    const macos_notary_profile = b.option([]const u8, "macos-notary-profile", "notarytool keychain profile name (run `xcrun notarytool store-credentials <name>` first)") orelse
-        b.graph.environ_map.get("FIZZY_MACOS_NOTARY_PROFILE");
+    // Options only, never the environment: Zig 0.17 caches the build's configuration without
+    // regard to it, so a variable read here would be seen once and then ignored.
+    // `scripts/release.sh` and `release.yml` turn the FIZZY_MACOS_* variables into these.
+    const macos_sign_app_identity = b.option([]const u8, "macos-sign-app", "macOS codesign identity for the app bundle (e.g. 'Developer ID Application: NAME (TEAMID)')");
+    const macos_sign_install_identity = b.option([]const u8, "macos-sign-installer", "macOS codesign identity for the installer pkg (e.g. 'Developer ID Installer: NAME (TEAMID)')");
+    const macos_notary_profile = b.option([]const u8, "macos-notary-profile", "notarytool keychain profile name (run `xcrun notarytool store-credentials <name>` first)");
+    const macos_sdk = b.option([]const u8, "macos-sdk", "macOS SDK path for an explicit -Dtarget=*-macos (default: `xcrun --sdk macosx --show-sdk-path`)");
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -31,6 +29,7 @@ pub fn build(b: *std.Build) !void {
         .macos_sign_app_identity = macos_sign_app_identity,
         .macos_sign_install_identity = macos_sign_install_identity,
         .macos_notary_profile = macos_notary_profile,
+        .macos_sdk = macos_sdk,
         // What fizzy-the-app ships in its web build beyond the built-ins. The browser cannot
         // load a plugin at runtime, so this is the one place a third-party plugin is named
         // in this repo — as build data, the way an app built on fizzy lists its own. By
@@ -113,7 +112,7 @@ pub fn addDvui(fizzy_dep: *std.Build.Dependency, root_module: *std.Build.Module,
     const exe = @import("build/exe.zig");
     const target = root_module.resolved_target orelse @panic("fizzy.addDvui: give the root module its target first");
     const optimize = root_module.optimize orelse .debug;
-    const macos_sdl_paths = try @import("build/common.zig").macosSdlPathsForExplicitTarget(b, target);
+    const macos_sdl_paths = try @import("build/common.zig").macosSdlPathsForExplicitTarget(b, target, null);
     const native = exe.nativeDvui(b, backend, target, optimize, .off, macos_sdl_paths);
     root_module.addImport("dvui", native.dvui);
     root_module.addImport("backend", native.backend);

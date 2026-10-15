@@ -57,14 +57,12 @@ pub const MacosSdlPaths = struct {
     lib: std.Build.LazyPath,
 };
 
-fn resolveMacosSdkPath(b: *std.Build) ![]const u8 {
-    // ZIG017 (release packaging PR): `SDKROOT` is read at configure, which 0.17 caches without
-    // regard to the environment; becomes a -D option.
-    if (b.graph.environ_map.get("SDKROOT")) |sdk| {
+/// `-Dmacos-sdk`, else `xcrun`. Not `SDKROOT`: Zig 0.17 caches the build's configuration without
+/// regard to the environment.
+fn resolveMacosSdkPath(b: *std.Build, explicit: ?[]const u8) ![]const u8 {
+    if (explicit) |sdk| {
         const trimmed = std.mem.trim(u8, sdk, " \t\r\n");
-        if (trimmed.len > 0) {
-            return b.dupePath(trimmed);
-        }
+        if (trimmed.len > 0) return b.dupePath(trimmed);
     }
 
     const argv: []const []const u8 = &.{
@@ -84,7 +82,7 @@ fn resolveMacosSdkPath(b: *std.Build) ![]const u8 {
     }
     switch (run.term) {
         .exited => |code| if (code != 0) {
-            std.log.err("SDL on macOS: explicit -Dtarget=*-macos needs an SDK path. xcrun exited with code {d}. Install Xcode Command Line Tools or set SDKROOT.", .{code});
+            std.log.err("SDL on macOS: explicit -Dtarget=*-macos needs an SDK path. xcrun exited with code {d}. Install Xcode Command Line Tools or pass -Dmacos-sdk=<path>.", .{code});
             return error.MacosSdkPath;
         },
         else => {
@@ -97,15 +95,31 @@ fn resolveMacosSdkPath(b: *std.Build) ![]const u8 {
     return b.dupePath(path);
 }
 
-pub fn macosSdlPathsForExplicitTarget(b: *std.Build, target: std.Build.ResolvedTarget) !?MacosSdlPaths {
+pub fn macosSdlPathsForExplicitTarget(b: *std.Build, target: std.Build.ResolvedTarget, macos_sdk: ?[]const u8) !?MacosSdlPaths {
     if (target.result.os.tag != .macos) return null;
     if (b.graph.host.result.os.tag != .macos) return null;
     if (target.query.isNative()) return null;
 
-    const sdk = try resolveMacosSdkPath(b);
+    const sdk = try resolveMacosSdkPath(b, macos_sdk);
     return MacosSdlPaths{
         .include = .{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/include" }) },
         .framework = .{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) },
         .lib = .{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) },
     };
+}
+
+/// Declare to Zig 0.17's configure cache that the build read whether `rel` exists: the file itself
+/// when it does, and otherwise the nearest directory that exists, since the maker cannot load a
+/// configuration that depends on a path inside a missing directory ("configuration failed:
+/// FileSystemFailure"). Making the file changes that directory, so the build still reconfigures.
+pub fn dependOnPathExistence(b: *std.Build, rel: []const u8) void {
+    b.root.access(b.graph.io, rel, .{}) catch {
+        var dir = std.fs.path.dirname(rel);
+        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
+            b.root.access(b.graph.io, d, .{}) catch continue;
+            return b.dependOnDirectoryMetadata(b.path(d));
+        }
+        return b.dependOnDirectoryMetadata(b.path("."));
+    };
+    b.dependOnFileMetadata(b.path(rel));
 }

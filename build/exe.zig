@@ -485,7 +485,7 @@ pub fn addFizzyExecutableForTarget(
         resolved_target.result.abi == .msvc;
     exe.root_module.link_libcpp = !exe_is_windows_msvc;
     if (velopack_enabled) if (vz) |v| {
-        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .include_modules = &.{app_module} });
+        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .c_modules = &.{app_module} });
     };
 
     return .{

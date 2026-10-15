@@ -18,7 +18,7 @@ pub var hooks: Hooks = .{};
 
 pub const impl: bool = build_opts.velopack_enabled and builtin.target.cpu.arch != .wasm32;
 
-const Vpk = struct {}; // ZIG017: @cImport is gone; Velopack.h becomes a translate-c module
+const Vpk = if (impl) @import("velopack_c") else struct {};
 
 pub fn logVpkError(prefix: []const u8) void {
     if (!impl) return;

@@ -1,7 +1,6 @@
 const std = @import("std");
 
 pub fn applyMsvcTranslateCShim(b: *std.Build, roots: []const *std.Build.Step.Compile) !void {
-    if (true) return; // ZIG017 (release packaging PR): Step.id and generated-file steps are gone in 0.17; the MSVC shim moves to where each translate-c step is made
     var seen = std.AutoHashMap(*std.Build.Step.TranslateC, void).init(b.allocator);
     defer seen.deinit();
     for (roots) |root_compile| {
@@ -12,9 +11,8 @@ pub fn applyMsvcTranslateCShim(b: *std.Build, roots: []const *std.Build.Step.Com
                 .generated => |g| g,
                 else => continue,
             };
-            const dep_step = b.graph.generated_files.items[@backingInt(gen.index)]; // ZIG017: guessed
-            if (true) continue; // ZIG017
-            const tc: *std.Build.Step.TranslateC = @fieldParentPtr("step", dep_step);
+            // The step that makes a generated file, by its index (as `std.Build` itself finds it).
+            const tc = b.graph.generated_files.items[@backingInt(gen.index)].cast(std.Build.Step.TranslateC) orelse continue;
             const gop = try seen.getOrPut(tc);
             if (gop.found_existing) continue;
             const rt = tc.target.result;
@@ -44,8 +42,9 @@ pub fn applyMsvcIncludesToReachableTranslateC(
     roots: []const *std.Build.Step.Compile,
     libc_ini_path: []const u8,
 ) !void {
-    // `libc_ini_path` is absolute (resolved via `b.pathFromRoot`), so any Dir works as the base.
-    const data = try b.root.root_dir.handle.readFileAlloc(b.graph.io, libc_ini_path, b.allocator, .unlimited);
+    // `libc_ini_path` is absolute (resolved against the build root).
+    b.dependOnFileContents(b.graph.cwdRelativePath(libc_ini_path));
+    const data = try std.Io.Dir.cwd().readFileAlloc(b.graph.io, libc_ini_path, b.allocator, .unlimited);
 
     var include_dir: ?[]const u8 = null;
     var sys_include_dir: ?[]const u8 = null;
@@ -78,10 +77,8 @@ pub fn applyMsvcIncludesToReachableTranslateC(
                 .generated => |g| g,
                 else => continue,
             };
-            const dep_step = b.graph.generated_files.items[@backingInt(gen.index)]; // ZIG017: guessed
-            if (true) continue; // ZIG017
-
-            const tc: *std.Build.Step.TranslateC = @fieldParentPtr("step", dep_step);
+            // The step that makes a generated file, by its index (as `std.Build` itself finds it).
+            const tc = b.graph.generated_files.items[@backingInt(gen.index)].cast(std.Build.Step.TranslateC) orelse continue;
             const gop = try seen_translate_c.getOrPut(tc);
             if (gop.found_existing) continue;
 

@@ -19,7 +19,7 @@ const dvui = @import("dvui");
 const auto_update = @import("auto_update.zig");
 const build_opts = @import("build_opts");
 
-const Vpk = struct {}; // ZIG017: @cImport is gone
+const Vpk = if (auto_update.impl) @import("velopack_c") else struct {};
 
 const UpdateJob = @This();
 
