@@ -14,13 +14,13 @@ const builtin = @import("builtin");
 pub fn hostKey() []const u8 {
     // The web: one key for the wasm side module a plugin publishes for the browser.
     if (builtin.target.cpu.arch == .wasm32) return "web-wasm32";
-    const os = switch (builtin.os.tag) {
+    const os = switch (builtin.target.os.tag) {
         .macos => "macos",
         .linux => "linux",
         .windows => "windows",
         else => "unknown",
     };
-    const arch = switch (builtin.cpu.arch) {
+    const arch = switch (builtin.target.cpu.arch) {
         .aarch64 => "aarch64",
         .x86_64 => "x86_64",
         else => "unknown",

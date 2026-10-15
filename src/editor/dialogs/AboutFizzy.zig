@@ -234,7 +234,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 8 } });
 
     if (comptime auto_update.impl) {
-        if (!auto_update.installLayoutSupported(dvui.io) and builtin.os.tag == .macos) {
+        if (!auto_update.installLayoutSupported(dvui.io) and builtin.target.os.tag == .macos) {
             dvui.labelNoFmt(
                 @src(),
                 "In-app updates need a packaged .app (Velopack). A zig-out binary is not an app bundle.",

@@ -20,7 +20,7 @@ const Overlay = @import("overlay.zig");
 const u = @import("user32.zig");
 
 comptime {
-    if (builtin.os.tag != .windows) @compileError("the composition spike is Windows only: -Dtarget=x86_64-windows-gnu or aarch64-windows-gnu");
+    if (builtin.target.os.tag != .windows) @compileError("the composition spike is Windows only: -Dtarget=x86_64-windows-gnu or aarch64-windows-gnu");
 }
 
 pub const std_options: std.Options = .{ .log_level = .info };

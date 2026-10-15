@@ -27,7 +27,7 @@ const SettingsWatcher = @This();
 /// file a moment to finish before `Editor.reconcileExternalSettingsChange` reads it.
 const debounce_ns: i128 = 200 * std.time.ns_per_ms;
 
-pub const have_impl = switch (builtin.os.tag) {
+pub const have_impl = switch (builtin.target.os.tag) {
     .macos, .linux, .windows => true,
     else => false,
 };
@@ -108,7 +108,7 @@ fn classify(config_folder: []const u8, path: []const u8) Kind {
         const top = rest[0 .. std.mem.indexOfAny(u8, rest, "/\\") orelse rest.len];
         for (state_folders) |name| if (std.mem.eql(u8, top, name)) return .ignored;
     }
-    const ext = switch (builtin.os.tag) {
+    const ext = switch (builtin.target.os.tag) {
         .windows => ".dll",
         .macos => ".dylib",
         else => ".so",
@@ -139,7 +139,7 @@ pub fn emptyStateFolder(io: std.Io, path: []const u8) void {
 }
 
 test classify {
-    const ext = switch (builtin.os.tag) {
+    const ext = switch (builtin.target.os.tag) {
         .windows => ".dll",
         .macos => ".dylib",
         else => ".so",

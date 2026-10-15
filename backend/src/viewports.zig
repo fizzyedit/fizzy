@@ -50,7 +50,7 @@ pub fn appActive() bool {
 
 /// Whether menus can be windows of their own (`openMenu`): macOS, and Windows (Acrylic popups),
 /// where viewports are.
-pub const menus = builtin.os.tag == .macos or builtin.os.tag == .windows;
+pub const menus = builtin.target.os.tag == .macos or builtin.target.os.tag == .windows;
 
 /// A window for a menu (`Popout`'s menus): borderless, above every window, never focused, the
 /// OS's material in it — rounded by `radius` points — and the pointer over it read in the main
@@ -268,7 +268,7 @@ pub fn fade(vp: *Viewport, alpha: f32) void {
 }
 
 /// Whether a carried view can be shown past every window (`openCarry`): macOS.
-pub const carries = builtin.os.tag == .macos;
+pub const carries = builtin.target.os.tag == .macos;
 
 pub fn close(vp: *Viewport) void {
     dvui.currentWindow().backend.impl.viewportClose(vp);
@@ -387,12 +387,12 @@ pub fn pinPointer(pin: Pin) void {
 /// from its edges (Windows: DWM; macOS: a titled window, as the main window is) — so the window is
 /// exactly the float's glass. Otherwise it is the glass with a clear
 /// margin round it, which the float draws its own shadow in.
-pub const os_frame = builtin.os.tag == .windows or builtin.os.tag == .macos;
+pub const os_frame = builtin.target.os.tag == .windows or builtin.target.os.tag == .macos;
 
 /// Whether a viewport's window opened `.os` has the OS's own buttons to close, minimize and zoom
 /// it — macOS's traffic lights, a titled window's — so its float draws no close button of its own.
 /// One opened `.app` has none anywhere.
-pub const os_buttons = builtin.os.tag == .macos;
+pub const os_buttons = builtin.target.os.tag == .macos;
 
 /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
 /// pixels in from the window's edge, `radius` its corners — for the float's frost to read the

@@ -366,7 +366,7 @@ pub fn health() Health.Snapshot {
     var n: c_int = 0;
     if (c.SDL_GetWindows(&n)) |windows| c.SDL_free(@ptrCast(windows));
     s.os_windows = @intCast(@max(n, 0));
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         var all: c_uint = 0;
         var visible: c_uint = 0;
         fizzy_macos_window_counts(&all, &visible);
@@ -412,7 +412,7 @@ const quit_signals = struct {
     var wake_fd: posix.fd_t = -1;
 
     fn install() void {
-        if (comptime builtin.os.tag == .windows) return;
+        if (comptime builtin.target.os.tag == .windows) return;
         if (wake_fd == -1) wake_fd = spawnWaker() orelse return;
         for (signals, &chained) |sig, *slot| {
             if (slot.* != null) continue;
@@ -450,7 +450,7 @@ const quit_signals = struct {
     /// Puts SDL's handlers back, so `SDL_Quit` finds its own and resets the signals to their
     /// defaults. The thread stays parked on its pipe for the rest of the process.
     fn uninstall() void {
-        if (comptime builtin.os.tag == .windows) return;
+        if (comptime builtin.target.os.tag == .windows) return;
         for (signals, &chained) |sig, *slot| if (slot.*) |old| {
             posix.sigaction(sig, &old, null);
             slot.* = null;
@@ -557,7 +557,7 @@ fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !s
 
     // adjust window size for content scale
     if (scale != 1.0 and saved_geometry == null) {
-        if (builtin.abi.isAndroid()) {
+        if (builtin.target.abi.isAndroid()) {
             // log.error fails on Android but SDL_Log will show up in LogCat
             c.SDL_Log("[ERROR] Android doesn't support SDL_SetWindowSize");
         } else {
@@ -570,7 +570,7 @@ fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !s
     }
 
     if (options.min_size) |size| {
-        if (builtin.abi.isAndroid()) {
+        if (builtin.target.abi.isAndroid()) {
             c.SDL_Log("[ERROR] Android doesn't support SDL_SetWindowMinimumSize");
         } else {
             try toErr(c.SDL_SetWindowMinimumSize(
@@ -582,7 +582,7 @@ fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !s
     }
 
     if (options.max_size) |size| {
-        if (builtin.abi.isAndroid()) {
+        if (builtin.target.abi.isAndroid()) {
             c.SDL_Log("[ERROR] Android doesn't support SDL_SetWindowMaximumSize");
         } else {
             try toErr(c.SDL_SetWindowMaximumSize(
@@ -759,7 +759,7 @@ fn configureBackend(back: *SDLBackend, options: InitOptions) !void {
     back.clear_window_on_begin = true;
 
     if (options.icon) |bytes| {
-        if (builtin.abi.isAndroid()) {
+        if (builtin.target.abi.isAndroid()) {
             // log.error fails on Android but SDL_Log will show up in LogCat
             c.SDL_Log("[ERROR] Android doesn't support setting a custom icon at runtime");
         } else {
@@ -770,7 +770,7 @@ fn configureBackend(back: *SDLBackend, options: InitOptions) !void {
 
 pub fn init(io: std.Io, window: *c.SDL_Window, gpu: *GpuRenderer) SDLBackend {
     dvui.io = io;
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         fizzy_native_monitor_install();
         if (cocoaWindow(window)) |nswindow| {
             fizzy_native_disable_titlebar_separator(nswindow);
@@ -792,7 +792,7 @@ extern "c" fn fizzy_native_viewport_presented(nswindow: ?*anyopaque) void;
 extern "c" fn fizzy_native_live_resize_next_frame(nswindow: *anyopaque, wait_s: f64, since_start_s: f64) void;
 
 fn cocoaWindow(window: *c.SDL_Window) ?*anyopaque {
-    if (builtin.os.tag != .macos) return null;
+    if (builtin.target.os.tag != .macos) return null;
     return c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
 }
 
@@ -800,12 +800,12 @@ fn cocoaWindow(window: *c.SDL_Window) ?*anyopaque {
 /// inside (`appIterate`): AppKit's tracking loop on macOS; on Windows the modal move/size loop,
 /// where SDL runs frames from a timer and from each step (fizzyedit/SDL's live-resize patch).
 fn inLiveResize(self: *SDLBackend) bool {
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         if (cocoaWindow(self.window)) |nswindow| return fizzy_native_in_live_resize(nswindow) != 0;
     }
     // The thread's move/size loop: any of fizzy's windows', the main one or a popped-out float's
     // (`Viewport.win32_loop`), where SDL runs the frame from the loop's timer and from each step.
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         var info = std.mem.zeroes(win32_gui.GUITHREADINFO);
         info.cbSize = @sizeOf(win32_gui.GUITHREADINFO);
         if (win32_gui.GetGUIThreadInfo(0, &info) != 0) return info.flags & win32_gui.GUI_INMOVESIZE != 0;
@@ -818,7 +818,7 @@ fn inLiveResize(self: *SDLBackend) bool {
 /// `waitTime`), so an animation keeps the display's rate while no resize step is drawing it
 /// (`fizzy_native_live_resize_next_frame` in `macos_monitor.m`).
 fn liveResizeNextFrame(self: *SDLBackend, win: *const dvui.Window, wait_micros: u32) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const nswindow = cocoaWindow(self.window) orelse return;
     const wait_s: f64 = if (wait_micros == std.math.maxInt(u32)) -1 else @as(f64, @floatFromInt(wait_micros)) / std.time.us_per_s;
     const since_start_ns = @max(0, self.nanoTime() - win.frame_time_ns);
@@ -934,7 +934,7 @@ pub fn cursorShow(_: *SDLBackend, value: ?bool) bool {
 
 pub fn native(self: *SDLBackend, _: *dvui.Window) dvui.Window.Native {
     const props = c.SDL_GetWindowProperties(self.window);
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows => return .{ .hwnd = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) },
         .macos => return .{ .cocoa_window = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) },
         else => return {},
@@ -1099,9 +1099,9 @@ const ViewportKind = enum { window, carry, overlay, menu };
 /// (`Viewport.ride`) — none for a menu opened in a float that is out. `dialog`: a dialog's window
 /// (`Viewport.dialog`).
 pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, ride: Ride, dialog: bool) ?*Viewport {
-    if (comptime builtin.os.tag != .macos and builtin.os.tag != .windows) return null;
+    if (comptime builtin.target.os.tag != .macos and builtin.target.os.tag != .windows) return null;
     const vp = self.openViewport(at, "", .menu, .os) orelse return null;
-    switch (comptime builtin.os.tag) {
+    switch (comptime builtin.target.os.tag) {
         .macos => {
             _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
             vp.ride = switch (ride) {
@@ -1130,19 +1130,19 @@ pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, r
 
 /// `vp`'s window just above `other`'s, where it is not already (macOS).
 pub fn viewportOrderAbove(_: *SDLBackend, vp: *Viewport, other: *Viewport) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     fizzy_macos_viewport_order_above(cocoaWindow(vp.window), cocoaWindow(other.window));
 }
 
 /// `vp`'s window at `other`'s level, just above it (macOS).
 pub fn viewportLift(_: *SDLBackend, vp: *Viewport, other: *Viewport) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     fizzy_macos_viewport_lift(cocoaWindow(vp.window), cocoaWindow(other.window));
 }
 
 /// `vp`'s window back at a window's own level, after `viewportLift` (macOS).
 pub fn viewportSettle(self: *SDLBackend, vp: *Viewport) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     fizzy_macos_viewport_settle(cocoaWindow(vp.window), cocoaWindow(self.window));
     self.stack_stale = true;
 }
@@ -1174,7 +1174,7 @@ pub fn viewportMainOffset(_: *SDLBackend, vp: *Viewport, offset: viewport_map.Po
 /// window): borderless and clear, the pointer passing through it to what is under, kept above every
 /// window, in no window list, never focused. macOS. Placed and drawn as any viewport.
 pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
-    if (comptime builtin.os.tag != .macos) return null;
+    if (comptime builtin.target.os.tag != .macos) return null;
     return self.openViewport(at, "", .carry, .os);
 }
 
@@ -1183,14 +1183,14 @@ pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
 /// grown to its display, clear but for its glass, the pointer passing through it. macOS 26, where
 /// `liquidGlassAvailable`.
 pub fn viewportOpenOverlay(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
-    if (comptime builtin.os.tag != .macos) return null;
+    if (comptime builtin.target.os.tag != .macos) return null;
     if (!liquidGlassAvailable()) return null;
     return self.openViewport(at, "", .overlay, .os);
 }
 
 /// Whether the OS has Liquid Glass to draw (`viewportOpenOverlay`): macOS 26.
 pub fn liquidGlassAvailable() bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     return fizzy_macos_liquid_glass_available() != 0;
 }
 
@@ -1224,7 +1224,7 @@ pub fn viewportOverlayGlass(_: *SDLBackend, vp: *Viewport, shapes: []const Glass
 /// RGBA rows, `w` by `h`, copied; null, none. Once a drag: its place each frame is cheap, as an
 /// image under the glass rather than a window of its own presented every frame.
 pub fn viewportOverlayPhotoImage(_: *SDLBackend, vp: *Viewport, rgba: ?[]const u8, w: u32, h: u32) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const px = rgba orelse {
         fizzy_macos_viewport_overlay_photo_image(cocoaWindow(vp.window), null, 0, 0);
         return;
@@ -1300,7 +1300,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // A menu's window is a carry window that takes the pointer, never focused: the window it opened
     // from keeps the keyboard, as an OS menu leaves it.
     // One framed by the app (`ViewportFrame.app`) is borderless on macOS as well.
-    const titled = builtin.os.tag == .macos and !carry and frame == .os;
+    const titled = builtin.target.os.tag == .macos and !carry and frame == .os;
     const frame_flag: c.SDL_WindowFlags = if (titled) 0 else c.SDL_WINDOW_BORDERLESS;
     const size_flag: c.SDL_WindowFlags = if (carry) 0 else c.SDL_WINDOW_RESIZABLE;
     const focus_flag: c.SDL_WindowFlags = if (menu) c.SDL_WINDOW_NOT_FOCUSABLE else 0;
@@ -1324,22 +1324,22 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // its own while the viewport was being resized — put the main window over it. Not on macOS,
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`plans/POPOUT_WINDOWS_PLAN.md`, decision 2).
-    if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
+    if (comptime builtin.target.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
     self.viewport_slots[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu, .app_frame = frame == .app };
     const vp = &self.viewport_slots[slot].?;
     // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
     if (menu) return vp;
     if (role == .overlay) {
-        if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+        if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
         return vp;
     }
     if (carry) {
-        if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
+        if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
         return vp;
     }
     // The slot holds it for the window's life, so SDL may keep the pointer.
     _ = c.SDL_SetWindowHitTest(window, viewportHitTest, vp);
-    if (comptime builtin.os.tag == .macos) if (frame == .app) {
+    if (comptime builtin.target.os.tag == .macos) if (frame == .app) {
         fizzy_macos_viewport_plain(cocoaWindow(window));
         fizzy_macos_viewport_windows_item(cocoaWindow(window), title_text.ptr);
     };
@@ -1357,14 +1357,14 @@ pub fn viewportCarryShape(_: *SDLBackend, vp: *Viewport, radius: ?f32, alpha: f3
 /// A carry window's Liquid Glass as the lens (the carried view) or as frost (a float's window growing
 /// out of it, as its own material is). macOS 26; nothing elsewhere.
 pub fn viewportCarryLens(_: *SDLBackend, vp: *Viewport, lens: bool) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     fizzy_macos_viewport_carry_lens(cocoaWindow(vp.window), @intFromBool(lens));
 }
 
 /// Points from `vp`'s window's left edge past the OS's own buttons in its title bar: the traffic
 /// lights of a titled macOS window, with the margin before them. 0 elsewhere.
 pub fn viewportButtonsWidth(_: *SDLBackend, vp: *Viewport) f32 {
-    if (comptime builtin.os.tag != .macos) return 0;
+    if (comptime builtin.target.os.tag != .macos) return 0;
     if (vp.passive) return 0;
     return @floatCast(fizzy_macos_window_buttons_width(cocoaWindow(vp.window)));
 }
@@ -1372,7 +1372,7 @@ pub fn viewportButtonsWidth(_: *SDLBackend, vp: *Viewport) f32 {
 /// The corner radius of a titled window, points: what a float's window is rounded by
 /// (`viewportCarryShape` grows the carried glass into it).
 pub fn windowCornerRadius(_: *SDLBackend) f32 {
-    if (comptime builtin.os.tag != .macos) return 0;
+    if (comptime builtin.target.os.tag != .macos) return 0;
     return @floatCast(fizzy_macos_window_corner_radius());
 }
 
@@ -1417,7 +1417,7 @@ pub fn viewportFade(_: *SDLBackend, vp: *Viewport, alpha: f32) void {
 /// windows anywhere — a window split out of the main one would open where the compositor likes, and
 /// none could follow a drag (`plans/POPOUT_WINDOWS_PLAN.md`). Floats stay in the main window there.
 pub fn viewportsAvailable() bool {
-    if (comptime builtin.os.tag != .linux) return true;
+    if (comptime builtin.target.os.tag != .linux) return true;
     const driver = c.SDL_GetCurrentVideoDriver() orelse return false;
     return !std.mem.eql(u8, std.mem.span(driver), "wayland");
 }
@@ -1452,7 +1452,7 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
                 _ = c.SDL_RaiseWindow(self.window);
             };
             // The window as SDL made it, for SDL to destroy (`viewportGlass`).
-            if (comptime builtin.os.tag == .macos) {
+            if (comptime builtin.target.os.tag == .macos) {
                 platform.macos_monitor.unwatch(v.window);
                 if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(v.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null)) |ns| fizzy_macos_viewport_unglass(ns);
             }
@@ -1472,7 +1472,7 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
 fn placeWindow(vp: *Viewport, to: viewport_map.ScreenRect, was: viewport_map.ScreenRect) void {
     if (std.meta.eql(to, was)) return;
     vp.app_placed_ns = c.SDL_GetTicksNS();
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         vp.frame_pending = true;
         return;
     }
@@ -1486,7 +1486,7 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
     // In a fullscreen Space, or on its way into or out of one, its frame is AppKit's: the float
     // follows the window (`viewportFollowWindow`), never the other way. A window put somewhere in
     // a Space is taken out of it.
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         if (platform.macos_monitor.osOwnsFrame(vp.window)) return vp.frame;
     }
     const placed = viewport_map.place(vp.band, vp.anchor, vp.density, frame);
@@ -1594,10 +1594,10 @@ pub fn viewportHints(_: *SDLBackend, vp: *Viewport, hints: ?struct { drag: viewp
         .drag = win.of(h.drag, o, d),
         .keep = win.of(h.keep, o, d),
         .glass = win.of(h.glass, o, d),
-        .edge = if (builtin.os.tag == .macos or maximized) 0 else h.edge / d,
+        .edge = if (builtin.target.os.tag == .macos or maximized) 0 else h.edge / d,
         // Where the OS resizes from no edge (macOS), the float's own resize zones stay its own.
-        .app_side = if (builtin.os.tag == .macos) h.app_side / d else 0,
-        .app_corner = if (builtin.os.tag == .macos) h.app_corner / d else 0,
+        .app_side = if (builtin.target.os.tag == .macos) h.app_side / d else 0,
+        .app_corner = if (builtin.target.os.tag == .macos) h.app_corner / d else 0,
     };
 }
 
@@ -1613,7 +1613,7 @@ pub fn viewportOsPlaced(_: *SDLBackend, vp: *Viewport) ?viewport_map.Rect {
 /// when the window is no longer the size it was (resized, snapped or maximized), not just moved.
 /// Null otherwise — and for a window the OS moved with no press (a keyboard snap).
 pub fn viewportOsMoveEnded(_: *SDLBackend, vp: *Viewport) ?struct { resized: bool } {
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         if (!vp.win32_loop.ended) return null;
         vp.win32_loop.ended = false;
         return .{ .resized = vp.win32_loop.resized };
@@ -1627,7 +1627,7 @@ pub fn viewportOsMoveEnded(_: *SDLBackend, vp: *Viewport) ?struct { resized: boo
 /// snapping and all, until the button is let go (`win32_titlebar.viewportDragMove`). False where
 /// that is not done (not Windows): the app goes on moving the window until the release.
 pub fn viewportDragMove(_: *SDLBackend, vp: *Viewport) bool {
-    if (comptime builtin.os.tag != .windows) return false;
+    if (comptime builtin.target.os.tag != .windows) return false;
     const hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
     platform.win32_titlebar.viewportDragMove(hwnd);
     return true;
@@ -1640,7 +1640,7 @@ pub fn viewportTitle(_: *SDLBackend, vp: *Viewport, text: []const u8) void {
     var buf: [128]u8 = undefined;
     const z = std.fmt.bufPrintZ(&buf, "{s}", .{text[0..@min(text.len, buf.len - 1)]}) catch return;
     _ = c.SDL_SetWindowTitle(vp.window, z.ptr);
-    if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_windows_item(cocoaWindow(vp.window), z.ptr);
+    if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_windows_item(cocoaWindow(vp.window), z.ptr);
 }
 
 /// The least the OS may resize `vp`'s window to: `size` physical pixels of the frame, its float's
@@ -1689,7 +1689,7 @@ extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]c
 /// - Elsewhere: none, for now.
 pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
     const props = c.SDL_GetWindowProperties(vp.window);
-    switch (comptime builtin.os.tag) {
+    switch (comptime builtin.target.os.tag) {
         .macos => {
             const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
             const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
@@ -1759,7 +1759,7 @@ fn density(self: *SDLBackend) f32 {
     // and the two arrive apart — the frames after a window jumps its size into or out of full screen
     // read half or twice the density, the main window's picture laid out at the wrong scale in the
     // corner and floats placed through it shrunk and moved (the user).
-    if (comptime builtin.os.tag == .macos) if (cocoaWindow(self.window)) |ns| {
+    if (comptime builtin.target.os.tag == .macos) if (cocoaWindow(self.window)) |ns| {
         const s = fizzy_macos_window_backing_scale(ns);
         if (s > 0) return @floatCast(s);
     };
@@ -1946,12 +1946,12 @@ fn viewportFollowWindow(vp: *Viewport) void {
     if (std.meta.eql(now, vp.screen)) return;
     // Placing a window is asynchronous on X11: just after the app put it somewhere, what it says
     // of itself is still on its way there.
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         if (c.SDL_GetTicksNS() -% vp.app_placed_ns < 250 * std.time.ns_per_ms) return;
     }
     // Under a held press, and no move loop to say when it ends (not Windows): the OS is moving it
     // until the press is let go.
-    if (comptime builtin.os.tag != .windows) {
+    if (comptime builtin.target.os.tag != .windows) {
         if (!vp.os_moving and c.SDL_GetGlobalMouseState(null, null) != 0) {
             vp.os_moving = true;
             vp.os_start = vp.screen;
@@ -1985,7 +1985,7 @@ fn viewportHitTest(_: ?*c.SDL_Window, area: [*c]const c.SDL_Point, data: ?*anyop
 
 pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
     // NOTE: SDL3's UIKit driver has no system cursors, so SDL_CreateSystemCursor always fails there.
-    if (builtin.os.tag == .ios) return;
+    if (builtin.target.os.tag == .ios) return;
     if (cursor == self.cursor_last) return;
     defer self.cursor_last = cursor;
     const new_shown_state = if (cursor == .hidden) false else if (self.cursor_last == .hidden) true else null;
@@ -2118,7 +2118,7 @@ pub fn renderPresent(self: *SDLBackend) void {
     // empty, then with a picture a frame of the drag away from it.
     var transacted: [max_viewports]bool = @splat(false);
     var any = false;
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         for (&self.viewport_slots, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             if (vp.app_frame and vp.shown) {
@@ -2158,7 +2158,7 @@ pub fn renderPresent(self: *SDLBackend) void {
             }
         }
     }
-    defer if (comptime builtin.os.tag == .macos) if (any) {
+    defer if (comptime builtin.target.os.tag == .macos) if (any) {
         for (&self.viewport_slots, transacted) |*slot, t| {
             if (!t) continue;
             const vp = if (slot.*) |*v| v else continue;
@@ -2196,7 +2196,7 @@ pub fn renderPresent(self: *SDLBackend) void {
     // A frame inside a Windows live resize is drawn before the loop goes on: one queued behind
     // others reaches the screen a composite or more after the size it was drawn for, as an edge
     // with nothing on it or a frame cut off (docs/WINDOWS_LIVE_RESIZE.md).
-    self.gpu.present(self.clear_window_on_begin, builtin.os.tag == .windows and self.inLiveResize());
+    self.gpu.present(self.clear_window_on_begin, builtin.target.os.tag == .windows and self.inLiveResize());
     // Shown once there is a frame in it (or empty, above). Not made key: the window it came out of
     // keeps the keyboard until the viewport is clicked.
     for (&self.viewport_slots, first_frame, map_empty) |*slot, show, empty| {
@@ -2209,7 +2209,7 @@ pub fn renderPresent(self: *SDLBackend) void {
             vp.mapped = true;
             // Riding on its window from here (`Viewport.ride`) — not before it shows: made a child
             // window, AppKit shows it at once, before it has a picture.
-            if (comptime builtin.os.tag == .macos) if (vp.ride) |parent| {
+            if (comptime builtin.target.os.tag == .macos) if (vp.ride) |parent| {
                 _ = c.SDL_SetWindowParent(vp.window, parent);
                 if (!vp.dialog) fizzy_macos_viewport_menu_attached(cocoaWindow(vp.window));
             };
@@ -2220,7 +2220,7 @@ pub fn renderPresent(self: *SDLBackend) void {
     // Over the main window as it first shows: SDL showed it below the key window. Once
     // (`noteMainForward`): from there it stacks as any window does. And once more as the app first
     // activates, which brings the main window in front of them (`fizzy_macos_watch_first_activation`).
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         fizzy_macos_watch_first_activation();
         if (fizzy_macos_took_first_activation() != 0) for (&self.viewport_slots) |*slot| if (slot.*) |*v| {
             v.over_main = true;
@@ -2317,7 +2317,7 @@ pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     // A float's window standing still on its way into or out of full screen: its picture has
     // taken this frame's step (`begin_hook`), and the float follows it there — as it did the
     // window's moves — and back to the window as the way ends.
-    if (comptime builtin.os.tag == .macos) for (&self.viewport_slots) |*slot| {
+    if (comptime builtin.target.os.tag == .macos) for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.picture_at[0] != 0 or vp.picture_at[1] != 0 or platform.window.windowSpacePicture(vp.window) != null)
             viewportFollowWindow(vp);
@@ -2341,7 +2341,7 @@ fn mainPicture(self: *const SDLBackend) ?viewport_map.Rect {
 /// picture, while it stands still on its way into or out of full screen (`main_picture`). Null:
 /// the frame is the window.
 pub fn pictureInWindow(self: *SDLBackend) ?struct { at: dvui.Rect.Physical, all: dvui.Rect.Physical } {
-    if (comptime builtin.os.tag != .macos) return null;
+    if (comptime builtin.target.os.tag != .macos) return null;
     const p = self.mainPicture() orelse return null;
     // The drawable the frame goes into: the window's size the moment it jumps (the monitor keeps it
     // so), where SDL's word on its pixel size comes a frame or more later.
@@ -2364,7 +2364,7 @@ pub fn pictureInWindow(self: *SDLBackend) ?struct { at: dvui.Rect.Physical, all:
 /// way into or out of full screen ran choppy and stood still partway for moments at a time (the
 /// user). The floats keep theirs the same way while the main window moves (`renderPresent`).
 fn mainHeld(self: *SDLBackend) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     // Its own way into or out of full screen is drawn whatever AppKit says of it on the way.
     if (platform.window.windowMovingItself(self.window)) return false;
     if (c.SDL_GetWindowFlags(self.window) & c.SDL_WINDOW_OCCLUDED != 0) return true;
@@ -2391,7 +2391,7 @@ pub fn pixelSize(self: *SDLBackend) dvui.Size.Physical {
     }
     var w: c_int = 0;
     var h: c_int = 0;
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         if (cocoaWindow(self.window)) |nswindow| {
             if (fizzy_native_metal_drawable_size(nswindow, &w, &h) != 0) {
                 self.last_pixel_size = .{ .w = @floatFromInt(w), .h = @floatFromInt(h) };
@@ -2788,7 +2788,7 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             // events per second of a 60Hz display
             //
             // Normalize by 60/refresh_hz on macOS
-            const mac_wheel_scale: f32 = if (sdl3 and builtin.os.tag == .macos) blk: {
+            const mac_wheel_scale: f32 = if (sdl3 and builtin.target.os.tag == .macos) blk: {
                 const display = c.SDL_GetDisplayForWindow(self.window);
                 if (display == 0) break :blk 1.0;
                 const mode = c.SDL_GetCurrentDisplayMode(display) orelse break :blk 1.0;
@@ -2803,7 +2803,7 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             // the right classification immediately.
             var mouse_type: dvui.enums.MouseType = .unknown;
 
-            if (sdl3 and builtin.os.tag == .macos) {
+            if (sdl3 and builtin.target.os.tag == .macos) {
                 const v = fizzy_native_monitor_last_scroll_precise();
                 if (v >= 0) {
                     mouse_type = if (v != 0) .trackpad else .mouse;
@@ -2854,9 +2854,9 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (self.log_events) {
                 log.debug("event FOCUS_GAINED\n", .{});
             }
-            if (dvui.accesskit_enabled and builtin.os.tag == .linux) {
+            if (dvui.accesskit_enabled and builtin.target.os.tag == .linux) {
                 dvui.AccessKit.c.accesskit_unix_adapter_update_window_focus_state(win.accesskit.adapter, true);
-            } else if (dvui.accesskit_enabled and builtin.os.tag == .macos) {
+            } else if (dvui.accesskit_enabled and builtin.target.os.tag == .macos) {
                 const events = dvui.AccessKit.c.accesskit_macos_subclassing_adapter_update_view_focus_state(win.accesskit.adapter, true);
                 if (events) |evts| {
                     dvui.AccessKit.c.accesskit_macos_queued_events_raise(evts);
@@ -2868,9 +2868,9 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (self.log_events) {
                 log.debug("event FOCUS_LOST\n", .{});
             }
-            if (dvui.accesskit_enabled and builtin.os.tag == .linux) {
+            if (dvui.accesskit_enabled and builtin.target.os.tag == .linux) {
                 dvui.AccessKit.c.accesskit_unix_adapter_update_window_focus_state(win.accesskit.adapter, false);
-            } else if (dvui.accesskit_enabled and builtin.os.tag == .macos) {
+            } else if (dvui.accesskit_enabled and builtin.target.os.tag == .macos) {
                 const events = dvui.AccessKit.c.accesskit_macos_subclassing_adapter_update_view_focus_state(win.accesskit.adapter, false);
                 if (events) |evts| {
                     dvui.AccessKit.c.accesskit_macos_queued_events_raise(evts);
@@ -2885,7 +2885,7 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (comptime sdl3) {
                 self.trackGeometry();
             }
-            if (dvui.accesskit_enabled and builtin.os.tag == .linux) {
+            if (dvui.accesskit_enabled and builtin.target.os.tag == .linux) {
                 var x: i32, var y: i32 = .{ undefined, undefined };
                 _ = c.SDL_GetWindowPosition(win.backend.impl.window, &x, &y);
                 var w: i32, var h: i32 = .{ undefined, undefined };
@@ -3262,7 +3262,7 @@ pub fn main(main_init: std.process.Init) !u8 {
     if (sdl3)
         _ = c.SDL_SetAppMetadata("DVUI App Example", "0.1", "com.example.dvui.app");
 
-    if (builtin.os.tag == .windows) { // optional
+    if (builtin.target.os.tag == .windows) { // optional
         // on windows graphical apps have no console, so output goes to nowhere - attach it manually. related: https://github.com/ziglang/zig/issues/4196
         dvui.Backend.Common.windowsAttachConsole() catch {};
     }
@@ -3689,12 +3689,12 @@ const live_resize_trace = struct {
     const Start = struct { t: f64, probe: [8]f64 };
 
     fn enabled() bool {
-        if (comptime builtin.os.tag != .macos) return false;
+        if (comptime builtin.target.os.tag != .macos) return false;
         return fizzy_live_resize_trace_enabled() != 0;
     }
 
     fn begin(back: *SDLBackend) ?Start {
-        if (comptime builtin.os.tag != .macos) return null;
+        if (comptime builtin.target.os.tag != .macos) return null;
         if (!enabled()) return null;
         const nswindow = cocoaWindow(back.window) orelse return null;
         var p: [8]f64 = undefined;
@@ -3709,7 +3709,7 @@ const live_resize_trace = struct {
     }
 
     fn end(s: Start, back: *SDLBackend, wait_micros: u32) void {
-        if (comptime builtin.os.tag != .macos) return;
+        if (comptime builtin.target.os.tag != .macos) return;
         const r = frame_rect;
         const p = s.probe;
         std.debug.print("[lr] {d:.6} frame {d} src={s} since={d:.1}ms took={d:.1}ms win={d}x{d} layer={d}x{d} drawable={d}x{d} swap={d}x{d} rect={d}x{d} wait={d}us\n", .{

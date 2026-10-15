@@ -27,7 +27,7 @@ comptime {
     // The menu bar's Objective-C (`macos/menu_target.m`) calls these back, and it is compiled into
     // every app on macOS (`addPlatformObjC`), so they are kept whether or not the app ever reaches
     // `menu` — a plain dvui app with no menu bar of its own failed to link without them.
-    if (@import("builtin").os.tag == .macos) {
+    if (@import("builtin").target.os.tag == .macos) {
         _ = &menu.FizzyMenuActivated;
         _ = &menu.FizzyMenuEnabled;
         _ = &menu.FizzyMenuTitle;

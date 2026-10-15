@@ -787,7 +787,7 @@ fn paneSide(side: sdk.RegionSpec.Drop.Side) core.widgets.DockLayout.Side {
 
 fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
     var content_color = dvui.themeGet().color(.window, .fill);
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos, .windows => {
             content_color = if (!runtime.host().isMaximized()) content_color.opacity(runtime.host().contentOpacity()) else content_color;
         },

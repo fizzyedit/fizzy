@@ -258,7 +258,7 @@ pub fn windowGlass(allocator: std.mem.Allocator, data: [:0]const u8, settings: *
     defer std.zon.parse.free(allocator, legacy);
     if (legacy.dialog_opacity == null and legacy.dialog_blur == null and legacy.dialog_lift == null and
         legacy.dialog_detail == null and legacy.dialog_refraction == null) return;
-    const opaque_window = comptime builtin.target.cpu.arch == .wasm32 or (builtin.os.tag != .macos and builtin.os.tag != .windows);
+    const opaque_window = comptime builtin.target.cpu.arch == .wasm32 or (builtin.target.os.tag != .macos and builtin.target.os.tag != .windows);
     if (opaque_window) if (legacy.dialog_opacity) |o| {
         settings.window_opacity_dark = std.math.clamp(o, 0, 1);
         settings.window_opacity_light = std.math.clamp(o, 0, 1);

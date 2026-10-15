@@ -42,7 +42,7 @@ const menu_model = @import("menu_model.zig");
 /// "fizzy default unless a plugin wants it" — that needs the layered `Command.default_keys`
 /// resolution in step C, not another entry in this function.
 ///
-/// Runtime mac detection — `builtin.os.tag.isDarwin()` is `false` for
+/// Runtime mac detection — `builtin.target.os.tag.isDarwin()` is `false` for
 /// wasm32-freestanding, so macOS web users would otherwise get the Windows (Ctrl)
 /// bindings. `fizzy.core.platform.isMacOS()` reads DVUI's `navigator.platform`-derived
 /// choice on web and uses `os.tag` on native.
@@ -899,7 +899,7 @@ fn shadowedByHigherLayer(editor: *Editor, binding: Keymap.Binding, command_id: [
 /// theirs (`backend_native.rebuildDynamicNativeMenus` tags them the same way). Neither needs a
 /// command↔item table: both name a command, and the chord comes from the keymap.
 pub fn syncNativeMenuShortcuts(editor: *Editor) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
 
     for (menu_model.flat_commands, 0..) |item, tag| {
         if (nativeShortcutFor(editor, item.id)) |s| {
@@ -977,7 +977,7 @@ fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
 /// equivalents, AppKit runs them, and a command reachable from both paths would fire twice.
 /// This is the exact condition `syncNativeMenuShortcuts` stamps, so the two cannot disagree.
 pub fn nativeMenuOwnsChord(editor: *Editor, id: []const u8) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     if (!menu_model.contains(id) and !nativeMenuItemFor(editor, id)) return false;
     return nativeShortcutFor(editor, id) != null;
 }

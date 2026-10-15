@@ -672,7 +672,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     const plugins_dir = std.fs.path.join(editor.app.gpa, &.{ config_folder, "plugins" }) catch return;
     defer editor.app.gpa.free(plugins_dir);
 
-    const ext_suffix: []const u8 = switch (builtin.os.tag) {
+    const ext_suffix: []const u8 = switch (builtin.target.os.tag) {
         .windows => ".dll",
         .macos => ".dylib",
         else => ".so",
@@ -2256,7 +2256,7 @@ pub fn postInit(editor: *Editor) !void {
         Watch.wake.setHook(wakeEventLoop);
 
         // What a Windows build set aside to install over this executable while it ran.
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             if (std.process.executablePath(dvui.io, &buf)) |n| ExecutableWatcher.removeSetAside(buf[0..n]) else |_| {}
         }
@@ -2517,7 +2517,7 @@ fn fizzyIsMacOS(_: *anyopaque) bool {
 }
 fn fizzyAppliesNativeWindowOpacity(_: *anyopaque) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    return builtin.os.tag == .macos or builtin.os.tag == .windows;
+    return builtin.target.os.tag == .macos or builtin.target.os.tag == .windows;
 }
 fn fizzyPanZoomScheme(ctx: *anyopaque) sdk.EditorAPI.PanZoomScheme {
     const editor = fizzyCtx(ctx);
@@ -3894,7 +3894,7 @@ pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.Wind
 /// there is none; clear at 0. Every window fizzy draws stands on it — the main window, a float's
 /// own window, the carry window (`Popout.base`) — so side by side they are one colour.
 pub fn windowBase(opacity: f32) dvui.Color {
-    const material = switch (builtin.os.tag) {
+    const material = switch (builtin.target.os.tag) {
         .macos, .windows => true,
         .linux => fizzy.editor().blurred_behind,
         else => false,
@@ -3932,7 +3932,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // frost over a blur at the full frost, and its own colour and bend. Elsewhere — the web,
         // Linux, Windows, where there is no OS glass to match — the app's frosted pane (`frosted`).
         const opacity = @max(if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light, glass_look.min_opacity);
-        const lens = builtin.os.tag == .macos and editor.app.settings.glass_shader;
+        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader;
         const pane = glass_look.frosted(opacity);
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
@@ -3955,7 +3955,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     fizzy.core.programs.publishHost();
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).
-    fizzy.core.screens.publishMainTop(if (builtin.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
+    fizzy.core.screens.publishMainTop(if (builtin.target.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
@@ -3983,7 +3983,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // (`backend.blurBehind`), asked for while the window is translucent at all, its corners the
     // frame's (square maximized, as `draw` draws it). Behind `FIZZY_BLUR_BEHIND=1` until it has been
     // seen on GNOME and KDE (`plans/WINDOWS_LINUX_GLASS_PLAN.md`).
-    if (builtin.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
+    if (builtin.target.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
         const win = dvui.currentWindow();
         const radius: f32 = if (fizzy.backend.isMaximized(win)) 0 else Constants.linux_window_radius;
         editor.blurred_behind = fizzy.backend.blurBehind(win, if (editor.window_opacity_anim.value > 0 and editor.window_opacity_anim.value < 1) radius else null);
@@ -3991,7 +3991,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Translucent over the desktop's material on macOS and Windows, and on Linux where the
     // compositor blurs behind the window; opaque elsewhere, where the window's alpha is only its
     // shape (`LiquidField.publishOpaqueWindow`).
-    fizzy.core.LiquidField.publishOpaqueWindow(builtin.os.tag != .macos and builtin.os.tag != .windows and !editor.blurred_behind);
+    fizzy.core.LiquidField.publishOpaqueWindow(builtin.target.os.tag != .macos and builtin.target.os.tag != .windows and !editor.blurred_behind);
     // Out of a fullscreen Space, the window stops covering the desktop on AppKit's and SDL's own
     // time, after the transition, and nothing wakes a frame for it: it sat opaque until the mouse
     // moved (the user). From the moment it sets out of the Space, frames keep coming until it no
@@ -4221,7 +4221,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // And on Wayland the window's shadow is fizzy's too, drawn in a margin round the frame
         // that the compositor knows is not the window (`frameInsets`, zero when maximized, tiled
         // or full screen).
-        const linux_windowed = builtin.os.tag == .linux and !fizzy.backend.isMaximized(dvui.currentWindow());
+        const linux_windowed = builtin.target.os.tag == .linux and !fizzy.backend.isMaximized(dvui.currentWindow());
         const insets = fizzy.backend.frameInsets(dvui.currentWindow());
         const shadowed = insets.x > 0 or insets.y > 0 or insets.w > 0 or insets.h > 0;
         var overall_box = dvui.box(
@@ -4243,7 +4243,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         // Non-macOS: a thin strip below the top edge so the in-window title row (menu, etc.) is not flush
         // against the window border (complements the system caption area on Windows 11).
-        if (builtin.os.tag != .macos) {
+        if (builtin.target.os.tag != .macos) {
             var top_inset = dvui.box(
                 @src(),
                 .{ .dir = .horizontal },
@@ -4264,7 +4264,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         //    overlay at the top-right corner (y=0) hosts the min/max/close buttons; a drag rect is pushed
         //    across the top so empty space (gaps between widgets) drags the window. Menu items and sidebar
         //    buttons push themselves as interactive rects so clicks on them still reach DVUI.
-        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
+        if (builtin.target.os.tag == .windows or builtin.target.os.tag == .linux) {
             fizzy.backend.resetTitleBarHints();
 
             const window_rect_natural = dvui.windowRect();
@@ -4277,7 +4277,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 (insets.y + title_strip_h) * scale,
                 @intFromFloat(window_rect_natural.w * scale),
             );
-        } else if (builtin.os.tag == .macos) {
+        } else if (builtin.target.os.tag == .macos) {
             // Collapse while zoomed/fullscreen (chrome overlays on hover); grow with
             // AppKit safe-area inset when restoring to a normal window.
             const title_strip_h = fizzy.backend.titlebarStripHeight(dvui.currentWindow());
@@ -4303,7 +4303,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // Top-right overlay on Windows and Linux: minimize / maximize / close, each in its
         // desktop's style (`caption_buttons`). Floating, so it takes no space in overall_box's
         // layout — the main UI below fills the entire window.
-        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
+        if (builtin.target.os.tag == .windows or builtin.target.os.tag == .linux) {
             const win_rect = dvui.windowRect();
             const frame: dvui.Rect = .{ .x = insets.x, .y = insets.y, .w = win_rect.w - insets.x - insets.w, .h = win_rect.h - insets.y - insets.h };
             caption_buttons.draw(frame, if (linux_windowed) Constants.linux_window_radius else null);
@@ -5729,7 +5729,7 @@ pub fn paste(editor: *Editor) !void {
 
 /// Forwards `name`'s keybind (e.g. "copy"/"paste") as a synthetic key-down event to whichever
 /// widget currently holds dvui keyboard focus. On macOS, Cmd+C/Cmd+V only ever reach us as a
-/// native menu action (see `Keybinds.tick`'s `builtin.os.tag != .macos` guard), and that path
+/// native menu action (see `Keybinds.tick`'s `builtin.target.os.tag != .macos` guard), and that path
 /// otherwise only knows how to talk to the active *document* (`runActiveDocCommand`). Any other
 /// focused widget with its own copy/paste handling — fizzy's Output Panel, a plugin's search
 /// box, dvui's own text-selection widgets — never sees the raw keystroke at all, unlike on
@@ -6055,7 +6055,7 @@ pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
     // `environ` array captured at startup, which any `unsetenv` elsewhere in the process (SDL,
     // a plugin, a system framework) shrinks *in place* — leaving a NULL before the captured
     // length and segfaulting the whole app on the next spawn. See `darwin_spawn.zig`.
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         // `posix_spawn` (unlike `posix_spawnp`) does not search `$PATH`, so name `open` in full.
         const child = fizzy.core.darwin_spawn.spawn(editor.app.gpa, .{
             .argv = &.{ "/usr/bin/open", path },
@@ -6080,7 +6080,7 @@ pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
     }
     // `start` is a cmd.exe builtin, not a standalone executable, so spawning it directly
     // (bypassing the shell) always fails on Windows — reveal via explorer.exe instead.
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const arg = try std.fmt.allocPrint(editor.app.gpa, "/select,{s}", .{path});
         defer editor.app.gpa.free(arg);
         _ = std.process.run(editor.app.gpa, dvui.io, .{ .argv = &.{ "explorer.exe", arg } }) catch {

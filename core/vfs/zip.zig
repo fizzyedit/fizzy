@@ -210,13 +210,13 @@ const dos_epoch_date: u16 = (1 << 5) | 1;
 fn readStruct(comptime T: type, bytes: []const u8, off: u64) ?T {
     if (off + @sizeOf(T) > bytes.len) return null;
     var v: T = @bitCast(bytes[@intCast(off)..][0..@sizeOf(T)].*);
-    if (@import("builtin").cpu.arch.endian() == .big) std.mem.byteSwapAllFields(T, &v);
+    if (@import("builtin").target.cpu.arch.endian() == .big) std.mem.byteSwapAllFields(T, &v);
     return v;
 }
 
 fn writeStruct(allocator: Allocator, out: *std.ArrayList(u8), value: anytype) Allocator.Error!void {
     var v = value;
-    if (@import("builtin").cpu.arch.endian() == .big) std.mem.byteSwapAllFields(@TypeOf(v), &v);
+    if (@import("builtin").target.cpu.arch.endian() == .big) std.mem.byteSwapAllFields(@TypeOf(v), &v);
     try out.appendSlice(allocator, std.mem.asBytes(&v));
 }
 

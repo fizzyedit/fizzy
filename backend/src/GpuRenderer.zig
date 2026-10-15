@@ -273,7 +273,7 @@ pub fn primary() ?*GpuRenderer {
 fn createDevice(window: *c.SDL_Window) ?*c.SDL_GPUDevice {
     const formats = c.SDL_GPU_SHADERFORMAT_SPIRV | c.SDL_GPU_SHADERFORMAT_DXIL | c.SDL_GPU_SHADERFORMAT_MSL;
     const debug = builtin.mode == .Debug;
-    if (builtin.os.tag == .windows and c.SDL_GetWindowFlags(window) & c.SDL_WINDOW_TRANSPARENT != 0) {
+    if (builtin.target.os.tag == .windows and c.SDL_GetWindowFlags(window) & c.SDL_WINDOW_TRANSPARENT != 0) {
         if (c.SDL_CreateGPUDevice(formats, debug, "direct3d12")) |device| return device;
         log.warn("no D3D12 device ({s}); the transparent window will be opaque", .{c.SDL_GetError()});
     }
@@ -411,7 +411,7 @@ pub fn destroy(self: *GpuRenderer) void {
 /// (SDL_GPU tags it sRGB, on claim and on every swapchain-parameter change). See
 /// `macos_monitor.m`.
 fn prepareLayer(window: *c.SDL_Window) void {
-    if (builtin.os.tag != .macos) return;
+    if (builtin.target.os.tag != .macos) return;
     const nswindow = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
     fizzy_native_metal_layer_prepare(nswindow);
 }
@@ -657,7 +657,7 @@ pub fn claimViewport(self: *GpuRenderer, window: *c.SDL_Window) !void {
         log.err("SDL_ClaimWindowForGPUDevice (viewport) failed: {s}", .{c.SDL_GetError()});
         return error.GpuClaimWindow;
     }
-    const mode: c.SDL_GPUPresentMode = if (builtin.os.tag == .macos)
+    const mode: c.SDL_GPUPresentMode = if (builtin.target.os.tag == .macos)
         c.SDL_GPU_PRESENTMODE_VSYNC
     else if (c.SDL_WindowSupportsGPUPresentMode(self.device, window, c.SDL_GPU_PRESENTMODE_IMMEDIATE))
         c.SDL_GPU_PRESENTMODE_IMMEDIATE
@@ -1193,7 +1193,7 @@ fn formatSupported(format: dvui.enums.TexturePixelFormat) bool {
 /// Where R, G, B and A sit in a texel of `format`, as bytes in memory; A null when the format
 /// has none (opaque).
 fn layout(format: dvui.enums.TexturePixelFormat) struct { r: u2, g: u2, b: u2, a: ?u2 } {
-    const little = builtin.cpu.arch.endian() == .little;
+    const little = builtin.target.cpu.arch.endian() == .little;
     // The `_8_8_8_8` formats are packed 32-bit words, named from the high byte down: in memory
     // on a little-endian machine they are the byte order reversed.
     const f: dvui.enums.TexturePixelFormat = if (!little) format else switch (format) {

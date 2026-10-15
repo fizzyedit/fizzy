@@ -93,7 +93,7 @@ pub fn acquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !void {
     if (profile.root) |root| {
         profile_id = try profile.lockId(gpa, app_id, root);
         id = profile_id.?;
-        if (builtin.os.tag != .windows) {
+        if (builtin.target.os.tag != .windows) {
             run_dir = try profile.runtimeDir(gpa, root);
             // `<dir>/<id>-<uid>.sock`, as `dvui-singleton-app` names it; a uid is at most 10 digits.
             const socket_len = run_dir.?.len + 1 + id.len + 1 + 10 + ".sock".len;
@@ -402,7 +402,7 @@ fn resolveAbsolute(gpa: std.mem.Allocator, cwd: []const u8, path: []const u8) ![
 }
 
 fn pickUnixSocketDir(buf: *[std.fs.max_path_bytes]u8) []const u8 {
-    if (builtin.os.tag == .windows) return "."; // unused on Windows
+    if (builtin.target.os.tag == .windows) return "."; // unused on Windows
     // Prefer TMPDIR (macOS sets it per-user) → /tmp fallback.
     // Use the libc env to avoid plumbing `process.Environ` here.
     if (std.c.getenv("TMPDIR")) |env_ptr| {
@@ -412,7 +412,7 @@ fn pickUnixSocketDir(buf: *[std.fs.max_path_bytes]u8) []const u8 {
             return buf[0..len];
         }
     }
-    if (builtin.os.tag == .linux) {
+    if (builtin.target.os.tag == .linux) {
         if (std.c.getenv("XDG_RUNTIME_DIR")) |env_ptr| {
             const len = std.mem.len(env_ptr);
             if (len > 0 and len < buf.len) {

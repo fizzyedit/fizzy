@@ -219,7 +219,7 @@ fn chmodPath(path: []const u8, mode: std.c.mode_t) c_int {
 }
 
 test "shutdown returns while the listener waits in accept" {
-    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    if (comptime builtin.target.os.tag == .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var name_buf: [64]u8 = undefined;
     const app_id = try std.fmt.bufPrint(&name_buf, "fizzy-singleton-test-{d}", .{std.c.getpid()});

@@ -327,14 +327,14 @@ export fn dvui_c_alloc(size: usize) ?*anyopaque {
         //log.debug("dvui_c_alloc {d} failed", .{size});
         return null;
     };
-    std.mem.writeInt(u64, buffer[0..@sizeOf(u64)], buffer.len, builtin.cpu.arch.endian());
+    std.mem.writeInt(u64, buffer[0..@sizeOf(u64)], buffer.len, builtin.target.cpu.arch.endian());
     //log.debug("dvui_c_alloc {*} {d}", .{ buffer.ptr + 8, size });
     return buffer.ptr + 8;
 }
 
 pub export fn dvui_c_free(ptr: ?*anyopaque) void {
     const buffer = @as([*]align(8) u8, @ptrCast(@alignCast(ptr orelse return))) - 8;
-    const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.cpu.arch.endian());
+    const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.target.cpu.arch.endian());
     //log.debug("dvui_c_free {?*} {d}", .{ ptr, len - 8 });
 
     gpa.free(buffer[0..@intCast(len)]);
@@ -349,7 +349,7 @@ export fn dvui_c_realloc_sized(ptr: ?*anyopaque, oldsize: usize, newsize: usize)
     }
 
     //const buffer = @as([*]u8, @ptrCast(ptr.?)) - 8;
-    //const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.cpu.arch.endian());
+    //const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.target.cpu.arch.endian());
 
     //const slice = buffer[0..@intCast(len)];
     //log.debug("dvui_c_realloc_sized buffer {*} {d}", .{ ptr, len });
@@ -361,7 +361,7 @@ export fn dvui_c_realloc_sized(ptr: ?*anyopaque, oldsize: usize, newsize: usize)
     dvui_c_free(ptr);
     return newptr;
 
-    //std.mem.writeInt(usize, slice[0..@sizeOf(usize)], slice.len, builtin.cpu.arch.endian());
+    //std.mem.writeInt(usize, slice[0..@sizeOf(usize)], slice.len, builtin.target.cpu.arch.endian());
     //return slice.ptr + 16;
 }
 
