@@ -625,7 +625,7 @@ pub fn init(
 
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light));
 
-    editor.explorer.* = .init();
+    editor.explorer.* = .{};
     editor.app.open_files = .empty;
     try editor.workbench.initDefaultWorkspace();
 
@@ -2083,6 +2083,11 @@ pub fn postInit(editor: *Editor) !void {
         .description = "Files under the project folder changed on disk (coalesced, ignore rules applied); truncated means rescan.",
         .payload = ".{ .events = .{ .{ .path = \"/abs\", .kind = .created, .object = .file, .old_path = \"\" } }, .truncated = false }",
     }) catch {};
+    editor.app.host.declareEvent(.{
+        .name = "fizzy.files.reveal",
+        .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",
+        .payload = ".{ .path = \"/absolute/path\" }",
+    }) catch {};
 
     // Publish the shared file set. Same reason as the commands above: `env.ctx` is this
     // editor's final address. The table answers three questions it can't itself — where the
@@ -2370,8 +2375,6 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
     .folderWatchActive = fizzyFolderWatchActive,
-    .explorerBranchIsOpen = fizzyExplorerBranchIsOpen,
-    .setExplorerBranchOpen = fizzySetExplorerBranchOpen,
     .drawWorkspaces = fizzyDrawWorkspaces,
     .showOpenFolderDialog = fizzyShowOpenFolderDialog,
     .showOpenFileDialog = fizzyShowOpenFileDialog,
@@ -2380,7 +2383,6 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .refresh = fizzyRefresh,
     .allocUntitledPath = fizzyAllocUntitledPath,
     .createDocument = fizzyCreateDocument,
-    .setExplorerNewFilePath = fizzySetExplorerNewFilePath,
     .saveState = fizzySaveState,
     .logLine = fizzyLogLine,
     .panic = fizzyPanic,
@@ -2656,17 +2658,6 @@ fn fizzyIsPathIgnored(
 ) bool {
     return fizzyCtx(ctx).ignore.isIgnored(project_root, abs_path, name, kind);
 }
-fn fizzyExplorerBranchIsOpen(ctx: *anyopaque, branch_id: dvui.Id) bool {
-    return fizzyCtx(ctx).explorer.open_branches.contains(branch_id);
-}
-fn fizzySetExplorerBranchOpen(ctx: *anyopaque, branch_id: dvui.Id, open: bool) void {
-    const editor = fizzyCtx(ctx);
-    if (open) {
-        editor.explorer.open_branches.put(branch_id, {}) catch {};
-    } else {
-        _ = editor.explorer.open_branches.remove(branch_id);
-    }
-}
 fn fizzyDrawWorkspaces(ctx: *anyopaque, index: usize) anyerror!dvui.App.Result {
     return fizzyCtx(ctx).workbench.drawWorkspaces(index);
 }
@@ -2713,17 +2704,6 @@ fn fizzyAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
 }
 fn fizzyCreateDocument(ctx: *anyopaque, path: []const u8, grid: sdk.EditorAPI.NewDocGrid) anyerror!sdk.DocHandle {
     return fizzyCtx(ctx).newFile(path, grid);
-}
-fn fizzySetExplorerNewFilePath(ctx: *anyopaque, path: []const u8) anyerror!void {
-    const editor = fizzyCtx(ctx);
-    try editor.workbench.setPendingNewFilePath(path);
-    // A plugin reaching this has just written `path` with its own save routine, not through
-    // `files.createFilePath`, so nothing has dropped the shared listing cache and that cache
-    // still predates the file. Left stale, the row never appears on the next frame: the match in
-    // `files.zig` never runs, no inline rename opens, and the dialog still closing over the top
-    // of it has no row to fly into. This is the only thing standing between "the file exists"
-    // and "the user can see and rename it".
-    editor.app.file_table.invalidateAll();
 }
 fn fizzySaveState(ctx: *anyopaque, doc_id: u64) sdk.EditorAPI.SaveState {
     return fizzyCtx(ctx).doc_io.state(doc_id);
@@ -2986,12 +2966,6 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
 
 pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
     return editor.workbench.activeDoc();
-}
-
-/// Files sidebar inactive — drop the tree's dvui stash id, which the tree sets again each frame
-/// it draws.
-pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
-    editor.workbench.clearFileTreeDataId();
 }
 
 /// Draws whichever center provider is active, blur-fading when that changes.
@@ -6325,7 +6299,6 @@ pub fn deinit(editor: *Editor) !void {
     }
     editor.app.settings.deinit(editor.app.gpa);
 
-    editor.explorer.deinit();
     editor.app.gpa.destroy(editor.explorer);
 
     PluginStore.deinit();

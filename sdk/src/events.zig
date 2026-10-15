@@ -72,6 +72,10 @@ pub fn parse(comptime T: type, arena: std.mem.Allocator, event: Event) !T {
 // `doc.owner.documentBytes(doc, path, allocator)`.
 //
 // `fizzy.files.changed`: files under the project folder changed on disk, `FilesChanged`.
+//
+// `fizzy.files.reveal`: a path was just made and should be shown the way a new file is: revealed
+// in whatever lists the project's files, selected, its name open for editing. `Path`. Emitted by
+// fizzy's `files` service (`reveal`), for a plugin's New flow or its own.
 
 /// The payload of fizzy's folder and document events.
 pub const Path = struct {

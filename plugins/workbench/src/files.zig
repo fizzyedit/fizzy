@@ -115,14 +115,16 @@ pub fn draw() !void {
     // closes it; the table answers them all the same way.
     const folder: ?[]const u8 = runtime.host().folder();
     const path = folder orelse {
-        runtime.workbench().file_tree_data_id = null;
         runtime.workbench().file_tree_root_opened = null;
         if (comptime builtin.target.cpu.arch == .wasm32) try drawWebEmpty() else drawNativeEmpty();
         return;
     };
 
+    // Where the tree's per-row stash lives (`dvui.dataSet` under it): made here, each frame it
+    // draws, so nothing outside the tree has to drop it when the Files view is hidden.
+    const unique_id = dvui.parentGet().extendId(@src(), 0);
     const filter_text = try drawFilter(tree);
-    try drawRoot(path, tree, filter_text);
+    try drawRoot(path, tree, unique_id, filter_text);
 }
 
 fn drawNativeEmpty() void {
@@ -201,7 +203,6 @@ fn drawFilter(tree: *core.widgets.TreeWidget) ![]const u8 {
     // last frame's draw invalidated while it was still reading them.
     files.releaseRetired();
 
-    runtime.workbench().file_tree_data_id = dvui.parentGet().extendId(@src(), 0);
     _ = tree;
 
     // Right margin keeps the entry clear of the overlay scrollbar that draws over the pane's right edge.
@@ -215,8 +216,7 @@ fn drawFilter(tree: *core.widgets.TreeWidget) ![]const u8 {
 
 /// The explorer's one root: the open folder, drawn as an ordinary folder row (see `drawRow`'s
 /// `root`), then the blank space below the tree.
-fn drawRoot(path: []const u8, tree: *core.widgets.TreeWidget, filter_text: []const u8) !void {
-    const unique_id = runtime.workbench().file_tree_data_id orelse return;
+fn drawRoot(path: []const u8, tree: *core.widgets.TreeWidget, unique_id: dvui.Id, filter_text: []const u8) !void {
     const root_branch_id = tree.data().id.update(path);
 
     // A folder the tree hasn't shown yet opens expanded, once. After that its open state is the
@@ -224,7 +224,7 @@ fn drawRoot(path: []const u8, tree: *core.widgets.TreeWidget, filter_text: []con
     const wb = runtime.workbench();
     if (wb.file_tree_root_opened != root_branch_id.asUsize()) {
         wb.file_tree_root_opened = root_branch_id.asUsize();
-        runtime.host().setExplorerBranchOpen(root_branch_id, true);
+        runtime.workbench().setBranchOpen(root_branch_id, true);
     }
 
     carryBack(tree, unique_id);
@@ -869,7 +869,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                 var expanded = false;
                 const expanded_indent: f32 = 14.0;
 
-                if (runtime.host().explorerBranchIsOpen(branch_id)) {
+                if (runtime.workbench().open_branches.contains(branch_id)) {
                     expanded = true;
                 }
 
@@ -974,7 +974,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                 if (branch.dropInto() and entry.kind == .directory) {
                     try applyFileMove(inner_unique_id, tree, abs_path);
                     // Expand the folder so the dropped item is visible
-                    runtime.host().setExplorerBranchOpen(branch_id, true);
+                    runtime.workbench().setBranchOpen(branch_id, true);
                 }
 
                 { // Add right click context menu for item options
@@ -1161,7 +1161,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                             //     .alpha = 0.15 * t,
                             // },
                         })) {
-                            runtime.host().setExplorerBranchOpen(branch_id, true);
+                            runtime.workbench().setBranchOpen(branch_id, true);
                             try search(
                                 abs_path,
                                 tree,
@@ -1173,13 +1173,13 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                                 if (root) |r| r.ranked else null,
                             );
                         } else {
-                            if (runtime.host().explorerBranchIsOpen(branch_id)) {
-                                runtime.host().setExplorerBranchOpen(branch_id, false);
+                            if (runtime.workbench().open_branches.contains(branch_id)) {
+                                runtime.workbench().setBranchOpen(branch_id, false);
                             }
                         }
                         // Keep open_branches in sync so hover-expand and drop-into expand persist next frame
                         if (branch.expanded) {
-                            runtime.host().setExplorerBranchOpen(branch_id, true);
+                            runtime.workbench().setBranchOpen(branch_id, true);
                         }
                         color_id.* = color_id.* + 1;
                     },
@@ -1292,7 +1292,7 @@ fn appendRowOrder(
         const abs = core.paths.join(arena, directory, e.name) catch continue;
         const branch_id = tree_id.update(abs);
         out.append(arena, .{ .id = branch_id.asUsize(), .path = abs }) catch return;
-        if (e.kind == .directory and runtime.host().explorerBranchIsOpen(branch_id)) {
+        if (e.kind == .directory and runtime.workbench().open_branches.contains(branch_id)) {
             appendRowOrder(arena, tree_id, abs, out);
         }
     }
@@ -1667,9 +1667,9 @@ fn applyFileMove(unique_id: dvui.Id, tree: *core.widgets.TreeWidget, target_dir:
 
 /// "New Folder..." from either context menu (the project row and a folder row run the same
 /// code): create the folder, then hand the tree its path so the row that appears next frame
-/// opens its inline rename editor with the name selected — the same handoff a New Document
-/// dialog makes through `EditorAPI.setExplorerNewFilePath`. Both now land on the shared
-/// `Workbench` instance, so it no longer matters which copy of this module makes the call.
+/// opens its inline rename editor with the name selected — what a plugin's New flow asks for
+/// through the `files` service's `reveal`, heard here as `fizzy.files.reveal`. Both land on the
+/// shared `Workbench` instance, so it does not matter which copy of this module makes the call.
 /// A folder that could not be created focuses nothing.
 pub fn createFolderInteractive(parent: []const u8) void {
     const arena = dvui.currentWindow().arena();

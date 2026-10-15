@@ -350,9 +350,6 @@ pub const VTable = struct {
     /// `fizzy.files.changed` can be relied on to be emitted. False with no folder open,
     /// on a platform with no watcher backend, or when starting one failed.
     folderWatchActive: *const fn (ctx: *anyopaque) bool,
-    /// Explorer tree branch expanded state.
-    explorerBranchIsOpen: *const fn (ctx: *anyopaque, branch_id: dvui.Id) bool,
-    setExplorerBranchOpen: *const fn (ctx: *anyopaque, branch_id: dvui.Id, open: bool) void,
     /// Draw workspace panes (center region); `index` is the root pane (usually 0).
     drawWorkspaces: *const fn (ctx: *anyopaque, index: usize) anyerror!dvui.App.Result,
     /// Native open-folder dialog (no-op on web).
@@ -376,8 +373,6 @@ pub const VTable = struct {
     allocUntitledPath: *const fn (ctx: *anyopaque) anyerror![]u8,
     /// Create and open a new document at `path` (path ownership transfers to fizzy).
     createDocument: *const fn (ctx: *anyopaque, path: []const u8, grid: NewDocGrid) anyerror!DocHandle,
-    /// Hint the files tree to scroll/highlight a path just created (e.g. New File dialog).
-    setExplorerNewFilePath: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
 
     // ---- saving ----
     /// How a document's saving stands, as fizzy runs it (`SaveState`): for a tab's or a file
@@ -687,14 +682,6 @@ pub fn folderWatchActive(self: EditorAPI) bool {
     return self.vtable.folderWatchActive(self.ctx);
 }
 
-pub fn explorerBranchIsOpen(self: EditorAPI, branch_id: dvui.Id) bool {
-    return self.vtable.explorerBranchIsOpen(self.ctx, branch_id);
-}
-
-pub fn setExplorerBranchOpen(self: EditorAPI, branch_id: dvui.Id, open: bool) void {
-    self.vtable.setExplorerBranchOpen(self.ctx, branch_id, open);
-}
-
 pub fn drawWorkspaces(self: EditorAPI, index: usize) !dvui.App.Result {
     return self.vtable.drawWorkspaces(self.ctx, index) catch |err| self.failed("drawWorkspaces", err);
 }
@@ -731,10 +718,6 @@ pub fn allocUntitledPath(self: EditorAPI) ![]u8 {
 
 pub fn createDocument(self: EditorAPI, path: []const u8, grid: NewDocGrid) !DocHandle {
     return self.vtable.createDocument(self.ctx, path, grid) catch |err| self.failed("createDocument", err);
-}
-
-pub fn setExplorerNewFilePath(self: EditorAPI, path: []const u8) !void {
-    return self.vtable.setExplorerNewFilePath(self.ctx, path) catch |err| self.failed("setExplorerNewFilePath", err);
 }
 
 pub fn saveState(self: EditorAPI, doc_id: u64) SaveState {

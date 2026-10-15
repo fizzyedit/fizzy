@@ -721,14 +721,6 @@ pub fn folderWatchActive(self: *Host) bool {
     return if (self.fizzy_api) |a| a.folderWatchActive() else false;
 }
 
-pub fn explorerBranchIsOpen(self: *Host, branch_id: dvui.Id) bool {
-    return if (self.fizzy_api) |a| a.explorerBranchIsOpen(branch_id) else false;
-}
-
-pub fn setExplorerBranchOpen(self: *Host, branch_id: dvui.Id, open: bool) void {
-    if (self.fizzy_api) |a| a.setExplorerBranchOpen(branch_id, open);
-}
-
 pub fn drawWorkspaces(self: *Host, index: usize) !dvui.App.Result {
     return if (self.fizzy_api) |a| try a.drawWorkspaces(index) else .ok;
 }
@@ -781,10 +773,6 @@ pub fn allocUntitledPath(self: *Host) ![]u8 {
 
 pub fn createDocument(self: *Host, path: []const u8, grid: EditorAPI.NewDocGrid) !DocHandle {
     return if (self.fizzy_api) |a| try a.createDocument(path, grid) else error.FizzyApiNotInstalled;
-}
-
-pub fn setExplorerNewFilePath(self: *Host, path: []const u8) !void {
-    return if (self.fizzy_api) |a| try a.setExplorerNewFilePath(path) else error.FizzyApiNotInstalled;
 }
 
 /// How a document's saving stands (`EditorAPI.SaveState`): for an indicator. Not saving and

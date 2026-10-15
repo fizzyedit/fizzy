@@ -27,21 +27,9 @@ scroll_info: dvui.ScrollInfo = .{
 },
 rect: dvui.Rect = .{},
 rect_screen: dvui.Rect.Physical = .{},
-open_branches: std.AutoHashMap(dvui.Id, void) = undefined,
 animations_ratio: f32 = 0.5,
 closed: bool = false,
 collapse_btn_anim_started: bool = false,
-
-pub fn init() Explorer {
-    return .{
-        .open_branches = .init(fizzy.entry().allocator),
-    };
-}
-
-pub fn deinit(self: *Explorer) void {
-    // TODO: Free memory
-    self.open_branches.deinit();
-}
 
 pub fn close(explorer: *Explorer, editor: *fizzy.Editor) void {
     explorer.closed = true;
@@ -131,11 +119,6 @@ pub fn draw(
     // the remembered choice. `f.selected` reads the choice against what the
     // place actually shows, which is the only reading that can never say that.
     const shown = f.selected(keywords);
-
-    if (comptime workbench.has_file_tree) {
-        const showing_files = if (shown) |s| std.mem.eql(u8, s.id, fizzy.Editor.workbench_files_view) else false;
-        if (!showing_files) editor.resetFileTreeWhenFilesHidden();
-    }
 
     if (shown) |surface| {
         // Through the layout's swap: choosing another view on the rail blurs from one body to

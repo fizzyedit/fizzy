@@ -7480,6 +7480,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try expectEmptyFolder(dir);
     }
 
+    // A plugin's New flow writes its file itself and asks the `files` service to show it
+    // (`reveal`): fizzy emits `fizzy.files.reveal`, and the tree, which hears it, reveals the row
+    // with its name open for editing. The tree holds the path until the row is laid out, then
+    // takes it, so heard-then-taken is the whole round trip.
+    {
+        try editor.setProjectFolder(project);
+        editor.explorer.open(editor);
+        editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, fizzy.Editor.workbench_files_view);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/made-by-a-plugin.md", .data = "" });
+        const made = try std.fs.path.join(gpa, &.{ project, "made-by-a-plugin.md" });
+        defer gpa.free(made);
+        const files_api = editor.app.host.getServiceTyped(sdk.services.files.Api) orelse return error.TestUnexpectedResult;
+        files_api.reveal(made);
+        var heard = false;
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (editor.workbench.pending_new_file_path) |pending| {
+                if (std.mem.eql(u8, pending, made)) heard = true;
+            } else if (heard) break;
+        }
+        try std.testing.expect(heard);
+        try std.testing.expect(editor.workbench.pending_new_file_path == null);
+    }
+
     // A quit straight after a pane slid shut (`snapshotClosingPane`): the pane still holds its
     // picture, and the quit comes after the last frame, when nothing can be freed at a frame's end.
     {

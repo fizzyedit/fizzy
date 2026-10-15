@@ -1174,7 +1174,7 @@ The SDK ships definitions for the services in this ecosystem, in
 
 | Service | Provider | What it's for |
 |---|---|---|
-| `"files"` | the application (fizzy: `src/editor/FilesService.zig`) | `createFile` / `createDir` / `rename` / `delete` / `move` on disk, with open documents rewritten or closed in step. Absent on web |
+| `"files"` | the application (fizzy: `src/editor/FilesService.zig`) | `createFile` / `createDir` / `rename` / `delete` / `move` on disk, with open documents rewritten or closed in step; `reveal` shows a path just made as a new file (the tree hears `fizzy.files.reveal`), for a plugin that wrote it itself. Absent on web |
 | `"workbench"` | `workbench` | Only what the thing drawing tabs is the authority on: `currentGrouping` / `newGrouping` (which pane a new document lands in — pass as `host.openFile`'s `grouping`) and `registerBranchDecorator` (draw on every file-tree row) |
 | `"markdown"` | `markdown` | Render a markdown byte slice into the current dvui parent (native only — absent on web) |
 | `"wikilink"` | any indexer (e.g. `brain`) | Resolve `[[Note]]` to a file, plus completion candidates and index state |

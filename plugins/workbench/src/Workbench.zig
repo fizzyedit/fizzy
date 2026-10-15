@@ -48,7 +48,9 @@ grouping_id_counter: u64 = 0,
 /// was (a hash of its surface id): the gap a strip opens for it while it is carried over one.
 carried_tab_w: f32 = 0,
 carried_tab_key: u64 = 0,
-file_tree_data_id: ?dvui.Id = null,
+/// The file tree's expanded folders, by branch id. Instance state for the same two-copies reason
+/// as `pending_new_file_path` below; fizzy's demos save and restore it with the rest of a scene.
+open_branches: std.AutoHashMapUnmanaged(dvui.Id, void) = .empty,
 /// Branch id of the last root the file tree opened by default. A new root starts expanded once;
 /// after that its open state is the user's (`files.drawRoot`). Instance state for the same
 /// two-copies reason as `pending_new_file_path` below.
@@ -107,6 +109,7 @@ pub fn init(allocator: std.mem.Allocator) Workbench {
 }
 
 pub fn deinit(self: *Workbench) void {
+    self.open_branches.deinit(self.allocator);
     self.loading.deinit(self.allocator);
     self.decorators.deinit(self.allocator);
     self.clearPendingNewFilePath();
@@ -209,8 +212,13 @@ pub fn newGroupingID(self: *Workbench) u64 {
     return self.grouping_id_counter;
 }
 
-pub fn clearFileTreeDataId(self: *Workbench) void {
-    self.file_tree_data_id = null;
+/// Expand or collapse the tree's folder `branch_id`.
+pub fn setBranchOpen(self: *Workbench, branch_id: dvui.Id, open: bool) void {
+    if (open) {
+        self.open_branches.put(self.allocator, branch_id, {}) catch {};
+    } else {
+        _ = self.open_branches.remove(branch_id);
+    }
 }
 
 /// A document closed by the user: its tab leaves every pane. Not called at shutdown, where the
