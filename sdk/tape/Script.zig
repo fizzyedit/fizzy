@@ -266,6 +266,35 @@ pub fn drag(self: *Script, from: Tape.Target, to: Tape.Target, opts: DragOptions
     self.t += self.pace.beat_ms;
 }
 
+pub const StrokeOptions = struct {
+    button: Tape.Button = .left,
+    /// Holding still after pressing and before releasing: a pen set down and lifted.
+    rest_ms: u32 = 40,
+};
+
+/// A point a stroke passes through, and how long the pen takes to reach it from the last.
+pub const StrokePoint = struct {
+    at: Tape.Target,
+    ms: u32 = 60,
+};
+
+/// Press at the first point, trace through the rest in straight lines, release at the last: a
+/// pen's stroke. The first point's `ms` is the glide there before pressing. One point is a dab.
+pub fn stroke(self: *Script, points: []const StrokePoint, opts: StrokeOptions) !void {
+    if (points.len == 0) return;
+    try self.moveTo(points[0].at, .{ .ms = points[0].ms });
+    try self.push(.{ .at = self.t, .do = .{ .press = opts.button } });
+    self.t += opts.rest_ms;
+    for (points[1..]) |p| {
+        var tgt = p.at;
+        tgt.tag = try self.dupe(tgt.tag);
+        try self.push(.{ .at = self.t, .ms = p.ms, .do = .{ .trace = tgt } });
+        self.t += p.ms;
+    }
+    self.t += opts.rest_ms;
+    try self.push(.{ .at = self.t, .do = .{ .release = opts.button } });
+}
+
 /// Wheel ticks where the pointer is: positive `y` scrolls up.
 pub fn scroll(self: *Script, by: Tape.Scroll) !void {
     try self.push(.{ .at = self.t, .do = .{ .scroll = by } });
@@ -407,4 +436,30 @@ test "a mistyped chord is caught when the script is written" {
     try s.keyframe(.{ .root = "demo://t" });
     try s.key("mod+s");
     try testing.expectError(error.BadChord, s.key("mod+nope"));
+}
+
+test "a stroke presses once, traces each point, and releases" {
+    var s: Script = .init(testing.allocator, "t", "");
+    s.check.live = true;
+    try s.stroke(&.{
+        .{ .at = .{ .tag = "canvas", .x = 0.1, .y = 0.1 } },
+        .{ .at = .{ .tag = "canvas", .x = 0.5, .y = 0.1 }, .ms = 100 },
+        .{ .at = .{ .tag = "canvas", .x = 0.5, .y = 0.5 }, .ms = 100 },
+    }, .{});
+    var owned = try s.finish();
+    defer owned.deinit();
+    var presses: usize = 0;
+    var traces: usize = 0;
+    var released_last = false;
+    for (owned.tape.ops) |op| {
+        released_last = op.do == .release;
+        switch (op.do) {
+            .press => presses += 1,
+            .trace => traces += 1,
+            else => {},
+        }
+    }
+    try testing.expectEqual(1, presses);
+    try testing.expectEqual(2, traces);
+    try testing.expect(released_last);
 }

@@ -67,7 +67,7 @@ const clear_size = 4;
 const chapter_size = 8;
 
 /// An op's kind on disk. Appended to, never reordered.
-const Kind = enum(u8) { keyframe, move, press, release, scroll, key, type, command, wait };
+const Kind = enum(u8) { keyframe, move, press, release, scroll, key, type, command, wait, trace };
 /// A wait's condition on disk.
 const UntilKind = enum(u8) { idle, shown, gone };
 
@@ -83,7 +83,7 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
     const title = try table.intern(gpa, tape.title);
     const home = try table.intern(gpa, tape.home);
     for (tape.ops) |op| switch (op.do) {
-        .move => |m| _ = try table.intern(gpa, m.tag),
+        .move, .trace => |m| _ = try table.intern(gpa, m.tag),
         .key, .type => |s| _ = try table.intern(gpa, s),
         .command => |c| {
             _ = try table.intern(gpa, c.id);
@@ -164,8 +164,8 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
                 kind = .keyframe;
                 a = i;
             },
-            .move => |m| {
-                kind = .move;
+            .move, .trace => |m| {
+                kind = if (op.do == .move) .move else .trace;
                 a = table.index(m.tag);
                 xy = .{ m.x, m.y, m.dx, m.dy };
             },
@@ -365,6 +365,7 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
         op.* = .{ .at = at, .ms = ms, .do = switch (kind) {
             .keyframe => .{ .keyframe = std.math.cast(u16, ia) orelse return error.Corrupt },
             .move => .{ .move = .{ .tag = try strings.get(ia), .x = xy[0], .y = xy[1], .dx = xy[2], .dy = xy[3] } },
+            .trace => .{ .trace = .{ .tag = try strings.get(ia), .x = xy[0], .y = xy[1], .dx = xy[2], .dy = xy[3] } },
             .press => .{ .press = std.enums.fromInt(Tape.Button, small) orelse return error.Corrupt },
             .release => .{ .release = std.enums.fromInt(Tape.Button, small) orelse return error.Corrupt },
             .scroll => .{ .scroll = .{ .x = xy[0], .y = xy[1] } },
@@ -551,6 +552,7 @@ fn everything() Tape {
             .{ .at = 1300, .do = .{ .wait = .{ .until = .{ .gone = "fizzy.palette" } } } },
             .{ .at = 1400, .do = .{ .keyframe = 1 } },
             .{ .at = 1500, .ms = 200, .do = .{ .move = .{} } },
+            .{ .at = 1700, .ms = 80, .do = .{ .trace = .{ .tag = "pixi.canvas:demo://t/a.pixi", .x = 0.4, .y = 0.6 } } },
         };
         const captions = [_]Tape.Caption{
             .{ .at = 0, .ms = 900, .title = "Hi", .text = "Welcome.", .place = .middle },

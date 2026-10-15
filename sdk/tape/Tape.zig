@@ -65,6 +65,10 @@ pub const Action = union(enum) {
     keyframe: u16,
     /// Glide the pointer onto a target over `Op.ms`.
     move: Target,
+    /// Carry the pointer onto a target over `Op.ms` in a straight line at an even pace: a pen's
+    /// stroke, where `move` is a hand reaching. A line drawn with a button held lands where it
+    /// was aimed.
+    trace: Target,
     /// A pointer button goes down where the pointer is.
     press: Button,
     /// A pointer button comes up where the pointer is.
@@ -85,6 +89,14 @@ pub const Action = union(enum) {
     /// Hold demo time until a condition holds. Waits are how a tape stays deterministic over an
     /// app that does things on its own time (loading a file, animating a pane open).
     wait: Wait,
+
+    /// Where a `move` or `trace` takes the pointer.
+    pub fn target(self: Action) ?Target {
+        return switch (self) {
+            .move, .trace => |t| t,
+            else => null,
+        };
+    }
 };
 
 pub const Button = enum { left, right, middle };
@@ -264,7 +276,7 @@ pub fn movesBetween(self: Tape, start: u32, stop: u32) bool {
     for (self.ops) |op| {
         if (op.at < start) continue;
         if (op.at >= stop) break;
-        if (op.do == .move) return true;
+        if (op.do.target() != null) return true;
     }
     return false;
 }
@@ -307,10 +319,7 @@ pub fn aimedAt(self: Tape, c: Caption, applied: usize) ?Target {
     for (self.ops, 0..) |op, i| {
         if (op.at < start) continue;
         if (op.at >= stop) break;
-        const target = switch (op.do) {
-            .move => |m| m,
-            else => continue,
-        };
+        const target = op.do.target() orelse continue;
         if (i >= applied) return latest orelse target;
         latest = target;
     }
@@ -339,7 +348,7 @@ pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
         const op = self.ops[i];
         const kind: Kind = switch (op.do) {
             .type, .key, .command => .keyboard,
-            .move, .press, .release, .scroll => .pointer,
+            .move, .trace, .press, .release, .scroll => .pointer,
             // A keyframe is a fresh start.
             .keyframe => break,
             .wait => continue,

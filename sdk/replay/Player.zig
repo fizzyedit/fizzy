@@ -485,7 +485,7 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
     while (op > s.scene) {
         op -= 1;
         switch (ops[op].do) {
-            .move => |target| {
+            .move, .trace => |target| {
                 self.settling.?.target = target;
                 break;
             },

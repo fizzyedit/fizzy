@@ -403,9 +403,9 @@ fn callout(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, 
     for (tape.ops) |op| {
         if (op.at < c.at) continue;
         if (op.at >= c.at + c.ms or keep.items.len == keep.capacity) break;
-        if (op.do != .move) continue;
+        const target = op.do.target() orelse continue;
         // The things it acts on, not the pane it acts in: covering an editor is unavoidable.
-        if (tagRect(op.do.move.tag)) |r| if (small(r, win)) keep.appendAssumeCapacity(r);
+        if (tagRect(target.tag)) |r| if (small(r, win)) keep.appendAssumeCapacity(r);
     }
 
     const cy = near.y + near.h / 2;
