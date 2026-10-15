@@ -327,14 +327,14 @@ export fn dvui_c_alloc(size: usize) ?*anyopaque {
         //log.debug("dvui_c_alloc {d} failed", .{size});
         return null;
     };
-    std.mem.writeInt(u64, buffer[0..@sizeOf(u64)], buffer.len, builtin.cpu.arch.endian());
+    std.mem.writeInt(u64, buffer[0..@sizeOf(u64)], buffer.len, builtin.target.cpu.arch.endian());
     //log.debug("dvui_c_alloc {*} {d}", .{ buffer.ptr + 8, size });
     return buffer.ptr + 8;
 }
 
 pub export fn dvui_c_free(ptr: ?*anyopaque) void {
     const buffer = @as([*]align(8) u8, @ptrCast(@alignCast(ptr orelse return))) - 8;
-    const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.cpu.arch.endian());
+    const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.target.cpu.arch.endian());
     //log.debug("dvui_c_free {?*} {d}", .{ ptr, len - 8 });
 
     gpa.free(buffer[0..@intCast(len)]);
@@ -349,7 +349,7 @@ export fn dvui_c_realloc_sized(ptr: ?*anyopaque, oldsize: usize, newsize: usize)
     }
 
     //const buffer = @as([*]u8, @ptrCast(ptr.?)) - 8;
-    //const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.cpu.arch.endian());
+    //const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.target.cpu.arch.endian());
 
     //const slice = buffer[0..@intCast(len)];
     //log.debug("dvui_c_realloc_sized buffer {*} {d}", .{ ptr, len });
@@ -361,7 +361,7 @@ export fn dvui_c_realloc_sized(ptr: ?*anyopaque, oldsize: usize, newsize: usize)
     dvui_c_free(ptr);
     return newptr;
 
-    //std.mem.writeInt(usize, slice[0..@sizeOf(usize)], slice.len, builtin.cpu.arch.endian());
+    //std.mem.writeInt(usize, slice[0..@sizeOf(usize)], slice.len, builtin.target.cpu.arch.endian());
     //return slice.ptr + 16;
 }
 
@@ -385,7 +385,7 @@ fn dvui_c_ldexp(x: f64, n: c_int) callconv(.c) f64 {
 // See https://github.com/ziglang/zig/issues/23358
 comptime {
     switch (builtin.mode) {
-        .Debug => {
+        .debug => {
             @export(&dvui_c_ldexp, .{ .name = "dvui_c_ldexp" });
         },
         else => {},
@@ -497,17 +497,17 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
             _ = try w.addEventText(.{ .text = str });
         },
         8 => {
-            const touch: dvui.enums.Button = @enumFromInt(@intFromEnum(dvui.enums.Button.touch0) + int1);
+            const touch: dvui.enums.Button = @fromBackingInt(@intCast(@backingInt(dvui.enums.Button.touch0) + int1));
             _ = try w.addEventPointer(.{ .button = touch, .action = .press, .xynorm = .{ .x = float1, .y = float2 } });
             touchPoints[int1] = .{ .x = float1, .y = float2 };
         },
         9 => {
-            const touch: dvui.enums.Button = @enumFromInt(@intFromEnum(dvui.enums.Button.touch0) + int1);
+            const touch: dvui.enums.Button = @fromBackingInt(@intCast(@backingInt(dvui.enums.Button.touch0) + int1));
             _ = try w.addEventPointer(.{ .button = touch, .action = .release, .xynorm = .{ .x = float1, .y = float2 } });
             touchPoints[int1] = null;
         },
         10 => {
-            const touch: dvui.enums.Button = @enumFromInt(@intFromEnum(dvui.enums.Button.touch0) + int1);
+            const touch: dvui.enums.Button = @fromBackingInt(@intCast(@backingInt(dvui.enums.Button.touch0) + int1));
             var dx: f32 = 0;
             var dy: f32 = 0;
             if (touchPoints[int1]) |p| {
@@ -665,12 +665,12 @@ fn web_mod_code_to_dvui(wmod: u8) dvui.enums.Mod {
     if (wmod == 0) return .none;
 
     var m: u16 = 0;
-    if (wmod & 0b0001 > 0) m |= @intFromEnum(dvui.enums.Mod.lshift);
-    if (wmod & 0b0010 > 0) m |= @intFromEnum(dvui.enums.Mod.lcontrol);
-    if (wmod & 0b0100 > 0) m |= @intFromEnum(dvui.enums.Mod.lalt);
-    if (wmod & 0b1000 > 0) m |= @intFromEnum(dvui.enums.Mod.lcommand);
+    if (wmod & 0b0001 > 0) m |= @backingInt(dvui.enums.Mod.lshift);
+    if (wmod & 0b0010 > 0) m |= @backingInt(dvui.enums.Mod.lcontrol);
+    if (wmod & 0b0100 > 0) m |= @backingInt(dvui.enums.Mod.lalt);
+    if (wmod & 0b1000 > 0) m |= @backingInt(dvui.enums.Mod.lcommand);
 
-    return @as(dvui.enums.Mod, @enumFromInt(m));
+    return @as(dvui.enums.Mod, @fromBackingInt(@intCast(m)));
 }
 
 //pub fn addAllEvents(self: *WebBackend, win: *dvui.Window) !void {
@@ -815,7 +815,7 @@ fn command(texture: ?dvui.Texture, maybe_clipr: ?dvui.Rect.Physical, index_start
         c.clip = @as(i32, b) << 1;
     } else if (texture) |t| {
         const blend = blends.get(@intFromPtr(t.ptr)) orelse .over;
-        c.clip = @as(i32, @intFromEnum(blend)) << 1;
+        c.clip = @as(i32, @backingInt(blend)) << 1;
     }
     if (maybe_clipr) |clipr| {
         c.clip |= 1;

@@ -74,7 +74,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             // release builds. Use `cmd /c exit 0` as the no-op and keep the
             // dependency on exe_for_package via the step graph.
             const host_is_windows = b.graph.host.result.os.tag == .windows;
-            const skip_strip = host_is_windows or optimize == .Debug or cross_for_strip;
+            const skip_strip = host_is_windows or optimize == .debug or cross_for_strip;
             const strip_release_sh = if (host_is_windows) blk: {
                 const sh = b.addSystemCommand(&.{ "cmd", "/c", "exit", "0" });
                 sh.step.dependOn(&exe_for_package.step);
@@ -141,13 +141,13 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                 &strip_release_sh.step,
             );
             vpk_pkg_sh.addArg("--packDir");
-            vpk_pkg_sh.addArg(b.getInstallPath(.{ .custom = pack_input_subdir }, ""));
+            vpk_pkg_sh.addArg("zig-out/ZIG017");
             switch (target.result.os.tag) {
                 .windows => {
                     // Sets the installer's icon and the Start Menu shortcut icon. The
                     // exe's own icon is already embedded via assets/windows/fizzy.rc.
                     vpk_pkg_sh.addArg("--icon");
-                    const ico_path = b.path("assets/windows/fizzy.ico").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("ico path: {}", .{e});
+                    const ico_path = b.root.joinString(b.allocator, "assets/windows/fizzy.ico") catch |e| std.debug.panic("ico path: {}", .{e});
                     vpk_pkg_sh.addArg(ico_path);
                     // Velopack's installer is silent (no shortcut-choice UI). Default is
                     // Desktop,StartMenu; restrict to StartMenu so we don't drop an
@@ -160,10 +160,10 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                     vpk_pkg_sh.addArg("fizzy");
                     // Bundle id / document types / versions: assets/macos/info.plist (vpk rejects --bundleId with --plist).
                     vpk_pkg_sh.addArg("--plist");
-                    const plist_path = b.path("assets/macos/info.plist").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("plist path: {}", .{e});
+                    const plist_path = b.root.joinString(b.allocator, "assets/macos/info.plist") catch |e| std.debug.panic("plist path: {}", .{e});
                     vpk_pkg_sh.addArg(plist_path);
                     vpk_pkg_sh.addArg("--icon");
-                    const icns_path = b.path("assets/macos/fizzy.icns").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("icns path: {}", .{e});
+                    const icns_path = b.root.joinString(b.allocator, "assets/macos/fizzy.icns") catch |e| std.debug.panic("icns path: {}", .{e});
                     vpk_pkg_sh.addArg(icns_path);
 
                     if (macos_sign_app_identity) |id| {
@@ -174,7 +174,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                         // Without this, Apple's notary service rejects with "signature does not
                         // include a secure timestamp" / "hardened runtime not enabled".
                         vpk_pkg_sh.addArg("--signEntitlements");
-                        const entitlements_path = b.path("assets/macos/Fizzy.entitlements").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("entitlements path: {}", .{e});
+                        const entitlements_path = b.root.joinString(b.allocator, "assets/macos/Fizzy.entitlements") catch |e| std.debug.panic("entitlements path: {}", .{e});
                         vpk_pkg_sh.addArg(entitlements_path);
                     }
                     if (macos_sign_install_identity) |id| {

@@ -35,7 +35,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
 
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
-    if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
+    if (builtin.target.os.tag != .macos or Menu.debug_force_on_macos) {
         const r = try Menu.draw(editor);
         if (r != .ok) return r;
     }

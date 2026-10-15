@@ -57,7 +57,7 @@ const max_events: usize = 512;
 /// of deep paths can't crowd out everything else and no path length is special-cased.
 const path_arena_bytes: usize = 64 * 1024;
 
-pub const have_impl = switch (builtin.os.tag) {
+pub const have_impl = switch (builtin.target.os.tag) {
     .macos, .linux, .windows => true,
     else => false,
 };

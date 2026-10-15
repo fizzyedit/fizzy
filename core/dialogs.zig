@@ -747,7 +747,7 @@ pub fn dialog(src: std.builtin.SourceLocation, opts: DialogOptions) dvui.IdMutex
         dvui.dataSet(opts.window, id, "_max_size", ms);
     }
     dvui.dataSet(opts.window, id, "_open", true);
-    dvui.dataSet(opts.window, id, "_header_kind", @intFromEnum(opts.header_kind));
+    dvui.dataSet(opts.window, id, "_header_kind", @backingInt(opts.header_kind));
 
     return id_mutex;
 }
@@ -855,10 +855,10 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         defer vbox.deinit();
 
         const header_kind: DialogHeaderKind = switch (dvui.dataGet(null, id, "_header_kind", u8) orelse 0) {
-            @intFromEnum(DialogHeaderKind.none) => .none,
-            @intFromEnum(DialogHeaderKind.info) => .info,
-            @intFromEnum(DialogHeaderKind.warning) => .warning,
-            @intFromEnum(DialogHeaderKind.err) => .err,
+            @backingInt(DialogHeaderKind.none) => .none,
+            @backingInt(DialogHeaderKind.info) => .info,
+            @backingInt(DialogHeaderKind.warning) => .warning,
+            @backingInt(DialogHeaderKind.err) => .err,
             else => .none,
         };
 
@@ -1653,7 +1653,7 @@ fn bubbleSpinnerPaintCheck(rs: dvui.RectScale, grow: f32, alpha: f32) void {
 /// Subwindow id used for save-complete toasts. Distinct from the canvas subwindow so
 /// `Workspace.drawCanvas`'s `toastsShow` won't render them — instead `Editor.drawSaveToasts`
 /// iterates this id and renders centered cards matching the loading-overlay style.
-pub const save_toast_subwindow_id: dvui.Id = @enumFromInt(0xF12_5A4E_71D0_5A4E);
+pub const save_toast_subwindow_id: dvui.Id = @fromBackingInt(@intCast(0xF12_5A4E_71D0_5A4E));
 
 /// Custom toast display for save-complete events. Visually matches `Editor.drawLoadingOverlay`:
 /// content-fill @ 0.85 background, drop shadow, checkmark icon + "Saved <basename>" label.

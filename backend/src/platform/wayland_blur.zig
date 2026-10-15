@@ -29,7 +29,7 @@ pub const Want = struct {
 /// Cheap to call every frame: the region is sent only when it changes. The first call binds the
 /// protocols, two round trips to the compositor.
 pub fn behind(display: *anyopaque, surface: *anyopaque, want: ?Want) bool {
-    if (comptime builtin.os.tag != .linux) return false;
+    if (comptime builtin.target.os.tag != .linux) return false;
     const s = ready(display) orelse return false;
     // What the compositor has said since (the blur turned off or on).
     _ = s.lib.display_dispatch_queue_pending(s.display, s.queue);
@@ -118,9 +118,9 @@ fn load() ?Lib {
     // SDL's own copy, already loaded for the window: never a second one.
     const handle = std.c.dlopen("libwayland-client.so.0", .{ .LAZY = true, .NOLOAD = true }) orelse return null;
     var lib: Lib = undefined;
-    inline for (@typeInfo(Lib).@"struct".fields) |f| {
-        const sym = std.c.dlsym(handle, "wl_" ++ f.name) orelse return null;
-        @field(lib, f.name) = @ptrCast(@alignCast(sym));
+    inline for (@typeInfo(Lib).@"struct".field_names, @typeInfo(Lib).@"struct".field_types, @typeInfo(Lib).@"struct".field_attrs) |f_name, _, _| {
+        const sym = std.c.dlsym(handle, "wl_" ++ f_name) orelse return null;
+        @field(lib, f_name) = @ptrCast(@alignCast(sym));
     }
     return lib;
 }

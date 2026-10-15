@@ -317,7 +317,7 @@ pub fn fromPath(path: []const u8) !Document {
 /// The token its editor keeps its measured layout under while hidden (`TextEntryWidget
 /// .InitOptions.retain_layout`), released when the document closes.
 pub fn layoutToken(self: *const Document) dvui.data.Token {
-    return @enumFromInt(std.hash.Wyhash.hash(0x7e47_1a70, std.mem.asBytes(&self.id)));
+    return @fromBackingInt(@intCast(std.hash.Wyhash.hash(0x7e47_1a70, std.mem.asBytes(&self.id))));
 }
 
 pub fn deinit(self: *Document) void {
@@ -453,7 +453,7 @@ pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
         .dirty = self.isDirty(),
         .focused = self.editor_focused,
         .untitled = self.unsaved,
-        .preview_mode = @intFromEnum(self.preview_mode),
+        .preview_mode = @backingInt(self.preview_mode),
         .scroll_y = self.scroll_y,
         .split = self.preview_split_ratio_user,
     });
@@ -465,7 +465,7 @@ pub fn fingerprint(self: *const Document) u64 {
     var h = std.hash.Wyhash.init(0x7e47_f1);
     h.update(self.text.items);
     const anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start;
-    h.update(std.mem.asBytes(&[_]u64{ anchor, self.sel_cursor, @intFromBool(self.isDirty()), @intFromEnum(self.preview_mode) }));
+    h.update(std.mem.asBytes(&[_]u64{ anchor, self.sel_cursor, @intFromBool(self.isDirty()), @backingInt(self.preview_mode) }));
     return h.final();
 }
 

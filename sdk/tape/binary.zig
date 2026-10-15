@@ -142,7 +142,7 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
     try w.writeAll(&magic);
     try w.writeInt(u16, version, .little);
     try w.writeInt(u16, 0, .little);
-    inline for (std.meta.fields(Header)) |f| try w.writeInt(u32, @field(h, f.name), .little);
+    inline for (@typeInfo(Header).@"struct".field_names, @typeInfo(Header).@"struct".field_types, @typeInfo(Header).@"struct".field_attrs) |f_name, _, _| try w.writeInt(u32, @field(h, f_name), .little);
 
     var at: u32 = 0;
     for (table.list.items) |s| {
@@ -171,7 +171,7 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
             },
             .press, .release => |btn| {
                 kind = if (op.do == .press) .press else .release;
-                small = @intFromEnum(btn);
+                small = @backingInt(btn);
             },
             .scroll => |s| {
                 kind = .scroll;
@@ -194,13 +194,13 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
                 kind = .wait;
                 b = wt.timeout;
                 switch (wt.until) {
-                    .idle => small = @intFromEnum(UntilKind.idle),
+                    .idle => small = @backingInt(UntilKind.idle),
                     .shown => |s| {
-                        small = @intFromEnum(UntilKind.shown);
+                        small = @backingInt(UntilKind.shown);
                         a = table.index(s);
                     },
                     .gone => |s| {
-                        small = @intFromEnum(UntilKind.gone);
+                        small = @backingInt(UntilKind.gone);
                         a = table.index(s);
                     },
                 }
@@ -208,7 +208,7 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
         }
         try w.writeInt(u32, op.at, .little);
         try w.writeInt(u32, op.ms, .little);
-        try w.writeByte(@intFromEnum(kind));
+        try w.writeByte(@backingInt(kind));
         try w.writeByte(small);
         try w.writeInt(u16, 0, .little);
         try w.writeInt(u32, a, .little);
@@ -221,7 +221,7 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
     var settings_at: u32 = 0;
     for (tape.keyframes) |kf| {
         try w.writeInt(u32, table.index(kf.root), .little);
-        try w.writeByte(@intFromEnum(kf.layout));
+        try w.writeByte(@backingInt(kf.layout));
         try w.splatByteAll(0, 3);
         for ([_]u32{ files_at, count(kf.files.len), open_at, count(kf.open.len), settings_at, count(kf.settings.len) }) |v|
             try w.writeInt(u32, v, .little);
@@ -243,7 +243,7 @@ pub fn write(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
     var clear_at: u32 = 0;
     for (tape.captions) |c| {
         for ([_]u32{ c.at, c.ms, table.index(c.title), table.index(c.text) }) |v| try w.writeInt(u32, v, .little);
-        try w.writeByte(@intFromEnum(c.place));
+        try w.writeByte(@backingInt(c.place));
         try w.splatByteAll(0, 3);
         for ([_]u32{ table.index(c.near), clear_at, count(c.clear.len) }) |v| try w.writeInt(u32, v, .little);
         clear_at += count(c.clear.len);
@@ -332,7 +332,7 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
     if (tape_version < oldest_version or tape_version > version) return error.UnsupportedVersion;
     _ = try r.int(u16); // flags: none yet
     var h: Header = undefined;
-    inline for (std.meta.fields(Header)) |f| @field(h, f.name) = try r.int(u32);
+    inline for (@typeInfo(Header).@"struct".field_names, @typeInfo(Header).@"struct".field_types, @typeInfo(Header).@"struct".field_attrs) |f_name, _, _| @field(h, f_name) = try r.int(u32);
 
     // The string table: offsets, then the bytes they index.
     const offsets = try r.take(try sizeOf(@as(usize, h.strings) + 1, 4));
@@ -603,7 +603,7 @@ test "binary and ZON are the same tape, converted either way" {
     var zon: std.Io.Writer.Allocating = .init(testing.allocator);
     defer zon.deinit();
     try tape.write(&zon.writer);
-    const source = try testing.allocator.dupeZ(u8, zon.written());
+    const source = try testing.allocator.dupeSentinel(u8, zon.written(), 0);
     defer testing.allocator.free(source);
     var from_zon = try Tape.parse(testing.allocator, source, .{});
     defer from_zon.deinit();

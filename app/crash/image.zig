@@ -33,7 +33,7 @@ pub const Image = struct {
 
 /// The image `address` lies in, or null where the platform can't say (or it lies in none).
 pub fn containing(address: usize) ?Image {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .macos, .ios, .tvos, .visionos, .watchos => macho(address),
         .linux, .freebsd, .netbsd, .openbsd, .dragonfly => elf(address),
         .windows => pe(address),
@@ -101,9 +101,9 @@ fn elf(address: usize) ?Image {
 fn gnuBuildId(notes: []const u8) ?[]const u8 {
     var at: usize = 0;
     while (at + 12 <= notes.len) {
-        const namesz = std.mem.readInt(u32, notes[at..][0..4], builtin.cpu.arch.endian());
-        const descsz = std.mem.readInt(u32, notes[at + 4 ..][0..4], builtin.cpu.arch.endian());
-        const kind = std.mem.readInt(u32, notes[at + 8 ..][0..4], builtin.cpu.arch.endian());
+        const namesz = std.mem.readInt(u32, notes[at..][0..4], builtin.target.cpu.arch.endian());
+        const descsz = std.mem.readInt(u32, notes[at + 4 ..][0..4], builtin.target.cpu.arch.endian());
+        const kind = std.mem.readInt(u32, notes[at + 8 ..][0..4], builtin.target.cpu.arch.endian());
         const name_at = at + 12;
         const desc_at = name_at + std.mem.alignForward(usize, namesz, 4);
         const next = desc_at + std.mem.alignForward(usize, descsz, 4);
@@ -158,12 +158,12 @@ fn pe(address: usize) ?Image {
 }
 
 test "the image holding this code contains it, and names its build" {
-    if (builtin.os.tag != .macos and builtin.os.tag != .linux and builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .macos and builtin.target.os.tag != .linux and builtin.target.os.tag != .windows) return error.SkipZigTest;
     const here = @intFromPtr(&containing);
     const image = containing(here) orelse return error.NoImage;
     try std.testing.expect(image.contains(here));
     // Zig's Mach-O linker always writes an LC_UUID; ELF and PE only carry an id when asked to.
-    if (builtin.os.tag == .macos) try std.testing.expectEqual(16, image.buildId().len);
+    if (builtin.target.os.tag == .macos) try std.testing.expectEqual(16, image.buildId().len);
 }
 
 test "a GNU build-id note is found among others" {
@@ -172,7 +172,7 @@ test "a GNU build-id note is found among others" {
             return std.mem.toBytes(v);
         }
     }.u;
-    const other = w(4) ++ w(8) ++ w(1) ++ "GNU\x00".* ++ [_]u8{0} ** 8;
+    const other = w(4) ++ w(8) ++ w(1) ++ "GNU\x00".* ++ @as([8]u8, @splat(0));
     const build_id = w(4) ++ w(5) ++ w(std.elf.NT_GNU_BUILD_ID) ++ "GNU\x00".* ++ "\xde\xad\xbe\xef\x01\x00\x00\x00".*;
     try std.testing.expectEqualSlices(u8, "\xde\xad\xbe\xef\x01", gnuBuildId(&(other ++ build_id)).?);
     try std.testing.expectEqual(null, gnuBuildId(&other));

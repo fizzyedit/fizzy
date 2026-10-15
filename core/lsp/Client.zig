@@ -1243,7 +1243,7 @@ fn spawnProcess(self: *Client, io: std.Io) !void {
 }
 
 fn spawnChild(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8, cwd: []const u8) !std.process.Child {
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         // Prefers the fuller login-shell-resolved PATH (already resolved above, by
         // `resolveExecutable` → `shell_env.path`, and cached) over this process's own
         // inherited one, so the server itself — not just fizzy locating its binary — sees the
@@ -1291,7 +1291,7 @@ fn spawnChild(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8, cwd:
 /// the very first language-server startup on Windows, independent of which mechanism spawned
 /// that background thread.
 fn resolveExecutable(gpa: std.mem.Allocator, io: std.Io, name: []const u8) ?[]u8 {
-    if (comptime builtin.os.tag == .windows) return null;
+    if (comptime builtin.target.os.tag == .windows) return null;
     if (std.mem.indexOfScalar(u8, name, '/') != null) return null;
 
     const inherited_path: ?[]const u8 = if (std.c.getenv("PATH")) |p| std.mem.span(p) else null;

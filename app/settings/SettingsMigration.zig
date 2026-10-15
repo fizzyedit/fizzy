@@ -75,13 +75,17 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
     defer allocator.free(data);
 
     @setEvalBranchQuota(10_000);
-    const legacy = std.zon.parse.fromSliceAlloc(LegacyDisk, allocator, data, null, .{
-        .ignore_unknown_fields = true,
+    const legacy = (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(allocator);
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(LegacyDisk, .{ .gpa = allocator, .arena = zig017_arena.allocator(), .source = data, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(LegacyDisk, allocator, zig017_v) else |zig017_e| zig017_e;
     }) catch |err| {
         dvui.log.warn("settings: could not parse settings.zon for R12 enabled migration ({s}); skipping", .{@errorName(err)});
         return;
     };
-    defer std.zon.parse.free(allocator, legacy);
+    defer zig017ZonFree(allocator, legacy);
 
     const blocks = SettingsPluginsZon.listPluginBlocks(allocator, data) catch return;
     defer SettingsPluginsZon.freeEntries(allocator, blocks);
@@ -195,15 +199,15 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
 /// `enabled` was listed, so an `.auto_update = false`-only block — which the app itself can
 /// write for a disabled plugin — was being swallowed too.)
 fn isAlreadyNested(gpa: std.mem.Allocator, text: []const u8) bool {
-    const z = gpa.dupeZ(u8, text) catch return false;
+    const z = gpa.dupeSentinel(u8, text, 0) catch return false;
     defer gpa.free(z);
 
     if (SettingsPluginsZon.extractField(gpa, z, "settings")) |s| {
         gpa.free(s);
         return true;
     }
-    inline for (@typeInfo(SettingsPluginsZon.Reserved).@"struct".fields) |field| {
-        if (SettingsPluginsZon.extractField(gpa, z, field.name)) |s| {
+    inline for (@typeInfo(SettingsPluginsZon.Reserved).@"struct".field_names, @typeInfo(SettingsPluginsZon.Reserved).@"struct".field_types, @typeInfo(SettingsPluginsZon.Reserved).@"struct".field_attrs) |field_name, _, _| {
+        if (SettingsPluginsZon.extractField(gpa, z, field_name)) |s| {
             gpa.free(s);
             return true;
         }
@@ -254,13 +258,80 @@ const LegacyGlass = struct {
 /// dialogs' blur goes with them, as the roughness that followed it does.
 pub fn windowGlass(allocator: std.mem.Allocator, data: [:0]const u8, settings: *Settings) void {
     @setEvalBranchQuota(10_000);
-    const legacy = std.zon.parse.fromSliceAlloc(LegacyGlass, allocator, data, null, .{ .ignore_unknown_fields = true }) catch return;
-    defer std.zon.parse.free(allocator, legacy);
+    const legacy = (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(allocator);
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(LegacyGlass, .{ .gpa = allocator, .arena = zig017_arena.allocator(), .source = data, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(LegacyGlass, allocator, zig017_v) else |zig017_e| zig017_e;
+    }) catch return;
+    defer zig017ZonFree(allocator, legacy);
     if (legacy.dialog_opacity == null and legacy.dialog_blur == null and legacy.dialog_lift == null and
         legacy.dialog_detail == null and legacy.dialog_refraction == null) return;
-    const opaque_window = comptime builtin.target.cpu.arch == .wasm32 or (builtin.os.tag != .macos and builtin.os.tag != .windows);
+    const opaque_window = comptime builtin.target.cpu.arch == .wasm32 or (builtin.target.os.tag != .macos and builtin.target.os.tag != .windows);
     if (opaque_window) if (legacy.dialog_opacity) |o| {
         settings.window_opacity_dark = std.math.clamp(o, 0, 1);
         settings.window_opacity_light = std.math.clamp(o, 0, 1);
     };
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
+}
+// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
+// arena the caller owns). Goes with the zon arena PR.
+fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                zig017ZonFree(gpa, value.*);
+                gpa.destroy(value);
+            },
+            .slice => {
+                for (value) |item| zig017ZonFree(gpa, item);
+                gpa.free(value);
+            },
+            else => comptime unreachable,
+        },
+        .array => for (value) |item| zig017ZonFree(gpa, item),
+        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
+        .@"union" => |u| if (u.tag_type != null) switch (value) {
+            inline else => |payload| zig017ZonFree(gpa, payload),
+        },
+        .optional => if (value) |some| zig017ZonFree(gpa, some),
+        else => {},
+    }
 }

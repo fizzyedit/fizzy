@@ -68,7 +68,7 @@ pub fn addSteps(
             .optimize = optimize,
             .link_libc = false,
             .single_threaded = true,
-            .strip = optimize == .ReleaseFast or optimize == .ReleaseSmall,
+            .strip = optimize == .fast or optimize == .small,
         }),
     });
     web_exe.entry = .disabled;
@@ -234,7 +234,7 @@ pub fn addSteps(
     for (web_plugin_dirs) |wp| {
         const dir = wp.dir;
         const zon_path = b.pathJoin(&.{ dir, "plugin.zig.zon" });
-        b.build_root.handle.access(b.graph.io, zon_path, .{}) catch {
+        b.root.root_dir.handle.access(b.graph.io, zon_path, .{}) catch {
             std.debug.print("fizzy web: plugin checkout '{s}' not found; the web build goes without it\n", .{dir});
             continue;
         };
@@ -329,7 +329,7 @@ pub fn addSteps(
     ).step);
     for (web_pages.items) |page| {
         const web_dir = b.pathJoin(&.{ page.dir, "web" });
-        var d = b.build_root.handle.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch continue;
+        var d = b.root.root_dir.handle.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch continue;
         defer d.close(b.graph.io);
         var it = d.iterate();
         while (it.next(b.graph.io) catch null) |entry| {
@@ -381,7 +381,7 @@ fn stampStorage(b: *std.Build) std.Build.LazyPath {
         else => std.debug.panic("-Dweb-storage={s}: only a-z, 0-9, '-' and '_'", .{name}),
     };
     const token = "__FIZZY_WEB_STORAGE__";
-    const html = b.build_root.handle.readFileAlloc(b.graph.io, "web/index.html", b.allocator, .unlimited) catch |err|
+    const html = b.root.root_dir.handle.readFileAlloc(b.graph.io, "web/index.html", b.allocator, .unlimited) catch |err|
         std.debug.panic("web/index.html: {t}", .{err});
     if (std.mem.indexOf(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
     const stamped = std.mem.replaceOwned(u8, b.allocator, html, token, name) catch @panic("OOM");

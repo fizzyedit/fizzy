@@ -89,15 +89,15 @@ const legacy_window_file = "window.zon";
 fn windowFilePath(buf: []u8, dir: []const u8, name: []const u8) ?[:0]const u8 {
     const sep = std.fs.path.sep_str;
     if (std.mem.endsWith(u8, dir, sep)) {
-        return std.fmt.bufPrintZ(buf, "{s}{s}", .{ dir, name }) catch null;
+        return std.fmt.bufPrintSentinel(buf, "{s}{s}", .{ dir, name }, 0) catch null;
     }
-    return std.fmt.bufPrintZ(buf, "{s}{s}{s}", .{ dir, sep, name }) catch null;
+    return std.fmt.bufPrintSentinel(buf, "{s}{s}{s}", .{ dir, sep, name }, 0) catch null;
 }
 
 /// Reads every field of `window.zon`, falling back to `SavedFrame`'s own defaults for whatever
 /// is missing or unparseable (never null — simplifies every caller, which only cares about the
 /// subset of fields it owns).
-/// Reads `window.zon` into `gpa`-owned memory. Free with `std.zon.parse.free(gpa, frame)` — the
+/// Reads `window.zon` into `gpa`-owned memory. Free with `zig017ZonFree(gpa, frame)` — the
 /// region list holds allocated names now, so the old return-by-value-and-forget will not do.
 pub fn loadWindowFile(gpa: std.mem.Allocator, dir: []const u8) SavedFrame {
     var path_buf: [1024]u8 = undefined;
@@ -109,17 +109,17 @@ pub fn loadWindowFile(gpa: std.mem.Allocator, dir: []const u8) SavedFrame {
         break :blk readCapped(gpa, legacy) catch return .{};
     };
     defer gpa.free(data);
-    const data_z = gpa.dupeZ(u8, data) catch return .{};
+    const data_z = gpa.dupeSentinel(u8, data, 0) catch return .{};
     defer gpa.free(data_z);
     // `fromSliceAlloc`, not `fromSlice`: the region list holds allocated names, and `fromSlice`
     // asserts at comptime that the result contains no pointers.
-    return std.zon.parse.fromSliceAlloc(
-        SavedFrame,
-        gpa,
-        data_z,
-        null,
-        .{ .ignore_unknown_fields = true },
-    ) catch .{};
+    return (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(SavedFrame, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = data_z, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(SavedFrame, gpa, zig017_v) else |zig017_e| zig017_e;
+    }) catch .{};
 }
 
 pub fn writeWindowFile(dir: []const u8, f: SavedFrame) void {
@@ -141,7 +141,7 @@ pub fn writeWindowFile(dir: []const u8, f: SavedFrame) void {
 pub fn saveRegions(dir: []const u8, regions: []const SavedRegion) void {
     const gpa = std.heap.page_allocator;
     var f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    defer zig017ZonFree(gpa, f);
     const keep = f.regions;
     f.regions = regions;
     writeWindowFile(dir, f);
@@ -154,7 +154,7 @@ pub fn saveRegions(dir: []const u8, regions: []const SavedRegion) void {
 pub fn saveTree(dir: []const u8, tree: ?core.widgets.DockLayout.Snapshot) void {
     const gpa = std.heap.page_allocator;
     var f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    defer zig017ZonFree(gpa, f);
     const keep = f.tree;
     f.tree = tree;
     writeWindowFile(dir, f);
@@ -165,7 +165,7 @@ pub fn saveTree(dir: []const u8, tree: ?core.widgets.DockLayout.Snapshot) void {
 /// Caller owns the result (`DockLayout.deinit`).
 pub fn loadTree(gpa: std.mem.Allocator, dir: []const u8) ?core.widgets.DockLayout {
     const f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    defer zig017ZonFree(gpa, f);
     const snap = f.tree orelse return null;
     var dock = core.widgets.DockLayout.fromSnapshot(gpa, snap) catch return null;
     dock.animated = true;
@@ -176,7 +176,7 @@ pub fn loadTree(gpa: std.mem.Allocator, dir: []const u8) ?core.widgets.DockLayou
 /// `freeRegions`.
 pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
     const f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    defer zig017ZonFree(gpa, f);
     const out = gpa.alloc(SavedRegion, f.regions.len) catch return &.{};
     var n: usize = 0;
     for (f.regions) |r| {
@@ -233,4 +233,65 @@ pub fn freeRegions(gpa: std.mem.Allocator, regions: []SavedRegion) void {
         if (r.floating) |fl| if (fl.home.len > 0) gpa.free(fl.home);
     }
     gpa.free(regions);
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
+}
+// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
+// arena the caller owns). Goes with the zon arena PR.
+fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                zig017ZonFree(gpa, value.*);
+                gpa.destroy(value);
+            },
+            .slice => {
+                for (value) |item| zig017ZonFree(gpa, item);
+                gpa.free(value);
+            },
+            else => comptime unreachable,
+        },
+        .array => for (value) |item| zig017ZonFree(gpa, item),
+        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
+        .@"union" => |u| if (u.tag_type != null) switch (value) {
+            inline else => |payload| zig017ZonFree(gpa, payload),
+        },
+        .optional => if (value) |some| zig017ZonFree(gpa, some),
+        else => {},
+    }
 }

@@ -42,7 +42,7 @@ const menu_model = @import("menu_model.zig");
 /// "fizzy default unless a plugin wants it" — that needs the layered `Command.default_keys`
 /// resolution in step C, not another entry in this function.
 ///
-/// Runtime mac detection — `builtin.os.tag.isDarwin()` is `false` for
+/// Runtime mac detection — `builtin.target.os.tag.isDarwin()` is `false` for
 /// wasm32-freestanding, so macOS web users would otherwise get the Windows (Ctrl)
 /// bindings. `fizzy.core.platform.isMacOS()` reads DVUI's `navigator.platform`-derived
 /// choice on web and uses `os.tag` on native.
@@ -883,8 +883,8 @@ fn shadowedByHigherLayer(editor: *Editor, binding: Keymap.Binding, command_id: [
         else if (binding.owner_id) |b| (if (other.owner_id) |o| std.mem.eql(u8, b, o) else false) else false;
         if (!same_owner) continue;
 
-        const mine = (@as(u16, @intFromEnum(binding.source)) << 8) | binding.when.weight();
-        const theirs = (@as(u16, @intFromEnum(other.source)) << 8) | other.when.weight();
+        const mine = (@as(u16, @backingInt(binding.source)) << 8) | binding.when.weight();
+        const theirs = (@as(u16, @backingInt(other.source)) << 8) | other.when.weight();
         if (theirs > mine) return true;
     }
     return false;
@@ -899,7 +899,7 @@ fn shadowedByHigherLayer(editor: *Editor, binding: Keymap.Binding, command_id: [
 /// theirs (`backend_native.rebuildDynamicNativeMenus` tags them the same way). Neither needs a
 /// command↔item table: both name a command, and the chord comes from the keymap.
 pub fn syncNativeMenuShortcuts(editor: *Editor) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
 
     for (menu_model.flat_commands, 0..) |item, tag| {
         if (nativeShortcutFor(editor, item.id)) |s| {
@@ -962,7 +962,7 @@ fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
         if (b.args.len > 0) continue;
         if (!std.mem.eql(u8, cmd, command)) continue;
         if (best) |cur| {
-            if (@intFromEnum(b.source) >= @intFromEnum(cur.source)) best = b;
+            if (@backingInt(b.source) >= @backingInt(cur.source)) best = b;
         } else best = b;
     }
     return best;
@@ -977,7 +977,7 @@ fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
 /// equivalents, AppKit runs them, and a command reachable from both paths would fire twice.
 /// This is the exact condition `syncNativeMenuShortcuts` stamps, so the two cannot disagree.
 pub fn nativeMenuOwnsChord(editor: *Editor, id: []const u8) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     if (!menu_model.contains(id) and !nativeMenuItemFor(editor, id)) return false;
     return nativeShortcutFor(editor, id) != null;
 }
@@ -1231,7 +1231,7 @@ pub fn webKeyBound(key_len: usize, mods_bits: u32) bool {
     };
     var buf: [16]u8 = undefined;
     const key = webKey(web_key_buf[0..key_len], &buf) orelse return false;
-    const function_key = @intFromEnum(key) >= @intFromEnum(Keymap.Key.f1) and @intFromEnum(key) <= @intFromEnum(Keymap.Key.f25);
+    const function_key = @backingInt(key) >= @backingInt(Keymap.Key.f1) and @backingInt(key) <= @backingInt(Keymap.Key.f25);
     if (!mods.ctrl and !mods.command and !function_key) return false;
 
     // Recording a new binding: every such chord is data for the settings pane, not the browser's.

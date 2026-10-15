@@ -31,7 +31,7 @@ var requested_insets: Insets = .{};
 /// makes the window borderless with those frame insets. Where SDL keeps no margin (X11)
 /// `frameInsets` reads zero and nothing draws there.
 pub fn useClientDecorations(insets: Insets) void {
-    if (builtin.os.tag != .linux) return;
+    if (builtin.target.os.tag != .linux) return;
     // Only fizzy's own backend makes the window through a creation hook, against an SDL with
     // frame insets; dvui's keeps the desktop's decorations.
     if (comptime @hasDecl(backend, "window_create_hook") and @hasDecl(c, "SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER")) {
@@ -52,7 +52,7 @@ fn addCreateProps(props: c.SDL_PropertiesID) void {
 /// The frame's margins in effect now, in window coordinates: those asked for while the window
 /// floats on Wayland; zero maximized, tiled or full screen, or where SDL keeps none.
 pub fn frameInsets(window: *c.SDL_Window) Insets {
-    if (comptime builtin.os.tag == .linux and @hasDecl(c, "SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER")) {
+    if (comptime builtin.target.os.tag == .linux and @hasDecl(c, "SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER")) {
         const props = c.SDL_GetWindowProperties(window);
         return .{
             .left = @floatFromInt(c.SDL_GetNumberProperty(props, c.SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER, 0)),
@@ -71,7 +71,7 @@ pub fn frameInsets(window: *c.SDL_Window) Insets {
 /// Cheap to call every frame; it is sent to the compositor only when it changes, and taken with
 /// the frame presented next.
 pub fn blurBehind(window: *c.SDL_Window, radius: ?f32) bool {
-    if (comptime builtin.os.tag != .linux) return false;
+    if (comptime builtin.target.os.tag != .linux) return false;
     const props = c.SDL_GetWindowProperties(window);
     const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null) orelse return false;
     const surface = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null) orelse return false;
@@ -104,7 +104,7 @@ const resize_frame_points: f32 = 6;
 
 /// Apply the chrome to `win` (see `window.setStyle`): idempotent, cheap to call every frame.
 pub fn applyChrome(win: *dvui.Window) void {
-    if (builtin.os.tag != .linux) return;
+    if (builtin.target.os.tag != .linux) return;
     const window = win.backend.impl.window;
     if (styled_window == window) return;
     styled_window = window;

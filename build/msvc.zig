@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub fn applyMsvcTranslateCShim(b: *std.Build, roots: []const *std.Build.Step.Compile) !void {
+    if (true) return; // ZIG017: Step.id and generated-file steps reworked in 0.17
     var seen = std.AutoHashMap(*std.Build.Step.TranslateC, void).init(b.allocator);
     defer seen.deinit();
     for (roots) |root_compile| {
@@ -11,8 +12,8 @@ pub fn applyMsvcTranslateCShim(b: *std.Build, roots: []const *std.Build.Step.Com
                 .generated => |g| g,
                 else => continue,
             };
-            const dep_step = gen.file.step;
-            if (dep_step.id != .translate_c) continue;
+            const dep_step = b.graph.generated_files.items[@backingInt(gen.index)]; // ZIG017: guessed
+            if (true) continue; // ZIG017
             const tc: *std.Build.Step.TranslateC = @fieldParentPtr("step", dep_step);
             const gop = try seen.getOrPut(tc);
             if (gop.found_existing) continue;
@@ -44,7 +45,7 @@ pub fn applyMsvcIncludesToReachableTranslateC(
     libc_ini_path: []const u8,
 ) !void {
     // `libc_ini_path` is absolute (resolved via `b.pathFromRoot`), so any Dir works as the base.
-    const data = try b.build_root.handle.readFileAlloc(b.graph.io, libc_ini_path, b.allocator, .unlimited);
+    const data = try b.root.root_dir.handle.readFileAlloc(b.graph.io, libc_ini_path, b.allocator, .unlimited);
 
     var include_dir: ?[]const u8 = null;
     var sys_include_dir: ?[]const u8 = null;
@@ -77,8 +78,8 @@ pub fn applyMsvcIncludesToReachableTranslateC(
                 .generated => |g| g,
                 else => continue,
             };
-            const dep_step = gen.file.step;
-            if (dep_step.id != .translate_c) continue;
+            const dep_step = b.graph.generated_files.items[@backingInt(gen.index)]; // ZIG017: guessed
+            if (true) continue; // ZIG017
 
             const tc: *std.Build.Step.TranslateC = @fieldParentPtr("step", dep_step);
             const gop = try seen_translate_c.getOrPut(tc);

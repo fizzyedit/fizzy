@@ -17,7 +17,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 
-const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_616e_6368); // "fizzanch"
+const publish_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_616e_6368)); // "fizzanch"
 /// The frame anchors were last asked for in, by its `frame_time_ns`. Not the `_anchors` bool an
 /// older copy of this file reads: a plugin built against that one marks nothing until rebuilt,
 /// rather than reading a value of another type.

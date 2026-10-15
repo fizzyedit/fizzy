@@ -185,7 +185,7 @@ fn intBounds(comptime IntT: type) struct { min: i64, max: i64 } {
 }
 
 fn enumChoices(comptime EnumT: type) []const []const u8 {
-    const enum_fields = std.meta.fields(EnumT);
+    const enum_fields = @import("zig017_fields.zig").enumFields(EnumT);
     comptime var names: [enum_fields.len][]const u8 = undefined;
     inline for (enum_fields, 0..) |f, i| names[i] = f.name;
     const frozen = names;
@@ -219,8 +219,8 @@ pub fn kindFor(comptime T: type, comptime opts: Options) Kind {
     };
 }
 
-fn buildSettings(comptime T: type) [std.meta.fields(T).len]Setting {
-    const struct_fields = std.meta.fields(T);
+fn buildSettings(comptime T: type) [std.meta.fieldNames(T).len]Setting {
+    const struct_fields = @import("zig017_fields.zig").fields(T);
     var out: [struct_fields.len]Setting = undefined;
     inline for (struct_fields, 0..) |f, i| {
         requireCell(f.type, f.name, T);
@@ -241,10 +241,10 @@ fn buildSettings(comptime T: type) [std.meta.fields(T).len]Setting {
 /// diff against defaults — works on this, which is why the on-disk format never learned that
 /// cells exist.
 fn Plain(comptime T: type) type {
-    const cell_fields = std.meta.fields(T);
+    const cell_fields = @import("zig017_fields.zig").fields(T);
     var names: [cell_fields.len][:0]const u8 = undefined;
     var types: [cell_fields.len]type = undefined;
-    var attrs: [cell_fields.len]std.builtin.Type.StructField.Attributes = undefined;
+    var attrs: [cell_fields.len]std.lang.Type.Struct.FieldAttributes = undefined;
     inline for (cell_fields, 0..) |f, i| {
         requireCell(f.type, f.name, T);
         const P = f.type.Payload;
@@ -312,7 +312,7 @@ pub const SettingsSchema = struct {
 /// non-default-only persistence (see `diffSerialize`, R12 in plans/PLUGIN_MANIFEST_PLAN.md) diffs
 /// every value against.
 pub fn Schema(comptime T: type) type {
-    const struct_fields = std.meta.fields(T);
+    const struct_fields = @import("zig017_fields.zig").fields(T);
     const built_settings = buildSettings(T);
 
     return struct {
@@ -458,14 +458,18 @@ pub fn Schema(comptime T: type) type {
 
         pub fn applyZon(out: *T, blob: []const u8) void {
             const gpa = runtime.allocator();
-            const blob_z = gpa.dupeZ(u8, blob) catch |err| {
+            const blob_z = gpa.dupeSentinel(u8, blob, 0) catch |err| {
                 dvui.log.warn("sdk.settings: out of memory parsing settings: {s}", .{@errorName(err)});
                 return;
             };
             defer gpa.free(blob_z);
 
-            const parsed = std.zon.parse.fromSliceAlloc(Payloads, gpa, blob_z, null, .{
-                .ignore_unknown_fields = true,
+            const parsed = (zig017_zon: {
+                var zig017_zd: std.zon.parse.Diagnostics = undefined;
+                var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
+                defer zig017_arena.deinit();
+                const zig017_r = std.zon.parse.fromSlice(Payloads, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = blob_z, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
+                break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Payloads, gpa, zig017_v) else |zig017_e| zig017_e;
             }) catch |err| {
                 dvui.log.warn("sdk.settings: failed to parse settings: {s}", .{@errorName(err)});
                 return;
@@ -635,9 +639,15 @@ pub fn Schema(comptime T: type) type {
             inline for (struct_fields, 0..) |f, i| {
                 if (i == field_index) {
                     const P = f.type.Payload;
-                    const text_z = gpa.dupeZ(u8, text) catch return false;
+                    const text_z = gpa.dupeSentinel(u8, text, 0) catch return false;
                     defer gpa.free(text_z);
-                    const parsed = std.zon.parse.fromSliceAlloc(P, gpa, text_z, null, .{}) catch return false;
+                    const parsed = (zig017_zon: {
+                        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+                        var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
+                        defer zig017_arena.deinit();
+                        const zig017_r = std.zon.parse.fromSlice(P, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = text_z, .diagnostics = &zig017_zd });
+                        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(P, gpa, zig017_v) else |zig017_e| zig017_e;
+                    }) catch return false;
                     // Strings follow the same ownership rule as `setString`; other payloads are
                     // plain values the parse allocated nothing for.
                     if (comptime typeTagFor(P) == .string) {
@@ -999,4 +1009,41 @@ test "a type with no dedicated control is still a legal setting, edited as zon t
 
     // `.other` payloads take part in diff-vs-default like anything else.
     try testing.expect(try S.diffSerialize(testing.allocator, .{}) == null);
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
 }

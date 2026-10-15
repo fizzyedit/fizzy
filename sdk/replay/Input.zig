@@ -16,7 +16,7 @@ const Sequencer = @import("tape").Sequencer;
 const chord = @import("tape").chord;
 
 /// The buttons this input has pressed and not let go of.
-held: std.EnumSet(Tape.Button) = .initEmpty(),
+held: std.EnumSet(Tape.Button) = .empty,
 
 /// A target's point in physical pixels: a fraction of the tagged rect (or the window), nudged by
 /// natural pixels. Only a visible tag has a point.
@@ -56,7 +56,7 @@ pub fn releaseHeld(self: *Input) void {
             _ = cw.addEventMouseButton(dvuiButton(b), .release) catch {};
         }
     }
-    self.held = .initEmpty();
+    self.held = .empty;
 }
 
 pub fn scroll(by: Tape.Scroll) void {
@@ -114,11 +114,11 @@ fn dvuiButton(b: Tape.Button) dvui.enums.Button {
 
 fn dvuiMod(m: chord.Mods) dvui.enums.Mod {
     var bits: u16 = 0;
-    if (m.ctrl) bits |= @intFromEnum(dvui.enums.Mod.lcontrol);
-    if (m.shift) bits |= @intFromEnum(dvui.enums.Mod.lshift);
-    if (m.alt) bits |= @intFromEnum(dvui.enums.Mod.lalt);
-    if (m.command) bits |= @intFromEnum(dvui.enums.Mod.lcommand);
-    return @enumFromInt(bits);
+    if (m.ctrl) bits |= @backingInt(dvui.enums.Mod.lcontrol);
+    if (m.shift) bits |= @backingInt(dvui.enums.Mod.lshift);
+    if (m.alt) bits |= @backingInt(dvui.enums.Mod.lalt);
+    if (m.command) bits |= @backingInt(dvui.enums.Mod.lcommand);
+    return @fromBackingInt(@intCast(bits));
 }
 
 /// The key events this frame's tape added, by `dvui.Event.num`: what `synthetic` answers from.

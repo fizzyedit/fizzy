@@ -121,7 +121,7 @@ pub fn get(self: *const Snapshot, n: u32) ?[]const u8 {
     return if (n == self.taken and n != 0) self.text.items else null;
 }
 
-const taking_id: dvui.Id = @enumFromInt(0x6669_7a7a_736e_6170); // "fizzsnap"
+const taking_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_736e_6170)); // "fizzsnap"
 const taking_key = "_snapshot_at";
 
 /// Whether a snapshot is being taken of this frame (`beginFrame`). Shared through the window's
@@ -382,7 +382,13 @@ test "a snapshot names what a person acts on, and what a tape aims at" {
     // It reads back as what it says: two buttons by name, the tagged one by its tag, the mark.
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const nodes = try std.zon.parse.fromSliceAlloc([]const Node, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    const nodes = try (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(arena.allocator());
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice([]const Node, .{ .gpa = arena.allocator(), .arena = zig017_arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &zig017_zd });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe([]const Node, arena.allocator(), zig017_v) else |zig017_e| zig017_e;
+    });
     var buttons: usize = 0;
     var save = false;
     var close = false;
@@ -466,7 +472,13 @@ test "a snapshot has the dialogs dvui shows after its capture, and says which wi
 
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const nodes = try std.zon.parse.fromSliceAlloc([]const Node, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    const nodes = try (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(arena.allocator());
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice([]const Node, .{ .gpa = arena.allocator(), .arena = zig017_arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &zig017_zd });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe([]const Node, arena.allocator(), zig017_v) else |zig017_e| zig017_e;
+    });
     // The windows first, each a node.
     try std.testing.expect(nodes.len > 3);
     for (nodes[0..3], [_][]const u8{ "app.window:main", "app.window:band", "app.window:dialog" }) |node, tag| {
@@ -497,4 +509,41 @@ test "a snapshot has the dialogs dvui shows after its capture, and says which wi
     try std.testing.expectEqual(@as(usize, 0), dvui.debug.capturedFrameCount());
     // Taken, nothing more is captured: a dialog drawn in a frame nobody asked for is free.
     try std.testing.expect(!taking());
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
 }

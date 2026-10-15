@@ -65,7 +65,7 @@ const skip_unread = builtin.target.cpu.arch == .wasm32;
 /// should not flip it on and off, and glass coming back finds it still there.
 const linger_frames: u32 = 60;
 
-const unseen_id: dvui.Id = @enumFromInt(0x6669_7a7a_756e_736e); // "fizzunsn"
+const unseen_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_756e_736e)); // "fizzunsn"
 const unseen_key = "_frame_unseen";
 
 /// Mark the frame running as one nobody will see — a demo catching up (`automation.Player.frames`)
@@ -90,7 +90,7 @@ pub fn unseen() bool {
     return dvui.dataGet(null, unseen_id, unseen_key, bool) orelse false;
 }
 
-const want_id: dvui.Id = @enumFromInt(0x6669_7a7a_6672_6d77); // "fizzfrmw"
+const want_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_6672_6d77)); // "fizzfrmw"
 const want_key = "_frame_target_wanted";
 
 /// Something will read what is under it this frame (a frost, `BlurBackdrop`) — keep the frame in

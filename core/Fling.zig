@@ -48,7 +48,7 @@ last_drag_ns: i128 = 0,
 // `touchend`, so the last-frame estimate reads a near-random speed. These fields track
 // the recent (position, time) history so release velocity can be averaged over a fixed
 // time window instead — immune to a dropped final move and to frame-timing jitter.
-hist: [hist_cap]TimedSample = [_]TimedSample{.{}} ** hist_cap,
+hist: [hist_cap]TimedSample = @splat(.{}),
 hist_head: usize = 0,
 hist_len: usize = 0,
 hist_pos: f32 = 0,

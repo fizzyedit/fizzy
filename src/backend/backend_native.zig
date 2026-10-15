@@ -120,7 +120,7 @@ pub const revealWindow = platform.window.reveal;
 /// the frame is restored on top of the chrome, so the chrome's own resizing cannot move it.
 pub fn restoreWindowState(win: *dvui.Window) void {
     platform.window.attach(win);
-    if (comptime builtin.os.tag == .macos) setWindowStyle(win);
+    if (comptime builtin.target.os.tag == .macos) setWindowStyle(win);
     if (win.backend.impl.init_opts_save) |opts| if (opts.pref_path) |dir| {
         layout_store_dir = dir;
         platform.geometry.setStore(.{ .load = layoutStoreLoad, .save = layoutStoreSave });
@@ -143,7 +143,7 @@ pub const WindowGlassLook = platform.window.WindowGlassLook;
 /// The main window's Liquid Glass this frame, where it is a window of Liquid Glass (macOS 26):
 /// whether it is — its colour is then under the glass, and the frame draws no base of its own.
 pub fn windowGlass(win: *dvui.Window, look: WindowGlassLook) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     return platform.window.liquidGlassLook(win.backend.impl.window, look.native());
 }
 
@@ -159,7 +159,7 @@ var layout_store_dir: []const u8 = "";
 fn layoutStoreLoad(_: ?*anyopaque) ?platform.geometry.Geometry {
     const gpa = std.heap.page_allocator;
     const f = loadWindowFile(gpa, layout_store_dir);
-    defer std.zon.parse.free(gpa, f);
+    defer zig017ZonFree(gpa, f);
     if (f.w < 1 or f.h < 1) return null;
     return .{ .x = f.x, .y = f.y, .w = f.w, .h = f.h, .state = if (f.maximized) .maximized else .normal };
 }
@@ -168,7 +168,7 @@ fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
     // Read-modify-write: the regions and tree on disk stay as they are.
     const gpa = std.heap.page_allocator;
     var f = loadWindowFile(gpa, layout_store_dir);
-    defer std.zon.parse.free(gpa, f);
+    defer zig017ZonFree(gpa, f);
     f.x = g.x;
     f.y = g.y;
     f.w = g.w;
@@ -182,7 +182,7 @@ fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
 /// pane mid-transition; a zoom without a Space keeps the full strip. Fizzy's titlebar heights
 /// over the window's state (`platform.macos_monitor.titlebarState`).
 pub fn titlebarStripHeight(win: *dvui.Window) f32 {
-    if (builtin.os.tag != .macos) return Constants.titlebar_height;
+    if (builtin.target.os.tag != .macos) return Constants.titlebar_height;
     const t = platform.macos_monitor.titlebarState(win);
     const in: platform.window_layout.StripInputs = .{
         .collapsed = t.collapsed,
@@ -254,7 +254,7 @@ const native_menus: []const platform.menu.Menu = blk: {
 
 /// Build the macOS menu bar from `menu_model`. Once; safe to call again.
 pub fn setupMacOSMenuBar() void {
-    if (builtin.os.tag != .macos) return;
+    if (builtin.target.os.tag != .macos) return;
     platform.menu.install(native_menus, .{
         .enabled = menuEnabled,
         .title = menuTitle,
@@ -270,7 +270,7 @@ pub fn setupMacOSMenuBar() void {
 
 /// Let go of the menu bar before the editor its hooks read is freed. No-op off macOS.
 pub fn teardownMacOSMenuBar() void {
-    if (builtin.os.tag != .macos) return;
+    if (builtin.target.os.tag != .macos) return;
     platform.menu.deinit();
 }
 
@@ -320,7 +320,7 @@ fn menuTitle(_: ?*anyopaque, ref: platform.menu.Ref) ?[*:0]const u8 {
 /// Rebuild every plugin-contributed native menu and item from the host's registry: on every
 /// plugin load, unload and hide-toggle. Each item's tag is its index in `host.native_menu_items`.
 pub fn rebuildDynamicNativeMenus() void {
-    if (builtin.os.tag != .macos) return;
+    if (builtin.target.os.tag != .macos) return;
     const host = &fizzy.editor().app.host;
     var menus: std.ArrayListUnmanaged(platform.menu.ExtraMenu) = .empty;
     defer menus.deinit(alloc());
@@ -346,7 +346,7 @@ var native_recent_count: usize = 0;
 /// Fill the Recent Folders submenu from the recents, newest first. AppKit menus are retained
 /// state, so this has to run whenever the list changes.
 pub fn rebuildNativeRecentFolders() void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const folders = fizzy.editor().app.recents.folders.items;
     const titles = alloc().alloc([]const u8, folders.len) catch return;
     defer alloc().free(titles);
@@ -395,4 +395,28 @@ pub fn setDynamicNativeMenuShortcut(index: usize, key: ?[]const u8, modifier_mas
 /// references the right product name.
 pub fn setSdlAppMetadata(name: [*:0]const u8, version: [*:0]const u8, identifier: [*:0]const u8) void {
     _ = sdl3.SDL_SetAppMetadata(name, version, identifier);
+}
+// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
+// arena the caller owns). Goes with the zon arena PR.
+fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                zig017ZonFree(gpa, value.*);
+                gpa.destroy(value);
+            },
+            .slice => {
+                for (value) |item| zig017ZonFree(gpa, item);
+                gpa.free(value);
+            },
+            else => comptime unreachable,
+        },
+        .array => for (value) |item| zig017ZonFree(gpa, item),
+        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
+        .@"union" => |u| if (u.tag_type != null) switch (value) {
+            inline else => |payload| zig017ZonFree(gpa, payload),
+        },
+        .optional => if (value) |some| zig017ZonFree(gpa, some),
+        else => {},
+    }
 }

@@ -196,13 +196,15 @@ pub fn Params(comptime T: type) type {
         /// naming where, and returns `error.BadArguments`.
         pub fn parse(call: *Call) error{ BadArguments, OutOfMemory }!Args {
             const text = std.mem.trim(u8, call.args, " \t\r\n");
-            const source = try call.arena.dupeZ(u8, if (text.len == 0) ".{}" else text);
-            var diag: std.zon.parse.Diagnostics = .{};
-            return std.zon.parse.fromSliceAlloc(Args, call.arena, source, &diag, .{}) catch |err| switch (err) {
+            const source = try call.arena.dupeSentinel(u8, if (text.len == 0) ".{}" else text, 0);
+            var diag: std.zon.parse.Diagnostics = undefined;
+            return (zig017_zon: {
+                break :zig017_zon std.zon.parse.fromSlice(Args, .{ .gpa = call.arena, .arena = call.arena, .source = source, .diagnostics = &diag });
+            }) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ParseZon => {
                     call.bad_args = true;
-                    const msg = std.fmt.allocPrint(call.arena, "{f}", .{&diag}) catch "the arguments do not fit";
+                    const msg = std.fmt.allocPrint(call.arena, "{f}", .{diag.fmt("args")}) catch "the arguments do not fit";
                     call.message = std.mem.trimEnd(u8, msg, "\n");
                     return error.BadArguments;
                 },
@@ -222,8 +224,8 @@ pub fn Params(comptime T: type) type {
     };
 }
 
-fn buildParams(comptime T: type) [std.meta.fields(T).len]Param {
-    const fields = std.meta.fields(T);
+fn buildParams(comptime T: type) [std.meta.fieldNames(T).len]Param {
+    const fields = @import("zig017_fields.zig").fields(T);
     var out: [fields.len]Param = undefined;
     for (fields, 0..) |f, i| {
         if (!settings.isCell(f.type)) @compileError(
@@ -261,10 +263,10 @@ fn defaultZon(comptime P: type, comptime value: P) ?[]const u8 {
 
 /// `T`'s fields with bare payload types, each keeping its cell's default if it has one.
 fn Plain(comptime T: type) type {
-    const fields = std.meta.fields(T);
+    const fields = @import("zig017_fields.zig").fields(T);
     var names: [fields.len][:0]const u8 = undefined;
     var types: [fields.len]type = undefined;
-    var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+    var attrs: [fields.len]std.lang.Type.Struct.FieldAttributes = undefined;
     for (fields, 0..) |f, i| {
         const P = f.type.Payload;
         names[i] = f.name;

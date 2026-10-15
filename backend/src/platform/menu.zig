@@ -115,13 +115,13 @@ pub export fn FizzyMenuEnabled(section: c_int, tag: c_int) callconv(.c) bool {
     const h = hooks orelse return true;
     if (h.input_blocked(h.ctx)) return false;
     if (section < 0 or section > 2 or tag < 0) return true;
-    return h.enabled(h.ctx, .{ .section = @enumFromInt(section), .tag = @intCast(tag) });
+    return h.enabled(h.ctx, .{ .section = @fromBackingInt(@intCast(section)), .tag = @intCast(tag) });
 }
 
 pub export fn FizzyMenuTitle(section: c_int, tag: c_int) callconv(.c) ?[*:0]const u8 {
     const h = hooks orelse return null;
     if (section < 0 or section > 2 or tag < 0) return null;
-    return h.title(h.ctx, .{ .section = @enumFromInt(section), .tag = @intCast(tag) });
+    return h.title(h.ctx, .{ .section = @fromBackingInt(@intCast(section)), .tag = @intCast(tag) });
 }
 
 pub export fn FizzyMenuInputBlocked() callconv(.c) bool {
@@ -142,7 +142,7 @@ fn nsString(text: [*:0]const u8) objc.Object {
 
 /// A sentinel copy of `text` for AppKit, from the platform allocator; free with `freeZ`.
 fn dupeZ(text: []const u8) ?[:0]u8 {
-    return dialogs.allocator().dupeZ(u8, text) catch null;
+    return dialogs.allocator().dupeSentinel(u8, text, 0) catch null;
 }
 
 fn setImage(item: objc.Object, symbol: [*:0]const u8, description: [*:0]const u8) void {
@@ -156,7 +156,7 @@ fn setImage(item: objc.Object, symbol: [*:0]const u8, description: [*:0]const u8
 /// Build the bar: `menus` in order after the app menu, Help last, the app menu's About retitled
 /// `about_title` and routed to `pollAbout`. Once; `hooks` answer for every item from then on.
 pub fn install(menus: []const Menu, h: Hooks, about_title: ?[:0]const u8) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     if (installed) return;
     hooks = h;
     const NSApplication = objc.getClass("NSApplication") orelse return;
@@ -276,7 +276,7 @@ pub fn isFixedMenu(id: []const u8) bool {
 /// first, so this is safe — and cheap enough — to call on every change. An `ExtraMenu` with no
 /// item in it is left out.
 pub fn setExtras(menus: []const ExtraMenu, items: []const ExtraItem) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     if (!installed) return;
     const bar = main_menu orelse return;
     const t = target orelse return;
@@ -335,7 +335,7 @@ pub fn setExtras(menus: []const ExtraMenu, items: []const ExtraItem) void {
 /// allocator is freed. The fixed menus stay on the bar for the rest of the process, every item
 /// enabled with its title as built. Not for a bar the app goes on using: `install` is once.
 pub fn deinit() void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     hooks = null;
     const gpa = dialogs.allocator();
     for (extra_leaves.items) |e| e.parent.msgSend(void, "removeItem:", .{e.item.value});
@@ -351,7 +351,7 @@ pub fn deinit() void {
 /// Fill list submenu `index` (the `index`th `.list` entry across the bar) with `titles`, in
 /// order; an item chosen reports its position in `titles`. Hidden while empty.
 pub fn setList(index: usize, titles: []const []const u8) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     if (index >= list_count) return;
     const menu = list_menus[index] orelse return;
     const t = target orelse return;
@@ -373,7 +373,7 @@ pub fn setList(index: usize, titles: []const []const u8) void {
 /// `modifiers`) with `modifiers` (`modifier_command` and the rest); null clears it. An item not
 /// on the bar now is left alone.
 pub fn setKeyEquivalent(ref: Ref, key: ?[]const u8, modifiers: c_ulong) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     switch (ref.section) {
         .bar => if (bar_items.get(ref.tag)) |item| applyKey(item, key, modifiers),
         .extra => for (extra_leaves.items) |e| if (e.tag == ref.tag) applyKey(e.item, key, modifiers),
@@ -398,7 +398,7 @@ fn applyKey(item: objc.Object, key: ?[]const u8, modifiers: c_ulong) void {
 
 /// The item chosen in `section` since the last call, if one was. Call once a frame, inside it.
 pub fn pollActivation(section: Section) ?Activation {
-    const tag = pending_tag[@intFromEnum(section)].swap(-1, .acq_rel);
+    const tag = pending_tag[@backingInt(section)].swap(-1, .acq_rel);
     if (tag < 0) return null;
     return .{
         .ref = .{ .section = section, .tag = @intCast(tag) },

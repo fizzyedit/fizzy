@@ -532,7 +532,8 @@ fn lift(id: []const u8, from: dvui.Rect.Physical, event_num: u16) void {
     wb.carried_tab_key = std.hash.Wyhash.hash(0, id);
     runtime.host().beginViewDrag(id, from);
     if (runtime.host().viewDragSurface() == null) return;
-    if (dvui.currentWindow().capture) |cm| dvui.captureMouseCustom(cm, event_num);
+    if (dvui.currentWindow().captures[0]) |cm| // ZIG017: per-pointer capture (dvui#1014); 0 is the mouse
+        dvui.captureMouseCustom(cm, event_num);
 }
 
 /// Write this pane's tab list and make `focus` its active tab.
@@ -787,7 +788,7 @@ fn paneSide(side: sdk.RegionSpec.Drop.Side) core.widgets.DockLayout.Side {
 
 fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
     var content_color = dvui.themeGet().color(.window, .fill);
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos, .windows => {
             content_color = if (!runtime.host().isMaximized()) content_color.opacity(runtime.host().contentOpacity()) else content_color;
         },

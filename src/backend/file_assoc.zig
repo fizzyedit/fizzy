@@ -79,20 +79,20 @@ pub const ExtAssoc = struct {
 };
 
 pub fn registerAll() void {
-    if (comptime builtin.os.tag != .windows) return;
+    if (comptime builtin.target.os.tag != .windows) return;
     impl.registerAll() catch |err| {
         std.log.warn("file_assoc: register failed: {t}", .{err});
     };
 }
 
 pub fn unregisterAll() void {
-    if (comptime builtin.os.tag != .windows) return;
+    if (comptime builtin.target.os.tag != .windows) return;
     impl.unregisterAll() catch |err| {
         std.log.warn("file_assoc: unregister failed: {t}", .{err});
     };
 }
 
-const impl = if (builtin.os.tag == .windows) WindowsImpl else NoopImpl;
+const impl = if (builtin.target.os.tag == .windows) WindowsImpl else NoopImpl;
 
 const NoopImpl = struct {
     fn registerAll() !void {}

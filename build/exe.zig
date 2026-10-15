@@ -222,7 +222,7 @@ pub fn addFizzyExecutableForTarget(
 
     const exe = b.addExecutable(.{
         .name = app_name,
-        .root_module = b.addModule("App", .{
+        .root_module = b.createModule(.{ // ZIG017: 0.17 refuses a second public "App"
             .target = resolved_target,
             .optimize = optimize,
             // `b.path`, not `.cwd_relative`: this resolves against *fizzy's* build root, which
@@ -240,17 +240,17 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.addImport("assets", assets_module);
     exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
-    if (optimize != .Debug) {
+    if (optimize != .debug) {
         switch (resolved_target.result.os.tag) {
             .windows => {
-                exe.subsystem = .Windows;
+                exe.subsystem = .windows;
                 // MSVC's libcmt links `WinMainCRTStartup` (needs `WinMain`) for /SUBSYSTEM:WINDOWS.
                 // Fizzy exposes `main`, so force the C `main` entry which works for either subsystem.
                 if (resolved_target.result.abi == .msvc) {
                     exe.entry = .{ .symbol_name = "mainCRTStartup" };
                 }
             },
-            else => exe.subsystem = .Posix,
+            else => exe.subsystem = .posix,
         }
     }
 

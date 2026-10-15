@@ -56,16 +56,22 @@ pub const IdentityManifest = @import("../../../sdk/src/manifest_identity.zig").I
 /// collide with the same file when the plugin is built standalone (its own `build.zig` already
 /// `@import`s it via `plugin_sdk.readManifest`). Panics clearly on a missing/invalid manifest.
 pub fn readManifestAt(b: *std.Build, zon_rel_path: []const u8) IdentityManifest {
-    const raw = b.build_root.handle.readFileAlloc(b.graph.io, zon_rel_path, b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
+    const raw = b.root.root_dir.handle.readFileAlloc(b.graph.io, zon_rel_path, b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
         std.debug.panic("fizzy: could not read {s}: {}", .{ zon_rel_path, e });
-    const src = b.allocator.dupeZ(u8, raw) catch @panic("OOM");
+    const src = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");
     const Target = struct {
         id: []const u8,
         name: []const u8,
         version: []const u8,
         min_sdk_version: []const u8 = "",
     };
-    const parsed = std.zon.parse.fromSliceAlloc(Target, b.allocator, src, null, .{ .ignore_unknown_fields = true }) catch |e|
+    const parsed = (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(b.allocator);
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(Target, .{ .gpa = b.allocator, .arena = zig017_arena.allocator(), .source = src, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Target, b.allocator, zig017_v) else |zig017_e| zig017_e;
+    }) catch |e|
         std.debug.panic("fizzy: failed to parse {s}: {}", .{ zon_rel_path, e });
     _ = std.SemanticVersion.parse(parsed.version) catch
         std.debug.panic("fizzy: {s} .version \"{s}\" is not valid semver", .{ zon_rel_path, parsed.version });
@@ -272,4 +278,41 @@ pub fn installDylib(b: *std.Build, lib: *std.Build.Step.Compile, name: []const u
         .dest_sub_path = dest,
     });
     b.getInstallStep().dependOn(&install_step.step);
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
 }

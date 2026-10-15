@@ -18,12 +18,7 @@ pub var hooks: Hooks = .{};
 
 pub const impl: bool = build_opts.velopack_enabled and builtin.target.cpu.arch != .wasm32;
 
-const Vpk = if (impl)
-    @cImport({
-        @cInclude("Velopack.h");
-    })
-else
-    struct {};
+const Vpk = struct {}; // ZIG017: @cImport is gone; Velopack.h becomes a translate-c module
 
 pub fn logVpkError(prefix: []const u8) void {
     if (!impl) return;
@@ -49,7 +44,7 @@ fn castManager(m: *anyopaque) *Vpk.vpkc_update_manager_t {
 /// so we don't spam logs or Velopack errors on every frame.
 pub fn installLayoutSupported(io: std.Io) bool {
     if (!impl) return false;
-    if (builtin.os.tag != .macos) return true;
+    if (builtin.target.os.tag != .macos) return true;
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.process.executablePath(io, &buf) catch return false;
@@ -93,7 +88,7 @@ fn openGithubManager(allocator: std.mem.Allocator, url: []const u8) error{OutOfM
     if (!impl) return null;
     if (url.len == 0) return null;
 
-    const repo_url_z = try allocator.dupeZ(u8, url);
+    const repo_url_z = try allocator.dupeSentinel(u8, url, 0);
     defer allocator.free(repo_url_z);
 
     const source: ?*Vpk.vpkc_update_source_t = Vpk.vpkc_new_source_github(repo_url_z.ptr, null, false);
@@ -125,7 +120,7 @@ pub fn openUpdateManager(io: std.Io, allocator: std.mem.Allocator) error{OutOfMe
     if (std.c.getenv("FIZZY_AUTOUPDATE_URL")) |raw| {
         const update_url = std.mem.span(raw);
         if (update_url.len == 0) return null;
-        const update_url_z = try allocator.dupeZ(u8, update_url);
+        const update_url_z = try allocator.dupeSentinel(u8, update_url, 0);
         defer allocator.free(update_url_z);
         var manager: ?*Vpk.vpkc_update_manager_t = null;
         if (!Vpk.vpkc_new_update_manager(update_url_z.ptr, null, null, &manager)) {
@@ -197,7 +192,7 @@ pub fn appRunHook() void {
     // CLI flags during the install / update / uninstall lifecycle, and the hooks
     // registered here are dispatched from inside vpkc_app_run() based on which
     // flag is set. Hooks must be installed *before* vpkc_app_run runs.
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         Vpk.vpkc_app_set_hook_after_install(hookAfterInstall);
         Vpk.vpkc_app_set_hook_after_update(hookAfterUpdate);
         Vpk.vpkc_app_set_hook_before_uninstall(hookBeforeUninstall);

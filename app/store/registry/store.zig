@@ -46,7 +46,7 @@ pub const Catalog = struct {
     io: std.Io,
     summary_url: []const u8,
     shard_url: []const u8,
-    status_value: std.atomic.Value(u8) = .init(@intFromEnum(Status.idle)),
+    status_value: std.atomic.Value(u8) = .init(@backingInt(Status.idle)),
     mutex: std.Io.Mutex = .init,
     summary: ?ParsedSummary = null,
     shard: ?ParsedShard = null,
@@ -92,7 +92,7 @@ pub const Catalog = struct {
     }
 
     pub fn status(self: *Catalog) Status {
-        return @enumFromInt(self.status_value.load(.acquire));
+        return @fromBackingInt(@intCast(self.status_value.load(.acquire)));
     }
 
     /// Kick off a background refresh. No-op while one is already in flight. Must be called from
@@ -106,10 +106,10 @@ pub const Catalog = struct {
         // Release the previous worker's group resources. `status() != .fetching` means it has
         // already stored its final status, so this returns as soon as that task unwinds.
         self.tasks.await(self.io) catch {};
-        self.status_value.store(@intFromEnum(Status.fetching), .release);
+        self.status_value.store(@backingInt(Status.fetching), .release);
         // `concurrent`, not `async`: this must run on its own thread, never inline on the caller's.
         self.tasks.concurrent(self.io, worker, .{self}) catch {
-            self.status_value.store(@intFromEnum(Status.failed), .release);
+            self.status_value.store(@backingInt(Status.failed), .release);
             return;
         };
     }
@@ -118,12 +118,12 @@ pub const Catalog = struct {
         if (self.wasm_summary_url) |u| self.allocator.free(u);
         if (self.wasm_shard_url) |u| self.allocator.free(u);
         self.wasm_summary_url = cacheBust(self.allocator, self.io, self.summary_url) orelse {
-            self.status_value.store(@intFromEnum(Status.failed), .release);
+            self.status_value.store(@backingInt(Status.failed), .release);
             return;
         };
         self.wasm_shard_url = cacheBust(self.allocator, self.io, self.shard_url);
         self.wasm_phase = .summary;
-        self.status_value.store(@intFromEnum(Status.fetching), .release);
+        self.status_value.store(@backingInt(Status.fetching), .release);
     }
 
     /// Advance in-flight browser GETs. UI thread, wasm only — a no-op natively. `fetcher` is the
@@ -163,7 +163,7 @@ pub const Catalog = struct {
             .shard => {
                 const url = self.wasm_shard_url orelse {
                     self.wasm_phase = .idle;
-                    self.status_value.store(@intFromEnum(Status.ready), .release);
+                    self.status_value.store(@backingInt(Status.ready), .release);
                     return;
                 };
                 switch (fetcher.request(self.allocator, url)) {
@@ -172,7 +172,7 @@ pub const Catalog = struct {
                     // every card reads "no compatible build".
                     .failed => {
                         self.wasm_phase = .idle;
-                        self.status_value.store(@intFromEnum(Status.ready), .release);
+                        self.status_value.store(@backingInt(Status.ready), .release);
                     },
                     .ready => |bytes| {
                         if (std.json.parseFromSlice(registry.ReleaseShard, self.allocator, bytes, .{
@@ -183,7 +183,7 @@ pub const Catalog = struct {
                             self.shard = parsed;
                         } else |_| {}
                         self.wasm_phase = .idle;
-                        self.status_value.store(@intFromEnum(Status.ready), .release);
+                        self.status_value.store(@backingInt(Status.ready), .release);
                     },
                 }
             },
@@ -192,7 +192,7 @@ pub const Catalog = struct {
 
     fn failWasm(self: *Catalog) void {
         self.wasm_phase = .idle;
-        self.status_value.store(@intFromEnum(Status.failed), .release);
+        self.status_value.store(@backingInt(Status.failed), .release);
     }
 
     /// Runs in the task group. Every failure path — including `error.Canceled` from a shutdown
@@ -200,7 +200,7 @@ pub const Catalog = struct {
     /// refresh: the app is on its way down, and a later `refresh` would overwrite it anyway.
     fn worker(self: *Catalog) void {
         const fresh_summary = registry.fetchSummary(self.allocator, self.io, self.summary_url) catch {
-            self.status_value.store(@intFromEnum(Status.failed), .release);
+            self.status_value.store(@backingInt(Status.failed), .release);
             return;
         };
         // Best-effort: any failure (network, 404 for a brand-new fingerprint nobody has
@@ -216,7 +216,7 @@ pub const Catalog = struct {
             self.shard = s;
         }
         self.mutex.unlock(self.io);
-        self.status_value.store(@intFromEnum(Status.ready), .release);
+        self.status_value.store(@backingInt(Status.ready), .release);
     }
 
     /// A joined view of the latest summary + this host's release shard, for the duration the

@@ -67,7 +67,7 @@ fn clearNewFilePath() void {
     runtime.workbench().clearPendingNewFilePath();
 }
 
-const open_message = if (builtin.os.tag == .macos) "Reveal in Finder" else "Reveal in File Browser";
+const open_message = if (builtin.target.os.tag == .macos) "Reveal in Finder" else "Reveal in File Browser";
 
 pub const Extension = enum {
     unsupported,

@@ -186,7 +186,7 @@ pub fn main() !void {
                     _ = c.SDL_SetGPUAllowedFramesInFlight(gpu, st.frames_in_flight);
                 },
                 c.SDLK_D => st.clip_delay = (st.clip_delay + 1) % 4,
-                c.SDLK_T => st.timing = @enumFromInt((@intFromEnum(st.timing) + 1) % 3),
+                c.SDLK_T => st.timing = @fromBackingInt(@intCast((@backingInt(st.timing) + 1) % 3)),
                 c.SDLK_B => st.use_backdrop = !st.use_backdrop,
                 c.SDLK_SPACE => st.paused = !st.paused,
                 c.SDLK_UP => st.speed *= 1.5,

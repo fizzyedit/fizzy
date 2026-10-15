@@ -30,7 +30,7 @@ const debounce_ns: i128 = 200 * std.time.ns_per_ms;
 /// Same ceiling as the text plugin's open path — guards against hashing something huge.
 const max_hash_bytes: usize = 64 * 1024 * 1024;
 
-pub const have_impl = switch (builtin.os.tag) {
+pub const have_impl = switch (builtin.target.os.tag) {
     .macos, .linux, .windows => true,
     else => false,
 };
@@ -65,7 +65,7 @@ by_path: std.StringHashMapUnmanaged(u64) = .empty,
 /// `.modified` for regular files — the case nightwatch's README calls out as the supported way
 /// to watch single files. Its directory-tree trade-off (mtime-diff scans miss pure content
 /// writes) doesn't apply to us: we only ever pass file paths.
-const doc_variant: if (have_impl) @import("nightwatch").Variant else void = switch (builtin.os.tag) {
+const doc_variant: if (have_impl) @import("nightwatch").Variant else void = switch (builtin.target.os.tag) {
     .macos, .freebsd, .openbsd, .netbsd, .dragonfly => .kqueuedir,
     else => if (have_impl) @import("nightwatch").default_variant else {},
 };

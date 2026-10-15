@@ -27,7 +27,10 @@ cd "$root"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# A directory's files as they are on disk, without build output or version control.
+# A directory's files as they are on disk, without build output or version control. On macOS,
+# without AppleDouble `._*` files too: bsdtar writes one per file with extended attributes, and
+# the backend would take `patches/sdl/._0001-….patch` for a patch.
+export COPYFILE_DISABLE=1
 pack() {
   tar -C "$1" -cf - --exclude=./.zig-cache --exclude=./zig-out --exclude=./zig-pkg \
     --exclude=./.git --exclude=./.jj --exclude=./.profile .
@@ -42,16 +45,24 @@ for repo in example-app example-plugin; do
     mkdir -p "$work/$repo"
     pack "$EXAMPLES_DIR/$repo" | tar -x -C "$work/$repo"
   else
-    git clone --quiet --depth 1 "https://github.com/fizzyedit/$repo" "$work/$repo"
+    # ZIG017: the examples' zig-0.17 branches while zig/0.17 is open; main again at the merge.
+    git clone --quiet --depth 1 --branch "${EXAMPLES_REF:-zig-0.17}" "https://github.com/fizzyedit/$repo" "$work/$repo"
   fi
 done
 
 (cd "$work/example-plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+# example-app bundles example-plugin (`hello`), pinned by URL: the copy here, on this tree's SDK.
+pack "$work/example-plugin" | gzip > "$work/example-plugin.tar.gz"
 (
   cd "$work/example-app"
+  zig fetch --save=hello "$work/example-plugin.tar.gz" >/dev/null
   zig fetch --save=fizzy "$work/fizzy.tar.gz" >/dev/null
   # Its replay app depends on the plugin SDK alone: this tree's, packed as a release would be.
   zig fetch --save=fizzy_sdk "$sdk_tarball" >/dev/null
+  # So do the plugins it carries, each pinning a released SDK of its own.
+  for plugin in plugins/*/; do
+    (cd "$plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+  done
 )
 
 # The plugin build installs the plugin: into a profile of its own, not this machine's fizzy.

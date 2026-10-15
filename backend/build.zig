@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     // harness, against the patched library. Arguments after `--` reach the runner:
     // `--filter <suite|test>`, `--require-gpu <driver>`.
     const test_sdl_step = b.step("test-sdl", "Build and run the suites for fizzy's SDL patches");
-    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseFast else optimize;
+    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .debug) .fast else optimize;
     if (sdlDependency(b, target, sdl_optimize, null)) |sdl| {
         const source = patchedSdl(b).?;
         const sdl_test = b.addLibrary(.{
@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
         suites.root_module.linkLibrary(sdl_test);
         suites.root_module.linkLibrary(sdl.artifact("SDL3"));
         const run = b.addRunArtifact(suites);
-        if (b.args) |args| run.addArgs(args);
+        run.addPassthruArgs();
         test_sdl_step.dependOn(&run.step);
     }
 }
@@ -107,7 +107,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     // device, every window's present. A Debug frame spent much of itself there (`sample`), and a
     // window's way into full screen ran at half the display's rate in Debug alone. The app's own
     // code stays Debug; stepping into SDL's C is what a Debug app gives up.
-    const sdl_optimize: std.builtin.OptimizeMode = if (opts.optimize == .Debug) .ReleaseFast else opts.optimize;
+    const sdl_optimize: std.builtin.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
     const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.macos_sdk);
 
     const sdl_translate_c = b.addTranslateC(.{
@@ -145,7 +145,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
 fn patchedSdl(b: *std.Build) ?std.Build.LazyPath {
     const io = b.graph.io;
     var names: std.ArrayList([]const u8) = .empty;
-    var dir = b.build_root.handle.openDir(io, "patches/sdl", .{ .iterate = true }) catch |err|
+    var dir = b.root.root_dir.handle.openDir(io, "patches/sdl", .{ .iterate = true }) catch |err|
         std.debug.panic("backend: open patches/sdl: {t}", .{err});
     defer dir.close(io);
     var it = dir.iterate();

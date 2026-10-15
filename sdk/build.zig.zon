@@ -2,7 +2,7 @@
     .name = .fizzy,
     .version = "0.2.0",
     .fingerprint = 0x3311781b63706048,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     // Plugin SDK package — no app-only deps (Velopack, nightwatch, …). Plugins depend on
     // this directory; the repo-root zon owns the editor build. See AGENTS.md.
     .paths = .{
@@ -13,6 +13,7 @@
         "replay_module.zig",
         "plugin_sdk_meta.zig",
         "plugin_sdk_check.zig",
+        "plugin_sdk_install.zig",
         "sdk_version.zig",
         "manifest_identity.zig",
         "paths.zig",
@@ -39,14 +40,14 @@
         // `fizzy-sdk-<version>` tag in the fork before the pin lands. `fizzy-dev` itself stays a
         // working branch and can be rebased freely — the tag, never.
         .dvui = .{
-            // fizzy-sdk-0.2.23
-            .url = "https://github.com/foxnne/dvui-dev/archive/f646ec0b17899a2c2f222ecce834c82e235e0486.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmTQyBAHtzJRJ2BzYtusSfj5mYzF4owYGcDHfyNY_",
+            // zig-0.17 branch (zig/0.17 pins a commit; tagged when it merges to main)
+            .url = "https://github.com/foxnne/dvui-dev/archive/2c899d18373f96f3502fd44ca2beedd5fb05feae.tar.gz",
+            .hash = "dvui-0.6.0-dev-AQFJmeNgBAF1o_avCwV7ojjs2FLb00R-kldfrM3fAMpg",
             //.path = "../../dvui-dev",
         },
         .zf = .{
-            .url = "git+https://github.com/natecraddock/zf#c35c421f84895193246db06c40683c1a30e616ef",
-            .hash = "zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW",
+            .url = "git+https://github.com/natecraddock/zf#e00f9e978b6a7126d1b35fa8ffd49b62042ad6f3",
+            .hash = "zf-0.11.0-OIRy8XCRAAB6FiMwIrtD6FqlagnFwpI6YyOu7bXeYH5J",
         },
     },
 }

@@ -28,11 +28,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// Whether the app draws its own title bar on this platform.
-pub const active = builtin.os.tag == .windows or builtin.os.tag == .linux;
+pub const active = builtin.target.os.tag == .windows or builtin.target.os.tag == .linux;
 /// Whether the OS asks these hints where a press goes: where the app draws its own title bar,
 /// and on macOS, where AppKit moves the window from any press in its transparent titlebar's
 /// region unless the view there says otherwise (`interactiveAt`).
-pub const hit_tested = active or builtin.os.tag == .macos;
+pub const hit_tested = active or builtin.target.os.tag == .macos;
 
 /// A caption button the app draws (Windows 11-style: the app draws them, the backend hit-tests them).
 pub const TitleBarButton = enum { minimize, maximize, close };
