@@ -67,6 +67,25 @@ pub fn failed(self: Plugin, what: []const u8, err: anyerror) error{PluginFailed}
     return error.PluginFailed;
 }
 
+/// A document's history as a line (`historyLine`): each step it can undo, oldest first, then
+/// each it can redo, and how many are applied. The app draws it as a timeline the person scrubs.
+pub const HistoryLine = struct {
+    /// Changes whenever the line does — a step added, undone or redone — so a caller keeps the
+    /// last line and asks again only when this moved.
+    version: u64,
+    entries: []const Entry,
+    /// How many of `entries` are applied; the rest are what redo brings back.
+    at: usize,
+
+    pub const Entry = struct {
+        /// The step's own, for its life: the app goes to a step, and keys who made it, by this.
+        /// Never 0.
+        id: u64,
+        /// What it did, short: "Typing", "Draw", "Add Layer".
+        title: []const u8,
+    };
+};
+
 /// A question an owner wants asked before fizzy saves a document (`saveQuestion`): a save that
 /// would flatten layers, drop data, change an encoding. fizzy asks it wherever a save starts
 /// (Save, Save All, Save and Close, the quit walk) and goes on by itself with the answer.
@@ -197,6 +216,14 @@ pub const VTable = struct {
     /// scroll — with no side effects. A demo compares it when a replay reaches a moment it
     /// snapshotted before, to catch a tape that does not replay exactly.
     documentFingerprint: ?*const fn (state: *anyopaque, doc: DocHandle) u64 = null,
+    /// `doc`'s history as a line (`HistoryLine`): every step, oldest first, and how many are
+    /// applied — the rest are what redo brings back. Its `version` changes whenever the line
+    /// does, so the app asks again only then. Entries and titles in `arena`. Absent = no
+    /// timeline for this owner's documents; undo and redo work as ever.
+    historyLine: ?*const fn (state: *anyopaque, doc: DocHandle, arena: std.mem.Allocator) anyerror!HistoryLine = null,
+    /// Undo or redo `doc` until step `id` (`HistoryLine.Entry.id`) is the last one applied; 0
+    /// goes back before the first. An id not on the line is an error, and nothing moves.
+    historyGoTo: ?*const fn (state: *anyopaque, doc: DocHandle, id: u64) anyerror!void = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
 
     /// Register a loaded/created document in the plugin's open-doc map. `file` points at
@@ -541,6 +568,25 @@ pub fn reloadDocument(self: Plugin, doc: DocHandle) bool {
         return true;
     }
     return false;
+}
+
+/// `doc`'s history as a line (`historyLine`), or null when the owner keeps none it shows.
+pub fn historyLine(self: Plugin, doc: DocHandle, arena: std.mem.Allocator) ?HistoryLine {
+    const f = self.vtable.historyLine orelse return null;
+    return f(self.state, doc, arena) catch |err| {
+        std.log.err("{s}: historyLine failed: {s}", .{ self.id, self.errorName(err) });
+        return null;
+    };
+}
+
+/// Go to step `id` of `doc`'s history (`historyGoTo`). Returns whether it went.
+pub fn historyGoTo(self: Plugin, doc: DocHandle, id: u64) bool {
+    const f = self.vtable.historyGoTo orelse return false;
+    f(self.state, doc, id) catch |err| {
+        std.log.err("{s}: historyGoTo failed: {s}", .{ self.id, self.errorName(err) });
+        return false;
+    };
+    return true;
 }
 
 /// `doc`'s state for a demo's snapshot (`captureDocumentState`). Null when the owner has no

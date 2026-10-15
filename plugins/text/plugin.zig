@@ -65,6 +65,8 @@ const vtable: sdk.Plugin.VTable = .{
     .reloadDocument = reloadDocument,
     .captureDocumentState = captureDocumentState,
     .restoreDocumentState = restoreDocumentState,
+    .historyLine = historyLine,
+    .historyGoTo = historyGoTo,
     .documentFingerprint = documentFingerprint,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
@@ -385,6 +387,21 @@ fn captureDocumentState(_: *anyopaque, handle: DocHandle, allocator: std.mem.All
 fn restoreDocumentState(_: *anyopaque, handle: DocHandle, bytes: []const u8) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     try doc.restoreState(bytes);
+}
+fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyerror!sdk.Plugin.HistoryLine {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    const steps = try doc.history.line(arena);
+    const entries = try arena.alloc(sdk.Plugin.HistoryLine.Entry, steps.len);
+    for (steps, entries) |st, *e| e.* = .{ .id = st.step, .title = switch (st.kind) {
+        .typing_other, .typing_first_space, .typing_consecutive_space => "Typing",
+        .deleting_left, .deleting_right => "Delete",
+        .other => "Edit",
+    } };
+    return .{ .version = doc.history.version, .entries = entries, .at = doc.history.undo_stack.items.len };
+}
+fn historyGoTo(_: *anyopaque, handle: DocHandle, id: u64) anyerror!void {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    try doc.goToStep(id);
 }
 fn documentFingerprint(_: *anyopaque, handle: DocHandle) u64 {
     const doc = docFrom(handle) orelse return 0;

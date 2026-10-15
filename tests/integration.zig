@@ -7149,6 +7149,59 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
     }
 
+    // A document's history as a line (`Plugin.historyLine`): each step keeps its id through
+    // undo and redo, and going to one (`historyGoTo`) is so many undos or redos.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try host.runCommand("fizzy.newFile");
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (d.id != was.id and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+        }
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(doc.id != was.id);
+        for ([_][]const u8{ "1", "2", "3" }) |digit| {
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{digit});
+            try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+        }
+        const readText = struct {
+            fn readText(h: *sdk.Host) ![]const u8 {
+                const zon = switch (h.callCommand("text.read", "", h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const rest = zon[at + ".text = \"".len ..];
+                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+            }
+        }.readText;
+        try std.testing.expectEqualStrings("321", try readText(host));
+
+        const line = doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 3), line.entries.len);
+        try std.testing.expectEqual(@as(usize, 3), line.at);
+        const steps = [_]u64{ line.entries[0].id, line.entries[1].id, line.entries[2].id };
+
+        try std.testing.expect(doc.owner.historyGoTo(doc, steps[0]));
+        try std.testing.expectEqualStrings("1", try readText(host));
+        const back = doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(back.version != line.version);
+        try std.testing.expectEqual(@as(usize, 1), back.at);
+        for (back.entries, steps) |e, id| try std.testing.expectEqual(id, e.id);
+
+        try std.testing.expect(doc.owner.historyGoTo(doc, 0));
+        try std.testing.expectEqualStrings("", try readText(host));
+        try std.testing.expect(doc.owner.historyGoTo(doc, steps[2]));
+        try std.testing.expectEqualStrings("321", try readText(host));
+
+        // Gone again, and the document before it active, as what follows expects.
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens
     // the panel with Output selected, and a view no region shows is not revealed.
     {

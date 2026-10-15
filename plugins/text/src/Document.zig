@@ -553,3 +553,9 @@ pub fn redo(self: *Document) void {
     self.pending_sel = sel;
     sdk.host().documentEdited(self.id);
 }
+
+/// Undo or redo until history step `step` is the last applied; 0 goes back before the first.
+pub fn goToStep(self: *Document, step: u64) !void {
+    const n = self.history.stepsTo(step) orelse return error.NoSuchStep;
+    for (0..@abs(n)) |_| if (n < 0) self.undo() else self.redo();
+}
