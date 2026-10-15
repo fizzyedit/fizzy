@@ -2114,9 +2114,11 @@ pub fn postInit(editor: *Editor) !void {
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
     // Every bundled plugin: its dylib beside the exe when there is one, else the copy linked
-    // in. None of the bundled four ship as dylibs today, so the load "fails" and the static
-    // copy registers on every run; not worth logging until that changes. The workbench's
-    // dylib entry takes the workbench state fizzy still holds as `arg_c`.
+    // in. The build puts the dylibs of fizzy's own (workbench, text, markdown, image) in
+    // `<exe_dir>/plugins/`, so fizzy's own features load the way a third-party plugin does
+    // and that path is exercised every run; a plugin with no dylib (archive, devtools, an
+    // app's own, every one on the web) fails the load quietly and its static copy registers.
+    // The workbench's dylib entry takes the workbench state fizzy still holds as `arg_c`.
     // What this build bundles, for anything that needs to know a plugin is compiled in rather
     // than installed (the store, which must not offer to uninstall one).
     editor.app.bundled_plugin_ids = comptime blk: {

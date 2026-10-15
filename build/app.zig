@@ -27,8 +27,8 @@ pub const WebPluginDir = struct {
 };
 
 pub const Options = struct {
-    /// Plugins the application bundles beyond fizzy's own — see `build.zig`'s `buildApp`.
-    app_plugins: []const @import("sdk.zig").BundledPlugin = &.{},
+    /// Every plugin the application links, fizzy's own among them — see `build.zig`'s `buildApp`.
+    app_plugins: []const @import("sdk.zig").BundledPlugin = &@import("plugins.zig").entries.all,
     /// Dependencies (by the name in `build.zig.zon`) whose `"plugin"` module the **web** build
     /// links in. The browser cannot `dlopen`, so a plugin exists there only if the application
     /// bundles it; this is fizzy-the-app's list, resolved for the wasm target. Each is looked

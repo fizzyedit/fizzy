@@ -15,8 +15,6 @@ const workbench_plugin = plugins.workbench;
 const text_plugin = plugins.text;
 const markdown_plugin = plugins.markdown;
 const image_plugin = plugins.image;
-const archive_plugin = plugins.archive;
-const devtools_plugin = plugins.devtools;
 const MacosSdlPaths = common.MacosSdlPaths;
 
 /// Install stripped exe + built-in plugin dylibs for `vpk pack --packDir`.
@@ -201,9 +199,10 @@ pub fn addFizzyExecutableForTarget(
     /// `Host.layout_ctx`. The file imports `dvui`, `app`, `core`, and `fizzy_sdk` — not
     /// `fizzy` / `Editor` — so the module graph does not cycle.
     app_layout: ?std.Build.LazyPath,
-    /// Plugins the application bundles beyond fizzy's own four: each a static module from a
-    /// plugin package (`plugin_dep.module("plugin")`), linked in and listed in the generated
-    /// `bundled_plugins` module under its plugin id.
+    /// Every plugin the application links, in registration order: fizzy's own
+    /// (`fizzy.plugins`, built here) and the application's, each a static module from a plugin
+    /// package (`plugin_dep.module("plugin")`). Listed in the generated `bundled_plugins` module
+    /// under its plugin id.
     app_plugins: []const sdk.BundledPlugin,
 ) !FizzyExecutable {
     const native = nativeDvui(b, native_backend, resolved_target, optimize, accesskit, macos_sdl_paths);
@@ -292,86 +291,24 @@ pub fn addFizzyExecutableForTarget(
 
     const sdk_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_mod, proxy_bridge_host_mod, core_module, exe.root_module);
     const sdk_proxy_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_proxy_mod, proxy_bridge_plugin_mod, core_proxy_module, null);
-    const workbench_module = workbench_plugin.addStaticModule(b, resolved_target, optimize, .{
+    // What this application links, as build data: a generated module whose `modules` tuple
+    // names every statically linked plugin, so the runtime registers, probes and falls back
+    // to whatever is listed here and never a plugin by name. An app built on fizzy lists its
+    // own (`buildApp`), fizzy's among them or not.
+    const linked = plugins.link(b, .{
+        .target = resolved_target,
+        .optimize = optimize,
         .dvui = dvui_mod,
         .core = core_module,
         .sdk = sdk_module,
         .icons = icons_module,
         .backend = native.backend,
-    }, workbench_opts, exe.root_module);
-    const text_module = text_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_mod,
-        .core = core_module,
-        .sdk = sdk_module,
-        .icons = icons_module,
-    }, exe.root_module);
-    const image_module = image_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_mod,
-        .core = core_module,
-        .sdk = sdk_module,
-    }, exe.root_module);
-    const archive_module = archive_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_mod,
-        .core = core_module,
-        .sdk = sdk_module,
-    }, exe.root_module);
-    const devtools_module = devtools_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_mod,
-        .core = core_module,
-        .sdk = sdk_module,
-    }, exe.root_module);
-    const markdown_module: ?*std.Build.Module = if (resolved_target.result.cpu.arch != .wasm32)
-        markdown_plugin.addStaticModule(b, resolved_target, optimize, .{
-            .dvui = dvui_mod,
-            .core = core_module,
-            .sdk = sdk_module,
-        }, exe.root_module)
-    else
-        null;
-
-    // What this application bundles, as build data: a generated module whose `modules` tuple
-    // names every statically linked plugin, so the runtime registers, probes and falls back
-    // to whatever is listed here and never a plugin by name. An app built on fizzy lists its
-    // own.
-    var bundled_list: std.ArrayList(sdk.BundledPlugin) = .empty;
-    try bundled_list.appendSlice(b.allocator, &.{
-        .{ .name = "workbench", .module = workbench_module },
-        .{ .name = "text", .module = text_module },
-        .{ .name = "image", .module = image_module },
-        .{ .name = "archive", .module = archive_module },
-        .{ .name = "markdown", .module = markdown_module },
-        .{ .name = "devtools", .module = devtools_module },
-    });
-    for (app_plugins) |p| {
-        const src_mod = p.module orelse {
-            try bundled_list.append(b.allocator, p);
-            continue;
-        };
-        // A copy per executable, not the plugin package's module itself: this function builds
-        // more than one exe (the packaged, Velopack-linked one beside the plain one), each with
-        // its own `dvui`/`core`/`fizzy_sdk`, and one module cannot import both sets. The copy
-        // keeps the plugin's own imports — its manifest options, its dependencies — and gets
-        // this exe's framework modules.
-        const m = b.createModule(.{
-            .target = resolved_target,
-            .optimize = optimize,
-            .root_source_file = src_mod.root_source_file,
-            .link_libc = resolved_target.result.cpu.arch != .wasm32,
-        });
-        var it = src_mod.import_table.iterator();
-        while (it.next()) |kv| {
-            const name = kv.key_ptr.*;
-            if (std.mem.eql(u8, name, "dvui") or std.mem.eql(u8, name, "core") or std.mem.eql(u8, name, "fizzy_sdk") or std.mem.eql(u8, name, "icons")) continue;
-            m.addImport(name, kv.value_ptr.*);
-        }
-        m.addImport("dvui", dvui_mod);
-        m.addImport("core", core_module);
-        m.addImport("fizzy_sdk", sdk_module);
-        if (icons_module) |icons| m.addImport("icons", icons);
-        exe.root_module.addImport(p.name, m);
-        try bundled_list.append(b.allocator, .{ .name = p.name, .module = m });
-    }
-    const bundled = sdk.bundledPluginsModule(b, resolved_target, optimize, bundled_list.items);
+        .workbench_opts = workbench_opts,
+        .consumer = exe.root_module,
+        .markdown = resolved_target.result.cpu.arch != .wasm32,
+    }, app_plugins);
+    const markdown_module = linked.markdown;
+    const bundled = sdk.bundledPluginsModule(b, resolved_target, optimize, linked.plugins);
     exe.root_module.addImport("bundled_plugins", bundled);
 
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{
@@ -415,7 +352,7 @@ pub fn addFizzyExecutableForTarget(
         }, workbench_opts);
     } else null;
 
-    const text_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
+    const text_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "text")) blk: {
         break :blk text_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
@@ -425,7 +362,7 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const markdown_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
+    const markdown_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "markdown")) blk: {
         break :blk markdown_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
@@ -434,7 +371,7 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const image_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
+    const image_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "image")) blk: {
         break :blk image_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,

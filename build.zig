@@ -63,6 +63,12 @@ var deferred: ?struct {
 
 pub const BundledPlugin = @import("build/sdk.zig").BundledPlugin;
 
+/// Fizzy's own plugins, as entries in the list `buildApp` links: `fizzy.plugins.text`, or
+/// `fizzy.plugins.all` for every one in fizzy's own order. Fizzy builds each for every executable.
+/// `workbench` must be listed for now, because the editor still holds its state
+/// (fizzyedit/plans#13).
+pub const plugins = @import("build/plugins.zig").entries;
+
 /// Build the application in a consumer's graph, with the plugins the consumer bundles.
 ///
 /// ```zig
@@ -75,18 +81,27 @@ pub const BundledPlugin = @import("build/sdk.zig").BundledPlugin;
 ///     .@"app-layout" = b.path("src/layout.zig"),
 /// });
 /// try fizzy.buildApp(fizzy_dep, &.{
+///     fizzy.plugins.workbench,
+///     fizzy.plugins.text,
 ///     .{ .name = "pixi", .module = b.dependency("pixi", .{ .target = target, .optimize = optimize }).module("plugin") },
 /// });
 /// b.installArtifact(fizzy_dep.artifact("myapp"));
 /// ```
 ///
-/// `name` is the plugin's id (its root's `plugin_id`); `module` its static module, which the
-/// plugin package exports and which fizzy wires to `dvui`, `core`, `fizzy_sdk` and `icons`.
-/// Fizzy's own four are always bundled ahead of these.
-pub fn buildApp(fizzy_dep: *std.Build.Dependency, plugins: []const BundledPlugin) !void {
+/// `linked` is everything the app links, in registration order (the order of the sidebar's
+/// views): fizzy's own (`fizzy.plugins`) and the app's. For an app's, `name` is the plugin's id
+/// (its root's `plugin_id`) and `module` its static module, which the plugin package exports and
+/// which fizzy wires to `dvui`, `core`, `fizzy_sdk` and `icons`.
+pub fn buildApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !void {
     const d = deferred orelse @panic("fizzy.buildApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
     var opts = d.base;
-    opts.app_plugins = plugins;
+    // Until fizzyedit/example-app lists fizzy's plugins itself (its CI and fizzy's build each
+    // other's main): a list naming none of fizzy's gets all of them ahead of its own, as before.
+    // Goes in fizzyedit/plans#13 step 2.
+    const names_fizzys = for (linked) |p| {
+        if (p.module == null) break true;
+    } else false;
+    opts.app_plugins = if (names_fizzys) linked else try std.mem.concat(fizzy_dep.builder.allocator, BundledPlugin, &.{ &plugins.all, linked });
     try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg);
 }
 

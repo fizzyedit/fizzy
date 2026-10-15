@@ -4,13 +4,6 @@ const core_mod = @import("fizzy_sdk").core_module;
 const plugins = @import("plugins.zig");
 const sdk = @import("sdk.zig");
 
-const workbench_plugin = plugins.workbench;
-const text_plugin = plugins.text;
-const image_plugin = plugins.image;
-const archive_plugin = plugins.archive;
-const devtools_plugin = plugins.devtools;
-const markdown_plugin = plugins.markdown;
-
 pub fn addSteps(
     b: *std.Build,
     optimize: std.builtin.OptimizeMode,
@@ -173,59 +166,28 @@ pub fn addSteps(
     // lazy analysis skips file-scope consts that no reachable body uses.
     // So no `backend` module is wired in for the web build.
 
-    const workbench_module_web = workbench_plugin.addStaticModule(b, web_target, optimize, .{
+    // What the application links, as the native exe has it (`build/exe.zig`), fizzy's own built
+    // here for wasm and the application's re-homed: modules made for the native target get this
+    // build's framework modules, their own imports kept.
+    const wiring: plugins.Wiring = .{
+        .target = web_target,
+        .optimize = optimize,
         .dvui = dvui_web,
         .core = core_module_web,
         .sdk = sdk_module_web,
         .icons = icons_web,
         .backend = null,
-    }, workbench_opts, web_exe.root_module);
-    const text_module_web = text_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web,
-        .core = core_module_web,
-        .sdk = sdk_module_web,
-        .icons = icons_web,
-    }, web_exe.root_module);
-    const image_module_web = image_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web,
-        .core = core_module_web,
-        .sdk = sdk_module_web,
-    }, web_exe.root_module);
-    const archive_module_web = archive_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web,
-        .core = core_module_web,
-        .sdk = sdk_module_web,
-    }, web_exe.root_module);
-    const markdown_module_web = markdown_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web,
-        .core = core_module_web,
-        .sdk = sdk_module_web,
-    }, web_exe.root_module);
-    const devtools_module_web = devtools_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web,
-        .core = core_module_web,
-        .sdk = sdk_module_web,
-    }, web_exe.root_module);
+        .workbench_opts = workbench_opts,
+        .consumer = web_exe.root_module,
+    };
+    const linked = plugins.link(b, wiring, app_plugins);
+    const markdown_module_web = linked.markdown;
     var bundled_list: std.ArrayList(sdk.BundledPlugin) = .empty;
-    bundled_list.appendSlice(b.allocator, &.{
-        .{ .name = "workbench", .module = workbench_module_web },
-        .{ .name = "text", .module = text_module_web },
-        .{ .name = "image", .module = image_module_web },
-        .{ .name = "archive", .module = archive_module_web },
-        .{ .name = "markdown", .module = markdown_module_web },
-        .{ .name = "devtools", .module = devtools_module_web },
-    }) catch @panic("OOM");
-    // Out-of-tree plugins the web build links in: the application's own list (`buildApp`),
-    // whose modules were made for the native target and are re-homed here, and the named
-    // dependencies resolved directly for wasm. Same re-homing the native exe does — a copy
-    // with this build's framework modules and the plugin's own imports kept.
-    for (app_plugins) |p| {
-        const src_mod = p.module orelse continue;
-        bundled_list.append(b.allocator, .{ .name = p.name, .module = rehome(b, web_target, optimize, src_mod, dvui_web, core_module_web, sdk_module_web, icons_web) }) catch @panic("OOM");
-    }
+    bundled_list.appendSlice(b.allocator, linked.plugins) catch @panic("OOM");
+    // And the named dependencies, resolved directly for wasm.
     for (web_plugin_deps) |dep_name| {
         const dep = b.lazyDependency(dep_name, .{ .target = web_target, .optimize = optimize }) orelse continue;
-        bundled_list.append(b.allocator, .{ .name = dep_name, .module = rehome(b, web_target, optimize, dep.module("plugin"), dvui_web, core_module_web, sdk_module_web, icons_web) }) catch @panic("OOM");
+        bundled_list.append(b.allocator, .{ .name = dep_name, .module = plugins.rehome(b, wiring, dep_name, dep.module("plugin")) }) catch @panic("OOM");
     }
     // A plugin may ship pages of its own beside the app (its `web/` directory → `plugins/<id>/`):
     // the far end of a popup round trip that is the plugin's, not fizzy's — a provider's
@@ -386,34 +348,4 @@ fn stampStorage(b: *std.Build) std.Build.LazyPath {
     if (std.mem.indexOf(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
     const stamped = std.mem.replaceOwned(u8, b.allocator, html, token, name) catch @panic("OOM");
     return b.addWriteFiles().add("index.html", stamped);
-}
-
-fn rehome(
-    b: *std.Build,
-    web_target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    src_mod: *std.Build.Module,
-    dvui_mod: *std.Build.Module,
-    core_module: *std.Build.Module,
-    sdk_mod: *std.Build.Module,
-    icons_mod: ?*std.Build.Module,
-) *std.Build.Module {
-    const m = b.createModule(.{
-        .target = web_target,
-        .optimize = optimize,
-        .root_source_file = src_mod.root_source_file,
-        .link_libc = false,
-        .single_threaded = true,
-    });
-    var it = src_mod.import_table.iterator();
-    while (it.next()) |kv| {
-        const name = kv.key_ptr.*;
-        if (std.mem.eql(u8, name, "dvui") or std.mem.eql(u8, name, "core") or std.mem.eql(u8, name, "fizzy_sdk") or std.mem.eql(u8, name, "icons")) continue;
-        m.addImport(name, kv.value_ptr.*);
-    }
-    m.addImport("dvui", dvui_mod);
-    m.addImport("core", core_module);
-    m.addImport("fizzy_sdk", sdk_mod);
-    if (icons_mod) |icons| m.addImport("icons", icons);
-    return m;
 }

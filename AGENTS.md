@@ -62,9 +62,13 @@ Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **
 
 Which plugins an executable links in is build data: `build/sdk.zig`'s `bundledPluginsModule`
 generates `bundled_plugins` (`pub const modules = .{ @import("workbench"), … }`) and the
-runtime iterates it — nothing in `app/` or `src/` names a plugin except the workbench (its
-state still lives on the Editor). An app built on fizzy adds its own with `defer-app` +
-`fizzy.buildApp(fizzy_dep, &.{ .{ .name, .module = dep.module("plugin") } })`; see
+runtime iterates it. Nothing in `app/` or `src/` registers a plugin by name, though two are
+imported as libraries and so always built: workbench (its state still lives on the Editor, so
+every list must include it) and markdown (the store draws READMEs with it). An app built on
+fizzy lists every plugin it links with `defer-app` + `fizzy.buildApp(fizzy_dep, &.{
+fizzy.plugins.workbench, fizzy.plugins.text, .{ .name, .module = dep.module("plugin") } })`:
+fizzy's own are entries with no module, built for each executable (`build/plugins.zig`'s
+`link`), and only those listed register or get a dylib. See
 [`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
 `fizzyedit/example-plugin`.
 
