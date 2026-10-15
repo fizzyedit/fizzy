@@ -311,7 +311,9 @@ pub fn keysAt(self: Tape, applied: usize, t: f64, window_ms: f64, out: []usize) 
 
 /// Where the tape's pointer is aimed while `c` shows, with the first `applied` ops applied: the
 /// target of the latest move in its time, or before there is one, of the first move to come in
-/// its time. Null when the pointer does not move in its time.
+/// its time. Null when the pointer does not move in its time. A `trace` is not aimed at: it is
+/// where a pen carries the pointer while it draws, and a caption that followed it would chase the
+/// pen across the canvas; it stays where the stroke began.
 pub fn aimedAt(self: Tape, c: Caption, applied: usize) ?Target {
     const start = c.at;
     const stop = c.at + c.ms;
@@ -319,7 +321,10 @@ pub fn aimedAt(self: Tape, c: Caption, applied: usize) ?Target {
     for (self.ops, 0..) |op, i| {
         if (op.at < start) continue;
         if (op.at >= stop) break;
-        const target = op.do.target() orelse continue;
+        const target = switch (op.do) {
+            .move => |m| m,
+            else => continue,
+        };
         if (i >= applied) return latest orelse target;
         latest = target;
     }
@@ -542,6 +547,20 @@ test "a caption is beside what the pointer is aimed at in its time" {
     try testing.expectEqualStrings("row", tape.aimedAt(c, 6).?.tag);
     // No move in its time: nothing to sit beside.
     try testing.expect(tape.aimedAt(.{ .at = 2500, .ms = 1000, .text = "" }, 5) == null);
+}
+
+test "a caption over a stroke stays where the pen went down" {
+    const ops = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .ms = 300, .do = .{ .move = .{ .tag = "canvas", .x = 0.1, .y = 0.1 } } },
+        .{ .at = 400, .do = .{ .press = .left } },
+        .{ .at = 450, .ms = 200, .do = .{ .trace = .{ .tag = "canvas", .x = 0.9, .y = 0.1 } } },
+        .{ .at = 650, .ms = 200, .do = .{ .trace = .{ .tag = "canvas", .x = 0.9, .y = 0.9 } } },
+        .{ .at = 900, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops };
+    const c: Caption = .{ .at = 0, .ms = 1000, .text = "a stroke" };
+    for (2..ops.len + 1) |applied| try testing.expectEqual(@as(f32, 0.1), tape.aimedAt(c, applied).?.x);
 }
 
 test "the keys shown are those pressed lately, since the cut, oldest first" {
