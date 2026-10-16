@@ -9,8 +9,8 @@
         // takes the patched tree (`-Dsdl_source`). How the patches are made and how SDL is updated:
         // fizzy's docs/DEPENDENCIES.md. Pinned here, by the package that uses them, and nowhere else.
         .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/404f499d42156bdf428497ab08a82467c5a914c5.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0XwKqgDQGV9OomCmHzkEF4hF1jVodwd7AUzla1LW",
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/ef7eb36b0b28aeac933d1bcdc152c56654891780.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0fEMqgARU41cFUViN07xvtpE9OeVQ6bDHadi1OfP",
             .lazy = true,
         },
         // The release sdl_zig's own `.sdl` pins: the same tarball, fetched once.
