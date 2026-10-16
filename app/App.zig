@@ -932,6 +932,8 @@ pub fn closeDocumentResources(app: *App, doc: sdk.DocHandle) void {
     if (app.tracks) |*t| t.closed(doc.id);
     // Whoever held it is holding nothing now (`sdk.Claim`).
     app.host.releaseDocumentClaims(doc.id);
+    // Nor are its steps anyone's now (`Host.stepAuthor`).
+    app.host.forgetDocumentAuthors(doc.id);
     _ = doc.owner.closeDocument(doc);
     doc.owner.unregisterDocument(doc.id);
 }

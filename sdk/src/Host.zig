@@ -36,6 +36,7 @@ pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
 pub const Claim = @import("Claim.zig");
 pub const Step = @import("Step.zig");
+pub const Author = @import("Author.zig");
 pub const events = @import("events.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
@@ -291,6 +292,22 @@ claims: std.ArrayListUnmanaged(Claim) = .empty,
 /// Who records documents' steps (`recordStep`): the app's tracks. Null, nobody does, and owners
 /// encode nothing.
 recorder: ?Recorder = null,
+/// Every author that has acted, interned by identity (`Author.same`); `Acting` and the step map
+/// hold indices into it. Strings are copies, so a label outlives the plugin that gave it.
+authors: std.ArrayListUnmanaged(Author) = .empty,
+/// Who is acting now (`act`): an index into `authors`, and the run it belongs to. Null: nobody.
+acting: Acting = .{},
+/// The frame's input author, set by the app where input is consumed (`setInputAuthor`): the
+/// person's, or a tape's while one drives. Null outside those places.
+input_author: ?u32 = null,
+/// Runs started (`act`): one per outermost `act`.
+runs: u64 = 0,
+/// Who made each step not the person's, per document (`recordStep`). A document gets an entry only
+/// once someone other than the person acts on it, so working alone this stays empty.
+step_authors: std.AutoHashMapUnmanaged(u64, DocAuthors) = .empty,
+/// Steps recorded where nobody acts (`Author.Kind.unattributed`): a missed site. The integration
+/// tests assert it stays 0.
+unattributed_steps: u64 = 0,
 next_claim_id: u32 = 1,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
@@ -333,6 +350,14 @@ pub fn deinit(self: *Host) void {
 
     for (self.claims.items) |c| self.allocator.free(c.label);
     self.claims.deinit(self.allocator);
+    for (self.authors.items) |a| {
+        self.allocator.free(a.plugin);
+        self.allocator.free(a.label);
+    }
+    self.authors.deinit(self.allocator);
+    var docs = self.step_authors.valueIterator();
+    while (docs.next()) |d| d.steps.deinit(self.allocator);
+    self.step_authors.deinit(self.allocator);
     self.plugins.deinit(self.allocator);
     self.services.deinit(self.allocator);
     self.selections.deinit(self.allocator);
@@ -1586,10 +1611,180 @@ pub fn recording(self: *const Host, doc_id: u64) bool {
 }
 
 /// A step of `doc_id`'s history, from its **owner**, as it happens (`Step`): each entry added or
-/// joined, undone or redone, and the history starting over. Only while `recording(doc_id)`.
+/// joined, undone or redone, and the history starting over. Every step, recorded or not: the host
+/// keeps who made it (`stepAuthor`) and the document's top (`topStep`). An owner encodes `effect`
+/// only while `recording(doc_id)`; the recorder hears the step only then.
 pub fn recordStep(self: *Host, doc_id: u64, step: Step) void {
-    const r = self.recorder orelse return;
-    r.vtable.step(r.ctx, doc_id, step);
+    self.noteAuthor(doc_id, step);
+    if (self.recording(doc_id)) {
+        const r = self.recorder.?;
+        r.vtable.step(r.ctx, doc_id, step);
+    }
+}
+
+// ---- authors (`plans/SHARED_HISTORY_PLAN.md`) ------------------------------------------------
+
+/// Who is acting, to restore with `endAct` or to store and act as again later (`actAgain`): an
+/// index into the host's authors, and the run.
+pub const Acting = struct {
+    author: ?u32 = null,
+    run: u64 = 0,
+};
+
+/// One document's authors: who made each step that is not the person's, by step id, and the step
+/// on top.
+pub const DocAuthors = struct {
+    steps: std.AutoHashMapUnmanaged(u64, StepAuthor) = .empty,
+    top: u64 = 0,
+};
+
+pub const StepAuthor = struct {
+    /// Index into the host's authors.
+    author: u32,
+    /// The run it was made in (`act`): one MCP call of an agent's, one op of a tape's.
+    run: u64,
+};
+
+/// Act as `author` until `endAct` with what this returns: the steps recorded meanwhile are
+/// theirs. The outermost `act` starts a run; one inside it keeps it. Innermost wins. UI thread
+/// only.
+pub fn act(self: *Host, who: Author) Acting {
+    const outer = self.acting;
+    const index = self.intern(who);
+    self.acting = .{
+        .author = index,
+        .run = if (outer.author == null) run: {
+            self.runs += 1;
+            break :run self.runs;
+        } else outer.run,
+    };
+    return outer;
+}
+
+/// Act as before: `stored` is what `acted` said when a call was put off (pixi's call waiting out
+/// the person's stroke), so its steps are still that author's, in that run.
+pub fn actAgain(self: *Host, stored: Acting) Acting {
+    const outer = self.acting;
+    self.acting = stored;
+    return outer;
+}
+
+/// Who is acting now, to store with work done later (`actAgain`).
+pub fn acted(self: *const Host) Acting {
+    return self.acting;
+}
+
+pub fn endAct(self: *Host, outer: Acting) void {
+    self.acting = outer;
+}
+
+/// Who is acting now: the innermost `act`, else the frame's input author where input is being
+/// consumed, else nobody known.
+pub fn author(self: *const Host) Author {
+    const index = self.acting.author orelse self.input_author orelse return .unattributed;
+    return self.authors.items[index];
+}
+
+/// The frame's input author (the app's to set, around where input is consumed): the person's, or
+/// a tape's while one drives. Null where no input is consumed.
+pub fn setInputAuthor(self: *Host, who: ?Author) void {
+    self.input_author = if (who) |a| self.intern(a) else null;
+}
+
+/// Who made step `id` of `doc_id`: the person when none other is kept.
+pub fn stepAuthor(self: *const Host, doc_id: u64, id: u64) Author {
+    const doc = self.step_authors.getPtr(doc_id) orelse return .person;
+    const s = doc.steps.get(id) orelse return .person;
+    return self.authors.items[s.author];
+}
+
+pub const TopStep = struct { id: u64, author: Author };
+
+/// The step on top of `doc_id`'s history and who made it, when the host knows it: once someone
+/// other than the person has acted on the document, from the steps its owner reports.
+pub fn topStep(self: *const Host, doc_id: u64) ?TopStep {
+    const doc = self.step_authors.getPtr(doc_id) orelse return null;
+    if (doc.top == 0) return null;
+    return .{ .id = doc.top, .author = self.stepAuthor(doc_id, doc.top) };
+}
+
+/// Whether the acting author may fold an edit into step `id` of `doc_id`: when `id` is theirs (a
+/// step with no author kept is the person's). False ends a run of typing: the owner starts a new
+/// step, so an agent's keystrokes never join the person's.
+pub fn mayMerge(self: *const Host, doc_id: u64, id: u64) bool {
+    const who = self.author();
+    const made = self.stepAuthor(doc_id, id);
+    // Nobody known acting is a missed site (`unattributed_steps`); it merges as the person would.
+    if (who.kind == .unattributed) return made.kind == .person;
+    return who.same(made);
+}
+
+/// Forget `doc_id`'s authors: the document closed.
+pub fn forgetDocumentAuthors(self: *Host, doc_id: u64) void {
+    var entry = self.step_authors.fetchRemove(doc_id) orelse return;
+    entry.value.steps.deinit(self.allocator);
+}
+
+fn intern(self: *Host, who: Author) u32 {
+    for (self.authors.items, 0..) |*a, i| {
+        if (!a.same(who)) continue;
+        // The label may come later (an agent's name, known once its client says hello).
+        if (who.label.len > 0 and !std.mem.eql(u8, a.label, who.label)) {
+            if (self.allocator.dupe(u8, who.label)) |label| {
+                self.allocator.free(a.label);
+                a.label = label;
+            } else |_| {}
+        }
+        return @intCast(i);
+    }
+    const plugin = self.allocator.dupe(u8, who.plugin) catch return self.internFailed();
+    const label = self.allocator.dupe(u8, who.label) catch {
+        self.allocator.free(plugin);
+        return self.internFailed();
+    };
+    self.authors.append(self.allocator, .{ .kind = who.kind, .plugin = plugin, .session = who.session, .label = label }) catch {
+        self.allocator.free(plugin);
+        self.allocator.free(label);
+        return self.internFailed();
+    };
+    return @intCast(self.authors.items.len - 1);
+}
+
+/// Out of memory interning: nobody known, rather than wrongly the person. Its strings are static,
+/// so `deinit` frees nothing it did not allocate: an empty slice frees as a no-op.
+fn internFailed(self: *Host) u32 {
+    for (self.authors.items, 0..) |a, i| if (a.kind == .unattributed and a.plugin.len == 0) return @intCast(i);
+    self.authors.append(self.allocator, .unattributed) catch {};
+    return @intCast(self.authors.items.len -| 1);
+}
+
+/// Keep who made `step`, and `doc_id`'s top (`recordStep`).
+fn noteAuthor(self: *Host, doc_id: u64, step: Step) void {
+    const who = self.author();
+    if (who.kind == .unattributed and step.kind != .restarted) self.unattributed_steps += 1;
+    const theirs = who.kind != .person;
+    // Working alone, nothing is kept: a document gets an entry the first time someone else acts.
+    const doc = if (self.step_authors.getPtr(doc_id)) |d| d else if (theirs) blk: {
+        const gop = self.step_authors.getOrPut(self.allocator, doc_id) catch return;
+        gop.value_ptr.* = .{};
+        break :blk gop.value_ptr;
+    } else return;
+    switch (step.kind) {
+        .restarted => {
+            doc.steps.clearRetainingCapacity();
+            doc.top = 0;
+        },
+        .added => {
+            if (theirs) {
+                const index = self.acting.author orelse self.input_author orelse self.internFailed();
+                doc.steps.put(self.allocator, step.id, .{ .author = index, .run = self.acting.run }) catch {};
+            }
+            doc.top = if (step.top != 0) step.top else step.id;
+        },
+        // A step joined keeps the author it began with (`mayMerge` decided it could join).
+        .joined => doc.top = if (step.top != 0) step.top else step.id,
+        .undone, .redone => doc.top = step.top,
+    }
 }
 
 // ---- activity --------------------------------------------------------------------------------
@@ -2859,4 +3054,103 @@ test "a surface's title can change: the Host keeps the copy, and frees it with t
     host.unregisterSurface("chat.doc:/chats/a.chat");
     host.unregisterPlugin(&plugin);
     try testing.expectEqual(@as(u32, 0), host.surface_titles.count());
+}
+
+test "a step is its author's, the person's when nobody else acts, and the top follows the owner" {
+    var host: Host = .init(std.testing.allocator);
+    defer host.deinit();
+    const doc: u64 = 7;
+    const claude: Author = .{ .kind = .agent, .plugin = "agent", .session = 1, .label = "Claude" };
+
+    // Working alone: nothing kept.
+    host.setInputAuthor(.person);
+    host.recordStep(doc, .{ .kind = .added, .id = 1 });
+    try std.testing.expectEqual(@as(usize, 0), host.step_authors.count());
+    try std.testing.expect(host.topStep(doc) == null);
+
+    // An agent's call: its step is its own, in one run, and on top.
+    const outer = host.act(claude);
+    host.recordStep(doc, .{ .kind = .added, .id = 2 });
+    host.recordStep(doc, .{ .kind = .added, .id = 3 });
+    host.endAct(outer);
+    try std.testing.expect(host.stepAuthor(doc, 2).same(claude));
+    try std.testing.expectEqualStrings("Claude", host.stepAuthor(doc, 3).label);
+    try std.testing.expectEqual(host.step_authors.getPtr(doc).?.steps.get(2).?.run, host.step_authors.getPtr(doc).?.steps.get(3).?.run);
+    try std.testing.expectEqual(@as(u64, 3), host.topStep(doc).?.id);
+
+    // The person's step after it is theirs, and the top.
+    host.recordStep(doc, .{ .kind = .added, .id = 4 });
+    try std.testing.expectEqual(Author.Kind.person, host.stepAuthor(doc, 4).kind);
+    try std.testing.expectEqual(Author.Kind.person, host.topStep(doc).?.author.kind);
+
+    // The person undoes theirs: the agent's is on top again, as the owner says.
+    host.recordStep(doc, .{ .kind = .undone, .id = 4, .top = 3 });
+    try std.testing.expect(host.topStep(doc).?.author.same(claude));
+
+    // A history started over knows no authors.
+    host.recordStep(doc, .{ .kind = .restarted, .id = 0 });
+    try std.testing.expectEqual(Author.Kind.person, host.stepAuthor(doc, 2).kind);
+    try std.testing.expect(host.topStep(doc) == null);
+
+    host.forgetDocumentAuthors(doc);
+    try std.testing.expectEqual(@as(usize, 0), host.step_authors.count());
+    try std.testing.expectEqual(@as(u64, 0), host.unattributed_steps);
+}
+
+test "acting: innermost wins, a run is the outermost act, and work put off acts again" {
+    var host: Host = .init(std.testing.allocator);
+    defer host.deinit();
+    const claude: Author = .{ .kind = .agent, .plugin = "agent", .session = 1 };
+    const tour: Author = .{ .kind = .tape, .plugin = "fizzy", .session = 9, .label = "the tour" };
+
+    try std.testing.expectEqual(Author.Kind.unattributed, host.author().kind);
+    host.setInputAuthor(.person);
+    try std.testing.expectEqual(Author.Kind.person, host.author().kind);
+
+    const a = host.act(claude);
+    const run = host.acted().run;
+    const b = host.act(tour);
+    try std.testing.expect(host.author().same(tour));
+    try std.testing.expectEqual(run, host.acted().run);
+    host.endAct(b);
+    try std.testing.expect(host.author().same(claude));
+    const stored = host.acted();
+    host.endAct(a);
+    try std.testing.expectEqual(Author.Kind.person, host.author().kind);
+
+    // A second call is a second run; the stored one acts again as itself.
+    const c = host.act(claude);
+    try std.testing.expect(host.acted().run != run);
+    host.endAct(c);
+    const d = host.actAgain(stored);
+    try std.testing.expectEqual(run, host.acted().run);
+    host.endAct(d);
+
+    // The same author interned once; a label given later is kept.
+    _ = host.act(.{ .kind = .agent, .plugin = "agent", .session = 1, .label = "Claude" });
+    try std.testing.expectEqual(@as(usize, 3), host.authors.items.len);
+    try std.testing.expectEqualStrings("Claude", host.author().label);
+}
+
+test "mayMerge: only the author's own step, so an agent never joins the person's run of typing" {
+    var host: Host = .init(std.testing.allocator);
+    defer host.deinit();
+    const doc: u64 = 3;
+    const claude: Author = .{ .kind = .agent, .plugin = "agent", .session = 1 };
+    host.setInputAuthor(.person);
+    host.recordStep(doc, .{ .kind = .added, .id = 1 });
+    try std.testing.expect(host.mayMerge(doc, 1));
+
+    const outer = host.act(claude);
+    try std.testing.expect(!host.mayMerge(doc, 1));
+    host.recordStep(doc, .{ .kind = .added, .id = 2 });
+    try std.testing.expect(host.mayMerge(doc, 2));
+    host.endAct(outer);
+    try std.testing.expect(!host.mayMerge(doc, 2));
+
+    // Nobody known acting is counted, and merges as the person would.
+    host.setInputAuthor(null);
+    try std.testing.expect(host.mayMerge(doc, 1));
+    host.recordStep(doc, .{ .kind = .added, .id = 3 });
+    try std.testing.expectEqual(@as(u64, 1), host.unattributed_steps);
 }

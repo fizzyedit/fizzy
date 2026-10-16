@@ -73,6 +73,8 @@ pub const Command = @import("Command.zig");
 pub const Claim = @import("Claim.zig");
 /// One step of a document's history, recorded (`Host.recordStep`) and applied (`Plugin.applyStep`).
 pub const Step = @import("Step.zig");
+/// Who made a change to a document (`Host.act`, `Host.stepAuthor`).
+pub const Author = @import("Author.zig");
 /// Events: a plugin announces, any plugin listens (`Host.emit`, `Host.subscribe`).
 pub const events = @import("events.zig");
 pub const menu = @import("menu.zig");

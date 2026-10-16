@@ -19,6 +19,11 @@ effect: []const u8 = "",
 motion: []const u8 = "",
 /// How long it took to make, as the owner saw it (a stroke from press to release). 0: at once.
 ms: u32 = 0,
+/// The entry on top once this step is done (the last one applied), 0 when none is. The host keeps
+/// each document's top from it, so Undo's label can name whose step it would take back without
+/// asking for the line. An owner that does not fill it leaves it 0: the host then takes an
+/// `added` or `joined` step's own `id` as the top, and knows no top after an undo or redo.
+top: u64 = 0,
 
 pub const Kind = enum {
     /// A new entry on the history.
