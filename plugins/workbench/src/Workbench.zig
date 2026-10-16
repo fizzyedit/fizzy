@@ -98,6 +98,9 @@ pub const Places = struct {
     placed: *const fn (ctx: *anyopaque, grouping: u64) bool,
     /// `grouping`'s pane has emptied and is going: its place closes, into the one beside it.
     close: *const fn (ctx: *anyopaque, grouping: u64) void,
+    /// Open an empty place on `side` of the place holding `grouping`'s pane, the pane staying
+    /// where it is: a pane's only tab dropped on its own edge, as a view alone in its place is.
+    open: *const fn (ctx: *anyopaque, grouping: u64, side: Panes.Side) bool,
 };
 
 pub const Loading = struct {

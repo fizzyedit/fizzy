@@ -46,7 +46,7 @@ pub fn wanted(gpa: std.mem.Allocator) bool {
 /// Hand the workbench the app's places to arrange its panes in. Before the workbench registers,
 /// so it knows not to offer its one surface of every pane, and with `self` at its final address.
 pub fn install(self: *Workspaces, wb: *Workbench) void {
-    wb.places = .{ .ctx = self, .beside = beside, .placed = placed, .close = close };
+    wb.places = .{ .ctx = self, .beside = beside, .placed = placed, .close = close, .open = open };
     // A document carried beside a view, rather than into a pane, opens a workspace there.
     self.editorOf().app.layout.documents = .{ .ctx = self, .house = house };
 }
@@ -303,22 +303,20 @@ fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Sid
     return true;
 }
 
-/// A new workspace in place `name`, which the layout has just made, holding the documents `ids`
-/// (`Layout.State.documents`): each moved out of the pane it was in, or opened there when it is
-/// not open yet, the first shown.
-fn house(ctx: *anyopaque, name: []const u8, ids: []const []const u8) bool {
+/// A new workspace holding the documents `ids` (`Layout.State.documents`), for the layout to
+/// place as it lands any view: each moved out of the pane it was in, or opened in it when it is
+/// not open yet, the first shown. Its view is registered at once, so the place it lands in can
+/// select it this frame. Null, and no workspace, when none went in.
+fn house(ctx: *anyopaque, ids: []const []const u8) ?[]const u8 {
     const self: *Workspaces = @ptrCast(@alignCast(ctx));
     const editor = self.editorOf();
     const wb = &editor.workbench;
     const host = &editor.app.host;
     const g = wb.newGroupingID();
-    const gop = wb.workspaces.getOrPut(wb.allocator, g) catch return false;
+    const gop = wb.workspaces.getOrPut(wb.allocator, g) catch return null;
     if (!gop.found_existing) gop.value_ptr.* = Editor.Workspace.init(g);
     // Empty until a load lands, not emptied: the rebuild keeps it.
     gop.value_ptr.expecting = true;
-    var buf: [64]u8 = undefined;
-    const view = host.arena().dupe(u8, viewId(&buf, g)) catch return false;
-    editor.app.layout.assign(editor.app.gpa, name, &.{view}) catch return false;
 
     var landed = false;
     // The first last, so it is the one shown: a document shows as it goes in.
@@ -332,18 +330,30 @@ fn house(ctx: *anyopaque, name: []const u8, ids: []const []const u8) bool {
             continue;
         }
         for (wb.workspaces.values()) |*ws| if (ws.grouping != g) ws.removeTab(id);
-        // Looked up again: the loop above may not grow the map, but `getOrPut` above may have.
-        const ws = wb.workspaces.getPtr(g) orelse return landed;
+        const ws = wb.workspaces.getPtr(g) orelse return null;
         ws.addTab(id, true);
         landed = true;
     }
     if (!landed) {
-        // Nothing came: no workspace, and the place is given back empty to close.
-        editor.app.layout.assign(editor.app.gpa, name, &.{}) catch {};
         if (wb.workspaces.getPtr(g)) |ws| ws.deinit();
         _ = wb.workspaces.orderedRemove(g);
+        return null;
     }
-    return landed;
+    self.register(g) catch return null;
+    return self.views.get(g).?.id;
+}
+
+fn open(ctx: *anyopaque, grouping: u64, side: Workbench.Panes.Side) bool {
+    const self: *Workspaces = @ptrCast(@alignCast(ctx));
+    var l = layoutOf(self.editorOf());
+    var buf: [64]u8 = undefined;
+    const place = Layout.ViewDrag.holderOf(&l, viewId(&buf, grouping)) orelse return false;
+    return Layout.splitOn(&l, place, switch (side) {
+        .left => .left,
+        .right => .right,
+        .top => .top,
+        .bottom => .bottom,
+    }) != null;
 }
 
 fn placed(ctx: *anyopaque, grouping: u64) bool {

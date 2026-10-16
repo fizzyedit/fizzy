@@ -37,15 +37,14 @@ pub const StoreOffer = struct {
     title: []const u8,
 };
 
-/// How an application gives a document a home outside the slots its plugins made: a place of its
+/// How an application gives a document a home outside the slots its plugins made: a view of its
 /// own that holds documents (fizzy's workspaces). With one, a document carried in the view drag
-/// is taken by any place's edges, and a split there opens with a home for it (`ViewDrag.place`).
+/// lands in any place as a view would, inside a new such view (`ViewDrag.place`).
 pub const Documents = struct {
     ctx: *anyopaque,
-    /// Give the documents `ids` a home in place `name`, which the layout has just made for them,
-    /// the first shown. A document not open yet is opened there. False when nothing went there:
-    /// the place is empty, and closes again.
-    house: *const fn (ctx: *anyopaque, name: []const u8, ids: []const []const u8) bool,
+    /// A new view holding the documents `ids`, the first shown — a document not open yet opened
+    /// in it — for the layout to place like any view it lands. Its id, or null when none went in.
+    house: *const fn (ctx: *anyopaque, ids: []const []const u8) ?[]const u8,
 };
 
 pub const StoreCatalog = struct {
