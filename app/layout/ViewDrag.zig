@@ -225,7 +225,7 @@ pub const Target = struct {
     /// Interned, so it outlives the frame the map was taken on.
     name: []const u8,
     bounds: dvui.Rect.Physical,
-    /// Content size in points, for the extent a landing split settles at.
+    /// Border-box size in points (`Region.size`), for the extent a landing split settles at.
     size: dvui.Size,
     /// The window it is drawn in (`Region.layer`): 0 the main window, `n` the `n`th float.
     layer: u16 = 0,

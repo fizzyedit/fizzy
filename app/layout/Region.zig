@@ -68,7 +68,8 @@ resize: bool = false,
 forget_when_empty: bool = false,
 /// How this place lays its children.
 dir: dvui.enums.Direction = .vertical,
-/// This frame's content size, in points. A menu split halves one axis.
+/// This frame's border box, in its parent's units (points, unless something above it scales):
+/// the reach a split of it halves along one axis.
 size: dvui.Size = .{},
 /// This frame's border in physical pixels, for hit-testing a view drag.
 bounds: dvui.Rect.Physical = .{},
@@ -580,8 +581,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
     if (init_opts.name.len > 0) {
-        const cr = box.data().contentRect();
-        self.state.setPlaceMetrics(init_opts.name, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+        self.state.setPlaceMetrics(init_opts.name, box.data());
         core.anchor.mark(box.data(), "region:{s}", .{init_opts.name});
     }
     self.containers[self.depth] = .{
@@ -1304,8 +1304,7 @@ fn drawTreeNode(
                     .forget_when_empty = true,
                     .dir = b.dir,
                 });
-                const cr = box.data().contentRect();
-                self.state.setPlaceMetrics(b.origin, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+                self.state.setPlaceMetrics(b.origin, box.data());
             }
             self.containers[self.depth] = .{
                 .dir = b.dir,
@@ -1354,8 +1353,7 @@ pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !v
         .dir = init_opts.dir,
     });
 
-    const cr = box.data().contentRect();
-    self.state.setPlaceMetrics(init_opts.name, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+    self.state.setPlaceMetrics(init_opts.name, box.data());
 
     if (self.depth >= Layout.max_nesting) return;
     self.containers[self.depth] = .{

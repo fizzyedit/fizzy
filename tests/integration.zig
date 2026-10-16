@@ -2797,6 +2797,73 @@ test "a fizzy Main split keeps the workspace on the leftover side" {
     try std.testing.expectEqual(@as(usize, 0), created.len);
 }
 
+/// fizzy's own Main: a carded place that hands its card to its panes, in a column of the window.
+const ColumnCardFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        layout.card = .{ .background = true, .padding = .all(8) };
+        {
+            var column = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer column.deinit();
+            var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .card = true, .pane_cards = true }, .{ .expand = .both });
+            defer main.deinit();
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+
+    /// What the place takes on screen: its border box in physical pixels, measured where it was
+    /// drawn rather than read back from the `size` a split halves.
+    fn sizeOf(e: *fizzy.Editor, name: []const u8) !dvui.Size {
+        for (e.app.layout.regions.items) |r| {
+            if (std.mem.eql(u8, r.name, name)) return .{ .w = r.bounds.w, .h = r.bounds.h };
+        }
+        return error.TestExpectedEqual;
+    }
+};
+
+// A split's extent is the new half's whole reach, card and all. Measured from the place's content
+// instead, every split of a carded place came out uneven by the card's padding, twice over.
+test "a split of a carded place, and of its new half, opens even halves" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1", layout.splitOn("Main", .right) orelse return error.TestExpectedEqual);
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    const right = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expect(left.w > 40);
+    try std.testing.expectApproxEqAbs(left.w, right.w, 1);
+
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1/b1", layout.splitOn("Main/r1", .bottom) orelse return error.TestExpectedEqual);
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1/b1");
+    try std.testing.expect(top.h > 40);
+    try std.testing.expectApproxEqAbs(top.h, bottom.h, 1);
+}
+
 test "a view-drag split opens on the dropped edge" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

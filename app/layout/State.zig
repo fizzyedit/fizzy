@@ -791,13 +791,17 @@ fn forgetWidgetSize(id: dvui.Id) void {
     dvui.dataRemove(null, id, "_chooser_press");
 }
 
-pub fn setPlaceMetrics(self: *State, name: []const u8, size: dvui.Size, bounds: dvui.Rect.Physical) void {
+/// Where place `name` was drawn this frame, from the box it was drawn in: its border box, in
+/// points and in physical pixels. The border box, not the content: a split's extent is the whole
+/// reach of the place it opens, padding included, so a split measured from the content rect gave
+/// a carded place's new half the card's padding twice over.
+pub fn setPlaceMetrics(self: *State, name: []const u8, data: *const dvui.WidgetData) void {
     var i = self.regions_building.items.len;
     while (i > 0) {
         i -= 1;
         if (!std.mem.eql(u8, self.regions_building.items[i].name, name)) continue;
-        self.regions_building.items[i].size = size;
-        self.regions_building.items[i].bounds = bounds;
+        self.regions_building.items[i].size = data.borderRect().size();
+        self.regions_building.items[i].bounds = data.borderRectScale().r;
         return;
     }
 }
