@@ -848,8 +848,9 @@ fn mapTargets(l: *Layout, d: *ViewDrag) void {
     // takes any view — so none shows its zones.
     if (std.mem.eql(u8, d.moved_id, held_id)) return;
     const surface_kw = draggedKeywords(l);
-    // A tab's content goes to a slot made for it, never a plain place (`Layout.slotted`).
-    const slotted = slottedId(l, d.moved_id);
+    // A tab's content goes to a slot made for it, never into a plain place (`Layout.slotted`) —
+    // only beside one, where the application gives it a home (`State.documents`).
+    const slotted = slottedId(l, d.moved_id) and l.state.documents == null;
     // Last frame's registry: complete, where this frame's is still being
     // filled in around the click that started the drag.
     const places = if (l.state.regions.items.len > 0)
@@ -1309,6 +1310,8 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     const d = &l.state.view_drag;
     const center: DropZones.Center = if (std.mem.eql(u8, d.name, name))
         (if (canFloat(l, name)) .float else .none)
+    else if (housedBeside(l, name))
+        .none
     else if (joins(l, d.name, name))
         .join
     else if (regionNamed(l.state, name)) |r| (if (r.shows == .many) .add else .replace) else .replace;
@@ -2329,7 +2332,10 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     if (!has_surface and !unopened(l, moved)) return;
     if (regionNamed(l.state, dest)) |r| {
         if (!accepts(r.*, keywordsOf(l, moved))) return;
-        if (!r.kind_slot and slottedId(l, moved)) return;
+        if (!r.kind_slot and slottedId(l, moved)) {
+            if (plan == .split) house(l, dest, plan.split.mint, moved);
+            return;
+        }
         // A plugin's region is asked first: it makes its own places, so a split of it is
         // something only it can do (`RegionSpec.on_drop`).
         if (r.on_drop) |on_drop| {
@@ -2372,6 +2378,32 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
         },
     }
     shutIfEmptied(l, source);
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+/// Whether a drop on `name`'s middle is none for what the live drag carries: a document over a
+/// plain place, which it may only go beside (`house`).
+fn housedBeside(l: *Layout, name: []const u8) bool {
+    if (l.state.documents == null) return false;
+    const r = regionNamed(l.state, name) orelse return false;
+    return !r.kind_slot and slottedId(l, l.state.view_drag.moved_id);
+}
+
+/// A document carried onto `dest`'s edge, a plain place it cannot go into: the place splits on
+/// that side, and the application gives the document, and what was carried with it, a home in
+/// the new half (`State.documents`). Where it came from is the slot's plugin's to tidy: its tab
+/// moves, as a drop into another slot moves it.
+fn house(l: *Layout, dest: []const u8, side: SplitTree.Side, moved: []const u8) void {
+    const docs = l.state.documents orelse return;
+    const new = Region.splitOn(l, dest, side) orelse return;
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    ids.append(l.arena, moved) catch return;
+    const d = &l.state.view_drag;
+    if (d.active() and d.with_n > 1) for (d.with[1..d.with_n]) |it| {
+        if (it.id.len > 0 and slottedId(l, it.id)) ids.append(l.arena, ownId(l.arena, it.id) orelse continue) catch break;
+    };
+    if (!docs.house(docs.ctx, new, ids.items)) closeMinted(l, new);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
 }

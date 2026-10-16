@@ -51,9 +51,10 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     }
 
     // A document nobody holds lands in the pane it was opened toward: the grouping the app
-    // stamped on it, which is the "open to the side" answer or the current pane.
+    // stamped on it, which is the "open to the side" answer or the current pane. Where the app
+    // arranges the panes, it seats them too (fizzy's `Workspaces.seat`).
     var i: usize = 0;
-    while (i < host.openDocCount()) : (i += 1) {
+    while (wb.places == null and i < host.openDocCount()) : (i += 1) {
         const doc = host.docByIndex(i) orelse continue;
         const id = try sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc));
         var held = false;
