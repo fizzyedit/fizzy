@@ -39,8 +39,8 @@
         // App-only. Plugins depend on `sdk/` (not this root package) so they never see
         // Velopack — see AGENTS.md.
         .velopack_zig = .{
-            .url = "https://github.com/graphl-tech/velopack-zig/archive/a80b037655509f73b83599480c3621fc9aa1e97a.tar.gz",
-            .hash = "velopack_zig-0.1.0-bbBwEQAwAQApz40XBeTbaW2TqqLunxb4JJHrXCJWAlYF",
+            .url = "https://github.com/graphl-tech/velopack-zig/archive/3d553b7efb3b9443ac4ad2bffdf85d5ae328177e.tar.gz",
+            .hash = "velopack_zig-0.1.0-bbBwERkwAQBxx5LimM-B5UQrwoqltUUvrthOlyuDbscm",
             .lazy = true,
         },
         .dvui_singleton_app = .{
