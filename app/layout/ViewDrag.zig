@@ -2821,20 +2821,22 @@ fn closable(l: *Layout, name: []const u8) bool {
 }
 
 /// A merge of two halves of a split: `gone` closed, its views now in `into`.
-const Merged = struct { gone: []const u8, into: []const u8 };
+pub const Merged = struct { gone: []const u8, into: []const u8 };
 
 /// Close the emptied place `name`, one half of a split the user made, into the other half. A
 /// minted half closes outright (`closeMinted`). The half that was split keeps its name — it is
-/// the shape's place — so it takes the other half's views and that half closes instead: the same
-/// one place either way, under the name the shape knows. Returns that merge, when it was one.
-/// A place no user split made, or whose other half is split again, stays as it is.
-fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
+/// the shape's place, or the name its own parent split knows it by — so it takes the other half's
+/// views and that half closes instead: the same one place either way, under the name the layout
+/// knows. A minted half split again is that case too: closed outright it would take its whole
+/// split with it. Returns that merge, when it was one. A place no user split made, or whose other
+/// half is split again, stays as it is.
+pub fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
     // A float nobody split, left with nothing to show, closes: it was the view's window.
     if (l.state.floats.find(name) != null and l.state.splits.root(name) == null) {
         Floats.close(l, name, .emptied);
         return null;
     }
-    if (l.state.isMinted(name)) {
+    if (l.state.isMinted(name) and !l.state.splits.isSplit(name)) {
         closeMinted(l, name);
         return null;
     }

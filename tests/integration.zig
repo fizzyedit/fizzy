@@ -2864,6 +2864,128 @@ test "a split of a carded place, and of its new half, opens even halves" {
     try std.testing.expectApproxEqAbs(top.h, bottom.h, 1);
 }
 
+/// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
+/// things at once: the half Main's split minted, and the half its own split kept.
+const NestedSplitCase = struct {
+    ctx: shim.Ctx,
+
+    fn init() !NestedSplitCase {
+        var ctx = try shim.init(std.testing.allocator);
+        errdefer ctx.deinit(std.testing.allocator);
+        const editor = ctx.editor;
+        editor.app.gpa = std.testing.allocator;
+        ColumnCardFrame.editor = editor;
+        const draw = struct {
+            fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+                return .ok;
+            }
+        }.f;
+        for ([_][]const u8{ "test.left", "test.top", "test.bottom", "test.right" }) |id| {
+            try editor.app.host.registerSurface(.{ .id = id, .title = id, .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+        }
+        try dvui.testing.settle(ColumnCardFrame.frame);
+        try editor.app.layout.assign(editor.app.gpa, "Main", &.{"test.left"});
+        try split(editor, "Main", .right, "Main/r1", "test.top");
+        try split(editor, "Main/r1", .bottom, "Main/r1/b1", "test.bottom");
+        return .{ .ctx = ctx };
+    }
+
+    fn split(editor: *fizzy.Editor, name: []const u8, side: fizzy.Editor.Layout.SplitTree.Side, want: []const u8, view: []const u8) !void {
+        {
+            var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+            try std.testing.expectEqualStrings(want, layout.splitOn(name, side) orelse return error.TestExpectedEqual);
+        }
+        try editor.app.layout.assign(editor.app.gpa, want, &.{view});
+        try dvui.testing.settle(ColumnCardFrame.frame);
+    }
+
+    fn deinit(self: *NestedSplitCase) void {
+        const editor = self.ctx.editor;
+        editor.app.layout.regions.deinit(editor.app.gpa);
+        editor.app.layout.regions_building.deinit(editor.app.gpa);
+        editor.app.layout.deinitExtents(editor.app.gpa);
+        editor.app.layout.deinitAssignments(editor.app.gpa);
+        editor.app.layout.deinitQualified(editor.app.gpa);
+        ColumnCardFrame.editor = null;
+        self.ctx.deinit(std.testing.allocator);
+    }
+
+    fn trash(self: *NestedSplitCase, name: []const u8) !void {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, name, name, .remove);
+        try dvui.testing.settle(ColumnCardFrame.frame);
+        try dvui.testing.settle(ColumnCardFrame.frame);
+    }
+};
+
+test "split: emptying the half that was split again closes only that half" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const state = &case.ctx.editor.app.layout;
+    const column = (try ColumnCardFrame.sizeOf(case.ctx.editor, "Main/r1")).w;
+
+    try case.trash("Main/r1");
+
+    // The column stays, one place again under the name Main's split knows, holding what its
+    // other half held — the same merge as emptying a split's origin anywhere else.
+    try std.testing.expectEqualStrings("Main", state.splits.siblingLeaf("Main/r1") orelse return error.TestExpectedEqual);
+    try std.testing.expect(state.splits.rootOf("Main/r1/b1") == null);
+    const kept = state.assignment("Main/r1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), kept.len);
+    try std.testing.expectEqualStrings("test.bottom", kept[0]);
+    try std.testing.expectApproxEqAbs(column, (try ColumnCardFrame.sizeOf(case.ctx.editor, "Main/r1")).w, 1);
+
+    const links = state.splits.collectLinks(std.testing.allocator);
+    defer std.testing.allocator.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqualStrings("Main/r1", links[0].name);
+}
+
+test "split: emptying the half that was split again stays when its other half is split too" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try NestedSplitCase.split(editor, "Main/r1/b1", .right, "Main/r1/b1/r1", "test.right");
+
+    try case.trash("Main/r1");
+
+    // No one place to merge into: the column and every split in it stay, Main/r1 empty.
+    const leaves = editor.app.layout.splits.leavesUnder(dvui.currentWindow().arena(), "Main");
+    try std.testing.expectEqual(@as(usize, 4), leaves.len);
+    const kept = editor.app.layout.assignment("Main/r1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 0), kept.len);
+    try std.testing.expectEqualStrings("test.bottom", editor.app.layout.assignment("Main/r1/b1").?[0]);
+}
+
+test "split: a column shut by its sash goes only once every place in it is empty" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const state = &editor.app.layout;
+    // The branch registers before the half that kept its name, so the first `Main/r1` is the
+    // column: the box its parent's sash sizes.
+    const column = for (state.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Main/r1")) break r.id;
+    } else return error.TestExpectedEqual;
+
+    // Shut with a view still in its bottom half: the column stays, and so does every place in it.
+    try state.assign(editor.app.gpa, "Main/r1", &.{});
+    fizzy.core.widgets.Split.close(column);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try std.testing.expectEqual(@as(usize, 3), state.splits.leavesUnder(dvui.currentWindow().arena(), "Main").len);
+    try std.testing.expectEqualStrings("test.bottom", state.assignment("Main/r1/b1").?[0]);
+
+    // Nothing left in it, the whole column goes, and nothing it held is left behind.
+    try state.assign(editor.app.gpa, "Main/r1/b1", &.{});
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try std.testing.expect(state.splits.root("Main") == null);
+    try std.testing.expect(state.assignment("Main/r1/b1") == null);
+    try std.testing.expectEqual(@as(f32, -1), state.extent("Main/r1/b1", -1));
+}
+
 test "a view-drag split opens on the dropped edge" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

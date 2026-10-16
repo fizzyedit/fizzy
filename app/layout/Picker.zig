@@ -143,7 +143,10 @@ pub fn draw(self: *Picker, f: *Layout) void {
             // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
             // sibling. Off it, only a minted leaf can. A float can always go: it closes, and what
             // it holds goes home.
-            const removable = created or state.canRemove(region.name) or state.floats.find(region.name) != null;
+            // A minted half split again goes by merging its other half into it (`ViewDrag.closeEmptied`);
+            // with that half split too there is nothing to merge, and Remove would only clear it.
+            const merges = !state.splits.isSplit(region.name) or state.siblingLeaf(region.name) != null;
+            const removable = (created and merges) or state.canRemove(region.name) or state.floats.find(region.name) != null;
             const assigned = state.assignment(region.name);
             const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
 
@@ -685,7 +688,11 @@ fn removeRegion(f: *Layout, region: *const Layout.Region) void {
         }
     }
     const forget = region.forget_when_empty or f.state.splits.canForget(region.name);
-    if (forget) {
+    if (forget and f.state.splits.canForget(region.name) and f.state.splits.isSplit(region.name)) {
+        // Split again, the place under this name is its whole split: the half that kept the
+        // name goes the way emptying it does, its other half's views merging into it.
+        _ = ViewDrag.closeEmptied(f, region.name);
+    } else if (forget) {
         if (region.id != .zero and (dvui.dataGet(null, region.id, "_size", f32) orelse 0) > 0) {
             Split.close(region.id);
             f.extents_changed = true;

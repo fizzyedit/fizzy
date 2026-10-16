@@ -478,7 +478,8 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
         extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0) persistExtent(self, init_opts, id, chosen, extent);
+        // A leaf draws on regardless: it walks no tree node.
+        if (init_opts.name.len > 0) _ = persistExtent(self, init_opts, id, chosen, extent);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the split appears to
@@ -914,29 +915,39 @@ fn drawContentsPhotographed(
     ViewDrag.keepShot(self, shot, &pic);
 }
 
-fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) void {
+/// Remember the extent of the place `opts` names, or forget the place when it has closed with
+/// nothing in it. Returns true when it forgot it: the split tree no longer has it, and the nodes
+/// a caller is walking to draw it may be gone, so it draws nothing more of it this frame.
+fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) bool {
     _ = shown;
-    const kept = if (self.state.assignment(opts.name)) |ids| ids.len > 0 else false;
     // A live drag writes a zero on the way through closed; forgetting here removes the
     // region and the next frame recreates a sentinel under the pointer — the pop.
     const dragging = dvui.dataGet(null, id, "_drag", bool) orelse false;
-    if (opts.forget_when_empty and !kept and !dragging) {
-        if (chosen <= 0) {
-            // Still travelling shut: collapsing here drops the leaf and the
-            // next frame has nothing to ease. `shown` can rest above zero
-            // after the curve, so "animation finished" is the real signal.
-            if (dvui.animationGet(id, "_ease") != null) {
-                if (self.state.setExtent(self.gpa, opts.name, 0)) self.extents_changed = true;
-                return;
-            }
-            if (self.state.clearExtent(self.gpa, opts.name)) self.extents_changed = true;
-            if (self.state.splits.collapse(self.gpa, opts.name)) self.extents_changed = true;
-            self.state.unassign(self.gpa, opts.name);
-            dvui.refresh(null, @src(), id);
-            return;
+    if (opts.forget_when_empty and !dragging and chosen <= 0) forget: {
+        // A place split again is every place in it (`SplitTree.Forest.collapse`): kept while any
+        // of them holds a view, and all of them forgotten with it.
+        const covered = self.state.splits.placeLeaves(self.arena, opts.name);
+        for (covered) |n| {
+            if (self.state.assignment(n)) |ids| if (ids.len > 0) break :forget;
         }
+        // Still travelling shut: collapsing here drops the leaf and the
+        // next frame has nothing to ease. `shown` can rest above zero
+        // after the curve, so "animation finished" is the real signal.
+        if (dvui.animationGet(id, "_ease") != null) {
+            if (self.state.setExtent(self.gpa, opts.name, 0)) self.extents_changed = true;
+            return false;
+        }
+        const dropped = self.state.splits.collapse(self.gpa, opts.name);
+        if (dropped) self.extents_changed = true;
+        for (covered) |n| {
+            if (self.state.clearExtent(self.gpa, n)) self.extents_changed = true;
+            self.state.unassign(self.gpa, n);
+        }
+        dvui.refresh(null, @src(), id);
+        return dropped;
     }
     if (self.state.setExtent(self.gpa, opts.name, chosen)) self.extents_changed = true;
+    return false;
 }
 
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.
@@ -997,6 +1008,9 @@ fn initTree(
     const branch = node.kind.branch;
     var box_opts = opts;
     var default_extent: f32 = 0;
+    // Forgotten this frame, the tree `branch` points into may be freed: its children wait for
+    // the next frame (`persistExtent` asked for it).
+    var dropped = false;
     if (init_opts.resize) {
         const given = opts.min_size_content orelse dvui.Size{};
         const default: f32 = switch (axis) {
@@ -1014,7 +1028,7 @@ fn initTree(
         }
         const extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0) persistExtent(self, init_opts, id, chosen, extent);
+        if (init_opts.name.len > 0) dropped = persistExtent(self, init_opts, id, chosen, extent);
         box_opts.min_size_content = switch (axis) {
             .horizontal => .{ .w = extent, .h = given.h },
             .vertical => .{ .w = given.w, .h = extent },
@@ -1071,7 +1085,7 @@ fn initTree(
     };
     self.depth += 1;
 
-    try drawTreeChildren(self, src, init_opts, opts, branch);
+    if (!dropped) try drawTreeChildren(self, src, init_opts, opts, branch);
 
     return .{
         .name = init_opts.name,
@@ -1273,7 +1287,8 @@ fn drawTreeNode(
                 const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
                 const shown = Split.eased(id, chosen);
                 dvui.dataSet(null, id, "_size", chosen);
-                persistExtent(self, .{ .name = b.origin, .forget_when_empty = true }, id, chosen, shown);
+                // Forgotten, its nodes are freed with it: nothing more of it to draw this frame.
+                if (persistExtent(self, .{ .name = b.origin, .forget_when_empty = true }, id, chosen, shown)) return;
                 box_opts.min_size_content = switch (parent_dir) {
                     .horizontal => .{ .w = shown },
                     .vertical => .{ .h = shown },
