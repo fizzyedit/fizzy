@@ -4315,6 +4315,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // layout needed these five calls verbatim, and getting one wrong is a bug an app
             // author has no way to diagnose. A shape declares regions; it does not run the
             // frame.
+            // The frame's input is consumed from here to the palette: whatever it changes is the
+            // person's, or a tape's while one drives (`Host.setInputAuthor`). Plugins' frame hooks
+            // outside it act for themselves, or are nobody's.
+            editor.app.host.setInputAuthor(editor.demo.author() orelse .person);
             var layout_root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
             for (editor.app.host.plugins.items) |plugin| plugin.tickActiveDocument(layout_root.data().id);
             editor.flushQueuedNativeMenuActions();
@@ -4367,6 +4371,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 .{layout.depth},
             );
 
+            editor.app.host.setInputAuthor(null);
             for (editor.app.host.plugins.items) |plugin| plugin.endFrame();
             layout_root.deinit();
 
@@ -4374,6 +4379,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
 
         { // Plugin keybinds + per-frame overlays (e.g. pixel-art's radial menu)
+            editor.app.host.setInputAuthor(editor.demo.author() orelse .person);
+            defer editor.app.host.setInputAuthor(null);
             // While the palette owns the keyboard, plugin ticks must not run — otherwise a
             // plugin's `matchBind` (e.g. pixi Export on the same chord as Quick Open) steals
             // focus before the palette entry can claim it.

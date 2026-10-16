@@ -73,6 +73,9 @@ quitting: bool = false,
 arrange: ?automation.Tape.Keyframe.Layout = null,
 /// Every plugin's settings as the demo found them, as ZON, to give back at the end.
 settings_saved: std.ArrayListUnmanaged(SavedSettings) = .empty,
+/// Who a live tape plays for (`automation.Api.playAs`): an agent's pointer tape is the agent's.
+/// Strings owned here. Null: the live tape is its own author.
+live_author: ?sdk.Author = null,
 
 const SavedSettings = struct {
     owner: []u8,
@@ -118,7 +121,7 @@ pub fn attach(self: *Demo, editor: *Editor) void {
         .editor = editor,
         .player = .init(gpa, stage),
         .live = .init(stage),
-        .service = .{ .gpa = gpa, .driver = &self.live, .other = .{ .ctx = self, .driving = demoLoaded }, .snapshots = &self.snapshot, .captures = &self.picture },
+        .service = .{ .gpa = gpa, .driver = &self.live, .other = .{ .ctx = self, .driving = demoLoaded }, .on_author = .{ .ctx = self, .set = liveAuthorSet }, .snapshots = &self.snapshot, .captures = &self.picture },
         .snapshot = .init(gpa),
         .picture = .init(gpa),
     };
@@ -133,6 +136,7 @@ fn demoLoaded(ctx: *anyopaque) bool {
 }
 
 pub fn deinit(self: *Demo) void {
+    self.setLiveAuthor(null);
     self.quitting = true;
     self.snapshot.deinit();
     self.picture.deinit();
@@ -353,6 +357,48 @@ const stage_vtable: automation.Stage.VTable = .{
     .release = release,
     .fingerprint = fingerprint,
 };
+
+/// A live tape played by nobody in particular, or a demo with no name.
+const tape_author: sdk.Author = .{ .kind = .tape, .plugin = "fizzy", .label = "a tape" };
+
+/// Whose frame this is when a tape drives it: the live tape's author (`live_author`, else the
+/// tape itself), or the demo being played or sought through. Null when no tape drives: a real
+/// press or key stops either before the frame's input is consumed, so the frame is the person's.
+pub fn author(self: *const Demo) ?sdk.Author {
+    if (self.live.playing()) return self.live_author orelse tape_author;
+    switch (self.player.state) {
+        .playing, .seeking => {},
+        else => return null,
+    }
+    const tape = (self.player.owned orelse return tape_author).tape;
+    return .{
+        .kind = .tape,
+        .plugin = "fizzy",
+        .session = std.hash.Wyhash.hash(0, tape.name),
+        .label = if (tape.title.len > 0) tape.title else tape.name,
+    };
+}
+
+fn liveAuthorSet(ctx: *anyopaque, who: ?sdk.Author) void {
+    from(ctx).setLiveAuthor(who);
+}
+
+/// Play the next live tape for `who` (`automation.Api.playAs`); null, for no one in particular.
+pub fn setLiveAuthor(self: *Demo, who: ?sdk.Author) void {
+    const gpa = self.editor.app.gpa;
+    if (self.live_author) |a| {
+        gpa.free(a.plugin);
+        gpa.free(a.label);
+    }
+    self.live_author = null;
+    const a = who orelse return;
+    const plugin = gpa.dupe(u8, a.plugin) catch return;
+    const label = gpa.dupe(u8, a.label) catch {
+        gpa.free(plugin);
+        return;
+    };
+    self.live_author = .{ .kind = a.kind, .plugin = plugin, .session = a.session, .label = label };
+}
 
 fn from(ctx: *anyopaque) *Demo {
     return @ptrCast(@alignCast(ctx));
@@ -628,6 +674,9 @@ fn idle(ctx: *anyopaque) bool {
 /// palette does once they are given; what it returns is not the demo's business.
 fn command(ctx: *anyopaque, id: []const u8, args: []const u8) void {
     const host = &from(ctx).editor.app.host;
+    // A tape's command is the tape's (or, for a live tape played for someone, theirs).
+    const outer = host.act(from(ctx).author() orelse tape_author);
+    defer host.endAct(outer);
     if (args.len == 0) {
         host.runCommand(id) catch |err| dvui.log.warn("demo: command {s} failed: {t}", .{ id, err });
         return;

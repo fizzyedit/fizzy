@@ -7223,12 +7223,18 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     const lookback = fizzy.core.profile.lookback() orelse return error.TestUnexpectedResult;
     lookback.budget_ns = 0;
     defer lookback.budget_ns = std.time.ns_per_s / 60;
+    const unattributed_before = editor.app.host.unattributed_steps;
     try editor.demo.play("tour");
     var frames: usize = 0;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
         _ = try dvui.testing.step(headlessFrame);
     }
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
+    // Every step the tour made has an author: its own where it drives the frame, or its commands'
+    // (`Host.act` in the demo's stage). A step nobody acted for is a missed site
+    // (`plans/SHARED_HISTORY_PLAN.md`). Owners report every step once that plan's step 3 lands;
+    // until then this guards the steps reported while recording.
+    try std.testing.expectEqual(unattributed_before, editor.app.host.unattributed_steps);
     {
         var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer out.deinit();

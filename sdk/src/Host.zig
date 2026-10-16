@@ -1809,7 +1809,14 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
     if (self.activity.getLastOrNull()) |last| {
         if (self.activity_run == self.command_runs and last.doc_id == doc_id) return;
     }
-    const title = self.allocator.dupe(u8, std.mem.trimEnd(u8, c.title, "…")) catch return;
+    const what = std.mem.trimEnd(u8, c.title, "…");
+    // An agent's edit says whose ("Claude · Draw"); the person's own, and a demo narrating itself,
+    // stay plain.
+    const who = self.author();
+    const title = (if (who.kind == .agent and who.label.len > 0)
+        std.fmt.allocPrint(self.allocator, "{s} · {s}", .{ who.label, what })
+    else
+        self.allocator.dupe(u8, what)) catch return;
     if (self.activity.items.len == activity_cap) {
         self.allocator.free(self.activity.items[0].title);
         _ = self.activity.orderedRemove(0);
@@ -3153,4 +3160,20 @@ test "mayMerge: only the author's own step, so an agent never joins the person's
     try std.testing.expect(host.mayMerge(doc, 1));
     host.recordStep(doc, .{ .kind = .added, .id = 3 });
     try std.testing.expectEqual(@as(u64, 1), host.unattributed_steps);
+}
+
+test "an agent's edit says whose in the activity; the person's stays plain" {
+    var host: Host = .init(std.testing.allocator);
+    defer host.deinit();
+    const draw: Command = .{ .id = "pixi.draw", .title = "Draw" };
+    host.running_command = &draw;
+    host.setInputAuthor(.person);
+    host.documentEdited(1);
+    try std.testing.expectEqualStrings("Draw", host.activity.items[0].title);
+
+    host.command_runs += 1;
+    const outer = host.act(.{ .kind = .agent, .plugin = "agent", .session = 1, .label = "Claude" });
+    host.documentEdited(1);
+    host.endAct(outer);
+    try std.testing.expectEqualStrings("Claude · Draw", host.activity.items[1].title);
 }
