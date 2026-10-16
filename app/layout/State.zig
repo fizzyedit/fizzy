@@ -45,6 +45,9 @@ pub const Documents = struct {
     /// A new view holding the documents `ids`, the first shown — a document not open yet opened
     /// in it — for the layout to place like any view it lands. Its id, or null when none went in.
     house: *const fn (ctx: *anyopaque, ids: []const []const u8) ?[]const u8,
+    /// The view holding document `id` and nothing else, if one does: carried alone, the
+    /// document carries that view, which lands as itself rather than inside a new one.
+    alone: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
 };
 
 pub const StoreCatalog = struct {

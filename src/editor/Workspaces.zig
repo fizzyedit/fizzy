@@ -48,7 +48,7 @@ pub fn wanted(gpa: std.mem.Allocator) bool {
 pub fn install(self: *Workspaces, wb: *Workbench) void {
     wb.places = .{ .ctx = self, .beside = beside, .placed = placed, .close = close, .open = open };
     // A document carried beside a view, rather than into a pane, opens a workspace there.
-    self.editorOf().app.layout.documents = .{ .ctx = self, .house = house };
+    self.editorOf().app.layout.documents = .{ .ctx = self, .house = house, .alone = alone };
 }
 
 pub fn deinit(self: *Workspaces, gpa: std.mem.Allocator) void {
@@ -354,6 +354,17 @@ fn open(ctx: *anyopaque, grouping: u64, side: Workbench.Panes.Side) bool {
         .top => .top,
         .bottom => .bottom,
     }) != null;
+}
+
+/// The view of the workspace whose only tab is document `id`, if one is.
+fn alone(ctx: *anyopaque, id: []const u8) ?[]const u8 {
+    const self: *Workspaces = @ptrCast(@alignCast(ctx));
+    for (self.editorOf().workbench.workspaces.values()) |*ws| {
+        if (ws.tabCount() != 1 or !ws.hasTab(id)) continue;
+        const v = self.views.get(ws.grouping) orelse return null;
+        return v.id;
+    }
+    return null;
 }
 
 fn placed(ctx: *anyopaque, grouping: u64) bool {
