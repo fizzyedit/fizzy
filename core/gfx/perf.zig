@@ -23,7 +23,7 @@ pub inline fn nanoTimestamp() i128 {
 }
 
 /// Enable perf recording in Debug and ReleaseSafe builds.
-pub const record: bool = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
+pub const record: bool = builtin.mode == .debug or builtin.mode == .safe;
 
 /// Lightweight drawing-specific counters active in ALL build modes.
 pub var draw_event_count: u32 = 0;

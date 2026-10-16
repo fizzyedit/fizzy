@@ -42,7 +42,7 @@ internal: bool = false,
 /// plugin's table. Leave it alone; call `errorName`.
 error_name: *const fn (code: ErrorInt) [:0]const u8 = &localErrorName,
 
-pub const ErrorInt = std.meta.Int(.unsigned, @bitSizeOf(anyerror));
+pub const ErrorInt = @Int(.unsigned, @bitSizeOf(anyerror));
 
 /// `@errorName` in whichever binary this is compiled into.
 pub fn localErrorName(code: ErrorInt) [:0]const u8 {

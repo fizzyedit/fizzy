@@ -472,10 +472,10 @@ fn syncStack(l: *Layout) void {
     const floats = &l.state.floats;
     const n = @min(floats.items.items.len, max);
     var ids: [max]u64 = undefined;
-    for (floats.items.items[0..n], 0..) |f, i| ids[i] = @intFromEnum(f.win_id);
+    for (floats.items.items[0..n], 0..) |f, i| ids[i] = @backingInt(f.win_id);
     const stack = dvui.currentWindow().subwindows.stack.items;
     const stack_ids = l.arena.alloc(u64, stack.len) catch return;
-    for (stack, 0..) |sw, i| stack_ids[i] = @intFromEnum(sw.id);
+    for (stack, 0..) |sw, i| stack_ids[i] = @backingInt(sw.id);
     var order: [max]usize = undefined;
     rules.stackOrder(order[0..n], ids[0..n], stack_ids);
     floats.reorder(order[0..n]);

@@ -440,7 +440,7 @@ pub const Owned = struct {
 /// (`parse`) otherwise.
 pub fn load(gpa: std.mem.Allocator, bytes: []const u8, check: Check) !Owned {
     if (binary.sniff(bytes)) return binary.read(gpa, bytes, check);
-    const source = try gpa.dupeZ(u8, bytes);
+    const source = try gpa.dupeSentinel(u8, bytes, 0);
     defer gpa.free(source);
     return parse(gpa, source, check);
 }
@@ -449,7 +449,13 @@ pub fn load(gpa: std.mem.Allocator, bytes: []const u8, check: Check) !Owned {
 pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8, check: Check) !Owned {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
-    const tape = try std.zon.parse.fromSliceAlloc(Tape, arena.allocator(), source, null, .{});
+    const tape = try (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(arena.allocator());
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(Tape, .{ .gpa = arena.allocator(), .arena = zig017_arena.allocator(), .source = source, .diagnostics = &zig017_zd });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Tape, arena.allocator(), zig017_v) else |zig017_e| zig017_e;
+    });
     try tape.validate(check);
     return .{ .arena = arena, .tape = tape };
 }
@@ -638,7 +644,7 @@ test "a tape round-trips through ZON" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
     try tape.write(&out.writer);
-    const text = try testing.allocator.dupeZ(u8, out.written());
+    const text = try testing.allocator.dupeSentinel(u8, out.written(), 0);
     defer testing.allocator.free(text);
 
     var back = try parse(testing.allocator, text, .{});
@@ -670,4 +676,41 @@ test "a hand-written tape parses with every default left out" {
     try testing.expectEqual(@as(f32, 0.5), owned.tape.ops[1].do.move.x);
     try testing.expect(owned.tape.ops[2].do.wait.until == .idle);
     try testing.expectEqual(@as(u32, 10_000), owned.tape.ops[2].do.wait.timeout);
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
 }

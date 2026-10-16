@@ -144,7 +144,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
 
     var effective_win_libc: ?[]const u8 = win_libc.libc_path;
     if (effective_win_libc == null) {
-        if (cross_win_msvc) effective_win_libc = b.libc_file;
+        if (cross_win_msvc) effective_win_libc = null; // ZIG017: 0.17 has no global --libc
     }
 
     // Velopack in the dev/install exe is opt-in (`-Dvelopack=true`). Release
@@ -204,7 +204,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     var version_owned: ?[]u8 = null; // lives as long as the build process
 
     const app_version: []const u8 = if (app_version_opt) |v| v else blk: {
-        const raw = b.build_root.handle.readFileAlloc(b.graph.io, "VERSION", b.allocator, std.Io.Limit.limited(256)) catch |e| std.debug.panic("read VERSION: {}", .{e});
+        const raw = b.root.root_dir.handle.readFileAlloc(b.graph.io, "VERSION", b.allocator, std.Io.Limit.limited(256)) catch |e| std.debug.panic("read VERSION: {}", .{e});
         version_owned = raw;
         break :blk std.mem.trimEnd(u8, raw, "\r\n");
     };
@@ -336,6 +336,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const zig_out_install_dir = cfg.zig_out_install_dir;
     const target_is_windows_msvc = cfg.target_is_windows_msvc;
     const cross_win_msvc = cfg.cross_win_msvc;
+    _ = cross_win_msvc; // ZIG017
     const effective_win_libc = cfg.effective_win_libc;
     const velopack_supported_for_target = cfg.velopack_supported_for_target;
     const velopack_enabled = cfg.velopack_enabled;
@@ -427,7 +428,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             .dest_dir = .{ .override = zig_out_install_dir },
         });
         // A running fizzy holds its executable on Windows: set it aside first, or the install fails.
-        if (b.graph.host.result.os.tag == .windows and target.result.os.tag == .windows) {
+        if (false) { // ZIG017: custom step + configure-time install path, both gone in 0.17
             const aside = SetAsideRunningExe.create(b, b.getInstallPath(zig_out_install_dir, exe.out_filename));
             aside.step.dependOn(&exe.step);
             install_artifact.step.dependOn(&aside.step);
@@ -1391,12 +1392,12 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         };
 
         if (effective_win_libc) |ini| {
-            if (cross_win_msvc) b.libc_file = null;
+            // ZIG017: no global --libc in 0.17
             const libc_lp: std.Build.LazyPath = .{ .cwd_relative = ini };
             velopack.applyWindowsMsvcLibcRecursive(b, roots[0..n], libc_lp);
 
             const ini_exists = blk: {
-                b.build_root.handle.access(b.graph.io, ini, .{}) catch break :blk false;
+                b.root.root_dir.handle.access(b.graph.io, ini, .{}) catch break :blk false;
                 break :blk true;
             };
             if (ini_exists) {

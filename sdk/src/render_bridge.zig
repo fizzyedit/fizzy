@@ -62,10 +62,10 @@ fn textureCreate(
     const created = win.backend.textureCreate(pixels, .{
         .width = options.width,
         .height = options.height,
-        .format = @enumFromInt(options.format),
-        .interpolation = @enumFromInt(options.interpolation),
-        .wrap_u = @enumFromInt(options.wrap_u),
-        .wrap_v = @enumFromInt(options.wrap_v),
+        .format = @fromBackingInt(@intCast(options.format)),
+        .interpolation = @fromBackingInt(@intCast(options.interpolation)),
+        .wrap_u = @fromBackingInt(@intCast(options.wrap_u)),
+        .wrap_v = @fromBackingInt(@intCast(options.wrap_v)),
     }) catch return emptyTextureDesc();
     return proxy_bridge.textureDescFrom(created);
 }
@@ -107,10 +107,10 @@ fn textureCreateTarget(ctx: ?*anyopaque, options: proxy_bridge.CreateOptions) ca
     const target = win.backend.textureCreateTarget(.{
         .width = options.width,
         .height = options.height,
-        .format = @enumFromInt(options.format),
-        .interpolation = @enumFromInt(options.interpolation),
-        .wrap_u = @enumFromInt(options.wrap_u),
-        .wrap_v = @enumFromInt(options.wrap_v),
+        .format = @fromBackingInt(@intCast(options.format)),
+        .interpolation = @fromBackingInt(@intCast(options.interpolation)),
+        .wrap_u = @fromBackingInt(@intCast(options.wrap_u)),
+        .wrap_v = @fromBackingInt(@intCast(options.wrap_v)),
         .precision = std.enums.fromInt(dvui.Texture.Precision, options.precision) orelse .default,
     }) catch return emptyTextureDesc();
     return proxy_bridge.textureDescFromTarget(target);
@@ -205,7 +205,7 @@ fn openURL(ctx: ?*anyopaque, url: [*]const u8, url_len: usize, new_window: u8) c
 
 fn setCursor(ctx: ?*anyopaque, cursor: u8) callconv(.c) void {
     const win = windowFromCtx(ctx);
-    win.backend.setCursor(@enumFromInt(cursor));
+    win.backend.setCursor(@fromBackingInt(@intCast(cursor)));
 }
 
 fn textInputRect(ctx: ?*anyopaque, has_rect: u8, rect: proxy_bridge.ClipRect) callconv(.c) void {

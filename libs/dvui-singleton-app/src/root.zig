@@ -103,7 +103,7 @@ pub const max_args: u32 = 4096;
 pub const max_arg_bytes: u32 = 1 << 20; // 1 MiB per arg
 pub const max_total_bytes: u64 = 32 << 20; // 32 MiB per message
 
-const Primary = if (builtin.os.tag == .windows)
+const Primary = if (builtin.target.os.tag == .windows)
     @import("windows_impl.zig").Primary
 else
     @import("unix_impl.zig").Primary;

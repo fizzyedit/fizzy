@@ -17,7 +17,7 @@ const Constants = @import("Constants.zig");
 const Button = fizzy.backend.TitleBarButton;
 
 pub const Style = enum { windows, gnome };
-pub const style: Style = if (builtin.os.tag == .linux) .gnome else .windows;
+pub const style: Style = if (builtin.target.os.tag == .linux) .gnome else .windows;
 
 /// Draws the buttons in the top-right corner of `frame`, the window's frame within it (inside the
 /// margin for its shadow on Linux). `corner_radius`: the window's own where fizzy rounds it
@@ -54,7 +54,7 @@ fn drawWindows(frame: dvui.Rect, corner_radius: ?f32) void {
         var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .role = .button,
             .label = .{ .text = nameOf(button, maximized) },
-            .id_extra = @intFromEnum(button),
+            .id_extra = @backingInt(button),
             .min_size_content = .{ .w = cell_w, .h = cell_h },
             .expand = .vertical,
             .background = hover,
@@ -94,7 +94,7 @@ fn drawGnome(frame: dvui.Rect) void {
         var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .role = .button,
             .label = .{ .text = nameOf(button, maximized) },
-            .id_extra = @intFromEnum(button),
+            .id_extra = @backingInt(button),
             .min_size_content = .{ .w = d, .h = d },
             .margin = .{ .x = if (i == 0) 0 else gap },
         });

@@ -73,9 +73,15 @@ fn fileLoad(_: ?*anyopaque) ?Geometry {
     const gpa = std.heap.page_allocator;
     const data = std.Io.Dir.cwd().readFileAlloc(file_io, path, gpa, .limited(4096)) catch return null;
     defer gpa.free(data);
-    const z = gpa.dupeZ(u8, data) catch return null;
+    const z = gpa.dupeSentinel(u8, data, 0) catch return null;
     defer gpa.free(z);
-    const g = std.zon.parse.fromSlice(Geometry, gpa, z, null, .{ .ignore_unknown_fields = true }) catch return null;
+    const g = (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(Geometry, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = z, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Geometry, gpa, zig017_v) else |zig017_e| zig017_e;
+    }) catch return null;
     return if (g.valid()) g else null;
 }
 
@@ -128,10 +134,10 @@ fn cocoaWindowOf(window: *c.SDL_Window) ?*anyopaque {
 
 /// Where `win` is now, as `Geometry`.
 pub fn capture(win: *dvui.Window) ?Geometry {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos => {
             const cocoa = cocoaWindowOf(win.backend.impl.window) orelse return null;
-            var out4: [4]f64 = .{0} ** 4;
+            var out4: [4]f64 = @splat(0);
             // The windowed frame — the one it had before a fullscreen Space, while it is in one.
             fizzy_macos_window_current_windowed_frame(cocoa, &out4);
             const g: Geometry = .{ .x = out4[0], .y = out4[1], .w = out4[2], .h = out4[3] };
@@ -165,7 +171,7 @@ pub fn capture(win: *dvui.Window) ?Geometry {
 
 /// Put `win` at `g`: false where it was not (no window, or nowhere on the screens there are now).
 fn apply(win: *dvui.Window, g: Geometry) bool {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos => {
             const cocoa = cocoaWindowOf(win.backend.impl.window) orelse return false;
             if (!frameOnScreens(.{ .x = g.x, .y = g.y, .w = g.w, .h = g.h })) return false;
@@ -233,7 +239,7 @@ var linux_window: ?*c.SDL_Window = null;
 var linux_watching = false;
 
 fn watchLinux(win: *dvui.Window) void {
-    if (comptime builtin.os.tag == .macos or builtin.os.tag == .windows) return;
+    if (comptime builtin.target.os.tag == .macos or builtin.target.os.tag == .windows) return;
     linux_window = win.backend.impl.window;
     trackLinux();
     if (linux_watching) return;
@@ -258,4 +264,41 @@ fn trackLinux() void {
     if (!c.SDL_GetWindowPosition(window, &x, &y) or !c.SDL_GetWindowSize(window, &w, &h)) return;
     if (w < 1 or h < 1) return;
     linux_normal = .{ .x = @floatFromInt(x), .y = @floatFromInt(y), .w = @floatFromInt(w), .h = @floatFromInt(h) };
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
 }

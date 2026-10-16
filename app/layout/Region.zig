@@ -955,7 +955,7 @@ fn nameExtra(name: []const u8) usize {
 }
 
 fn extraFor(name: []const u8, side: SplitTree.Side) usize {
-    return @truncate(nameExtra(name) ^ @as(u64, @intFromEnum(side)) << 8);
+    return @truncate(nameExtra(name) ^ @as(u64, @backingInt(side)) << 8);
 }
 
 fn idOf(state: *Layout.State, name: []const u8) ?dvui.Id {

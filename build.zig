@@ -109,7 +109,7 @@ pub fn addDvui(fizzy_dep: *std.Build.Dependency, root_module: *std.Build.Module,
     const b = fizzy_dep.builder;
     const exe = @import("build/exe.zig");
     const target = root_module.resolved_target orelse @panic("fizzy.addDvui: give the root module its target first");
-    const optimize = root_module.optimize orelse .Debug;
+    const optimize = root_module.optimize orelse .debug;
     const macos_sdl_paths = try @import("build/common.zig").macosSdlPathsForExplicitTarget(b, target);
     const native = exe.nativeDvui(b, backend, target, optimize, .off, macos_sdl_paths);
     root_module.addImport("dvui", native.dvui);

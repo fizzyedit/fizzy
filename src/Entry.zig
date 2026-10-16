@@ -61,10 +61,10 @@ const start_options_base: dvui.App.StartOptions = .{
     .icon = icon,
     // Linux too, for the rounded corners outside the window's fill (`Editor`): Vulkan composites
     // the swapchain's alpha on Wayland. Its fill stays opaque — nothing blurs behind it there.
-    .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows or builtin.os.tag == .linux) true else false,
+    .transparent = if (builtin.target.os.tag == .macos or builtin.target.os.tag == .windows or builtin.target.os.tag == .linux) true else false,
     // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
     .window_init_options = .{
-        .button_order = if (builtin.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
+        .button_order = if (builtin.target.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
     },
 };
 
@@ -97,12 +97,12 @@ fn startOptions() dvui.App.StartOptions {
         // bundle's `.icns` — so the Dock icon visibly loses its background the moment fizzy
         // launches. Inside a bundle the `.icns` is already the right icon; leave it alone. Loose
         // dev builds have no bundle icon at all, so there we still want the runtime one.
-        if (comptime builtin.os.tag == .macos) {
+        if (comptime builtin.target.os.tag == .macos) {
             if (runningFromAppBundle(main_init.io)) opts.icon = null;
         }
         // A profile is the config folder itself (`app.profile`), for SDL's preferences too.
         const pref: ?[:0]const u8 = if (@import("app").profile.root) |root|
-            std.fmt.bufPrintZ(&pref_path_buf, "{s}", .{root}) catch null
+            std.fmt.bufPrintSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
         else
             paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
         if (pref) |pref_path| {
@@ -123,7 +123,7 @@ fn startOptions() dvui.App.StartOptions {
         fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, app_version_z, AppInfo.bundle_id_z);
         // Linux: fizzy draws its own title bar and the window's shadow (`linux_titlebar`), which
         // SDL has to know before the window is made.
-        if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.target.os.tag == .linux) {
             const in = Constants.linux_window_shadow_insets;
             fizzy.backend.useClientDecorations(.{ .left = in.left, .top = in.top, .right = in.right, .bottom = in.bottom });
         }
@@ -276,7 +276,7 @@ const sdk_version = std.fmt.comptimePrint("{f} ({x})", .{
 fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
     // A refresh record, counted as a frame's cause; printed only for `FIZZY_LOG_REFRESH`.
     if (fizzy.core.profile.interceptLog(level, scope, format, args) and !refresh_log_active) return;
-    if (comptime scope == .dvui and level == .debug and @import("builtin").mode != .Debug) return;
+    if (comptime scope == .dvui and level == .debug and @import("builtin").mode != .debug) return;
     if (!refresh_log_active) fizzy.OutputLog.append(level, scope, format, args);
     dvui.App.logFn(level, scope, format, args);
 }
@@ -356,7 +356,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     app_ptr.* = .{
         .allocator = allocator,
         .window = win,
-        .root_path = try allocator.dupeZ(u8, path),
+        .root_path = try allocator.dupeSentinel(u8, path, 0),
     };
 
     const editor_ptr = try allocator.create(Editor);
@@ -395,7 +395,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // near the top of AppInit while the window was hidden). The window opens at
     // its saved windowed geometry; fullscreen/maximize are not restored. Windows
     // chrome goes here.
-    if (builtin.os.tag != .macos) {
+    if (builtin.target.os.tag != .macos) {
         fizzy.backend.setWindowStyle(win);
     }
 
@@ -506,7 +506,7 @@ fn gpuTotals() ?fizzy.core.profile.Gpu {
     if (comptime !@hasDecl(dvui.backend, "gpuTotals")) return null;
     const t = dvui.backend.gpuTotals();
     var out: fizzy.core.profile.Gpu = .{};
-    inline for (std.meta.fields(fizzy.core.profile.Gpu)) |f| @field(out, f.name) = @truncate(@field(t, f.name));
+    inline for (@typeInfo(fizzy.core.profile.Gpu).@"struct".field_names, @typeInfo(fizzy.core.profile.Gpu).@"struct".field_types, @typeInfo(fizzy.core.profile.Gpu).@"struct".field_attrs) |f_name, _, _| @field(out, f_name) = @truncate(@field(t, f_name));
     return out;
 }
 

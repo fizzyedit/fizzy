@@ -16,7 +16,7 @@ const Phase = enum(u8) {
 };
 
 var launched: bool = false;
-var phase: std.atomic.Value(u8) = .init(@intFromEnum(Phase.pending));
+var phase: std.atomic.Value(u8) = .init(@backingInt(Phase.pending));
 
 /// Set by `startLaunchCheck` when the "update available" state is faked for UI work
 /// (`Constants.debug_simulate_update_available`). Nothing may act on it beyond drawing the
@@ -44,7 +44,7 @@ const PROGRESS_TOAST_TIMEOUT_US: i32 = std.math.maxInt(i32);
 /// Stable, non-null subwindow id for this toast. Using a non-null id makes DVUI's
 /// default `toastsShow(null, …)` (run in `Window.end`) skip it, so we can render
 /// it ourselves in a custom rect via `dvui.toastsFor(SUBWINDOW_ID)`.
-const SUBWINDOW_ID: dvui.Id = @enumFromInt(0xF122_DA70_AD0E_71D0);
+const SUBWINDOW_ID: dvui.Id = @fromBackingInt(@intCast(0xF122_DA70_AD0E_71D0));
 
 // Estimated toast size — used for the FloatingWidget bounding rect and for
 // computing the bottom-left anchor relative to the infobar. The real toast
@@ -63,22 +63,22 @@ pub fn startLaunchCheck(io: std.Io, simulate_out_of_date: bool) void {
         const fake = "9.9.9 (simulated)";
         @memcpy(remote_ver[0..fake.len], fake);
         remote_ver_len = fake.len;
-        phase.store(@intFromEnum(Phase.done_yes), .release);
+        phase.store(@backingInt(Phase.done_yes), .release);
         return;
     }
 
     if (!auto_update.impl) {
-        phase.store(@intFromEnum(Phase.done_no), .release);
+        phase.store(@backingInt(Phase.done_no), .release);
         return;
     }
 
     if (!auto_update.installLayoutSupported(io)) {
-        phase.store(@intFromEnum(Phase.done_no), .release);
+        phase.store(@backingInt(Phase.done_no), .release);
         return;
     }
 
     const thread = std.Thread.spawn(.{}, worker, .{io}) catch {
-        phase.store(@intFromEnum(Phase.done_no), .release);
+        phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
     thread.detach();
@@ -87,7 +87,7 @@ pub fn startLaunchCheck(io: std.Io, simulate_out_of_date: bool) void {
 fn worker(io: std.Io) void {
     var ver_buf: [128]u8 = undefined;
     const summary = auto_update.checkRemoteVersionSummary(io, std.heap.page_allocator, &ver_buf) catch {
-        phase.store(@intFromEnum(Phase.done_no), .release);
+        phase.store(@backingInt(Phase.done_no), .release);
         return;
     };
     switch (summary) {
@@ -95,19 +95,19 @@ fn worker(io: std.Io) void {
             const n = @min(v.len, remote_ver.len);
             @memcpy(remote_ver[0..n], v[0..n]);
             remote_ver_len = n;
-            phase.store(@intFromEnum(Phase.done_yes), .release);
+            phase.store(@backingInt(Phase.done_yes), .release);
         },
         .no_update, .remote_empty => {
-            phase.store(@intFromEnum(Phase.done_no), .release);
+            phase.store(@backingInt(Phase.done_no), .release);
         },
         else => {
-            phase.store(@intFromEnum(Phase.done_no), .release);
+            phase.store(@backingInt(Phase.done_no), .release);
         },
     }
 }
 
 pub fn badgeVisible() bool {
-    return phase.load(.acquire) == @intFromEnum(Phase.done_yes);
+    return phase.load(.acquire) == @backingInt(Phase.done_yes);
 }
 
 /// Where the launch update check has got to, for anything that must sequence itself *behind* a
@@ -138,7 +138,7 @@ pub fn appUpdateState() AppUpdateState {
             else => return .installing,
         };
     }
-    return switch (@as(Phase, @enumFromInt(phase.load(.acquire)))) {
+    return switch (@as(Phase, @fromBackingInt(@intCast(phase.load(.acquire))))) {
         .pending => .checking,
         .done_no => .none,
         .done_yes => .available,

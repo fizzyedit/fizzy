@@ -820,11 +820,11 @@ pub fn readPluginReservedField(gpa: std.mem.Allocator, settings_data: ?[:0]const
     const data = settings_data orelse return null;
     const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
     defer gpa.free(plugins);
-    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    const plugins_z = gpa.dupeSentinel(u8, plugins, 0) catch return null;
     defer gpa.free(plugins_z);
     const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
     defer gpa.free(id_block);
-    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    const id_z = gpa.dupeSentinel(u8, id_block, 0) catch return null;
     defer gpa.free(id_z);
     return SettingsPluginsZon.extractField(gpa, id_z, field);
 }
@@ -834,11 +834,11 @@ pub fn readPluginSettingsText(gpa: std.mem.Allocator, settings_data: ?[:0]const 
     const data = settings_data orelse return null;
     const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
     defer gpa.free(plugins);
-    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    const plugins_z = gpa.dupeSentinel(u8, plugins, 0) catch return null;
     defer gpa.free(plugins_z);
     const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
     defer gpa.free(id_block);
-    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    const id_z = gpa.dupeSentinel(u8, id_block, 0) catch return null;
     defer gpa.free(id_z);
     return SettingsPluginsZon.extractField(gpa, id_z, "settings");
 }

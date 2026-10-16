@@ -76,7 +76,7 @@ fn writeMeta(editor: *Editor, w: *std.Io.Writer, arena: std.mem.Allocator, why: 
         .why = why,
         .seconds = seconds,
         .frames = frames,
-        .fizzy = .{ .version = fizzy.version, .optimize = @tagName(builtin.mode), .os = @tagName(builtin.os.tag), .arch = @tagName(builtin.cpu.arch) },
+        .fizzy = .{ .version = fizzy.version, .optimize = @tagName(builtin.mode), .os = @tagName(builtin.target.os.tag), .arch = @tagName(builtin.target.cpu.arch) },
         .window = .{ .w = px.w, .h = px.h, .scale = dvui.windowNaturalScale() },
         .plugins = plugins.items,
     }, .{}, w);

@@ -86,7 +86,7 @@ glass_shader: bool = true,
 /// Whether a float can leave the main window into an OS window of its own, and a view be carried
 /// past the main window to open one there. Taken at launch: a change waits for a restart, which the
 /// app says (`Editor.restartPending`). On by default on macOS; `FIZZY_POPOUT` overrides it.
-float_windows: bool = builtin.os.tag == .macos,
+float_windows: bool = builtin.target.os.tag == .macos,
 
 /// Whether a view drag's glass — the carried view and the drop zones — is the OS's own (Liquid Glass,
 /// macOS 26) rather than the app's, where floats are windows. Applied at once; `FIZZY_NATIVE_GLASS`
@@ -126,7 +126,7 @@ plugin_update_mode: PluginUpdateMode = .prompt,
 /// frosted. Where the window is opaque (the web, Linux), the glass the app draws over it: little
 /// colour, well frosted — the dialogs' glass as it was.
 pub const GlassDefaults = struct { opacity_dark: f32, opacity_light: f32 };
-pub const default_glass: GlassDefaults = if (builtin.target.cpu.arch == .wasm32 or (builtin.os.tag != .macos and builtin.os.tag != .windows))
+pub const default_glass: GlassDefaults = if (builtin.target.cpu.arch == .wasm32 or (builtin.target.os.tag != .macos and builtin.target.os.tag != .windows))
     .{ .opacity_dark = 0.2, .opacity_light = 0.2 }
 else
     .{ .opacity_dark = 0.7, .opacity_light = 0.3 };
@@ -197,7 +197,7 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]cons
 pub fn freeParsed(allocator: std.mem.Allocator, parsed: Settings) void {
     var value = parsed;
     if (value.theme.ptr == default_theme.ptr) value.theme = "";
-    std.zon.parse.free(allocator, value);
+    zig017ZonFree(allocator, value);
 }
 
 /// Parses `data` (already-read `settings.zon` bytes) into a `Settings` value, ignoring unknown
@@ -210,7 +210,13 @@ pub fn freeParsed(allocator: std.mem.Allocator, parsed: Settings) void {
 /// which owns the live value's long-lived `theme`).
 pub fn parseOnly(allocator: std.mem.Allocator, data: [:0]const u8) !Settings {
     @setEvalBranchQuota(10_000);
-    var parsed = try std.zon.parse.fromSliceAlloc(Settings, allocator, data, null, .{ .ignore_unknown_fields = true });
+    var parsed = try (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(allocator);
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(Settings, .{ .gpa = allocator, .arena = zig017_arena.allocator(), .source = data, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Settings, allocator, zig017_v) else |zig017_e| zig017_e;
+    });
     SettingsMigration.windowGlass(allocator, data, &parsed);
     return parsed;
 }
@@ -246,12 +252,12 @@ pub fn serialize(settings: *const Settings, allocator: std.mem.Allocator) ![]u8 
     defer aw.deinit();
 
     var any = false;
-    inline for (std.meta.fields(Settings)) |f| {
-        if (!fieldEqual(f.type, @field(settings, f.name), @field(default_value, f.name))) {
+    inline for (@typeInfo(Settings).@"struct".field_names, @typeInfo(Settings).@"struct".field_types, @typeInfo(Settings).@"struct".field_attrs) |f_name, f_type, _| {
+        if (!fieldEqual(f_type, @field(settings, f_name), @field(default_value, f_name))) {
             if (!any) try aw.writer.writeAll(".{\n");
             any = true;
-            try aw.writer.print("    .{f} = ", .{std.zig.fmtId(f.name)});
-            try std.zon.stringify.serialize(@field(settings, f.name), .{}, &aw.writer);
+            try aw.writer.print("    .{f} = ", .{std.zig.fmtId(f_name)});
+            try std.zon.stringify.serialize(@field(settings, f_name), .{}, &aw.writer);
             try aw.writer.writeAll(",\n");
         }
     }
@@ -262,4 +268,65 @@ pub fn serialize(settings: *const Settings, allocator: std.mem.Allocator) ![]u8 
 
 pub fn deinit(settings: *Settings, allocator: std.mem.Allocator) void {
     allocator.free(settings.theme);
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
+}
+// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
+// arena the caller owns). Goes with the zon arena PR.
+fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                zig017ZonFree(gpa, value.*);
+                gpa.destroy(value);
+            },
+            .slice => {
+                for (value) |item| zig017ZonFree(gpa, item);
+                gpa.free(value);
+            },
+            else => comptime unreachable,
+        },
+        .array => for (value) |item| zig017ZonFree(gpa, item),
+        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
+        .@"union" => |u| if (u.tag_type != null) switch (value) {
+            inline else => |payload| zig017ZonFree(gpa, payload),
+        },
+        .optional => if (value) |some| zig017ZonFree(gpa, some),
+        else => {},
+    }
 }

@@ -159,7 +159,7 @@ pub fn Ring(comptime name: []const u8, comptime Frame: type, comptime Record: ty
         /// Frames `from` up to (not including) `to`, their records and payloads, as one file: the
         /// header and the three arrays, the records' `first` and `bytes_at` rebased to the file's.
         pub fn write(self: *const Self, w: *std.Io.Writer, from: u64, to: u64) !void {
-            std.debug.assert(builtin.cpu.arch.endian() == .little);
+            std.debug.assert(builtin.target.cpu.arch.endian() == .little);
             const lo = @max(from, self.oldestWhole());
             const hi = @min(to, self.frames_n);
             var n_records: u64 = 0;
@@ -315,7 +315,7 @@ test "the rings keep the newest, and a stretch starts at the oldest frame still 
     for (0..TestRing.frames_cap + 10) |i| ring.appendFrame(.{ .t_ns = @intCast(i) }, &.{.{ .button = @intCast(i % 16) }}, &.{});
     try std.testing.expectEqual(@as(u64, 10), ring.oldestWhole());
     // Payloads outrunning their ring: a frame whose bytes were overwritten is not whole.
-    for (0..8) |_| ring.appendFrame(.{ .t_ns = 100 }, &.{.{ .button = 1 }}, &.{"x" ** 64});
+    for (0..8) |_| ring.appendFrame(.{ .t_ns = 100 }, &.{.{ .button = 1 }}, &.{&@as([64]u8, @splat('x'))});
     const oldest = ring.frame(ring.oldestWhole());
     const r = ring.records[@intCast(oldest.first % TestRing.records_cap)];
     try std.testing.expect(r.bytes_at >= ring.bytes_n - TestRing.bytes_cap);

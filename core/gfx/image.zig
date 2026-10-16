@@ -187,7 +187,7 @@ pub fn checkerboardTile(width: u32, height: u32, even: [4]u8, odd: [4]u8) ?dvui.
     const size_f: dvui.Size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) };
     for (buf, 0..) |*p, i| {
         const rgba = if (math.checker(size_f, i)) even else odd;
-        p.* = @bitCast(rgba);
+        p.* = .{ .r = rgba[0], .g = rgba[1], .b = rgba[2], .a = rgba[3] };
     }
 
     return dvui.textureCreate(buf, .{
@@ -209,7 +209,7 @@ pub fn cachedTexture(source: dvui.ImageSource) dvui.ImageSource {
         .imageFile => |f| f,
         else => return source,
     };
-    const id: dvui.Id = @enumFromInt(@as(u64, @intFromPtr(file.bytes.ptr)) ^ file.bytes.len);
+    const id: dvui.Id = @fromBackingInt(@intCast(@as(u64, @intFromPtr(file.bytes.ptr)) ^ file.bytes.len));
     if (dvui.dataGet(null, id, "_image_texture_key", u64)) |key| {
         if (dvui.textureGetCached(key)) |tex| return .{ .texture = tex };
     }

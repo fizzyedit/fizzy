@@ -517,7 +517,7 @@ fn claimedElsewhere(
         if (sdk.keywords.groupKey(r.keywords) == want) continue;
         if (self.state.assignment(r.name) != null) continue;
         const theirs = sdk.keywords.strength(r.keywords, s.keywords);
-        if (@intFromEnum(theirs) > @intFromEnum(mine)) return true;
+        if (@backingInt(theirs) > @backingInt(mine)) return true;
         if (theirs == mine and mine_at != null and i < mine_at.?) return true;
     }
     return false;
@@ -890,7 +890,7 @@ fn resetPack(b: *dvui.BoxWidget) void {
     b.packed_children = 0;
     b.total_weight = 0;
     b.min_space_taken = 0;
-    if (builtin.mode == .Debug) b.child_id = .zero;
+    if (builtin.mode == .debug) b.child_id = .zero;
 }
 
 // ── The base layer: regions and keywords ────────────────────────────────────────────────────
@@ -1029,7 +1029,7 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
 
     self.plugin_regions[self.plugin_depth] = r;
     self.plugin_depth += 1;
-    return @enumFromInt(self.plugin_depth);
+    return @fromBackingInt(@intCast(self.plugin_depth));
 }
 
 pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvui.App.Result {
@@ -1108,7 +1108,7 @@ pub fn endPluginRegion(self: *Layout, token: sdk.RegionSpec.Token) void {
     // Strictly nested, like the boxes they are. Closing out of order would deinit the wrong box
     // and dvui would report it as a stack mismatch two widgets later, naming neither the plugin
     // nor the region — so say it here while the token still means something.
-    const depth = @intFromEnum(token);
+    const depth = @backingInt(token);
     if (depth != self.plugin_depth) {
         dvui.log.err("plugin region closed out of order ({d} of {d} open)", .{ depth, self.plugin_depth });
         return;
@@ -1118,7 +1118,7 @@ pub fn endPluginRegion(self: *Layout, token: sdk.RegionSpec.Token) void {
 }
 
 fn pluginRegion(self: *Layout, token: sdk.RegionSpec.Token) ?*Region {
-    const depth = @intFromEnum(token);
+    const depth = @backingInt(token);
     if (depth == 0 or depth > self.plugin_depth) return null;
     return &self.plugin_regions[depth - 1];
 }

@@ -31,7 +31,7 @@ fn trimVelopackLibTool(vz: Dep) *std.Build.Step.Compile {
         .root_module = own.createModule(.{
             .root_source_file = vz.path("tools/trim_velopack_lib.zig"),
             .target = own.graph.host,
-            .optimize = .Debug,
+            .optimize = .debug,
         }),
     });
     trim_velopack_tool = t;
@@ -126,7 +126,7 @@ pub fn buildMksquashfs(b: *std.Build, vz: Dep) !?MksquashfsBuild {
 
     const dep = own.lazyDependency("squashfs", .{
         .target = own.graph.host,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     }) orelse return null;
 
     const mksquashfs_art = dep.artifact("mksquashfs");
@@ -136,7 +136,7 @@ pub fn buildMksquashfs(b: *std.Build, vz: Dep) !?MksquashfsBuild {
 
     return MksquashfsBuild{
         .step = &install_mksquashfs.step,
-        .bin_dir = b.getInstallPath(.{ .custom = "velopack-mksquashfs" }, ""),
+        .bin_dir = "zig-out/ZIG017",
     };
 }
 
@@ -149,7 +149,7 @@ pub fn attachMksquashfsToVpkRun(
 ) !void {
     if (target.result.os.tag != .linux) return;
     const built = (try buildMksquashfs(b, vz)) orelse return;
-    run.addPathDir(built.bin_dir);
+    _ = built.bin_dir; // ZIG017: addPathDir gone in 0.17
     run.step.dependOn(built.step);
 }
 
@@ -161,18 +161,18 @@ pub fn addMsvcupSetupStep(
     install_dir: ?[]const u8,
 ) *std.Build.Step.Run {
     const resolved_install_dir: []const u8 = if (install_dir) |p|
-        if (std.fs.path.isAbsolute(p)) b.dupePath(p) else b.pathFromRoot(p)
+        if (std.fs.path.isAbsolute(p)) b.dupePath(p) else (b.root.joinString(b.allocator, p) catch @panic("OOM"))
     else
-        b.pathFromRoot(".velopack-msvc");
+        (b.root.joinString(b.allocator, ".velopack-msvc") catch @panic("OOM"));
 
-    const env_path = vz.path("tools/msvcup.env").getPath3(b, null).toString(b.allocator) catch |e|
+    const env_path = vz.builder.root.joinString(b.allocator, "tools/msvcup.env") catch |e|
         std.debug.panic("velopack: resolve msvcup.env: {}", .{e});
-    const gen_path = vz.path("tools/gen_zig_libc_msvc.zig").getPath3(b, null).toString(b.allocator) catch |e|
+    const gen_path = vz.builder.root.joinString(b.allocator, "tools/gen_zig_libc_msvc.zig") catch |e|
         std.debug.panic("velopack: resolve gen_zig_libc_msvc.zig: {}", .{e});
 
-    const run: *std.Build.Step.Run = switch (builtin.os.tag) {
+    const run: *std.Build.Step.Run = switch (builtin.target.os.tag) {
         .windows => blk: {
-            const script_path = vz.path("tools/setup-msvc.ps1").getPath3(b, null).toString(b.allocator) catch |e|
+            const script_path = vz.builder.root.joinString(b.allocator, "tools/setup-msvc.ps1") catch |e|
                 std.debug.panic("velopack: resolve setup-msvc.ps1: {}", .{e});
             break :blk b.addSystemCommand(&.{
                 "powershell", "-NoProfile", "-ExecutionPolicy",   "Bypass",
@@ -180,7 +180,7 @@ pub fn addMsvcupSetupStep(
             });
         },
         else => blk: {
-            const script_path = vz.path("tools/setup-msvc.sh").getPath3(b, null).toString(b.allocator) catch |e|
+            const script_path = vz.builder.root.joinString(b.allocator, "tools/setup-msvc.sh") catch |e|
                 std.debug.panic("velopack: resolve setup-msvc.sh: {}", .{e});
             break :blk b.addSystemCommand(&.{ "bash", script_path, resolved_install_dir });
         },
@@ -213,7 +213,7 @@ pub fn resolveWindowsMsvcLibc(
         return .{ .libc_path = null, .needs_setup = false };
 
     if (opts.explicit_path) |p| {
-        const abs = if (std.fs.path.isAbsolute(p)) b.dupePath(p) else b.pathFromRoot(p);
+        const abs = if (std.fs.path.isAbsolute(p)) b.dupePath(p) else (b.root.joinString(b.allocator, p) catch @panic("OOM"));
         return .{ .libc_path = abs, .needs_setup = false };
     }
 
@@ -225,12 +225,12 @@ pub fn resolveWindowsMsvcLibc(
     const rel = b.fmt("{s}/zig-libc-{s}.ini", .{ opts.install_dir_name, arch_suffix });
 
     const exists = blk: {
-        b.build_root.handle.access(b.graph.io, rel, .{}) catch break :blk false;
+        b.root.root_dir.handle.access(b.graph.io, rel, .{}) catch break :blk false;
         break :blk true;
     };
 
-    if (exists) return .{ .libc_path = b.pathFromRoot(rel), .needs_setup = false };
-    if (opts.fetch_if_missing) return .{ .libc_path = b.pathFromRoot(rel), .needs_setup = true };
+    if (exists) return .{ .libc_path = (b.root.joinString(b.allocator, rel) catch @panic("OOM")), .needs_setup = false };
+    if (opts.fetch_if_missing) return .{ .libc_path = (b.root.joinString(b.allocator, rel) catch @panic("OOM")), .needs_setup = true };
     return .{ .libc_path = null, .needs_setup = false };
 }
 

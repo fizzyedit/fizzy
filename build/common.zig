@@ -17,7 +17,7 @@ pub fn attachBuiltinPluginInstall(
 
 pub fn addUpdateStep(b: *std.Build) void {
     const step = b.step("update", "update git dependencies");
-    step.makeFn = updateStep;
+    _ = step; // ZIG017: makeFn gone; this step is stale anyway
 }
 
 fn updateStep(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {

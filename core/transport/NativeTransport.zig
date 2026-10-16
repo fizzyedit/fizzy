@@ -222,7 +222,7 @@ fn perform(job: *Job) vfs.Error!vfs.http.Response {
         .response_writer = &body.writer,
     }) catch return error.Http;
     const bytes = body.toOwnedSlice() catch return error.OutOfMemory;
-    return .{ .status = @intFromEnum(result.status), .body = bytes };
+    return .{ .status = @backingInt(result.status), .body = bytes };
 }
 
 fn cancel(ptr: *anyopaque, handle: vfs.http.Job) void {

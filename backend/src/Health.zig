@@ -77,11 +77,11 @@ pub const Counts = struct {
     destroyed: u32 = 0,
 
     fn add(a: *Counts, b: Counts) void {
-        inline for (std.meta.fields(Counts)) |f| @field(a, f.name) +|= @field(b, f.name);
+        inline for (@typeInfo(Counts).@"struct".field_names, @typeInfo(Counts).@"struct".field_types, @typeInfo(Counts).@"struct".field_attrs) |f_name, _, _| @field(a, f_name) +|= @field(b, f_name);
     }
 
     fn max(a: *Counts, b: Counts) void {
-        inline for (std.meta.fields(Counts)) |f| @field(a, f.name) = @max(@field(a, f.name), @field(b, f.name));
+        inline for (@typeInfo(Counts).@"struct".field_names, @typeInfo(Counts).@"struct".field_types, @typeInfo(Counts).@"struct".field_attrs) |f_name, _, _| @field(a, f_name) = @max(@field(a, f_name), @field(b, f_name));
     }
 };
 
@@ -284,7 +284,7 @@ test "SDL's log is counted from any thread, and the first error kept" {
     for (&pool) |*th| th.* = try std.Thread.spawn(.{}, struct {
         fn run(hp: *Health) void {
             for (0..each) |_| {
-                hp.noteLog(.@"error", "x" ** (first_error_cap + 10));
+                hp.noteLog(.@"error", &@as([first_error_cap + 10]u8, @splat('x')));
                 hp.noteLog(.warning, "w");
             }
         }
@@ -295,7 +295,7 @@ test "SDL's log is counted from any thread, and the first error kept" {
     try std.testing.expectEqual(@as(u32, threads * each), s.sdl_errors);
     try std.testing.expectEqual(@as(u32, threads * each + 1), s.sdl_warnings);
     // Cut to the cap, written once.
-    try std.testing.expectEqualStrings("x" ** first_error_cap, s.first_sdl_error);
+    try std.testing.expectEqualStrings(&@as([first_error_cap]u8, @splat('x')), s.first_sdl_error);
 }
 
 test "a snapshot round-trips through ZON" {
@@ -312,10 +312,16 @@ test "a snapshot round-trips through ZON" {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
     try std.zon.stringify.serialize(s, .{}, &out.writer);
-    const text = try std.testing.allocator.dupeZ(u8, out.written());
+    const text = try std.testing.allocator.dupeSentinel(u8, out.written(), 0);
     defer std.testing.allocator.free(text);
-    const back = try std.zon.parse.fromSliceAlloc(Snapshot, std.testing.allocator, text, null, .{});
-    defer std.zon.parse.free(std.testing.allocator, back);
+    const back = try (zig017_zon: {
+        var zig017_zd: std.zon.parse.Diagnostics = undefined;
+        var zig017_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+        defer zig017_arena.deinit();
+        const zig017_r = std.zon.parse.fromSlice(Snapshot, .{ .gpa = std.testing.allocator, .arena = zig017_arena.allocator(), .source = text, .diagnostics = &zig017_zd });
+        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Snapshot, std.testing.allocator, zig017_v) else |zig017_e| zig017_e;
+    });
+    defer zig017ZonFree(std.testing.allocator, back);
     try std.testing.expectEqual(s.presents, back.presents);
     try std.testing.expectEqual(s.os_windows, back.os_windows);
     try std.testing.expectEqual(s.ns_windows, back.ns_windows);
@@ -323,4 +329,65 @@ test "a snapshot round-trips through ZON" {
     try std.testing.expectEqual(s.frame_times, back.frame_times);
     try std.testing.expectEqual(s.last_frame, back.last_frame);
     try std.testing.expectEqualStrings(s.first_sdl_error, back.first_sdl_error);
+}
+
+// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
+// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
+fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                const out = try gpa.create(p.child);
+                out.* = try zig017ZonDupe(p.child, gpa, value.*);
+                return out;
+            },
+            .slice => {
+                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
+                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
+                return out;
+            },
+            else => comptime unreachable,
+        },
+        .array => |a| {
+            var out: T = undefined;
+            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
+            return out;
+        },
+        .@"struct" => |s| {
+            var out: T = value;
+            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
+                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
+            }
+            return out;
+        },
+        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
+            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
+        },
+        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
+        else => return value,
+    }
+}
+// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
+// arena the caller owns). Goes with the zon arena PR.
+fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |p| switch (p.size) {
+            .one => {
+                zig017ZonFree(gpa, value.*);
+                gpa.destroy(value);
+            },
+            .slice => {
+                for (value) |item| zig017ZonFree(gpa, item);
+                gpa.free(value);
+            },
+            else => comptime unreachable,
+        },
+        .array => for (value) |item| zig017ZonFree(gpa, item),
+        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
+        .@"union" => |u| if (u.tag_type != null) switch (value) {
+            inline else => |payload| zig017ZonFree(gpa, payload),
+        },
+        .optional => if (value) |some| zig017ZonFree(gpa, some),
+        else => {},
+    }
 }
