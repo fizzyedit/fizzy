@@ -7202,6 +7202,96 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // A document's steps (`Host.recordStep`): while recorded, each change is reported as it
+    // happens, forward, and played into a fresh document (`Plugin.applyStep`) they make the same
+    // text. Typing runs join a step; an undo is its step reversed; nothing is encoded unrecorded.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const newDoc = struct {
+            fn newDoc(ed: *fizzy.Editor, h: *sdk.Host, not: u64) !sdk.DocHandle {
+                try h.runCommand("fizzy.newFile");
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (d.id != not and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.newDoc;
+        const textOf = struct {
+            fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
+                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const zon = switch (h.callCommand("text.read", args, h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const rest = zon[at + ".text = \"".len ..];
+                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+            }
+        }.textOf;
+        const Recorded = struct {
+            doc: u64 = 0,
+            kinds: std.ArrayList(sdk.Step.Kind) = .empty,
+            effects: std.ArrayList([]u8) = .empty,
+
+            fn wants(ctx: *anyopaque, id: u64) bool {
+                return @as(*@This(), @ptrCast(@alignCast(ctx))).doc == id;
+            }
+            fn step(ctx: *anyopaque, id: u64, st: sdk.Step) void {
+                const self: *@This() = @ptrCast(@alignCast(ctx));
+                std.debug.assert(id == self.doc);
+                self.kinds.append(std.testing.allocator, st.kind) catch unreachable;
+                self.effects.append(std.testing.allocator, std.testing.allocator.dupe(u8, st.effect) catch unreachable) catch unreachable;
+            }
+            fn deinit(self: *@This()) void {
+                for (self.effects.items) |e| std.testing.allocator.free(e);
+                self.effects.deinit(std.testing.allocator);
+                self.kinds.deinit(std.testing.allocator);
+            }
+        };
+        var rec: Recorded = .{};
+        defer rec.deinit();
+        host.recorder = .{ .ctx = &rec, .vtable = &.{ .wants = Recorded.wants, .step = Recorded.step } };
+        defer host.recorder = null;
+
+        const a = try newDoc(editor, host, was.id);
+        rec.doc = a.id;
+        // Typed a keystroke at a time: one step, joined.
+        for ([_][]const u8{ "a", "b" }) |key| {
+            try dvui.testing.writeText(key);
+            try dvui.testing.settle(headlessFrame);
+        }
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"X\", .line = 1 }", host.arena()) == .ok);
+        try editor.undo();
+        try editor.redo();
+        try editor.undo();
+        // An edit after going back: the step gone back over stays undone.
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"Y\", .line = 1 }", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("Yab", try textOf(host, a));
+        try std.testing.expectEqualSlices(sdk.Step.Kind, &.{ .added, .joined, .added, .undone, .redone, .undone, .added }, rec.kinds.items);
+
+        // Played into a document of its own, forward, in order: the same text.
+        const b = try newDoc(editor, host, a.id);
+        try std.testing.expect(b.owner.step_format == a.owner.step_format and a.owner.step_format != 0);
+        for (rec.effects.items) |effect| try std.testing.expect(b.owner.applyStep(b, effect, "", 0));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("Yab", try textOf(host, b));
+        // Unrecorded, B reported nothing; and a step that does not fit is refused, B untouched:
+        // the undo takes back an `X` that is not there.
+        try std.testing.expectEqual(@as(usize, 7), rec.kinds.items.len);
+        // (Through the hook itself: the wrapper logs the refusal as an error, which fails a run.)
+        try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.applyStep.?(b.owner.state, b, rec.effects.items[3], "", 0));
+        try std.testing.expectEqualStrings("Yab", try textOf(host, b));
+
+        try editor.rawCloseFileID(b.id);
+        try editor.rawCloseFileID(a.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens
     // the panel with Output selected, and a view no region shows is not revealed.
     {

@@ -35,6 +35,7 @@ pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
 pub const Claim = @import("Claim.zig");
+pub const Step = @import("Step.zig");
 pub const events = @import("events.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
@@ -287,6 +288,9 @@ activity_run: u64 = 0,
 
 /// Documents held by a plugin while it works on them (`Claim`).
 claims: std.ArrayListUnmanaged(Claim) = .empty,
+/// Who records documents' steps (`recordStep`): the app's tracks. Null, nobody does, and owners
+/// encode nothing.
+recorder: ?Recorder = null,
 next_claim_id: u32 = 1,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
@@ -1557,6 +1561,35 @@ fn claimRefusing(self: *Host, c: *const Command) ?Claim {
     const doc = self.activeDoc() orelse return null;
     if (doc.owner != owner) return null;
     return self.documentClaim(doc.id);
+}
+
+// ---- recording -------------------------------------------------------------------------------
+
+/// What keeps the steps owners report: set by the app, never by a plugin.
+pub const Recorder = struct {
+    ctx: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        /// Whether `doc_id`'s steps are wanted. Asked before every step, so it is cheap.
+        wants: *const fn (ctx: *anyopaque, doc_id: u64) bool,
+        /// Keep `step` of `doc_id`. Its bytes are only valid for the call.
+        step: *const fn (ctx: *anyopaque, doc_id: u64, step: Step) void,
+    };
+};
+
+/// Whether `doc_id`'s steps are recorded. An owner asks before it encodes one, so a document
+/// nobody records costs nothing.
+pub fn recording(self: *const Host, doc_id: u64) bool {
+    const r = self.recorder orelse return false;
+    return r.vtable.wants(r.ctx, doc_id);
+}
+
+/// A step of `doc_id`'s history, from its **owner**, as it happens (`Step`): each entry added or
+/// joined, undone or redone, and the history starting over. Only while `recording(doc_id)`.
+pub fn recordStep(self: *Host, doc_id: u64, step: Step) void {
+    const r = self.recorder orelse return;
+    r.vtable.step(r.ctx, doc_id, step);
 }
 
 // ---- activity --------------------------------------------------------------------------------

@@ -187,14 +187,51 @@ pub fn note(
     };
 }
 
-/// Commit the pending edit, merging it into the current group when VSCode's rule says to.
-pub fn end(self: *History, gpa: Allocator, sel_after: Range) void {
-    var p = self.pending orelse return;
+/// What a commit did to the history, for whoever records it (`sdk.Step`).
+pub const Committed = struct {
+    step: u64,
+    /// It joined the step on top (a run of typing) rather than starting one.
+    joined: bool,
+    /// What this commit did: the whole step when it starts one, only the new part when it joins.
+    /// Valid until the history next changes.
+    edits: []const Transaction.Edit,
+    sel_after: Range,
+};
+
+/// A step as the history holds it: its id, its edits, and the selection either side. Valid until
+/// the history next changes.
+pub const StepRef = struct {
+    step: u64,
+    edits: []const Transaction.Edit,
+    sel_before: Range,
+    sel_after: Range,
+
+    fn of(e: *const Entry) StepRef {
+        return .{ .step = e.step, .edits = e.txn.edits.items, .sel_before = e.txn.sel_before, .sel_after = e.txn.sel_after };
+    }
+};
+
+/// The step `applyRedo` just put back: the last applied. Null when none is.
+pub fn lastApplied(self: *const History) ?StepRef {
+    const items = self.undo_stack.items;
+    return if (items.len == 0) null else .of(&items[items.len - 1]);
+}
+
+/// The step `applyUndo` just took back: the next to redo. Null when there is none.
+pub fn lastUndone(self: *const History) ?StepRef {
+    const items = self.redo_stack.items;
+    return if (items.len == 0) null else .of(&items[items.len - 1]);
+}
+
+/// Commit the pending edit, merging it into the current group when VSCode's rule says to. Returns
+/// what it did, or null when there was nothing to commit.
+pub fn end(self: *History, gpa: Allocator, sel_after: Range) ?Committed {
+    var p = self.pending orelse return null;
     self.pending = null;
 
     if (p.txn.isEmpty()) {
         p.txn.deinit(gpa);
-        return;
+        return null;
     }
     p.txn.sel_after = sel_after;
 
@@ -228,8 +265,10 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range) void {
         self.undo_stack.items.len > 0 and
         !shouldBreakGroup(prev_kind, kind);
 
+    var committed: Committed = undefined;
     if (can_merge) {
         var top = &self.undo_stack.items[self.undo_stack.items.len - 1];
+        const first_new = top.txn.edits.items.len;
         // Move the pending edits onto the existing group; the group keeps its original
         // `sel_before` so undo returns to where the whole run started.
         for (p.txn.edits.items) |e| {
@@ -246,6 +285,7 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range) void {
         top.kind = kind;
         top.id = self.next_id;
         self.next_id += 1;
+        committed = .{ .step = top.step, .joined = true, .edits = top.txn.edits.items[first_new..], .sel_after = sel_after };
     } else {
         self.undo_stack.append(gpa, .{
             .txn = p.txn,
@@ -255,16 +295,19 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range) void {
         }) catch |err| {
             std.log.err("History.end: push failed: {s}", .{@errorName(err)});
             p.txn.deinit(gpa);
-            return;
+            return null;
         };
         self.next_id += 1;
+        const top = &self.undo_stack.items[self.undo_stack.items.len - 1];
+        committed = .{ .step = top.step, .joined = false, .edits = top.txn.edits.items, .sel_after = sel_after };
     }
     self.group_open = true;
     self.version += 1;
+    return committed;
 }
 
 /// Record one complete edit built outside the begin/note/end flow (the paste command). Always
-/// its own undo step.
+/// its own undo step. Null when it changed nothing.
 pub fn pushComplete(
     self: *History,
     gpa: Allocator,
@@ -273,19 +316,27 @@ pub fn pushComplete(
     inserted: []const u8,
     sel_before: Range,
     sel_after: Range,
-) !void {
+) !?Committed {
     var txn: Transaction = .{ .sel_before = sel_before, .sel_after = sel_after };
     errdefer txn.deinit(gpa);
     try txn.append(gpa, pos, removed, inserted);
     if (txn.isEmpty()) {
         txn.deinit(gpa);
-        return;
+        return null;
     }
+    return try self.push(gpa, txn);
+}
+
+/// Take `txn`, already applied, as a step of its own: a recorded step played into the document
+/// (`Transaction.applyStepTo`).
+pub fn push(self: *History, gpa: Allocator, txn: Transaction) !Committed {
     self.clearRedo(gpa);
     try self.undo_stack.append(gpa, .{ .txn = txn, .kind = .other, .id = self.next_id, .step = self.next_id });
     self.next_id += 1;
     self.group_open = false;
     self.version += 1;
+    const top = &self.undo_stack.items[self.undo_stack.items.len - 1];
+    return .{ .step = top.step, .joined = false, .edits = top.txn.edits.items, .sel_after = top.txn.sel_after };
 }
 
 fn clearRedo(self: *History, gpa: Allocator) void {
@@ -422,7 +473,7 @@ const Harness = struct {
             try self.text.insertSlice(self.gpa, self.cursor, ch);
             self.hist.note(self.gpa, self.cursor, "", ch);
             self.cursor += ch.len;
-            self.hist.end(self.gpa, .collapsed(self.cursor));
+            _ = self.hist.end(self.gpa, .collapsed(self.cursor));
         }
     }
 
@@ -434,7 +485,7 @@ const Harness = struct {
             self.hist.note(self.gpa, self.cursor - 1, removed, "");
             try self.text.replaceRange(self.gpa, self.cursor - 1, 1, "");
             self.cursor -= 1;
-            self.hist.end(self.gpa, .collapsed(self.cursor));
+            _ = self.hist.end(self.gpa, .collapsed(self.cursor));
         }
     }
 
@@ -533,7 +584,7 @@ test "undo restores the selection, not just an offset" {
     hist.begin(.init(6, 11));
     hist.note(a, 6, "world", "X");
     try text.replaceRange(a, 6, 5, "X");
-    hist.end(a, .collapsed(7));
+    _ = hist.end(a, .collapsed(7));
 
     const sel = hist.applyUndo(a, &text).?;
     try t.expectEqualStrings("hello world", text.items);
@@ -622,7 +673,7 @@ test "cut-shaped deletion is one undoable step" {
     h.hist.note(h.gpa, 6, "world", "");
     try h.text.replaceRange(h.gpa, 6, 5, "");
     h.cursor = 6;
-    h.hist.end(h.gpa, .collapsed(6));
+    _ = h.hist.end(h.gpa, .collapsed(6));
 
     try t.expectEqualStrings("hello ", h.text.items);
     _ = h.undo();
@@ -656,4 +707,38 @@ test "the line: steps keep their ids through merges, undo and redo" {
     try t.expectEqual(@as(?isize, 0), h.hist.stepsTo(before[0].step));
     try t.expectEqual(@as(?isize, -1), h.hist.stepsTo(0));
     try t.expectEqual(@as(?isize, null), h.hist.stepsTo(9999));
+}
+
+test "a commit says whether it started a step or joined one, and what it added" {
+    const a = t.allocator;
+    var hist: History = .{};
+    defer hist.deinit(a);
+
+    hist.begin(.collapsed(0));
+    hist.note(a, 0, "", "a");
+    const first = hist.end(a, .collapsed(1)).?;
+    try t.expect(!first.joined);
+    try t.expectEqual(@as(usize, 1), first.edits.len);
+
+    hist.begin(.collapsed(1));
+    hist.note(a, 1, "", "b");
+    const second = hist.end(a, .collapsed(2)).?;
+    // Typing runs on: the same step, and only the new keystroke.
+    try t.expect(second.joined);
+    try t.expectEqual(first.step, second.step);
+    try t.expectEqual(@as(usize, 1), second.edits.len);
+    try t.expectEqualStrings("b", second.edits[0].inserted);
+
+    // An empty commit commits nothing.
+    hist.begin(.collapsed(2));
+    try t.expect(hist.end(a, .collapsed(2)) == null);
+
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(a);
+    try text.appendSlice(a, "ab");
+    _ = hist.applyUndo(a, &text).?;
+    try t.expectEqual(first.step, hist.lastUndone().?.step);
+    try t.expectEqual(@as(usize, 2), hist.lastUndone().?.edits.len);
+    _ = hist.applyRedo(a, &text).?;
+    try t.expectEqual(first.step, hist.lastApplied().?.step);
 }

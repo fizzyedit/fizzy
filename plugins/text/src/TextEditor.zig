@@ -1830,7 +1830,8 @@ fn editNotifyInserted(ctx: *anyopaque, pos: usize, bytes: []const u8) void {
     docFromCtx(ctx).history.note(sdk.allocator(), pos, "", bytes);
 }
 fn editNotifyEnd(ctx: *anyopaque, sel_after: tc.Range) void {
-    docFromCtx(ctx).history.end(sdk.allocator(), sel_after);
+    const doc = docFromCtx(ctx);
+    if (doc.history.end(sdk.allocator(), sel_after)) |c| doc.recordCommitted(c);
 }
 
 const max_text_bytes: usize = 64 * 1024 * 1024;

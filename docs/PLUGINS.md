@@ -666,6 +666,17 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   reaches a moment it snapshotted. An owner without them still plays in demos; a moment with its
   document open just is not snapshotted, and seeks through it replay from the keyframe. `text`
   implements all three.
+- **Steps** (optional) — what a document's history records and replays (`sdk.Step`,
+  `plans/RECORDING_PLAN.md`). While `host.recording(doc.id)` says so, the owner reports each
+  change as it happens with `host.recordStep(doc.id, step)`: a new history entry (`added`), more of
+  the entry on top (`joined`, a run of typing), an entry taken back (`undone`, its effect the
+  reverse) or put back (`redone`), and the history starting over (`restarted`, a reload). Every
+  step's `effect` applies **forward**, in the owner's own encoding, numbered by the plugin's
+  `step_format` (bump it when an older build would misread a step); `motion` is how it was made,
+  when the owner knows. `applyStep(doc, effect, motion, ms)` lands one as a new history entry,
+  shown being made over `ms` (0: at once), and refuses one that does not fit what the document
+  holds, leaving it as it was. Nobody recording, nothing is encoded. `text` implements both:
+  each step is a transaction's edits, removed and inserted bytes, and the selection after.
 - **Rendering** — `drawDocument(doc)` (the document's content, called through the document's
   surface wherever a region accepting `document` shows it), `infobarEntries(active_doc)` (icon
   + text chips Fizzy draws in the infobar; plugins do not draw into the bar).

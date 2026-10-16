@@ -71,6 +71,8 @@ pub const NativeMenuItem = menus.NativeMenuItem;
 /// A named action fizzy invokes by id, without knowing what it does.
 pub const Command = @import("Command.zig");
 pub const Claim = @import("Claim.zig");
+/// One step of a document's history, recorded (`Host.recordStep`) and applied (`Plugin.applyStep`).
+pub const Step = @import("Step.zig");
 /// Events: a plugin announces, any plugin listens (`Host.emit`, `Host.subscribe`).
 pub const events = @import("events.zig");
 pub const menu = @import("menu.zig");
