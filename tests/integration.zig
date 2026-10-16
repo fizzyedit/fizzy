@@ -2520,10 +2520,13 @@ test "the picker lists each view under the place it is made for, the open place 
     for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
     try std.testing.expectEqual(try y("test.output"), try y("test.files"));
     try std.testing.expect(try y("test.output") < try y("test.misc"));
+    // The sidebar holds nothing now, and still leads, empty, under its own name.
+    try std.testing.expect((try dvui.testing.tagGet("picker.empty")).rect.y < try y("test.files"));
     editor.app.layout.openPicker(editor.app.gpa, "Panel", null);
     for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
     try std.testing.expectEqual(try y("test.output"), try y("test.files"));
     try std.testing.expect(try y("test.output") < try y("test.misc"));
+    try std.testing.expect(dvui.tagGet("picker.empty") == null);
 }
 
 test "a hide_when_empty panel stays while its view is dragged onto main" {
