@@ -49,15 +49,10 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
     if (core.fs.readZ(allocator, dvui.io, path) catch null) |data| {
         defer allocator.free(data);
 
-        if ((zig017_zon: {
-            var zig017_zd: std.zon.parse.Diagnostics = undefined;
-            var zig017_arena: std.heap.ArenaAllocator = .init(allocator);
-            defer zig017_arena.deinit();
-            const zig017_r = std.zon.parse.fromSlice(Disk, .{ .gpa = allocator, .arena = zig017_arena.allocator(), .source = data, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-            break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Disk, allocator, zig017_v) else |zig017_e| zig017_e;
-        }) catch null) |disk| {
-            defer zig017ZonFree(allocator, disk);
-
+        var disk_arena: std.heap.ArenaAllocator = .init(allocator);
+        defer disk_arena.deinit();
+        var disk_diag: std.zon.parse.Diagnostics = undefined;
+        if (std.zon.parse.fromSlice(Disk, .{ .gpa = allocator, .arena = disk_arena.allocator(), .source = data, .diagnostics = &disk_diag, .ignore_unknown_fields = true }) catch null) |disk| {
             for (disk.folders) |folder| {
                 // A folder on a mount (`gdrive://…`) is not the disk's to check: it exists
                 // whenever its plugin is signed in, which is decided at open time.
@@ -171,65 +166,4 @@ pub fn deinit(recents: *Recents, allocator: std.mem.Allocator) void {
     recents.folders.deinit();
 
     recents.commands.deinit(allocator);
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
-}
-// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
-// arena the caller owns). Goes with the zon arena PR.
-fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
-    switch (@typeInfo(@TypeOf(value))) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                zig017ZonFree(gpa, value.*);
-                gpa.destroy(value);
-            },
-            .slice => {
-                for (value) |item| zig017ZonFree(gpa, item);
-                gpa.free(value);
-            },
-            else => comptime unreachable,
-        },
-        .array => for (value) |item| zig017ZonFree(gpa, item),
-        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
-        .@"union" => |u| if (u.tag_type != null) switch (value) {
-            inline else => |payload| zig017ZonFree(gpa, payload),
-        },
-        .optional => if (value) |some| zig017ZonFree(gpa, some),
-        else => {},
-    }
 }

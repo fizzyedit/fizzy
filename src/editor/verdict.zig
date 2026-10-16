@@ -190,13 +190,10 @@ fn readExpect(gpa: std.mem.Allocator, file: []const u8) !Expect {
     defer gpa.free(bytes);
     const source = try gpa.dupeSentinel(u8, bytes, 0);
     defer gpa.free(source);
-    return (zig017_zon: {
-        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-        var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
-        defer zig017_arena.deinit();
-        const zig017_r = std.zon.parse.fromSlice(Expect, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = source, .diagnostics = &zig017_zd });
-        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Expect, gpa, zig017_v) else |zig017_e| zig017_e;
-    });
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSliceNoAlloc(Expect, .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag });
 }
 
 /// Once a displayed frame, after the app's: watch the tape start and end. True: the tape has
@@ -365,41 +362,4 @@ pub fn finish(leaks: ?bool) u8 {
 fn over(limit: ?u32, value: u32) bool {
     const max = limit orelse return false;
     return value > max;
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
 }

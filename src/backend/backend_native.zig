@@ -158,8 +158,9 @@ var layout_store_dir: []const u8 = "";
 
 fn layoutStoreLoad(_: ?*anyopaque) ?platform.geometry.Geometry {
     const gpa = std.heap.page_allocator;
-    const f = loadWindowFile(gpa, layout_store_dir);
-    defer zig017ZonFree(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const f = loadWindowFile(gpa, arena.allocator(), layout_store_dir);
     if (f.w < 1 or f.h < 1) return null;
     return .{ .x = f.x, .y = f.y, .w = f.w, .h = f.h, .state = if (f.maximized) .maximized else .normal };
 }
@@ -167,8 +168,9 @@ fn layoutStoreLoad(_: ?*anyopaque) ?platform.geometry.Geometry {
 fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
     // Read-modify-write: the regions and tree on disk stay as they are.
     const gpa = std.heap.page_allocator;
-    var f = loadWindowFile(gpa, layout_store_dir);
-    defer zig017ZonFree(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var f = loadWindowFile(gpa, arena.allocator(), layout_store_dir);
     f.x = g.x;
     f.y = g.y;
     f.w = g.w;
@@ -395,28 +397,4 @@ pub fn setDynamicNativeMenuShortcut(index: usize, key: ?[]const u8, modifier_mas
 /// references the right product name.
 pub fn setSdlAppMetadata(name: [*:0]const u8, version: [*:0]const u8, identifier: [*:0]const u8) void {
     _ = sdl3.SDL_SetAppMetadata(name, version, identifier);
-}
-// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
-// arena the caller owns). Goes with the zon arena PR.
-fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
-    switch (@typeInfo(@TypeOf(value))) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                zig017ZonFree(gpa, value.*);
-                gpa.destroy(value);
-            },
-            .slice => {
-                for (value) |item| zig017ZonFree(gpa, item);
-                gpa.free(value);
-            },
-            else => comptime unreachable,
-        },
-        .array => for (value) |item| zig017ZonFree(gpa, item),
-        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
-        .@"union" => |u| if (u.tag_type != null) switch (value) {
-            inline else => |payload| zig017ZonFree(gpa, payload),
-        },
-        .optional => if (value) |some| zig017ZonFree(gpa, some),
-        else => {},
-    }
 }
