@@ -2027,6 +2027,9 @@ fn storeUninstalled(arena: std.mem.Allocator) []const @import("app").layout.Stat
 }
 
 pub fn postInit(editor: *Editor) !void {
+    // Documents' tracks, while they are behind a switch (plans/RECORDING_PLAN.md, step 3).
+    editor.app.tracks = .init(editor.app.gpa, &editor.app.host);
+    if (Popout.envSwitch("FIZZY_TRACKS") orelse false) editor.setTracking(true);
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});
     } else {
@@ -2736,6 +2739,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
     if (editor.document_watcher) |*w| {
         if (editor.app.docById(id)) |doc| w.track(doc);
     }
+    if (editor.app.tracks) |*t| if (editor.app.docById(id)) |doc| t.opened(doc);
     if (editor.app.docById(id)) |doc| {
         editor.registerDocSurface(doc) catch |err| {
             dvui.log.err("document surface for {s}: {t}", .{ owner.documentPath(doc), err });
@@ -2962,6 +2966,14 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     }
     if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc));
     return .ok;
+}
+
+/// Record documents' tracks, or stop. Documents open now get one; those opened after too.
+pub fn setTracking(editor: *Editor, on: bool) void {
+    const t = &(editor.app.tracks orelse return);
+    t.on = on;
+    editor.app.host.recorder = if (on) t.recorder() else null;
+    if (on) for (editor.app.open_files.values()) |doc| t.opened(doc);
 }
 
 pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
@@ -3948,6 +3960,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.app.file_table.pump();
     // Saves whose encode finished on their worker: on to their write, or done.
     editor.doc_io.tick();
+    // The document states tracks asked for since last frame, before anything draws.
+    if (editor.app.tracks) |*t| t.tick();
     editor.promoteEditedPreviews();
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
@@ -6183,6 +6197,8 @@ pub fn deinit(editor: *Editor) !void {
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
     editor.black_box.deinit(editor.app.gpa);
+    editor.app.host.recorder = null;
+    if (editor.app.tracks) |*t| t.deinit();
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
