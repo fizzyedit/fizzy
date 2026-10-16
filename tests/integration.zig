@@ -2513,6 +2513,17 @@ test "the picker lists each view under the place it is made for, the open place 
     for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
     try std.testing.expect(try y("test.files") < try y("test.output"));
     try std.testing.expect(try y("test.output") < try y("test.misc"));
+
+    // Files moved into the panel reads under the panel, in one row with Output, from either
+    // picker.
+    try editor.app.layout.assign(editor.app.gpa, "Panel", &.{ "test.output", "test.files" });
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expectEqual(try y("test.output"), try y("test.files"));
+    try std.testing.expect(try y("test.output") < try y("test.misc"));
+    editor.app.layout.openPicker(editor.app.gpa, "Panel", null);
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expectEqual(try y("test.output"), try y("test.files"));
+    try std.testing.expect(try y("test.output") < try y("test.misc"));
 }
 
 test "a hide_when_empty panel stays while its view is dragged onto main" {
