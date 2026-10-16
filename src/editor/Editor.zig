@@ -2731,6 +2731,8 @@ const DocSurface = struct {
     focus_inside: bool = false,
     /// The commands just run on it, shown on its pane.
     feed: @import("app").ActivityFeed = .{},
+    /// Its history as a line at the bottom of the pane: undo and redo show it.
+    transport: @import("app").HistoryTransport = .{},
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2947,9 +2949,12 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     if (editor.app.host.activity_muted) ds.feed.clear() else {
         const now = dvui.frameTimeNS();
         ds.feed.take(&editor.app.host, doc.id, now);
-        // Above the pill, while someone holds the document.
+        // Above the pill while someone holds the document, and above the transport while it shows.
         var area = canvas.data().borderRectScale().r;
         if (claim_pill) |pill| area.h = pill.physical.y - area.y + 6 * dvui.windowRectScale().s;
+        if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
+            area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
+        };
         ds.feed.draw(area, @truncate(ds.doc_id), now);
     }
 
@@ -2973,7 +2978,8 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             }, false);
         }
     }
-    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc));
+    // Its history, while undo or redo or the pointer keep it: not while someone else holds it.
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id));
     return .ok;
 }
 
@@ -6061,11 +6067,26 @@ pub fn processPendingSaveAs(editor: *Editor) void {
 }
 
 pub fn undo(editor: *Editor) !void {
-    try editor.runActiveDocCommand("undo");
+    try editor.historyStep(.undo);
 }
 
 pub fn redo(editor: *Editor) !void {
-    try editor.runActiveDocCommand("redo");
+    try editor.historyStep(.redo);
+}
+
+/// An undo or a redo of the active document, through its owner's command: its transport shows,
+/// and a key held down goes further each press (`HistoryTransport.press`), the command run that
+/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar.
+fn historyStep(editor: *Editor, action: enum { undo, redo }) !void {
+    const doc = editor.activeDoc() orelse return;
+    const name = @tagName(action);
+    const shows = editor.app.host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
+    const ds = if (shows) editor.doc_surfaces.get(doc.id) else null;
+    const by = if (ds) |d| d.transport.press(dvui.frameTimeNS(), action == .redo) else 1;
+    for (0..by) |_| {
+        if (!editor.activeDocCommandEnabled(name)) break;
+        try editor.runActiveDocCommand(name);
+    }
 }
 
 pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {

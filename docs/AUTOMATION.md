@@ -149,6 +149,8 @@ user's motion settings, timed in demo time.
 | `fizzy.command:<command id>` | a menu row that runs a command |
 | `fizzy.dialog.close` | the close button in a dialog's header |
 | `fizzy.dialog:<title>:<label>` | a button in a dialog: its footer's, or one drawn with `core.dialogs.bodyButton` (`fizzy.dialog:About Fizzy:Close`) |
+| `history.line:<abs path>` | a document's transport line, from its first stop to its last, while the transport shows: `x` is that fraction of its history (`x = 0` before any change) |
+| `history.back:<abs path>`, `history.forward:<abs path>` | its undo and redo buttons |
 | `fizzy.window:main` | the main window |
 | `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
 | `region:<name>` | a layout region (`Main`, `Panel`, …) |

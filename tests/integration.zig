@@ -7476,6 +7476,96 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // A document's transport (`app.HistoryTransport`): undo shows it over the document's pane; a
+    // press on its line goes to that step, its buttons step, a drag along it follows; and an undo
+    // held down goes further each press.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try host.runCommand("fizzy.newFile");
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (d.id != was.id and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+        }
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(doc.id != was.id);
+        const path = doc.owner.documentPath(doc);
+        for (0..40) |_| try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"x\", .line = 1 }", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        const at = struct {
+            fn at(h: *sdk.Host, d: sdk.DocHandle) !usize {
+                return (d.owner.historyLine(d, h.arena()) orelse return error.TestUnexpectedResult).at;
+            }
+        }.at;
+        const ds = editor.doc_surfaces.get(doc.id) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+
+        try editor.undo();
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
+        try std.testing.expectEqual(@as(usize, 39), try at(host, doc));
+
+        const play = struct {
+            fn play(ed: *fizzy.Editor, script: *automation.Script) !void {
+                try ed.demo.live.play(try script.finish());
+                for (0..300) |_| {
+                    if (!ed.demo.live.playing()) break;
+                    _ = try dvui.testing.step(headlessFrame);
+                }
+                try std.testing.expect(ed.demo.live.outcome.? == .finished);
+            }
+        }.play;
+        const line_tag = try std.fmt.allocPrint(gpa, "history.line:{s}", .{path});
+        defer gpa.free(line_tag);
+        const forward_tag = try std.fmt.allocPrint(gpa, "history.forward:{s}", .{path});
+        defer gpa.free(forward_tag);
+        {
+            // A press on the title, over the line's start, is the bar's and goes nowhere.
+            var s: automation.Script = .init(gpa, "transport-title", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0, .y = 0.15 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 39), try at(host, doc));
+        {
+            // The line's start: before any change.
+            var s: automation.Script = .init(gpa, "transport-start", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 0), try at(host, doc));
+        {
+            // Redo: one step on.
+            var s: automation.Script = .init(gpa, "transport-forward", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = forward_tag }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 1), try at(host, doc));
+        {
+            // A drag from the start to the end follows the pointer there.
+            var s: automation.Script = .init(gpa, "transport-drag", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.drag(.{ .tag = line_tag, .x = 0 }, .{ .tag = line_tag, .x = 1 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 40), try at(host, doc));
+
+        // Held down, ten presses in a frame: one step each for six, then two each.
+        for (0..10) |_| try editor.undo();
+        try std.testing.expectEqual(@as(usize, 40 - 14), try at(host, doc));
+
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens
     // the panel with Output selected, and a view no region shows is not revealed.
     {
