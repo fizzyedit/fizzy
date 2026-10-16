@@ -1172,9 +1172,10 @@ pub fn viewportMainOffset(_: *SDLBackend, vp: *Viewport, offset: viewport_map.Po
 
 /// A window that carries a view past every window of the app's, over the desktop (`Popout`'s carry
 /// window): borderless and clear, the pointer passing through it to what is under, kept above every
-/// window, in no window list, never focused. macOS. Placed and drawn as any viewport.
+/// window, in no window list, never focused. macOS, and Windows (with no material: the app's glass
+/// alone, `win32_titlebar.viewportCarryChrome`). Placed and drawn as any viewport.
 pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
-    if (comptime builtin.target.os.tag != .macos) return null;
+    if (comptime builtin.target.os.tag != .macos and builtin.target.os.tag != .windows) return null;
     return self.openViewport(at, "", .carry, .os);
 }
 
@@ -1304,7 +1305,8 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     const frame_flag: c.SDL_WindowFlags = if (titled) 0 else c.SDL_WINDOW_BORDERLESS;
     const size_flag: c.SDL_WindowFlags = if (carry) 0 else c.SDL_WINDOW_RESIZABLE;
     const focus_flag: c.SDL_WindowFlags = if (menu) c.SDL_WINDOW_NOT_FOCUSABLE else 0;
-    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag | focus_flag;
+    const carry_flag: c.SDL_WindowFlags = if (builtin.target.os.tag == .windows and role == .carry) c.SDL_WINDOW_NOT_FOCUSABLE else 0;
+    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag | focus_flag | carry_flag;
     _ = c.SDL_SetStringProperty(props, c.SDL_PROP_WINDOW_CREATE_TITLE_STRING, title_text.ptr);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_X_NUMBER, placed.screen.x);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_Y_NUMBER, placed.screen.y);
@@ -1334,7 +1336,13 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
         return vp;
     }
     if (carry) {
-        if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
+        switch (comptime builtin.target.os.tag) {
+            .macos => fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material),
+            .windows => if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd| {
+                platform.win32_titlebar.viewportCarryChrome(hwnd);
+            },
+            else => {},
+        }
         return vp;
     }
     // The slot holds it for the window's life, so SDL may keep the pointer.
@@ -1372,6 +1380,8 @@ pub fn viewportButtonsWidth(_: *SDLBackend, vp: *Viewport) f32 {
 /// The corner radius of a titled window, points: what a float's window is rounded by
 /// (`viewportCarryShape` grows the carried glass into it).
 pub fn windowCornerRadius(_: *SDLBackend) f32 {
+    // DWM's round corners, which a float's window takes (`win32_titlebar.viewportChrome`).
+    if (comptime builtin.target.os.tag == .windows) return 8;
     if (comptime builtin.target.os.tag != .macos) return 0;
     return @floatCast(fizzy_macos_window_corner_radius());
 }
@@ -2165,6 +2175,16 @@ pub fn renderPresent(self: *SDLBackend) void {
             fizzy_native_viewport_presented(cocoaWindow(vp.window));
         }
         fizzy_native_transaction_commit();
+    };
+    // Windows: a carry window has no material to shape (`win32_titlebar.viewportCarryChrome`): its
+    // picture is its shape, and hidden it is wholly see-through.
+    if (comptime builtin.target.os.tag == .windows) for (&self.viewport_slots) |*slot| {
+        const vp = if (slot.*) |*v| v else continue;
+        if (!vp.passive or vp.overlay) continue;
+        const alpha = if (vp.carry_radius < 0) 0 else vp.carry_alpha;
+        if (alpha == vp.carry_alpha_shown) continue;
+        vp.carry_alpha_shown = alpha;
+        _ = c.SDL_SetWindowOpacity(vp.window, alpha);
     };
     // Each viewport's part of the frame goes in with the main window's, one submission for all.
     var first_frame: [max_viewports]bool = @splat(false);

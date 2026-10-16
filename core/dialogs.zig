@@ -205,9 +205,14 @@ pub fn carriedCard(layer: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
 }
 
 /// Whether carried things are shown in windows of their own this run (fizzy's float windows on
-/// macOS): a carried view's photograph is taken without the place's background, its content over
-/// the window's material — set by the app before anything draws.
+/// macOS and Windows): a carried view's photograph is taken without the place's background, its
+/// content over the window's material — set by the app before anything draws.
 pub var carry_windows: bool = false;
+
+/// Whether a carry window's own material is the carried thing's glass (macOS: the OS's, masked to
+/// its shape). Where it has none (Windows, which cannot shape it), the app draws its glass into the
+/// window, as it does in its own windows. Set with `carry_windows`.
+pub var carry_material: bool = false;
 
 /// `carriedGlass` for glass whose shapes run together (`LiquidField`) — the dragged view as a
 /// drop — frosted at the dialog style. False when the style has the blur off, or the glass program

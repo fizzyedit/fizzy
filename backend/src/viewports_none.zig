@@ -66,6 +66,7 @@ pub fn inMain(_: *const Viewport) Rect {
 pub const os_frame = false;
 pub const os_buttons = false;
 pub const carries = false;
+pub const carry_material = false;
 pub fn seeThrough(_: *Viewport, _: bool) void {}
 pub fn fade(_: *Viewport, _: f32) void {}
 pub fn maximized(_: *const Viewport) bool {
