@@ -21,7 +21,8 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 
     if (!wb.restored) {
         wb.restored = true;
-        loadPanes(wb);
+        // Where the app arranges the panes, its own layout brought them back.
+        if (wb.places == null) loadPanes(wb);
         for (host.assignedRegionNames()) |region_name| {
             const grouping = Workspace.groupingOfName(region_name) orelse continue;
             // A copy: the assignment is borrowed until the next `assignSurfaces`, and each open
@@ -92,11 +93,14 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
         if (live > 0 or ws.expecting) {
             // Filled (or about to be) — including one that was on its way out when its
             // document landed, which is a pane to keep, not a hole to finish closing.
-            if (wb.paneLeaf(ws.grouping)) |leaf| wb.panes.reopenLeaf(leaf);
+            if (wb.places == null) if (wb.paneLeaf(ws.grouping)) |leaf| wb.panes.reopenLeaf(leaf);
             k += 1;
             continue;
         }
-        if (wb.paneLeaf(ws.grouping) != null) {
+        // The app's place slides shut by itself once it is closed, and the pane goes now.
+        if (wb.places) |p| {
+            p.close(p.ctx, ws.grouping);
+        } else if (wb.paneLeaf(ws.grouping) != null) {
             wb.closePane(ws.grouping);
             k += 1;
             continue;

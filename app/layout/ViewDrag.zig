@@ -2485,7 +2485,7 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
 
 /// The declared place showing `id` now, if one is: where a view carried out of the picker comes
 /// from (`floatOut`).
-fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
+pub fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
     for (l.state.regions.items) |r| {
         for (holding(l, r.name)) |held| {
             if (std.mem.eql(u8, held, id)) return r.name;
@@ -2792,6 +2792,32 @@ fn selectNamed(l: *Layout, name: []const u8, id: []const u8) void {
 fn shutIfEmptied(l: *Layout, name: []const u8) void {
     if (holding(l, name).len > 0) return;
     _ = closeEmptied(l, name);
+}
+
+/// Take view `id` out of the place holding it, and close that place if it is left with nothing:
+/// a half of a split the user made closes into the other half, and a float closes. What an
+/// application does with a view of its own that has nothing left to show (fizzy's emptied
+/// workspaces). A place that cannot close keeps the view, and this returns false: an emptied
+/// view is still the place's to show, rather than a hole in it.
+pub fn withdraw(l: *Layout, id: []const u8) bool {
+    const name = ownId(l.arena, holderOf(l, id) orelse return false) orelse return false;
+    const kept = idsWithout(l.arena, holding(l, name), id);
+    if (kept.len == 0 and !closable(l, name)) return false;
+    // A place its keywords fill, left something to show, is left alone as in `takeOut`.
+    if (kept.len == 0 or l.state.assignment(name) != null) l.state.assign(l.gpa, name, kept) catch {};
+    reselect(l, name, id, kept);
+    shutIfEmptied(l, name);
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+    return true;
+}
+
+/// Whether the emptied place `name` would close (`closeEmptied`), rather than stay empty.
+fn closable(l: *Layout, name: []const u8) bool {
+    if (l.state.floats.find(name) != null and l.state.splits.root(name) == null) return true;
+    if (l.state.isMinted(name)) return true;
+    const sibling = l.state.siblingLeaf(name) orelse return false;
+    return l.state.isMinted(sibling);
 }
 
 /// A merge of two halves of a split: `gone` closed, its views now in `into`.

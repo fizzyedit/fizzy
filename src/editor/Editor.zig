@@ -103,12 +103,15 @@ pub const Host = sdk.Host;
 /// Workbench: the file-management home — file tree, open/load flow, and the
 /// workspace/tabs/splits system, plus the per-branch explorer decoration registry.
 pub const Workbench = workbench_mod.Workbench;
+pub const Workspaces = @import("Workspaces.zig");
 
 /// The host runtime — everything an application on fizzy runs unchanged.
 app: App,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
+/// The workbench's panes as the app's own views, when `FIZZY_WORKSPACES=1` asked (`Workspaces`).
+workspaces: Workspaces = .{},
 /// The first claim id not yet shown beside the person (`showClaimed`).
 claims_seen: u32 = 1,
 
@@ -2046,6 +2049,12 @@ pub fn postInit(editor: *Editor) !void {
         } else |_| {}
     }
     sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
+    // Before the plugins register: the workbench offers its one surface of every pane only where
+    // the app does not place each pane itself.
+    if (Workspaces.wanted(editor.app.gpa)) {
+        editor.workspaces.install(&editor.workbench);
+        dvui.log.info("layout: workspaces are views (FIZZY_WORKSPACES)", .{});
+    }
 
     editor.demo.attach(editor);
     // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made — and
@@ -4523,6 +4532,7 @@ pub fn setWindowStyle(_: *Editor) void {
 
 pub fn rebuildWorkspaces(editor: *Editor) !void {
     try editor.workbench.rebuildWorkspaces();
+    editor.workspaces.sync();
 }
 
 /// Write every region's extent and assignment to `layout.zon`, by name. One record per region
@@ -6120,7 +6130,8 @@ pub fn closeFile(editor: *Editor, index: usize) !void {
 /// only its image stays for the slide.
 fn snapshotClosingPane(editor: *Editor, doc: sdk.DocHandle) void {
     const wb = editor.workbench;
-    if (wb.panes.nodes.items[wb.panes.root] == .leaf) return;
+    // Where the app arranges the panes, the place slides shut on its own and draws no picture.
+    if (wb.places != null or wb.solePane()) return;
     const id = sdk.document.surfaceId(editor.app.host.arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
     for (wb.workspaces.values()) |*ws| {
         if (!ws.hasTab(id) or ws.tabCount() != 1) continue;
@@ -6222,6 +6233,7 @@ pub fn deinit(editor: *Editor) !void {
 
     // Tear workspaces down first, while the plugins whose documents they hold are still alive.
     editor.workbench.deinitWorkspaces(fizzy.entry().window.backend);
+    editor.workspaces.deinit(editor.app.gpa);
 
     // Drain & join the save-queue worker before tearing anything else down. Any
     // queued jobs need to finish writing or be dropped before File data is freed.

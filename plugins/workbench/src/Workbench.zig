@@ -38,6 +38,12 @@ workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
 /// plugin's own directory whenever it changes (`workbench_layout.savePanes`).
 panes: Panes,
 panes_dirty: bool = false,
+/// Where the panes are arranged when the app arranges them instead of `panes`: each pane a view
+/// of the app's, in a place of the app's, beside another by a split of the app's (fizzy's
+/// `Workspaces`, behind `FIZZY_WORKSPACES=1`). Null: the panes are this tree's leaves, as before.
+/// Filled in by the app before this plugin registers, and instance state for the same
+/// two-copies reason as `pending_new_file_path` below.
+places: ?Places = null,
 /// How tall a pane's tab strip was, the last time a pane had one. An empty pane beside others
 /// holds the same room open, so its card lines up with its neighbours' instead of starting
 /// higher.
@@ -79,6 +85,20 @@ pending_new_file_path: ?[]u8 = null,
 /// app fills this in (`Openings` in fizzy) and the tab strip reads it to draw a tab that has no
 /// document yet. Strings are the app's; this only borrows them.
 loading: std.StringArrayHashMapUnmanaged(Loading) = .empty,
+
+/// The app's half of arranging the panes (`places`). Every pane is named by its grouping; what
+/// it is called in the app's layout is the app's business.
+pub const Places = struct {
+    ctx: *anyopaque,
+    /// Give `grouping`'s pane a place on `side` of the place holding `anchor`'s. False when there
+    /// is no room, or `anchor`'s pane is in no place yet.
+    beside: *const fn (ctx: *anyopaque, grouping: u64, anchor: u64, side: Panes.Side) bool,
+    /// Whether `grouping`'s pane has a place, or will have one without being given it: the one
+    /// pane the layout's keywords show where no other is.
+    placed: *const fn (ctx: *anyopaque, grouping: u64) bool,
+    /// `grouping`'s pane has emptied and is going: its place closes, into the one beside it.
+    close: *const fn (ctx: *anyopaque, grouping: u64) void,
+};
 
 pub const Loading = struct {
     /// The file being opened: the tab's icon comes from its extension.
@@ -148,8 +168,20 @@ pub fn paneLeaf(self: *Workbench, grouping: u64) ?Panes.NodeIndex {
 }
 
 /// Give `grouping` a leaf if it has none: the root when the tree is empty, else a split off the
-/// current pane's right edge (or off the last pane, when the current one is gone).
+/// current pane's right edge (or off the last pane, when the current one is gone). Where the app
+/// arranges the panes, a place beside the current one's.
 fn seatPane(self: *Workbench, grouping: u64) !void {
+    if (self.places) |p| {
+        if (p.placed(p.ctx, grouping)) return;
+        const anchor = if (self.open_workspace_grouping != grouping and self.workspaces.contains(self.open_workspace_grouping))
+            self.open_workspace_grouping
+        else for (self.workspaces.keys()) |g| {
+            if (g != grouping) break g;
+        } else return;
+        // No room yet (the layout has not drawn): the app places it once there is.
+        _ = p.beside(p.ctx, grouping, anchor, .right);
+        return;
+    }
     if (self.paneLeaf(grouping) != null) return;
     const root = &self.panes.nodes.items[self.panes.root];
     if (root.* == .leaf and root.leaf.tabs.items.len == 0) {
@@ -170,6 +202,14 @@ fn seatPane(self: *Workbench, grouping: u64) !void {
 /// Open a new pane for `grouping` on `side` of `anchor`'s pane — a drop on a pane's edge. The
 /// workspace is created too, so `pane()` afterwards finds both.
 pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side) !void {
+    if (self.places) |p| {
+        if (!p.beside(p.ctx, grouping, anchor, side)) return error.NoRoom;
+        const gop = try self.workspaces.getOrPut(self.allocator, grouping);
+        if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
+        gop.value_ptr.expecting = true;
+        if (grouping > self.grouping_id_counter) self.grouping_id_counter = grouping;
+        return;
+    }
     if (self.paneLeaf(grouping) != null) return;
     const anchor_leaf = self.paneLeaf(anchor) orelse return error.NoSuchPane;
     var buf: [32]u8 = undefined;
@@ -186,14 +226,24 @@ pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side
 /// Send an emptied pane's leaf sliding shut. The workspace itself leaves once the leaf has
 /// gone (`workbench_layout.rebuildWorkspaces`).
 pub fn closePane(self: *Workbench, grouping: u64) void {
+    if (self.places) |p| return p.close(p.ctx, grouping);
     const leaf = self.paneLeaf(grouping) orelse return;
     self.panes.closeLeaf(leaf);
 }
 
 /// Whether `grouping`'s pane is sliding shut (`closePane`).
 pub fn paneClosing(self: *Workbench, grouping: u64) bool {
+    // The app's place slides shut on its own; the pane is gone from the moment it closes.
+    if (self.places != null) return false;
     const leaf = self.paneLeaf(grouping) orelse return false;
     return self.panes.leafClosing(leaf);
+}
+
+/// Whether this is the only pane: the one that shows the home page when empty, and the one that
+/// never goes.
+pub fn solePane(self: *const Workbench) bool {
+    if (self.places != null) return self.workspaces.count() <= 1;
+    return self.panes.nodes.items[self.panes.root] == .leaf;
 }
 
 /// At shutdown, after the last frame: `backend` frees what a frame would have (`Workspace.deinitAtQuit`).

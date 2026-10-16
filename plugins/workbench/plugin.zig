@@ -62,7 +62,9 @@ pub fn register(host: *sdk.Host) !void {
             .draw = drawFiles,
         });
     }
-    try host.registerSurface(.{
+    // Where the app arranges the panes, each is a view of its own (`Workbench.places`), and
+    // there is no one surface drawing them all.
+    if (runtime.workbench().places == null) try host.registerSurface(.{
         .id = center_workspaces,
         .owner = &plugin,
         .title = "Workspace",

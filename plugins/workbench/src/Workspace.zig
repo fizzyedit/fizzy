@@ -176,7 +176,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     if (tabs.len > 0) {
         self.drawTabs(region, tabs, selected);
         self.offerStrip(region, self.tabCount());
-    } else if (!solePane()) {
+    } else if (!runtime.workbench().solePane()) {
         // An empty pane in a split looks like its neighbours with nothing open: the tab strip's
         // room, then the same card, empty — not a bare pane that starts higher than they do.
         const h = runtime.workbench().tab_strip_h;
@@ -815,7 +815,7 @@ fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
         // it. An empty pane beside others — above all one sliding shut after its last tab
         // closed — is just an empty document pane: the logo and buttons flashing up in it as it
         // went read as a page opening, not a file closing.
-        if (!solePane()) return;
+        if (!runtime.workbench().solePane()) return;
 
         const alpha = dvui.alpha(1.0);
         dvui.alphaSet(1.0);
@@ -829,12 +829,6 @@ fn dropSnapshot(self: *Workspace) void {
     if (self.closing_snapshot) |t| dvui.textureDestroyLater(t);
     self.closing_snapshot = null;
     self.snapshot_idle_frames = 0;
-}
-
-/// Whether this is the workbench's only pane — the one that shows the home page when empty.
-fn solePane() bool {
-    const wb = runtime.workbench();
-    return wb.panes.nodes.items[wb.panes.root] == .leaf;
 }
 
 pub fn drawHomePage(_: *Workspace) !void {
