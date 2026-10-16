@@ -110,6 +110,9 @@ const Entry = struct {
     /// compares this against `Document.clean_op_id`, so it must change whenever the buffer
     /// changes — a merge that left the id alone would make a modified document look saved.
     id: u64,
+    /// The step's own id, given when it is pushed and kept through merges (unlike `id`): what a
+    /// timeline names it by (`line`, `stepsTo`).
+    step: u64,
 
     fn deinit(self: *Entry, gpa: Allocator) void {
         self.txn.deinit(gpa);
@@ -127,6 +130,8 @@ pending: ?struct {
 /// fresh group rather than merging into whatever is on top.
 group_open: bool = false,
 next_id: u64 = 1,
+/// Moves whenever the history does: a step pushed or merged into, undone or redone.
+version: u64 = 0,
 
 pub fn deinit(self: *History, gpa: Allocator) void {
     for (self.undo_stack.items) |*e| e.deinit(gpa);
@@ -246,6 +251,7 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range) void {
             .txn = p.txn,
             .kind = kind,
             .id = self.next_id,
+            .step = self.next_id,
         }) catch |err| {
             std.log.err("History.end: push failed: {s}", .{@errorName(err)});
             p.txn.deinit(gpa);
@@ -254,6 +260,7 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range) void {
         self.next_id += 1;
     }
     self.group_open = true;
+    self.version += 1;
 }
 
 /// Record one complete edit built outside the begin/note/end flow (the paste command). Always
@@ -275,9 +282,10 @@ pub fn pushComplete(
         return;
     }
     self.clearRedo(gpa);
-    try self.undo_stack.append(gpa, .{ .txn = txn, .kind = .other, .id = self.next_id });
+    try self.undo_stack.append(gpa, .{ .txn = txn, .kind = .other, .id = self.next_id, .step = self.next_id });
     self.next_id += 1;
     self.group_open = false;
+    self.version += 1;
 }
 
 fn clearRedo(self: *History, gpa: Allocator) void {
@@ -306,6 +314,7 @@ pub fn applyUndo(self: *History, gpa: Allocator, text: *std.ArrayList(u8)) ?Rang
         entry.deinit(gpa);
     };
     self.group_open = false;
+    self.version += 1;
     return sel;
 }
 
@@ -324,7 +333,34 @@ pub fn applyRedo(self: *History, gpa: Allocator, text: *std.ArrayList(u8)) ?Rang
         entry.deinit(gpa);
     };
     self.group_open = false;
+    self.version += 1;
     return sel;
+}
+
+// -- the line -------------------------------------------------------------------------------------
+
+/// One step of `line`.
+pub const Step = struct { step: u64, kind: EditKind };
+
+/// Every step, oldest first: the undo stack, then the redo stack from the next redo on. The
+/// first `undo_stack.items.len` are applied.
+pub fn line(self: History, arena: Allocator) ![]Step {
+    const out = try arena.alloc(Step, self.undo_stack.items.len + self.redo_stack.items.len);
+    for (self.undo_stack.items, 0..) |e, i| out[i] = .{ .step = e.step, .kind = e.kind };
+    const redo = self.redo_stack.items;
+    for (redo, 0..) |e, i| out[out.len - 1 - i] = .{ .step = e.step, .kind = e.kind };
+    return out;
+}
+
+/// How many steps to undo (negative) or redo (positive) for `step` to be the last applied; 0
+/// goes back before the first. Null when `step` is not on the line.
+pub fn stepsTo(self: History, step: u64) ?isize {
+    const applied: isize = @intCast(self.undo_stack.items.len);
+    if (step == 0) return -applied;
+    for (self.undo_stack.items, 0..) |e, i| if (e.step == step) return @as(isize, @intCast(i + 1)) - applied;
+    const redo = self.redo_stack.items;
+    for (redo, 0..) |e, i| if (e.step == step) return @intCast(redo.len - i);
+    return null;
 }
 
 // -- tests ---------------------------------------------------------------------------------------
@@ -591,4 +627,33 @@ test "cut-shaped deletion is one undoable step" {
     try t.expectEqualStrings("hello ", h.text.items);
     _ = h.undo();
     try t.expectEqualStrings("hello world", h.text.items);
+}
+
+test "the line: steps keep their ids through merges, undo and redo" {
+    var h: Harness = .{ .gpa = t.allocator };
+    defer h.deinit();
+    try h.type_("abc");
+    try h.backspace(1);
+    try h.type_("\n");
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const before = try h.hist.line(arena.allocator());
+    // A typing run is one step however many keys merged into it.
+    try t.expectEqual(@as(usize, 3), before.len);
+    try t.expectEqual(EditKind.typing_other, before[0].kind);
+
+    const v = h.hist.version;
+    _ = h.undo();
+    _ = h.undo();
+    try t.expect(h.hist.version != v);
+    const after = try h.hist.line(arena.allocator());
+    // The same steps in the same order: two of them now redo.
+    for (before, after) |a, b| try t.expectEqual(a.step, b.step);
+    try t.expectEqual(@as(usize, 1), h.hist.undo_stack.items.len);
+
+    // Going to a step is so many undos or redos.
+    try t.expectEqual(@as(?isize, 2), h.hist.stepsTo(before[2].step));
+    try t.expectEqual(@as(?isize, 0), h.hist.stepsTo(before[0].step));
+    try t.expectEqual(@as(?isize, -1), h.hist.stepsTo(0));
+    try t.expectEqual(@as(?isize, null), h.hist.stepsTo(9999));
 }

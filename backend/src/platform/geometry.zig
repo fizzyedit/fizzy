@@ -128,7 +128,7 @@ fn cocoaWindowOf(window: *c.SDL_Window) ?*anyopaque {
 
 /// Where `win` is now, as `Geometry`.
 pub fn capture(win: *dvui.Window) ?Geometry {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos => {
             const cocoa = cocoaWindowOf(win.backend.impl.window) orelse return null;
             var out4: [4]f64 = .{0} ** 4;
@@ -165,7 +165,7 @@ pub fn capture(win: *dvui.Window) ?Geometry {
 
 /// Put `win` at `g`: false where it was not (no window, or nowhere on the screens there are now).
 fn apply(win: *dvui.Window, g: Geometry) bool {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos => {
             const cocoa = cocoaWindowOf(win.backend.impl.window) orelse return false;
             if (!frameOnScreens(.{ .x = g.x, .y = g.y, .w = g.w, .h = g.h })) return false;
@@ -233,7 +233,7 @@ var linux_window: ?*c.SDL_Window = null;
 var linux_watching = false;
 
 fn watchLinux(win: *dvui.Window) void {
-    if (comptime builtin.os.tag == .macos or builtin.os.tag == .windows) return;
+    if (comptime builtin.target.os.tag == .macos or builtin.target.os.tag == .windows) return;
     linux_window = win.backend.impl.window;
     trackLinux();
     if (linux_watching) return;

@@ -11,7 +11,6 @@ const icon = assets.files.@"icon.png";
 
 const fizzy = @import("fizzy.zig");
 const workbench = @import("workbench");
-const text = @import("text");
 const auto_update = @import("app").update.auto_update;
 const file_assoc = @import("backend/file_assoc.zig");
 const update_notify = @import("app").update.update_notify;
@@ -61,10 +60,10 @@ const start_options_base: dvui.App.StartOptions = .{
     .icon = icon,
     // Linux too, for the rounded corners outside the window's fill (`Editor`): Vulkan composites
     // the swapchain's alpha on Wayland. Its fill stays opaque — nothing blurs behind it there.
-    .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows or builtin.os.tag == .linux) true else false,
+    .transparent = if (builtin.target.os.tag == .macos or builtin.target.os.tag == .windows or builtin.target.os.tag == .linux) true else false,
     // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
     .window_init_options = .{
-        .button_order = if (builtin.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
+        .button_order = if (builtin.target.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
     },
 };
 
@@ -97,7 +96,7 @@ fn startOptions() dvui.App.StartOptions {
         // bundle's `.icns` — so the Dock icon visibly loses its background the moment fizzy
         // launches. Inside a bundle the `.icns` is already the right icon; leave it alone. Loose
         // dev builds have no bundle icon at all, so there we still want the runtime one.
-        if (comptime builtin.os.tag == .macos) {
+        if (comptime builtin.target.os.tag == .macos) {
             if (runningFromAppBundle(main_init.io)) opts.icon = null;
         }
         // A profile is the config folder itself (`app.profile`), for SDL's preferences too.
@@ -123,7 +122,7 @@ fn startOptions() dvui.App.StartOptions {
         fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, app_version_z, AppInfo.bundle_id_z);
         // Linux: fizzy draws its own title bar and the window's shadow (`linux_titlebar`), which
         // SDL has to know before the window is made.
-        if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.target.os.tag == .linux) {
             const in = Constants.linux_window_shadow_insets;
             fizzy.backend.useClientDecorations(.{ .left = in.left, .top = in.top, .right = in.right, .bottom = in.bottom });
         }
@@ -395,7 +394,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // near the top of AppInit while the window was hidden). The window opens at
     // its saved windowed geometry; fullscreen/maximize are not restored. Windows
     // chrome goes here.
-    if (builtin.os.tag != .macos) {
+    if (builtin.target.os.tag != .macos) {
         fizzy.backend.setWindowStyle(win);
     }
 
@@ -473,7 +472,7 @@ pub fn AppFrame() !dvui.App.Result {
     // dvui's refresh records, while someone reads them: the profiler, as frame causes, or a
     // `FIZZY_LOG_REFRESH` run.
     _ = dvui.debug.logRefresh(refresh_log_active or fizzy.core.profile.recordingCauses());
-    fizzy.core.profile.hostFrameBegin(lastSubmitNs());
+    fizzy.core.profile.hostFrameBegin(lastSubmitNs(), gpuTotals());
     defer fizzy.core.profile.hostFrameEnd();
     revealOnceDrawn(false);
     defer revealOnceDrawn(true);
@@ -497,6 +496,17 @@ fn frameEnded(end_micros: ?u32) bool {
 fn lastSubmitNs() ?u64 {
     if (comptime @hasDecl(dvui.backend, "last_submit_ns")) return dvui.backend.last_submit_ns;
     return null;
+}
+
+/// The backend's running GPU totals — textures and targets made and destroyed, target switches —
+/// as the profiler counts them (`core.profile.Gpu`), where the backend keeps them. Every image's
+/// textures pass through the host's backend, so these cover the plugins' too.
+fn gpuTotals() ?fizzy.core.profile.Gpu {
+    if (comptime !@hasDecl(dvui.backend, "gpuTotals")) return null;
+    const t = dvui.backend.gpuTotals();
+    var out: fizzy.core.profile.Gpu = .{};
+    inline for (std.meta.fields(fizzy.core.profile.Gpu)) |f| @field(out, f.name) = @truncate(@field(t, f.name));
+    return out;
 }
 
 /// One run of the app's frame.

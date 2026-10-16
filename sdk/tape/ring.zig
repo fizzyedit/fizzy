@@ -159,7 +159,7 @@ pub fn Ring(comptime name: []const u8, comptime Frame: type, comptime Record: ty
         /// Frames `from` up to (not including) `to`, their records and payloads, as one file: the
         /// header and the three arrays, the records' `first` and `bytes_at` rebased to the file's.
         pub fn write(self: *const Self, w: *std.Io.Writer, from: u64, to: u64) !void {
-            std.debug.assert(builtin.cpu.arch.endian() == .little);
+            std.debug.assert(builtin.target.cpu.arch.endian() == .little);
             const lo = @max(from, self.oldestWhole());
             const hi = @min(to, self.frames_n);
             var n_records: u64 = 0;

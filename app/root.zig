@@ -38,6 +38,8 @@ pub const crash = @import("crash");
 
 /// Recently opened folders, persisted as `recents.zon`.
 pub const Recents = @import("Recents.zig");
+/// The commands just run on a document, shown on its pane (`Host.activity`).
+pub const ActivityFeed = @import("ActivityFeed.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {

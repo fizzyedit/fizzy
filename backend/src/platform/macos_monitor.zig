@@ -180,7 +180,7 @@ fn macosLiveResizeUpdate(window: *c.SDL_Window) void {
 /// Wake the SDL event loop from an AppKit notification about `cocoa`'s window. Sync its sizes
 /// first so the next appIterate begin() sees transition-correct dimensions.
 export fn fizzy_macos_window_resize_cb(cocoa: ?*anyopaque) void {
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         if (macos_pump_ready) {
             if (watchedOf(cocoa)) |w| macosSyncSizes(w);
         }
@@ -200,7 +200,7 @@ export fn fizzy_macos_window_wake() void {
 
 /// Called from the monitor's 60Hz NSTimer for each window animating: its live sizes into SDL.
 export fn fizzy_macos_window_pump_sync(cocoa: ?*anyopaque) void {
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         if (!macos_pump_ready) return;
         if (watchedOf(cocoa)) |w| macosSyncSizes(w);
     }
@@ -211,7 +211,7 @@ export fn fizzy_macos_window_pump_sync(cocoa: ?*anyopaque) void {
 /// it between frames; a transition's stage, run from inside one, only wakes the loop
 /// (`macosLiveResizeUpdate`).
 export fn fizzy_macos_window_pump_render() void {
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .macos) {
         if (!macos_pump_ready) return;
         const window = macos_monitor_window orelse return;
         macosLiveResizeUpdate(window);
@@ -245,7 +245,7 @@ fn macosAppPresented(back: *Backend.SDLBackend) void {
 /// Sync AppKit → SDL before `Window.begin` during Space / zoom animations only, for every window
 /// animating. Registered on the SDL backend from `restoreWindowState`.
 fn macosAppPreBeginSync(back: *Backend.SDLBackend) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     if (!macos_pump_ready) return;
     _ = back;
     // Sync AppKit's live sizes into SDL during Space/zoom animations so dvui lays
@@ -279,7 +279,7 @@ var macos_live_resize_saved_vsync: ?c_int = null;
 /// unless SDL draws the resize itself (`sdl_draws_live_resize` in `macos/window_monitor.m`),
 /// whose presents wait for no vsync.
 export fn fizzy_macos_window_live_resize_vsync(cocoa: ?*anyopaque, active: c_int) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const window = macos_monitor_window orelse return;
     // The main window's: a float's window is drawn with the main one's frame, paced by it.
     if (cocoa == null or cocoaWindowOf(window) != cocoa) return;
@@ -319,7 +319,7 @@ export fn fizzy_macos_window_reset_sync_cache(cocoa: ?*anyopaque) void {
 /// Reconcile SDL's cached sizes and Metal drawable with `cocoa`'s live AppKit bounds.
 /// Called at didEnter/didExit so steady state never keeps transition sizes.
 export fn fizzy_macos_window_commit_steady_state(cocoa: ?*anyopaque) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     if (!macos_pump_ready) return;
     const w = watchedOf(cocoa) orelse return;
     fizzy_macos_window_reset_sync_cache(cocoa);
@@ -379,7 +379,7 @@ export fn fizzy_macos_origin_nudged(cap_x: f64, cap_y: f64, cur_x: f64, cur_y: f
 /// through SDL's styles, for fizzy's chrome (`styleTitled`): without that it came back from each
 /// round trip a title bar shorter.
 pub fn install(win: *dvui.Window) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const back = win.backend.impl;
     const cocoa = cocoaWindowOf(back.window) orelse return;
     if (comptime !own_backend) return fizzy_macos_window_keep_full_size_content(cocoa);
@@ -415,7 +415,7 @@ fn addWatched(w: Watched) void {
 /// followed (`install`): it goes full screen in a Space of its own, and its float follows it there
 /// and back. Call once its chrome is in place; `unwatch` before it closes.
 pub fn watch(window: *c.SDL_Window) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const cocoa = cocoaWindowOf(window) orelse return;
     addWatched(.{ .window = window, .cocoa = cocoa, .follow_position = true });
     fizzy_macos_window_install_resize_observer(cocoa);
@@ -426,7 +426,7 @@ pub fn watch(window: *c.SDL_Window) void {
 
 /// Stop following a float's window (`watch`), as it closes.
 pub fn unwatch(window: *c.SDL_Window) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const cocoa = cocoaWindowOf(window) orelse return;
     fizzy_macos_window_uninstall_monitor(cocoa);
     for (&watched) |*slot| {
@@ -439,7 +439,7 @@ pub fn unwatch(window: *c.SDL_Window) void {
 /// Whether AppKit owns a watched window's frame: in a fullscreen Space, or on its way into or out
 /// of one, or un-zooming. Nothing may move it then.
 pub fn osOwnsFrame(window: *c.SDL_Window) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     const cocoa = cocoaWindowOf(window) orelse return false;
     return fizzy_macos_window_in_fullscreen_space(cocoa) != 0 or fizzy_macos_window_transition_sync_active(cocoa) != 0;
 }
@@ -461,7 +461,7 @@ pub const TitlebarState = struct {
 };
 
 pub fn titlebarState(win: *dvui.Window) TitlebarState {
-    if (comptime builtin.os.tag != .macos) return .{};
+    if (comptime builtin.target.os.tag != .macos) return .{};
     const raw_ptr = cocoaWindowOf(win.backend.impl.window);
     const inset = if (raw_ptr != null) fizzy_macos_window_titlebar_inset(raw_ptr) else 0;
     const saved = fizzy_macos_window_saved_titlebar_inset(raw_ptr);

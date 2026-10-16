@@ -23,6 +23,7 @@ const Snapshot = @import("replay").Snapshot;
 const anim = @import("anim.zig");
 const draw = @import("draw.zig");
 const screens = @import("screens.zig");
+const native_glass = @import("native_glass.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by
 /// fizzy so core stays decoupled from the editor. When a modal is open fizzy
@@ -188,6 +189,21 @@ pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
     glassShadow(r, corners, scale, surfaceShadow(), 1);
 }
 
+/// A carried thing's glass where it is drawn in a floating widget of its own (`layer`, its id):
+/// the OS's where the OS draws glass declared outside a view drag (`native_glass.offered`: macOS
+/// 26), as a view's card carried there is, and what the layer holds goes over that glass in the
+/// OS's overlay (`screens.markCarried`), drawn in none of the app's own windows; elsewhere
+/// `carriedGlass`. A row lifted out of a list carried this way is the same glass a tab or a file
+/// is when it is carried.
+pub fn carriedCard(layer: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
+    if (native_glass.offered()) {
+        native_glass.add(.{ .rect = r, .radius = @min(rounding.scaled(rounding.card) * scale, @min(r.w, r.h) / 2) });
+        screens.markCarried(layer);
+        return;
+    }
+    carriedGlass(layer, r, scale);
+}
+
 /// Whether carried things are shown in windows of their own this run (fizzy's float windows on
 /// macOS): a carried view's photograph is taken without the place's background, its content over
 /// the window's material — set by the app before anything draws.
@@ -211,6 +227,73 @@ pub fn carriedFieldWhole(id: dvui.Id, field: widgets.LiquidField, scale: f32) bo
     pane.form = 1;
     widgets.BlurBackdrop.fieldPane(id, field, scale, pane);
     return true;
+}
+
+// ---- glass controls -----------------------------------------------------------------------------
+
+/// A control floating over content as a bubble of glass — a round button, or a capsule holding a
+/// scrubber or a row of buttons. Physical pixels, window coordinates; rounded across its shorter
+/// side, so a square is a circle.
+pub const Bubble = struct {
+    rect: dvui.Rect.Physical,
+    /// White added over it, 0…1: `bubble_hover` under the pointer, `bubble_press` held.
+    light: f32 = 0,
+};
+pub const bubble_hover: f32 = 0.14;
+pub const bubble_press: f32 = 0.24;
+
+pub const BubblesOptions = struct {
+    /// Points: how near two bubbles come before their glass runs together (`LiquidField.merge_px`);
+    /// 0 never joins.
+    merge: f32 = 0,
+    /// The shadows' share, 0…1: bubbles still run together into one want none, a ring round each
+    /// lying dark across the bridges.
+    shadow: f32 = 1,
+    /// A signature of what lies under the bubbles, as `frostPaneKept`'s: the frost is read again
+    /// only when it changes. Null reads it every frame.
+    witness: ?u64 = null,
+};
+
+/// Controls of glass over content, one look wherever they float: the demo player's transport, a
+/// plugin's buttons over its canvas. Each bubble is drawn as a drop is (`LiquidField`, its edge
+/// bending along its own outline — a capsule's ends round, as a circle's are), lit by its
+/// `light`, whole from the first frame, with the floating surfaces' shadow as a ring round it.
+/// Where the glass program is not there to draw it, or the blur is off, each is frosted (or
+/// filled) on its own and lit with the menus' hover and press. `id` keys the frost.
+pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: BubblesOptions) void {
+    const bs = surfaceShadow();
+    // The ring after the glass, so the glass never blurs it in.
+    defer if (opts.shadow > 0) for (bubbles) |b| {
+        if (b.rect.w < 1 or b.rect.h < 1) continue;
+        glassShadow(b.rect, .round(@min(b.rect.w, b.rect.h) / 2 / scale), scale, bs, opts.shadow);
+    };
+    if (widgets.LiquidField.ready()) {
+        if (widgets.liquidFrost()) |frost| {
+            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale };
+            for (bubbles) |b| {
+                if (b.rect.w < 1 or b.rect.h < 1) continue;
+                field.add(.{ .rect = b.rect, .radii = @splat(@min(b.rect.w, b.rect.h)), .round = true, .light = b.light });
+            }
+            var pane = frost;
+            pane.form = 1;
+            pane.witness = opts.witness;
+            widgets.BlurBackdrop.fieldPane(id, field, scale, pane);
+            return;
+        }
+    }
+    for (bubbles, 0..) |b, i| {
+        if (b.rect.w < 1 or b.rect.h < 1) continue;
+        const round: dvui.CornerRect = .round(@min(b.rect.w, b.rect.h) / 2 / scale);
+        const physical = round.scale(scale, dvui.CornerRect.Physical);
+        const piece = id.update(std.mem.asBytes(&i));
+        const frosted = if (opts.witness) |w| frostPaneKept(piece, b.rect, round, scale, w) else frostPane(piece, b.rect, round, scale);
+        if (!frosted) b.rect.fill(physical, .{ .color = .{ .color = dialogFill() }, .fade = 1 });
+        if (b.light >= bubble_press) {
+            b.rect.fill(physical, .{ .color = .{ .color = rowPress() }, .fade = 1 });
+        } else if (b.light > 0) {
+            b.rect.fill(physical, .{ .color = .{ .color = rowHover() }, .fade = 1 });
+        }
+    }
 }
 
 /// Clear glass at the dialog style (`BlurBackdrop.Pane.clear`): its tint, lift and edge over what
@@ -1313,13 +1396,14 @@ pub fn bubbleSpinner(
     if (wd.rect.empty()) return;
 
     const rs = wd.contentRectScale();
+    const scale: BubbleScale = .at(@min(rs.r.w, rs.r.h) / rs.s);
     const still = motion.off();
     const now = dvui.frameTimeNS();
     const t0 = dvui.dataGet(null, wd.id, "_t0", i128) orelse now;
     dvui.dataSet(null, wd.id, "_t0", t0);
     const t: f64 = if (still) 1.3 else @as(f64, @floatFromInt(now - t0)) / std.time.ns_per_s * motion.rate();
 
-    var frame: BubbleFrame = .{};
+    var frame: BubbleFrame = .{ .merge = boil.merge * scale.soft };
     if (init.complete_elapsed_ns) |elapsed_ns| {
         if (still or elapsed_ns >= bubble_save_transition_ns) {
             const grow = if (still) 1 else @as(f32, @floatFromInt(elapsed_ns - bubble_save_transition_ns)) /
@@ -1328,13 +1412,13 @@ pub fn bubbleSpinner(
             frame.check_alpha = motion.fade(grow);
         }
         if (!still) {
-            bubbleBoil(t, &frame);
+            bubbleBoil(t, scale, &frame);
             bubbleFinish(&frame, elapsed_ns);
         }
         if (!still and elapsed_ns < bubble_save_transition_ns + @max(bubble_check_grow_ns, bubble_pop_ns))
             dvui.refresh(null, @src(), wd.id);
     } else {
-        bubbleBoil(t, &frame);
+        bubbleBoil(t, scale, &frame);
         if (!still) dvui.refresh(null, @src(), wd.id);
     }
     bubblePaint(rs, &frame, options.color(.text).toColor());
@@ -1360,11 +1444,45 @@ const boil = struct {
     /// How far a pop's ring spreads past the bubble.
     const ring: f32 = 0.16;
     const golden_angle: f64 = 2.39996322972865332;
+    /// The spinner's size, in points, that the numbers above are drawn for (`BubbleScale`).
+    const points: f32 = 24;
+};
+
+/// How the boiling changes with the spinner's size. A bubble keeps about one size in points, and
+/// the spinner's size is only how much room it has: a small spinner boils in a tight pot, a big one
+/// with more bubbles that get further out. Below about 18 pt the bubbles shrink after all, or the
+/// buds would never leave the core.
+const BubbleScale = struct {
+    /// The bubbles' size against `boil`'s: `boil.points / points`, held to what still boils.
+    z: f32 = 1,
+    /// What grows less than a bubble does: the core, and how far apart bubbles still bridge. At the
+    /// bubbles' full size a small spinner's core swallows every bud.
+    soft: f32 = 1,
+    /// Seconds between buds.
+    period: f64 = boil.period,
+    /// How far out a bud gets: as far as a full-grown bubble and its pop still fit.
+    reach: f32 = boil.reach,
+    /// A bud's life against `boil.life`: further to go is longer to get there, though not as much
+    /// longer as a steady speed would make it.
+    life: f32 = 1,
+
+    fn at(points: f32) BubbleScale {
+        const z = std.math.clamp(std.math.pow(f32, boil.points / @max(points, 1), 0.9), 0.3, 1.3);
+        const edge = boil.reach + boil.bud + boil.grow + boil.ring;
+        const reach = edge - z * (boil.bud + boil.grow + boil.ring);
+        return .{
+            .z = z,
+            .soft = std.math.pow(f32, z, 0.7),
+            .period = boil.period * std.math.pow(f64, z, 0.6),
+            .reach = reach,
+            .life = @sqrt((reach - boil.start * z) / (boil.reach - boil.start) / z),
+        };
+    }
 };
 
 /// One frame of bubbles, in `boil` units about the middle.
 const BubbleFrame = struct {
-    discs: [24]liquid_blob.Disc = undefined,
+    discs: [48]liquid_blob.Disc = undefined,
     n: usize = 0,
     rings: [12]Ring = undefined,
     nr: usize = 0,
@@ -1408,35 +1526,37 @@ fn bubbleEaseOut(x: f32) f32 {
 }
 
 /// The spinner at `t` seconds: the core, churning, and the buds out from it.
-fn bubbleBoil(t: f64, f: *BubbleFrame) void {
+fn bubbleBoil(t: f64, s: BubbleScale, f: *BubbleFrame) void {
     const tau = 2 * std.math.pi;
     const pulse: f32 = @floatCast(0.5 + 0.5 * @sin(t * tau / (boil.period * 1.5)));
-    f.disc(0, 0, boil.core * (0.9 + 0.12 * pulse));
+    const core = boil.core * s.soft;
+    f.disc(0, 0, core * (0.9 + 0.12 * pulse));
     // The core churns: three bubbles inside it, each wandering off-centre at its own pace.
     for (0..3) |i| {
         const fi: f64 = @floatFromInt(i);
         const a = t * (5 + fi * 1.7) + fi * 2.1;
-        const off: f32 = @floatCast(0.06 + 0.03 * @sin(t * 13 + fi * 4));
+        const off: f32 = s.soft * @as(f32, @floatCast(0.06 + 0.03 * @sin(t * 13 + fi * 4)));
         const size: f32 = @floatCast(0.62 + 0.08 * @sin(t * 9 + fi));
-        f.disc(off * @as(f32, @floatCast(@cos(a))), off * @as(f32, @floatCast(@sin(a))), boil.core * size);
+        f.disc(off * @as(f32, @floatCast(@cos(a))), off * @as(f32, @floatCast(@sin(a))), core * size);
     }
 
-    const span: f64 = boil.life * 1.25 + boil.pop;
-    var j: i64 = @intFromFloat(@floor((t - span) / boil.period));
-    const last: i64 = @intFromFloat(@floor(t / boil.period));
+    const span: f64 = boil.life * s.life * 1.25 + boil.pop;
+    var j: i64 = @intFromFloat(@floor((t - span) / s.period));
+    const last: i64 = @intFromFloat(@floor(t / s.period));
     while (j <= last) : (j += 1) {
-        const born = @as(f64, @floatFromInt(j)) * boil.period;
+        const born = @as(f64, @floatFromInt(j)) * s.period;
         if (born > t) continue;
         const age: f32 = @floatCast(t - born);
         const dir: f32 = @floatCast(@mod(@as(f64, @floatFromInt(j)) * boil.golden_angle, tau));
-        const life = boil.life * (0.75 + 0.5 * bubbleHash(j, 7));
-        const end = boil.reach * (0.72 + 0.28 * bubbleHash(j, 3));
-        const full = boil.bud + boil.grow * (0.6 + 0.4 * bubbleHash(j, 9));
+        const life = boil.life * s.life * (0.75 + 0.5 * bubbleHash(j, 7));
+        const start = boil.start * s.soft;
+        const end = s.reach * (0.72 + 0.28 * bubbleHash(j, 3));
+        const full = s.z * (boil.bud + boil.grow * (0.6 + 0.4 * bubbleHash(j, 9)));
         const phase = bubbleHash(j, 5) * tau;
 
         const g = @min(age / life, 1);
-        const out = boil.start + (end - boil.start) * (1 - (1 - g) * (1 - g));
-        const sway = boil.wobble * @sin(age * 10 + phase) * g;
+        const out = start + (end - start) * (1 - (1 - g) * (1 - g));
+        const sway = boil.wobble * s.z * @sin(age * 10 + phase) * g;
         const x = out * @cos(dir) - sway * @sin(dir);
         const y = out * @sin(dir) + sway * @cos(dir);
         const r = full * (0.35 + 0.65 * bubbleEaseOut(g * 1.4));
@@ -1446,7 +1566,7 @@ fn bubbleBoil(t: f64, f: *BubbleFrame) void {
             if (g < 0.35) f.disc(x * 0.55, y * 0.55, r * 0.75 * (1 - bubbleSmoothstep(0.05, 0.35, g)));
         } else {
             const v = (age - life) / boil.pop;
-            if (v < 1) f.ring(x, y, r + boil.ring * bubbleEaseOut(v), 1 - v);
+            if (v < 1) f.ring(x, y, r + boil.ring * s.z * bubbleEaseOut(v), 1 - v);
         }
     }
 }

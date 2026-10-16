@@ -220,6 +220,8 @@ fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) 
         for (tape.keysAt(player.seq.cursor, player.seq.now, keys_ms, &keys_buf)) |i| {
             if (stack.items.len == stack.capacity) break;
             const op = tape.ops[i];
+            // A command shows on the pane it edits (`ActivityFeed`); the keys pressed show here.
+            if (op.do == .command) continue;
             if (keysLabel(player, op) == null) continue;
             const at: f64 = @floatFromInt(op.at);
             stack.appendAssumeCapacity(.{
@@ -401,9 +403,9 @@ fn callout(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, 
     for (tape.ops) |op| {
         if (op.at < c.at) continue;
         if (op.at >= c.at + c.ms or keep.items.len == keep.capacity) break;
-        if (op.do != .move) continue;
+        const target = op.do.target() orelse continue;
         // The things it acts on, not the pane it acts in: covering an editor is unavoidable.
-        if (tagRect(op.do.move.tag)) |r| if (small(r, win)) keep.appendAssumeCapacity(r);
+        if (tagRect(target.tag)) |r| if (small(r, win)) keep.appendAssumeCapacity(r);
     }
 
     const cy = near.y + near.h / 2;
@@ -669,39 +671,16 @@ fn barGeometry(center: dvui.Point, full_w: f32, p: f32, out: *[5]dvui.Rect) f32 
     return std.math.clamp(apart, 0, 1);
 }
 
-/// The bar's glass: its pieces as one liquid glass (`LiquidField`), running together where they
-/// are close, the hovered one lit; where the glass program is not there to draw it, or the blur is
-/// off, each piece frosted (or filled) on its own. Their shadows come in as they part — a ring
-/// round each piece would lie dark across the bridges while they are one.
+/// The bar's glass: its pieces as one liquid glass, running together where they are close, the
+/// hovered one lit (`core.dialogs.glassBubbles`). Their shadows come in as they part — a ring round
+/// each piece would lie dark across the bridges while they are one.
 fn barGlass(id: dvui.Id, pieces: []const dvui.Rect.Physical, s: f32, hovered: ?Piece, apart: f32) void {
-    const bs = core.dialogs.surfaceShadow();
-    defer for (pieces) |r| {
-        if (r.w < 1 or r.h < 1) continue;
-        core.dialogs.glassShadow(r, .round(r.h / 2 / s), s, bs, apart);
+    var bubbles: [5]core.dialogs.Bubble = undefined;
+    for (pieces, bubbles[0..pieces.len], 0..) |r, *b, i| b.* = .{
+        .rect = r,
+        .light = if (hovered != null and @intFromEnum(hovered.?) == i) core.dialogs.bubble_hover else 0,
     };
-    if (core.widgets.LiquidField.ready()) {
-        var field: core.widgets.LiquidField = .{ .merge_px = bar_merge * s, .scale = s };
-        for (pieces, 0..) |r, i| {
-            if (r.w < 1 or r.h < 1) continue;
-            field.add(.{
-                .rect = r,
-                .radii = @splat(r.h),
-                .round = i != @intFromEnum(Piece.track),
-                .light = if (hovered != null and @intFromEnum(hovered.?) == i) 0.14 else 0,
-            });
-        }
-        if (core.dialogs.carriedFieldWhole(id, field, s)) return;
-    }
-    for (pieces, 0..) |r, i| {
-        if (r.w < 1 or r.h < 1) continue;
-        const round: dvui.CornerRect = .round(r.h / 2 / s);
-        if (!core.dialogs.frostPane(id.update(@tagName(@as(Piece, @enumFromInt(i)))), r, round, s)) {
-            r.fill(round.scale(s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.dialogFill() } });
-        }
-        if (hovered != null and @intFromEnum(hovered.?) == i) {
-            r.fill(round.scale(s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.rowHover() } });
-        }
-    }
+    core.dialogs.glassBubbles(id, bubbles[0..pieces.len], s, .{ .merge = bar_merge, .shadow = apart });
 }
 
 /// A bar button's icon, in the middle of its bubble `r` (window-natural; `bounds` the layer's).
@@ -752,11 +731,25 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     const x0 = r.x + pad + time_w + 14;
     const x1 = r.x + r.w - pad;
     const small_font = dvui.Font.theme(.body).larger(-2);
+
+    // The speed, top right of the capsule: a press steps it (`Player.stepRate`).
+    var speed_buf: [8]u8 = undefined;
+    const speed = std.fmt.bufPrint(&speed_buf, "{d}\u{00D7}", .{player.rate}) catch "";
+    const speed_w = small_font.textSize(speed).w;
+    const speed_r: dvui.Rect = .{ .x = x1 - speed_w, .y = r.y + 5, .w = speed_w, .h = small_font.lineHeight() };
+    dvui.labelNoFmt(@src(), speed, .{}, .{
+        .rect = .{ .x = speed_r.x - bounds.x, .y = speed_r.y - bounds.y, .w = speed_r.w + 2, .h = speed_r.h },
+        .padding = .{},
+        .margin = .{},
+        .font = small_font,
+        .color_text = .{ .color = ink.opacity(if (player.rate == 1) 0.65 else 0.95) },
+    });
+    player.transport.speed = wrs.rectToPhysical(speed_r.outsetAll(4));
     const chapter = if (tape.chapterAt(now)) |i| tape.chapters[i].title else tape.title;
     const ch = small_font.lineHeight();
     if (x1 - x0 > 8) {
         dvui.labelNoFmt(@src(), chapter, .{}, .{
-            .rect = .{ .x = x0 - bounds.x, .y = r.y + 5 - bounds.y, .w = x1 - x0, .h = ch },
+            .rect = .{ .x = x0 - bounds.x, .y = r.y + 5 - bounds.y, .w = @max(0, x1 - x0 - speed_w - 10), .h = ch },
             .padding = .{},
             .margin = .{},
             .font = small_font,

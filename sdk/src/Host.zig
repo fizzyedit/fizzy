@@ -34,6 +34,7 @@ pub const RailItemContribution = @import("menus.zig").RailItemContribution;
 pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
+pub const Claim = @import("Claim.zig");
 pub const events = @import("events.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
@@ -264,6 +265,29 @@ account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
 /// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
 commands: std.ArrayListUnmanaged(Command) = .empty,
+/// The commands run on documents lately, oldest first and at most `activity_cap`, for each
+/// document's panes to show as they run: by whoever ran them (a person, a tape, an agent). Titles
+/// are copies, so an entry outlives the plugin that ran it.
+activity: std.ArrayListUnmanaged(Activity) = .empty,
+activity_seq: u64 = 0,
+/// No activity is noted while set: a tape seeking replays its commands where nobody watches.
+activity_muted: bool = false,
+/// How long the last command called with arguments goes on showing its work
+/// (`Command.Call.showing_ms`), for whoever called it.
+last_showing_ms: u32 = 0,
+/// The command whose body is running, if any: the edits made meanwhile are its (`documentEdited`).
+running_command: ?*const Command = null,
+/// While above 0, documents opened or created land beside the pane the person is in
+/// (`EditorAPI.OpenOptions.beside`), not in it: an agent's work opens where it will be seen,
+/// rather than over the person's document and then moved. Nested scopes count; UI thread only.
+open_beside: u32 = 0,
+/// Counts command runs, so one run that edits several times shows once.
+command_runs: u64 = 0,
+activity_run: u64 = 0,
+
+/// Documents held by a plugin while it works on them (`Claim`).
+claims: std.ArrayListUnmanaged(Claim) = .empty,
+next_claim_id: u32 = 1,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 /// Who listens for which events (`subscribe`), and what plugins say they announce
@@ -300,6 +324,11 @@ pub fn init(allocator: std.mem.Allocator) Host {
 }
 
 pub fn deinit(self: *Host) void {
+    for (self.activity.items) |a| self.allocator.free(a.title);
+    self.activity.deinit(self.allocator);
+
+    for (self.claims.items) |c| self.allocator.free(c.label);
+    self.claims.deinit(self.allocator);
     self.plugins.deinit(self.allocator);
     self.services.deinit(self.allocator);
     self.selections.deinit(self.allocator);
@@ -581,6 +610,14 @@ pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, 
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
 }
 
+/// Open documents beside the person until `endOpenBeside` (`open_beside`).
+pub fn openBeside(self: *Host) void {
+    self.open_beside += 1;
+}
+pub fn endOpenBeside(self: *Host) void {
+    self.open_beside -|= 1;
+}
+
 /// Open a file — see `EditorAPI.OpenOptions`. Returns true when a new load started.
 pub fn openFile(self: *Host, opts: EditorAPI.OpenOptions) !bool {
     return if (self.fizzy_api) |a| try a.openFile(opts) else false;
@@ -684,14 +721,6 @@ pub fn folderWatchActive(self: *Host) bool {
     return if (self.fizzy_api) |a| a.folderWatchActive() else false;
 }
 
-pub fn explorerBranchIsOpen(self: *Host, branch_id: dvui.Id) bool {
-    return if (self.fizzy_api) |a| a.explorerBranchIsOpen(branch_id) else false;
-}
-
-pub fn setExplorerBranchOpen(self: *Host, branch_id: dvui.Id, open: bool) void {
-    if (self.fizzy_api) |a| a.setExplorerBranchOpen(branch_id, open);
-}
-
 pub fn drawWorkspaces(self: *Host, index: usize) !dvui.App.Result {
     return if (self.fizzy_api) |a| try a.drawWorkspaces(index) else .ok;
 }
@@ -744,10 +773,6 @@ pub fn allocUntitledPath(self: *Host) ![]u8 {
 
 pub fn createDocument(self: *Host, path: []const u8, grid: EditorAPI.NewDocGrid) !DocHandle {
     return if (self.fizzy_api) |a| try a.createDocument(path, grid) else error.FizzyApiNotInstalled;
-}
-
-pub fn setExplorerNewFilePath(self: *Host, path: []const u8) !void {
-    return if (self.fizzy_api) |a| try a.setExplorerNewFilePath(path) else error.FizzyApiNotInstalled;
 }
 
 /// How a document's saving stands (`EditorAPI.SaveState`): for an indicator. Not saving and
@@ -886,6 +911,15 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
     removeOwned(Command, &self.commands, plugin);
+    {
+        var i: usize = 0;
+        while (i < self.claims.items.len) {
+            if (self.claims.items[i].owner == plugin) {
+                self.allocator.free(self.claims.items[i].label);
+                _ = self.claims.orderedRemove(i);
+            } else i += 1;
+        }
+    }
     removeOwned(LanguageSupport, &self.language_support, plugin);
     removeOwned(FileRowFillColor, &self.file_row_fill_colors, plugin);
     removeOwned(FileRowDecorator, &self.file_row_decorators, plugin);
@@ -1450,6 +1484,124 @@ pub fn commandEnabled(self: *Host, id: []const u8) bool {
     return if (c.isEnabled) |f| f(owner.state) else true;
 }
 
+// ---- claims ----------------------------------------------------------------------------------
+
+/// Hold `doc_id` for `owner` while it works on it (`Claim`): the person's input to the document is
+/// held back until `releaseClaim`, or until they stop it from its panes. `label` names the holder
+/// to the person. A document holds one claim: another plugin's is `error.DocumentClaimed`; the
+/// same plugin claiming again gets its claim back, relabelled.
+pub fn claimDocument(self: *Host, owner: *Plugin, doc_id: u64, label: []const u8) !u32 {
+    if (self.documentClaim(doc_id)) |c| {
+        if (c.owner != owner) return error.DocumentClaimed;
+        const i = self.claimIndex(c.id).?;
+        const owned = try self.allocator.dupe(u8, label);
+        self.allocator.free(self.claims.items[i].label);
+        self.claims.items[i].label = owned;
+        return c.id;
+    }
+    const owned = try self.allocator.dupe(u8, label);
+    errdefer self.allocator.free(owned);
+    const id = self.next_claim_id;
+    try self.claims.append(self.allocator, .{ .id = id, .doc_id = doc_id, .label = owned, .owner = owner });
+    self.next_claim_id +%= 1;
+    if (self.next_claim_id == 0) self.next_claim_id = 1;
+    self.refresh();
+    return id;
+}
+
+/// Let go of a claim. Unknown ids (already released, or stopped by the person) are a no-op.
+pub fn releaseClaim(self: *Host, id: u32) void {
+    const i = self.claimIndex(id) orelse return;
+    self.allocator.free(self.claims.items[i].label);
+    _ = self.claims.orderedRemove(i);
+    self.refresh();
+}
+
+/// The claim on `doc_id`, if one holds it. A holder that finds its claim gone was stopped.
+pub fn documentClaim(self: *const Host, doc_id: u64) ?Claim {
+    for (self.claims.items) |c| {
+        if (c.doc_id == doc_id) return c;
+    }
+    return null;
+}
+
+/// Whether claim `id` still holds.
+pub fn claimHolds(self: *const Host, id: u32) bool {
+    return self.claimIndex(id) != null;
+}
+
+/// Drop every claim on `doc_id`: the document closed.
+pub fn releaseDocumentClaims(self: *Host, doc_id: u64) void {
+    var i: usize = 0;
+    while (i < self.claims.items.len) {
+        if (self.claims.items[i].doc_id == doc_id) {
+            self.allocator.free(self.claims.items[i].label);
+            _ = self.claims.orderedRemove(i);
+        } else i += 1;
+    }
+}
+
+fn claimIndex(self: *const Host, id: u32) ?usize {
+    for (self.claims.items, 0..) |c, i| {
+        if (c.id == id) return i;
+    }
+    return null;
+}
+
+/// The claim that refuses the person command `c` on the active document: the document is claimed
+/// and `c` belongs to the plugin that draws it (Undo, Copy and Delete reach it as `<owner>.<verb>`).
+fn claimRefusing(self: *Host, c: *const Command) ?Claim {
+    // Nothing held, nothing to ask: a command costs no more than before.
+    if (self.claims.items.len == 0) return null;
+    const owner = c.owner orelse return null;
+    const doc = self.activeDoc() orelse return null;
+    if (doc.owner != owner) return null;
+    return self.documentClaim(doc.id);
+}
+
+// ---- activity --------------------------------------------------------------------------------
+
+/// A command that edited a document (`activity`).
+pub const Activity = struct {
+    /// Increasing: a reader keeps the last it saw and takes those after it.
+    seq: u64,
+    doc_id: u64,
+    /// The command's title, as a person reads it: `Draw`, `Undo`. Owned by the host.
+    title: []const u8,
+};
+
+const activity_cap = 32;
+
+/// An open document was just edited (an undo step was recorded, or undone): its **owner** calls
+/// this for every edit. When a command is running, the edit is that command's, and the document's
+/// panes show it (`activity`), once per run of the command.
+pub fn documentEdited(self: *Host, doc_id: u64) void {
+    const c = self.running_command orelse return;
+    if (self.activity_muted) return;
+    if (self.activity.getLastOrNull()) |last| {
+        if (self.activity_run == self.command_runs and last.doc_id == doc_id) return;
+    }
+    const title = self.allocator.dupe(u8, std.mem.trimEnd(u8, c.title, "…")) catch return;
+    if (self.activity.items.len == activity_cap) {
+        self.allocator.free(self.activity.items[0].title);
+        _ = self.activity.orderedRemove(0);
+    }
+    self.activity_seq += 1;
+    self.activity_run = self.command_runs;
+    self.activity.append(self.allocator, .{ .seq = self.activity_seq, .doc_id = doc_id, .title = title }) catch {
+        self.allocator.free(title);
+        return;
+    };
+    self.refresh();
+}
+
+/// Run a command's body as the running command, so the edits it makes are its own.
+fn running(self: *Host, c: *const Command) ?*const Command {
+    const outer = self.running_command;
+    self.running_command = c;
+    self.command_runs += 1;
+    return outer;
+}
 /// Run the command `id` with no arguments (no-op when unknown), as a menu row or a keybind
 /// does. The owner's opaque `state` is passed to `run`. A command with only `runWith` runs it
 /// with no arguments, unless a parameter is required: then the app is asked to collect them
@@ -1458,9 +1610,17 @@ pub fn commandEnabled(self: *Host, id: []const u8) bool {
 pub fn runCommand(self: *Host, id: []const u8) !void {
     const c = self.command(id) orelse return;
     const owner = c.owner orelse return;
+    // A person's command on a document someone holds waits until they let go (`Claim`). The
+    // holder reaches it through `callCommand`.
+    if (self.claimRefusing(c)) |claim| {
+        std.log.info("{s}: {s} is working on this document", .{ id, claim.label });
+        return error.DocumentClaimed;
+    }
     if (c.run) |run| {
         const prof = core.profile.begin(owner.id, c.id);
         defer prof.end();
+        const outer = self.running(c);
+        defer self.running_command = outer;
         run(owner.state) catch |err| return owner.failed(c.id, err);
         return;
     }
@@ -1600,14 +1760,20 @@ pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.m
     const run_with = c.runWith orelse {
         const trimmed = std.mem.trim(u8, args, " \t\r\n");
         if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .bad_args = "this command takes no arguments" };
+        const outer = self.running(c);
+        defer self.running_command = outer;
         c.run.?(owner.state) catch |err| return .{ .failed = owner.errorName(err) };
         return .{ .ok = null };
     };
+    self.last_showing_ms = 0;
     var call: Command.Call = .{ .args = args, .arena = results };
+    const outer = self.running(c);
+    defer self.running_command = outer;
     run_with(owner.state, &call) catch |err| {
         const msg = call.message orelse owner.errorName(err);
         return if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg };
     };
+    self.last_showing_ms = call.showing_ms;
     return .{ .ok = call.result };
 }
 

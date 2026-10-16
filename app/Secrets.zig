@@ -162,7 +162,7 @@ test "secrets round-trip through a 0600 file and never through settings" {
 
     // On disk: only the owner can read it, and a fresh instance reads it back.
     const st = try tmp.dir.statFile(io, "secrets", .{});
-    if (builtin.os.tag != .windows) try std.testing.expectEqual(@as(u32, 0o600), @as(u32, @intCast(st.permissions.toMode() & 0o777)));
+    if (builtin.target.os.tag != .windows) try std.testing.expectEqual(@as(u32, 0o600), @as(u32, @intCast(st.permissions.toMode() & 0o777)));
     var again = try Secrets.init(a, io, dir);
     defer again.deinit();
     try std.testing.expectEqualStrings("1//abc\"quoted\"", again.get("drive.refresh_token").?);

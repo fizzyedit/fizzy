@@ -17,7 +17,7 @@ const crash = @import("crash");
 
 /// Zig 0.16.0's `std.DynLib` dropped Windows support; this thin wrapper restores it for
 /// Windows while delegating elsewhere. Shape matches `std.DynLib.{open, close, lookup}`.
-pub const DynLib = if (builtin.os.tag == .windows) WindowsDynLib else std.DynLib;
+pub const DynLib = if (builtin.target.os.tag == .windows) WindowsDynLib else std.DynLib;
 
 const WindowsDynLib = struct {
     const windows = std.os.windows;
@@ -100,7 +100,7 @@ pub const PreRegister = struct {
 
 /// Platform-specific plugin dylib extension.
 pub fn pluginExtension() []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .windows => "dll",
         .macos => "dylib",
         else => "so",
@@ -126,7 +126,7 @@ pub fn builtinPluginPath(
 }
 
 fn nativeEnviron() std.process.Environ {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         return .{ .block = .global };
     }
     var n: usize = 0;
@@ -634,7 +634,7 @@ pub fn probeVersionInfo(path: []const u8) ?PluginVersionInfo {
 test "builtin plugin path joins exe_dir/plugins/<name>/<name>.<ext>" {
     const path = try builtinPluginPath(std.testing.allocator, "/app", "pixi");
     defer std.testing.allocator.free(path);
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dll", path),
         .macos => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.dylib", path),
         else => try std.testing.expectEqualStrings("/app/plugins/pixi/pixi.so", path),

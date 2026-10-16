@@ -48,7 +48,9 @@ grouping_id_counter: u64 = 0,
 /// was (a hash of its surface id): the gap a strip opens for it while it is carried over one.
 carried_tab_w: f32 = 0,
 carried_tab_key: u64 = 0,
-file_tree_data_id: ?dvui.Id = null,
+/// The file tree's expanded folders, by branch id. Instance state for the same two-copies reason
+/// as `pending_new_file_path` below; fizzy's demos save and restore it with the rest of a scene.
+open_branches: std.AutoHashMapUnmanaged(dvui.Id, void) = .empty,
 /// Branch id of the last root the file tree opened by default. A new root starts expanded once;
 /// after that its open state is the user's (`files.drawRoot`). Instance state for the same
 /// two-copies reason as `pending_new_file_path` below.
@@ -107,6 +109,7 @@ pub fn init(allocator: std.mem.Allocator) Workbench {
 }
 
 pub fn deinit(self: *Workbench) void {
+    self.open_branches.deinit(self.allocator);
     self.loading.deinit(self.allocator);
     self.decorators.deinit(self.allocator);
     self.clearPendingNewFilePath();
@@ -193,8 +196,9 @@ pub fn paneClosing(self: *Workbench, grouping: u64) bool {
     return self.panes.leafClosing(leaf);
 }
 
-pub fn deinitWorkspaces(self: *Workbench) void {
-    for (self.workspaces.values()) |*workspace| workspace.deinit();
+/// At shutdown, after the last frame: `backend` frees what a frame would have (`Workspace.deinitAtQuit`).
+pub fn deinitWorkspaces(self: *Workbench, backend: dvui.Backend) void {
+    for (self.workspaces.values()) |*workspace| workspace.deinitAtQuit(backend);
     self.workspaces.deinit(self.allocator);
     self.panes.deinit();
 }
@@ -208,8 +212,13 @@ pub fn newGroupingID(self: *Workbench) u64 {
     return self.grouping_id_counter;
 }
 
-pub fn clearFileTreeDataId(self: *Workbench) void {
-    self.file_tree_data_id = null;
+/// Expand or collapse the tree's folder `branch_id`.
+pub fn setBranchOpen(self: *Workbench, branch_id: dvui.Id, open: bool) void {
+    if (open) {
+        self.open_branches.put(self.allocator, branch_id, {}) catch {};
+    } else {
+        _ = self.open_branches.remove(branch_id);
+    }
 }
 
 /// A document closed by the user: its tab leaves every pane. Not called at shutdown, where the
@@ -356,6 +365,27 @@ fn focusIn(self: *Workbench, ws: *Workspace, doc: sdk.DocHandle, id: []const u8)
     runtime.host().selectInRegion(Workspace.name(&buf, ws.grouping), id);
     self.open_workspace_grouping = ws.grouping;
     ws.active = doc;
+}
+
+/// Show `doc` beside the pane the person is in, leaving them that pane and their focus: a
+/// document a plugin has taken to work on (`sdk.Claim`), seen as it changes while the person
+/// stays where they were. Left alone when another pane shows it already, or when it is all the
+/// person's pane holds.
+pub fn showBeside(self: *Workbench, doc: sdk.DocHandle) void {
+    const here = self.open_workspace_grouping;
+    for (self.workspaces.values()) |ws| {
+        if (ws.grouping != here) if (ws.active) |a| if (a.id == doc.id) return;
+    }
+    const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
+    if (self.workspaces.getPtr(here)) |ws| if (ws.hasTab(id) and ws.tabCount() == 1) return;
+    // Beside: a pane there is already, or else a new one on this one's right.
+    const target = for (self.workspaces.values()) |ws| {
+        if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
+    } else self.newGroupingID();
+    for (self.workspaces.values()) |*ws| if (ws.grouping != target) ws.removeTab(id);
+    const side = self.pane(target) catch return;
+    side.addTab(id, true);
+    self.open_workspace_grouping = here;
 }
 
 pub fn activeWorkspaceCanvasRectPhysical(self: *Workbench) ?dvui.Rect.Physical {

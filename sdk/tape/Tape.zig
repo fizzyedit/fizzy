@@ -65,6 +65,10 @@ pub const Action = union(enum) {
     keyframe: u16,
     /// Glide the pointer onto a target over `Op.ms`.
     move: Target,
+    /// Carry the pointer onto a target over `Op.ms` in a straight line at an even pace: a pen's
+    /// stroke, where `move` is a hand reaching. A line drawn with a button held lands where it
+    /// was aimed.
+    trace: Target,
     /// A pointer button goes down where the pointer is.
     press: Button,
     /// A pointer button comes up where the pointer is.
@@ -85,6 +89,14 @@ pub const Action = union(enum) {
     /// Hold demo time until a condition holds. Waits are how a tape stays deterministic over an
     /// app that does things on its own time (loading a file, animating a pane open).
     wait: Wait,
+
+    /// Where a `move` or `trace` takes the pointer.
+    pub fn target(self: Action) ?Target {
+        return switch (self) {
+            .move, .trace => |t| t,
+            else => null,
+        };
+    }
 };
 
 pub const Button = enum { left, right, middle };
@@ -264,7 +276,7 @@ pub fn movesBetween(self: Tape, start: u32, stop: u32) bool {
     for (self.ops) |op| {
         if (op.at < start) continue;
         if (op.at >= stop) break;
-        if (op.do == .move) return true;
+        if (op.do.target() != null) return true;
     }
     return false;
 }
@@ -299,7 +311,9 @@ pub fn keysAt(self: Tape, applied: usize, t: f64, window_ms: f64, out: []usize) 
 
 /// Where the tape's pointer is aimed while `c` shows, with the first `applied` ops applied: the
 /// target of the latest move in its time, or before there is one, of the first move to come in
-/// its time. Null when the pointer does not move in its time.
+/// its time. Null when the pointer does not move in its time. A `trace` is not aimed at: it is
+/// where a pen carries the pointer while it draws, and a caption that followed it would chase the
+/// pen across the canvas; it stays where the stroke began.
 pub fn aimedAt(self: Tape, c: Caption, applied: usize) ?Target {
     const start = c.at;
     const stop = c.at + c.ms;
@@ -339,7 +353,7 @@ pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
         const op = self.ops[i];
         const kind: Kind = switch (op.do) {
             .type, .key, .command => .keyboard,
-            .move, .press, .release, .scroll => .pointer,
+            .move, .trace, .press, .release, .scroll => .pointer,
             // A keyframe is a fresh start.
             .keyframe => break,
             .wait => continue,
@@ -533,6 +547,20 @@ test "a caption is beside what the pointer is aimed at in its time" {
     try testing.expectEqualStrings("row", tape.aimedAt(c, 6).?.tag);
     // No move in its time: nothing to sit beside.
     try testing.expect(tape.aimedAt(.{ .at = 2500, .ms = 1000, .text = "" }, 5) == null);
+}
+
+test "a caption over a stroke stays where the pen went down" {
+    const ops = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .ms = 300, .do = .{ .move = .{ .tag = "canvas", .x = 0.1, .y = 0.1 } } },
+        .{ .at = 400, .do = .{ .press = .left } },
+        .{ .at = 450, .ms = 200, .do = .{ .trace = .{ .tag = "canvas", .x = 0.9, .y = 0.1 } } },
+        .{ .at = 650, .ms = 200, .do = .{ .trace = .{ .tag = "canvas", .x = 0.9, .y = 0.9 } } },
+        .{ .at = 900, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops };
+    const c: Caption = .{ .at = 0, .ms = 1000, .text = "a stroke" };
+    for (2..ops.len + 1) |applied| try testing.expectEqual(@as(f32, 0.1), tape.aimedAt(c, applied).?.x);
 }
 
 test "the keys shown are those pressed lately, since the cut, oldest first" {

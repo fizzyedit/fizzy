@@ -141,7 +141,7 @@ fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8) !void {
     // out of the terminal's foreground group, which is what the hangup is sent to. Windows: a
     // console of its own (no-op for a Release build, which has none), so closing the launcher's
     // console does not close it.
-    if (comptime builtin.os.tag.isDarwin()) {
+    if (comptime builtin.target.os.tag.isDarwin()) {
         _ = try core.darwin_spawn.spawn(gpa, .{ .argv = argv.items, .stdin = .discard, .stdout = .discard, .stderr = .discard, .new_session = true }, null);
         return;
     }
@@ -150,7 +150,7 @@ fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8) !void {
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,
-        .pgid = if (builtin.os.tag == .windows) null else 0,
+        .pgid = if (builtin.target.os.tag == .windows) null else 0,
         .create_no_window = true,
     });
 }

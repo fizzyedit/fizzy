@@ -114,7 +114,7 @@
 //!
 //! Note the core pieces come through the named `core` module, never by relative path: a file may
 //! belong to only one module, and `@import("../../core/...")` here would claim it for the root
-//! build module and break `core` as a dependency outright (CLAUDE.md).
+//! build module and break `core` as a dependency outright (AGENTS.md).
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");

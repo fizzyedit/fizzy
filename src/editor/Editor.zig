@@ -109,6 +109,8 @@ app: App,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
+/// The first claim id not yet shown beside the person (`showClaimed`).
+claims_seen: u32 = 1,
 
 /// Open documents that are *previews*: shown in italic and replaced by the next preview in
 /// their pane rather than kept (`EditorAPI.OpenMode`). A set of ids rather than a flag on the
@@ -623,7 +625,7 @@ pub fn init(
 
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light));
 
-    editor.explorer.* = .init();
+    editor.explorer.* = .{};
     editor.app.open_files = .empty;
     try editor.workbench.initDefaultWorkspace();
 
@@ -665,12 +667,12 @@ pub const view_settings = "fizzy.settings";
 pub const workbench_files_view = workbench_mod.view_files;
 
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return;
 
     const plugins_dir = std.fs.path.join(editor.app.gpa, &.{ config_folder, "plugins" }) catch return;
     defer editor.app.gpa.free(plugins_dir);
 
-    const ext_suffix: []const u8 = switch (builtin.os.tag) {
+    const ext_suffix: []const u8 = switch (builtin.target.os.tag) {
         .windows => ".dll",
         .macos => ".dylib",
         else => ".so",
@@ -731,7 +733,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             // static/dylib path (see `postInit` above) and may *also* have its dylib sitting in
             // this same shared plugins directory — built-ins compile "the same third-party
             // shape" a real third-party plugin would, and `zig build install` drops every
-            // plugin's dylib here alike (see CLAUDE.md). Rediscovering a built-in's own binary
+            // plugin's dylib here alike (see AGENTS.md). Rediscovering a built-in's own binary
             // here is expected, not a failure: recording it as one would surface the same id
             // twice in the settings pane (once as the loaded built-in, once as a "failed" user
             // plugin), which collides on the shared heading widget id. Only a genuine third-party
@@ -1422,7 +1424,7 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 /// dvui/render-bridge sync path as `loadUserPlugins`. Caller ensures `id` is not already
 /// registered. On success the lib is appended to `loaded_plugin_libs`.
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
     const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
         editor.userPluginLoadFailed(id, path, err);
@@ -1630,7 +1632,7 @@ const WebPluginRequest = struct {
 /// The page asks for a plugin: `?plugin=<id>` on the URL (`plugins/<id>/<id>.wasm` beside
 /// the app), or one it remembered from a store install (by its URL).
 export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void {
-    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    if (comptime builtin.target.cpu.arch != .wasm32 or !App.loads_plugins) return;
     const editor = web_editor orelse return;
     const id = id_ptr[0..id_len];
     // The id reaches this from the page's query string, and with no URL it is interpolated
@@ -2081,6 +2083,11 @@ pub fn postInit(editor: *Editor) !void {
         .description = "Files under the project folder changed on disk (coalesced, ignore rules applied); truncated means rescan.",
         .payload = ".{ .events = .{ .{ .path = \"/abs\", .kind = .created, .object = .file, .old_path = \"\" } }, .truncated = false }",
     }) catch {};
+    editor.app.host.declareEvent(.{
+        .name = "fizzy.files.reveal",
+        .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",
+        .payload = ".{ .path = \"/absolute/path\" }",
+    }) catch {};
 
     // Publish the shared file set. Same reason as the commands above: `env.ctx` is this
     // editor's final address. The table answers three questions it can't itself — where the
@@ -2112,9 +2119,11 @@ pub fn postInit(editor: *Editor) !void {
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
     // Every bundled plugin: its dylib beside the exe when there is one, else the copy linked
-    // in. None of the bundled four ship as dylibs today, so the load "fails" and the static
-    // copy registers on every run; not worth logging until that changes. The workbench's
-    // dylib entry takes the workbench state fizzy still holds as `arg_c`.
+    // in. The build puts the dylibs of fizzy's own (workbench, text, markdown, image) in
+    // `<exe_dir>/plugins/`, so fizzy's own features load the way a third-party plugin does
+    // and that path is exercised every run; a plugin with no dylib (archive, devtools, an
+    // app's own, every one on the web) fails the load quietly and its static copy registers.
+    // The workbench's dylib entry takes the workbench state fizzy still holds as `arg_c`.
     // What this build bundles, for anything that needs to know a plugin is compiled in rather
     // than installed (the store, which must not offer to uninstall one).
     editor.app.bundled_plugin_ids = comptime blk: {
@@ -2254,7 +2263,7 @@ pub fn postInit(editor: *Editor) !void {
         Watch.wake.setHook(wakeEventLoop);
 
         // What a Windows build set aside to install over this executable while it ran.
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             if (std.process.executablePath(dvui.io, &buf)) |n| ExecutableWatcher.removeSetAside(buf[0..n]) else |_| {}
         }
@@ -2366,8 +2375,6 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
     .folderWatchActive = fizzyFolderWatchActive,
-    .explorerBranchIsOpen = fizzyExplorerBranchIsOpen,
-    .setExplorerBranchOpen = fizzySetExplorerBranchOpen,
     .drawWorkspaces = fizzyDrawWorkspaces,
     .showOpenFolderDialog = fizzyShowOpenFolderDialog,
     .showOpenFileDialog = fizzyShowOpenFileDialog,
@@ -2376,7 +2383,6 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .refresh = fizzyRefresh,
     .allocUntitledPath = fizzyAllocUntitledPath,
     .createDocument = fizzyCreateDocument,
-    .setExplorerNewFilePath = fizzySetExplorerNewFilePath,
     .saveState = fizzySaveState,
     .logLine = fizzyLogLine,
     .panic = fizzyPanic,
@@ -2515,7 +2521,7 @@ fn fizzyIsMacOS(_: *anyopaque) bool {
 }
 fn fizzyAppliesNativeWindowOpacity(_: *anyopaque) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    return builtin.os.tag == .macos or builtin.os.tag == .windows;
+    return builtin.target.os.tag == .macos or builtin.target.os.tag == .windows;
 }
 fn fizzyPanZoomScheme(ctx: *anyopaque) sdk.EditorAPI.PanZoomScheme {
     const editor = fizzyCtx(ctx);
@@ -2652,17 +2658,6 @@ fn fizzyIsPathIgnored(
 ) bool {
     return fizzyCtx(ctx).ignore.isIgnored(project_root, abs_path, name, kind);
 }
-fn fizzyExplorerBranchIsOpen(ctx: *anyopaque, branch_id: dvui.Id) bool {
-    return fizzyCtx(ctx).explorer.open_branches.contains(branch_id);
-}
-fn fizzySetExplorerBranchOpen(ctx: *anyopaque, branch_id: dvui.Id, open: bool) void {
-    const editor = fizzyCtx(ctx);
-    if (open) {
-        editor.explorer.open_branches.put(branch_id, {}) catch {};
-    } else {
-        _ = editor.explorer.open_branches.remove(branch_id);
-    }
-}
 fn fizzyDrawWorkspaces(ctx: *anyopaque, index: usize) anyerror!dvui.App.Result {
     return fizzyCtx(ctx).workbench.drawWorkspaces(index);
 }
@@ -2710,17 +2705,6 @@ fn fizzyAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
 fn fizzyCreateDocument(ctx: *anyopaque, path: []const u8, grid: sdk.EditorAPI.NewDocGrid) anyerror!sdk.DocHandle {
     return fizzyCtx(ctx).newFile(path, grid);
 }
-fn fizzySetExplorerNewFilePath(ctx: *anyopaque, path: []const u8) anyerror!void {
-    const editor = fizzyCtx(ctx);
-    try editor.workbench.setPendingNewFilePath(path);
-    // A plugin reaching this has just written `path` with its own save routine, not through
-    // `files.createFilePath`, so nothing has dropped the shared listing cache and that cache
-    // still predates the file. Left stale, the row never appears on the next frame: the match in
-    // `files.zig` never runs, no inline rename opens, and the dialog still closing over the top
-    // of it has no row to fly into. This is the only thing standing between "the file exists"
-    // and "the user can see and rename it".
-    editor.app.file_table.invalidateAll();
-}
 fn fizzySaveState(ctx: *anyopaque, doc_id: u64) sdk.EditorAPI.SaveState {
     return fizzyCtx(ctx).doc_io.state(doc_id);
 }
@@ -2731,6 +2715,10 @@ const DocSurface = struct {
     doc_id: u64,
     /// `<owner>.doc:<path>`, gpa-owned; the surface's title is the basename, a slice of it.
     id: []u8,
+    /// Whether a widget inside the document had focus last frame: its keys are the document's.
+    focus_inside: bool = false,
+    /// The commands just run on it, shown on its pane.
+    feed: @import("app").ActivityFeed = .{},
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2766,6 +2754,7 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     ds.* = .{
         .editor = editor,
         .doc_id = doc.id,
+        .feed = .init(&editor.app.host),
         .id = try sdk.document.surfaceId(gpa, doc.owner.id, path),
     };
     errdefer gpa.free(ds.id);
@@ -2812,6 +2801,104 @@ pub fn documentPathChanged(editor: *Editor, doc: sdk.DocHandle) void {
     dvui.refresh(null, @src(), null);
 }
 
+/// The pill on a held document saying who holds it, with Stop, at its pane's bottom right: where
+/// it sits, worked out before the document draws so the input held back from the document is not
+/// held from it.
+const ClaimPill = struct {
+    text: []const u8,
+    physical: dvui.Rect.Physical,
+
+    const pad: f32 = 12;
+    const height: f32 = 28;
+    /// The stop icon's side, and the press area round it.
+    const stop: f32 = 10;
+    const stop_pad: f32 = 6;
+    /// From the pane's edges.
+    const inset: f32 = 12;
+
+    fn init(canvas: *dvui.WidgetData, label: []const u8) ClaimPill {
+        const text = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s} is working", .{label}) catch "Working";
+        const font = dvui.Font.theme(.body).larger(-1);
+        const w = font.textSize(text).w + stop + stop_pad * 2 + pad * 2;
+        const content = canvas.contentRect();
+        const rect: dvui.Rect = .{ .x = @max(0, content.w - w - inset), .y = @max(0, content.h - height - inset), .w = w, .h = height };
+        return .{ .text = text, .physical = canvas.contentRectScale().rectToPhysical(rect) };
+    }
+};
+
+/// Hold back the person's input to a held document: presses, drags and scrolls over its panes
+/// (not over the pill, so Stop works, and not releases, so a gesture begun before the claim ends),
+/// and the keys of a widget inside it, which loses focus.
+fn holdInput(canvas: *dvui.WidgetData, ds: *DocSurface, keep: dvui.Rect.Physical) void {
+    const r = canvas.borderRectScale().r;
+    const focused = dvui.focusedWidgetId();
+    for (dvui.events()) |*e| {
+        if (e.handled) continue;
+        switch (e.evt) {
+            .mouse => |me| {
+                if (me.action == .release) continue;
+                if (me.floating_win != dvui.subwindowCurrentId()) continue;
+                if (!r.contains(me.p) or keep.contains(me.p)) continue;
+                e.handle(@src(), canvas);
+            },
+            .key, .text => if (ds.focus_inside and focused != null and e.target_widgetId == focused) e.handle(@src(), canvas),
+            else => {},
+        }
+    }
+    if (ds.focus_inside) dvui.focusWidget(null, null, null);
+}
+
+/// The held document's pill: who holds it, and Stop, which lets go for them. A bubble of glass, as
+/// the other controls floating over content are (`core.dialogs.glassBubbles`), on a floating layer
+/// of its own above the document, so its clicks are its own.
+fn drawClaim(editor: *Editor, claim: sdk.Claim, pill: ClaimPill, path: []const u8) void {
+    const at = pill.physical.toNatural();
+    var float: dvui.FloatingWidget = undefined;
+    float.init(@src(), .{}, .{ .rect = .{ .x = at.x, .y = at.y, .w = at.w, .h = at.h }, .id_extra = claim.id });
+    defer float.deinit();
+    core.dialogs.glassBubbles(float.data().id, &.{.{ .rect = pill.physical }}, dvui.windowRectScale().s, .{});
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both, .padding = .{ .x = ClaimPill.pad, .w = ClaimPill.pad / 2 } });
+    defer row.deinit();
+    const font = dvui.Font.theme(.body).larger(-1);
+    const ink = dvui.themeGet().color(.window, .text);
+    dvui.labelNoFmt(@src(), pill.text, .{}, .{ .gravity_y = 0.5, .padding = .all(0), .font = font, .color_text = .{ .color = ink.opacity(0.8) } });
+    const tag = std.fmt.allocPrint(dvui.currentWindow().arena(), "fizzy.claim.stop:{s}", .{path}) catch null;
+    var stop: dvui.ButtonWidget = undefined;
+    stop.init(@src(), .{}, .{
+        .gravity_y = 0.5,
+        .margin = .{ .x = ClaimPill.pad / 2 },
+        .padding = .all(ClaimPill.stop_pad),
+        .background = false,
+        .label = .{ .text = "Stop" },
+        .tag = tag,
+    });
+    defer stop.deinit();
+    stop.processEvents();
+    const color = if (stop.hovered()) ink else ink.opacity(0.8);
+    // The stop glyph: a filled, slightly rounded square.
+    var glyph = dvui.box(@src(), .{}, .{
+        .min_size_content = .{ .w = ClaimPill.stop, .h = ClaimPill.stop },
+        .background = true,
+        .corners = .all(2),
+        .color_fill = .{ .color = color },
+    });
+    glyph.deinit();
+    if (stop.clicked()) editor.app.host.releaseClaim(claim.id);
+}
+
+/// A document a plugin has just taken (`sdk.Claim`) shows beside the person, so they watch the
+/// work without it taking the pane they are in. One compare a frame until a claim comes.
+fn showClaimed(editor: *Editor) void {
+    const host = &editor.app.host;
+    if (host.next_claim_id == editor.claims_seen) return;
+    for (host.claims.items) |c| {
+        if (c.id < editor.claims_seen) continue;
+        if (editor.app.docById(c.doc_id)) |doc| editor.workbench.showBeside(doc);
+    }
+    editor.claims_seen = host.next_claim_id;
+}
+
 /// A document drawn as a surface: the canvas box around it, then the owner's `drawDocument`. The document is looked up by id each time — a plugin can unload
 /// between frames, and the handle in `open_files` is the one that is current.
 fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
@@ -2830,7 +2917,28 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // The handle is opaque to every plugin (pixi stores it, never reads through it); the canvas
     // box id is what a plugin keys its per-pane state on.
     doc.owner.bindDocumentToPane(doc, canvas.data().id, ds, false);
+
+    // Someone holds the document (`sdk.Claim`): the person's input to it waits, the rest of
+    // fizzy stays theirs.
+    const claim = editor.app.host.documentClaim(doc.id);
+    const claim_pill: ?ClaimPill = if (claim) |c| .init(canvas.data(), c.label) else null;
+    // A live tape plays its holder's input, not the person's: theirs stops the tape, and from
+    // the next frame is held here too.
+    if (claim_pill) |pill| if (!editor.demo.live.playing()) holdInput(canvas.data(), ds, pill.physical);
+
+    const focus_before = dvui.lastFocusedIdInFrame();
     _ = try doc.owner.drawDocument(doc);
+    ds.focus_inside = dvui.lastFocusedIdInFrameSince(focus_before) != null;
+
+    // The commands run on it, as they run; none while a tape seeks, which replays them unseen.
+    if (editor.app.host.activity_muted) ds.feed.clear() else {
+        const now = dvui.frameTimeNS();
+        ds.feed.take(&editor.app.host, doc.id, now);
+        // Above the pill, while someone holds the document.
+        var area = canvas.data().borderRectScale().r;
+        if (claim_pill) |pill| area.h = pill.physical.y - area.y + 6 * dvui.windowRectScale().s;
+        ds.feed.draw(area, @truncate(ds.doc_id), now);
+    }
 
     // A menu inside the document only when its owner names one. The context is created *after*
     // the document drew, and only for an owner that asked, because a right-click belongs to
@@ -2852,17 +2960,12 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             }, false);
         }
     }
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc));
     return .ok;
 }
 
 pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
     return editor.workbench.activeDoc();
-}
-
-/// Files sidebar inactive — drop the tree's dvui stash id, which the tree sets again each frame
-/// it draws.
-pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
-    editor.workbench.clearFileTreeDataId();
 }
 
 /// Draws whichever center provider is active, blur-fading when that changes.
@@ -3767,7 +3870,7 @@ pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.Wind
 /// there is none; clear at 0. Every window fizzy draws stands on it — the main window, a float's
 /// own window, the carry window (`Popout.base`) — so side by side they are one colour.
 pub fn windowBase(opacity: f32) dvui.Color {
-    const material = switch (builtin.os.tag) {
+    const material = switch (builtin.target.os.tag) {
         .macos, .windows => true,
         .linux => fizzy.editor().blurred_behind,
         else => false,
@@ -3805,7 +3908,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // frost over a blur at the full frost, and its own colour and bend. Elsewhere — the web,
         // Linux, Windows, where there is no OS glass to match — the app's frosted pane (`frosted`).
         const opacity = @max(if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light, glass_look.min_opacity);
-        const lens = builtin.os.tag == .macos and editor.app.settings.glass_shader;
+        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader;
         const pane = glass_look.frosted(opacity);
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
@@ -3823,11 +3926,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
     // A demo replaying to a seek wants every frame to land where it is going: no motion.
-    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast);
+    const playback: f32 = if (editor.demo.player.state == .playing) editor.demo.player.rate else 1;
+    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast, playback);
     fizzy.core.programs.publishHost();
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).
-    fizzy.core.screens.publishMainTop(if (builtin.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
+    fizzy.core.screens.publishMainTop(if (builtin.target.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
@@ -3855,7 +3959,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // (`backend.blurBehind`), asked for while the window is translucent at all, its corners the
     // frame's (square maximized, as `draw` draws it). Behind `FIZZY_BLUR_BEHIND=1` until it has been
     // seen on GNOME and KDE (`plans/WINDOWS_LINUX_GLASS_PLAN.md`).
-    if (builtin.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
+    if (builtin.target.os.tag == .linux and Popout.envSwitch("FIZZY_BLUR_BEHIND") orelse false) {
         const win = dvui.currentWindow();
         const radius: f32 = if (fizzy.backend.isMaximized(win)) 0 else Constants.linux_window_radius;
         editor.blurred_behind = fizzy.backend.blurBehind(win, if (editor.window_opacity_anim.value > 0 and editor.window_opacity_anim.value < 1) radius else null);
@@ -3863,7 +3967,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Translucent over the desktop's material on macOS and Windows, and on Linux where the
     // compositor blurs behind the window; opaque elsewhere, where the window's alpha is only its
     // shape (`LiquidField.publishOpaqueWindow`).
-    fizzy.core.LiquidField.publishOpaqueWindow(builtin.os.tag != .macos and builtin.os.tag != .windows and !editor.blurred_behind);
+    fizzy.core.LiquidField.publishOpaqueWindow(builtin.target.os.tag != .macos and builtin.target.os.tag != .windows and !editor.blurred_behind);
     // Out of a fullscreen Space, the window stops covering the desktop on AppKit's and SDL's own
     // time, after the transition, and nothing wakes a frame for it: it sat opaque until the mouse
     // moved (the user). From the moment it sets out of the Space, frames keep coming until it no
@@ -3995,6 +4099,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         defer t.end();
         // What was announced since last frame first, so a plugin's frame sees what it heard.
         editor.app.host.deliverEvents();
+        // A seek replays a tape's commands where nobody watches: not shown as activity.
+        editor.app.host.activity_muted = editor.demo.player.state == .seeking;
+        editor.showClaimed();
         for (editor.app.host.plugins.items) |plugin| plugin.beginFrame();
     }
     if (fizzy.core.perf.record) fizzy.core.perf.beginFrame();
@@ -4090,7 +4197,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // And on Wayland the window's shadow is fizzy's too, drawn in a margin round the frame
         // that the compositor knows is not the window (`frameInsets`, zero when maximized, tiled
         // or full screen).
-        const linux_windowed = builtin.os.tag == .linux and !fizzy.backend.isMaximized(dvui.currentWindow());
+        const linux_windowed = builtin.target.os.tag == .linux and !fizzy.backend.isMaximized(dvui.currentWindow());
         const insets = fizzy.backend.frameInsets(dvui.currentWindow());
         const shadowed = insets.x > 0 or insets.y > 0 or insets.w > 0 or insets.h > 0;
         var overall_box = dvui.box(
@@ -4112,7 +4219,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         // Non-macOS: a thin strip below the top edge so the in-window title row (menu, etc.) is not flush
         // against the window border (complements the system caption area on Windows 11).
-        if (builtin.os.tag != .macos) {
+        if (builtin.target.os.tag != .macos) {
             var top_inset = dvui.box(
                 @src(),
                 .{ .dir = .horizontal },
@@ -4133,7 +4240,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         //    overlay at the top-right corner (y=0) hosts the min/max/close buttons; a drag rect is pushed
         //    across the top so empty space (gaps between widgets) drags the window. Menu items and sidebar
         //    buttons push themselves as interactive rects so clicks on them still reach DVUI.
-        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
+        if (builtin.target.os.tag == .windows or builtin.target.os.tag == .linux) {
             fizzy.backend.resetTitleBarHints();
 
             const window_rect_natural = dvui.windowRect();
@@ -4146,7 +4253,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 (insets.y + title_strip_h) * scale,
                 @intFromFloat(window_rect_natural.w * scale),
             );
-        } else if (builtin.os.tag == .macos) {
+        } else if (builtin.target.os.tag == .macos) {
             // Collapse while zoomed/fullscreen (chrome overlays on hover); grow with
             // AppKit safe-area inset when restoring to a normal window.
             const title_strip_h = fizzy.backend.titlebarStripHeight(dvui.currentWindow());
@@ -4172,7 +4279,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // Top-right overlay on Windows and Linux: minimize / maximize / close, each in its
         // desktop's style (`caption_buttons`). Floating, so it takes no space in overall_box's
         // layout — the main UI below fills the entire window.
-        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
+        if (builtin.target.os.tag == .windows or builtin.target.os.tag == .linux) {
             const win_rect = dvui.windowRect();
             const frame: dvui.Rect = .{ .x = insets.x, .y = insets.y, .w = win_rect.w - insets.x - insets.w, .h = win_rect.h - insets.y - insets.h };
             caption_buttons.draw(frame, if (linux_windowed) Constants.linux_window_radius else null);
@@ -4250,7 +4357,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // Recording a chord in settings blocks these for the same reason the palette does:
             // the keys are being captured, not invoked.
             if (!editor.command_palette.open and !KeybindSettings.isRecording()) {
+                // The active document's own keys wait while someone holds it (`sdk.Claim`).
+                const held_owner: ?*sdk.Plugin = if (editor.activeDoc()) |doc|
+                    if (editor.app.host.documentClaim(doc.id) != null) doc.owner else null
+                else
+                    null;
                 for (editor.app.host.plugins.items) |plugin| {
+                    if (plugin == held_owner) continue;
                     plugin.tickKeybinds() catch {
                         dvui.log.err("plugin '{s}': keybind tick failed — see its own log", .{plugin.id});
                     };
@@ -5066,7 +5179,7 @@ pub fn openFile(editor: *Editor, opts: sdk.EditorAPI.OpenOptions) !bool {
     else
         null;
 
-    const started = try editor.openPath(opts.path, opts.grouping, .{ .preview = preview, .take_slot_of = slot });
+    const started = try editor.openPath(opts.path, opts.grouping, .{ .preview = preview, .take_slot_of = slot, .beside = opts.beside });
     if (preview) {
         if (editor.docFromPath(opts.path)) |doc| editor.setDocumentPreview(doc.id, true);
     }
@@ -5126,9 +5239,11 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
 }
 
 /// Where an open's placeholder tab goes (see `Openings.begin`).
-const Placement = struct {
+pub const Placement = struct {
     preview: bool = false,
     take_slot_of: ?[]const u8 = null,
+    /// `OpenOptions.beside`.
+    beside: bool = false,
 };
 
 /// Watch this executable while `restart_on_rebuild` is on, and stop when it goes off. Once a frame;
@@ -5229,9 +5344,16 @@ fn keepSessionForRestart(editor: *Editor) bool {
     return true;
 }
 
-fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Placement) !bool {
+fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement_in: Placement) !bool {
+    var placement = placement_in;
+    placement.beside = placement.beside or editor.app.host.open_beside > 0;
     // Last session's document, as a restart kept it: from its state, not the disk.
-    if (comptime restart.supported) if (editor.session) |*kept| if (kept.openKept(editor, path_in, grouping) != null) return true;
+    // One never saved that it could not bring back has no file to open instead.
+    if (comptime restart.supported) if (editor.session) |*kept| switch (kept.openKept(editor, path_in, grouping)) {
+        .opened => return true,
+        .lost => return false,
+        .not_kept => {},
+    };
 
     const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
@@ -5239,7 +5361,9 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Plac
     // Already open? Just focus it. (`docFromPath` also collapses lexical variants, so a doc
     // opened under a pre-normalization spelling is still found.)
     if (editor.docFromPath(path)) |doc| {
-        if (editor.app.open_files.getIndex(doc.id)) |i| {
+        if (placement.beside) {
+            editor.workbench.showBeside(doc);
+        } else if (editor.app.open_files.getIndex(doc.id)) |i| {
             editor.workbench.setActiveDocIndex(i);
         }
         return false;
@@ -5259,7 +5383,7 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Plac
         const started = try editor.doc_io.open(path, grouping);
         if (started) {
             if (editor.app.host.pluginForExtension(std.fs.path.extension(path))) |owner| {
-                editor.openings.begin(editor, path, grouping, placement.preview, owner, placement.take_slot_of);
+                editor.openings.begin(editor, path, grouping, placement, owner);
             }
         }
         return started;
@@ -5300,7 +5424,7 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Plac
         job.destroy(io);
         return err;
     };
-    editor.openings.begin(editor, path, grouping, placement.preview, owner, placement.take_slot_of);
+    editor.openings.begin(editor, path, grouping, placement, owner);
 
     return true;
 }
@@ -5541,16 +5665,23 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
     const id = owner.documentIdFromBuffer(staging.buf.ptr);
     try editor.insertOpenDoc(staging.buf.ptr, owner, id);
     editor.documentOpened(id);
-    editor.workbench.setActiveDocIndex(editor.app.open_files.count() - 1);
+    const doc = editor.app.docById(id) orelse return error.FailedToCreateFile;
+    // Created beside the person (`Host.open_beside`), it lands there at once: never first over
+    // the document they are in, fitted to that pane, and then moved.
+    if (editor.app.host.open_beside > 0) {
+        editor.workbench.showBeside(doc);
+    } else {
+        editor.workbench.setActiveDocIndex(editor.app.open_files.count() - 1);
+    }
     editor.pending_composite_warmup = true;
 
-    return editor.app.docById(id) orelse return error.FailedToCreateFile;
+    return doc;
 }
 
 /// Dispatch a generic fizzy action to the active document owner's command (`<owner_id>.<action>`).
 /// No active doc, or an owner that registered no such command, is a clean no-op. This is how the
 /// fizzy's Edit menu / keybinds reach per-editor actions without naming any plugin.
-fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
+pub fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
     const doc = editor.activeDoc() orelse return;
     const id = try std.fmt.allocPrint(editor.app.arena.allocator(), "{s}.{s}", .{ doc.owner.id, action });
     try editor.app.host.runCommand(id);
@@ -5592,7 +5723,7 @@ pub fn paste(editor: *Editor) !void {
 
 /// Forwards `name`'s keybind (e.g. "copy"/"paste") as a synthetic key-down event to whichever
 /// widget currently holds dvui keyboard focus. On macOS, Cmd+C/Cmd+V only ever reach us as a
-/// native menu action (see `Keybinds.tick`'s `builtin.os.tag != .macos` guard), and that path
+/// native menu action (see `Keybinds.tick`'s `builtin.target.os.tag != .macos` guard), and that path
 /// otherwise only knows how to talk to the active *document* (`runActiveDocCommand`). Any other
 /// focused widget with its own copy/paste handling — fizzy's Output Panel, a plugin's search
 /// box, dvui's own text-selection widgets — never sees the raw keystroke at all, unlike on
@@ -5918,7 +6049,7 @@ pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
     // `environ` array captured at startup, which any `unsetenv` elsewhere in the process (SDL,
     // a plugin, a system framework) shrinks *in place* — leaving a NULL before the captured
     // length and segfaulting the whole app on the next spawn. See `darwin_spawn.zig`.
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         // `posix_spawn` (unlike `posix_spawnp`) does not search `$PATH`, so name `open` in full.
         const child = fizzy.core.darwin_spawn.spawn(editor.app.gpa, .{
             .argv = &.{ "/usr/bin/open", path },
@@ -5943,7 +6074,7 @@ pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
     }
     // `start` is a cmd.exe builtin, not a standalone executable, so spawning it directly
     // (bypassing the shell) always fails on Windows — reveal via explorer.exe instead.
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const arg = try std.fmt.allocPrint(editor.app.gpa, "/select,{s}", .{path});
         defer editor.app.gpa.free(arg);
         _ = std.process.run(editor.app.gpa, dvui.io, .{ .argv = &.{ "explorer.exe", arg } }) catch {
@@ -5966,6 +6097,11 @@ fn reapChild(pid: std.posix.pid_t) void {
 
 pub fn closeFileID(editor: *Editor, id: u64) !void {
     if (editor.app.open_files.get(id)) |doc| {
+        // Not out from under whoever holds it (`sdk.Claim`): Stop on its panes lets go first.
+        if (editor.app.host.documentClaim(id)) |claim| {
+            dvui.log.info("{s} is working on {s}: stop it before closing", .{ claim.label, std.fs.path.basename(doc.owner.documentPath(doc)) });
+            return;
+        }
         if (doc.owner.isDirty(doc)) {
             Dialogs.UnsavedClose.request(id);
             return;
@@ -6085,7 +6221,7 @@ pub fn deinit(editor: *Editor) !void {
     }
 
     // Tear workspaces down first, while the plugins whose documents they hold are still alive.
-    editor.workbench.deinitWorkspaces();
+    editor.workbench.deinitWorkspaces(fizzy.entry().window.backend);
 
     // Drain & join the save-queue worker before tearing anything else down. Any
     // queued jobs need to finish writing or be dropped before File data is freed.
@@ -6163,7 +6299,6 @@ pub fn deinit(editor: *Editor) !void {
     }
     editor.app.settings.deinit(editor.app.gpa);
 
-    editor.explorer.deinit();
     editor.app.gpa.destroy(editor.explorer);
 
     PluginStore.deinit();

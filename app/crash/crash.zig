@@ -11,10 +11,9 @@
 //! - a panic in the app's own code (`panic`, the root file's panic handler);
 //! - a fault anywhere in the process (`handleSegfault`, std's segfault handler, which the app
 //!   switches on in every build mode): SIGSEGV, SIGBUS, SIGILL, SIGFPE, or an access violation;
-//! - an abort or trap anywhere (SIGABRT, SIGTRAP; POSIX only). A plugin's panic lands here: its
-//!   dylib has its own std, whose panic handler prints the message and aborts. The message then
-//!   reaches stderr but not the report; carrying it is the dylib entry's `panic` forwarding to
-//!   the host's `panic` through an exported symbol, a follow-up.
+//! - a panic in a plugin dylib, which has its own std: the generated root's handler
+//!   (`sdk.dylib.panic`) forwards it through `EditorAPI.panic` to `panic`, message and frames;
+//! - an abort or trap anywhere (SIGABRT, SIGTRAP; POSIX only).
 //!
 //! After the report, each hands on to what would have run without it: std's own handler, which
 //! prints the symbolized stack trace, or the signal's default action.
@@ -25,7 +24,7 @@ const builtin = @import("builtin");
 pub const image = @import("image.zig");
 
 /// Where crash reports can be written: native targets std can catch faults on.
-pub const supported = builtin.cpu.arch != .wasm32 and std.debug.have_segfault_handling_support;
+pub const supported = builtin.target.cpu.arch != .wasm32 and std.debug.have_segfault_handling_support;
 
 pub const Module = struct {
     name_buf: [32]u8 = undefined,
@@ -90,7 +89,7 @@ pub fn writeReport(
             try w.print(": {s}\n", .{s.name}),
     }
     try w.print("\n{s} {s}, sdk {s}, {t} {t} {t}\n\nmodules:\n", .{
-        run.app, run.version, run.sdk, builtin.os.tag, builtin.cpu.arch, builtin.mode,
+        run.app, run.version, run.sdk, builtin.target.os.tag, builtin.target.cpu.arch, builtin.mode,
     });
     for (modules, 0..) |*m, i| {
         try w.print("  {d} {s} {s} 0x{x} 0x{x} ", .{ i, m.name(), m.version(), m.image.base, m.image.end - m.image.base });
@@ -144,7 +143,7 @@ var run_info: ?Run = null;
 /// The report's file, once `writeTo` has named it.
 var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 var path_len: usize = 0;
-var path_w: if (builtin.os.tag == .windows) [std.fs.max_path_bytes:0]u16 else void = undefined;
+var path_w: if (builtin.target.os.tag == .windows) [std.fs.max_path_bytes:0]u16 else void = undefined;
 
 /// Starts reporting for this run: enters the executable as module 0 and catches aborts and
 /// traps. Call once, first thing. std's segfault handler is the root's to switch on
@@ -154,7 +153,7 @@ pub fn init(run: Run) void {
     if (!supported) return;
     run_info = run;
     addModule(run.app, run.version, @intFromPtr(&init));
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         const act: std.posix.Sigaction = .{
             .handler = .{ .sigaction = onAbortOrTrap },
             .mask = std.posix.sigemptyset(),
@@ -169,7 +168,7 @@ pub fn init(run: Run) void {
 /// Nothing is written there unless the run crashes.
 pub fn writeTo(io: std.Io, config_folder: []const u8) void {
     if (!supported) return;
-    const pid = if (builtin.os.tag == .windows) win.GetCurrentProcessId() else std.c.getpid();
+    const pid = if (builtin.target.os.tag == .windows) win.GetCurrentProcessId() else std.c.getpid();
     const launched = std.Io.Timestamp.now(io, .real).toMilliseconds();
     const sep = std.fs.path.sep;
     const path = std.fmt.bufPrintZ(&path_buf, "{s}{c}crashes{c}{d}-{d}.txt", .{ config_folder, sep, sep, launched, pid }) catch return;
@@ -178,7 +177,7 @@ pub fn writeTo(io: std.Io, config_folder: []const u8) void {
         std.log.warn("crash reports: can't create {s}: {t}", .{ dir, err });
         return;
     };
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const n = std.unicode.wtf8ToWtf16Le(&path_w, path) catch return;
         if (n >= path_w.len) return;
         path_w[n] = 0;
@@ -248,7 +247,7 @@ fn report(what: What, where: Where) void {
 }
 
 fn writeFile(text: []const u8) bool {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const h = win.CreateFileW(&path_w, win.GENERIC_WRITE, 0, null, win.CREATE_ALWAYS, win.FILE_ATTRIBUTE_NORMAL, null);
         if (h == win.INVALID_HANDLE_VALUE) return false;
         defer _ = win.CloseHandle(h);
@@ -261,7 +260,7 @@ fn writeFile(text: []const u8) bool {
 }
 
 fn writeStderr(text: []const u8) void {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         _ = win.writeAll(win.GetStdHandle(win.STD_ERROR_HANDLE) orelse return, text);
     } else _ = posixWriteAll(2, text);
 }
@@ -278,7 +277,7 @@ fn posixWriteAll(fd: std.c.fd_t, text: []const u8) bool {
 
 /// The file name of the image holding `address`, for a frame in no known module.
 fn imageName(address: usize, buf: []u8) ?[]const u8 {
-    if (builtin.os.tag == .windows) return null;
+    if (builtin.target.os.tag == .windows) return null;
     var info: Dl_info = undefined;
     if (dladdr(@ptrFromInt(address), &info) == 0) return null;
     const path = std.mem.span(info.dli_fname orelse return null);

@@ -29,7 +29,7 @@ pub const Want = struct {
 /// Cheap to call every frame: the region is sent only when it changes. The first call binds the
 /// protocols, two round trips to the compositor.
 pub fn behind(display: *anyopaque, surface: *anyopaque, want: ?Want) bool {
-    if (comptime builtin.os.tag != .linux) return false;
+    if (comptime builtin.target.os.tag != .linux) return false;
     const s = ready(display) orelse return false;
     // What the compositor has said since (the blur turned off or on).
     _ = s.lib.display_dispatch_queue_pending(s.display, s.queue);

@@ -7,7 +7,12 @@ buildrunner.zig
 .DS_Store
 imgui.ini
 recents.json
-.claude/
+# Claude Code: the shared settings, hooks and launch configs are tracked; each person's own
+# settings and the app's worktrees are not.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/launch.json
 .config/
 .temp/
 web/app/

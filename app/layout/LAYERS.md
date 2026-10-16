@@ -85,7 +85,7 @@ put a switch in the public API that the framework does not yet honour, which is 
 adding it a version later. Sequence stands as written.
 
 **The dvui bump is the risk item, and it should land on its own.** `sdk/build.zig.zon` is the
-repo's only dvui pin and is deliberately absent from the root zon (CLAUDE.md explains why adding
+repo's only dvui pin and is deliberately absent from the root zon (AGENTS.md explains why adding
 a second pin cannot work). Fizzy has also diverged `PanedWidget`, and the layered work diverges
 it further — so bumping dvui *and* changing the widget in one change makes a regression
 unbisectable. Land the bump against a green tree first.

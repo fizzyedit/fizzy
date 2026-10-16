@@ -72,7 +72,7 @@ const Cache = struct {
 };
 
 fn resolve(gpa: std.mem.Allocator, io: std.Io) !?[]u8 {
-    if (comptime builtin.os.tag != .macos) return null;
+    if (comptime builtin.target.os.tag != .macos) return null;
 
     const shell = if (std.c.getenv("SHELL")) |s| std.mem.span(s) else "/bin/zsh";
 

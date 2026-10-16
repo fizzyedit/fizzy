@@ -629,7 +629,8 @@ fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Phys
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);
     dvui.clipSet(area);
-    const prev_alpha = dvui.alpha(1);
+    const prev_alpha = dvui.currentWindow().alpha;
+    dvui.alphaSet(1);
     defer dvui.alphaSet(prev_alpha);
     var color = base(false);
     color.a = @intFromFloat(@round(255 * std.math.clamp(fill, 0, 1)));

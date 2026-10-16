@@ -49,7 +49,7 @@ fn castManager(m: *anyopaque) *Vpk.vpkc_update_manager_t {
 /// so we don't spam logs or Velopack errors on every frame.
 pub fn installLayoutSupported(io: std.Io) bool {
     if (!impl) return false;
-    if (builtin.os.tag != .macos) return true;
+    if (builtin.target.os.tag != .macos) return true;
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.process.executablePath(io, &buf) catch return false;
@@ -197,7 +197,7 @@ pub fn appRunHook() void {
     // CLI flags during the install / update / uninstall lifecycle, and the hooks
     // registered here are dispatched from inside vpkc_app_run() based on which
     // flag is set. Hooks must be installed *before* vpkc_app_run runs.
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         Vpk.vpkc_app_set_hook_after_install(hookAfterInstall);
         Vpk.vpkc_app_set_hook_after_update(hookAfterUpdate);
         Vpk.vpkc_app_set_hook_before_uninstall(hookBeforeUninstall);

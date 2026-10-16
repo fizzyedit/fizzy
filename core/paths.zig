@@ -81,7 +81,7 @@ pub fn isNormalizedAbsolute(path: []const u8) bool {
     if (!std.fs.path.isAbsolute(path)) return false;
     // On Windows `resolve` also rewrites separators and drive-letter case; not worth
     // replicating, so only the POSIX shape claims the fast path.
-    if (builtin.os.tag == .windows) return false;
+    if (builtin.target.os.tag == .windows) return false;
     return isNormalizedPosixTail(path);
 }
 
@@ -102,7 +102,7 @@ fn isNormalizedPosixTail(path: []const u8) bool {
 }
 
 test isNormalizedAbsolute {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
 
     // Canonical shapes take the fast path, and agree with `normalize`.

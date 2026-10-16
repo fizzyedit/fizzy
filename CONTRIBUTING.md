@@ -1,6 +1,6 @@
 # Working on fizzy
 
-`CLAUDE.md` says what fizzy is. This file says how a change gets from an idea to `main`, for
+`AGENTS.md` says what fizzy is. This file says how a change gets from an idea to `main`, for
 people and agents alike, on a laptop or in a cloud session. Several agents work on this repo at
 once, and these rules are what keep their work from colliding.
 
@@ -37,8 +37,7 @@ The open PR list is the board of who is working on what.
    touches the same files or the same plan step, coordinate on it (comment, or stack on top of
    it) instead of starting a parallel version.
 2. **Open a draft PR on your first push** (`gh pr create --draft --body-file <file>`), with the
-   template filled in as far as you know it. A draft runs CI but doesn't take the one web test
-   copy (`web.yml`), so claim early.
+   template filled in as far as you know it. A draft runs CI, so claim early.
 3. **Mark it ready when it is done and verified.** Merging is the maintainer's. Never push to
    `main`, and never merge a PR you opened unless asked to.
 
@@ -50,6 +49,10 @@ The open PR list is the board of who is working on what.
   `git commit` act on the last *git* commit, which can be far behind jj's working copy, and take
   undescribed work with them. If something is clobbered, `jj op log` and `jj undo` /
   `jj op restore` bring it back.
+- **Claude Code enforces some of this.** `.claude/settings.json` hooks refuse git write commands
+  in a jj repo and a workspace under `/tmp` (`.claude/hooks/guard-bash.sh`), and run `zig fmt` on
+  each `.zig` or `.zon` file an agent writes (`.claude/hooks/zig-fmt.sh`). Other agents have only
+  the written rules, and CI's format check.
 - **Work in a workspace of your own.** The default checkout is shared: the desktop app moves it
   between sessions' branches, and other sessions edit in it. For anything longer than a quick
   look, `jj workspace add --name <task> -r main@origin ../fizzy-<task>` and build, test and
@@ -71,9 +74,15 @@ The open PR list is the board of who is working on what.
   then `jj describe --stdin < file` or `gh pr create --body-file file`. With `-m "…"` or an
   unquoted heredoc, zsh runs every backticked name as a command.
 - **Push a branch:** `jj bookmark create <area>/<slug> -r @-`, then
-  `jj git push --bookmark <area>/<slug>`. Pushing `main` publishes (the web app at
-  fizzyed.it/app, and an SDK release when the version moved), so `main` moves only by a merged
-  PR.
+  `jj git push --bookmark <area>/<slug>`. Pushing `main` publishes (fizzyed.it/testapp
+  always, fizzyed.it/app while `main` is on the live SDK, and an SDK release when the version
+  moved), so `main` moves only by a merged PR.
+- **Look before `jj abandon`.** Abandon only an id that `jj log` prints as `(empty)` that moment,
+  never one from memory, and never a change that is some workspace's working copy
+  (`jj workspace list`). `jj undo` brings back a wrong one.
+- **A local bookmark can hold another session's work.** `jj git push --bookmark X` pushes wherever
+  `X` points, whoever moved it. Before pushing a branch you didn't create, compare `X` with
+  `X@origin`, and check that `jj bookmark set` printed "Moved" rather than a hint.
 - **When your PR has merged, forget its workspace, then fetch.** `jj workspace forget <task>`,
   then `jj git fetch`. GitHub deletes a merged branch, and the fetch abandons the changes only
   that branch held, so landed work doesn't linger in the next agent's `jj log` looking live.
@@ -109,7 +118,8 @@ tags `sdk-v*` and publishes the tarball, then asks each `fizzyedit` store plugin
 builds against the new SDK and opens a `sdk: repin to fizzy SDK <version>` PR in its own repo
 when it needs a release (its fingerprint moved, or it no longer builds, as a draft); merge it and
 tag the version it names. A merge that leaves the version alone publishes nothing: a released
-tarball is pinned by hash, so it is never replaced.
+tarball is pinned by hash, so it is never replaced. Once the plugins have released into it, the
+maintainer makes the SDK **live** on the site (below).
 
 - **A feature PR records the fingerprint and leaves `sdk_version` alone.** When the shape moves,
   the build fails with the new value; record it, label the PR `sdk`, and say in the template's
@@ -118,9 +128,15 @@ tarball is pinned by hash, so it is never replaced.
   since the last `sdk-v*` tag. Two branches never race for the same number, and a morning's SDK
   changes cost one round of repinning instead of several. Changes to `core/` that plugins build
   in, with no fingerprint move, reach them the same way.
-- **Release soon after a merge that moved the fingerprint.** fizzyed.it/app is built from
-  `main`, and store plugins don't load there until the release is out and they are repinned.
-  Batch on purpose, not by forgetting.
+- **The site has two copies, and merging an `sdk` PR breaks neither** (`web.yml`).
+  fizzyed.it/testapp is `main`, every push: a new SDK is there to try while plugins catch up.
+  fizzyed.it/app is the **live** SDK release, the one the store's plugins are built for, so every
+  plugin loads there. It goes up from `main` only while `main` is on the live SDK; after an `sdk`
+  merge it holds. Going live is the maintainer's step, once the repinned plugins are released and
+  the store holds them: `gh workflow run web.yml --ref main -f go_live=0.2.N` records
+  `sdk-v0.2.N` as live (a deployment to the `web-live` environment) and puts the app up (from
+  `main`, or from the release's own commit if `main` has moved on). Until then non-SDK fixes
+  reach testapp, not the app.
 - **An app release never ships an unreleased fingerprint.** If it moved since the last `sdk-v*`
   tag, release the SDK first (`RELEASING.md`).
 
@@ -128,7 +144,7 @@ tarball is pinned by hash, so it is never replaced.
 
 | What | Where |
 |---|---|
-| What fizzy is, and its architecture rules | `CLAUDE.md` |
+| What fizzy is, and its architecture rules | `AGENTS.md` |
 | How we work | this file |
 | The plugin contract | `docs/PLUGINS.md` |
 | Plans | private, in [`fizzyedit/plans`](https://github.com/fizzyedit/plans): issues, and a long design as `plans/<NAME>_PLAN.md` opening with a status line (`Status: proposed`, `in progress, fizzyedit/fizzy#N`, or `done`) |
@@ -144,6 +160,15 @@ tarball is pinned by hash, so it is never replaced.
 - **A deferred feature gets a named seam.** When a plan leaves something for later, say what it
   will hook into, not just "not yet".
 - **No one-line wrapper functions.** Write the library call at the site.
+- **Speed over convenience.** Native performance is fizzy's edge. Nothing optional (automation,
+  agents, debug capture) may cost a frame when it is unused. Measure before calling a change
+  fast, and keep a benchmark once it is.
+- **Build the seam the next plugin needs.** When a plugin needs something from the host, add the
+  general primitive (an event its owner fires, a host-owned copy) rather than a fix for this one
+  plugin (a per-frame poll, a slice borrowed from plugin memory). Moving the fingerprint for the
+  clearer shape is fine.
+- **Pitfalls go where they bite.** A trap that cost real time is written down in the
+  `AGENTS.md` of the directory it lives in, or `docs/PITFALLS.md` if it has none.
 
 ## The gate on `main`
 

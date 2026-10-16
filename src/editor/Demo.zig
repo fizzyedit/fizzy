@@ -449,7 +449,7 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
     };
 
     // The tree as if never seen: folders closed, the root opening on its own.
-    editor.explorer.open_branches.clearRetainingCapacity();
+    editor.workbench.open_branches.clearRetainingCapacity();
     editor.workbench.file_tree_root_opened = null;
     editor.setProjectFolder(kf.root) catch |err| dvui.log.err("demo: could not open {s}: {t}", .{ kf.root, err });
     editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, Editor.workbench_files_view);
@@ -738,8 +738,8 @@ fn fill(self: *Demo, snap: *Snapshot, root: []const u8, mem: *core.vfs.Mem) !boo
     }
     snap.docs = docs.items;
 
-    const branches = try a.alloc(dvui.Id, editor.explorer.open_branches.count());
-    var it = editor.explorer.open_branches.keyIterator();
+    const branches = try a.alloc(dvui.Id, editor.workbench.open_branches.count());
+    var it = editor.workbench.open_branches.keyIterator();
     var i: usize = 0;
     while (it.next()) |id| : (i += 1) branches[i] = id.*;
     snap.branches = branches;
@@ -798,8 +798,8 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     if (snap.explorer_closed != editor.explorer.closed) {
         if (snap.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
     }
-    editor.explorer.open_branches.clearRetainingCapacity();
-    for (snap.branches) |id| editor.explorer.open_branches.put(id, {}) catch {};
+    editor.workbench.open_branches.clearRetainingCapacity();
+    for (snap.branches) |id| editor.workbench.setBranchOpen(id, true);
     editor.workbench.file_tree_root_opened = snap.root_opened;
 
     for (snap.settings) |saved| {

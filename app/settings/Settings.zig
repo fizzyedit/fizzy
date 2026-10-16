@@ -86,7 +86,7 @@ glass_shader: bool = true,
 /// Whether a float can leave the main window into an OS window of its own, and a view be carried
 /// past the main window to open one there. Taken at launch: a change waits for a restart, which the
 /// app says (`Editor.restartPending`). On by default on macOS; `FIZZY_POPOUT` overrides it.
-float_windows: bool = builtin.os.tag == .macos,
+float_windows: bool = builtin.target.os.tag == .macos,
 
 /// Whether a view drag's glass — the carried view and the drop zones — is the OS's own (Liquid Glass,
 /// macOS 26) rather than the app's, where floats are windows. Applied at once; `FIZZY_NATIVE_GLASS`
@@ -126,7 +126,7 @@ plugin_update_mode: PluginUpdateMode = .prompt,
 /// frosted. Where the window is opaque (the web, Linux), the glass the app draws over it: little
 /// colour, well frosted — the dialogs' glass as it was.
 pub const GlassDefaults = struct { opacity_dark: f32, opacity_light: f32 };
-pub const default_glass: GlassDefaults = if (builtin.target.cpu.arch == .wasm32 or (builtin.os.tag != .macos and builtin.os.tag != .windows))
+pub const default_glass: GlassDefaults = if (builtin.target.cpu.arch == .wasm32 or (builtin.target.os.tag != .macos and builtin.target.os.tag != .windows))
     .{ .opacity_dark = 0.2, .opacity_light = 0.2 }
 else
     .{ .opacity_dark = 0.7, .opacity_light = 0.3 };

@@ -67,7 +67,7 @@ pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
     defer alloc().free(default);
     // Do not use our borderless/custom-frame main window as the dialog parent on Windows: the shell
     // may inherit extended style and the picker loses normal frame/close affordances.
-    const parent: ?*c.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
+    const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     c.SDL_ShowSaveFileDialog(GenericSaveDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default);
 }
 
@@ -77,7 +77,7 @@ pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
         break :blk std.fs.path.joinZ(alloc(), &.{ dir, default_filename }) catch "untitled";
     };
     defer alloc().free(default);
-    const parent: ?*c.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
+    const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     c.SDL_ShowOpenFileDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default.ptr, true);
 }
 
@@ -87,7 +87,7 @@ pub fn showOpenFolderDialog(cb: *const fn (?[][:0]const u8) void, default_folder
         break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{dir}, 0) catch "untitled";
     };
     defer alloc().free(default);
-    const parent: ?*c.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
+    const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     c.SDL_ShowOpenFolderDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, default.ptr, false);
 }
 

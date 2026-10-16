@@ -17,7 +17,7 @@ const Constants = @import("Constants.zig");
 const Button = fizzy.backend.TitleBarButton;
 
 pub const Style = enum { windows, gnome };
-pub const style: Style = if (builtin.os.tag == .linux) .gnome else .windows;
+pub const style: Style = if (builtin.target.os.tag == .linux) .gnome else .windows;
 
 /// Draws the buttons in the top-right corner of `frame`, the window's frame within it (inside the
 /// margin for its shadow on Linux). `corner_radius`: the window's own where fizzy rounds it

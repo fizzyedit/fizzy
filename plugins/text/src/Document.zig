@@ -528,6 +528,7 @@ pub fn replaceRange(self: *Document, start: usize, end: usize, new: []const u8) 
     self.sel_start = after.head;
     self.sel_end = after.head;
     self.pending_sel = after;
+    sdk.host().documentEdited(self.id);
 }
 
 /// Reverses the most recent edit, if any, and relocates the caret to it (applied on the next
@@ -539,6 +540,7 @@ pub fn undo(self: *Document) void {
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
     self.pending_sel = sel;
+    sdk.host().documentEdited(self.id);
 }
 
 /// Re-applies the most recently undone edit, if any.
@@ -549,4 +551,11 @@ pub fn redo(self: *Document) void {
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
     self.pending_sel = sel;
+    sdk.host().documentEdited(self.id);
+}
+
+/// Undo or redo until history step `step` is the last applied; 0 goes back before the first.
+pub fn goToStep(self: *Document, step: u64) !void {
+    const n = self.history.stepsTo(step) orelse return error.NoSuchStep;
+    for (0..@abs(n)) |_| if (n < 0) self.undo() else self.redo();
 }

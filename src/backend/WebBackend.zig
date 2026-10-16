@@ -74,6 +74,25 @@ pub var last_submit_ns: u64 = 0;
 /// frame now whatever `end` said. fizzy's `automation` service uses it: it notes whether dvui
 /// went quiet (`settled`), and runs one more frame when a caller was told "not yet", so the caller
 /// sees the answer change without asking for frames itself.
+/// What the backend has asked WebGL to make and unmake since it started: textures from pixels,
+/// render targets (each a texture, and a framebuffer once drawn into), either destroyed, and the
+/// switches between targets. Running totals, an integer add beside each call into `web.js`; the
+/// profiler reads them each frame (`gpuTotals`, `core.profile.Gpu`). Every image's textures —
+/// the plugins' side modules' too — are made here.
+const GpuTotals = struct {
+    textures: u32 = 0,
+    targets: u32 = 0,
+    destroyed: u32 = 0,
+    target_switches: u32 = 0,
+};
+var gpu_totals: GpuTotals = .{};
+/// The target the stream draws into, for counting switches: 0 the screen.
+var gpu_target: usize = 0;
+
+pub fn gpuTotals() GpuTotals {
+    return gpu_totals;
+}
+
 pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
 
 pub var win: dvui.Window = undefined;
@@ -308,14 +327,14 @@ export fn dvui_c_alloc(size: usize) ?*anyopaque {
         //log.debug("dvui_c_alloc {d} failed", .{size});
         return null;
     };
-    std.mem.writeInt(u64, buffer[0..@sizeOf(u64)], buffer.len, builtin.cpu.arch.endian());
+    std.mem.writeInt(u64, buffer[0..@sizeOf(u64)], buffer.len, builtin.target.cpu.arch.endian());
     //log.debug("dvui_c_alloc {*} {d}", .{ buffer.ptr + 8, size });
     return buffer.ptr + 8;
 }
 
 pub export fn dvui_c_free(ptr: ?*anyopaque) void {
     const buffer = @as([*]align(8) u8, @ptrCast(@alignCast(ptr orelse return))) - 8;
-    const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.cpu.arch.endian());
+    const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.target.cpu.arch.endian());
     //log.debug("dvui_c_free {?*} {d}", .{ ptr, len - 8 });
 
     gpa.free(buffer[0..@intCast(len)]);
@@ -330,7 +349,7 @@ export fn dvui_c_realloc_sized(ptr: ?*anyopaque, oldsize: usize, newsize: usize)
     }
 
     //const buffer = @as([*]u8, @ptrCast(ptr.?)) - 8;
-    //const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.cpu.arch.endian());
+    //const len = std.mem.readInt(u64, buffer[0..@sizeOf(u64)], builtin.target.cpu.arch.endian());
 
     //const slice = buffer[0..@intCast(len)];
     //log.debug("dvui_c_realloc_sized buffer {*} {d}", .{ ptr, len });
@@ -342,7 +361,7 @@ export fn dvui_c_realloc_sized(ptr: ?*anyopaque, oldsize: usize, newsize: usize)
     dvui_c_free(ptr);
     return newptr;
 
-    //std.mem.writeInt(usize, slice[0..@sizeOf(usize)], slice.len, builtin.cpu.arch.endian());
+    //std.mem.writeInt(usize, slice[0..@sizeOf(usize)], slice.len, builtin.target.cpu.arch.endian());
     //return slice.ptr + 16;
 }
 
@@ -735,6 +754,7 @@ pub fn begin(_: *WebBackend, arena_in: std.mem.Allocator) !void {
     batch = .{};
     // `web.js` starts every frame on the screen, in dvui's own program.
     target_is_fb = false;
+    gpu_target = 0;
     program = null;
     blend_override = null;
 }
@@ -950,6 +970,7 @@ pub fn textureCreate(_: *WebBackend, pixels: [*]const u8, options: dvui.Texture.
     };
 
     const id = wasm.wasm_textureCreate(pixels, options.width, options.height, wasm_interp, wasm_wrap_u, wasm_wrap_v);
+    gpu_totals.textures +%= 1;
     return dvui.Texture{
         .ptr = @ptrFromInt(id),
         .width = options.width,
@@ -1015,6 +1036,7 @@ pub fn textureCreateTarget(_: *WebBackend, options: dvui.Texture.CreateOptions) 
         wasm.wasm_textureCreatePreciseTarget(options.width, options.height, wasm_interp, wasm_wrap_u, wasm_wrap_v)
     else
         wasm.wasm_textureCreateTarget(options.width, options.height, wasm_interp, wasm_wrap_u, wasm_wrap_v);
+    gpu_totals.targets +%= 1;
     return dvui.TextureTarget{
         .ptr = @ptrFromInt(id),
         .width = options.width,
@@ -1043,8 +1065,11 @@ pub fn textureFromTargetTemp(_: *WebBackend, texture: dvui.TextureTarget) !dvui.
 }
 
 pub fn renderTarget(_: *WebBackend, texture: ?dvui.TextureTarget) !void {
-    try marker(Command.switch_target, if (texture) |tex| @intCast(@intFromPtr(tex.ptr)) else 0);
+    const id: usize = if (texture) |tex| @intFromPtr(tex.ptr) else 0;
+    try marker(Command.switch_target, @intCast(id));
     target_is_fb = texture != null;
+    if (id != gpu_target) gpu_totals.target_switches +%= 1;
+    gpu_target = id;
 }
 
 pub fn textureReadTarget(_: *WebBackend, texture: dvui.TextureTarget, pixels_out: [*]u8) !void {
@@ -1056,12 +1081,14 @@ pub fn textureDestroy(_: *WebBackend, texture: dvui.Texture) void {
     if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
     _ = blends.remove(@intFromPtr(texture.ptr));
     wasm.wasm_textureDestroy(@intCast(@intFromPtr(texture.ptr)));
+    gpu_totals.destroyed +%= 1;
 }
 
 pub fn textureDestroyTarget(_: *WebBackend, texture: dvui.Texture.Target) void {
     if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
     _ = blends.remove(@intFromPtr(texture.ptr));
     wasm.wasm_textureDestroy(@intCast(@intFromPtr(texture.ptr)));
+    gpu_totals.destroyed +%= 1;
 }
 
 pub fn textInputRect(_: *WebBackend, rect: ?dvui.Rect.Natural) void {

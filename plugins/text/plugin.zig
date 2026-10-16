@@ -40,6 +40,7 @@ const vtable: sdk.Plugin.VTable = .{
     .loadDocument = loadDocument,
     .loadDocumentFromBytes = loadDocumentFromBytes,
     .createDocument = createDocument,
+    .loadUntitledDocument = loadUntitledDocument,
     .setDocumentGroupingOnBuffer = setDocumentGroupingOnBuffer,
     .documentIdFromBuffer = documentIdFromBuffer,
     .deinitDocumentBuffer = deinitDocumentBuffer,
@@ -65,6 +66,8 @@ const vtable: sdk.Plugin.VTable = .{
     .reloadDocument = reloadDocument,
     .captureDocumentState = captureDocumentState,
     .restoreDocumentState = restoreDocumentState,
+    .historyLine = historyLine,
+    .historyGoTo = historyGoTo,
     .documentFingerprint = documentFingerprint,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
@@ -279,6 +282,14 @@ fn createDocument(_: *anyopaque, path: []const u8, _: sdk.EditorAPI.NewDocGrid, 
     doc.unsaved = true;
     doc.pending_focus = true;
 }
+/// A document never saved, back from its unsaved text (a crash, a restart): untitled, and dirty.
+fn loadUntitledDocument(_: *anyopaque, title: []const u8, _: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void {
+    const doc = docBuf(out_doc);
+    doc.* = try Document.fromBytes(title, bytes);
+    doc.unsaved = true;
+    // Clean is a history at its saved id, and this one was never saved.
+    doc.clean_op_id = std.math.maxInt(u64);
+}
 fn setDocumentGroupingOnBuffer(_: *anyopaque, doc: *anyopaque, grouping: u64) void {
     docBuf(doc).grouping = grouping;
 }
@@ -385,6 +396,21 @@ fn captureDocumentState(_: *anyopaque, handle: DocHandle, allocator: std.mem.All
 fn restoreDocumentState(_: *anyopaque, handle: DocHandle, bytes: []const u8) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     try doc.restoreState(bytes);
+}
+fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyerror!sdk.Plugin.HistoryLine {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    const steps = try doc.history.line(arena);
+    const entries = try arena.alloc(sdk.Plugin.HistoryLine.Entry, steps.len);
+    for (steps, entries) |st, *e| e.* = .{ .id = st.step, .title = switch (st.kind) {
+        .typing_other, .typing_first_space, .typing_consecutive_space => "Typing",
+        .deleting_left, .deleting_right => "Delete",
+        .other => "Edit",
+    } };
+    return .{ .version = doc.history.version, .entries = entries, .at = doc.history.undo_stack.items.len };
+}
+fn historyGoTo(_: *anyopaque, handle: DocHandle, id: u64) anyerror!void {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    try doc.goToStep(id);
 }
 fn documentFingerprint(_: *anyopaque, handle: DocHandle) u64 {
     const doc = docFrom(handle) orelse return 0;

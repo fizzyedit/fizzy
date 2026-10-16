@@ -42,7 +42,7 @@ const menu_model = @import("menu_model.zig");
 /// "fizzy default unless a plugin wants it" — that needs the layered `Command.default_keys`
 /// resolution in step C, not another entry in this function.
 ///
-/// Runtime mac detection — `builtin.os.tag.isDarwin()` is `false` for
+/// Runtime mac detection — `builtin.target.os.tag.isDarwin()` is `false` for
 /// wasm32-freestanding, so macOS web users would otherwise get the Windows (Ctrl)
 /// bindings. `fizzy.core.platform.isMacOS()` reads DVUI's `navigator.platform`-derived
 /// choice on web and uses `os.tag` on native.
@@ -162,6 +162,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
     .{ .id = "fizzy.resetLayout", .title = "Reset Layout", .bind = null, .run = cmdResetLayout, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.toggleFullScreen", .title = "Toggle Full Screen", .bind = null, .run = cmdToggleFullScreen, .icon = icons.tvg.lucide.maximize },
+    .{ .id = "fizzy.fitView", .title = "Fit to View", .bind = null, .run = cmdFitView, .isEnabled = cmdFitViewEnabled, .icon = icons.tvg.lucide.scan },
     .{ .id = "fizzy.deleteSelection", .title = "Delete Selection", .bind = "delete_selection_contents", .run = cmdDeleteSelection, .isEnabled = cmdDeleteSelectionEnabled, .icon = icons.tvg.lucide.@"trash-2" },
     .{ .id = "fizzy.accept", .title = "Accept", .bind = "activate", .run = cmdAccept, .isEnabled = cmdAcceptEnabled, .icon = icons.tvg.lucide.check },
     .{ .id = "fizzy.cancel", .title = "Cancel", .bind = "cancel", .run = cmdCancel, .isEnabled = cmdCancelEnabled, .icon = icons.tvg.lucide.x },
@@ -184,7 +185,55 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.playPause", .title = "Demo: Play / Pause", .bind = null, .run = cmdDemoPlayPause, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.demo.restart", .title = "Demo: Restart", .bind = null, .run = cmdDemoRestart, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
+    .{ .id = "fizzy.demo.playTape", .title = "Demo: Play a Tape…", .bind = null, .run = cmdPlayTape, .params = TapePath.params, .runWith = TapePath.bind(cmdPlayTapePath), .icon = icons.tvg.lucide.@"circle-play" },
+    .{ .id = "fizzy.demo.speed", .title = "Demo: Speed…", .bind = null, .run = cmdDemoSpeedStep, .isEnabled = demoLoaded, .params = DemoSpeed.params, .runWith = DemoSpeed.bind(cmdDemoSpeed), .icon = icons.tvg.lucide.gauge },
 } ++ demoCatalogCommands();
+
+const TapePath = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The tape to play, a .tape or .zon file, as an absolute path: a recording, an agent's session, a demo. Empty asks with the open dialog." }) = .init(""),
+});
+
+fn cmdPlayTape(_: *anyopaque) anyerror!void {
+    fizzy.backend.showOpenFileDialog(playTapeCallback, &.{.{ .name = "Tape", .pattern = "tape;zon" }}, "", null);
+}
+
+fn playTapeCallback(paths: ?[][:0]const u8) void {
+    const list = paths orelse return;
+    if (list.len == 0) return;
+    playTapeFile(fizzy.editor(), list[0]) catch |err| dvui.log.err("tape {s}: {t}", .{ list[0], err });
+}
+
+/// Plays a tape file in the player, with its transport: seek, chapters, play and pause. A tape
+/// that opens on a keyframe sets the person's session aside and gives it back when it ends.
+fn cmdPlayTapePath(state: *anyopaque, args: TapePath.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.path.len == 0) return cmdPlayTape(state);
+    if (comptime is_web) return call.fail("a page plays a tape from its address (?demo=<url>)", .{});
+    if (!std.fs.path.isAbsolute(args.path)) return call.fail("give an absolute path: {s}", .{args.path});
+    playTapeFile(editorFromState(state), args.path) catch |err| return call.fail("could not play {s}: {t}", .{ args.path, err });
+}
+
+fn playTapeFile(editor: *Editor, path: []const u8) !void {
+    if (comptime is_web) return error.Unsupported;
+    const gpa = editor.app.gpa;
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(256 << 20));
+    defer gpa.free(bytes);
+    editor.demo.playTapeSoon(bytes);
+}
+
+const DemoSpeed = sdk.Command.Params(struct {
+    rate: sdk.Command.Arg(f32, .{ .description = "How many times the tape's own pace: 0.25, 0.5, 1, 2 or 4. 0 steps to the next.", .min = 0, .max = 4 }) = .init(0),
+});
+
+fn cmdDemoSpeedStep(state: *anyopaque) anyerror!void {
+    editorFromState(state).demo.player.stepRate();
+}
+
+/// How fast the loaded tape plays, as the transport's speed does.
+fn cmdDemoSpeed(state: *anyopaque, args: DemoSpeed.Args, call: *sdk.Command.Call) anyerror!void {
+    const player = &editorFromState(state).demo.player;
+    if (args.rate == 0) player.stepRate() else player.setRate(args.rate);
+    try call.returns(.{ .rate = player.rate });
+}
 
 fn demoCatalogCommands() [Editor.Demo.catalog.entries.len]FizzyCommand {
     var out: [Editor.Demo.catalog.entries.len]FizzyCommand = undefined;
@@ -434,6 +483,14 @@ fn cmdCancel(state: *anyopaque) anyerror!void {
     try editorFromState(state).cancel();
 }
 
+/// The active document's view fitted to its pane again (`<owner>.fitView`): an image or a sprite
+/// the person has panned and zoomed, back where a new one opens.
+fn cmdFitView(state: *anyopaque) anyerror!void {
+    try editorFromState(state).runActiveDocCommand("fitView");
+}
+fn cmdFitViewEnabled(state: *anyopaque) bool {
+    return editorFromState(state).activeDocCommandEnabled("fitView");
+}
 fn cmdUndoEnabled(state: *anyopaque) bool {
     return editorFromState(state).activeDocCommandEnabled("undo");
 }
@@ -625,6 +682,7 @@ const vscode_defaults = [_]DefaultBind{
     .{ .command = "fizzy.commandPalette", .keys = "mod+shift+p" },
     // The platform's own: F11 in VSCode and browsers, ⌃⌘F in every macOS app.
     .{ .command = "fizzy.toggleFullScreen", .keys = "f11", .keys_mac = "ctrl+cmd+f" },
+    .{ .command = "fizzy.fitView", .keys = "mod+0" },
 } ++ open_folder_defaults ++ close_defaults;
 
 /// The web has no folder to open — a page cannot read a directory tree — so Open Folder does not
@@ -672,6 +730,7 @@ pub const document_verbs = [_]DocumentVerb{
     .{ .action = "undo", .fizzy_id = "fizzy.undo" },
     .{ .action = "redo", .fizzy_id = "fizzy.redo" },
     .{ .action = "deleteSelection", .fizzy_id = "fizzy.deleteSelection" },
+    .{ .action = "fitView", .fizzy_id = "fizzy.fitView" },
     .{ .action = "acceptEdit", .fizzy_id = "fizzy.accept" },
     .{ .action = "cancelEdit", .fizzy_id = "fizzy.cancel" },
     .{ .action = "transform", .fizzy_id = null },
@@ -851,7 +910,7 @@ fn shadowedByHigherLayer(editor: *Editor, binding: Keymap.Binding, command_id: [
 /// theirs (`backend_native.rebuildDynamicNativeMenus` tags them the same way). Neither needs a
 /// command↔item table: both name a command, and the chord comes from the keymap.
 pub fn syncNativeMenuShortcuts(editor: *Editor) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
 
     for (menu_model.flat_commands, 0..) |item, tag| {
         if (nativeShortcutFor(editor, item.id)) |s| {
@@ -929,7 +988,7 @@ fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
 /// equivalents, AppKit runs them, and a command reachable from both paths would fire twice.
 /// This is the exact condition `syncNativeMenuShortcuts` stamps, so the two cannot disagree.
 pub fn nativeMenuOwnsChord(editor: *Editor, id: []const u8) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     if (!menu_model.contains(id) and !nativeMenuItemFor(editor, id)) return false;
     return nativeShortcutFor(editor, id) != null;
 }

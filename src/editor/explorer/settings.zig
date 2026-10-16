@@ -315,7 +315,7 @@ const window_items = [_]Item{
         .draw = drawRestartOnRebuild,
         .inline_control = true,
     },
-}) ++ (if (builtin.os.tag != .macos or builtin.target.cpu.arch == .wasm32) [_]Item{} else [_]Item{
+}) ++ (if (builtin.target.os.tag != .macos or builtin.target.cpu.arch == .wasm32) [_]Item{} else [_]Item{
     .{
         .label = "Native glass",
         .key = "native_glass",

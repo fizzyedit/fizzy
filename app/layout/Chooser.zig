@@ -37,7 +37,7 @@
 //! picking the already-selected item means (`reselected`).
 //!
 //! Nothing here reaches past the public `Layout` API: a shape that wants a chooser this file
-//! cannot draw copies it, per the shipped-shapes methodology in CLAUDE.md.
+//! cannot draw copies it, per the shipped-shapes methodology in AGENTS.md.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");

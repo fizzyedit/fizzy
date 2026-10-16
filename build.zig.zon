@@ -38,7 +38,7 @@
             .hash = "assetpack-0.2.0-5DA2d1ZkAADJanNVdWrUBOGMhOzUENhrUiqXcHADxY2x",
         },
         // App-only. Plugins depend on `sdk/` (not this root package) so they never see
-        // Velopack — see CLAUDE.md.
+        // Velopack — see AGENTS.md.
         .velopack_zig = .{
             .url = "https://github.com/graphl-tech/velopack-zig/archive/0c2f20635a97fde38cc8000e9fb1a75f891cf37d.tar.gz",
             .hash = "velopack_zig-0.0.1-LzeGcengAACU1f33uDAuLKlWXtek0KCC6i_b3XWeJMjd",

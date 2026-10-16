@@ -211,6 +211,12 @@ jobs:
         if: matrix.name == 'macOS'
         run: bash scripts/ci-retry.sh zig build -Dnative-backend=sdl3 -Dno-emit --summary all
 
+      # A link-only app (`-Ddynamic-plugins=false`): its gates on loading plugins at runtime are
+      # comptime, so only a build with it off shows that build still compiles.
+      - name: Compile a link-only app
+        if: matrix.name == 'Linux'
+        run: bash scripts/ci-retry.sh zig build -Ddynamic-plugins=false -Dno-emit --summary all
+
       # The suites for SDL's patches on macOS (FizzyGPU's Metal tests; the rest are Linux's), when
       # SDL's patches or pins changed: see the `sdl` job. Is there a Metal device? The probe says,
       # and the suite then requires Metal, so a runner with one can't skip the Metal tests. (On

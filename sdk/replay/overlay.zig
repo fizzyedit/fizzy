@@ -7,6 +7,7 @@
 //! (`LiveDriver`), `drawPlayer` for a demo (`Player`).
 const std = @import("std");
 const dvui = @import("dvui");
+const anchor = @import("anchor.zig");
 const Sequencer = @import("tape").Sequencer;
 const LiveDriver = @import("LiveDriver.zig");
 const Player = @import("Player.zig");
@@ -32,7 +33,10 @@ pub fn drawLive(driver: *const LiveDriver, opts: Options) void {
     } else null;
     const since_ms: f32 = @floatFromInt(@divTrunc(now - hand.since_ns, std.time.ns_per_ms));
     const in: f32 = if (opts.fade_ms <= 0) 1 else std.math.clamp(since_ms / opts.fade_ms, 0, 1);
-    paintPointer(driver.seq.pointer, ripple, if (hand.typing) 1 - in else in, driver.input.held.count() > 0);
+    // A cursor the app draws itself where the pointer is (a paint tool's pencil) is the pointer
+    // there: two at one place would be one too many, so this one gives way (`anchor.own_cursor`).
+    const own = dvui.currentWindow().tags.containsUsed(anchor.own_cursor) orelse false;
+    paintPointer(driver.seq.pointer, ripple, if (own) 0 else if (hand.typing) 1 - in else in, driver.input.held.count() > 0);
 }
 
 /// A demo's pointer, while it drives, timed in demo time: a seek shows what playing showed.
@@ -41,8 +45,9 @@ pub fn drawPlayer(player: *Player, opts: Options) void {
     const fw = layer(@src(), .{ .rect = pointerRect(player.seq.pointer), .name = "DemoPointer" }, .{});
     defer fw.deinit();
     const ripple: ?Ripple = if (player.last_press) |press| .{ .pt = press.pt, .age_ms = player.seq.now - press.at } else null;
-    // Out of the way of the words while the tape types, as a desktop's pointer is.
-    const shown = player.pointerShown(opts.fade_ms);
+    // Out of the way of the words while the tape types, as a desktop's pointer is, and of a
+    // cursor the app draws itself (`drawLive`).
+    const shown = if (dvui.currentWindow().tags.containsUsed(anchor.own_cursor) orelse false) 0 else player.pointerShown(opts.fade_ms);
     paintPointer(player.seq.pointer, ripple, shown, player.input.held.count() > 0);
 }
 

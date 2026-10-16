@@ -6197,12 +6197,21 @@ test "a frost never captures more than the picture it reads" {
     // Partly off the window, and smaller than it: kept whole, and so its capture size.
     const edge: Rect = .{ .x = 2300, .y = 10, .w = 400, .h = 300 };
     try std.testing.expectEqual(edge, within(edge, win).?);
-    // A view drag's drop zones across the main window and a float's band 100000 pixels on: cut to
-    // the window (it asked Metal for a texture 46424 pixels wide).
+    // A view drag's drop zones across the main window and a float's band 100000 pixels on: the
+    // window's width (it asked Metal for a texture 46424 pixels wide), its own height.
     const across = within(.{ .x = 1800, .y = 200, .w = 100600, .h = 900 }, win).?;
-    try std.testing.expectEqual(@as(f32, 1800), across.x);
-    try std.testing.expectEqual(@as(f32, 600), across.w);
+    try std.testing.expectEqual(@as(f32, 0), across.x);
+    try std.testing.expectEqual(@as(f32, 2400), across.w);
+    try std.testing.expectEqual(@as(f32, 200), across.y);
     try std.testing.expectEqual(@as(f32, 900), across.h);
+    // Taller than the window — a window-tall float, its capture bucketed past the frame — moving up
+    // and down: one size all the way, the window's height. Cut to what of it was on the window, it
+    // was a new height and a new pyramid every frame (Safari: half the frame rate).
+    var y: f32 = -300;
+    while (y < 600) : (y += 37) {
+        const tall = within(.{ .x = 100, .y = y, .w = 862, .h = 1900 }, win).?;
+        try std.testing.expectEqual(Rect{ .x = 100, .y = 0, .w = 862, .h = 1600 }, tall);
+    }
     // Wholly in the band: nothing of the window.
     try std.testing.expectEqual(@as(?Rect, null), within(.{ .x = 100000, .y = 0, .w = 3000, .h = 100 }, win));
     // Smaller than the picture but nowhere on it — the main window's drop zones replayed into a
@@ -7075,6 +7084,122 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             else => return error.TestUnexpectedResult,
         };
         try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
+
+        // A document a plugin holds (`sdk.Claim`) takes none of the person's input: what they
+        // type waits, and so do the commands they run on it and its close, until the holder lets
+        // go or they press Stop on its panes. The holder's own calls still reach it.
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const path = doc.owner.documentPath(doc);
+        const docText = struct {
+            fn docText(h: *sdk.Host) ![]const u8 {
+                return switch (h.callCommand("text.read", "", h.arena())) {
+                    .ok => |r| r orelse error.TestUnexpectedResult,
+                    else => error.TestUnexpectedResult,
+                };
+            }
+        }.docText;
+        var holder_state: u8 = 0;
+        const holder_vtable: sdk.Plugin.VTable = .{};
+        var holder: sdk.Plugin = .{ .state = &holder_state, .vtable = &holder_vtable, .id = "holder", .display_name = "Holder" };
+        const here = editor.workbench.open_workspace_grouping;
+        const claim = try host.claimDocument(&holder, doc.id, "Holder");
+        try std.testing.expectError(error.DocumentClaimed, host.claimDocument(editor.app.host.plugins.items[0], doc.id, "Other"));
+        try dvui.testing.settle(headlessFrame);
+
+        // It shows beside the person, who keeps the pane they were in (`Workbench.showBeside`).
+        try std.testing.expectEqual(here, editor.workbench.open_workspace_grouping);
+        const beside = for (editor.workbench.workspaces.values()) |ws| {
+            if (ws.grouping != here) if (ws.active) |a| if (a.id == doc.id) break true;
+        } else false;
+        try std.testing.expect(beside);
+        // The person goes to it there.
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(doc.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+
+        try dvui.testing.writeText("held");
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
+        try std.testing.expectError(error.DocumentClaimed, editor.undo());
+        try editor.closeFileID(doc.id);
+        try std.testing.expect(editor.docFromPath(path) != null);
+
+        // The holder's own edit lands.
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"!\", .line = 1 }", host.arena()) == .ok);
+        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"!typed\"") != null);
+
+        // Who holds it is on its panes, with Stop, which a person (or a tape) presses.
+        const stop_tag = try std.fmt.allocPrint(gpa, "fizzy.claim.stop:{s}", .{path});
+        defer gpa.free(stop_tag);
+        var s: automation.Script = .init(gpa, "stop-claim", "");
+        s.check = automation.Input.check;
+        s.check.live = true;
+        try s.click(.{ .tag = stop_tag }, .{});
+        try editor.demo.live.play(try s.finish());
+        for (0..200) |_| {
+            if (!editor.demo.live.playing()) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expect(editor.demo.live.outcome.? == .finished);
+        try std.testing.expect(!host.claimHolds(claim));
+        try std.testing.expect(host.documentClaim(doc.id) == null);
+
+        // Let go, the person's commands reach it again.
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
+    }
+
+    // A document's history as a line (`Plugin.historyLine`): each step keeps its id through
+    // undo and redo, and going to one (`historyGoTo`) is so many undos or redos.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try host.runCommand("fizzy.newFile");
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (d.id != was.id and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+        }
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(doc.id != was.id);
+        for ([_][]const u8{ "1", "2", "3" }) |digit| {
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{digit});
+            try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+        }
+        const readText = struct {
+            fn readText(h: *sdk.Host) ![]const u8 {
+                const zon = switch (h.callCommand("text.read", "", h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const rest = zon[at + ".text = \"".len ..];
+                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+            }
+        }.readText;
+        try std.testing.expectEqualStrings("321", try readText(host));
+
+        const line = doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 3), line.entries.len);
+        try std.testing.expectEqual(@as(usize, 3), line.at);
+        const steps = [_]u64{ line.entries[0].id, line.entries[1].id, line.entries[2].id };
+
+        try std.testing.expect(doc.owner.historyGoTo(doc, steps[0]));
+        try std.testing.expectEqualStrings("1", try readText(host));
+        const back = doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(back.version != line.version);
+        try std.testing.expectEqual(@as(usize, 1), back.at);
+        for (back.entries, steps) |e, id| try std.testing.expectEqual(id, e.id);
+
+        try std.testing.expect(doc.owner.historyGoTo(doc, 0));
+        try std.testing.expectEqualStrings("", try readText(host));
+        try std.testing.expect(doc.owner.historyGoTo(doc, steps[2]));
+        try std.testing.expectEqualStrings("321", try readText(host));
+
+        // Gone again, and the document before it active, as what follows expects.
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
     }
 
     // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens
@@ -7155,6 +7280,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         inline_md_text = "**One** paragraph.\n\nAnd another, with `code`.\n\n- and\n- a list";
         for (0..3) |_| _ = try dvui.testing.step(inlineMarkdownFrame);
         try std.testing.expect(inline_md_height > one_para * 2);
+        inline_md.?.release(0x1d1e);
+
+        // Streamed in a few bytes a frame, as a chat reply arrives, it only ever grows. Each
+        // re-parse left the edited block with an estimate that a pin then emitted for a frame, so
+        // a streaming reply shrank by a line and grew back, over and over.
+        const reply = "Sure. Let me look at how the view lays out a message while it streams, because that is where the motion comes from.\n\nThe **scroll area** sizes its content from last frame's sizes, and a message that grows by a line is a frame late.\n\n- one point\n- and a second that goes on long enough to wrap at this width, and then some more";
+        var last: f32 = 0;
+        var n: usize = 0;
+        while (n < reply.len) {
+            n = @min(reply.len, n + 9);
+            inline_md_text = reply[0..n];
+            _ = try dvui.testing.step(inlineMarkdownFrame);
+            if (inline_md_height + 0.5 < last) {
+                std.debug.print("inline markdown shrank from {d:.1} to {d:.1} at byte {d}\n", .{ last, inline_md_height, n });
+                return error.TestUnexpectedResult;
+            }
+            last = inline_md_height;
+        }
         inline_md.?.release(0x1d1e);
     }
 
@@ -7258,6 +7401,56 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         editor.session = null;
     }
 
+    // A document never saved comes back from its unsaved bytes (`Plugin.loadUntitledDocument`),
+    // kept as its owner would save them (`Plugin.bytesPath`), not from a file named by its title,
+    // which there is none of. Here it has no state (its owner might keep none): all it has is
+    // its bytes, and it is still untitled, dirty and whole.
+    {
+        const before = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!before.owner.documentHasRecognizedSaveExtension(before));
+        const path = try gpa.dupe(u8, before.owner.documentPath(before));
+        defer gpa.free(path);
+        const grouping = before.owner.documentGrouping(before);
+        const dir = try fizzy.Editor.KeptDocuments.sessionDir(gpa, editor.app.config_folder);
+        defer gpa.free(dir);
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            defer kept.deinit();
+            for (kept.docs.items) |d| if (std.mem.eql(u8, d.path, path)) {
+                try std.testing.expect(d.save_as != null and d.unsaved != null);
+            };
+            try kept.save(dir);
+        }
+        {
+            var d = try std.Io.Dir.cwd().openDir(dvui.io, dir, .{ .iterate = true });
+            defer d.close(dvui.io);
+            var it = d.iterate();
+            while (try it.next(dvui.io)) |file| {
+                if (std.mem.endsWith(u8, file.name, ".state")) try d.deleteFile(dvui.io, file.name);
+            }
+            const zon = try d.readFileAlloc(dvui.io, "session.zon", gpa, .unlimited);
+            defer gpa.free(zon);
+            const stateless = try std.mem.replaceOwned(u8, gpa, zon, ".has_state = true", ".has_state = false");
+            defer gpa.free(stateless);
+            try d.writeFile(dvui.io, .{ .sub_path = "session.zon", .data = stateless });
+        }
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer ids.deinit(gpa);
+        for (editor.app.open_files.values()) |d| try ids.append(gpa, d.id);
+        for (ids.items) |id| editor.detachFileID(id);
+
+        editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
+        _ = try editor.app.host.openFile(.{ .path = path, .grouping = grouping });
+        const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("text", after.owner.id);
+        try std.testing.expect(after.owner.isDirty(after));
+        try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
+        const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        if (editor.session) |*kept| kept.deinit();
+        editor.session = null;
+    }
+
     // A checkpoint (`Checkpoint`): what a run that did not quit cleanly left is read once at the
     // next launch. Each write is a generation of files in the same folder (`saveGeneration`), the
     // last one's removed once the new `session.zon` is in place; one cut off before any
@@ -7305,6 +7498,41 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try expectEmptyFolder(dir);
     }
 
+    // A plugin's New flow writes its file itself and asks the `files` service to show it
+    // (`reveal`): fizzy emits `fizzy.files.reveal`, and the tree, which hears it, reveals the row
+    // with its name open for editing. The tree holds the path until the row is laid out, then
+    // takes it, so heard-then-taken is the whole round trip.
+    {
+        try editor.setProjectFolder(project);
+        editor.explorer.open(editor);
+        editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, fizzy.Editor.workbench_files_view);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/made-by-a-plugin.md", .data = "" });
+        const made = try std.fs.path.join(gpa, &.{ project, "made-by-a-plugin.md" });
+        defer gpa.free(made);
+        const files_api = editor.app.host.getServiceTyped(sdk.services.files.Api) orelse return error.TestUnexpectedResult;
+        files_api.reveal(made);
+        var heard = false;
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (editor.workbench.pending_new_file_path) |pending| {
+                if (std.mem.eql(u8, pending, made)) heard = true;
+            } else if (heard) break;
+        }
+        try std.testing.expect(heard);
+        try std.testing.expect(editor.workbench.pending_new_file_path == null);
+    }
+
+    // A quit straight after a pane slid shut (`snapshotClosingPane`): the pane still holds its
+    // picture, and the quit comes after the last frame, when nothing can be freed at a frame's end.
+    {
+        const pixels = [_]u8{0} ** (4 * 4 * 4);
+        const snap = try t.window.backend.textureCreate(&pixels, .{ .width = 4, .height = 4 });
+        editor.workbench.workspaces.values()[0].closing_snapshot = snap;
+    }
+    // The harness keeps its window current between frames; `appQuit` has none.
+    const harness_window = dvui.current_window;
+    dvui.current_window = null;
+    defer dvui.current_window = harness_window;
     try editor.deinit();
 }
 
@@ -7637,7 +7865,7 @@ fn captureFrame() !dvui.App.Result {
     return .ok;
 }
 
-test "a capture is the drawn part of the frame target, as a PNG, once taken" {
+test "a capture is the drawn part of the frame target, as drawn, once taken" {
     var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 100, .h = 100 } });
     defer t.deinit();
     capture_under_test = .init(std.testing.allocator);
@@ -7654,41 +7882,44 @@ test "a capture is the drawn part of the frame target, as a PNG, once taken" {
 
     // Nothing asked: a frame takes no picture.
     _ = try dvui.testing.step(captureFrame);
-    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(1));
+    try std.testing.expect(capture_under_test.get(1) == null);
 
     const n = capture_under_test.request("");
-    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
+    try std.testing.expect(capture_under_test.get(n) == null);
     try std.testing.expectEqual(n, capture_under_test.request("")); // asked again before it is taken
     _ = try dvui.testing.step(captureFrame);
-    const png = capture_under_test.get(n) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualSlices(u8, &.{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' }, png[0..8]);
-    // IHDR: the drawn part's width and height, not the target's.
-    try std.testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, png[16..20], .big));
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, png[20..24], .big));
+    const main = capture_under_test.get(n) orelse return error.TestUnexpectedResult;
+    // The drawn part's width and height, not the target's; its pixels as drawn, premultiplied,
+    // row by row: nothing is encoded or converted in the app's frame.
+    try std.testing.expectEqual(@as(u32, 3), main.width);
+    try std.testing.expectEqual(@as(u32, 2), main.height);
+    try std.testing.expectEqual(@as(usize, 3 * 2 * 4), main.pixels.len);
+    try std.testing.expectEqualSlices(u8, &.{ 128, 0, 0, 128, 0, 255, 0, 255 }, main.pixels[0..8]);
 
     // The next is a new picture; the last stays until it is taken.
     const m = capture_under_test.request("fizzy.window:dialog:Ask");
     try std.testing.expect(m != n);
     try std.testing.expect(capture_under_test.get(n) != null);
     _ = try dvui.testing.step(captureFrame);
-    try std.testing.expectEqual(@as(?[]const u8, null), capture_under_test.get(n));
+    try std.testing.expect(capture_under_test.get(n) == null);
     // A window by its tag: its own picture, its size.
-    const dialog_png = capture_under_test.get(m) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, dialog_png[16..20], .big));
-    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, dialog_png[20..24], .big));
+    const dialog = capture_under_test.get(m) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 2), dialog.width);
+    try std.testing.expectEqual(@as(u32, 1), dialog.height);
+    try std.testing.expectEqualSlices(u8, &dialog_pixels, dialog.pixels);
 
     // Every window, where each lies round the main one: the main window's 3 columns, and the
     // dialog's 2 from the third on — 4 wide.
     const every = capture_under_test.request(automation.Capture.all);
     _ = try dvui.testing.step(captureFrame);
-    const all_png = capture_under_test.get(every) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u32, 4), std.mem.readInt(u32, all_png[16..20], .big));
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, all_png[20..24], .big));
+    const all = capture_under_test.get(every) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 4), all.width);
+    try std.testing.expectEqual(@as(u32, 2), all.height);
 
     // No window by that name: taken, and empty.
     const none = capture_under_test.request("fizzy.window:dialog:Nobody");
     _ = try dvui.testing.step(captureFrame);
-    try std.testing.expectEqual(@as(usize, 0), (capture_under_test.get(none) orelse return error.TestUnexpectedResult).len);
+    try std.testing.expectEqual(@as(u32, 0), (capture_under_test.get(none) orelse return error.TestUnexpectedResult).width);
 }
 
 // ---- A live tape drags ------------------------------------------------------------------------

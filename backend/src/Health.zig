@@ -70,6 +70,11 @@ pub const Counts = struct {
     target_switches: u32 = 0,
     /// Texture creations and updates uploaded.
     uploads: u32 = 0,
+    /// Textures made from pixels, render targets made, and either destroyed: GPU allocations,
+    /// which a frame that only draws makes none of (the profiler's `core.profile.Gpu`).
+    textures: u32 = 0,
+    targets: u32 = 0,
+    destroyed: u32 = 0,
 
     fn add(a: *Counts, b: Counts) void {
         inline for (std.meta.fields(Counts)) |f| @field(a, f.name) +|= @field(b, f.name);

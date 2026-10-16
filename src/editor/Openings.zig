@@ -32,6 +32,8 @@ pub const Opening = struct {
     preview: bool,
     /// Why the load failed, once it has. The placeholder shows it until its tab is closed.
     failed: ?[]u8 = null,
+    /// Shown beside the person's pane once it lands (`OpenOptions.beside`).
+    beside: bool = false,
     /// Frames since the document took the tab. Null while still loading.
     landed: ?u8 = null,
     /// Asked to be shown before its pane had a region to show it in (an open at launch, before
@@ -73,7 +75,9 @@ pub fn loading(self: *const Openings) bool {
 /// The load of `path` has started: put its placeholder in front of the user. `owner` is the
 /// plugin the document will belong to (the tab slot a restored session kept for it is named by
 /// its surface id); `take_slot_of` is a tab whose place it takes — the preview it replaces.
-pub fn begin(self: *Openings, editor: *Editor, path: []const u8, grouping: u64, preview: bool, owner: *sdk.Plugin, take_slot_of: ?[]const u8) void {
+pub fn begin(self: *Openings, editor: *Editor, path: []const u8, grouping: u64, placement: Editor.Placement, owner: *sdk.Plugin) void {
+    const preview = placement.preview;
+    const take_slot_of = placement.take_slot_of;
     if (self.entries.contains(path)) return;
     const o = self.gpa.create(Opening) catch return;
     o.* = .{
@@ -85,6 +89,7 @@ pub fn begin(self: *Openings, editor: *Editor, path: []const u8, grouping: u64, 
         .surface_id = undefined,
         .grouping = grouping,
         .preview = preview,
+        .beside = placement.beside,
     };
     o.surface_id = std.mem.concat(self.gpa, u8, &.{ surface_prefix, path }) catch {
         self.gpa.free(o.path);
@@ -162,6 +167,7 @@ pub fn land(self: *Openings, editor: *Editor, path: []const u8, doc: sdk.DocHand
         }
     } else |_| {}
     if (o.preview) editor.setDocumentPreview(doc.id, true);
+    if (o.beside) wb.showBeside(doc);
     _ = wb.loading.swapRemove(o.surface_id);
     o.landed = 0;
     host.refresh();

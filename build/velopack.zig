@@ -170,7 +170,7 @@ pub fn addMsvcupSetupStep(
     const gen_path = vz.path("tools/gen_zig_libc_msvc.zig").getPath3(b, null).toString(b.allocator) catch |e|
         std.debug.panic("velopack: resolve gen_zig_libc_msvc.zig: {}", .{e});
 
-    const run: *std.Build.Step.Run = switch (builtin.os.tag) {
+    const run: *std.Build.Step.Run = switch (builtin.target.os.tag) {
         .windows => blk: {
             const script_path = vz.path("tools/setup-msvc.ps1").getPath3(b, null).toString(b.allocator) catch |e|
                 std.debug.panic("velopack: resolve setup-msvc.ps1: {}", .{e});

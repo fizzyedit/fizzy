@@ -103,6 +103,10 @@ pub const Call = struct {
     /// Set, with `message`, when `args` did not fit the parameters. `bind` does this; a
     /// hand-written `runWith` rarely needs to.
     bad_args: bool = false,
+    /// Set by a command that goes on showing its work after it returns (a drawing drawn
+    /// stroke by stroke): for how long, in ms as written (`core.motion`). A recorded session
+    /// gives its step that long, so a replay goes from one to the next without a pause.
+    showing_ms: u32 = 0,
 
     /// Return `value` (anything `std.zon.stringify` can write) as the command's result.
     pub fn returns(self: *Call, value: anytype) error{OutOfMemory}!void {

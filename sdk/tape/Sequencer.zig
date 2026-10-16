@@ -192,7 +192,7 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 }
                 self.cursor += 1;
             },
-            .move => {
+            .move, .trace => {
                 self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now };
                 self.cursor += 1;
             },
@@ -240,20 +240,20 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
     if (self.glide) |*g| {
         const op = self.tape.ops[g.op];
         const f = fraction(op, to);
-        if (sink.vtable.locate(sink.ctx, op.do.move)) |pt| g.to = pt;
+        if (sink.vtable.locate(sink.ctx, op.do.target().?)) |pt| g.to = pt;
         // A target never seen leaves the pointer where it is rather than flying to the corner.
         const dest = g.to orelse g.from;
         // The frames live play would have drawn between, each a point along the way.
         const end: f64 = @min(to, @as(f64, @floatFromInt(op.end())));
         var t = g.at + path_step_ms;
         while (t < end) : (t += path_step_ms) {
-            const pt = glidePoint(g.from, dest, fraction(op, t));
+            const pt = pathPoint(op, g.from, dest, fraction(op, t));
             if (pt.x == self.pointer.x and pt.y == self.pointer.y) continue;
             self.pointer = pt;
             sink.vtable.moveTo(sink.ctx, pt);
         }
         g.at = @max(g.at, to);
-        self.pointer = glidePoint(g.from, dest, f);
+        self.pointer = pathPoint(op, g.from, dest, f);
         sink.vtable.moveTo(sink.ctx, self.pointer);
         if (f >= 1) {
             self.glide = null;
@@ -279,7 +279,7 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
 /// Land whatever is still in flight, as if its time had come.
 fn finishSpans(self: *Sequencer, sink: Sink) void {
     if (self.glide) |g| {
-        if (sink.vtable.locate(sink.ctx, self.tape.ops[g.op].do.move)) |pt| {
+        if (sink.vtable.locate(sink.ctx, self.tape.ops[g.op].do.target().?)) |pt| {
             self.pointer = pt;
             sink.vtable.moveTo(sink.ctx, pt);
         }
@@ -318,6 +318,12 @@ fn fraction(op: Tape.Op, t: f64) f32 {
 }
 
 // ---- how a person moves --------------------------------------------------------------------
+
+/// The pointer `f` of the way along `op`: a `move`'s glide, or a `trace`'s ruled line.
+fn pathPoint(op: Tape.Op, from: Point, to: Point, f: f32) Point {
+    if (op.do == .move) return glidePoint(from, to, f);
+    return .{ .x = from.x + (to.x - from.x) * f, .y = from.y + (to.y - from.y) * f };
+}
 
 /// The pointer `f` of the way along a glide: eased in and out, on a slight bow rather than a ruled
 /// line — a hand moving a mouse swings a little, and a dead-straight constant-speed pointer reads as
@@ -741,4 +747,12 @@ test "the pointer bows on its way and arrives exactly" {
     try testing.expectEqual(b.x, glidePoint(a, b, 1).x);
     try testing.expectApproxEqAbs(@as(f32, 0), glidePoint(a, b, 1).y, 0.001);
     try testing.expect(@abs(glidePoint(a, b, 0.5).y) > 1);
+}
+
+test "a trace runs ruled: on the line between, evenly" {
+    const a: Point = .{ .x = 0, .y = 0 };
+    const b: Point = .{ .x = 400, .y = 0 };
+    const op: Tape.Op = .{ .at = 0, .ms = 100, .do = .{ .trace = .{} } };
+    try testing.expectEqual(@as(f32, 0), pathPoint(op, a, b, 0.5).y);
+    try testing.expectEqual(@as(f32, 100), pathPoint(op, a, b, 0.25).x);
 }

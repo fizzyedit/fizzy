@@ -100,14 +100,14 @@ pub const WindowGlassLook = struct {
 /// its edge, a compact toolbar's corners — where the OS has it (macOS 26). Once per window.
 /// Whether it is.
 pub fn liquidGlass(raw_ptr: *anyopaque) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     return fizzy_macos_window_liquid_glass(raw_ptr, ns_visual_effect_material) != 0;
 }
 
 /// `window`'s Liquid Glass this frame (`liquidGlass`). Whether it has any: false, and nothing set,
 /// where it stands on vibrancy instead.
 pub fn liquidGlassLook(window: *c.SDL_Window, look: WindowGlass) bool {
-    if (comptime builtin.os.tag != .macos) return false;
+    if (comptime builtin.target.os.tag != .macos) return false;
     const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
     if (fizzy_macos_window_has_liquid_glass(ns) == 0) return false;
     fizzy_macos_window_liquid_glass_look(ns, &look);
@@ -154,7 +154,7 @@ fn cocoaWindowOf(window: *c.SDL_Window) ?*anyopaque {
 /// Reveal the window (it is created hidden, so its chrome and geometry are in place first),
 /// maximized when `maximized`.
 pub fn show(win: *dvui.Window, maximized: bool) void {
-    if (comptime builtin.os.tag != .macos and builtin.os.tag != .windows and builtin.os.tag != .linux) return;
+    if (comptime builtin.target.os.tag != .macos and builtin.target.os.tag != .windows and builtin.target.os.tag != .linux) return;
     _ = c.SDL_ShowWindow(win.backend.impl.window);
     if (maximized) _ = c.SDL_MaximizeWindow(win.backend.impl.window);
 }
@@ -167,7 +167,7 @@ pub fn show(win: *dvui.Window, maximized: bool) void {
 /// nothing.
 pub fn showUndrawn(win: *dvui.Window, maximized: bool) void {
     const window = win.backend.impl.window;
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos => _ = c.SDL_SetWindowOpacity(window, 0),
         .windows => setCloaked(win, true),
         else => {},
@@ -177,7 +177,7 @@ pub fn showUndrawn(win: *dvui.Window, maximized: bool) void {
 
 /// The first frame is on screen: let it be seen (`showUndrawn`).
 pub fn reveal(win: *dvui.Window) void {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .macos => _ = c.SDL_SetWindowOpacity(win.backend.impl.window, 1),
         .windows => setCloaked(win, false),
         else => {},
@@ -185,7 +185,7 @@ pub fn reveal(win: *dvui.Window) void {
 }
 
 fn setCloaked(win: *dvui.Window, cloaked: bool) void {
-    if (comptime builtin.os.tag != .windows) return;
+    if (comptime builtin.target.os.tag != .windows) return;
     const hwnd = win32_titlebar.getWin32Hwnd(win) orelse return;
     const win32 = @import("win32");
     const value: u32 = @intFromBool(cloaked);
@@ -204,7 +204,7 @@ pub fn isMaximized(win: *dvui.Window) bool {
 /// a window over the desktop, and keeps its translucency and its edge (the user). Elsewhere,
 /// maximized or full screen.
 pub fn windowMaximized(window: *c.SDL_Window) bool {
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(window),
             c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
@@ -221,7 +221,7 @@ pub fn windowMaximized(window: *c.SDL_Window) bool {
 pub fn windowUnseen(window: *c.SDL_Window) bool {
     const flags = c.SDL_GetWindowFlags(window);
     if (flags & (c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) return true;
-    if (builtin.os.tag != .macos) return false;
+    if (builtin.target.os.tag != .macos) return false;
     const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
     return fizzy_macos_window_visible(ns) == 0;
 }
@@ -245,7 +245,7 @@ pub fn windowCovers(window: *c.SDL_Window) bool {
 /// (`space_transition`, until did-exit) says it is still in the transition: by the style alone it
 /// faded while AppKit showed opaque pictures of it, and popped in see-through as they went.
 fn windowInSpaceTransition(window: *c.SDL_Window) bool {
-    if (builtin.os.tag != .macos) return false;
+    if (builtin.target.os.tag != .macos) return false;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
     return fizzy_macos_window_space_transition_active(raw_ptr) != 0;
 }
@@ -253,7 +253,7 @@ fn windowInSpaceTransition(window: *c.SDL_Window) bool {
 /// Whether `window` is on its way into a fullscreen Space: it goes opaque at once
 /// (`Editor.easeWindowOpacity`), so the pictures AppKit animates it as are opaque too.
 pub fn windowEnteringSpace(window: *c.SDL_Window) bool {
-    if (builtin.os.tag != .macos) return false;
+    if (builtin.target.os.tag != .macos) return false;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
     return fizzy_macos_window_space_transition_active(raw_ptr) != 0 and fizzy_macos_window_space_entering(raw_ptr) != 0;
 }
@@ -266,7 +266,7 @@ pub fn enteringSpace(win: *dvui.Window) bool {
 /// out of one (`macos/window_monitor.m`'s own animation, where AppKit animates no pictures of it):
 /// its opacity follows this, the fade and the move one motion. Null otherwise.
 pub fn windowSpaceFullness(window: *c.SDL_Window) ?f32 {
-    if (builtin.os.tag != .macos) return null;
+    if (builtin.target.os.tag != .macos) return null;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return null;
     const f = fizzy_macos_window_space_fullness(raw_ptr);
     return if (f < 0) null else @floatCast(std.math.clamp(f, 0, 1));
@@ -280,7 +280,7 @@ pub fn spaceFullness(win: *dvui.Window) ?f32 {
 /// picture this frame: points from the window's top left — where the window would have been, were
 /// it moved a step a frame (`fizzy_macos_window_space_still`). Null on no such way.
 pub fn windowSpacePicture(window: *c.SDL_Window) ?struct { x: f32, y: f32, w: f32, h: f32 } {
-    if (builtin.os.tag != .macos) return null;
+    if (builtin.target.os.tag != .macos) return null;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return null;
     var x: f64 = 0;
     var y: f64 = 0;
@@ -293,7 +293,7 @@ pub fn windowSpacePicture(window: *c.SDL_Window) ?struct { x: f32, y: f32, w: f3
 /// Whether `window` is moving itself into or out of a fullscreen Space this frame
 /// (`macos/window_monitor.m`'s own animation).
 pub fn windowMovingItself(window: *c.SDL_Window) bool {
-    if (builtin.os.tag != .macos) return false;
+    if (builtin.target.os.tag != .macos) return false;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
     return fizzy_macos_window_space_moving(raw_ptr) != 0;
 }
@@ -305,7 +305,7 @@ pub fn windowMovingItself(window: *c.SDL_Window) bool {
 /// fullscreen flag (which is wrong for zoomed windows and only updates after animations).
 /// On non-macOS targets this is just `isMaximized`.
 pub fn isFullscreenChromeHidden(win: *dvui.Window) bool {
-    if (builtin.os.tag != .macos) return isMaximized(win);
+    if (builtin.target.os.tag != .macos) return isMaximized(win);
     const raw_ptr = c.SDL_GetPointerProperty(
         c.SDL_GetWindowProperties(win.backend.impl.window),
         c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
@@ -322,7 +322,7 @@ pub fn isFullscreenChromeHidden(win: *dvui.Window) bool {
 /// unconditionally every frame was a `SetWindowPos(SWP_FRAMECHANGED)` — a `WM_NCCALCSIZE` — a
 /// library load and a class-brush write each frame on Windows, and two style-mask writes on macOS.
 pub fn setStyle(win: *dvui.Window) void {
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(win.backend.impl.window),
             c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
@@ -348,9 +348,9 @@ pub fn setStyle(win: *dvui.Window) void {
             const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
             styleTitled(ns);
         };
-    } else if (builtin.os.tag == .windows) {
+    } else if (builtin.target.os.tag == .windows) {
         win32_titlebar.applyChrome(win);
-    } else if (builtin.os.tag == .linux) {
+    } else if (builtin.target.os.tag == .linux) {
         linux_titlebar.applyChrome(win);
     }
 }
@@ -414,7 +414,7 @@ fn styleTitled(raw_ptr: *anyopaque) void {
 /// vibrancy read as the app does. The main window's and every float's own window's alike
 /// (`setBackground`, `SDLBackend.viewportGlass`).
 pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
-    if (comptime builtin.os.tag != .macos) return;
+    if (comptime builtin.target.os.tag != .macos) return;
     const window = objc.Object.fromId(raw_ptr);
     const NSColor = objc.getClass("NSColor").?;
     const new_color = NSColor.msgSend(objc.Object, "colorWithRed:green:blue:alpha:", .{
@@ -447,7 +447,7 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
 }
 
 pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(win.backend.impl.window),
             c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
@@ -478,7 +478,7 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
             // SDL3 currently removes the shadow when the transparency flag for the window is set. This brings it back.
             window.msgSend(void, "setHasShadow:", .{true});
         }
-    } else if (builtin.os.tag == .windows) {
+    } else if (builtin.target.os.tag == .windows) {
         setStyle(win);
         win32_titlebar.clearCaptionColors(win);
         // As macOS's NSAppearance above: the backdrop matches the dvui theme.
@@ -552,7 +552,7 @@ fn wrapContentViewWithVibrancy(window: objc.Object) void {
 /// the window monitor (`FizzyWindowMonitor.m`) already follows; elsewhere SDL's.
 pub fn toggleFullscreen() void {
     const w = main() orelse return;
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         const ns = objc.Object.fromId(cocoaWindowOf(w) orelse return);
         // From the run loop, as the green button asks, never from inside a frame (a command, a
         // key): AppKit pictures the window as it will be in full screen from inside
@@ -575,14 +575,14 @@ pub fn toggleFullscreen() void {
 
 pub fn raise() void {
     if (main()) |w| _ = c.SDL_RaiseWindow(w);
-    if (builtin.os.tag == .macos) activateApp();
+    if (builtin.target.os.tag == .macos) activateApp();
 }
 
 /// macOS only: make fizzy the active application. `activate(ignoringOtherApps:)` is deprecated
 /// on 14+ in favour of `activate`, so try the new selector first and fall back — the old one
 /// still works and is the only one on earlier systems.
 fn activateApp() void {
-    if (builtin.os.tag != .macos) return;
+    if (builtin.target.os.tag != .macos) return;
     const NSApplication = objc.getClass("NSApplication") orelse return;
     const app = NSApplication.msgSend(objc.Object, "sharedApplication", .{});
     if (app.value == null) return;

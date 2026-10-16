@@ -67,6 +67,25 @@ pub fn failed(self: Plugin, what: []const u8, err: anyerror) error{PluginFailed}
     return error.PluginFailed;
 }
 
+/// A document's history as a line (`historyLine`): each step it can undo, oldest first, then
+/// each it can redo, and how many are applied. The app draws it as a timeline the person scrubs.
+pub const HistoryLine = struct {
+    /// Changes whenever the line does — a step added, undone or redone — so a caller keeps the
+    /// last line and asks again only when this moved.
+    version: u64,
+    entries: []const Entry,
+    /// How many of `entries` are applied; the rest are what redo brings back.
+    at: usize,
+
+    pub const Entry = struct {
+        /// The step's own, for its life: the app goes to a step, and keys who made it, by this.
+        /// Never 0.
+        id: u64,
+        /// What it did, short: "Typing", "Draw", "Add Layer".
+        title: []const u8,
+    };
+};
+
 /// A question an owner wants asked before fizzy saves a document (`saveQuestion`): a save that
 /// would flatten layers, drop data, change an encoding. fizzy asks it wherever a save starts
 /// (Save, Save All, Save and Close, the quit walk) and goes on by itself with the answer.
@@ -140,6 +159,13 @@ pub const VTable = struct {
     /// `loadDocument`, but from in-memory bytes (browser file picker). `path` is used
     /// for extension detection + display name. Synchronous (web has no load worker).
     loadDocumentFromBytes: ?*const fn (state: *anyopaque, path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
+    /// Open `bytes` as an untitled document named `title` (`untitled-1`), as `createDocument`
+    /// would have made it with these contents: never saved, and dirty. `bytes` are what
+    /// `documentBytes` encoded for it under `bytes_path` (`bytesPath`: the name Save As offers,
+    /// `untitled.pixi`), which says their format. How a crash or a restart brings back a document
+    /// that was never saved; without it, one comes back only as far as its state restores
+    /// into an empty document. Synchronous.
+    loadUntitledDocument: ?*const fn (state: *anyopaque, title: []const u8, bytes_path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
     /// Size of the plugin's document type for stack/heap staging buffers (`loadDocument`, etc.).
     documentStackSize: ?*const fn (state: *anyopaque) usize = null,
     documentStackAlign: ?*const fn (state: *anyopaque) usize = null,
@@ -197,6 +223,14 @@ pub const VTable = struct {
     /// scroll — with no side effects. A demo compares it when a replay reaches a moment it
     /// snapshotted before, to catch a tape that does not replay exactly.
     documentFingerprint: ?*const fn (state: *anyopaque, doc: DocHandle) u64 = null,
+    /// `doc`'s history as a line (`HistoryLine`): every step, oldest first, and how many are
+    /// applied — the rest are what redo brings back. Its `version` changes whenever the line
+    /// does, so the app asks again only then. Entries and titles in `arena`. Absent = no
+    /// timeline for this owner's documents; undo and redo work as ever.
+    historyLine: ?*const fn (state: *anyopaque, doc: DocHandle, arena: std.mem.Allocator) anyerror!HistoryLine = null,
+    /// Undo or redo `doc` until step `id` (`HistoryLine.Entry.id`) is the last one applied; 0
+    /// goes back before the first. An id not on the line is an error, and nothing moves.
+    historyGoTo: ?*const fn (state: *anyopaque, doc: DocHandle, id: u64) anyerror!void = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
 
     /// Register a loaded/created document in the plugin's open-doc map. `file` points at
@@ -480,6 +514,17 @@ pub fn loadDocumentFromBytes(self: Plugin, path: []const u8, bytes: []const u8, 
     return false;
 }
 
+/// `loadUntitledDocument`. Returns whether the plugin handled it (`false` = no hook).
+pub fn loadUntitledDocument(self: Plugin, title: []const u8, bytes_path: []const u8, bytes: []const u8, out_doc: *anyopaque) !bool {
+    const prof = core.profile.begin(self.id, "loadUntitledDocument");
+    defer prof.end();
+    if (self.vtable.loadUntitledDocument) |f| {
+        f(self.state, title, bytes_path, bytes, out_doc) catch |err| return self.failed("loadUntitledDocument", err);
+        return true;
+    }
+    return false;
+}
+
 pub fn isDirty(self: Plugin, doc: DocHandle) bool {
     const prof = core.profile.begin(self.id, "isDirty");
     defer prof.end();
@@ -509,6 +554,16 @@ pub fn encodeSnapshot(self: Plugin, snapshot: *anyopaque, path: []const u8, allo
 
 pub fn releaseSnapshot(self: Plugin, snapshot: *anyopaque) void {
     if (self.vtable.releaseSnapshot) |f| f(self.state, snapshot);
+}
+
+/// The path `doc`'s bytes are encoded under (`documentBytes`), owned by `allocator`: its own, or
+/// for one never saved (`untitled-1`, which names no format), the name Save As offers
+/// (`untitled.pixi`), so the bytes are what a save would write.
+pub fn bytesPath(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) ![]const u8 {
+    if (!self.documentHasRecognizedSaveExtension(doc)) {
+        if (self.documentDefaultSaveAsFilename(doc, allocator)) |name| return name else |_| {}
+    }
+    return allocator.dupe(u8, self.documentPath(doc));
 }
 
 /// Both halves at once, on the calling thread: for the few who need the bytes now (a crash
@@ -541,6 +596,25 @@ pub fn reloadDocument(self: Plugin, doc: DocHandle) bool {
         return true;
     }
     return false;
+}
+
+/// `doc`'s history as a line (`historyLine`), or null when the owner keeps none it shows.
+pub fn historyLine(self: Plugin, doc: DocHandle, arena: std.mem.Allocator) ?HistoryLine {
+    const f = self.vtable.historyLine orelse return null;
+    return f(self.state, doc, arena) catch |err| {
+        std.log.err("{s}: historyLine failed: {s}", .{ self.id, self.errorName(err) });
+        return null;
+    };
+}
+
+/// Go to step `id` of `doc`'s history (`historyGoTo`). Returns whether it went.
+pub fn historyGoTo(self: Plugin, doc: DocHandle, id: u64) bool {
+    const f = self.vtable.historyGoTo orelse return false;
+    f(self.state, doc, id) catch |err| {
+        std.log.err("{s}: historyGoTo failed: {s}", .{ self.id, self.errorName(err) });
+        return false;
+    };
+    return true;
 }
 
 /// `doc`'s state for a demo's snapshot (`captureDocumentState`). Null when the owner has no

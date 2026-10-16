@@ -23,6 +23,7 @@ const store = @import("registry/store.zig");
 const Page = @import("PluginPage.zig");
 const PluginLoader = @import("PluginLoader.zig");
 const PluginManager = @import("PluginManager.zig");
+const App = @import("../App.zig");
 /// Pretend two installed plugins have store updates waiting, so the update flow (the app's
 /// offer, or the silent path's logging) can be exercised without an actually out-of-date
 /// plugin. A build-time flag: flip it, run, flip it back.
@@ -406,6 +407,9 @@ const app = &PluginManager.current;
 
 pub fn register(manager: PluginManager) !void {
     PluginManager.current = manager;
+    // A link-only build has no store: nothing to fetch, nowhere to install to. The manager is
+    // still set, because settings name plugins through it (`displayName`).
+    if (comptime !App.loads_plugins) return;
     const host = manager.host;
     const url = resolveRegistryUrl();
     const fp_hex = try std.fmt.allocPrint(manager.gpa, "0x{x}", .{dylib.abi_fingerprint});
@@ -1333,6 +1337,7 @@ fn offerPendingUpdates() void {
 /// before the Host-registry iterations, so a freshly-registered or unloaded plugin never
 /// mutates a list mid-iteration.
 pub fn tick() void {
+    if (comptime !App.loads_plugins) return;
     if (comptime builtin.target.cpu.arch == .wasm32) {
         if (catalog) |*c| c.pump(web_fetch);
         StoreIcon.pump();

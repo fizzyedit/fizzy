@@ -4,7 +4,7 @@
     .fingerprint = 0x3311781b63706048,
     .minimum_zig_version = "0.16.0",
     // Plugin SDK package — no app-only deps (Velopack, nightwatch, …). Plugins depend on
-    // this directory; the repo-root zon owns the editor build. See CLAUDE.md.
+    // this directory; the repo-root zon owns the editor build. See AGENTS.md.
     .paths = .{
         "build.zig",
         "build.zig.zon",
