@@ -464,16 +464,32 @@ pub fn Schema(comptime T: type) type {
             };
             defer gpa.free(blob_z);
 
-            const parsed = (zig017_zon: {
-                var zig017_zd: std.zon.parse.Diagnostics = undefined;
-                var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
-                defer zig017_arena.deinit();
-                const zig017_r = std.zon.parse.fromSlice(Payloads, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = blob_z, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-                break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Payloads, gpa, zig017_v) else |zig017_e| zig017_e;
+            var arena: std.heap.ArenaAllocator = .init(gpa);
+            defer arena.deinit();
+            var diag: std.zon.parse.Diagnostics = undefined;
+            var parsed = std.zon.parse.fromSlice(Payloads, .{
+                .gpa = gpa,
+                .arena = arena.allocator(),
+                .source = blob_z,
+                .diagnostics = &diag,
+                .ignore_unknown_fields = true,
             }) catch |err| {
                 dvui.log.warn("sdk.settings: failed to parse settings: {s}", .{@errorName(err)});
                 return;
             };
+            // The parse's strings are in `arena`. One that is not the declared default is copied
+            // out, so it is this schema's to free (`freeOwned`); a default stays the default.
+            inline for (struct_fields) |f| {
+                if (comptime typeTagFor(f.type.Payload) == .string) {
+                    const parsed_str = @field(parsed, f.name);
+                    if (parsed_str.ptr != @field(default_payloads, f.name).ptr) {
+                        @field(parsed, f.name) = gpa.dupe(u8, parsed_str) catch |err| {
+                            dvui.log.warn("sdk.settings: out of memory keeping settings: {s}", .{@errorName(err)});
+                            return;
+                        };
+                    }
+                }
+            }
             freeOwned(gpa, out.*);
             fromPayloads(out, parsed);
         }
@@ -641,16 +657,14 @@ pub fn Schema(comptime T: type) type {
                     const P = f.type.Payload;
                     const text_z = gpa.dupeSentinel(u8, text, 0) catch return false;
                     defer gpa.free(text_z);
-                    const parsed = (zig017_zon: {
-                        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-                        var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
-                        defer zig017_arena.deinit();
-                        const zig017_r = std.zon.parse.fromSlice(P, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = text_z, .diagnostics = &zig017_zd });
-                        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(P, gpa, zig017_v) else |zig017_e| zig017_e;
-                    }) catch return false;
-                    // Strings follow the same ownership rule as `setString`; other payloads are
-                    // plain values the parse allocated nothing for.
+                    var arena: std.heap.ArenaAllocator = .init(gpa);
+                    defer arena.deinit();
+                    var diag: std.zon.parse.Diagnostics = undefined;
+                    var parsed = std.zon.parse.fromSlice(P, .{ .gpa = gpa, .arena = arena.allocator(), .source = text_z, .diagnostics = &diag }) catch return false;
+                    // Strings follow the same ownership rule as `setString`: copied out of the
+                    // parse's arena, the schema's to free. Other payloads are plain values.
                     if (comptime typeTagFor(P) == .string) {
+                        parsed = gpa.dupe(u8, parsed) catch return false;
                         if (fieldIsOwned(f.name, v.*)) gpa.free(@field(v.*, f.name).v);
                     }
                     payloadPtr(v, f.name).* = parsed;
@@ -1009,41 +1023,4 @@ test "a type with no dedicated control is still a legal setting, edited as zon t
 
     // `.other` payloads take part in diff-vs-default like anything else.
     try testing.expect(try S.diffSerialize(testing.allocator, .{}) == null);
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
 }

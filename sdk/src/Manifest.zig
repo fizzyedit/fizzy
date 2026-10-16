@@ -52,7 +52,7 @@ author_url: []const u8 = "",
 /// `dupeZ`/`readFileAllocOptions` with a sentinel) into a `Manifest`. Validates `version` (and
 /// `min_sdk_version`, when non-empty) are well-formed semver post-parse — zon itself has no
 /// semver type, so this is the manifest's own integrity check on top of the structural parse.
-/// Free the result with `free`.
+/// The result, its strings included, lives in `arena`; `gpa` is the parse's scratch.
 ///
 /// **Unknown fields are ignored on purpose**, which is what makes this format forward-compatible:
 /// `Manifest` is explicitly a growing set of optional fields (R16 added `description`, R17 added
@@ -63,25 +63,20 @@ author_url: []const u8 = "",
 /// (`probeName`/`probeDescription`/`probeTags`/`probeVersionInfo`) would silently lose data it
 /// could otherwise still read. The tradeoff accepted here is that a misspelled field name is
 /// ignored rather than diagnosed; the visible symptom is a store listing missing that value.
-pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Manifest {
-    const m = try (zig017_zon: {
-        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-        var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
-        defer zig017_arena.deinit();
-        const zig017_r = std.zon.parse.fromSlice(Manifest, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = source, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Manifest, gpa, zig017_v) else |zig017_e| zig017_e;
+pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8) !Manifest {
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const m = try std.zon.parse.fromSlice(Manifest, .{
+        .gpa = gpa,
+        .arena = arena,
+        .source = source,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
     });
-    errdefer free(gpa, m);
     _ = std.SemanticVersion.parse(m.version) catch return error.InvalidVersion;
     if (m.min_sdk_version.len > 0) {
         _ = std.SemanticVersion.parse(m.min_sdk_version) catch return error.InvalidMinSdkVersion;
     }
     return m;
-}
-
-/// Free a `Manifest` returned by `parse`.
-pub fn free(gpa: std.mem.Allocator, m: Manifest) void {
-    zig017ZonFree(gpa, m);
 }
 
 test "Manifest parse round-trips identity" {
@@ -95,8 +90,11 @@ test "Manifest parse round-trips identity" {
         \\}
     ;
 
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+
+    defer arena.deinit();
+
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("example", m.id);
     try std.testing.expectEqualStrings("Example", m.name);
@@ -113,8 +111,9 @@ test "parse defaults min_sdk_version when omitted" {
         \\    .version = "0.1.0",
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("", m.min_sdk_version);
 }
@@ -128,8 +127,9 @@ test "parse defaults tags to empty when omitted" {
         \\    .version = "0.1.0",
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqual(@as(usize, 0), m.tags.len);
 }
@@ -144,8 +144,9 @@ test "parse round-trips tags" {
         \\    .tags = .{ "editor", "pixel-art" },
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqual(@as(usize, 2), m.tags.len);
     try std.testing.expectEqualStrings("editor", m.tags[0]);
@@ -163,8 +164,9 @@ test "parse round-trips author and author_url" {
         \\    .author_url = "https://example.test/~somebody",
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("somebody", m.author);
     try std.testing.expectEqualStrings("https://example.test/~somebody", m.author_url);
@@ -175,8 +177,9 @@ test "parse defaults author and author_url to empty" {
     const source: [:0]const u8 =
         \\.{ .id = "example", .name = "Example", .version = "0.1.0" }
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("", m.author);
     try std.testing.expectEqualStrings("", m.author_url);
@@ -195,8 +198,9 @@ test "parse ignores fields a newer SDK added" {
         \\    .another = .{ "a", "b" },
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("example", m.id);
     try std.testing.expectEqualStrings("0.1.0", m.version);
@@ -211,66 +215,7 @@ test "parse rejects a non-semver version" {
         \\    .version = "not-a-version",
         \\}
     ;
-    try std.testing.expectError(error.InvalidVersion, parse(gpa, source));
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
-}
-// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
-// arena the caller owns). Goes with the zon arena PR.
-fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
-    switch (@typeInfo(@TypeOf(value))) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                zig017ZonFree(gpa, value.*);
-                gpa.destroy(value);
-            },
-            .slice => {
-                for (value) |item| zig017ZonFree(gpa, item);
-                gpa.free(value);
-            },
-            else => comptime unreachable,
-        },
-        .array => for (value) |item| zig017ZonFree(gpa, item),
-        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
-        .@"union" => |u| if (u.tag_type != null) switch (value) {
-            inline else => |payload| zig017ZonFree(gpa, payload),
-        },
-        .optional => if (value) |some| zig017ZonFree(gpa, some),
-        else => {},
-    }
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    try std.testing.expectError(error.InvalidVersion, parse(gpa, arena.allocator(), source));
 }

@@ -871,7 +871,7 @@ pub fn builtinManifest(editor: *Editor, id: []const u8) ?sdk.Manifest {
         if (std.mem.eql(u8, m.plugin_id, id)) {
             const frame_gpa = editor.app.arena.allocator();
             const zon = frame_gpa.dupeSentinel(u8, m.plugin_options.manifest_zon, 0) catch return null;
-            return sdk.Manifest.parse(frame_gpa, zon) catch return null;
+            return sdk.Manifest.parse(frame_gpa, frame_gpa, zon) catch return null;
         }
     }
     return null;
@@ -3457,11 +3457,12 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     // plugin's settings. Left unreconciled until another external change retriggers a read
     // (rare in practice: the watcher's debounce already gives a normal atomic save time to
     // settle before this runs at all).
-    const parsed = Settings.parseOnly(gpa, data) catch |err| {
+    var parsed_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer parsed_arena.deinit();
+    const parsed = Settings.parseOnly(gpa, parsed_arena.allocator(), data) catch |err| {
         dvui.log.warn("settings watcher: could not parse external settings.zon change ({s}); skipping this reconciliation", .{@errorName(err)});
         return;
     };
-    defer Settings.freeParsed(gpa, parsed);
 
     // Fizzy fields, one at a time rather than `editor.app.settings = parsed` wholesale: `theme` is
     // runtime-owned (see its doc comment on `Settings`) and must not be clobbered by the raw

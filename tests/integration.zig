@@ -5162,13 +5162,10 @@ test "verdict: the soak tape is a demo, and its expectations read" {
     // It ends on a wait, so what closed last has time to close before the windows are counted.
     try std.testing.expect(owned.tape.ops[owned.tape.ops.len - 1].do == .wait);
 
-    const expect = try (zig017_zon: {
-        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-        var zig017_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-        defer zig017_arena.deinit();
-        const zig017_r = std.zon.parse.fromSlice(fizzy.verdict.Expect, .{ .gpa = std.testing.allocator, .arena = zig017_arena.allocator(), .source = @embedFile("soak_expect"), .diagnostics = &zig017_zd });
-        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(fizzy.verdict.Expect, std.testing.allocator, zig017_v) else |zig017_e| zig017_e;
-    });
+    var expect_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer expect_arena.deinit();
+    var expect_diag: std.zon.parse.Diagnostics = undefined;
+    const expect = try std.zon.parse.fromSliceNoAlloc(fizzy.verdict.Expect, .{ .gpa = std.testing.allocator, .arena = expect_arena.allocator(), .source = @embedFile("soak_expect"), .diagnostics = &expect_diag });
     try std.testing.expect(!expect.allow_leaks);
     try std.testing.expectEqual(@as(u32, 0), expect.max_sdl_errors);
     try std.testing.expectEqual(@as(?u32, null), expect.os_windows);
@@ -5338,14 +5335,10 @@ test "float: the saved layout brings it back, and Reset Layout takes it away" {
     gpa.free(regions);
     const text = try gpa.dupeSentinel(u8, out.written(), 0);
     defer gpa.free(text);
-    const saved = try (zig017_zon: {
-        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-        var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
-        defer zig017_arena.deinit();
-        const zig017_r = std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = text, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe([]fizzy.backend.SavedRegion, gpa, zig017_v) else |zig017_e| zig017_e;
-    });
-    defer zig017ZonFree(gpa, saved);
+    var saved_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer saved_arena.deinit();
+    var saved_diag: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{ .gpa = gpa, .arena = saved_arena.allocator(), .source = text, .diagnostics = &saved_diag, .ignore_unknown_fields = true });
 
     editor.app.layout.resetLayout(gpa);
     try dvui.testing.settle(ManyPanelFrame.frame);
@@ -6672,25 +6665,17 @@ const HeardEvents = struct {
         defer gpa.free(src);
         // A batch of disk changes is heard by its first path, everything else by its `.path`.
         const path = if (std.mem.eql(u8, e.name, "fizzy.files.changed")) files: {
-            const changed = (zig017_zon: {
-                var zig017_zd: std.zon.parse.Diagnostics = undefined;
-                var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
-                defer zig017_arena.deinit();
-                const zig017_r = std.zon.parse.fromSlice(sdk.events.FilesChanged, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = src, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-                break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(sdk.events.FilesChanged, gpa, zig017_v) else |zig017_e| zig017_e;
-            }) catch return;
-            defer zig017ZonFree(gpa, changed);
+            var changed_arena: std.heap.ArenaAllocator = .init(gpa);
+            defer changed_arena.deinit();
+            var changed_diag: std.zon.parse.Diagnostics = undefined;
+            const changed = std.zon.parse.fromSlice(sdk.events.FilesChanged, .{ .gpa = gpa, .arena = changed_arena.allocator(), .source = src, .diagnostics = &changed_diag, .ignore_unknown_fields = true }) catch return;
             if (changed.events.len == 0) return;
             break :files gpa.dupe(u8, changed.events[0].path) catch return;
         } else plain: {
-            const payload = (zig017_zon: {
-                var zig017_zd: std.zon.parse.Diagnostics = undefined;
-                var zig017_arena: std.heap.ArenaAllocator = .init(gpa);
-                defer zig017_arena.deinit();
-                const zig017_r = std.zon.parse.fromSlice(sdk.events.Path, .{ .gpa = gpa, .arena = zig017_arena.allocator(), .source = src, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-                break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(sdk.events.Path, gpa, zig017_v) else |zig017_e| zig017_e;
-            }) catch return;
-            defer zig017ZonFree(gpa, payload);
+            var payload_arena: std.heap.ArenaAllocator = .init(gpa);
+            defer payload_arena.deinit();
+            var payload_diag: std.zon.parse.Diagnostics = undefined;
+            const payload = std.zon.parse.fromSlice(sdk.events.Path, .{ .gpa = gpa, .arena = payload_arena.allocator(), .source = src, .diagnostics = &payload_diag, .ignore_unknown_fields = true }) catch return;
             break :plain gpa.dupe(u8, payload.path) catch return;
         };
         self.events.append(gpa, .{ .name = gpa.dupe(u8, e.name) catch return, .path = path }) catch gpa.free(path);
@@ -6993,13 +6978,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
                 };
-                return (zig017_zon: {
-                    var zig017_zd: std.zon.parse.Diagnostics = undefined;
-                    var zig017_arena: std.heap.ArenaAllocator = .init(h.arena());
-                    defer zig017_arena.deinit();
-                    const zig017_r = std.zon.parse.fromSlice(Read, .{ .gpa = h.arena(), .arena = zig017_arena.allocator(), .source = try h.arena().dupeSentinel(u8, zon, 0), .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-                    break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Read, h.arena(), zig017_v) else |zig017_e| zig017_e;
-                });
+                var diag: std.zon.parse.Diagnostics = undefined;
+                return std.zon.parse.fromSlice(Read, .{ .gpa = h.arena(), .arena = h.arena(), .source = try h.arena().dupeSentinel(u8, zon, 0), .diagnostics = &diag, .ignore_unknown_fields = true });
             }
         }.read;
 
@@ -7037,13 +7017,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(notes, front.owner.documentPath(front));
             const Caret = struct { caret: struct { line: u32, column: u32 } };
             const out = host.callCommand("text.read", notes_args, host.arena()).ok.?;
-            const at = try (zig017_zon: {
-                var zig017_zd: std.zon.parse.Diagnostics = undefined;
-                var zig017_arena: std.heap.ArenaAllocator = .init(host.arena());
-                defer zig017_arena.deinit();
-                const zig017_r = std.zon.parse.fromSlice(Caret, .{ .gpa = host.arena(), .arena = zig017_arena.allocator(), .source = try host.arena().dupeSentinel(u8, out, 0), .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-                break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Caret, host.arena(), zig017_v) else |zig017_e| zig017_e;
-            });
+            var at_diag: std.zon.parse.Diagnostics = undefined;
+            const at = try std.zon.parse.fromSlice(Caret, .{ .gpa = host.arena(), .arena = host.arena(), .source = try host.arena().dupeSentinel(u8, out, 0), .diagnostics = &at_diag, .ignore_unknown_fields = true });
             try std.testing.expectEqual(@as(u32, 3), at.caret.line);
             try std.testing.expectEqual(@as(u32, 4), at.caret.column);
         }
@@ -7271,13 +7246,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             // has passed on screen, which a few test frames are not.
             profile: struct { frame: struct { fps: f64 } },
         };
-        const stats = try (zig017_zon: {
-            var zig017_zd: std.zon.parse.Diagnostics = undefined;
-            var zig017_arena: std.heap.ArenaAllocator = .init(host.arena());
-            defer zig017_arena.deinit();
-            const zig017_r = std.zon.parse.fromSlice(Stats, .{ .gpa = host.arena(), .arena = zig017_arena.allocator(), .source = try host.arena().dupeSentinel(u8, zon, 0), .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-            break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Stats, host.arena(), zig017_v) else |zig017_e| zig017_e;
-        });
+        var stats_diag: std.zon.parse.Diagnostics = undefined;
+        const stats = try std.zon.parse.fromSlice(Stats, .{ .gpa = host.arena(), .arena = host.arena(), .source = try host.arena().dupeSentinel(u8, zon, 0), .diagnostics = &stats_diag, .ignore_unknown_fields = true });
         try std.testing.expect(for (stats.plugins) |pl| {
             if (std.mem.eql(u8, pl.id, "devtools")) break pl.link == .bundled;
         } else false);
@@ -7297,13 +7267,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             else => return error.TestUnexpectedResult,
         };
         const Written = struct { path: []const u8, frames: u64 };
-        const written = try (zig017_zon: {
-            var zig017_zd: std.zon.parse.Diagnostics = undefined;
-            var zig017_arena: std.heap.ArenaAllocator = .init(host.arena());
-            defer zig017_arena.deinit();
-            const zig017_r = std.zon.parse.fromSlice(Written, .{ .gpa = host.arena(), .arena = zig017_arena.allocator(), .source = try host.arena().dupeSentinel(u8, zon, 0), .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-            break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Written, host.arena(), zig017_v) else |zig017_e| zig017_e;
-        });
+        var written_diag: std.zon.parse.Diagnostics = undefined;
+        const written = try std.zon.parse.fromSlice(Written, .{ .gpa = host.arena(), .arena = host.arena(), .source = try host.arena().dupeSentinel(u8, zon, 0), .diagnostics = &written_diag, .ignore_unknown_fields = true });
         try std.testing.expect(written.frames > 0);
         const input_path = try std.fs.path.join(host.arena(), &.{ written.path, "input.bin" });
         const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, input_path, host.arena(), .unlimited);
@@ -7922,65 +7887,4 @@ test "a live tape drags a floating window by its header" {
     try std.testing.expectEqual(automation.LiveDriver.Outcome.finished, live_driver.outcome.?);
     std.debug.print("float x {d:.1} (from 300) after {d} frames\n", .{ live_float.x, frames });
     try std.testing.expectApproxEqAbs(@as(f32, 150), live_float.x, 2);
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
-}
-// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
-// arena the caller owns). Goes with the zon arena PR.
-fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
-    switch (@typeInfo(@TypeOf(value))) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                zig017ZonFree(gpa, value.*);
-                gpa.destroy(value);
-            },
-            .slice => {
-                for (value) |item| zig017ZonFree(gpa, item);
-                gpa.free(value);
-            },
-            else => comptime unreachable,
-        },
-        .array => for (value) |item| zig017ZonFree(gpa, item),
-        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
-        .@"union" => |u| if (u.tag_type != null) switch (value) {
-            inline else => |payload| zig017ZonFree(gpa, payload),
-        },
-        .optional => if (value) |some| zig017ZonFree(gpa, some),
-        else => {},
-    }
 }

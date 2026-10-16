@@ -175,29 +175,17 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]cons
     const data = core.fs.readZ(allocator, dvui.io, path) catch return default(allocator);
     defer allocator.free(data);
 
-    const parsed = parseOnly(allocator, data) catch |err| {
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const parsed = parseOnly(allocator, arena.allocator(), data) catch |err| {
         dvui.log.warn("Could not parse settings.zon ({s}); using defaults.", .{@errorName(err)});
         return default(allocator);
     };
-
-    defer freeParsed(allocator, parsed);
 
     var result = parsed;
     // Own `theme` for the process lifetime (freed in `deinit`); every other field is scalar.
     result.theme = try allocator.dupe(u8, parsed.theme);
     return result;
-}
-
-/// Frees a `parseOnly`/`load` result. Not `std.zon.parse.free` directly: since R12 the file only
-/// records non-default fields, so a missing `theme` is filled by `std.zon.parse` with *this
-/// struct's declared default* — a comptime string literal, not an allocation — and handing that
-/// pointer to the allocator would be an invalid free. Zeroing it first makes the whole-struct
-/// free a no-op for that field (`Allocator.free` returns early on an empty slice) while still
-/// covering any other allocated field.
-pub fn freeParsed(allocator: std.mem.Allocator, parsed: Settings) void {
-    var value = parsed;
-    if (value.theme.ptr == default_theme.ptr) value.theme = "";
-    zig017ZonFree(allocator, value);
 }
 
 /// Parses `data` (already-read `settings.zon` bytes) into a `Settings` value, ignoring unknown
@@ -206,16 +194,17 @@ pub fn freeParsed(allocator: std.mem.Allocator, parsed: Settings) void {
 /// defaults — defaulting is only correct when there's no existing live state to fall back *to*
 /// (startup); `Editor.reconcileExternalSettingsChange` (external hand-edit reconciliation, R11)
 /// has existing state and must not let a transient torn-write read reset every fizzy field and
-/// every plugin's settings. Caller frees the result with `freeParsed` (not `Settings.deinit`,
-/// which owns the live value's long-lived `theme`).
-pub fn parseOnly(allocator: std.mem.Allocator, data: [:0]const u8) !Settings {
+/// every plugin's settings. The result's strings live in `arena` (`allocator` is the parse's
+/// scratch); `load` copies out the one it keeps.
+pub fn parseOnly(allocator: std.mem.Allocator, arena: std.mem.Allocator, data: [:0]const u8) !Settings {
     @setEvalBranchQuota(10_000);
-    var parsed = try (zig017_zon: {
-        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-        var zig017_arena: std.heap.ArenaAllocator = .init(allocator);
-        defer zig017_arena.deinit();
-        const zig017_r = std.zon.parse.fromSlice(Settings, .{ .gpa = allocator, .arena = zig017_arena.allocator(), .source = data, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Settings, allocator, zig017_v) else |zig017_e| zig017_e;
+    var diag: std.zon.parse.Diagnostics = undefined;
+    var parsed = try std.zon.parse.fromSlice(Settings, .{
+        .gpa = allocator,
+        .arena = arena,
+        .source = data,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
     });
     SettingsMigration.windowGlass(allocator, data, &parsed);
     return parsed;
@@ -238,7 +227,7 @@ fn fieldEqual(comptime FT: type, a: FT, b: FT) bool {
 /// halves of `settings.zon` record just what the user actually changed. An untouched fizzy
 /// serializes to `.{}`; a field hand-written back at its default drops out on the next write.
 /// Reading back is unaffected: `load`/`parseOnly` fill every missing field from these same
-/// defaults (see `freeParsed` for the one ownership wrinkle that creates).
+/// defaults (they are the declared defaults themselves: `load` copies `theme` before keeping it).
 ///
 /// This is *not* the whole `settings.zon` file — plugin settings are a separate
 /// `.plugins = .{ .<id> = .{...}, ... }` field spliced on afterward by
@@ -268,65 +257,4 @@ pub fn serialize(settings: *const Settings, allocator: std.mem.Allocator) ![]u8 
 
 pub fn deinit(settings: *Settings, allocator: std.mem.Allocator) void {
     allocator.free(settings.theme);
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
-}
-// ZIG017 stand-in: 0.16's `std.zon.parse.free`, which 0.17 removed (results now come from an
-// arena the caller owns). Goes with the zon arena PR.
-fn zig017ZonFree(gpa: std.mem.Allocator, value: anytype) void {
-    switch (@typeInfo(@TypeOf(value))) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                zig017ZonFree(gpa, value.*);
-                gpa.destroy(value);
-            },
-            .slice => {
-                for (value) |item| zig017ZonFree(gpa, item);
-                gpa.free(value);
-            },
-            else => comptime unreachable,
-        },
-        .array => for (value) |item| zig017ZonFree(gpa, item),
-        .@"struct" => |s| inline for (s.field_names) |n| zig017ZonFree(gpa, @field(value, n)),
-        .@"union" => |u| if (u.tag_type != null) switch (value) {
-            inline else => |payload| zig017ZonFree(gpa, payload),
-        },
-        .optional => if (value) |some| zig017ZonFree(gpa, some),
-        else => {},
-    }
 }

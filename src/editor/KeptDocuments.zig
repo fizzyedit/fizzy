@@ -359,13 +359,8 @@ pub fn loadSession(gpa: std.mem.Allocator, dir: []const u8) ?KeptDocuments {
     defer gpa.free(text);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const saved = (zig017_zon: {
-        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-        var zig017_arena: std.heap.ArenaAllocator = .init(arena.allocator());
-        defer zig017_arena.deinit();
-        const zig017_r = std.zon.parse.fromSlice(Saved, .{ .gpa = arena.allocator(), .arena = zig017_arena.allocator(), .source = text, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(Saved, arena.allocator(), zig017_v) else |zig017_e| zig017_e;
-    }) catch |err| {
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const saved = std.zon.parse.fromSlice(Saved, .{ .gpa = gpa, .arena = arena.allocator(), .source = text, .diagnostics = &diag, .ignore_unknown_fields = true }) catch |err| {
         dvui.log.warn("restart: the last session could not be read ({t}); documents open from disk", .{err});
         return null;
     };
@@ -494,41 +489,4 @@ fn recover(editor: *Editor, path: []const u8, unsaved: []const u8) void {
     };
     dvui.log.warn("reload: the unsaved contents of {s} are in {s}", .{ path, out });
     dvui.toast(@src(), .{ .message = std.fmt.allocPrint(editor.app.arena.allocator(), "Unsaved changes to {s} were kept in {s}", .{ std.fs.path.basename(path), out }) catch "Unsaved changes were kept in fizzy's recovered folder." });
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
 }
