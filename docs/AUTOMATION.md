@@ -152,6 +152,10 @@ user's motion settings, timed in demo time.
 | `fizzy.window:main` | the main window |
 | `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
 | `region:<name>` | a layout region (`Main`, `Panel`, …) |
+| `picker:<view id>` | a view's card in a place's picker |
+| `picker.mode:one`, `picker.mode:many` | the picker's Single / Multiple |
+| `picker.action:split`, `:clear`, `:defaults`, `:remove` | the picker's actions, each only while it can be pressed (a dimmed Clear has no name) |
+| `picker.split:vertical`, `picker.split:horizontal` | the rows of the picker's Split menu |
 
 A demo's files live under its keyframe's `root`, so a path is `demo://tour/src/main.zig`.
 `src/editor/demos/catalog.zig` has helpers (`catalog.file(s, "src/main.zig")`) that build these.

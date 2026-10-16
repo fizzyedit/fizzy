@@ -156,10 +156,10 @@ pub fn draw(self: *Picker, f: *Layout) void {
                 .padding = .{ .y = 4 },
             });
             defer controls.deinit();
-            if (modeButton(@src(), "Single", region.shows == .one, 1)) {
+            if (modeButton(@src(), "Single", "picker.mode:one", region.shows == .one, 1)) {
                 setShows(f, &region, .one);
             }
-            if (modeButton(@src(), "Multiple", region.shows == .many, 2)) {
+            if (modeButton(@src(), "Multiple", "picker.mode:many", region.shows == .many, 2)) {
                 setShows(f, &region, .many);
             }
 
@@ -185,6 +185,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
                     .style = .control,
                 });
                 const split_from = split.activeRect();
+                core.anchor.mark(split.data(), "picker.action:split", .{});
                 {
                     var label = dvui.box(@src(), .{ .dir = .horizontal }, .{});
                     defer label.deinit();
@@ -207,14 +208,14 @@ pub fn draw(self: *Picker, f: *Layout) void {
                         .frost = core.widgets.menuFrost(),
                     }, core.widgets.menuSurfaceOptions());
                     defer choices.deinit();
-                    if (core.widgets.menuRow(@src(), "Vertical", .{}) != null) {
+                    if (core.widgets.menuRow(@src(), "Vertical", .{ .anchor = "picker.split:vertical" }) != null) {
                         choices.close();
                         f.splitNamed(region.name, .horizontal);
                         self.close(gpa);
                         state.discardSnapshots(gpa);
                         return;
                     }
-                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .id_extra = 1 }) != null) {
+                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .id_extra = 1, .anchor = "picker.split:horizontal" }) != null) {
                         choices.close();
                         f.splitNamed(region.name, .vertical);
                         self.close(gpa);
@@ -224,17 +225,17 @@ pub fn draw(self: *Picker, f: *Layout) void {
                 }
             }
             if (!created) {
-                if (actionButton(@src(), "Clear", showing, 2)) {
+                if (actionButton(@src(), "Clear", "picker.action:clear", showing, 2)) {
                     clearRegion(f, region.name);
                 }
-                if (actionButton(@src(), "Defaults", assigned != null, 4)) {
+                if (actionButton(@src(), "Defaults", "picker.action:defaults", assigned != null, 4)) {
                     state.unassign(gpa, region.name);
                     state.markDirty();
                     dvui.refresh(null, @src(), null);
                 }
             }
             if (removable) {
-                if (actionButton(@src(), "Remove", true, 3)) {
+                if (actionButton(@src(), "Remove", "picker.action:remove", true, 3)) {
                     removeRegion(f, &region);
                     self.close(gpa);
                     state.discardSnapshots(gpa);
@@ -606,9 +607,9 @@ fn setShows(f: *Layout, region: *const Layout.Region, shows: Layout.Region.Shows
     dvui.refresh(null, @src(), null);
 }
 
-fn modeButton(src: std.builtin.SourceLocation, label: []const u8, on: bool, id_extra: usize) bool {
+fn modeButton(src: std.builtin.SourceLocation, label: []const u8, name: []const u8, on: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
-    return dvui.button(src, label, .{}, .{
+    return namedButton(src, label, name, .{
         .font = actionFont(),
         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
         .margin = .{ .x = 4 },
@@ -625,9 +626,11 @@ fn actionFont() dvui.Font {
 
 /// One of the picker's actions. Disabled, it keeps its place (dimmed, no hover, never clicked)
 /// rather than leaving a gap the row closes up over.
-fn actionButton(src: std.builtin.SourceLocation, label: []const u8, enabled: bool, id_extra: usize) bool {
+fn actionButton(src: std.builtin.SourceLocation, label: []const u8, name: []const u8, enabled: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
-    const clicked = dvui.button(src, label, .{}, .{
+    // Named only while it can be pressed: a dimmed one swallows the click, and a driver waiting
+    // for the name should wait for the action, not for the button.
+    const clicked = namedButton(src, label, if (enabled) name else null, .{
         .font = actionFont(),
         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
         .margin = .{ .w = 4 },
@@ -638,6 +641,23 @@ fn actionButton(src: std.builtin.SourceLocation, label: []const u8, enabled: boo
         .color_fill_press = if (enabled) null else .{ .color = theme.color(.control, .fill) },
     });
     return enabled and clicked;
+}
+
+/// `dvui.button`, named `name` (when there is one) for a demo or an agent to aim at (`core.anchor`, `picker.*` in
+/// docs/AUTOMATION.md). The row's buttons come and go with the place — Remove sits where Split
+/// sat on a place with nothing to Clear — so a point read off one place's picker can land on
+/// another action in the next; a name cannot.
+fn namedButton(src: std.builtin.SourceLocation, label: []const u8, name: ?[]const u8, opts: dvui.Options) bool {
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(src, .{}, opts);
+    defer bw.deinit();
+    if (name) |n| core.anchor.mark(bw.data(), "{s}", .{n});
+    bw.processEvents();
+    bw.drawBackground();
+    const clicked = bw.clicked();
+    dvui.labelNoFmt(@src(), label, .{ .align_x = 0.5, .align_y = 0.5 }, opts.strip().override(bw.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    bw.drawFocus();
+    return clicked;
 }
 
 fn contains(list: []const *sdk.Surface, id: []const u8) bool {
