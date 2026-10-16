@@ -178,6 +178,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.capture", .title = "Capture the Last 30 Seconds", .bind = null, .run = cmdCapture, .params = CaptureArgs.params, .runWith = CaptureArgs.bind(cmdCaptureWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.record", .title = "Tracks: Record…", .bind = null, .run = cmdTracks, .params = TracksRecord.params, .runWith = TracksRecord.bind(cmdTracksRecord), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.replay", .title = "Tracks: Replay…", .bind = null, .run = cmdTracks, .params = TracksReplay.params, .runWith = TracksReplay.bind(cmdTracksReplay), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks.export", .title = "Tracks: Export as a Tape…", .bind = null, .run = cmdTracks, .params = TracksExport.params, .runWith = TracksExport.bind(cmdTracksExport), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks", .title = "Tracks: Report", .bind = null, .run = cmdTracks, .params = TracksArgs.params, .runWith = TracksArgs.bind(cmdTracksWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
@@ -610,6 +611,35 @@ fn cmdTracksReplay(state: *anyopaque, args: TracksReplay.Args, call: *sdk.Comman
     const n = if (args.steps == 0) track.steps.items.len else args.steps;
     t.replayInto(from.id, into, n) catch |err| return call.fail("the replay stopped: {t}", .{err});
     try call.returns(.{ .steps = @min(n, track.steps.items.len), .checkpoints = track.checkpoints.items.len });
+}
+
+const TracksExport = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document whose track to export, by its path. Empty: the active one." }) = .init(""),
+    out: sdk.Command.Arg([]const u8, .{ .description = "Where to write the tape. Empty: the config folder's tapes/, named for the document and the time." }) = .init(""),
+    real_time: sdk.Command.Arg(bool, .{ .description = "Keep every pause as long as it was. Off: a pause past 2 s plays as 0.6 s." }) = .init(false),
+});
+
+/// A document's track as a tape (`Tracks.exportTape`): how it was made, from where its track
+/// began, to play anywhere (`fizzy.demo.playTape`). Returns where it went and what it holds.
+fn cmdTracksExport(state: *anyopaque, args: TracksExport.Args, call: *sdk.Command.Call) anyerror!void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return call.fail("the web has no file to write a tape to yet", .{});
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return call.fail("no tracks in this app", .{}));
+    const doc = (if (args.path.len == 0) editor.activeDoc() else editor.docFromPath(args.path)) orelse
+        return call.fail("no open document at {s}", .{if (args.path.len == 0) "(active)" else args.path});
+    const gpa = editor.app.gpa;
+    const bytes = t.exportTape(&editor.app.host, doc, gpa, .{ .real_time = args.real_time }) catch |err| return call.fail("could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
+    defer gpa.free(bytes);
+    const io = dvui.io;
+    const out = if (args.out.len > 0) args.out else out: {
+        const stem = std.fs.path.stem(doc.owner.documentPath(doc));
+        const file = try std.fmt.allocPrint(call.arena, "{s}-{d}.tape", .{ stem, std.Io.Clock.real.now(io).toSeconds() });
+        break :out try std.fs.path.join(call.arena, &.{ editor.app.config_folder, "tapes", file });
+    };
+    if (std.fs.path.dirname(out)) |dir| std.Io.Dir.cwd().createDirPath(io, dir) catch |err| return call.fail("could not make {s}: {t}", .{ dir, err });
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out, .data = bytes }) catch |err| return call.fail("could not write {s}: {t}", .{ out, err });
+    const track = t.trackOf(doc.id).?;
+    try call.returns(.{ .path = out, .bytes = bytes.len, .steps = track.steps.items.len });
 }
 
 fn cmdTracksRecord(state: *anyopaque, args: TracksRecord.Args, call: *sdk.Command.Call) anyerror!void {

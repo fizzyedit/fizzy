@@ -28,6 +28,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const state_delta = @import("state_delta.zig");
+const tape = @import("tape");
 
 gpa: std.mem.Allocator,
 /// The frame clock: what a step's moment is read from. A bench gives its own.
@@ -83,6 +84,9 @@ pub const Track = struct {
     format: u32,
     /// The document when the track began; null until the next frame takes it.
     base: ?State = null,
+    /// Where the document's history stood when the base was taken (`HistoryLine`'s step id, 0
+    /// before any): what an export rewinds the document to for its file (`exportTape`).
+    base_top: u64 = 0,
     steps: std.ArrayListUnmanaged(Rec) = .empty,
     /// Every step's effect and motion, one after another.
     bytes: std.ArrayListUnmanaged(u8) = .empty,
@@ -240,6 +244,7 @@ pub fn tick(self: *Tracks) void {
             t.steps.clearRetainingCapacity();
             t.bytes.clearRetainingCapacity();
             t.base = self.take(t.doc, 0) orelse continue;
+            t.base_top = historyTop(t.doc, self.gpa) orelse 0;
         } else if (t.checkpoint_due) {
             var s = self.take(t.doc, t.steps.items.len) orelse continue;
             // As what differs from the latest whole state, unless that is half the document or
@@ -327,6 +332,14 @@ pub fn shed(self: *Tracks) void {
         }
         t.checkpoints.shrinkRetainingCapacity(kept);
     }
+}
+
+/// The step `doc`'s history is at (0 before any), or null when its owner keeps no line.
+fn historyTop(doc: sdk.DocHandle, gpa: std.mem.Allocator) ?u64 {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const line = doc.owner.historyLine(doc, arena.allocator()) orelse return null;
+    return if (line.at == 0) 0 else line.entries[line.at - 1].id;
 }
 
 fn take(self: *Tracks, doc: sdk.DocHandle, count: usize) ?Track.State {
@@ -423,6 +436,113 @@ pub fn replayInto(self: *Tracks, doc_id: u64, target: sdk.DocHandle, count: usiz
     for (t.checkpoints.items) |c| if (c.step == n) if (c.fingerprint) |want| {
         if (target.owner.documentFingerprint(target) != want) return error.Mismatch;
     };
+}
+
+pub const ExportOptions = struct {
+    /// Keep every pause as long as it was.
+    real_time: bool = false,
+};
+/// A pause longer than this plays as `short_gap_ms`.
+pub const gap_ms = 2000;
+pub const short_gap_ms = 600;
+
+pub const ExportError = error{
+    /// No open document has a track by that id: a tape is made from the document itself.
+    NoTrack,
+    /// The track has nothing yet: its base is taken at the next frame.
+    NoBase,
+    /// The owner keeps no history to go back through.
+    NoHistory,
+    /// Where the track began is no longer on the document's history (undone past and edited
+    /// over), or a step joined the entry it began in: the document cannot be put back there.
+    StartNotInHistory,
+    /// The owner could not write the document as a file.
+    NoBytes,
+    /// The document went back to the track's start for its file and could not come forward
+    /// again: it is left there, the rest of its history a redo away.
+    NotReturned,
+    OutOfMemory,
+};
+
+/// `doc`'s track as a tape, in the binary form, deflated (`tape.binary`): a keyframe holding
+/// the document's file as it was when the track began, a wait for it to open, then every step
+/// at the moment it came, a replay of how the document was made that plays anywhere.
+///
+/// The file is the document's own, written by its owner (`Plugin.documentBytes`), as it stood at
+/// the track's start: the document is taken back there through its history (`historyGoTo`),
+/// written, and brought forward again in the same call, with nothing drawn between and neither
+/// the track nor the activity feed hearing of it. The person's history is as it was. Named
+/// `name` (the document's file name, with its owner's extension when it has none), under
+/// `demo://share`. Owned by `gpa`.
+///
+/// Pauses longer than `ExportOptions.gap_ms` play as `short_gap_ms` (`real_time` keeps them as
+/// they were): a tape of an hour's drawing is the drawing, not the hour, and the moment before
+/// the first step is a beat rather than however long the document sat open.
+pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.mem.Allocator, opts: ExportOptions) ExportError![]u8 {
+    const prof = core.profile.begin("fizzy", "tracks.export");
+    defer prof.end();
+    const t = self.open.get(doc.id) orelse return error.NoTrack;
+    const base = t.base orelse return error.NoBase;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // A step that joined the entry the track began in changed that entry after the base: going
+    // back to the entry would keep it.
+    for (t.steps.items) |r| if (r.kind == .joined and r.id == t.base_top and t.base_top != 0) return error.StartNotInHistory;
+    const line = doc.owner.historyLine(doc, arena) orelse return error.NoHistory;
+    const now_top = if (line.at == 0) 0 else line.entries[line.at - 1].id;
+    // Gone from the line (undone past, and edited over): refused before anything moves.
+    if (t.base_top != 0) for (line.entries) |e| {
+        if (e.id == t.base_top) break;
+    } else return error.StartNotInHistory;
+
+    const name = blk: {
+        const base_name = std.fs.path.basename(doc.owner.documentPath(doc));
+        if (std.fs.path.extension(base_name).len > 0) break :blk base_name;
+        const types = doc.owner.fileTypes();
+        if (types.len == 0) break :blk base_name;
+        break :blk try std.mem.concat(arena, u8, &.{ base_name, types[0] });
+    };
+
+    // Back to where the track began, the file written there, and forward again: that last
+    // move is checked, since a failure would leave the person's document at the track's start.
+    const bytes = bytes: {
+        const was_track_muted = self.muted;
+        self.muted = doc.id;
+        defer self.muted = was_track_muted;
+        const was_muted = host.activity_muted;
+        host.activity_muted = true;
+        defer host.activity_muted = was_muted;
+        const moved = now_top != t.base_top;
+        if (moved and !doc.owner.historyGoTo(doc, t.base_top)) return error.StartNotInHistory;
+        const written = doc.owner.documentBytes(doc, name, arena) catch null;
+        if (moved and !doc.owner.historyGoTo(doc, now_top)) {
+            std.log.err("tracks: {s} went back to its track's start and could not come forward; redo brings the rest back", .{doc.owner.documentPath(doc)});
+            return error.NotReturned;
+        }
+        break :bytes written orelse return error.NoBytes;
+    };
+
+    const files = try arena.alloc(tape.Tape.File, 1);
+    files[0] = .{ .path = name, .text = bytes, .owner = doc.owner.id, .format = t.format };
+    const keyframes = try arena.alloc(tape.Tape.Keyframe, 1);
+    keyframes[0] = .{ .root = "demo://share", .files = files, .open = try arena.dupe([]const u8, &.{name}), .layout = .focused };
+    const ops = try arena.alloc(tape.Tape.Op, t.steps.items.len + 2);
+    ops[0] = .{ .at = 0, .do = .{ .keyframe = 0 } };
+    ops[1] = .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } };
+    // Each pause runs from where the step before it ended, recorded and played: a stroke drawn
+    // over a second and a half is never cut short by the next step arriving early.
+    var played_end: u32 = 0;
+    var recorded_end = base.at;
+    for (t.steps.items, ops[2..]) |r, *op| {
+        const gap = r.at -| recorded_end;
+        const at = played_end + if (!opts.real_time and gap > gap_ms) short_gap_ms else gap;
+        op.* = .{ .at = at, .ms = r.ms, .do = .{ .step = .{ .file = name, .effect = t.effect(r), .motion = t.motion(r) } } };
+        played_end = at + r.ms;
+        recorded_end = @max(recorded_end, r.at + r.ms);
+    }
+    const title = try std.fmt.allocPrint(arena, "How {s} was made", .{name});
+    return tape.binary.encode(gpa, .{ .name = "share", .title = title, .ops = ops, .keyframes = keyframes }, .{ .deflate = true }) catch return error.OutOfMemory;
 }
 
 /// The open document's track, or else the latest that ended for it.
