@@ -11,18 +11,23 @@
 //! A frame with nothing asked of it returns at once, and a sleeping app does nothing at all.
 //!
 //! **What it costs.** A base per open document that records steps, as `captureDocumentState`
-//! makes it, the steps' bytes, and the checkpoints, in memory for the session (`held`). Older
+//! makes it, the steps' bytes, and the checkpoints, in memory for the session (`held`). A
+//! checkpoint is kept as what differs from the latest whole state (`state_delta`): the base, or a
+//! checkpoint kept whole because its delta had come to half the document. Older
 //! checkpoints are thinned (`thin`), and past `cap` the oldest ended tracks go, then all but each
 //! open track's newest checkpoint (`shed`); steps and bases stay, since undo will walk them.
-//! Deflating sealed chunks off the UI thread is the next step of the plan; until it lands tracks
-//! are behind `on` (fizzy: `FIZZY_TRACKS=1`). `zig build bench-tracks` measures what a step, a
-//! checkpoint and a replay cost.
+//! Taking and diffing a checkpoint happen on the frame that takes it, on every target (the web has
+//! no threads); were that ever too long, the diff would be spread over the frames after, a slice
+//! each, the copy being immutable once taken. Until tracks are on by default they are behind `on`
+//! (fizzy: `FIZZY_TRACKS=1`). `zig build bench-tracks` measures what a step, a checkpoint and a
+//! replay cost.
 const Tracks = @This();
 
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
+const state_delta = @import("state_delta.zig");
 
 gpa: std.mem.Allocator,
 /// The frame clock: what a step's moment is read from. A bench gives its own.
@@ -53,11 +58,11 @@ pub const default_cap = 256 << 20;
 pub const dense_ms = 60 * std.time.ms_per_min;
 pub const sparse_steps = 4096;
 
-/// When a step asks for a checkpoint. A checkpoint is a whole copy of the document, so it is
-/// taken only once the steps since the last are worth a share of one (`state_share`: their bytes
-/// times it reach the last state's size), and then after `checkpoint_steps` of them, or a pause of
-/// `checkpoint_gap_ms` before one. Past `checkpoint_max_steps` one is taken whatever it costs,
-/// so a seek never replays more than that.
+/// When a step asks for a checkpoint. A checkpoint costs what differs from the latest whole state,
+/// so it is taken only once the steps since the last are worth a share of one (`state_share`:
+/// their bytes times it reach the last checkpoint's size), and then after `checkpoint_steps` of
+/// them, or a pause of `checkpoint_gap_ms` before one. Past `checkpoint_max_steps` one is taken
+/// whatever it costs, so a seek never replays more than that.
 pub const checkpoint_steps = 256;
 pub const checkpoint_max_steps = 8192;
 pub const checkpoint_gap_ms = 30_000;
@@ -83,7 +88,8 @@ pub const Track = struct {
     bytes: std.ArrayListUnmanaged(u8) = .empty,
     checkpoints: std.ArrayListUnmanaged(State) = .empty,
     checkpoint_due: bool = false,
-    /// The size of the last state taken: what the next checkpoint will cost.
+    /// The size of the last checkpoint kept as a delta: about what the next will cost. 0 after a
+    /// whole state, whose next delta starts small.
     state_len: usize = 0,
     /// Steps, and their bytes, since the last state taken.
     since_steps: u32 = 0,
@@ -102,11 +108,13 @@ pub const Track = struct {
 
     pub const Span = struct { start: usize, len: usize };
 
-    /// The document as `captureDocumentState` gave it, after the first `step` steps.
+    /// The document as `captureDocumentState` gave it, after the first `step` steps: whole, or as
+    /// what differs from the latest whole state before it (`state_delta`).
     pub const State = struct {
         at: u32,
         step: usize,
         bytes: []u8,
+        whole: bool = true,
         /// `documentFingerprint` then, when the owner has one: a replay that reaches this moment
         /// must come out the same.
         fingerprint: ?u64,
@@ -128,6 +136,25 @@ pub const Track = struct {
             if (self.checkpoints.items[i].step <= count) return &self.checkpoints.items[i];
         }
         return if (self.base) |*b| b else null;
+    }
+
+    /// The latest whole state before checkpoint `i` (`checkpoints.len`: after them all): what a
+    /// delta there is against. The base when no checkpoint before it is whole.
+    fn wholeBefore(self: *const Track, i: usize) []const u8 {
+        var j = i;
+        while (j > 0) {
+            j -= 1;
+            if (self.checkpoints.items[j].whole) return self.checkpoints.items[j].bytes;
+        }
+        return self.base.?.bytes;
+    }
+
+    /// `s` (the base, or one of the checkpoints) as the whole state: borrowed when it is kept
+    /// whole, else made from its delta, `owned` by `gpa`.
+    pub fn wholeState(self: *const Track, gpa: std.mem.Allocator, s: *const State) state_delta.Error!struct { bytes: []const u8, owned: bool } {
+        if (s.whole) return .{ .bytes = s.bytes, .owned = false };
+        const i = (@intFromPtr(s) - @intFromPtr(self.checkpoints.items.ptr)) / @sizeOf(State);
+        return .{ .bytes = try state_delta.apply(gpa, self.wholeBefore(i), s.bytes), .owned = true };
     }
 
     /// Bytes this track holds.
@@ -214,7 +241,16 @@ pub fn tick(self: *Tracks) void {
             t.bytes.clearRetainingCapacity();
             t.base = self.take(t.doc, 0) orelse continue;
         } else if (t.checkpoint_due) {
-            const s = self.take(t.doc, t.steps.items.len) orelse continue;
+            var s = self.take(t.doc, t.steps.items.len) orelse continue;
+            // As what differs from the latest whole state, unless that is half the document or
+            // more: then whole, and the next ones differ from it.
+            if (state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes)) |delta| {
+                if (delta.len * 2 < s.bytes.len) {
+                    self.gpa.free(s.bytes);
+                    s.bytes = delta;
+                    s.whole = false;
+                } else self.gpa.free(delta);
+            } else |_| {}
             t.checkpoints.append(self.gpa, s) catch {
                 self.gpa.free(s.bytes);
                 continue;
@@ -224,21 +260,22 @@ pub fn tick(self: *Tracks) void {
         t.checkpoint_due = false;
         t.since_steps = 0;
         t.since_bytes = 0;
-        t.state_len = (if (t.checkpoints.getLastOrNull()) |c| c.bytes.len else t.base.?.bytes.len);
+        t.state_len = if (t.checkpoints.getLastOrNull()) |c| (if (c.whole) 0 else c.bytes.len) else 0;
         self.held = self.held - @min(self.held, before) + t.size();
     }
     if (self.held > self.cap) self.shed();
 }
 
 /// Thin `t`'s checkpoints older than `dense_ms` to one per `sparse_steps` steps: a seek that far
-/// back replays more, and the track holds less.
+/// back replays more, and the track holds less. Only deltas go: a whole state is what the deltas
+/// after it are made from.
 fn thin(self: *Tracks, t: *Track) void {
     const now_ms = self.now();
     var kept: usize = 0;
     var last_step: ?usize = null;
     for (t.checkpoints.items) |c| {
         const old = now_ms -| c.at >= dense_ms;
-        if (old) if (last_step) |l| if (c.step - l < sparse_steps) {
+        if (old and !c.whole) if (last_step) |l| if (c.step - l < sparse_steps) {
             self.gpa.free(c.bytes);
             continue;
         };
@@ -250,8 +287,8 @@ fn thin(self: *Tracks, t: *Track) void {
 }
 
 /// Over the cap: the oldest ended tracks go first; then every open track keeps only its newest
-/// checkpoint. Steps and bases stay: undo will walk them, and compacting (plan step 12) is what
-/// makes them smaller.
+/// checkpoint, and the whole state it is a delta of. Steps and bases stay: undo will walk them,
+/// and compacting (plan step 12) is what makes them smaller.
 pub fn shed(self: *Tracks) void {
     const prof = core.profile.begin("fizzy", "tracks.shed");
     defer prof.end();
@@ -263,14 +300,32 @@ pub fn shed(self: *Tracks) void {
     }
     if (self.held <= self.cap) return;
     for (self.open.values()) |t| {
-        if (t.checkpoints.items.len < 2) continue;
-        const last = t.checkpoints.items.len - 1;
-        for (t.checkpoints.items[0..last]) |c| {
+        const items = t.checkpoints.items;
+        if (items.len < 2) continue;
+        const last = items.len - 1;
+        // The whole state the newest is a delta of, when that is a checkpoint and not the base.
+        var whole: ?usize = null;
+        if (!items[last].whole) {
+            var j = last;
+            while (j > 0) {
+                j -= 1;
+                if (items[j].whole) {
+                    whole = j;
+                    break;
+                }
+            }
+        }
+        var kept: usize = 0;
+        for (items, 0..) |c, i| {
+            if (i == last or i == whole) {
+                items[kept] = c;
+                kept += 1;
+                continue;
+            }
             self.held -|= c.bytes.len;
             self.gpa.free(c.bytes);
         }
-        t.checkpoints.items[0] = t.checkpoints.items[last];
-        t.checkpoints.shrinkRetainingCapacity(1);
+        t.checkpoints.shrinkRetainingCapacity(kept);
     }
 }
 
@@ -357,9 +412,11 @@ pub fn replayInto(self: *Tracks, doc_id: u64, target: sdk.DocHandle, count: usiz
     const t = self.trackOf(doc_id) orelse return error.NoTrack;
     const n = @min(count, t.steps.items.len);
     const s = t.stateBefore(n) orelse return error.NoState;
+    const state = t.wholeState(self.gpa, s) catch return error.RestoreFailed;
+    defer if (state.owned) self.gpa.free(state.bytes);
     self.muted = target.id;
     defer self.muted = 0;
-    if (!target.owner.restoreDocumentState(target, s.bytes)) return error.RestoreFailed;
+    if (!target.owner.restoreDocumentState(target, state.bytes)) return error.RestoreFailed;
     for (t.steps.items[s.step..n]) |r| {
         if (!target.owner.applyStep(target, t.effect(r), t.motion(r), 0)) return error.StepFailed;
     }
@@ -445,30 +502,52 @@ test "a frame's top does work only when a track asked for some" {
     try testing.expectEqual(@as(usize, 1), t.trackOf(1).?.steps.items.len);
 }
 
-test "a checkpoint is taken when the steps since are worth one, or at the most a seek replays" {
+test "a checkpoint is what differs from the whole state, taken once the steps since are worth one" {
     var t = Stand.tracks();
     defer t.deinit();
     t.opened(Stand.doc(1));
     t.tick();
     const track = t.trackOf(1).?;
-    // Steps of 1 byte against a 4 KB state: not worth one at `checkpoint_steps`.
-    for (0..checkpoint_steps) |_| Stand.step(&t, 1, "x", 1);
-    t.tick();
-    try testing.expectEqual(@as(usize, 0), track.checkpoints.items.len);
-    // Worth it once their bytes reach the state's size.
     const sixteen: [16]u8 = @splat(5);
-    for (0..(4096 - checkpoint_steps) / 16) |_| Stand.step(&t, 1, &sixteen, 1);
+    // The first after the base is a small delta: 16 bytes changed of 4 KB.
+    for (0..checkpoint_steps) |_| Stand.step(&t, 1, &sixteen, 1);
     t.tick();
     try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
-    try testing.expectEqual(track.steps.items.len, track.checkpoints.items[0].step);
-    // An empty step costs nothing to replay, but a seek still replays no more than the most.
-    for (0..checkpoint_max_steps) |_| Stand.step(&t, 1, "", 1);
+    try testing.expect(!track.checkpoints.items[0].whole);
+    try testing.expect(track.checkpoints.items[0].bytes.len < 64);
+    // A bigger change, a third of the document: still a delta, and what the next one weighs.
+    const third: [1500]u8 = @splat(6);
+    Stand.step(&t, 1, &third, 1);
+    for (0..checkpoint_steps - 1) |_| Stand.step(&t, 1, "", 1);
     t.tick();
     try testing.expectEqual(@as(usize, 2), track.checkpoints.items.len);
+    try testing.expect(!track.checkpoints.items[1].whole);
+    // Steps worth less than that delta ask for none.
+    for (0..checkpoint_steps) |_| Stand.step(&t, 1, "x", 1);
+    t.tick();
+    try testing.expectEqual(@as(usize, 2), track.checkpoints.items.len);
+    // However little they are worth, a seek replays no more than the most.
+    for (0..checkpoint_max_steps) |_| Stand.step(&t, 1, "", 1);
+    t.tick();
+    try testing.expectEqual(@as(usize, 3), track.checkpoints.items.len);
+    // Changed by more than half: kept whole, and what the next deltas are made from.
+    const most: [3000]u8 = @splat(7);
+    Stand.step(&t, 1, &most, 1);
+    for (0..checkpoint_max_steps) |_| Stand.step(&t, 1, "", 1);
+    t.tick();
+    try testing.expect(track.checkpoints.getLast().whole);
+    for (0..checkpoint_steps) |_| Stand.step(&t, 1, &sixteen, 1);
+    t.tick();
+    try testing.expect(!track.checkpoints.getLast().whole);
+    try testing.expectEqual(t.held, track.size());
 
-    // A replay lands where the document was, and checks the fingerprint the checkpoint kept.
+    // A replay lands where the document was through a delta, and checks the fingerprint kept.
+    const want = Stand.bytes;
+    @memset(&Stand.bytes, 0);
     try t.replayInto(1, Stand.doc(2), track.steps.items.len);
-    try testing.expectEqual(track.checkpoints.items[1].fingerprint.?, Stand.fingerprint(undefined, Stand.doc(2)));
+    try testing.expectEqualSlices(u8, &want, &Stand.bytes);
+    // And through the one before the whole state.
+    try t.replayInto(1, Stand.doc(2), track.checkpoints.items[1].step);
 }
 
 test "checkpoints older than an hour thin to one per sparse_steps" {

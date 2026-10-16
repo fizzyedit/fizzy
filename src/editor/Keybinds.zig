@@ -177,6 +177,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.capture", .title = "Capture the Last 30 Seconds", .bind = null, .run = cmdCapture, .params = CaptureArgs.params, .runWith = CaptureArgs.bind(cmdCaptureWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.record", .title = "Tracks: Record…", .bind = null, .run = cmdTracks, .params = TracksRecord.params, .runWith = TracksRecord.bind(cmdTracksRecord), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks.replay", .title = "Tracks: Replay…", .bind = null, .run = cmdTracks, .params = TracksReplay.params, .runWith = TracksReplay.bind(cmdTracksReplay), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks", .title = "Tracks: Report", .bind = null, .run = cmdTracks, .params = TracksArgs.params, .runWith = TracksArgs.bind(cmdTracksWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
@@ -590,6 +591,26 @@ const TracksArgs = sdk.Command.Params(struct {});
 const TracksRecord = sdk.Command.Params(struct {
     on: sdk.Command.Arg(bool, .{ .description = "Record documents' tracks, or stop. Open documents start a track now." }),
 });
+
+const TracksReplay = sdk.Command.Params(struct {
+    from: sdk.Command.Arg([]const u8, .{ .description = "The open document whose track to replay, by its path." }),
+    into: sdk.Command.Arg([]const u8, .{ .description = "The open document to replay it into, by its path: one of the same owner, which records none of it." }),
+    steps: sdk.Command.Arg(u32, .{ .description = "How many of the track's steps; 0 for all of them." }) = .init(0),
+});
+
+/// Put one open document where another's track was after so many steps: its nearest state, then
+/// the steps since (`Tracks.replayInto`). How an agent checks a track replays, and how a person
+/// sees one played into a copy.
+fn cmdTracksReplay(state: *anyopaque, args: TracksReplay.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return call.fail("no tracks in this app", .{}));
+    const from = editor.docFromPath(args.from) orelse return call.fail("no open document at {s}", .{args.from});
+    const into = editor.docFromPath(args.into) orelse return call.fail("no open document at {s}", .{args.into});
+    const track = t.trackOf(from.id) orelse return call.fail("{s} has no track", .{args.from});
+    const n = if (args.steps == 0) track.steps.items.len else args.steps;
+    t.replayInto(from.id, into, n) catch |err| return call.fail("the replay stopped: {t}", .{err});
+    try call.returns(.{ .steps = @min(n, track.steps.items.len), .checkpoints = track.checkpoints.items.len });
+}
 
 fn cmdTracksRecord(state: *anyopaque, args: TracksRecord.Args, call: *sdk.Command.Call) anyerror!void {
     const editor = editorFromState(state);

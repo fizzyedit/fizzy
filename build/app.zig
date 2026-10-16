@@ -644,6 +644,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
         .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
+        // A document state as the bytes that differ from another: how a track's checkpoints
+        // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
+        .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
