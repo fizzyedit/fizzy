@@ -447,10 +447,11 @@ pub fn reloadFromDisk(self: *Document) !void {
 /// contents, selection with the caret's end, scroll, preview, and whether it is dirty
 /// (`doc_state`).
 pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
+    const sel = self.selection();
     return doc_state.encode(allocator, .{
         .text = self.text.items,
-        .anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start,
-        .head = self.sel_cursor,
+        .anchor = sel.anchor,
+        .head = sel.head,
         .dirty = self.isDirty(),
         .focused = self.editor_focused,
         .untitled = self.unsaved,
@@ -465,9 +466,19 @@ pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
 pub fn fingerprint(self: *const Document) u64 {
     var h = std.hash.Wyhash.init(0x7e47_f1);
     h.update(self.text.items);
-    const anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start;
-    h.update(std.mem.asBytes(&[_]u64{ anchor, self.sel_cursor, @intFromBool(self.isDirty()), @intFromEnum(self.preview_mode) }));
+    const sel = self.selection();
+    h.update(std.mem.asBytes(&[_]u64{ sel.anchor, sel.head, @intFromBool(self.isDirty()), @intFromEnum(self.preview_mode) }));
     return h.final();
+}
+
+/// The selection as the document has it: one an edit from outside the widget set
+/// (`pending_sel`, which the next draw installs, clamped as it does), else the widget's.
+pub fn selection(self: *const Document) tc.Range {
+    if (self.pending_sel) |r| {
+        const len = self.text.items.len;
+        return .init(@min(r.anchor, len), @min(r.head, len));
+    }
+    return .init(if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start, self.sel_cursor);
 }
 
 /// Put the document back as `captureState` found it, in place — the buffer replaced as a reload
