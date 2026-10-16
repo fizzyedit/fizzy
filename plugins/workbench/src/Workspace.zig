@@ -721,6 +721,15 @@ pub fn insertTab(self: *Workspace, id: []const u8, index: usize) void {
 pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
     const grouping: u64 = @as(u64, @intFromPtr(ctx orelse return false)) - 1;
     const wb = runtime.workbench();
+    // A pane's only tab let go on the pane's own edge goes to that side as the pane, with room
+    // opening on the other: where the app places the panes, the place splits the way it does for
+    // a view alone in its place. Moved into a new pane there instead, the one it left closed
+    // behind it — the same tab and room, by a round trip.
+    if (wb.places) |p| if (drop.zone == .edge and drop.others.len == 0) {
+        if (wb.workspaces.getPtr(grouping)) |own| if (own.tabCount() == 1 and own.hasTab(drop.surface_id)) {
+            return p.open(p.ctx, grouping, paneSide(opposite(drop.zone.edge)));
+        };
+    };
     const target = switch (drop.zone) {
         .center => grouping,
         .edge => |side| blk: {
@@ -774,6 +783,15 @@ fn openHere(self: *Workspace, id: []const u8, path: []const u8, at: ?usize) bool
         self.expecting = false;
     }
     return started;
+}
+
+fn opposite(side: sdk.RegionSpec.Drop.Side) sdk.RegionSpec.Drop.Side {
+    return switch (side) {
+        .left => .right,
+        .right => .left,
+        .top => .bottom,
+        .bottom => .top,
+    };
 }
 
 fn paneSide(side: sdk.RegionSpec.Drop.Side) core.widgets.DockLayout.Side {
