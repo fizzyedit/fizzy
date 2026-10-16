@@ -10,6 +10,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 pub const Secrets = @import("Secrets.zig");
+const Tracks = @import("Tracks.zig");
 const sdk = @import("fizzy_sdk");
 const builtin = @import("builtin");
 const build_opts = @import("build_opts");
@@ -202,6 +203,9 @@ folder_retired: std.ArrayListUnmanaged([]const u8) = .empty,
 pending_folder_close: bool = false,
 
 open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
+/// Each open document's history, timed (`Tracks`): set up once the app is at its final address,
+/// and only then the host's recorder.
+tracks: ?Tracks = null,
 
 file_id_counter: u64 = 0,
 
@@ -925,6 +929,7 @@ pub fn formatPluginProbeDetail(allocator: std.mem.Allocator, info: PluginLoader.
 /// Removes the entry from the plugin's document registry; fizzy still removes
 /// the matching `DocHandle` from `open_files`.
 pub fn closeDocumentResources(app: *App, doc: sdk.DocHandle) void {
+    if (app.tracks) |*t| t.closed(doc.id);
     // Whoever held it is holding nothing now (`sdk.Claim`).
     app.host.releaseDocumentClaims(doc.id);
     _ = doc.owner.closeDocument(doc);

@@ -14,6 +14,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("fizzy");
+const Tracks = @import("app").Tracks;
 const shim = @import("fizzy_shim.zig");
 const TextEntryWidget = @import("text").TextEntryWidget;
 const sdk = @import("fizzy_sdk");
@@ -7288,6 +7289,89 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         try editor.rawCloseFileID(b.id);
         try editor.rawCloseFileID(a.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // Tracks (`app.Tracks`): with tracking on, an open document's steps are kept with their times,
+    // beside its state when the track began and every so often since; any moment of the track
+    // replays into another document. A replay target records nothing of it.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const newDoc = struct {
+            fn newDoc(ed: *fizzy.Editor, h: *sdk.Host, not: u64) !sdk.DocHandle {
+                try h.runCommand("fizzy.newFile");
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (d.id != not and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.newDoc;
+        const textOf = struct {
+            fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
+                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const zon = switch (h.callCommand("text.read", args, h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const rest = zon[at + ".text = \"".len ..];
+                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+            }
+        }.textOf;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+
+        const a = try newDoc(editor, host, was.id);
+        try dvui.testing.settle(headlessFrame);
+        for ([_][]const u8{ "a", "b" }) |key| {
+            try dvui.testing.writeText(key);
+            try dvui.testing.settle(headlessFrame);
+        }
+        // Enough steps for a checkpoint, then an undo.
+        for (0..Tracks.checkpoint_steps + 44) |_| {
+            try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"x\", .line = 1 }", host.arena()) == .ok);
+        }
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        const want = try std.testing.allocator.dupe(u8, try textOf(host, a));
+        defer std.testing.allocator.free(want);
+        try std.testing.expectEqual(Tracks.checkpoint_steps + 43 + 2, want.len);
+
+        const track = tracks.trackOf(a.id) orelse return error.TestUnexpectedResult;
+        const n = track.steps.items.len;
+        try std.testing.expectEqual(@as(usize, 2 + Tracks.checkpoint_steps + 44 + 1), n);
+        try std.testing.expect(track.base != null);
+        try std.testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
+        try std.testing.expectEqual(n, track.checkpoints.items[0].step);
+        try std.testing.expectEqual(sdk.Step.Kind.undone, track.steps.items[n - 1].kind);
+        for (track.steps.items[1..], track.steps.items[0 .. n - 1]) |later, earlier| try std.testing.expect(later.at >= earlier.at);
+        try std.testing.expectEqual(a.id, tracks.focus.items[tracks.focus.items.len - 1].doc_id);
+
+        // All of it, from the checkpoint, to the fingerprint it recorded; and the start of it,
+        // from the base.
+        const b = try newDoc(editor, host, a.id);
+        try dvui.testing.settle(headlessFrame);
+        try tracks.replayInto(a.id, b, n);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings(want, try textOf(host, b));
+        try std.testing.expectEqual(a.owner.documentFingerprint(a), b.owner.documentFingerprint(b));
+        try tracks.replayInto(a.id, b, 2);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("ab", try textOf(host, b));
+        // The target kept its own track, and recorded none of the replay.
+        const tb = tracks.trackOf(b.id) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 0), tb.steps.items.len);
+
+        // Closed, a document's track is kept for the session.
+        try editor.rawCloseFileID(b.id);
+        try editor.rawCloseFileID(a.id);
+        try std.testing.expect(tracks.open.get(a.id) == null);
+        try std.testing.expectEqual(track, tracks.trackOf(a.id).?);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
     }
