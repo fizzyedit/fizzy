@@ -2031,7 +2031,7 @@ fn storeUninstalled(arena: std.mem.Allocator) []const @import("app").layout.Stat
 
 pub fn postInit(editor: *Editor) !void {
     // Documents' tracks, while they are behind a switch (plans/RECORDING_PLAN.md, step 3).
-    editor.app.tracks = .init(editor.app.gpa, &editor.app.host);
+    editor.app.tracks = .init(editor.app.gpa);
     if (Popout.envSwitch("FIZZY_TRACKS") orelse false) editor.setTracking(true);
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});

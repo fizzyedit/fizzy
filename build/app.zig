@@ -644,6 +644,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
         .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
+        // A document state as the bytes that differ from another: how a track's checkpoints
+        // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
+        .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
@@ -1229,6 +1232,32 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
         const bench_step = b.step("bench-replay", "Benchmark a demo seek, silent against shown frame by frame (prints timings)");
         const run_bench = b.addRunArtifact(bench_replay);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
+    // `zig build bench-tracks` — what a document's track costs (`app.Tracks`): a step, a frame's
+    // top idle and with a checkpoint, a replay, what a session holds. Same rules as `bench-text`.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_tracks.zig"),
+        });
+        bench_module.addImport("app", app_module_test);
+        bench_module.addImport("fizzy_sdk", sdk_module_test);
+
+        const bench_tracks = b.addTest(.{ .name = "fizzy-bench-tracks", .root_module = bench_module });
+        bench_tracks.root_module.link_libcpp = !target_is_windows_msvc;
+        if (target.result.os.tag == .windows) {
+            bench_tracks.root_module.linkSystemLibrary("comctl32", .{});
+        }
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, bench_tracks, .{ .target = target, .optimize = optimize });
+        };
+
+        const bench_step = b.step("bench-tracks", "Benchmark a document's track: steps, checkpoints, replays (prints timings)");
+        const run_bench = b.addRunArtifact(bench_tracks);
         run_bench.has_side_effects = true;
         bench_step.dependOn(&run_bench.step);
     }

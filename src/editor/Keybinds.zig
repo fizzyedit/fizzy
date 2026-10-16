@@ -176,6 +176,9 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.restart", .title = "Restart Fizzy", .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.capture", .title = "Capture the Last 30 Seconds", .bind = null, .run = cmdCapture, .params = CaptureArgs.params, .runWith = CaptureArgs.bind(cmdCaptureWith), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks.record", .title = "Tracks: Record…", .bind = null, .run = cmdTracks, .params = TracksRecord.params, .runWith = TracksRecord.bind(cmdTracksRecord), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks.replay", .title = "Tracks: Replay…", .bind = null, .run = cmdTracks, .params = TracksReplay.params, .runWith = TracksReplay.bind(cmdTracksReplay), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks", .title = "Tracks: Report", .bind = null, .run = cmdTracks, .params = TracksArgs.params, .runWith = TracksArgs.bind(cmdTracksWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
 
@@ -583,6 +586,71 @@ fn cmdCaptureWith(state: *anyopaque, args: CaptureArgs.Args, call: *sdk.Command.
     const written = captures.write(editorFromState(state), args.seconds, args.why) catch |err| return call.fail("could not write the capture: {t}", .{err});
     try call.returns(written);
 }
+
+const TracksArgs = sdk.Command.Params(struct {});
+const TracksRecord = sdk.Command.Params(struct {
+    on: sdk.Command.Arg(bool, .{ .description = "Record documents' tracks, or stop. Open documents start a track now." }),
+});
+
+const TracksReplay = sdk.Command.Params(struct {
+    from: sdk.Command.Arg([]const u8, .{ .description = "The open document whose track to replay, by its path." }),
+    into: sdk.Command.Arg([]const u8, .{ .description = "The open document to replay it into, by its path: one of the same owner, which records none of it." }),
+    steps: sdk.Command.Arg(u32, .{ .description = "How many of the track's steps; 0 for all of them." }) = .init(0),
+});
+
+/// Put one open document where another's track was after so many steps: its nearest state, then
+/// the steps since (`Tracks.replayInto`). How an agent checks a track replays, and how a person
+/// sees one played into a copy.
+fn cmdTracksReplay(state: *anyopaque, args: TracksReplay.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return call.fail("no tracks in this app", .{}));
+    const from = editor.docFromPath(args.from) orelse return call.fail("no open document at {s}", .{args.from});
+    const into = editor.docFromPath(args.into) orelse return call.fail("no open document at {s}", .{args.into});
+    const track = t.trackOf(from.id) orelse return call.fail("{s} has no track", .{args.from});
+    const n = if (args.steps == 0) track.steps.items.len else args.steps;
+    t.replayInto(from.id, into, n) catch |err| return call.fail("the replay stopped: {t}", .{err});
+    try call.returns(.{ .steps = @min(n, track.steps.items.len), .checkpoints = track.checkpoints.items.len });
+}
+
+fn cmdTracksRecord(state: *anyopaque, args: TracksRecord.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    editor.setTracking(args.on);
+    try call.returns(.{ .on = args.on });
+}
+
+/// What the documents' tracks hold (`app.Tracks`): whether they record, what every track holds
+/// against the cap, how many frames did any of their work, and each track's steps, checkpoints
+/// and bytes. Devtools' view of them, and an agent's.
+fn cmdTracks(state: *anyopaque) anyerror!void {
+    const t = &(editorFromState(state).app.tracks orelse return);
+    dvui.log.info("tracks: {d} open, {d} ended, {d} KB of {d} KB", .{ t.open.count(), t.ended.items.len, t.held >> 10, t.cap >> 10 });
+}
+
+fn cmdTracksWith(state: *anyopaque, _: TracksArgs.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return call.fail("no tracks in this app", .{}));
+    const arena = editor.app.host.arena();
+    const rows = try arena.alloc(TrackRow, t.open.count() + t.ended.items.len);
+    for (t.open.values(), 0..) |track, i| rows[i] = .of(track, true, editor);
+    for (t.ended.items, t.open.count()..) |track, i| rows[i] = .of(track, false, editor);
+    try call.returns(.{ .on = t.on, .held = t.held, .cap = t.cap, .worked = t.worked, .tracks = rows });
+}
+
+/// A track as `fizzy.tracks` reports it. An ended track's document is gone, so it has no path.
+const TrackRow = struct {
+    doc_id: u64,
+    path: []const u8,
+    owner: []const u8,
+    open: bool,
+    steps: usize,
+    checkpoints: usize,
+    bytes: usize,
+
+    fn of(track: *const @import("app").Tracks.Track, open: bool, editor: *Editor) TrackRow {
+        const path = if (!open) "" else if (editor.app.docById(track.doc_id)) |d| d.owner.documentPath(d) else "";
+        return .{ .doc_id = track.doc_id, .path = path, .owner = track.owner.id, .open = open, .steps = track.steps.items.len, .checkpoints = track.checkpoints.items.len, .bytes = track.size() };
+    }
+};
 
 const TraceArgs = sdk.Command.Params(struct {
     path: sdk.Command.Arg([]const u8, .{ .description = "Where to write the trace (JSON). Empty writes it in the config folder's traces/, named by the time." }) = .init(""),

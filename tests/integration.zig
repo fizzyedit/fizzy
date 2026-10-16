@@ -7367,6 +7367,22 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const tb = tracks.trackOf(b.id) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(usize, 0), tb.steps.items.len);
 
+        // A frame nothing asked of does no tracks work: an idle app, recording, costs a branch.
+        const worked = tracks.worked;
+        for (0..120) |_| {
+            dvui.refresh(null, @src(), null);
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expectEqual(worked, tracks.worked);
+        // What they hold, as devtools and an agent read it.
+        const report = switch (host.callCommand("fizzy.tracks", "", host.arena())) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(std.mem.indexOf(u8, report, ".on = true") != null);
+        const steps_row = try std.fmt.allocPrint(host.arena(), ".steps = {d}", .{n});
+        try std.testing.expect(std.mem.indexOf(u8, report, steps_row) != null);
+
         // Closed, a document's track is kept for the session.
         try editor.rawCloseFileID(b.id);
         try editor.rawCloseFileID(a.id);
