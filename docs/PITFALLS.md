@@ -16,6 +16,30 @@ goes beside the code if it has an area, here if not.
 - **Tests run only from files their root module analyzes** (`tests/AGENTS.md`).
   `zig build check-tests-reached` names any that don't.
 
+## The build (Zig 0.17)
+
+`build.zig` runs in a configurer, and its result is cached; a separate maker runs the steps.
+Four things in that split cost time on the move to 0.17:
+
+- **The configuration is cached without regard to the environment.** A variable that
+  `build.zig` reads with `b.graph.environ_map` is seen on the first configure and then ignored
+  until something else forces a reconfigure. Anything that changes the build is a `-D` option.
+  Scripts that hold a setting in the environment (`scripts/release.sh`, `release.yml`) turn it
+  into the option.
+- **`Run.setEnvironmentVariable` freezes the whole environment.** Its first call copies the
+  configure-time environment into the Run, and that copy is cached with the configuration. The
+  command then keeps the environment of the first configure (a `DOTNET_ROOT` exported later never
+  arrived). A command that needs its environment changed runs through velopack-zig's
+  `tools/run_env.zig` (`velopack.addVpkRun`), which applies the changes when it runs. A step
+  that reads the environment itself, as `sdk/plugin_sdk_install.zig` does, reads it at make time.
+- **A file read while configuring must be declared**, or a change to it is never seen:
+  `b.dependOnFileContents`, `dependOnFileMetadata` (existence), `dependOnDirectoryContents`
+  (a listing). `--cache-poison=disallowed` does not catch an undeclared read.
+- **A declared path must not be inside a missing directory.** The maker cannot load the
+  configuration ("configuration failed: FileSystemFailure"); a plugin without `.github/` hit it.
+  `common.dependOnPathExistence` (and its copy in `sdk/plugin_sdk.zig`) declares the nearest
+  directory that exists instead.
+
 ## Running a second fizzy
 
 - **`fizzy --profile <dir>`** keeps config, recents, plugins, the single-instance lock and its

@@ -53,13 +53,8 @@ pub fn matches(pattern: []const u8, name: []const u8) bool {
 pub fn parse(comptime T: type, arena: std.mem.Allocator, event: Event) !T {
     const text = std.mem.trim(u8, event.payload, " \t\r\n");
     const source = try arena.dupeSentinel(u8, if (text.len == 0) ".{}" else text, 0);
-    return (zig017_zon: {
-        var zig017_zd: std.zon.parse.Diagnostics = undefined;
-        var zig017_arena: std.heap.ArenaAllocator = .init(arena);
-        defer zig017_arena.deinit();
-        const zig017_r = std.zon.parse.fromSlice(T, .{ .gpa = arena, .arena = zig017_arena.allocator(), .source = source, .diagnostics = &zig017_zd, .ignore_unknown_fields = true });
-        break :zig017_zon if (zig017_r) |zig017_v| zig017ZonDupe(T, arena, zig017_v) else |zig017_e| zig017_e;
-    });
+    var diag: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSlice(T, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diag, .ignore_unknown_fields = true });
 }
 
 // ---- what fizzy announces ----
@@ -144,41 +139,4 @@ test "a subscription takes its name, its prefix, or everything" {
     try std.testing.expect(matches("fizzy.document.*", "fizzy.document.opened"));
     try std.testing.expect(!matches("fizzy.document.*", "fizzy.folder.opened"));
     try std.testing.expect(matches("*", "chat.turn_ended"));
-}
-
-// ZIG017 stand-in: a deep copy of a zon result out of the parse's arena into the caller's
-// allocator, where the code before 0.17 expects to free it. Goes with the zon arena PR.
-fn zig017ZonDupe(comptime T: type, gpa: std.mem.Allocator, value: T) error{OutOfMemory}!T {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => {
-                const out = try gpa.create(p.child);
-                out.* = try zig017ZonDupe(p.child, gpa, value.*);
-                return out;
-            },
-            .slice => {
-                const out = if (comptime p.sentinel()) |s| try gpa.allocSentinel(p.child, value.len, s) else try gpa.alloc(p.child, value.len);
-                for (out, value) |*o, v| o.* = try zig017ZonDupe(p.child, gpa, v);
-                return out;
-            },
-            else => comptime unreachable,
-        },
-        .array => |a| {
-            var out: T = undefined;
-            for (&out, value) |*o, v| o.* = try zig017ZonDupe(a.child, gpa, v);
-            return out;
-        },
-        .@"struct" => |s| {
-            var out: T = value;
-            inline for (s.field_names, s.field_types, s.field_attrs) |n, FT, attrs| {
-                if (!attrs.@"comptime") @field(out, n) = try zig017ZonDupe(FT, gpa, @field(value, n));
-            }
-            return out;
-        },
-        .@"union" => |u| if (u.tag_type == null) return value else switch (value) {
-            inline else => |payload, tag| return @unionInit(T, @tagName(tag), try zig017ZonDupe(@TypeOf(payload), gpa, payload)),
-        },
-        .optional => |o| return if (value) |v| try zig017ZonDupe(o.child, gpa, v) else null,
-        else => return value,
-    }
 }

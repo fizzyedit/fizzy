@@ -4,8 +4,7 @@
 # rewritten too, and delete it in the PR that merges the branch. Idempotent.
 #
 # Hand migrations are not here. What is here either `zig fmt` does, or is a rename with one
-# right answer. `zon_standin.pl` is the exception: a stand-in for the zon arena migration,
-# marked ZIG017 wherever it writes, until that PR replaces it.
+# right answer.
 set -euo pipefail
 cd "$(jj root 2>/dev/null || git rev-parse --show-toplevel)"
 here=scripts/zig-0.17
@@ -36,8 +35,8 @@ perl -0pi -e 's/\.dupeZ(\((?:[^()]++|(?1))*\))/my $a=$1; $a =~ s{\)\z}{, 0)}; ".
 python3 $here/fields.py $files >/dev/null
 python3 $here/unused.py $here $files >/dev/null
 
-# Stand-in until the zon arena PR: 0.17's std.zon.parse, results in the old allocator.
-perl $here/zon_standin.pl $files >/dev/null
+# Not std.zon.parse: each call is ported by hand to its owner's arena. A 0.16 call that a merge
+# from main brings fails to compile, which is the reminder.
 
 # Last: zig fmt's own upgrades (@intFromEnum -> @backingInt, ...).
 jj file list | grep -E "\.(zig|zon)$" | xargs "${zig[@]}" fmt >/dev/null  # everything, spikes too

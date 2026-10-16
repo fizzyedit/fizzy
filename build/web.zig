@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common.zig");
 const helpers = @import("../plugins/shared/build/helpers.zig");
 const core_mod = @import("fizzy_sdk").core_module;
 const plugins = @import("plugins.zig");
@@ -234,7 +235,7 @@ pub fn addSteps(
     for (web_plugin_dirs) |wp| {
         const dir = wp.dir;
         const zon_path = b.pathJoin(&.{ dir, "plugin.zig.zon" });
-        dependOnPathExistence(b, zon_path);
+        common.dependOnPathExistence(b, zon_path);
         b.root.access(b.graph.io, zon_path, .{}) catch {
             std.debug.print("fizzy web: plugin checkout '{s}' not found; the web build goes without it\n", .{dir});
             continue;
@@ -331,7 +332,7 @@ pub fn addSteps(
     for (web_pages.items) |page| {
         const web_dir = b.pathJoin(&.{ page.dir, "web" });
         var d = b.root.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch {
-            dependOnPathExistence(b, web_dir);
+            common.dependOnPathExistence(b, web_dir);
             continue;
         };
         b.dependOnDirectoryContents(b.path(web_dir));
@@ -422,20 +423,4 @@ fn rehome(
     m.addImport("fizzy_sdk", sdk_mod);
     if (icons_mod) |icons| m.addImport("icons", icons);
     return m;
-}
-
-/// Declare to Zig 0.17's configure cache that the build read whether `rel` exists: the file itself
-/// when it does, and otherwise the nearest directory that exists, since the maker cannot load a
-/// configuration that depends on a path inside a missing directory ("configuration failed:
-/// FileSystemFailure"). Making the file changes that directory, so the build still reconfigures.
-fn dependOnPathExistence(b: *std.Build, rel: []const u8) void {
-    b.root.access(b.graph.io, rel, .{}) catch {
-        var dir = std.fs.path.dirname(rel);
-        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
-            b.root.access(b.graph.io, d, .{}) catch continue;
-            return b.dependOnDirectoryMetadata(b.path(d));
-        }
-        return b.dependOnDirectoryMetadata(b.path("."));
-    };
-    b.dependOnFileMetadata(b.path(rel));
 }

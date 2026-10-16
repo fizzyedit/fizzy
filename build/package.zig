@@ -86,12 +86,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                 break :blk sh;
             };
 
-            //const dotnet_tool_restore = velopack.addDotnetToolRestoreStep(b);
-            //const vpk_vendor_repair = velopack.addVpkVendorRepairStep(b);
-            //vpk_vendor_repair.step.dependOn(&dotnet_tool_restore.step);
-
-            const vpk_pkg_sh = b.addSystemCommand(&.{"dotnet"});
-            vpk_pkg_sh.addArg("vpk");
+            const vpk_pkg_sh = try velopack.addVpkRun(b, vz, target);
             // When packaging a foreign-OS bundle, vpk needs an OS directive (e.g. `vpk [win] pack ...`)
             // because by default it auto-detects from the host OS.
             if (cross_os) {
@@ -189,15 +184,11 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                 },
                 else => {},
             }
-            vpk_pkg_sh.setEnvironmentVariable("DOTNET_ROLL_FORWARD", "Major");
             // Stream vpk's stdout/stderr live so failures surface their actual
             // diagnostic instead of just an exit-code-N message from the build
             // runner. With `addOutputDirectoryArg` in play, `infer_from_args`
             // can otherwise capture+drop stdio on certain runner configs.
             vpk_pkg_sh.stdio = .inherit;
-            try velopack.attachMksquashfsToVpkRun(b, vz, vpk_pkg_sh, target);
-
-            //vpk_pkg_sh.step.dependOn(&vpk_vendor_repair.step);
             vpk_pkg_sh.step.dependOn(pack_stage_tail);
 
             const build_package_install = b.addInstallDirectory(.{
@@ -251,6 +242,13 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                     zig_pkg_run.addArg(b.fmt("-Dwindows-msvc-libc={s}", .{libc_path}));
                 }
                 if (fetch_msvc) zig_pkg_run.addArg("-Dfetch-msvc");
+            }
+            // Signing reaches the macOS children as options: each child's own configuration is
+            // cached without regard to the environment.
+            if (std.mem.endsWith(u8, triple, "-macos")) {
+                if (macos_sign_app_identity) |id| zig_pkg_run.addArg(b.fmt("-Dmacos-sign-app={s}", .{id}));
+                if (macos_sign_install_identity) |id| zig_pkg_run.addArg(b.fmt("-Dmacos-sign-installer={s}", .{id}));
+                if (macos_notary_profile) |p| zig_pkg_run.addArg(b.fmt("-Dmacos-notary-profile={s}", .{p}));
             }
             zig_pkg_run.setCwd(b.path("."));
             if (prev_step) |p| {
