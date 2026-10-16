@@ -21,6 +21,8 @@
 //!     path a point per `path_step_ms`, the frames live play would have drawn, so whatever it
 //!     crosses sees the pointer pass — a text field it leaves forgets its click count, as it did
 //!     live — and typing still arrives a keystroke at a time.
+//!   * **Steps land together.** A `step` is a document's own change, not input: it needs no frame
+//!     drawn before the next op, so a seek over an hour of drawing applies it all in one call.
 //!   * **Waits hold time still.** A `wait` that does not hold yet stops the clock at the wait until
 //!     it does (or its timeout passes, in wall time), so the ops after it land on an app that has
 //!     caught up — at any speed, on any machine.
@@ -88,6 +90,9 @@ pub const Sink = struct {
         holds: *const fn (ctx: *anyopaque, until: Tape.Until) bool,
         /// A wait gave up. The sink says so where a person will see it.
         timedOut: *const fn (ctx: *anyopaque, until: Tape.Until) void,
+        /// Apply a step to its file, shown being made over `ms` (the op's). Null for a sink that
+        /// plays only live tapes, which have none (`Tape.validate`).
+        step: ?*const fn (ctx: *anyopaque, step: Tape.Step, ms: u32) void = null,
     };
 };
 
@@ -199,6 +204,10 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
             .type => {
                 self.typing = .{ .op = self.cursor };
                 self.cursor += 1;
+            },
+            .step => |st| {
+                self.cursor += 1;
+                if (sink.vtable.step) |f| f(sink.ctx, st, op.ms);
             },
             .keyframe => |i| {
                 self.cursor += 1;
@@ -429,6 +438,7 @@ const Log = struct {
             .keyframe = keyframe,
             .holds = holds,
             .timedOut = timedOut,
+            .step = step,
         } };
     }
     fn from(ctx: *anyopaque) *Log {
@@ -469,6 +479,9 @@ const Log = struct {
     }
     fn timedOut(ctx: *anyopaque, _: Tape.Until) void {
         from(ctx).print("timeout", .{});
+    }
+    fn step(ctx: *anyopaque, st: Tape.Step, ms: u32) void {
+        from(ctx).print("step {s} {s} {d}", .{ st.file, st.effect, ms });
     }
 };
 
@@ -532,6 +545,35 @@ test "a click lands a frame after the glide that brought the pointer to it" {
         \\
     , landed);
     try testing.expect(seq.done());
+}
+
+test "steps land together, with no frame between them, each at its own time" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .ms = 40, .do = .{ .step = .{ .file = "a.pixi", .effect = "one" } } },
+        .{ .at = 200, .do = .{ .step = .{ .file = "a.pixi", .effect = "two" } } },
+        .{ .at = 300, .ms = 90, .do = .{ .step = .{ .file = "a.pixi", .effect = "three" } } },
+        .{ .at = 400, .do = .{ .key = "a" } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+
+    var seq: Sequencer = .init(&tape);
+    try testing.expectEqual(Progress.yielded, seq.advance(0, 16, log.sink()));
+    // Played live, each lands when it is due.
+    try testing.expectEqual(Progress.reached, seq.advance(150, 16, log.sink()));
+    try testing.expectEqualStrings("keyframe demo://a\nstep a.pixi one 40\n", log.out.items);
+    // Sought past, the rest land in the one call, up to the key that needs a frame of its own.
+    try testing.expectEqual(Progress.yielded, seq.advance(1000, 16, log.sink()));
+    try testing.expectEqualStrings(
+        \\keyframe demo://a
+        \\step a.pixi one 40
+        \\step a.pixi two 0
+        \\step a.pixi three 90
+        \\key a
+        \\
+    , log.out.items);
 }
 
 test "a glide covered in one call still passes along its path, a frame's worth at a time" {

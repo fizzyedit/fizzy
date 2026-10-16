@@ -286,17 +286,29 @@ one.
 | `type: "text"` | Type over `ms`; `\n` is Enter, `\t` is Tab. |
 | `command: .{ .id, .args }` | Run a command: with no `args`, as its menu row or shortcut would (one that needs arguments asks for them); with `args`, ZON keyed by its parameters (`".{ .line = 1 }"`), as the palette does once they are given. A script writes `s.command(id)` or `s.commandWith(id, .{ .line = 1 })`. |
 | `wait: .{ .until, .timeout }` | Hold demo time until `.idle`, `.shown = "tag"` or `.gone = "tag"`; give up after `timeout` ms of wall time. |
+| `step: .{ .file, .effect, .motion }` | Apply one step of a document's history to `file` of the keyframe before it, shown being made over `ms`: `effect` is what the step did and `motion` how it was made (optional), both in the file's `owner`'s encoding. Steps land together, with no frame between them, so a seek across an hour of drawing is one call. |
 
 Key chords are the app's spelling: the `tape` library carries them as text, and a `Tape.Check`
 the app passes to `parse`, `load` and `Script` says which it accepts (fizzy's is
 `automation.Input.check`, the keymap's parser).
 
+**Steps** record what a document became, not the input that made it, so they replay exactly at
+any window size and in any layout (`plans/RECORDING_PLAN.md`). A file a step changes names the
+plugin that applies it and its encoding: `.{ .path = "sprite.pixi", .text = <the file's bytes>,
+.owner = "pixi", .format = 1 }`. A file's `text` is its bytes as on disk, a binary document's
+included (ZON escapes them). `Check.steps` says whose steps, in which format, the app can apply;
+without it a tape with steps is refused (`error.StepsUnsupported`), since a step nobody applied
+would play a document that never changes. The app applies them through its stage
+(`Stage.step`). Fizzy does not apply steps yet.
+
 ### The binary form (`.tape`)
 
-`tape.binary` writes and reads the same `Tape` as a few flat tables: a 60-byte header (`FZTP`,
-a version, the counts), a string table that holds each distinct string once (anchors repeat
-constantly), then fixed-size records — ops, keyframes and their files, captions, chapters —
-that point into it by index. Reading is one bounds-checked pass that builds the `Tape` in a
+`tape.binary` writes and reads the same `Tape` as a few flat tables: a header (`FZTP`, a
+version, the counts), a string table that holds each distinct string once (anchors repeat
+constantly), a blob table of the steps' effects and motion, then fixed-size records — ops,
+keyframes and their files, captions, chapters — that point into them by index. With
+`.{ .deflate = true }` everything after the version and flags is one zlib stream, for a tape that
+is sent somewhere. Reading is one bounds-checked pass that builds the `Tape` in a
 single arena, with every offset, index and enum checked: a damaged or truncated file is an
 error, never a crash. It is lossless both ways, so a tape converts freely between the forms.
 
@@ -308,6 +320,14 @@ compare (`zig build bench-tape -Doptimize=ReleaseFast`; recording-shaped tapes, 
 | 200 (a scripted demo) | 31 KB | 0.34 ms | 8 KB | 0.012 ms |
 | 10,000 (about ten minutes recorded) | 1.5 MB | 17 ms | 353 KB | 0.29 ms |
 | 100,000 | 15 MB | 179 ms | 3.4 MB | 3.9 ms |
+
+A recording of drawing, plain against deflated (steps shaped as a pixi stroke's effect, with the
+pen's path; the same bench, ReleaseFast):
+
+| Steps | Plain | Plain load | Deflated | Deflated write | Deflated load |
+|---:|---:|---:|---:|---:|---:|
+| 2,000 (about an hour of drawing) | 275 KB | 0.04 ms | 100 KB | 8.7 ms | 0.86 ms |
+| 20,000 | 2.7 MB | 0.25 ms | 873 KB | 87 ms | 7.9 ms |
 
 ## Live tapes
 

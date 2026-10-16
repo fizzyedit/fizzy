@@ -19,6 +19,12 @@
 //! app's own spelling (fizzy's: `"mod+shift+p"`, `"enter"`); what a spelling means, and whether
 //! one is right, is the app's to say (`Check`), so the format carries no keymap of its own.
 //!
+//! **Steps** carry a document's own history rather than input: the effect of one change (the
+//! pixels a stroke set, the text a transaction inserted) in its owner's encoding, applied to a
+//! file the keyframe declared. Input replays only in a window laid out as it was recorded; an
+//! effect replays exactly anywhere. What a step's bytes mean is the owner's, versioned by the file's
+//! `format`, and whether the app can apply them is the app's to say (`Check.steps`).
+//!
 //! Everything here is plain data with no pointers into anything but its own strings, so a tape
 //! round-trips through ZON (`parse`, `write`): the same thing a script builds (`Script`) is what
 //! a recorder would write and what a web page can fetch and play.
@@ -89,6 +95,10 @@ pub const Action = union(enum) {
     /// Hold demo time until a condition holds. Waits are how a tape stays deterministic over an
     /// app that does things on its own time (loading a file, animating a pane open).
     wait: Wait,
+    /// Apply one step of a document's history to a file of the keyframe before it, shown being
+    /// made over `Op.ms` (the time it took, as recorded). Lands with no frame drawn between it and
+    /// the next: an effect needs no layout to land on, so a seek applies thousands a frame.
+    step: Step,
 
     /// Where a `move` or `trace` takes the pointer.
     pub fn target(self: Action) ?Target {
@@ -111,6 +121,20 @@ pub const Command = struct {
     /// it would ask a person. Carried as text, never parsed here: what the arguments mean, and
     /// whether they fit, is the command's to say when it runs.
     args: []const u8 = "",
+};
+
+/// One step of a document's history, as its owner encoded it.
+pub const Step = struct {
+    /// The file it changes, as the keyframe before it names it (`File.path`). The file names its
+    /// owner, whose step it is.
+    file: []const u8,
+    /// What the step did to the document, in the owner's encoding (`File.format`): exact, so it
+    /// lands the same at any window size, in any layout.
+    effect: []const u8,
+    /// How it was made, when the owner recorded it (a pen's path and timing, in the document's
+    /// own coordinates), so a replay shows it made as it was. Empty: the owner shows the effect
+    /// made its own way.
+    motion: []const u8 = "",
 };
 
 pub const Scroll = struct {
@@ -194,6 +218,12 @@ pub const Keyframe = struct {
     /// put in place at the cut whatever the viewer has chosen, and given back when the demo ends.
     settings: []const Setting = &.{},
 
+    /// The file at `path`, or null when it has none.
+    pub fn file(self: Keyframe, path: []const u8) ?*const File {
+        for (self.files) |*f| if (std.mem.eql(u8, f.path, path)) return f;
+        return null;
+    }
+
     /// How the window is arranged at the cut. The stage's to interpret, like the rest.
     pub const Layout = enum {
         /// As it is.
@@ -220,7 +250,13 @@ pub const Setting = struct {
 pub const File = struct {
     /// Relative to the keyframe's `root`: `src/main.zig`.
     path: []const u8,
+    /// Its bytes, as on disk: text, or a binary document's (a `.pixi`), which ZON escapes.
     text: []const u8,
+    /// The plugin that opens it and applies its steps (`pixi`). Empty: whichever the app would
+    /// open it with, and the file takes no steps.
+    owner: []const u8 = "",
+    /// The owner's encoding of its steps (`Step.effect`), which the owner numbers.
+    format: u32 = 0,
 };
 
 // ---- reading -------------------------------------------------------------------------------
@@ -356,7 +392,7 @@ pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
             .move, .trace, .press, .release, .scroll => .pointer,
             // A keyframe is a fresh start.
             .keyframe => break,
-            .wait => continue,
+            .wait, .step => continue,
         };
         const at: f64 = @floatFromInt(op.at);
         if (moved_at) |m| {
@@ -386,6 +422,10 @@ pub const Error = error{
     ChaptersOutOfOrder,
     /// A live tape (`Check.live`) plays on the app as it is, so it never cuts to a keyframe.
     KeyframeInLiveTape,
+    /// A step names no file of the keyframe before it, or one with no owner to apply it.
+    StepWithoutFile,
+    /// The app cannot apply a file's steps: no `Check.steps`, or it said no to the owner's format.
+    StepsUnsupported,
 };
 
 /// What only the app can say about a tape: whether a key chord is spelled right, in its spelling.
@@ -396,6 +436,10 @@ pub const Check = struct {
     /// test, a macro, an automation client — rather than a demo that cuts to the state it
     /// declares. It has no keyframe anywhere, where a demo opens on one.
     live: bool = false,
+    /// Whether the app applies `owner`'s steps written in `format`. Left out, a tape with steps
+    /// is refused: unlike a misspelled chord, which shows when it is pressed, a step nobody
+    /// applies plays a document that never changes and looks like a tape that works.
+    steps: ?*const fn (owner: []const u8, format: u32) bool = null,
 };
 
 /// Check what `Sequencer` relies on, once, at load — a tape that fails here would misplay rather
@@ -403,6 +447,8 @@ pub const Check = struct {
 pub fn validate(self: Tape, check: Check) Error!void {
     if (!check.live and (self.ops.len == 0 or self.ops[0].at != 0 or self.ops[0].do != .keyframe)) return error.NoKeyframeAtStart;
     var prev: u32 = 0;
+    // The keyframe the ops are under: a step's file is one of its.
+    var scene: ?*const Keyframe = null;
     for (self.ops) |op| {
         if (op.at < prev) return error.OpsOutOfOrder;
         prev = op.at;
@@ -410,6 +456,13 @@ pub fn validate(self: Tape, check: Check) Error!void {
             .keyframe => |i| {
                 if (check.live) return error.KeyframeInLiveTape;
                 if (i >= self.keyframes.len) return error.BadKeyframeIndex;
+                scene = &self.keyframes[i];
+            },
+            .step => |st| {
+                const f = (scene orelse return error.StepWithoutFile).file(st.file) orelse return error.StepWithoutFile;
+                if (f.owner.len == 0) return error.StepWithoutFile;
+                const ok = check.steps orelse return error.StepsUnsupported;
+                if (!ok(f.owner, f.format)) return error.StepsUnsupported;
             },
             .key => |k| if (check.key) |ok| {
                 if (!ok(k)) return error.BadChord;
@@ -670,4 +723,48 @@ test "a hand-written tape parses with every default left out" {
     try testing.expectEqual(@as(f32, 0.5), owned.tape.ops[1].do.move.x);
     try testing.expect(owned.tape.ops[2].do.wait.until == .idle);
     try testing.expectEqual(@as(u32, 10_000), owned.tape.ops[2].do.wait.timeout);
+}
+
+/// An app that applies `pixi`'s steps in its format 1, and nobody else's.
+pub const test_steps: Check = .{ .steps = struct {
+    fn ok(owner: []const u8, format: u32) bool {
+        return std.mem.eql(u8, owner, "pixi") and format == 1;
+    }
+}.ok };
+
+test "a step changes a file of the keyframe before it, whose owner the app can apply" {
+    const sprite: [5]u8 = .{ 0x89, 'P', 0, 0xff, '\n' };
+    const files = [_]File{ .{ .path = "a.pixi", .text = &sprite, .owner = "pixi", .format = 1 }, .{ .path = "notes.md", .text = "# hi" } };
+    const kf = [_]Keyframe{ .{ .root = "demo://s", .files = &files, .open = &.{"a.pixi"} }, .{ .root = "demo://s" } };
+    const ops = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .ms = 250, .do = .{ .step = .{ .file = "a.pixi", .effect = "\x01\x02", .motion = "\x00" } } },
+        .{ .at = 400, .do = .{ .step = .{ .file = "a.pixi", .effect = "\x03" } } },
+    };
+    const tape: Tape = .{ .name = "s", .ops = &ops, .keyframes = &kf };
+    try tape.validate(test_steps);
+    // An app that says nothing of steps, or no to this owner's format, refuses the tape.
+    try testing.expectError(error.StepsUnsupported, tape.validate(.{}));
+    const other_format = [_]File{.{ .path = "a.pixi", .text = &sprite, .owner = "pixi", .format = 2 }};
+    try testing.expectError(error.StepsUnsupported, (Tape{ .name = "s", .ops = &ops, .keyframes = &.{.{ .root = "demo://s", .files = &other_format }} }).validate(test_steps));
+    // A file that names its owner and takes no steps needs nothing of the app.
+    try (Tape{ .name = "s", .ops = ops[0..1], .keyframes = &.{.{ .root = "demo://s", .files = &other_format }} }).validate(.{});
+
+    // Its file must be the keyframe's, and one with an owner to apply it.
+    const elsewhere = [_]Op{ ops[0], .{ .at = 50, .do = .{ .keyframe = 1 } }, ops[1] };
+    try testing.expectError(error.StepWithoutFile, (Tape{ .name = "s", .ops = &elsewhere, .keyframes = &kf }).validate(test_steps));
+    const ownerless = [_]Op{ ops[0], .{ .at = 50, .do = .{ .step = .{ .file = "notes.md", .effect = "x" } } } };
+    try testing.expectError(error.StepWithoutFile, (Tape{ .name = "s", .ops = &ownerless, .keyframes = &kf }).validate(test_steps));
+    // A live tape has no keyframe, so nothing to step.
+    try testing.expectError(error.StepWithoutFile, (Tape{ .name = "s", .ops = ops[1..] }).validate(.{ .live = true, .steps = test_steps.steps }));
+
+    // Through ZON, the binary file and the steps come back byte for byte.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try tape.write(&out.writer);
+    const source = try testing.allocator.dupeZ(u8, out.written());
+    defer testing.allocator.free(source);
+    var back = try parse(testing.allocator, source, test_steps);
+    defer back.deinit();
+    try testing.expectEqualDeep(tape, back.tape);
 }

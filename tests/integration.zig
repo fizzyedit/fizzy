@@ -5147,7 +5147,7 @@ test "demo: every bundled demo builds into a valid tape" {
         try std.testing.expect(std.mem.endsWith(u8, owned.tape.keyframes[0].root, e.name));
 
         // And it travels as a `.tape` (what a site hosts) unchanged.
-        const bytes = try automation.binary.encode(std.testing.allocator, owned.tape);
+        const bytes = try automation.binary.encode(std.testing.allocator, owned.tape, .{});
         defer std.testing.allocator.free(bytes);
         var back = try automation.Tape.load(std.testing.allocator, bytes, automation.Input.check);
         defer back.deinit();
@@ -5188,7 +5188,7 @@ test "demo: the hand-written sample tape parses and round-trips" {
     // `Tape.load` takes the source as it is and the binary form alike.
     var loaded = try automation.Tape.load(std.testing.allocator, source, automation.Input.check);
     defer loaded.deinit();
-    const bytes = try automation.binary.encode(std.testing.allocator, owned.tape);
+    const bytes = try automation.binary.encode(std.testing.allocator, owned.tape, .{});
     defer std.testing.allocator.free(bytes);
     var from_binary = try automation.Tape.load(std.testing.allocator, bytes, automation.Input.check);
     defer from_binary.deinit();
@@ -7645,7 +7645,7 @@ test "automation service: tape bytes in, a ticket back, the outcome by ticket" {
     // The binary form plays the same; the first tape's outcome is still there to ask for.
     var owned = try liveTape();
     defer owned.deinit();
-    const encoded = try automation.binary.encode(std.testing.allocator, owned.tape);
+    const encoded = try automation.binary.encode(std.testing.allocator, owned.tape, .{});
     defer std.testing.allocator.free(encoded);
     const second = try started(api.play(encoded));
     try std.testing.expect(second != ticket);
