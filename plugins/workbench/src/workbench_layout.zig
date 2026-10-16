@@ -21,8 +21,9 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 
     if (!wb.restored) {
         wb.restored = true;
-        // Where the app arranges the panes, its own layout brought them back.
-        if (wb.places == null) loadPanes(wb);
+        // Where the app arranges the panes, it brought them back itself — and carries an
+        // arrangement saved before it did over into its own (fizzy's `Workspaces.carryOver`).
+        loadPanes(wb);
         for (host.assignedRegionNames()) |region_name| {
             const grouping = Workspace.groupingOfName(region_name) orelse continue;
             // A copy: the assignment is borrowed until the next `assignSurfaces`, and each open
@@ -226,6 +227,14 @@ fn loadPanes(wb: *Workbench) void {
     if (wb.workspaces.count() > 0 and wb.paneLeaf(wb.open_workspace_grouping) == null) {
         wb.open_workspace_grouping = wb.workspaces.keys()[0];
     }
+}
+
+/// Delete the saved arrangement: the app has taken it over (`Workbench.places`).
+pub fn forgetPanes(wb: *Workbench) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const path = panesPath(wb) orelse return;
+    defer wb.allocator.free(path);
+    std.Io.Dir.cwd().deleteFile(dvui.io, path) catch {};
 }
 
 fn panesPath(wb: *Workbench) ?[]u8 {

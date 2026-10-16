@@ -1399,8 +1399,13 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
     if (self.state.floatRoot(name) == null) {
         if (self.state.dock) |*dock| return splitDock(self, dock, name, side);
     }
+    return splitOnSized(self, name, side, ViewDrag.placeSize(self.state, name) orelse return null, 0.5);
+}
 
-    const size = ViewDrag.placeSize(self.state, name) orelse return null;
+/// `splitOn` for a place of `size` that need not have been drawn yet — a split of a half another
+/// split made this frame, as a saved arrangement is rebuilt — with `share` of it for the new half.
+/// Only the split forest's: a seed's dock tree splits its own drawn leaves (`splitOn`).
+pub fn splitOnSized(self: *Layout, name: []const u8, side: SplitTree.Side, size: dvui.Size, share: f32) ?[]const u8 {
     const span = switch (SplitTree.axisOf(side)) {
         .horizontal => size.w,
         .vertical => size.h,
@@ -1415,7 +1420,7 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
     intern.state = self.state;
     // Halved the way the preview halves it — the sash out of the middle, both
     // sides the same — so what slid open is the size that lands.
-    const want = @max(1, (span - Split.handle_size) / 2);
+    const want = @max(1, (span - Split.handle_size) * std.math.clamp(share, 0, 1));
     const new = self.state.splits.split(self.gpa, intern.go, name, side, want, null) orelse return null;
     if (self.state.setExtent(self.gpa, new, want)) self.extents_changed = true;
     self.state.assign(self.gpa, new, &.{}) catch {};

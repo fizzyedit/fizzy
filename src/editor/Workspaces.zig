@@ -22,6 +22,9 @@ const Workspaces = @This();
 
 /// Each pane's view, by its grouping.
 views: std.AutoArrayHashMapUnmanaged(u64, *View) = .empty,
+/// Whether last session's layout has been squared with the panes that came back, once the
+/// layout has drawn (`settle`).
+settled: bool = false,
 
 const View = struct {
     editor: *Editor,
@@ -111,6 +114,10 @@ pub fn sync(self: *Workspaces) void {
     // Every pane but one is somewhere it was put; the one is where the keywords show it. More
     // than one with nowhere to be would all be Main's, and Main shows one.
     if (editor.app.layout.regions.items.len == 0) return;
+    if (!self.settled) {
+        self.settled = true;
+        self.settle();
+    }
     var first: ?u64 = null;
     for (wb.workspaces.keys()) |g| {
         if (self.assigned(g)) continue;
@@ -148,6 +155,93 @@ fn seat(self: *Workspaces) void {
         const toward = if (want == 0 and !wb.workspaces.contains(0)) wb.open_workspace_grouping else want;
         const ws = wb.pane(stale_in orelse toward) catch continue;
         ws.addTab(id, false);
+    }
+}
+
+/// Square last session's layout with the panes that came back, the first frame there are places
+/// to read. A place whose workspace did not come back (it held no document at quit, or none that
+/// could open) closes, as it would have had it emptied. And an arrangement the workbench saved
+/// before the app arranged its panes (`panes.zon`) becomes the app's: its tree, split for split,
+/// out of the place the first workspace is in, each pane's workspace in its half. Then the file
+/// goes, the arrangement being the layout's to keep from here on.
+fn settle(self: *Workspaces) void {
+    const editor = self.editorOf();
+    const wb = &editor.workbench;
+    var l = layoutOf(editor);
+
+    var gone: std.ArrayListUnmanaged([]const u8) = .empty;
+    var any_placed = false;
+    var it = editor.app.layout.assignments.valueIterator();
+    while (it.next()) |ids| for (ids.*) |id| {
+        if (!std.mem.startsWith(u8, id, id_prefix)) continue;
+        const g = std.fmt.parseInt(u64, id[id_prefix.len..], 10) catch continue;
+        if (wb.workspaces.contains(g)) {
+            any_placed = true;
+        } else gone.append(l.arena, l.arena.dupe(u8, id) catch continue) catch {};
+    };
+    for (gone.items) |id| _ = Layout.ViewDrag.withdraw(&l, id);
+
+    const panes = &wb.panes;
+    const root = panes.nodes.items[panes.root];
+    // Placed already, the layout is the app's; a single pane is no arrangement.
+    if (!any_placed and root == .split) carry: {
+        const first = firstLive(wb, panes.root) orelse break :carry;
+        var buf: [64]u8 = undefined;
+        const place = Layout.ViewDrag.holderOf(&l, viewId(&buf, first)) orelse break :carry;
+        const size = Layout.ViewDrag.placeSize(l.state, place) orelse break :carry;
+        carryOver(self, &l, panes.root, place, size);
+    }
+    wb.forgetPanes();
+}
+
+/// Lay `node` of the workbench's old tree out in place `name`, `size` big: a pane's workspace is
+/// put there, and a split splits it, the second half as big a share as it had.
+fn carryOver(self: *Workspaces, l: *Layout, node: Workbench.Panes.NodeIndex, name: []const u8, size: dvui.Size) void {
+    const wb = &self.editorOf().workbench;
+    switch (wb.panes.nodes.items[node]) {
+        .free => {},
+        .leaf => {
+            const g = firstLive(wb, node) orelse return;
+            var buf: [64]u8 = undefined;
+            const id = l.arena.dupe(u8, viewId(&buf, g)) catch return;
+            l.state.assign(l.gpa, name, &.{id}) catch {};
+        },
+        .split => |sp| {
+            if (firstLive(wb, sp.first) == null) return carryOver(self, l, sp.second, name, size);
+            if (firstLive(wb, sp.second) == null) return carryOver(self, l, sp.first, name, size);
+            const across = sp.dir == .horizontal;
+            const share = 1 - std.math.clamp(sp.ratio, 0, 1);
+            const owned = l.arena.dupe(u8, name) catch return;
+            const new = Layout.Region.splitOnSized(l, owned, if (across) .right else .bottom, size, share) orelse
+                return carryOver(self, l, sp.first, name, size);
+            const second = l.arena.dupe(u8, new) catch return;
+            var a = size;
+            var b = size;
+            if (across) {
+                a.w = size.w * (1 - share);
+                b.w = size.w * share;
+            } else {
+                a.h = size.h * (1 - share);
+                b.h = size.h * share;
+            }
+            carryOver(self, l, sp.first, owned, a);
+            carryOver(self, l, sp.second, second, b);
+        },
+    }
+}
+
+/// The first pane under `node` of the old tree that came back, by its grouping.
+fn firstLive(wb: *Workbench, node: Workbench.Panes.NodeIndex) ?u64 {
+    switch (wb.panes.nodes.items[node]) {
+        .free => return null,
+        .leaf => |leaf| {
+            for (leaf.tabs.items) |t| {
+                const g = Editor.Workspace.groupingOfName(t) orelse continue;
+                if (wb.workspaces.contains(g)) return g;
+            }
+            return null;
+        },
+        .split => |sp| return firstLive(wb, sp.first) orelse firstLive(wb, sp.second),
     }
 }
 

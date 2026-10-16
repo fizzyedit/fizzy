@@ -384,6 +384,10 @@ pub fn rebuildWorkspaces(self: *Workbench) !void {
     return workbench_layout.rebuildWorkspaces(self);
 }
 
+pub fn forgetPanes(self: *Workbench) void {
+    workbench_layout.forgetPanes(self);
+}
+
 pub fn drawWorkspaces(self: *Workbench, index: usize) !dvui.App.Result {
     return workbench_layout.drawWorkspaces(self, index);
 }
