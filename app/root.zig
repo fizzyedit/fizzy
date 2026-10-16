@@ -167,4 +167,5 @@ test {
     _ = watch.SettingsWatcher;
     _ = watch.ExecutableWatcher;
     _ = store.Loader;
+    _ = Tracks;
 }

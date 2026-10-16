@@ -1233,6 +1233,32 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         bench_step.dependOn(&run_bench.step);
     }
 
+    // `zig build bench-tracks` — what a document's track costs (`app.Tracks`): a step, a frame's
+    // top idle and with a checkpoint, a replay, what a session holds. Same rules as `bench-text`.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_tracks.zig"),
+        });
+        bench_module.addImport("app", app_module_test);
+        bench_module.addImport("fizzy_sdk", sdk_module_test);
+
+        const bench_tracks = b.addTest(.{ .name = "fizzy-bench-tracks", .root_module = bench_module });
+        bench_tracks.root_module.link_libcpp = !target_is_windows_msvc;
+        if (target.result.os.tag == .windows) {
+            bench_tracks.root_module.linkSystemLibrary("comctl32", .{});
+        }
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, bench_tracks, .{ .target = target, .optimize = optimize });
+        };
+
+        const bench_step = b.step("bench-tracks", "Benchmark a document's track: steps, checkpoints, replays (prints timings)");
+        const run_bench = b.addRunArtifact(bench_tracks);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
     // `zig build bench-tape` — saving and loading a tape, ZON against the binary form, at the
     // sizes of a demo, a recording and a long session. Same rules as `bench-text`; std-only, so
     // it needs no window and builds in seconds.
