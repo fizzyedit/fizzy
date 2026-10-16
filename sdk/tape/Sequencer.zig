@@ -180,8 +180,10 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
         const next_at: f64 = if (self.cursor < ops.len) @floatFromInt(ops[self.cursor].at) else std.math.inf(f64);
         // Spans run up to the next op's start: anything still in flight then lands before it.
         if (self.advanceSpans(@min(until, next_at), sink)) |p| return p;
-        if (next_at > until) {
-            self.now = @max(self.now, until);
+        // Past the last op, `until` may itself be infinite: `nextAt`'s "nothing next", which a
+        // live driver asks for as it is. Infinity is not past infinity, so the end is its own test.
+        if (self.cursor >= ops.len or next_at > until) {
+            if (std.math.isFinite(until)) self.now = @max(self.now, until);
             return .reached;
         }
         self.finishSpans(sink);
@@ -512,6 +514,27 @@ fn playTo(seq: *Sequencer, t: f64, frame_ms: f64, sink: Sink) void {
     while (seq.now < t and guard < 10_000) : (guard += 1) {
         _ = seq.advance(@min(t, seq.now + frame_ms), frame_ms, sink);
     }
+}
+
+test "asked for what is next with nothing left, it has reached the end" {
+    // A live driver asks for `nextAt`, which is infinite once the ops are spent — at once, for an
+    // empty tape (valid live: `Tape.validate`).
+    var log: Log = .{};
+    defer log.deinit();
+    const empty: Tape = .{ .name = "empty", .ops = &.{} };
+    var seq: Sequencer = .init(&empty);
+    try testing.expect(seq.done());
+    try testing.expectEqual(Progress.reached, seq.advance(seq.nextAt(), 16, log.sink()));
+    try testing.expectEqual(@as(f64, 0), seq.now);
+    try testing.expectEqualStrings("", log.out.items);
+
+    const ops = [_]Tape.Op{.{ .at = 40, .do = .{ .key = "mod+s" } }};
+    const one: Tape = .{ .name = "one", .ops = &ops };
+    seq = .init(&one);
+    try testing.expectEqual(Progress.yielded, seq.advance(seq.nextAt(), 16, log.sink()));
+    try testing.expect(seq.done());
+    try testing.expectEqual(Progress.reached, seq.advance(seq.nextAt(), 16, log.sink()));
+    try testing.expectEqual(@as(f64, 40), seq.now);
 }
 
 test "a click lands a frame after the glide that brought the pointer to it" {
