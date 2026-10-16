@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common.zig");
 // Vendored Velopack glue — see build/velopack.zig header (never `@import("velopack_zig")`).
 const velopack = @import("velopack.zig");
 const exe = @import("exe.zig");
@@ -141,7 +142,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                 &strip_release_sh.step,
             );
             vpk_pkg_sh.addArg("--packDir");
-            vpk_pkg_sh.addArg("zig-out/ZIG017");
+            vpk_pkg_sh.addDirectoryArg(common.installDirPath(.{ .custom = pack_input_subdir }));
             switch (target.result.os.tag) {
                 .windows => {
                     // Sets the installer's icon and the Start Menu shortcut icon. The

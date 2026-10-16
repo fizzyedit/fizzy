@@ -1,8 +1,6 @@
 const std = @import("std");
 
 const plugin = @import("fizzy_sdk").plugin;
-const update = @import("../update.zig");
-const GitDependency = update.GitDependency;
 
 /// Install `{id}.{ext}` flat under a `plugins/` directory (no `lib` prefix).
 pub fn attachBuiltinPluginInstall(
@@ -15,31 +13,16 @@ pub fn attachBuiltinPluginInstall(
     parent.dependOn(&plugin.installBuiltinPlugin(b, dylib, id, plugins_dir).step);
 }
 
-pub fn addUpdateStep(b: *std.Build) void {
-    const step = b.step("update", "update git dependencies");
-    _ = step; // ZIG017: makeFn gone; this step is stale anyway
-}
-
-fn updateStep(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
-    const deps = &.{
-        GitDependency{
-            .url = "https://github.com/foxnne/zig-objc",
-            .branch = "main",
-        },
-        GitDependency{
-            .url = "https://github.com/kristoff-it/zigwin32",
-            .branch = "fix/zig16",
-        },
-        GitDependency{
-            .url = "https://github.com/foxnne/zig-lib-icons",
-            .branch = "dvui",
-        },
-        GitDependency{
-            .url = "https://github.com/foxnne/dvui-dev",
-            .branch = "main",
-        },
+/// Where `dir` is under the install prefix, resolved when the build runs: Zig 0.17 has no
+/// install path at configure time.
+pub fn installDirPath(dir: std.Build.InstallDir) std.Build.LazyPath {
+    return switch (dir) {
+        .prefix => .{ .relative = .{ .base = .install_prefix } },
+        .lib => .{ .relative = .{ .base = .install_lib } },
+        .bin => .{ .relative = .{ .base = .install_bin } },
+        .header => .{ .relative = .{ .base = .install_include } },
+        .custom => |sub| .{ .relative = .{ .base = .install_prefix, .sub_path = sub } },
     };
-    try update.update_dependency(step.owner.allocator, step.owner.graph.io, deps);
 }
 
 /// Installed artifacts go under `zig-out/<this>/…` so `packageall` and parallel targets never clobber each other.
@@ -75,6 +58,8 @@ pub const MacosSdlPaths = struct {
 };
 
 fn resolveMacosSdkPath(b: *std.Build) ![]const u8 {
+    // ZIG017 (release packaging PR): `SDKROOT` is read at configure, which 0.17 caches without
+    // regard to the environment; becomes a -D option.
     if (b.graph.environ_map.get("SDKROOT")) |sdk| {
         const trimmed = std.mem.trim(u8, sdk, " \t\r\n");
         if (trimmed.len > 0) {

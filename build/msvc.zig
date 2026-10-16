@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn applyMsvcTranslateCShim(b: *std.Build, roots: []const *std.Build.Step.Compile) !void {
-    if (true) return; // ZIG017: Step.id and generated-file steps reworked in 0.17
+    if (true) return; // ZIG017 (release packaging PR): Step.id and generated-file steps are gone in 0.17; the MSVC shim moves to where each translate-c step is made
     var seen = std.AutoHashMap(*std.Build.Step.TranslateC, void).init(b.allocator);
     defer seen.deinit();
     for (roots) |root_compile| {

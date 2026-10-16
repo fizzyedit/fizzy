@@ -222,7 +222,7 @@ pub fn addFizzyExecutableForTarget(
 
     const exe = b.addExecutable(.{
         .name = app_name,
-        .root_module = b.createModule(.{ // ZIG017: 0.17 refuses a second public "App"
+        .root_module = b.createModule(.{ // private: one per target, and 0.17 refuses a second public "App"
             .target = resolved_target,
             .optimize = optimize,
             // `b.path`, not `.cwd_relative`: this resolves against *fizzy's* build root, which
