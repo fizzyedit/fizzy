@@ -282,7 +282,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
     const ranked_all = offered(f, &region, &query);
     // Each card under the place holding it, or else the place its keywords make it for; this one
     // first, so what belongs in the explorer and what in the panel reads off the headers. A
-    // query ranks within each. Sorted once, not per section.
+    // query ranks within each. Each card's section is worked out once, not once per section.
     const sections = f.arena.alloc(usize, ranked_all.len) catch return;
     for (ranked_all, sections) |ranked, *section| {
         const s = &f.host.surfaces.items[ranked.item];
@@ -461,6 +461,9 @@ test "a view a place holds is listed under that place, whatever its keywords" {
 /// The place being edited, when no card falls under it: its header still leads, so the popup
 /// says which place it fills — a split's new leaf accepts no view's keywords until one is put in.
 fn emptyHome(region: *const Layout.Region, query: *const core.fuzzy.Query) void {
+    var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    defer box.deinit();
+    core.anchor.mark(box.data(), "picker.empty", .{});
     sectionHeader(region.name, 0);
     dvui.labelNoFmt(@src(), if (query.isEmpty()) "Nothing here yet." else "No matching views here.", .{}, .{
         .padding = .{ .x = 4, .h = 4 },

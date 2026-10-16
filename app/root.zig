@@ -42,6 +42,8 @@ pub const Recents = @import("Recents.zig");
 pub const ActivityFeed = @import("ActivityFeed.zig");
 /// A track per open document: its history with the time put back in.
 pub const Tracks = @import("Tracks.zig");
+/// A document's transport: its history as a line at the bottom of its pane, undo and redo as seeks.
+pub const HistoryTransport = @import("HistoryTransport.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {
@@ -168,4 +170,5 @@ test {
     _ = watch.ExecutableWatcher;
     _ = store.Loader;
     _ = Tracks;
+    _ = HistoryTransport;
 }

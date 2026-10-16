@@ -647,6 +647,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
+        // When a document's transport shows and for how long, how far a held undo goes, which
+        // step a point on its line is. std-only (see history_transport.zig); `HistoryTransport`
+        // draws it.
+        .{ "fizzy-history-transport-tests", "app/history_transport.zig" },
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
