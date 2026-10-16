@@ -32,8 +32,11 @@ Each directory is file for file the shape a third-party plugin has, and the temp
 - **A test build that overwrote a user's installed plugin is theirs to restore.** Say so. Don't
   copy anything back from the loader's `.load-copy/`.
 - **An installed dylib refuses to load if its optimize mode differs from the app's**
-  (`AbiBuildEnvMismatch`). `zig build` defaults to Debug, and store plugins are built
+  (`AbiOptimizeMismatch`). `zig build` defaults to Debug, and store plugins are built
   ReleaseFast.
+- **A Fizzy built from `main` past an SDK release refuses plugins built against that release**
+  (`AbiShapeMismatch`): `sdk` feature PRs move the shape and leave `sdk_version` alone. Build
+  the plugin against the checkout's SDK with `zig build --fork=<fizzy>/sdk`.
 - **A plugin built from the released SDK tarball ignores local `sdk/` and `core/` edits.** To
   test an SDK change end to end, point its `build.zig.zon` `.fizzy` dependency at a *relative*
   path (`../../fizzy/sdk`; absolute paths are rejected).

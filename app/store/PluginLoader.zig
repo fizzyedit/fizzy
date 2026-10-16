@@ -62,7 +62,8 @@ pub const LoadError = error{
     SetRenderBridgeSymbolMissing,
     SdkVersionSymbolMissing,
     AbiMismatch,
-    AbiBuildEnvMismatch,
+    AbiOptimizeMismatch,
+    AbiShapeMismatch,
     SdkVersionMismatch,
     PluginIdMismatch,
     RegisterRejected,
@@ -403,14 +404,14 @@ pub fn open(allocator: std.mem.Allocator, path: []const u8, expected_id: []const
                 plugin_fp,
             });
         } else {
-            // `sdk_version` is bumped exactly when the SDK boundary shape changes
-            // (`test-sdk-version` CI enforces this). So if the plugin was built against the
-            // same `sdk_version` we run, the fingerprint can only differ on things
-            // `sdk_version` does not cover — arch, os, or optimize mode (Debug vs ReleaseFast).
-            // Report that as a distinct, less alarming error than a genuine SDK drift.
+            // The fingerprint is the boundary shape folded with the optimize class, so a refusal
+            // is one or the other. The shape can move without the version: feature PRs record
+            // a new shape and only a release bumps `sdk_version`, so a Fizzy built from `main`
+            // past a release refuses plugins built against that release.
+            if (dylib_api.optimizeClassOf(plugin_fp) != null) return error.AbiOptimizeMismatch;
             const built_with = readVersionTriplet(lookupVersionFn(&lib, dylib_api.symbol_sdk_version));
             if (std.SemanticVersion.order(built_with, version.sdk_version) == .eq) {
-                return error.AbiBuildEnvMismatch;
+                return error.AbiShapeMismatch;
             }
             return error.AbiMismatch;
         }

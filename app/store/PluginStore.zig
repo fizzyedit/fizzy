@@ -2875,8 +2875,7 @@ const store_optimize_class = "fast";
 /// shard URL the store never publishes under, and *every* plugin — including ones whose SDK
 /// version matches this host exactly — reads "No compatible build in store". That message points
 /// at the store, but the cause is entirely local and comptime-known, so say so instead. Same
-/// condition the local load path reports as `error.AbiBuildEnvMismatch` ("SDK versions match, but
-/// optimize mode does not match").
+/// condition the local load path reports as `error.AbiOptimizeMismatch`.
 const host_optimize_matches_store = std.mem.eql(u8, dylib.optimize_safety_class, store_optimize_class);
 
 /// Cap on the reported min width of the no-build message (same `max_size_content` trick as

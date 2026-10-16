@@ -885,7 +885,14 @@ const missing_symbols_reason = "the plugin is missing required entry symbols —
 
 const load_failure_reasons = .{
     .AbiMismatch = "built against an incompatible Fizzy SDK — rebuild the plugin against this Fizzy build",
-    .AbiBuildEnvMismatch = "SDK versions match, but optimize mode does not match",
+    .AbiOptimizeMismatch = if (std.mem.eql(u8, sdk.dylib.optimize_safety_class, "safe"))
+        "built ReleaseFast or ReleaseSmall, but this Fizzy is a " ++ @tagName(builtin.mode) ++
+            " build — rebuild the plugin in Debug, or run a release build of Fizzy"
+    else
+        "built Debug or ReleaseSafe, but this Fizzy is a " ++ @tagName(builtin.mode) ++
+            " build — rebuild the plugin with -Doptimize=ReleaseFast",
+    .AbiShapeMismatch = "same SDK version but a different SDK shape — a Fizzy built from main past " ++
+        "a release needs plugins built with zig build --fork=<fizzy>/sdk (or this Fizzy is older than the plugin's SDK)",
     .SdkVersionMismatch = "requires a newer Fizzy SDK — update Fizzy or install a matching plugin build",
     .PluginIdMismatch = "plugin id in the dylib does not match its filename — rename the file or fix manifest.id",
     .DylibOpenFailed = "the plugin library could not be opened (missing file, wrong architecture, or unresolved symbols)",

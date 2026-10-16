@@ -26,7 +26,8 @@ pub const LoadError = error{
     Unsupported,
     LoadFailed,
     AbiMismatch,
-    AbiBuildEnvMismatch,
+    AbiOptimizeMismatch,
+    AbiShapeMismatch,
     SdkVersionMismatch,
     PluginIdMismatch,
     RegisterRejected,
@@ -288,8 +289,10 @@ pub fn prepare(url: []const u8, expected_id: []const u8, lib_in: WebDynLib) Load
     const abi_fp_fn = lib.lookup(dylib_api.GetAbiFingerprintFn, dylib_api.symbol_abi_fingerprint) orelse return error.LoadFailed;
     const plugin_fp = abi_fp_fn();
     if (!dylib_api.fingerprintMatches(plugin_fp)) {
+        // Same split as the desktop loader's: optimize class, then shape under one version.
+        if (dylib_api.optimizeClassOf(plugin_fp) != null) return error.AbiOptimizeMismatch;
         const built_with = readVersionTriplet(lib.lookup(dylib_api.GetSdkVersionFn, dylib_api.symbol_sdk_version));
-        if (std.SemanticVersion.order(built_with, version.sdk_version) == .eq) return error.AbiBuildEnvMismatch;
+        if (std.SemanticVersion.order(built_with, version.sdk_version) == .eq) return error.AbiShapeMismatch;
         return error.AbiMismatch;
     }
 
