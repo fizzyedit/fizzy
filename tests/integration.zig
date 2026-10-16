@@ -7281,6 +7281,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         for (0..3) |_| _ = try dvui.testing.step(inlineMarkdownFrame);
         try std.testing.expect(inline_md_height > one_para * 2);
         inline_md.?.release(0x1d1e);
+
+        // Streamed in a few bytes a frame, as a chat reply arrives, it only ever grows. Each
+        // re-parse left the edited block with an estimate that a pin then emitted for a frame, so
+        // a streaming reply shrank by a line and grew back, over and over.
+        const reply = "Sure. Let me look at how the view lays out a message while it streams, because that is where the motion comes from.\n\nThe **scroll area** sizes its content from last frame's sizes, and a message that grows by a line is a frame late.\n\n- one point\n- and a second that goes on long enough to wrap at this width, and then some more";
+        var last: f32 = 0;
+        var n: usize = 0;
+        while (n < reply.len) {
+            n = @min(reply.len, n + 9);
+            inline_md_text = reply[0..n];
+            _ = try dvui.testing.step(inlineMarkdownFrame);
+            if (inline_md_height + 0.5 < last) {
+                std.debug.print("inline markdown shrank from {d:.1} to {d:.1} at byte {d}\n", .{ last, inline_md_height, n });
+                return error.TestUnexpectedResult;
+            }
+            last = inline_md_height;
+        }
+        inline_md.?.release(0x1d1e);
     }
 
     // The `plugins` service: what each plugin's loading did. A built-in is loaded; a reload that

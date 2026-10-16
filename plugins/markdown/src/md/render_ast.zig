@@ -1949,8 +1949,16 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         // everything below jumps, and next frame's anchor "corrects" it — the flash that
         // only happens when scrolling up. Pin the *emitted* height to the table; `record` still
         // learns the real size from the unconstrained inner box (see `measured` below).
-        const pin_for_above = known_h > 0 and !width_in_flux and y <= anchor_y;
-        const pin_h: ?f32 = if (known_h > 0 and !width_in_flux and
+        //
+        // Only a virtualized render pins. With no viewport (`drawInline`: a chat bubble, a
+        // tooltip) every block is laid out every frame, so no block comes back from a spacer and
+        // there is nothing for a pin to hide. There a pin does harm: an edit re-parses, which
+        // leaves the edited block with an estimate (biased low) or the deferred height its first
+        // frame filed, and next frame's pin emits that in place of its real height. The caller
+        // sees the block shrink by a line and grow back; a chat streaming a reply re-parses on
+        // every chunk, so its conversation bounced by a line each time.
+        const pin_for_above = virtualize and known_h > 0 and !width_in_flux and y <= anchor_y;
+        const pin_h: ?f32 = if (virtualize and known_h > 0 and !width_in_flux and
             (pin_for_above or
                 (frozen and block_state != .estimated) or
                 pinnable)) known_h else null;
