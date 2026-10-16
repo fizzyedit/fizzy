@@ -11,6 +11,9 @@
 //! Cards assign a surface here. That is how a sidebar view stays in the
 //! sidebar, and how a plugin readme lands in the center — keywords are the
 //! default guess, an assignment is the answer. "Back to defaults" undoes it.
+//! The cards are listed under the place their keywords are for — this place
+//! first, then each other place by its name, then "Other" — so a view made for
+//! the panel reads as one, wherever the picker was opened.
 //!
 //! A card is also a handle. Dragged out of the popup it becomes the same
 //! floating view the corner button lifts out of a place (`ViewDrag`), and
@@ -28,6 +31,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
+const icons = @import("icons");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
 const State = @import("State.zig");
@@ -207,14 +211,14 @@ pub fn draw(self: *Picker, f: *Layout) void {
                         .frost = core.widgets.menuFrost(),
                     }, core.widgets.menuSurfaceOptions());
                     defer choices.deinit();
-                    if (core.widgets.menuRow(@src(), "Vertical", .{}) != null) {
+                    if (core.widgets.menuRow(@src(), "Vertical", .{ .icon = icons.tvg.lucide.@"columns-2" }) != null) {
                         choices.close();
                         f.splitNamed(region.name, .horizontal);
                         self.close(gpa);
                         state.discardSnapshots(gpa);
                         return;
                     }
-                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .id_extra = 1 }) != null) {
+                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .icon = icons.tvg.lucide.@"rows-2", .id_extra = 1 }) != null) {
                         choices.close();
                         f.splitNamed(region.name, .vertical);
                         self.close(gpa);
@@ -269,11 +273,24 @@ pub fn draw(self: *Picker, f: *Layout) void {
     var row: ?*dvui.BoxWidget = null;
     defer if (row) |r| r.deinit();
     var col: usize = 0;
-    for (offered(f, &region, &query)) |ranked| {
+    const places = placesFor(f, &region);
+    const ranked_all = offered(f, &region, &query);
+    // Each card under the place its keywords make it for, this one first, so what belongs in
+    // the explorer and what in the panel reads off the headers; a query ranks within each.
+    var current: ?usize = null;
+    for (0..places.len + 1) |section| for (ranked_all) |ranked| {
         // `i` is the surface's place in the registry, not in this list: a card keeps its widget
         // id while the filter reorders what is around it.
         const i = ranked.item;
         const s = &f.host.surfaces.items[i];
+        if ((sectionOf(places, s.keywords) orelse places.len) != section) continue;
+        if (current != section) {
+            current = section;
+            if (row) |r| r.deinit();
+            row = null;
+            col = 0;
+            sectionHeader(if (section < places.len) places[section].name else "Other", section);
+        }
         if (col == 0) {
             if (row) |r| r.deinit();
             row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .horizontal });
@@ -330,7 +347,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
         }
         state.markDirty();
         dvui.refresh(null, @src(), null);
-    }
+    };
 
     if (state.store_catalog) |store| drawStoreSection(f, &region, store, &row, &col, &query);
 }
@@ -348,6 +365,73 @@ fn offered(f: *Layout, region: *const Layout.Region, query: *const core.fuzzy.Qu
     }
     if (!query.isEmpty()) core.fuzzy.sort(usize, out.items);
     return out.items;
+}
+
+/// A place a card can be listed under: a region's name and the keywords it accepts.
+const Place = struct {
+    name: []const u8,
+    keywords: []const []const u8,
+};
+
+/// The places the picker sorts cards under: `region` itself first, then each other kind of place
+/// the shape declared, in its order. One per keyword group — the icon rail and the explorer it
+/// chooses for are one place — and never a document pane, which offers only documents.
+fn placesFor(f: *Layout, region: *const Layout.Region) []const Place {
+    var out: std.ArrayListUnmanaged(Place) = .empty;
+    out.append(f.arena, .{ .name = region.name, .keywords = region.keywords }) catch return &.{};
+    for (f.state.regions.items) |*r| {
+        if (r.name.len == 0 or r.kind_slot) continue;
+        const key = sdk.keywords.groupKey(r.keywords);
+        const seen = for (out.items) |p| {
+            if (sdk.keywords.groupKey(p.keywords) == key) break true;
+        } else false;
+        if (!seen) out.append(f.arena, .{ .name = r.name, .keywords = r.keywords }) catch break;
+    }
+    return out.items;
+}
+
+/// The place a surface is made for: the one accepting its keywords most strongly, the first of
+/// equals — `places[0]`, the place being edited, when it is among them. Null when none accepts it.
+/// The same fit `Layout` binds by (`sdk.keywords.strength`), so the header a card sits under is
+/// where its keywords would put it.
+fn sectionOf(places: []const Place, keywords: []const []const u8) ?usize {
+    var best: ?usize = null;
+    var best_fit: sdk.keywords.Fit = .none;
+    for (places, 0..) |p, i| {
+        const fit = sdk.keywords.strength(p.keywords, keywords);
+        if (@intFromEnum(fit) > @intFromEnum(best_fit)) {
+            best = i;
+            best_fit = fit;
+        }
+    }
+    return best;
+}
+
+test "a view is listed under the place its keywords are for, the edited place first" {
+    const kw = sdk.keywords.ide;
+    const places = [_]Place{
+        .{ .name = "Panel", .keywords = kw.panel },
+        .{ .name = "Sidebar", .keywords = kw.sidebar },
+        .{ .name = "Main", .keywords = kw.main },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), sectionOf(&places, &.{"explorer"}));
+    try std.testing.expectEqual(@as(?usize, 0), sectionOf(&places, &.{"output"}));
+    // Made for both: the place being edited wins the tie.
+    try std.testing.expectEqual(@as(?usize, 0), sectionOf(&places, &.{ "sidebar", "panel" }));
+    // A specific sub-place still lands under the area that holds it.
+    try std.testing.expectEqual(@as(?usize, 2), sectionOf(&places, &.{"main.document"}));
+    try std.testing.expectEqual(@as(?usize, null), sectionOf(&places, &.{"inspector"}));
+    try std.testing.expectEqual(@as(?usize, null), sectionOf(&places, &.{}));
+}
+
+/// A heading over a run of cards — a place's name, or the store.
+fn sectionHeader(title: []const u8, id_extra: usize) void {
+    dvui.labelNoFmt(@src(), title, .{}, .{
+        .id_extra = id_extra,
+        .font = dvui.Font.theme(.heading),
+        .padding = .{ .y = 10, .x = 4 },
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
+    });
 }
 
 /// Where a view comes from, as its card says it: the plugin's name, or "Built-in" for one the app
@@ -746,11 +830,7 @@ fn drawStoreSection(
     }
     col.* = 0;
 
-    dvui.labelNoFmt(@src(), "Store", .{}, .{
-        .font = dvui.Font.theme(.heading),
-        .padding = .{ .y = 10, .x = 4 },
-        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
-    });
+    sectionHeader("Store", 10_000);
 
     for (offers.items, 0..) |offer, i| {
         if (col.* == 0) {

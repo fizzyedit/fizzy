@@ -2431,6 +2431,90 @@ test "a split before a region that hides itself is not drawn, and nothing draws 
     try std.testing.expectEqual(@as(usize, 2), editor.app.layout.regions.items.len);
 }
 
+/// Sidebar beside Main over Panel, with the picker drawn over them as fizzy's frame does.
+const PickerFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        fizzy.core.anchor.want();
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        {
+            var content = try layout.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+            defer content.deinit();
+            {
+                var sidebar = try layout.region(@src(), .{ .name = "Sidebar", .keywords = sdk.keywords.ide.sidebar, .shows = .many }, .{ .min_size_content = .{ .w = 200 }, .expand = .vertical });
+                defer sidebar.deinit();
+            }
+            layout.split(@src(), .{});
+            {
+                var right = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+                defer right.deinit();
+                {
+                    var main = try layout.region(@src(), .{ .name = "Main", .keywords = sdk.keywords.ide.main }, .{ .expand = .both });
+                    defer main.deinit();
+                }
+                layout.split(@src(), .{});
+                {
+                    var panel = try layout.region(@src(), .{ .name = "Panel", .keywords = sdk.keywords.ide.panel, .shows = .many }, .{ .min_size_content = .{ .h = 200 }, .expand = .horizontal });
+                    defer panel.deinit();
+                }
+            }
+        }
+        e.app.layout.publishRegions();
+        layout.captureUnplaced();
+        e.app.layout.picker.draw(&layout);
+        return .ok;
+    }
+};
+
+test "the picker lists each view under the place it is made for, the open place first" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.picker.close(editor.app.gpa);
+    defer editor.app.layout.discardSnapshots(editor.app.gpa);
+
+    try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = sdk.keywords.ide.sidebar, .draw = PickerFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = sdk.keywords.ide.panel, .draw = PickerFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.misc", .title = "Misc", .keywords = &.{"inspector"}, .draw = PickerFrame.draw });
+
+    PickerFrame.editor = editor;
+    defer PickerFrame.editor = null;
+    try dvui.testing.settle(PickerFrame.frame);
+
+    const y = struct {
+        fn of(id: []const u8) !f32 {
+            var buf: [64]u8 = undefined;
+            return (try dvui.testing.tagGet(try std.fmt.bufPrint(&buf, "picker:{s}", .{id}))).rect.y;
+        }
+    }.of;
+
+    // From the panel: its own view first, then the sidebar's, then the one no place asks for.
+    // Stepped, not settled: the open popup keeps asking for frames.
+    editor.app.layout.openPicker(editor.app.gpa, "Panel", null);
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expect(try y("test.output") < try y("test.files"));
+    try std.testing.expect(try y("test.files") < try y("test.misc"));
+
+    // From the sidebar, the sidebar's view leads instead.
+    editor.app.layout.openPicker(editor.app.gpa, "Sidebar", null);
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expect(try y("test.files") < try y("test.output"));
+    try std.testing.expect(try y("test.output") < try y("test.misc"));
+}
+
 test "a hide_when_empty panel stays while its view is dragged onto main" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
