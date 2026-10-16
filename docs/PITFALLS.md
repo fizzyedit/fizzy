@@ -15,6 +15,13 @@ goes beside the code if it has an area, here if not.
   for function-local structs with `var`s inside generic functions.
 - **Tests run only from files their root module analyzes** (`tests/AGENTS.md`).
   `zig build check-tests-reached` names any that don't.
+- **On Windows, "test runner failed to respond" with every test passed means a leaked pipe.**
+  Zig 0.16's Windows spawn makes each child inherit every inheritable handle the build runner
+  holds, its other children's pipes among them. A long-lived child (a compiler, a sleeper)
+  spawned beside a test keeps that test's stdout open, so after the test exits the runner waits a
+  minute for EOF and fails it. CI compiles the tests (`zig build check`) before running them for
+  this; don't fold the two steps back together, or start anything long-lived inside `zig build
+  test`.
 
 ## Running a second fizzy
 

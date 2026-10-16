@@ -184,6 +184,17 @@ jobs:
       - name: Fetch dependencies (with retries)
         shell: bash
         run: bash scripts/ci-retry.sh zig build --fetch
+      # Every test binary is compiled before any of them runs, so no compiler is alive beside a
+      # running test. On Windows, Zig 0.16 spawns each child inheriting every inheritable handle
+      # the build runner holds, the pipes it is making for its other children included. A
+      # compiler spawned while a test's pipes exist keeps a copy of that test's stdout: the test
+      # passes and exits, but its stdout reaches EOF only when the compiler exits, and the runner
+      # gives up after a minute with "test runner failed to respond", on whichever tiny test was
+      # unlucky, about one run in thirty. `check` is exactly the compiles `test` needs, so the
+      # step after it spawns only test binaries, which live for milliseconds.
+      - name: Compile tests
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build check --summary all
       - name: Run tests
         shell: bash
         run: bash scripts/ci-retry.sh zig build test --summary all
