@@ -2407,6 +2407,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
 /// to). Where the document came from is the slot's plugin's to tidy: its tab moves, as a drop
 /// into another slot moves it.
 fn house(l: *Layout, dest: []const u8, plan: Drop.Plan, moved: []const u8) void {
+    if (carriedView(l, moved)) |carried| return landView(l, carried.from, dest, plan, carried.view);
     const place_name = switch (plan) {
         .split => |sp| Region.splitOn(l, dest, sp.mint) orelse return,
         .swap, .join => dest,
@@ -2420,6 +2421,41 @@ fn house(l: *Layout, dest: []const u8, plan: Drop.Plan, moved: []const u8) void 
     const list = if (many and plan != .split) idsWith(l.arena, holding(l, place_name), view) else l.arena.dupe([]const u8, &.{view}) catch return;
     l.state.assign(l.gpa, place_name, list) catch return;
     selectNamed(l, place_name, view);
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+/// The view a document carried alone carries with it (`State.Documents.alone`), and the place it
+/// is in: the only tab of its workspace takes the workspace along, so the drop moves that, as
+/// a drag of the workspace itself would, rather than making a new one round the document and
+/// leaving the old to close — a round trip that drew the document anew twice, and blinked.
+fn carriedView(l: *Layout, moved: []const u8) ?struct { view: []const u8, from: []const u8 } {
+    const docs = l.state.documents orelse return null;
+    if (l.state.view_drag.with_n > 1) return null;
+    const view = ownId(l.arena, docs.alone(docs.ctx, moved) orelse return null) orelse return null;
+    const from = ownId(l.arena, holderOf(l, view) orelse return null) orelse return null;
+    return .{ .view = view, .from = from };
+}
+
+/// Land view `view`, shown in place `from`, on `dest` as `plan` says — what `place` does with a
+/// view carried out of its place, for one a document carried along (`carriedView`).
+fn landView(l: *Layout, from: []const u8, dest: []const u8, plan: Drop.Plan, view: []const u8) void {
+    switch (plan) {
+        .split => |sp| {
+            const new = Region.splitOn(l, dest, sp.mint) orelse return;
+            l.state.assign(l.gpa, new, &.{view}) catch {};
+            selectNamed(l, new, view);
+            takeOut(l, from, view, null);
+        },
+        .swap, .join => if (std.mem.eql(u8, from, dest))
+            return
+        else if (joins(l, from, dest))
+            join(l, from, dest, view)
+        else
+            swap(l, from, dest, view),
+        .remove, .float => return,
+    }
+    shutIfEmptied(l, from);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
 }
@@ -2740,7 +2776,8 @@ fn join(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
         }
     }
     if (!containsId(ids.items, moved)) ids.append(l.arena, moved) catch {};
-    l.state.setShows(l.gpa, pair.keep, .many);
+    // As tabs only for more than one: a view joined with an empty half is the one view.
+    if (ids.items.len > 1) l.state.setShows(l.gpa, pair.keep, .many);
     l.state.assign(l.gpa, pair.keep, ids.items) catch {};
     l.state.assign(l.gpa, pair.drop, &.{}) catch {};
     selectNamed(l, pair.keep, moved);
