@@ -24,8 +24,7 @@ extern void fizzy_macos_window_request_clear_frames(void *nswindow, int frames);
 extern void fizzy_macos_window_commit_steady_state(void *nswindow);
 extern void fizzy_macos_window_glass_toolbar(void *nswindow, int on);
 extern void fizzy_macos_window_glass_follow(void *nswindow);
-extern void fizzy_macos_window_let_go(void *nswindow);
-extern void fizzy_macos_window_way_done(void *nswindow);
+extern void fizzy_macos_window_float_way(void *nswindow, int way);
 extern int fizzy_macos_window_has_liquid_glass(void *nswindow);
 extern void fizzy_macos_window_live_resize_vsync(void *nswindow, int active);
 extern bool SDL_GetHintBoolean(const char *name, bool default_value);
@@ -430,8 +429,8 @@ static void schedule_transition_watchdog(void *nswindow) {
         w->space_transition = NO;
         w->space_entering = NO;
         w->unzoom_animating = NO;
-        /* Never arrived: its child windows may be attached again (`fizzy_macos_window_let_go`). */
-        fizzy_macos_window_way_done(nswindow);
+        /* Never arrived: a float back above the main window (`fizzy_macos_window_float_way`). */
+        fizzy_macos_window_float_way(nswindow, 0);
         fizzy_macos_window_commit_steady_state(nswindow);
         request_resize_pump(nswindow, 30);
     });
@@ -691,8 +690,8 @@ static void start_space_animation(NSWindow *window, NSRect to, NSTimeInterval du
 static NSArray *fizzy_custom_windows_for_space(NSWindow *window, BOOL entering) {
     WindowMonitor *m = monitor_of((__bridge void *)window);
     if (!m) return nil;
-    /* Alone on its way: no child windows along, nor taken along by a parent. */
-    fizzy_macos_window_let_go((__bridge void *)window);
+    /* A float on its way at the normal level (`fizzy_macos_window_float_way`). */
+    fizzy_macos_window_float_way((__bridge void *)window, 1);
     /* The window as it is, before AppKit or SDL touch it for the transition: where its way in starts
      * and its way out ends, and its title bar's height for the way back. */
     if (entering) {
@@ -882,7 +881,7 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             break;
         case 1: // didEnter
             finish_space_animation(m);
-            fizzy_macos_window_way_done(win);
+            fizzy_macos_window_float_way(win, 0);
             /* Its backdrop square, its corners the screen's: however it got here — AppKit's own way
              * in, Split View — and not only the monitor's own animation. */
             fizzy_macos_window_glass_follow(win);
@@ -906,7 +905,7 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             break;
         case 3: // didExit
             finish_space_animation(m);
-            fizzy_macos_window_way_done(win);
+            fizzy_macos_window_float_way(win, 0);
             /* Its corners back, however it came out: AppKit's own way out of Split View too. */
             fizzy_macos_window_glass_follow(win);
             m->space_transition = NO;
@@ -1337,7 +1336,7 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
                                          usingBlock:^(__unused NSNotification *note) {
             WindowMonitor *wm = monitor_of(nswindow);
             if (!wm) return;
-            fizzy_macos_window_way_done(nswindow);
+            fizzy_macos_window_float_way(nswindow, 0);
             const BOOL entering = wm->space_entering;
             if (wm->anim_follow) {
                 const BOOL moved = wm->anim_active || !NSIsEmptyRect(wm->anim_from);

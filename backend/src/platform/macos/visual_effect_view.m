@@ -198,204 +198,106 @@ void fizzy_macos_viewport_still(void *nswindow) {
     if (window != nil) [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
 }
 
-/* Marks a child window attached by `fizzy_macos_window_attach_child`, the only kind let go as its
- * parent moves (`fizzy_macos_window_children_stay`): a menu or a dialog riding on its window
- * (`SDLBackend.Viewport.ride`) moves with it. */
-static char g_stays_put;
-/* Marks a window on its way into or out of a full screen Space, from letting go of the windows
- * attached to it (`fizzy_macos_window_let_go`) until AppKit says it has arrived or failed
- * (`fizzy_macos_window_way_done`): no window is attached to it or it to one meanwhile. Attached
- * again by a frame drawn between the two, before AppKit counted the way as begun, a child taken
- * full screen took its parent, and every other child, along with it (the user). */
-static char g_on_its_way;
+/* ---- Floats above the main window, by window level ----
+ *
+ * A window of the OS's own frame (`SDLBackend.Viewport.native`) stays over the main window as an
+ * owned window does on Windows: one level above the app's other windows while the app is active,
+ * back among them as it deactivates, so another app's windows still go over it. A level, not a
+ * child window: AppKit moves a child window with its parent — the window server moves a window
+ * dragged by its title bar before the app hears of it, so the children went along — and takes it
+ * along into and out of full screen, and every way of letting them go first was too late for one
+ * of those (the user). Nothing is attached here; the window server keeps the order.
+ *
+ * At the normal level, every float, whenever any window of the app is on its way into or out of a
+ * full screen Space or in one, whichever Space is showing: AppKit takes a window above the normal
+ * level along into the app's full screen Space as a palette — on its way there, and again as the
+ * person swipes over to it, before the app hears the Space changed (the user) — and a float's own
+ * way there is a normal window's. Above again once none of the app's windows is full screen. */
+static char g_float_above;
+static char g_float_on_its_way;
 
-/* `child` a child window of `parent`'s — kept over it by the window server, which never puts the
- * parent above it, as an owned window is on Windows — or, `attach` 0, its own again. Each only when
- * it is not so already. */
-void fizzy_macos_window_attach_child(void *parent, void *child, int attach) {
+static BOOL any_on_its_way_or_full(void) {
+    for (NSWindow *w in [NSApp windows]) {
+        if (objc_getAssociatedObject(w, &g_float_on_its_way) != nil) return YES;
+        if (([w styleMask] & NSWindowStyleMaskFullScreen) != 0) return YES;
+    }
+    return NO;
+}
+
+static void float_level(NSWindow *w, BOOL apart) {
+    if (objc_getAssociatedObject(w, &g_float_above) == nil) return;
+    const BOOL above = [NSApp isActive] && !apart && ([w styleMask] & NSWindowStyleMaskFullScreen) == 0;
+    const NSWindowLevel want = above ? NSNormalWindowLevel + 1 : NSNormalWindowLevel;
+    if ([w level] != want) [w setLevel:want];
+}
+
+static void float_level_all(void) {
+    const BOOL apart = any_on_its_way_or_full();
+    for (NSWindow *w in [NSApp windows]) float_level(w, apart);
+}
+
+/* `nswindow` sets out on its way into or out of full screen (`way` 1), from `toggleFullScreen:` or
+ * AppKit's asking for the way's windows, or has arrived, failed or been given up on (`way` 0). Any
+ * of the app's windows: the main window's way takes the floats down as much as a float's own. */
+void fizzy_macos_window_float_way(void *nswindow, int way) {
+    NSWindow *w = (__bridge NSWindow *)nswindow;
+    if (w == nil) return;
+    objc_setAssociatedObject(w, &g_float_on_its_way, way ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    float_level_all();
+}
+
+/* Down to the normal level before AppKit looks at the window for its way into full screen: the
+ * green button, the menu item and the shortcut all come through `toggleFullScreen:`. */
+static Class g_toggle_class = Nil;
+static IMP g_toggle_orig = NULL;
+
+extern int fizzy_macos_window_space_transition_active(void *nswindow);
+
+static void float_toggle_full_screen(id self, SEL cmd, id sender) {
+    void *w = (__bridge void *)self;
+    fizzy_macos_window_float_way(w, 1);
+    ((void (*)(id, SEL, id))g_toggle_orig)(self, cmd, sender);
+    /* A toggle AppKit never made a way of — refused, or dropped as the app activated — lets the
+     * floats back up: nothing else would (the monitor's watchdog only follows a way that began). */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (fizzy_macos_window_space_transition_active(w) == 0) fizzy_macos_window_float_way(w, 0);
+    });
+}
+
+static void float_hook_toggle(NSWindow *w) {
+    Class cls = object_getClass(w);
+    if (g_toggle_class != Nil) return;
+    SEL sel = @selector(toggleFullScreen:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (m == NULL) return;
+    g_toggle_orig = method_getImplementation(m);
+    /* An override of the window's own class: added where it inherits NSWindow's, replaced where it
+     * has one. */
+    if (!class_addMethod(cls, sel, (IMP)float_toggle_full_screen, method_getTypeEncoding(m))) {
+        g_toggle_orig = method_setImplementation(class_getInstanceMethod(cls, sel), (IMP)float_toggle_full_screen);
+    }
+    g_toggle_class = cls;
+}
+
+/* `nswindow`, a window of the OS's own frame, kept above the main window from now on. */
+void fizzy_macos_window_float_above(void *nswindow) {
     @autoreleasepool {
-        NSWindow *p = (__bridge NSWindow *)parent;
-        NSWindow *w = (__bridge NSWindow *)child;
-        if (p == nil || w == nil) return;
-        if (attach) {
-            if ([w parentWindow] == p) return;
-            if (objc_getAssociatedObject(w, &g_on_its_way) != nil || objc_getAssociatedObject(p, &g_on_its_way) != nil) return;
-            if ([w parentWindow] != nil) [[w parentWindow] removeChildWindow:w];
-            if (objc_getAssociatedObject(w, &g_stays_put) == nil) {
-                /* In front of the other child windows as it becomes key — clicked, or opened — as a
-                 * window comes in front of the app's others: AppKit keeps child windows in the order
-                 * they were attached, and the last one stayed over the rest whichever was key (the
-                 * user). Attached again, it goes over them. Both observers go as it closes: kept,
-                 * they piled up, a window at a closed one's address matching them. */
-                NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-                __block id raise = nil;
-                __block id closing = nil;
-                raise = [center addObserverForName:NSWindowDidBecomeKeyNotification
-                                            object:w
-                                             queue:[NSOperationQueue mainQueue]
-                                        usingBlock:^(NSNotification *note) {
-                    NSWindow *key = note.object;
-                    NSWindow *parent = [key parentWindow];
-                    if (parent == nil || [[parent childWindows] lastObject] == key) return;
-                    [parent removeChildWindow:key];
-                    [parent addChildWindow:key ordered:NSWindowAbove];
-                }];
-                closing = [center addObserverForName:NSWindowWillCloseNotification
-                                              object:w
-                                               queue:nil
-                                          usingBlock:^(__unused NSNotification *note) {
-                    [center removeObserver:raise];
-                    [center removeObserver:closing];
-                    raise = nil;
-                    closing = nil;
+        NSWindow *w = (__bridge NSWindow *)nswindow;
+        if (w == nil || objc_getAssociatedObject(w, &g_float_above) != nil) return;
+        objc_setAssociatedObject(w, &g_float_above, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        float_hook_toggle(w);
+        static BOOL app_observed = NO;
+        if (!app_observed) {
+            app_observed = YES;
+            NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+            for (NSString *name in @[ NSApplicationDidBecomeActiveNotification, NSApplicationDidResignActiveNotification ]) {
+                [center addObserverForName:name object:nil queue:nil usingBlock:^(__unused NSNotification *note) {
+                    float_level_all();
                 }];
             }
-            objc_setAssociatedObject(w, &g_stays_put, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            [p addChildWindow:w ordered:NSWindowAbove];
-        } else if ([w parentWindow] != nil) {
-            [[w parentWindow] removeChildWindow:w];
         }
+        float_level_all();
     }
-}
-
-/* The person moving or live-resizing `nswindow` (`SDLBackend.attachNatives`): its child windows let
- * go as it sets out, so they stay where they are, as owned windows do on Windows and X11 — a child
- * window otherwise goes with its parent. AppKit has moved the parent a step by then, and them with
- * it: each is put back where it was as the press began. Attached again, in the order they were in,
- * as the press is let go — at once, not at the app's next frame, which an idle app does not draw. */
-static char g_children_stay;
-static NSMutableArray<NSWindow *> *g_let_go = nil;      /* back to front */
-static NSMutableArray<NSValue *> *g_pressed_at = nil;   /* each child's frame as the press began */
-static NSMutableArray<NSWindow *> *g_pressed_kids = nil;
-static NSTimer *g_reattach_timer = nil;
-
-static NSArray<NSWindow *> *stayingChildren(NSWindow *parent) {
-    NSMutableArray<NSWindow *> *kids = [NSMutableArray array];
-    /* Back to front, as the window server has them. */
-    for (NSWindow *w in [[NSApp orderedWindows] reverseObjectEnumerator]) {
-        if ([w parentWindow] == parent && objc_getAssociatedObject(w, &g_stays_put) != nil) [kids addObject:w];
-    }
-    return kids;
-}
-
-static void reattachWhenLetGo(NSWindow *parent) {
-    if (g_reattach_timer != nil) return;
-    g_reattach_timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0 repeats:YES block:^(NSTimer *timer) {
-        if ([NSEvent pressedMouseButtons] != 0) return;
-        [timer invalidate];
-#if !__has_feature(objc_arc)
-        [g_reattach_timer release];
-#endif
-        g_reattach_timer = nil;
-        /* Not while either is on its way into or out of full screen (`g_on_its_way`): the app's next
-         * frame after it lands attaches them (`SDLBackend.attachNatives`). */
-        if (objc_getAssociatedObject(parent, &g_on_its_way) == nil) {
-            for (NSWindow *w in g_let_go) {
-                if ([w isVisible] && [w parentWindow] == nil && [w isOnActiveSpace] && [parent isOnActiveSpace] &&
-                    objc_getAssociatedObject(w, &g_on_its_way) == nil) {
-                    [parent addChildWindow:w ordered:NSWindowAbove];
-                }
-            }
-        }
-        /* Holding none of them past the press: a window closed meanwhile stays closed. */
-        [g_let_go removeAllObjects];
-        [g_pressed_kids removeAllObjects];
-        [g_pressed_at removeAllObjects];
-    }];
-#if !__has_feature(objc_arc)
-    [g_reattach_timer retain];
-#endif
-}
-
-void fizzy_macos_window_children_stay(void *nswindow) {
-    NSWindow *window = (__bridge NSWindow *)nswindow;
-    if (window == nil || objc_getAssociatedObject(window, &g_children_stay) != nil) return;
-    objc_setAssociatedObject(window, &g_children_stay, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (g_let_go == nil) {
-        g_let_go = [[NSMutableArray alloc] init];
-        g_pressed_at = [[NSMutableArray alloc] init];
-        g_pressed_kids = [[NSMutableArray alloc] init];
-    }
-    /* Where each child is as a press on the parent begins, before any move of it; forgotten as a
-     * press that moved nothing is let go (one that moved them is the reattach timer's). */
-    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp
-                                          handler:^NSEvent *(NSEvent *event) {
-        if ([event type] == NSEventTypeLeftMouseUp) {
-            if (g_reattach_timer == nil) {
-                [g_pressed_kids removeAllObjects];
-                [g_pressed_at removeAllObjects];
-            }
-        } else if ([event window] == window) {
-            [g_pressed_kids removeAllObjects];
-            [g_pressed_at removeAllObjects];
-            for (NSWindow *w in stayingChildren(window)) {
-                [g_pressed_kids addObject:w];
-                [g_pressed_at addObject:[NSValue valueWithRect:[w frame]]];
-            }
-        }
-        return event;
-    }];
-    /* As it actually moves under a held press — not at will-move, which a plain click on its title
-     * bar posts too: let go and attached again around every click, AppKit's raise of the parent
-     * sometimes landed between the two, and it came over them (the user). */
-    for (NSString *name in @[ NSWindowDidMoveNotification, NSWindowWillStartLiveResizeNotification ]) {
-        [[NSNotificationCenter defaultCenter] addObserverForName:name
-                                                          object:window
-                                                           queue:[NSOperationQueue mainQueue]
-                                                      usingBlock:^(NSNotification *note) {
-            if ([NSEvent pressedMouseButtons] == 0) return;
-            NSWindow *parent = note.object;
-            NSArray<NSWindow *> *kids = stayingChildren(parent);
-            if ([kids count] == 0) return;
-            [g_let_go setArray:kids];
-            /* Back to front, each over the one before it, the first over the parent: let go, they
-             * fell under the parent it was moving or resizing (the user). */
-            NSWindow *below = parent;
-            for (NSWindow *w in kids) {
-                [parent removeChildWindow:w];
-                const NSUInteger i = [g_pressed_kids indexOfObjectIdenticalTo:w];
-                if (i != NSNotFound) [w setFrame:[g_pressed_at[i] rectValue] display:NO];
-                [w orderWindow:NSWindowAbove relativeTo:[below windowNumber]];
-                below = w;
-            }
-            reattachWhenLetGo(parent);
-        }];
-    }
-}
-
-/* `nswindow` on its way into or out of a full screen Space (`fizzy_custom_windows_for_space`): lets
- * go of the windows attached to it, and its parent lets go of it, before AppKit takes child windows
- * along. Child windows stay on the desktop (`SDLBackend.attachNatives`): carried into a full screen
- * Space, every way a child could take part in it — its own Space, tiling, Split View — left the Space
- * black or out of reach (the user), and a window cannot be moved between Spaces through public API.
- * Nothing is attached to it or it to anything on the way (`g_on_its_way`). */
-void fizzy_macos_window_let_go(void *nswindow) {
-    @autoreleasepool {
-        NSWindow *window = (__bridge NSWindow *)nswindow;
-        if (window == nil) return;
-        objc_setAssociatedObject(window, &g_on_its_way, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        for (NSWindow *w in [NSArray arrayWithArray:[window childWindows]]) {
-            if (objc_getAssociatedObject(w, &g_stays_put) != nil) {
-                [window removeChildWindow:w];
-            }
-        }
-        if ([window parentWindow] != nil && objc_getAssociatedObject(window, &g_stays_put) != nil) {
-            [[window parentWindow] removeChildWindow:window];
-        }
-    }
-}
-
-/* `nswindow` has arrived in, or back out of, a full screen Space, or failed to: windows are attached
- * to it, and it to its parent, again (`fizzy_macos_window_let_go`). */
-void fizzy_macos_window_way_done(void *nswindow) {
-    NSWindow *window = (__bridge NSWindow *)nswindow;
-    if (window != nil) objc_setAssociatedObject(window, &g_on_its_way, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-/* Whether `nswindow` is on the Space the person is looking at (`SDLBackend.attachNatives`). */
-int fizzy_macos_window_on_active_space(void *nswindow) {
-    NSWindow *window = (__bridge NSWindow *)nswindow;
-    return window != nil && [window isVisible] && [window isOnActiveSpace] ? 1 : 0;
 }
 
 void fizzy_macos_viewport_reshadow(void *nswindow) {
