@@ -114,6 +114,44 @@ pub fn setDarkMode(win: *dvui.Window, dark: bool) void {
     );
 }
 
+/// The OS's caption on `window`, in `color` with its title in `text`, light or dark as the theme
+/// is (`window.nativeTitleBar`). Caption and text colours are Windows 11's; earlier, DWM's own.
+/// A window of the OS's own frame with a most size (`viewports.maxSize`) has no maximize button, as a
+/// Windows app with one has none: `SW_MAXIMIZE`, the button and a double-click on the caption fill
+/// the screen past the most SDL keeps a drag to. Given back once it has no most.
+pub fn allowMaximize(window: *c.SDL_Window, allow: bool) void {
+    if (comptime builtin.target.os.tag != .windows) return;
+    const raw = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return;
+    const h: win32.foundation.HWND = @ptrCast(raw);
+    const wm = win32.ui.windows_and_messaging;
+    const ws_maximizebox: isize = 0x00010000;
+    const style = wm.GetWindowLongPtrW(h, wm.GWL_STYLE);
+    const want = if (allow) style | ws_maximizebox else style & ~ws_maximizebox;
+    if (want == style) return;
+    _ = wm.SetWindowLongPtrW(h, wm.GWL_STYLE, want);
+    // SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED: the caption
+    // drawn again without the button.
+    _ = wm.SetWindowPos(h, null, 0, 0, 0, 0, @bitCast(@as(u32, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)));
+}
+
+pub fn nativeCaption(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color, dark: bool) void {
+    if (builtin.target.os.tag != .windows) return;
+    const hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return;
+    const hwnd_h = @as(win32.foundation.HWND, @ptrCast(hwnd));
+    const dark_value: u32 = @intFromBool(dark);
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(
+        hwnd_h,
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_USE_IMMERSIVE_DARK_MODE))),
+        &dark_value,
+        @sizeOf(u32),
+    );
+    // COLORREF: 0x00BBGGRR.
+    const caption: u32 = @as(u32, color.b) << 16 | @as(u32, color.g) << 8 | color.r;
+    const title: u32 = @as(u32, text.b) << 16 | @as(u32, text.g) << 8 | text.r;
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_CAPTION_COLOR, &caption, @sizeOf(u32));
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_TEXT_COLOR, &title, @sizeOf(u32));
+}
+
 /// No caption or border tint: the app draws its own title bar in the client area.
 pub fn clearCaptionColors(win: *dvui.Window) void {
     if (builtin.target.os.tag != .windows) return;

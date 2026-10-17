@@ -354,6 +354,44 @@ pub fn sizedTarget(slot: *?dvui.Texture.Target, w: u32, h: u32) ?dvui.Texture.Ta
     return slot.*.?;
 }
 
+/// `sizedTarget` for `vp`'s picture: the same, but on its window's way into or out of full screen,
+/// its picture a new size every frame, the one in `slot` kept while `w` by `h` fits in it — made
+/// the display's size as the way begins, not anew each frame. The picture is drawn from its top
+/// left; `present` copies what the window holds.
+pub fn keptTarget(vp: *const Viewport, slot: *?dvui.Texture.Target, w: u32, h: u32) ?dvui.Texture.Target {
+    const moving = spaceFullness(vp) != null;
+    if (slot.*) |t| {
+        const fits = t.width >= w and t.height >= h;
+        const exact = t.width == w and t.height == h;
+        if (!fits or (!moving and !exact)) {
+            t.destroyLater();
+            slot.* = null;
+        }
+    }
+    if (slot.* == null) {
+        var tw = w;
+        var th = h;
+        if (moving) {
+            const d = displayInMain();
+            tw = @max(w, @as(u32, @intFromFloat(@max(0, @round(d.w)))));
+            th = @max(h, @as(u32, @intFromFloat(@max(0, @round(d.h)))));
+        }
+        slot.* = dvui.textureCreateTarget(.{ .width = tw, .height = th, .interpolation = .nearest }) catch return null;
+    }
+    return slot.*.?;
+}
+
+/// dvui's screens besides the main window's (`dvui.screensSet`): each window's part of the frame
+/// that shows a floating window, so what opens in it — a menu, a dialog — stays in that window.
+pub fn publishScreens() void {
+    dvui.currentWindow().backend.impl.viewportScreens();
+}
+
+/// The most the OS may resize `vp`'s window to, physical pixels: 0 each way for no most.
+pub fn maxSize(vp: *Viewport, w: f32, h: f32) void {
+    dvui.currentWindow().backend.impl.viewportMaxSize(vp, w, h);
+}
+
 /// Where `vp`'s window is now, in the main window's part of the frame (physical pixels from
 /// its top left): where its float goes when it comes back.
 pub fn inMain(vp: *const Viewport) Rect {
@@ -400,6 +438,11 @@ pub const os_buttons = builtin.target.os.tag == .macos;
 /// (yet).
 pub fn glass(vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
     return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
+}
+
+/// Whether `vp`'s window has the keyboard: it is the OS's key window.
+pub fn hasKeyboard(vp: *const Viewport) bool {
+    return SDLBackend.viewportHasKeyboard(vp);
 }
 
 /// The OS asked to close `vp`'s window.

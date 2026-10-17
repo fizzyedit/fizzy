@@ -39,6 +39,10 @@ Four things in that split cost time on the move to 0.17:
   configuration ("configuration failed: FileSystemFailure"); a plugin without `.github/` hit it.
   `common.dependOnPathExistence` (and its copy in `sdk/plugin_sdk.zig`) declares the nearest
   directory that exists instead.
+- **Some GitHub `archive/<sha>.tar.gz` URLs fetch wrong.** `zig fetch` reports the package's
+  hash, but a build's own fetch leaves the archive's top folder in place: no `build.zig.zon` at
+  the package's root, an unnamed `N-V-…` hash, and "hash mismatch" (dvui-dev `bd7736d`). Pin the
+  same commit as `git+https://github.com/<owner>/<repo>#<sha>`; the hash is the same.
 
 ## Running a second fizzy
 
