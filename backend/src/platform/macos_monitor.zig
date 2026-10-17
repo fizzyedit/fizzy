@@ -429,6 +429,13 @@ pub fn unwatch(window: *c.SDL_Window) void {
     if (comptime builtin.target.os.tag != .macos) return;
     const cocoa = cocoaWindowOf(window) orelse return;
     fizzy_macos_window_uninstall_monitor(cocoa);
+    // The main window, as the app quits: the pump's tick reads it without asking for its monitor
+    // (`fizzy_macos_window_pump_render`), and one more tick while SDL quits would draw into a
+    // window it has destroyed.
+    if (macos_monitor_window == window) {
+        macos_monitor_window = null;
+        macos_pump_ready = false;
+    }
     for (&watched) |*slot| {
         if (slot.*) |w| if (w.cocoa == cocoa) {
             slot.* = null;
