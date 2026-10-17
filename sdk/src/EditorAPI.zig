@@ -306,8 +306,8 @@ pub const VTable = struct {
     /// plugin can address a region it is not drawing right now: a tab dropped on another pane,
     /// a pane that does not exist yet, a session being restored before anything has drawn.
     assignSurfaces: *const fn (ctx: *anyopaque, region: []const u8, ids: ?[]const []const u8) anyerror!void,
-    /// The assignment for a region name, or null if the user never chose. Borrowed from the app;
-    /// copy before the next assignment write.
+    /// The assignment for a region name, or null if the user never chose. Borrowed from the app
+    /// until the next assignment write, which may itself be given these ids: read, edit, write.
     assignedSurfaces: *const fn (ctx: *anyopaque, region: []const u8) ?[]const []const u8,
     /// Every region name that has an assignment, arena-allocated. How a plugin finds the panes
     /// it declared last session before it has declared any this one.

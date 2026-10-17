@@ -473,9 +473,17 @@ pub fn assignment(self: *State, name: []const u8) ?[]const []const u8 {
 /// Set what region `name` shows. An empty list is a real choice — "nothing here" — distinct from
 /// `unassign`, which hands the region back to its keywords. A surface lives in one
 /// place: putting it here takes it out of every other assignment.
+///
+/// `surfaces` may borrow from any assignment, this region's included — read, edit, write back
+/// is how a pane adds a tab. So past `setAssignment`, which frees the old lists, only this
+/// region's new, owned copy is read: its key and list, taken out of the map first, since
+/// rewriting the other regions can grow the map and move its entries.
 pub fn assign(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: []const []const u8) !void {
     try self.setAssignment(gpa, name, surfaces);
-    for (surfaces) |id| self.evictIdFromOthers(gpa, name, id);
+    const owned = self.assignments.getEntry(name).?;
+    const key = owned.key_ptr.*;
+    const ids = owned.value_ptr.*;
+    for (ids) |id| try self.evictIdFromOthers(gpa, key, id);
 }
 
 fn setAssignment(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: []const []const u8) !void {
@@ -500,33 +508,24 @@ fn setAssignment(self: *State, gpa: std.mem.Allocator, name: []const u8, surface
     gop.value_ptr.* = owned;
 }
 
-fn evictIdFromOthers(self: *State, gpa: std.mem.Allocator, keep: []const u8, id: []const u8) void {
-    var names: [32][]const u8 = undefined;
-    var n: usize = 0;
+fn evictIdFromOthers(self: *State, gpa: std.mem.Allocator, keep: []const u8, id: []const u8) !void {
+    var names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer names.deinit(gpa);
     var it = self.assignments.iterator();
     while (it.next()) |e| {
         if (std.mem.eql(u8, e.key_ptr.*, keep)) continue;
-        for (e.value_ptr.*) |x| {
-            if (!std.mem.eql(u8, x, id)) continue;
-            if (n < names.len) {
-                names[n] = e.key_ptr.*;
-                n += 1;
-            }
+        for (e.value_ptr.*) |x| if (std.mem.eql(u8, x, id)) {
+            try names.append(gpa, e.key_ptr.*);
             break;
-        }
+        };
     }
-    for (names[0..n]) |region| {
+    var kept: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer kept.deinit(gpa);
+    for (names.items) |region| {
         const ids = self.assignment(region) orelse continue;
-        var kept: [32][]const u8 = undefined;
-        var k: usize = 0;
-        for (ids) |x| {
-            if (std.mem.eql(u8, x, id)) continue;
-            if (k < kept.len) {
-                kept[k] = x;
-                k += 1;
-            }
-        }
-        self.setAssignment(gpa, region, kept[0..k]) catch {};
+        kept.clearRetainingCapacity();
+        for (ids) |x| if (!std.mem.eql(u8, x, id)) try kept.append(gpa, x);
+        try self.setAssignment(gpa, region, kept.items);
     }
 }
 

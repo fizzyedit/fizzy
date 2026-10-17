@@ -1901,6 +1901,72 @@ test "assigning a region overrides keyword matching, duplicates and empties" {
     try std.testing.expectEqualStrings("test.other", layout.matching(sidebar)[0].id);
 }
 
+// A pane adds or drops a tab by reading its assignment, editing the list and writing it back
+// (`Workspace.addTab`), so the list it writes borrows the ids it replaces. On 2026-10-16 that
+// crashed fizzy in `evictIdFromOthers`, reading ids the write had just freed, on a document an
+// agent opened beside the person. The page allocator unmaps every free, so a read of one faults
+// here every time rather than whenever the freed slot's page happened to go.
+test "assigning a region a list borrowed from the assignments it replaces" {
+    const gpa = std.heap.page_allocator;
+    var state: fizzy.Editor.Layout.State = .{};
+    defer state.deinitAssignments(gpa);
+
+    try state.assign(gpa, "pane.1", &.{ "doc.a", "doc.b" });
+    try state.assign(gpa, "pane.2", &.{ "doc.c", "doc.d" });
+
+    // Pane 1 takes doc.c as a tab: its own ids, then the new one borrowed from pane 2's list.
+    const one = state.assignment("pane.1").?;
+    const two = state.assignment("pane.2").?;
+    try state.assign(gpa, "pane.1", &.{ one[0], one[1], two[0] });
+    try std.testing.expectEqual(@as(usize, 3), state.assignment("pane.1").?.len);
+    try std.testing.expectEqualStrings("doc.c", state.assignment("pane.1").?[2]);
+    try std.testing.expectEqual(@as(usize, 1), state.assignment("pane.2").?.len);
+    try std.testing.expectEqualStrings("doc.d", state.assignment("pane.2").?[0]);
+
+    // Pane 2 drops back to its first tab, written from its own list, under its own key.
+    const keyed = state.assignments.getEntry("pane.2").?;
+    try state.assign(gpa, keyed.key_ptr.*, keyed.value_ptr.*[0..1]);
+    try std.testing.expectEqualStrings("doc.d", state.assignment("pane.2").?[0]);
+}
+
+// Taking a region's ids out of the others rewrites them, and rewriting even an existing entry
+// can grow the map (`getOrPut` makes room first), moving every entry. Whatever `assign` holds of
+// its own entry must outlive that. Some count of regions leaves the map full at the rewrite;
+// trying every count up to well past a resize reaches it, and the page allocator faults on a
+// stale read.
+test "assigning a region whose ids other regions hold, whatever the map's fill" {
+    const gpa = std.heap.page_allocator;
+    for (1..64) |count| {
+        var state: fizzy.Editor.Layout.State = .{};
+        defer state.deinitAssignments(gpa);
+        var names: [64][16]u8 = undefined;
+        var ids: [64][]const u8 = undefined;
+        for (0..count) |i| {
+            const name = try std.fmt.bufPrint(&names[i], "pane.{d}", .{i});
+            try state.assign(gpa, name, &.{name});
+            ids[i] = name;
+        }
+        // One region takes every id: each other region is emptied, none twice.
+        try state.assign(gpa, "all", ids[0..count]);
+        try std.testing.expectEqual(count, state.assignment("all").?.len);
+        for (ids[0..count]) |name| try std.testing.expectEqual(@as(usize, 0), state.assignment(name).?.len);
+    }
+}
+
+// A place of many tabs keeps every one when another place takes one of them.
+test "taking one id out of a region of many keeps the rest" {
+    const gpa = std.testing.allocator;
+    var state: fizzy.Editor.Layout.State = .{};
+    defer state.deinitAssignments(gpa);
+    var bufs: [40][16]u8 = undefined;
+    var ids: [40][]const u8 = undefined;
+    for (&ids, 0..) |*id, i| id.* = try std.fmt.bufPrint(&bufs[i], "doc.{d}", .{i});
+    try state.assign(gpa, "pane.1", &ids);
+    try state.assign(gpa, "pane.2", &.{ids[0]});
+    try std.testing.expectEqual(@as(usize, 39), state.assignment("pane.1").?.len);
+    try std.testing.expectEqualStrings("doc.39", state.assignment("pane.1").?[38]);
+}
+
 // -- regions inside regions ----------------------------------------------------------------------
 
 // A region declared inside another names a place *within* it: a document pane inside the main area
@@ -7473,6 +7539,34 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try editor.undo();
         try dvui.testing.settle(headlessFrame);
         try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
+    }
+
+    // Documents a command creates open beside the person (`Host.openBeside`), as an agent's
+    // `pixi.create` does, into panes whose tabs have come and gone. Each pane's tab list is
+    // rewritten from itself (`Workspace.addTab`), the crash of 2026-10-16 (`Layout.State.assign`).
+    {
+        const host = &editor.app.host;
+        const here = editor.workbench.open_workspace_grouping;
+        const grid: sdk.EditorAPI.NewDocGrid = .{ .column_width = 16, .row_height = 16 };
+        var made: [4]u64 = undefined;
+        for (&made, 0..) |*id, i| {
+            const p = try std.fmt.allocPrint(gpa, "{s}/beside-{d}.txt", .{ project, i });
+            defer gpa.free(p);
+            host.openBeside();
+            defer host.endOpenBeside();
+            const doc = try editor.newFile(p, grid);
+            id.* = doc.id;
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqual(here, editor.workbench.open_workspace_grouping);
+            // Every other one goes again, leaving its pane's list shorter for the next.
+            if (i % 2 == 1) try editor.closeFileID(made[i - 1]);
+            try dvui.testing.settle(headlessFrame);
+        }
+        const last = editor.app.docById(made[made.len - 1]) orelse return error.TestUnexpectedResult;
+        const beside = for (editor.workbench.workspaces.values()) |ws| {
+            if (ws.grouping != here) if (ws.active) |a| if (a.id == last.id) break true;
+        } else false;
+        try std.testing.expect(beside);
     }
 
     // A document's history as a line (`Plugin.historyLine`): each step keeps its id through

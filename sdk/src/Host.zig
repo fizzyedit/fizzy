@@ -606,8 +606,8 @@ pub fn assignSurfaces(self: *Host, region_name: []const u8, ids: ?[]const []cons
     if (self.fizzy_api) |a| return a.assignSurfaces(region_name, ids);
 }
 
-/// The assignment under `region_name`, or null when the user never chose. Borrowed; copy before
-/// the next `assignSurfaces`.
+/// The assignment under `region_name`, or null when the user never chose. Borrowed until the next
+/// `assignSurfaces`, which may itself be given these ids: read, edit, write.
 pub fn assignedSurfaces(self: *Host, region_name: []const u8) ?[]const []const u8 {
     return if (self.fizzy_api) |a| a.assignedSurfaces(region_name) else null;
 }
