@@ -376,7 +376,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // Whether dvui went quiet at the end of each frame, for the `automation` service's `settled`.
     if (comptime @hasDecl(dvui.backend, "frame_ended_hook")) dvui.backend.frame_ended_hook = frameEnded;
     // Fizzy takes its floats out into windows itself (`Popout`).
-    if (comptime @hasDecl(dvui.backend, "floating_os_windows")) dvui.backend.floating_os_windows = false;
+    if (comptime @hasDecl(dvui.backend, "floating_os_windows")) dvui.backend.floating_os_windows = .none;
 
     // Hand the window to the listener thread and queue our own argv so the
     // first frame opens any files / project folder supplied on the command line.

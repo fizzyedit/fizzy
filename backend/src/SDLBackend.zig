@@ -364,10 +364,11 @@ pub var window_create_hook: ?*const fn (props: c.SDL_PropertiesID) void = null;
 /// sees the answer change without asking for frames itself.
 pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
 
-/// Whether dvui's floating windows are shown in OS windows of their own (`floatingWindowOs`,
-/// `os_windows`). Off for an app that takes floats out into windows itself, as fizzy does
-/// (`Popout`): set before the first frame.
-pub var floating_os_windows = true;
+/// Which of dvui's floating windows are shown in OS windows of their own (`floatingWindowOs`,
+/// `os_windows`): those that ask (`os_window`, as `dvui.osWindow`'s does), every one (not modal),
+/// or none, for an app that takes floats out into windows itself, as fizzy does (`Popout`). Set
+/// before the first frame.
+pub var floating_os_windows: enum { asked, all, none } = .asked;
 
 /// The backend's health counters now (`Health`): frames, presents, swapchain resizes, the OS
 /// windows alive, what SDL logged, frame-time percentiles and each frame's GPU work. Kept current
@@ -1086,12 +1087,18 @@ fn dressPlainWindows(self: *SDLBackend) void {
     };
 }
 
-/// Each of dvui's floating windows (not modal) is shown in an OS window of its own, its frame the
-/// OS's (`os_windows`), while `floating_os_windows`: dvui asks as it begins, true while it has one
-/// or one can open for it. `dvui.osWindow` too, which this backend draws as a floating window: it
-/// makes no `dvui.Window` of its own for one (no `initWindowSecondary`).
-pub fn floatingWindowOs(_: *SDLBackend, id: dvui.Id, open_flag: ?*bool, min: dvui.Size, max: dvui.Size) bool {
-    return floating_os_windows and os_windows.named(id, open_flag, min, max);
+/// A floating window of dvui's (not modal) shown in an OS window of its own, its frame the OS's
+/// (`os_windows`), as `floating_os_windows` says: dvui asks as it begins (`asked`, the window asked
+/// for one), true while it has one or one can open for it. `dvui.osWindow`'s asks, which this
+/// backend draws as a floating window: it makes no `dvui.Window` of its own for one (no
+/// `initWindowSecondary`).
+pub fn floatingWindowOs(_: *SDLBackend, id: dvui.Id, asked: bool, open_flag: ?*bool, min: dvui.Size, max: dvui.Size) bool {
+    const shown = switch (floating_os_windows) {
+        .asked => asked,
+        .all => true,
+        .none => false,
+    };
+    return shown and os_windows.named(id, open_flag, min, max);
 }
 
 /// `windowHeader` in floating window `id`: its title on that window's title bar, where it has one
