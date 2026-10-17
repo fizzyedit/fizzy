@@ -532,7 +532,7 @@ fn lift(id: []const u8, from: dvui.Rect.Physical, event_num: u16) void {
     wb.carried_tab_key = std.hash.Wyhash.hash(0, id);
     runtime.host().beginViewDrag(id, from);
     if (runtime.host().viewDragSurface() == null) return;
-    if (dvui.currentWindow().captures[0]) |cm| // ZIG017: per-pointer capture (dvui#1014); 0 is the mouse
+    if (dvui.captureMouseGet()) |cm|
         dvui.captureMouseCustom(cm, event_num);
 }
 
