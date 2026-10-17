@@ -1744,10 +1744,6 @@ extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) v
 extern fn fizzy_macos_viewport_plain(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_reshadow(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_still(nswindow: ?*anyopaque) void;
-extern fn fizzy_macos_window_on_active_space(nswindow: ?*anyopaque) c_int;
-extern fn fizzy_macos_window_attach_child(parent: ?*anyopaque, child: ?*anyopaque, attach: c_int) void;
-extern fn fizzy_macos_window_children_stay(nswindow: ?*anyopaque) void;
-extern fn fizzy_macos_window_in_fullscreen_space(nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_order_above(nswindow: ?*anyopaque, other: ?*anyopaque) void;
@@ -2360,12 +2356,12 @@ pub fn renderPresent(self: *SDLBackend) void {
             if (!vp.over_main) continue;
             vp.over_main = false;
             if (!vp.mapped or vp.passive or vp.menu) continue;
-            // A child window of the main window's (`attachNatives`), over it by the OS's doing.
+            // An ordinary window of the app's (`ViewportFrame.native`): in front where it opened, and
+            // ordered from there as the person orders it.
             if (vp.native) continue;
             fizzy_macos_viewport_over_main(cocoaWindow(vp.window), main_ns);
             self.stack_stale = true;
         }
-        self.attachNatives();
         // Which floats' windows lie under the main window now, for a drag over the main window to
         // read nothing of them there (`viewportUnderMain`). A query of the window server, so only
         // when the stacking may have changed.
@@ -2378,48 +2374,6 @@ pub fn renderPresent(self: *SDLBackend) void {
         }
     }
     self.manage_backend_tracking.check(.renderPresent);
-}
-
-/// macOS: each window of the OS's own frame (`Viewport.native`) a child window of the main window's,
-/// so the window server keeps it over the main window, as an owned window is on Windows and X11 —
-/// put back over it after the OS raised the main window, each window flashed under it for a frame
-/// (the user). Only on the desktop, never in the main window's full screen Space: carried in there,
-/// each way a child could take part in it — a Space of its own, tiling, Split View — left the Space
-/// black or out of reach, and attached from another Space it stayed the child of a window it could
-/// not reach. So the main window goes full screen alone, and its children wait on the desktop.
-///
-/// Not while a press is held — the person moving or resizing the main window, which would take its
-/// child windows with it where owned windows stay (`fizzy_macos_window_children_stay` lets them go as
-/// it sets out) — nor while either window is on its way into or out of full screen, each letting go
-/// as it sets out (`fizzy_macos_window_let_go`): carried along, they moved with the main window's
-/// jump, and a child taken full screen from the main window's Space left the others black (the
-/// user). A child in a full screen Space of its own stays out.
-fn attachNatives(self: *SDLBackend) void {
-    // Nothing to do, nor to watch the main window for, until a window of the OS's own frame is up:
-    // fizzy itself has none.
-    const any = for (&self.viewport_slots) |*slot| {
-        if (slot.*) |*vp| if (vp.native and vp.mapped) break true;
-    } else false;
-    if (!any) return;
-    const main_ns = cocoaWindow(self.window);
-    fizzy_macos_window_children_stay(main_ns);
-    const main_free = c.SDL_GetGlobalMouseState(null, null) == 0 and !platform.window.windowMovingItself(self.window) and
-        !platform.macos_monitor.inTransition(self.window) and fizzy_macos_window_on_active_space(main_ns) != 0 and
-        fizzy_macos_window_in_fullscreen_space(main_ns) == 0;
-    for (&self.viewport_slots) |*slot| {
-        const vp = if (slot.*) |*v| v else continue;
-        if (!vp.native or !vp.mapped) continue;
-        const ns = cocoaWindow(vp.window);
-        const own_space = fizzy_macos_window_in_fullscreen_space(ns) != 0 or platform.window.windowMovingItself(vp.window) or
-            platform.macos_monitor.inTransition(vp.window);
-        if (own_space) {
-            fizzy_macos_window_attach_child(main_ns, ns, 0);
-        } else if (main_free and fizzy_macos_window_on_active_space(ns) != 0) {
-            // Not one the person put on another desktop: attached, it was pulled back to the main
-            // window's.
-            fizzy_macos_window_attach_child(main_ns, ns, 1);
-        }
-    }
 }
 
 pub fn backend(self: *SDLBackend) dvui.Backend {
