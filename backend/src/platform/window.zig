@@ -321,7 +321,12 @@ pub fn isFullscreenChromeHidden(win: *dvui.Window) bool {
 /// returns `WS_SYSMENU` and its caption buttons, and the backdrop's frame with it). Applying it all
 /// unconditionally every frame was a `SetWindowPos(SWP_FRAMECHANGED)` — a `WM_NCCALCSIZE` — a
 /// library load and a class-brush write each frame on Windows, and two style-mask writes on macOS.
+/// Whether the app dresses its windows itself (`setStyle`, `setBackground`), as fizzy does: then the
+/// backend leaves a plain dvui app's look (`nativeTitleBar`) off its main window.
+pub var app_dresses_windows = false;
+
 pub fn setStyle(win: *dvui.Window) void {
+    app_dresses_windows = true;
     if (builtin.target.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(win.backend.impl.window),
@@ -344,7 +349,7 @@ pub fn setStyle(win: *dvui.Window) void {
         // borderless, it was never titled.
         if (comptime own_backend) for (&win.backend.impl.viewport_slots) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
-            if (vp.passive or vp.menu or vp.app_frame) continue;
+            if (vp.passive or vp.menu or vp.app_frame or vp.native) continue;
             const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
             styleTitled(ns);
         };
@@ -408,6 +413,27 @@ fn styleTitled(raw_ptr: *anyopaque) void {
     }
 }
 
+/// The OS's own title bar on `window` — its title, its buttons — coloured as the window is
+/// (`color`, the theme's window fill), the app's content below it: how a plain dvui app's windows
+/// look on this backend (`SDLBackend.floatingWindowOs`, `SDLBackend.dressPlainWindows`). Fizzy's
+/// own windows draw their title bar themselves (`setStyle`). Cheap to call again: each setter
+/// is skipped when the window already has it.
+/// - macOS: a titled window's title bar made transparent, so the window's colour shows through it.
+/// - Windows: the caption in that colour (DWM, Windows 11), its text the theme's.
+/// - Linux: the window manager's own, as it draws it.
+pub fn nativeTitleBar(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color, dark: bool) void {
+    switch (builtin.target.os.tag) {
+        .macos => {
+            const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
+            const ns = objc.Object.fromId(raw_ptr);
+            if (!ns.msgSend(bool, "titlebarAppearsTransparent", .{})) ns.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
+            skin(raw_ptr, color, dark);
+        },
+        .windows => win32_titlebar.nativeCaption(window, color, text, dark),
+        else => {},
+    }
+}
+
 /// A window of fizzy's skinned as the app is: its background — what AppKit draws its title bar
 /// with, the one a fullscreen window reveals at the top among them — `color`, and its appearance
 /// light or dark by the app's theme, not the system's, so its title bar, traffic lights and
@@ -447,6 +473,7 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
 }
 
 pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
+    app_dresses_windows = true;
     if (builtin.target.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(win.backend.impl.window),

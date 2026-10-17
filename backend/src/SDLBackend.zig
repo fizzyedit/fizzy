@@ -18,7 +18,7 @@ const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
 /// The OS windows besides the main one an app draws with (`Viewport`).
 pub const viewports = @import("viewports.zig");
-/// `dvui.osWindow` as a window of its own from the one frame (`osWindowFloating`).
+/// dvui's floating windows as OS windows of their own from the one frame (`floatingWindowOs`).
 pub const os_windows = @import("os_windows.zig");
 /// What this backend keeps count of as it runs (`health`).
 pub const Health = @import("Health.zig");
@@ -219,6 +219,9 @@ pub const Viewport = struct {
     menu: bool = false,
     /// Framed by the app, not the OS (`ViewportFrame.app`): borderless everywhere, macOS too.
     app_frame: bool = false,
+    /// Framed by the OS as any app's window is (`ViewportFrame.native`): its title bar, frame and
+    /// hit-testing are the OS's own, and nothing of fizzy's dresses it.
+    native: bool = false,
     /// macOS, framed by the app: the size its shadow was last taken at, and how many frames more
     /// to take it again. AppKit shapes a clear window's shadow from what is drawn in it, so it is
     /// taken again once the window shows and after it changes size, a frame late, once the
@@ -349,6 +352,11 @@ pub var window_create_hook: ?*const fn (props: c.SDL_PropertiesID) void = null;
 /// went quiet (`settled`), and runs one more frame when a caller was told "not yet", so the caller
 /// sees the answer change without asking for frames itself.
 pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
+
+/// Whether dvui's floating windows are shown in OS windows of their own (`floatingWindowOs`,
+/// `os_windows`). Off for an app that takes floats out into windows itself, as fizzy does
+/// (`Popout`): set before the first frame.
+pub var floating_os_windows = true;
 
 /// The backend's health counters now (`Health`): frames, presents, swapchain resizes, the OS
 /// windows alive, what SDL logged, frame-time percentiles and each frame's GPU work. Kept current
@@ -1050,12 +1058,35 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 // ---------------------------------------------------------------------------------------------
 // dvui's OS windows
 
-/// A `dvui.osWindow`, which dvui draws as a floating window here: this backend makes no
-/// `dvui.Window` of its own for one (no `initWindowSecondary`), so it is a floating window in the
-/// one frame, and `os_windows` shows it in an OS window of its own. dvui calls this each frame it is
-/// drawn, with the header it is moved by (physical).
-pub fn osWindowFloating(_: *SDLBackend, id: dvui.Id, header: dvui.Rect.Physical, opts: dvui.OsWindowWidget.InitOptions) void {
-    os_windows.named(id, header, opts.title);
+/// The theme's window colours `dressPlainWindows` last gave the windows.
+var plain_dressed: ?[2]dvui.Color = null;
+
+/// The OS's own title bar on a plain dvui app's windows — the main one and each of the OS's own
+/// frame (`Viewport.native`) — in the theme's colour: set again only when the theme's colours
+/// change. A window opening is dressed as it opens (`viewportOpen`).
+fn dressPlainWindows(self: *SDLBackend) void {
+    const theme = dvui.themeGet();
+    const colors: [2]dvui.Color = .{ theme.color(.window, .fill), theme.color(.window, .text) };
+    if (plain_dressed) |d| if (std.meta.eql(d, colors)) return;
+    plain_dressed = colors;
+    platform.window.nativeTitleBar(self.window, colors[0], colors[1], theme.dark);
+    for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) {
+        platform.window.nativeTitleBar(v.window, colors[0], colors[1], theme.dark);
+    };
+}
+
+/// Each of dvui's floating windows (not modal) is shown in an OS window of its own, its frame the
+/// OS's (`os_windows`), while `floating_os_windows`: dvui asks as it begins, true while it has one
+/// or one can open for it. `dvui.osWindow` too, which this backend draws as a floating window: it
+/// makes no `dvui.Window` of its own for one (no `initWindowSecondary`).
+pub fn floatingWindowOs(_: *SDLBackend, id: dvui.Id, open_flag: ?*bool, min: dvui.Size, max: dvui.Size) bool {
+    return floating_os_windows and os_windows.named(id, open_flag, min, max);
+}
+
+/// `windowHeader` in floating window `id`: its title on that window's title bar, where it has one
+/// of its own (`floatingWindowOs`).
+pub fn floatingWindowTitle(_: *SDLBackend, id: dvui.Id, header: []const u8) bool {
+    return os_windows.titled(id, header);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1081,6 +1112,11 @@ pub const ViewportFrame = enum {
     /// on macOS. Moved and resized only where the app says (`viewportHints`). A dvui app's
     /// floating windows, drawn as dvui draws them.
     app,
+    /// The OS's own window, as any app's: its title bar (the window's title, its buttons, moving,
+    /// full screen), its frame and resizing, the title bar in the window's colour
+    /// (`platform.window.nativeTitleBar`), and what the app draws below it — a dvui floating
+    /// window's content and nothing of its frame. `dvui.osWindow`'s windows (`os_windows`).
+    native,
 };
 
 const ViewportKind = enum { window, carry, overlay, menu };
@@ -1297,7 +1333,8 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // A menu's window is a carry window that takes the pointer, never focused: the window it opened
     // from keeps the keyboard, as an OS menu leaves it.
     // One framed by the app (`ViewportFrame.app`) is borderless on macOS as well.
-    const titled = builtin.target.os.tag == .macos and !carry and frame == .os;
+    // One framed natively (`ViewportFrame.native`) is titled everywhere: the OS's ordinary window.
+    const titled = !carry and (frame == .native or (builtin.target.os.tag == .macos and frame == .os));
     const frame_flag: c.SDL_WindowFlags = if (titled) 0 else c.SDL_WINDOW_BORDERLESS;
     const size_flag: c.SDL_WindowFlags = if (carry) 0 else c.SDL_WINDOW_RESIZABLE;
     const focus_flag: c.SDL_WindowFlags = if (menu) c.SDL_WINDOW_NOT_FOCUSABLE else 0;
@@ -1322,7 +1359,7 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`plans/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.target.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewport_slots[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu, .app_frame = frame == .app };
+    self.viewport_slots[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry and !menu, .overlay = role == .overlay, .menu = menu, .app_frame = frame == .app, .native = frame == .native };
     const vp = &self.viewport_slots[slot].?;
     // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
     if (menu) return vp;
@@ -1332,6 +1369,15 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     }
     if (carry) {
         if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
+        return vp;
+    }
+    // The OS's own window: its title bar and frame are the OS's to hit-test and move. No show or
+    // close animation, as no viewport has one (`viewportDress`): AppKit's never finishes under
+    // this loop and leaves the window behind as a ghost.
+    if (frame == .native) {
+        if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_still(cocoaWindow(window));
+        const theme = dvui.themeGet();
+        platform.window.nativeTitleBar(window, theme.color(.window, .fill), theme.color(.window, .text), theme.dark);
         return vp;
     }
     // The slot holds it for the window's life, so SDL may keep the pointer.
@@ -1640,6 +1686,31 @@ pub fn viewportTitle(_: *SDLBackend, vp: *Viewport, text: []const u8) void {
     if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_windows_item(cocoaWindow(vp.window), z.ptr);
 }
 
+/// Whether `vp`'s window has the keyboard: it is the OS's key window.
+pub fn viewportHasKeyboard(vp: *const Viewport) bool {
+    return c.SDL_GetWindowFlags(vp.window) & c.SDL_WINDOW_INPUT_FOCUS != 0;
+}
+
+/// dvui's screens besides the main window (`dvui.screensSet`): each window's part of the frame that
+/// shows a floating window — not a menu's, a carried view's or an overlay's.
+pub fn viewportScreens(self: *SDLBackend) void {
+    var rects: [max_viewports]dvui.Rect.Natural = undefined;
+    var n: usize = 0;
+    const s = dvui.windowNaturalScale();
+    for (&self.viewport_slots) |*slot| {
+        const vp = if (slot.*) |*v| v else continue;
+        if (vp.passive or vp.menu or vp.overlay) continue;
+        rects[n] = .{ .x = vp.frame.x / s, .y = vp.frame.y / s, .w = vp.frame.w / s, .h = vp.frame.h / s };
+        n += 1;
+    }
+    dvui.screensSet(rects[0..n]);
+}
+
+pub fn viewportMaxSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
+    _ = c.SDL_SetWindowMaximumSize(vp.window, @intFromFloat(@floor(w / vp.density)), @intFromFloat(@floor(h / vp.density)));
+    platform.win32_titlebar.allowMaximize(vp.window, w == 0 and h == 0);
+}
+
 /// The least the OS may resize `vp`'s window to: `size` physical pixels of the frame, its float's
 /// least.
 pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
@@ -1650,6 +1721,7 @@ extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, i
 extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_plain(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_reshadow(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_still(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_order_above(nswindow: ?*anyopaque, other: ?*anyopaque) void;
@@ -2197,13 +2269,15 @@ pub fn renderPresent(self: *SDLBackend) void {
     // others reaches the screen a composite or more after the size it was drawn for, as an edge
     // with nothing on it or a frame cut off (docs/WINDOWS_LIVE_RESIZE.md).
     self.gpu.present(self.clear_window_on_begin, builtin.target.os.tag == .windows and self.inLiveResize());
-    // Shown once there is a frame in it (or empty, above). Not made key: the window it came out of
-    // keeps the keyboard until the viewport is clicked.
+    // Shown once there is a frame in it (or empty, above). Not made key — the window it came out of
+    // keeps the keyboard until the viewport is clicked — but for a window of the OS's own frame
+    // (`.native`), which opens key, as a window an app opens does.
     for (&self.viewport_slots, first_frame, map_empty) |*slot, show, empty| {
         if (!show and !empty) continue;
         const vp = if (slot.*) |*v| v else continue;
         if (!vp.mapped) {
-            _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+            // Only while the app is active: one opened behind another app's window took its keyboard.
+            _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, if (vp.native and appActive()) "1" else "0");
             _ = c.SDL_ShowWindow(vp.window);
             _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
             vp.mapped = true;
@@ -3346,7 +3420,12 @@ pub fn main(main_init: std.process.Init) !u8 {
         // send all SDL events to dvui for processing
         try back.addAllEvents(&win);
 
+        // As `appIterate`: the floating windows in OS windows of their own, and a plain dvui app's
+        // main window dressed.
+        os_windows.beforeFrame();
         const res = try app.frameFn();
+        os_windows.afterFrame();
+        if (!platform.window.app_dresses_windows) back.dressPlainWindows();
 
         var end_micros = try win.end(.{});
         Health.current.frameEnd(c.SDL_GetTicksNS());
@@ -3593,6 +3672,9 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
         return c.SDL_APP_FAILURE;
     };
     os_windows.afterFrame();
+    // A plain dvui app's main window: the OS's own title bar, in the theme's colour. Fizzy's own
+    // windows are dressed by fizzy (`platform.window.setStyle`), which says so.
+    if (!platform.window.app_dresses_windows) appState.back.dressPlainWindows();
 
     live_resize_trace.overlay();
 

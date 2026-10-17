@@ -175,6 +175,13 @@ void fizzy_macos_viewport_plain(void *nswindow) {
     }
 }
 
+/* No show or close animation for `nswindow` (`viewportDress`): a window of the OS's own frame
+ * (`SDLBackend.ViewportFrame.native`), dressed by nothing else of fizzy's. */
+void fizzy_macos_viewport_still(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    if (window != nil) [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+}
+
 void fizzy_macos_viewport_reshadow(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
