@@ -76,6 +76,22 @@ pub const Repeat = struct {
     }
 };
 
+/// The range of a track's `n` steps a share's two slider fractions name (`Dialogs.ShareTape`):
+/// from after `from` steps to after `to`, at least one step and inside the track.
+pub fn shareRange(n: usize, from_f: f32, to_f: f32) struct { usize, usize } {
+    const nf: f32 = @floatFromInt(n);
+    const from = @min(n -| 1, @as(usize, @intFromFloat(@floor(from_f * nf))));
+    const to = @max(from + 1, @min(n, @as(usize, @intFromFloat(@ceil(to_f * nf)))));
+    return .{ from, to };
+}
+
+test "a share's range is at least one step, and inside the track" {
+    try std.testing.expectEqual(.{ 0, 10 }, shareRange(10, 0, 1));
+    try std.testing.expectEqual(.{ 9, 10 }, shareRange(10, 1, 1));
+    try std.testing.expectEqual(.{ 5, 6 }, shareRange(10, 0.5, 0.1));
+    try std.testing.expectEqual(.{ 2, 8 }, shareRange(10, 0.25, 0.75));
+}
+
 /// The step a point `x` on a line from `x0` to `x1` means, in a history of `n` steps: how many
 /// of them are applied, 0 (before the first) to `n`. The line is split into `n + 1` equal stops,
 /// the point taking the nearest.

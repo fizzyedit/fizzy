@@ -441,6 +441,10 @@ pub fn replayInto(self: *Tracks, doc_id: u64, target: sdk.DocHandle, count: usiz
 pub const ExportOptions = struct {
     /// Keep every pause as long as it was.
     real_time: bool = false,
+    /// The range of the track's steps to share: from the document as it was after the first
+    /// `from`, through step `to` (exclusive; null: the last).
+    from: usize = 0,
+    to: ?usize = null,
 };
 /// A pause longer than this plays as `short_gap_ms`.
 pub const gap_ms = 2000;
@@ -453,9 +457,12 @@ pub const ExportError = error{
     NoBase,
     /// The owner keeps no history to go back through.
     NoHistory,
-    /// Where the track began is no longer on the document's history (undone past and edited
-    /// over), or a step joined the entry it began in: the document cannot be put back there.
+    /// Where the range begins is no longer on the document's history (undone past and edited
+    /// over), was reached by undoing past the track's start, or a step joined the entry it began
+    /// in: the document cannot be put back there.
     StartNotInHistory,
+    /// The range holds no steps.
+    EmptyRange,
     /// The owner could not write the document as a file.
     NoBytes,
     /// The document went back to the track's start for its file and could not come forward
@@ -464,12 +471,118 @@ pub const ExportError = error{
     OutOfMemory,
 };
 
+/// Where `t`'s document's history stood after its first `count` steps: the top entry's id (0 for
+/// none), worked out from the steps themselves, so it holds for any owner. Null where it cannot be
+/// known: an undo or redo reached an entry from before the track began.
+pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{OutOfMemory}!?u64 {
+    // The entries added since the track began, and how many of them are done.
+    var line: std.ArrayListUnmanaged(u64) = .empty;
+    defer line.deinit(gpa);
+    var at: usize = 0;
+    for (t.steps.items[0..@min(count, t.steps.items.len)]) |r| switch (r.kind) {
+        .added => {
+            line.shrinkRetainingCapacity(at);
+            try line.append(gpa, r.id);
+            at += 1;
+        },
+        .joined => {},
+        .undone => at = std.mem.indexOfScalar(u64, line.items[0..at], r.id) orelse return null,
+        .redone => at = 1 + (std.mem.indexOfScalar(u64, line.items, r.id) orelse return null),
+        .restarted => return null,
+    };
+    return if (at == 0) t.base_top else line.items[at - 1];
+}
+
+/// What a range of a track holds, for the person to see before it is shared (`summarize`).
+pub const Summary = struct {
+    /// The range, as it will be exported (`to` resolved and clamped).
+    from: usize,
+    to: usize,
+    steps: usize,
+    /// From the range's first step to its last's end, as it happened; and as the tape plays it,
+    /// its long pauses shortened unless `real_time`.
+    recorded_ms: u64,
+    played_ms: u64,
+    /// Who made its steps, each once, in the order they first came.
+    authors: []const sdk.Author,
+    /// Why the range cannot be shared as it stands, when it cannot (`exportTape` would refuse).
+    refused: ?ExportError = null,
+};
+
+/// The range `opts` names of `doc`'s track, summed up: how many steps, how long, by whom, and
+/// whether the document can be put back where it begins. Moves nothing; `arena` holds the authors.
+pub fn summarize(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, arena: std.mem.Allocator, opts: ExportOptions) ExportError!Summary {
+    const t = self.open.get(doc.id) orelse return error.NoTrack;
+    const base = t.base orelse return error.NoBase;
+    const to = @min(opts.to orelse t.steps.items.len, t.steps.items.len);
+    const first = @min(opts.from, to);
+    var out: Summary = .{ .from = first, .to = to, .steps = to - first, .recorded_ms = 0, .played_ms = 0, .authors = &.{} };
+    if (first == to) {
+        out.refused = error.EmptyRange;
+        return out;
+    }
+    _ = self.startOf(doc, arena, t, first) catch |err| {
+        out.refused = err;
+    };
+
+    var timing: Timing = .init(t, base, first, opts.real_time);
+    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    for (t.steps.items[first..to]) |r| {
+        out.played_ms = timing.place(r) + r.ms;
+        const who = host.stepAuthor(doc.id, r.id);
+        for (authors.items) |a| {
+            if (a.same(who)) break;
+        } else try authors.append(arena, who);
+    }
+    out.recorded_ms = timing.recorded_end -| (if (first == 0) base.at else t.steps.items[first].at);
+    out.authors = authors.items;
+    return out;
+}
+
+/// The history entry a range starting after step `first` goes back to, checked against the
+/// document's line as it is now. Errors as `exportTape` refuses.
+fn startOf(self: *Tracks, doc: sdk.DocHandle, arena: std.mem.Allocator, t: *const Track, first: usize) ExportError!u64 {
+    _ = self;
+    const top = (try topAfter(t, arena, first)) orelse return error.StartNotInHistory;
+    // A step after it that joined that entry changed it: going back to the entry would keep it.
+    if (top != 0) for (t.steps.items[first..]) |r| if (r.kind == .joined and r.id == top) return error.StartNotInHistory;
+    const line = doc.owner.historyLine(doc, arena) orelse return error.NoHistory;
+    // Gone from the line (undone past, and edited over).
+    if (top != 0) for (line.entries) |e| {
+        if (e.id == top) break;
+    } else return error.StartNotInHistory;
+    return top;
+}
+
+/// When each step plays, in ms from the tape's start: each pause runs from where the step before
+/// it ended, recorded and played, so a stroke drawn over a second and a half is never cut short
+/// by the next step arriving early; a pause past `gap_ms` plays as `short_gap_ms` unless real time.
+const Timing = struct {
+    played_end: u32 = 0,
+    recorded_end: u32,
+    real_time: bool,
+
+    /// From the track's start, its time opening counts; from a step, the range opens on it.
+    fn init(t: *const Track, base: Track.State, first: usize, real_time: bool) Timing {
+        return .{ .recorded_end = if (first == 0) base.at else t.steps.items[first].at, .real_time = real_time };
+    }
+
+    fn place(self: *Timing, r: Track.Rec) u32 {
+        const gap = r.at -| self.recorded_end;
+        const at = self.played_end + if (!self.real_time and gap > gap_ms) short_gap_ms else gap;
+        self.played_end = at + r.ms;
+        self.recorded_end = @max(self.recorded_end, r.at + r.ms);
+        return at;
+    }
+};
+
 /// `doc`'s track as a tape, in the binary form, deflated (`tape.binary`): a keyframe holding
-/// the document's file as it was when the track began, a wait for it to open, then every step
-/// at the moment it came, a replay of how the document was made that plays anywhere.
+/// the document's file as it was where the range begins (`ExportOptions.from`; the track's start
+/// by default), a wait for it to open, then each step of the range at the moment it came, a
+/// replay of how the document was made that plays anywhere.
 ///
 /// The file is the document's own, written by its owner (`Plugin.documentBytes`), as it stood at
-/// the track's start: the document is taken back there through its history (`historyGoTo`),
+/// the range's start (`topAfter`): the document is taken back there through its history (`historyGoTo`),
 /// written, and brought forward again in the same call, with nothing drawn between and neither
 /// the track nor the activity feed hearing of it. The person's history is as it was. Named
 /// `name` (the document's file name, with its owner's extension when it has none), under
@@ -486,15 +599,13 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // A step that joined the entry the track began in changed that entry after the base: going
-    // back to the entry would keep it.
-    for (t.steps.items) |r| if (r.kind == .joined and r.id == t.base_top and t.base_top != 0) return error.StartNotInHistory;
+    const to = @min(opts.to orelse t.steps.items.len, t.steps.items.len);
+    const first = @min(opts.from, to);
+    if (first == to) return error.EmptyRange;
+    // Refused before anything moves.
+    const start_top = try self.startOf(doc, arena, t, first);
     const line = doc.owner.historyLine(doc, arena) orelse return error.NoHistory;
     const now_top = if (line.at == 0) 0 else line.entries[line.at - 1].id;
-    // Gone from the line (undone past, and edited over): refused before anything moves.
-    if (t.base_top != 0) for (line.entries) |e| {
-        if (e.id == t.base_top) break;
-    } else return error.StartNotInHistory;
 
     const name = blk: {
         const base_name = std.fs.path.basename(doc.owner.documentPath(doc));
@@ -504,8 +615,8 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
         break :blk try std.mem.concat(arena, u8, &.{ base_name, types[0] });
     };
 
-    // Back to where the track began, the file written there, and forward again: that last
-    // move is checked, since a failure would leave the person's document at the track's start.
+    // Back to where the range begins, the file written there, and forward again: that last
+    // move is checked, since a failure would leave the person's document at the range's start.
     const bytes = bytes: {
         const was_track_muted = self.muted;
         self.muted = doc.id;
@@ -513,8 +624,8 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
         const was_muted = host.activity_muted;
         host.activity_muted = true;
         defer host.activity_muted = was_muted;
-        const moved = now_top != t.base_top;
-        if (moved and !doc.owner.historyGoTo(doc, t.base_top)) return error.StartNotInHistory;
+        const moved = now_top != start_top;
+        if (moved and !doc.owner.historyGoTo(doc, start_top)) return error.StartNotInHistory;
         const written = doc.owner.documentBytes(doc, name, arena) catch null;
         if (moved and !doc.owner.historyGoTo(doc, now_top)) {
             std.log.err("tracks: {s} went back to its track's start and could not come forward; redo brings the rest back", .{doc.owner.documentPath(doc)});
@@ -527,19 +638,12 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     files[0] = .{ .path = name, .text = bytes, .owner = doc.owner.id, .format = t.format };
     const keyframes = try arena.alloc(tape.Tape.Keyframe, 1);
     keyframes[0] = .{ .root = "demo://share", .files = files, .open = try arena.dupe([]const u8, &.{name}), .layout = .focused };
-    const ops = try arena.alloc(tape.Tape.Op, t.steps.items.len + 2);
+    const ops = try arena.alloc(tape.Tape.Op, to - first + 2);
     ops[0] = .{ .at = 0, .do = .{ .keyframe = 0 } };
     ops[1] = .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } };
-    // Each pause runs from where the step before it ended, recorded and played: a stroke drawn
-    // over a second and a half is never cut short by the next step arriving early.
-    var played_end: u32 = 0;
-    var recorded_end = base.at;
-    for (t.steps.items, ops[2..]) |r, *op| {
-        const gap = r.at -| recorded_end;
-        const at = played_end + if (!opts.real_time and gap > gap_ms) short_gap_ms else gap;
-        op.* = .{ .at = at, .ms = r.ms, .do = .{ .step = .{ .file = name, .effect = t.effect(r), .motion = t.motion(r) } } };
-        played_end = at + r.ms;
-        recorded_end = @max(recorded_end, r.at + r.ms);
+    var timing: Timing = .init(t, base, first, opts.real_time);
+    for (t.steps.items[first..to], ops[2..]) |r, *op| {
+        op.* = .{ .at = timing.place(r), .ms = r.ms, .do = .{ .step = .{ .file = name, .effect = t.effect(r), .motion = t.motion(r) } } };
     }
     const title = try std.fmt.allocPrint(arena, "How {s} was made", .{name});
     return tape.binary.encode(gpa, .{ .name = "share", .title = title, .ops = ops, .keyframes = keyframes }, .{ .deflate = true }) catch return error.OutOfMemory;
@@ -720,4 +824,18 @@ test "over the cap, ended tracks go first, then all but each open track's newest
     try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
     try testing.expectEqual(track.steps.items.len, track.checkpoints.items[0].step);
     try testing.expectEqual(t.held, track.size());
+}
+
+test "where the history stood after each step, from the steps alone" {
+    var t: Track = .{ .doc_id = 1, .doc = Stand.doc(1), .owner = &Stand.plugin, .format = 1, .base_top = 7 };
+    defer t.steps.deinit(testing.allocator);
+    const steps = [_]struct { sdk.Step.Kind, u64 }{
+        .{ .added, 10 },  .{ .joined, 10 }, .{ .added, 11 }, .{ .undone, 11 }, .{ .undone, 10 },
+        .{ .redone, 10 }, .{ .added, 12 },  .{ .undone, 7 },
+    };
+    for (steps) |st| try t.steps.append(testing.allocator, .{ .kind = st[0], .id = st[1], .at = 0, .ms = 0, .effect = .{ .start = 0, .len = 0 }, .motion = .{ .start = 0, .len = 0 } });
+    // Before any step, where the track began; then each step's top. Adding 12 after undoing 11
+    // overwrites it, and undoing 7 (from before the track) cannot be known.
+    const want = [_]?u64{ 7, 10, 10, 11, 10, 7, 10, 12, null };
+    for (want, 0..) |w, count| try testing.expectEqual(w, try topAfter(&t, testing.allocator, count));
 }

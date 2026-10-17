@@ -675,6 +675,8 @@ const TracksExport = sdk.Command.Params(struct {
     path: sdk.Command.Arg([]const u8, .{ .description = "The open document whose track to export, by its path. Empty: the active one." }) = .init(""),
     out: sdk.Command.Arg([]const u8, .{ .description = "Where to write the tape. Empty: the config folder's tapes/, named for the document and the time." }) = .init(""),
     real_time: sdk.Command.Arg(bool, .{ .description = "Keep every pause as long as it was. Off: a pause past 2 s plays as 0.6 s." }) = .init(false),
+    from: sdk.Command.Arg(u32, .{ .description = "Start after this many of the track's steps: the tape opens on the document as it was then. 0: where the track began." }) = .init(0),
+    to: sdk.Command.Arg(u32, .{ .description = "End after this many of the track's steps. 0: the last." }) = .init(0),
 });
 
 /// A document's track as a tape (`Tracks.exportTape`): how it was made, from where its track
@@ -686,11 +688,14 @@ fn cmdTracksExport(state: *anyopaque, args: TracksExport.Args, call: *sdk.Comman
     const doc = (if (args.path.len == 0) editor.activeDoc() else editor.docFromPath(args.path)) orelse
         return call.fail("no open document at {s}", .{if (args.path.len == 0) "(active)" else args.path});
     const gpa = editor.app.gpa;
-    const bytes = t.exportTape(&editor.app.host, doc, gpa, .{ .real_time = args.real_time }) catch |err| return call.fail("could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
+    const opts: @import("app").Tracks.ExportOptions = .{ .real_time = args.real_time, .from = args.from, .to = if (args.to == 0) null else args.to };
+    const sum = t.summarize(&editor.app.host, doc, call.arena, opts) catch |err| return call.fail("could not sum up {s}'s track: {t}", .{ doc.owner.documentPath(doc), err });
+    const bytes = t.exportTape(&editor.app.host, doc, gpa, opts) catch |err| return call.fail("could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
     defer gpa.free(bytes);
     const out = editor.keepTape(call.arena, doc, bytes, args.out) catch |err| return call.fail("could not write the tape: {t}", .{err});
-    const track = t.trackOf(doc.id).?;
-    try call.returns(.{ .path = out, .bytes = bytes.len, .steps = track.steps.items.len });
+    const authors = try call.arena.alloc([]const u8, sum.authors.len);
+    for (sum.authors, authors) |a, *l| l.* = if (a.kind == .person) "the person" else if (a.label.len > 0) a.label else @tagName(a.kind);
+    try call.returns(.{ .path = out, .bytes = bytes.len, .steps = sum.steps, .from = sum.from, .to = sum.to, .recorded_ms = sum.recorded_ms, .played_ms = sum.played_ms, .authors = authors });
 }
 
 fn cmdTracksRecord(state: *anyopaque, args: TracksRecord.Args, call: *sdk.Command.Call) anyerror!void {

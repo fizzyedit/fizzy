@@ -7988,6 +7988,32 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             },
         };
         try std.testing.expect(std.mem.indexOf(u8, result, ".steps = 6") != null);
+        // A range (`from`): the tape opens on the document as it was after two steps, and holds
+        // the four after; its summary names whose they are.
+        {
+            const ranged = try std.fmt.allocPrint(gpa, "{s}/tapes/export-range.tape", .{editor.app.config_folder});
+            defer gpa.free(ranged);
+            const range_args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\", .from = 2 }}", .{ path, ranged });
+            const range_result = switch (host.callCommand("fizzy.tracks.export", range_args, host.arena())) {
+                .ok => |r| r orelse return error.TestUnexpectedResult,
+                else => return error.TestUnexpectedResult,
+            };
+            try std.testing.expect(std.mem.indexOf(u8, range_result, ".steps = 4") != null);
+            // One author, named (a command run with no one acting is nobody known).
+            try std.testing.expect(std.mem.indexOf(u8, range_result, ".authors = .{\"unattributed\"}") != null);
+            const range_bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, ranged, gpa, .limited(1 << 20));
+            defer gpa.free(range_bytes);
+            var range_check = app.automation.Input.check;
+            range_check.steps = fizzy.Editor.Demo.stepsCheck;
+            var range_tape = try app.automation.Tape.load(gpa, range_bytes, range_check);
+            defer range_tape.deinit();
+            try std.testing.expectEqualStrings("two\none\n", range_tape.tape.keyframes[0].files[0].text);
+            var range_steps: usize = 0;
+            for (range_tape.tape.ops) |op| range_steps += @intFromBool(op.do == .step);
+            try std.testing.expectEqual(@as(usize, 4), range_steps);
+            // The person's document is where it was.
+            try std.testing.expectEqualStrings(want, try textOf(host, path));
+        }
         // The person's document is where it was, its history too.
         try std.testing.expectEqualStrings(want, try textOf(host, path));
         const line_after = (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult);
@@ -8049,7 +8075,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             }
         }.count;
         const kept_before = try count(tapes_dir);
-        editor.share_pending = doc.id;
+        editor.share_pending = .{ .doc_id = doc.id };
         const shared_path = try std.fmt.allocPrint(gpa, "tape://2/{s}", .{std.fs.path.basename(path)});
         defer gpa.free(shared_path);
         for (0..2000) |_| {
