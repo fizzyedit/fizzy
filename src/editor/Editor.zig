@@ -133,9 +133,9 @@ command_palette: @import("CommandPalette.zig") = .{},
 demo: Demo = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
 tape_tabs: TapeTabs = .{},
-/// A document whose transport's share was pressed: exported at the top of the next frame, before
-/// anything draws, since the export walks the document's history back and forth.
-share_pending: ?u64 = null,
+/// A part of a document's history to export (the strip's export window): at the top of the next
+/// frame, before anything draws, since the export walks the document's history back and forth.
+share_pending: ?struct { doc_id: u64, from: usize, to: usize } = null,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
@@ -3008,58 +3008,67 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         }
     }
     // Its history, while undo or redo or the pointer keep it: not while someone else holds it.
-    // A shared tape being trimmed has the trim bar instead.
-    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else if (editor.tape_tabs.trimOf(doc.id, dvui.currentWindow().arena())) |trim| {
-        TapeTabs.drawTrim(doc, trim[0], trim[1], canvas.data().borderRectScale().r, @truncate(ds.doc_id));
-    } else {
-        const shareable = if (editor.app.tracks) |*t| if (t.trackOf(doc.id)) |tr| tr.steps.items.len > 0 else false else false;
-        const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{ .share = shareable, .frames = if (recorded != null) &ds.frames else null });
-        if (pressed.share) {
-            editor.share_pending = doc.id;
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else {
+        // Exported from where its track began on; while the export window is open, what it holds.
+        const track = if (recorded) |tr| if (tr.steps.items.len > 0 and tr.base != null) tr else null else null;
+        const summary: []const u8 = if (track != null) if (ds.transport.window) |win| exportSummary(editor, doc, win.from, win.to) else "" else "";
+        const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
+            .frames = if (recorded != null) &ds.frames else null,
+            .export_from = if (track) |tr| tr.base_top else null,
+            .window_summary = summary,
+        });
+        if (pressed.exported) |win| {
+            editor.share_pending = .{ .doc_id = doc.id, .from = win.from, .to = win.to };
             dvui.refresh(null, @src(), null);
         }
     }
     return .ok;
 }
 
-/// How `doc` was made, as a tape to trim: its whole track exported (`Tracks.exportTape`) and
-/// opened in a tab of its own, played in at once, for the person to trim and share
-/// (`TapeTabs`, `TrimBar`). Nothing is written until they share. The transport's share.
-pub fn shareDocument(editor: *Editor, doc: sdk.DocHandle) void {
+/// What the export window from stop `from` to stop `to` of `doc`'s history holds, in words: "4
+/// steps, 12 s, by you and Claude". Empty when part of it was made before its track began.
+fn exportSummary(editor: *Editor, doc: sdk.DocHandle, from: usize, to: usize) []const u8 {
+    const arena = dvui.currentWindow().arena();
+    const t = &(editor.app.tracks orelse return "");
+    const line = doc.owner.historyLine(doc, arena) orelse return "";
+    const sum = t.lineSummary(&editor.app.host, doc, arena, line, from, to) orelse return "";
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const w = &out.writer;
+    const secs = (sum.played_ms + 500) / 1000;
+    w.print("{d} step{s}, ", .{ sum.steps, if (sum.steps == 1) "" else "s" }) catch {};
+    if (secs < 60) w.print("{d} s", .{secs}) catch {} else w.print("{d} min {d} s", .{ secs / 60, secs % 60 }) catch {};
+    if (sum.authors.len > 0) w.writeAll(", by ") catch {};
+    for (sum.authors, 0..) |a, i| {
+        if (i > 0) w.writeAll(if (i == sum.authors.len - 1) " and " else ", ") catch {};
+        w.writeAll(switch (a.kind) {
+            .person => "you",
+            .unattributed => "someone unknown",
+            else => if (a.label.len > 0) a.label else @tagName(a.kind),
+        }) catch {};
+    }
+    return out.written();
+}
+
+/// A part of `doc`'s history as a tape (the strip's export window, stops `from` to `to`):
+/// exported as the strip shows it (`Tracks.exportLine`), kept in the config folder's `tapes/`,
+/// and said on the document.
+pub fn exportDocument(editor: *Editor, doc: sdk.DocHandle, from: usize, to: usize) void {
     const gpa = editor.app.gpa;
     const t = &(editor.app.tracks orelse return);
-    const bytes = t.exportTape(&editor.app.host, doc, gpa, .{}) catch |err| {
-        dvui.log.warn("share: could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
-        _ = editor.noteOnDocument(doc.id, "Could not share");
+    const bytes = t.exportLine(&editor.app.host, doc, gpa, from, to, .{}) catch |err| {
+        dvui.log.warn("export: could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
+        _ = editor.noteOnDocument(doc.id, "Could not export");
         return;
     };
     defer gpa.free(bytes);
-    // Whose each step is, for the trim to say.
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const arena = dvui.currentWindow().arena();
-    const steps = (t.trackOf(doc.id) orelse return).steps.items;
-    const by = arena.alloc(u8, steps.len) catch return;
-    var names: std.ArrayListUnmanaged([]const u8) = .empty;
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
-    for (steps, by) |r, *b| {
-        const who = editor.app.host.stepAuthor(doc.id, r.id);
-        const i = for (authors.items, 0..) |a, i| {
-            if (a.same(who)) break i;
-        } else i: {
-            if (authors.items.len == 255) break :i 254;
-            authors.append(arena, who) catch return;
-            names.append(arena, switch (who.kind) {
-                .person => "you",
-                .unattributed => "someone unknown",
-                else => if (who.label.len > 0) who.label else @tagName(who.kind),
-            }) catch return;
-            break :i authors.items.len - 1;
-        };
-        b.* = @intCast(i);
-    }
-    editor.tape_tabs.open(editor, bytes, .{ .trim = .{ .by = by, .names = names.items } }) catch |err| {
-        dvui.log.warn("share: could not open the tape: {t}", .{err});
-        _ = editor.noteOnDocument(doc.id, "Could not open the tape");
+    const saved = editor.keepTape(arena, doc, bytes, "") catch |err| {
+        dvui.log.warn("export: could not keep the tape: {t}", .{err});
+        _ = editor.noteOnDocument(doc.id, "Could not save the tape");
+        return;
     };
+    _ = editor.noteOnDocument(doc.id, std.fmt.allocPrint(arena, "Saved {s}", .{std.fs.path.basename(saved)}) catch "Saved the tape");
 }
 
 /// Say `message` on the document's own panes, in the glass its commands show in
@@ -4080,9 +4089,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.doc_io.tick();
     // The document states tracks asked for since last frame, before anything draws.
     if (editor.app.tracks) |*t| t.tick();
-    if (editor.share_pending) |id| {
+    if (editor.share_pending) |p| {
         editor.share_pending = null;
-        if (editor.app.open_files.get(id)) |doc| editor.shareDocument(doc);
+        if (editor.app.open_files.get(p.doc_id)) |doc| editor.exportDocument(doc, p.from, p.to);
     }
     editor.tape_tabs.tick(editor);
     editor.promoteEditedPreviews();
