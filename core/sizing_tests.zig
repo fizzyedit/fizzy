@@ -24,4 +24,7 @@ test {
     // The smooth union the dialogs' and floats' bubbles run together with: its tests are
     // arithmetic, but the file speaks in dvui's points.
     _ = @import("gfx/liquid_blob.zig");
+    // `blitData` is pixi's, not fizzy's: nothing else here compiles it, and it speaks in dvui
+    // colours.
+    _ = @import("gfx/image.zig");
 }
