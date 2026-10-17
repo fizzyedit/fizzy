@@ -413,21 +413,31 @@ fn styleTitled(raw_ptr: *anyopaque) void {
     }
 }
 
+extern fn fizzy_macos_window_plain_backdrop(nswindow: ?*anyopaque, r: f64, g: f64, b: f64, radius: f64) void;
+extern fn fizzy_macos_window_corner_radius() f64;
+
 /// The OS's own title bar on `window` — its title, its buttons — coloured as the window is
 /// (`color`, the theme's window fill), the app's content below it: how a plain dvui app's windows
 /// look on this backend (`SDLBackend.floatingWindowOs`, `SDLBackend.dressPlainWindows`). Fizzy's
 /// own windows draw their title bar themselves (`setStyle`). Cheap to call again: each setter
 /// is skipped when the window already has it.
-/// - macOS: a titled window's title bar made transparent, so the window's colour shows through it.
+/// - macOS: fizzy's own shape (`styleTitled`), its content under a transparent title bar, but its
+///   title showing: the backend keeps that band clear and in the window's colour
+///   (`platform.macos_monitor.titlebarStrip`), and the window goes into and out of full screen as fizzy's does.
 /// - Windows: the caption in that colour (DWM, Windows 11), its text the theme's.
 /// - Linux: the window manager's own, as it draws it.
 pub fn nativeTitleBar(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color, dark: bool) void {
     switch (builtin.target.os.tag) {
         .macos => {
             const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
+            styleTitled(raw_ptr);
             const ns = objc.Object.fromId(raw_ptr);
-            if (!ns.msgSend(bool, "titlebarAppearsTransparent", .{})) ns.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
+            if (ns.msgSend(c_long, "titleVisibility", .{}) != 0) ns.msgSend(void, "setTitleVisibility:", .{@as(c_long, 0)});
             skin(raw_ptr, color, dark);
+            // Clear, over a backdrop in the window's colour that follows its picture on its way
+            // into or out of full screen, as fizzy's glass does.
+            const f = color.toRGBA();
+            fizzy_macos_window_plain_backdrop(raw_ptr, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, fizzy_macos_window_corner_radius());
         },
         .windows => win32_titlebar.nativeCaption(window, color, text, dark),
         else => {},
