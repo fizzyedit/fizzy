@@ -223,9 +223,11 @@ pub fn lastUndone(self: *const History) ?StepRef {
     return if (items.len == 0) null else .of(&items[items.len - 1]);
 }
 
-/// Commit the pending edit, merging it into the current group when VSCode's rule says to. Returns
-/// what it did, or null when there was nothing to commit.
-pub fn end(self: *History, gpa: Allocator, sel_after: Range) ?Committed {
+/// Commit the pending edit, merging it into the current group when VSCode's rule says to and
+/// `may_join` allows: false when the step on top is another hand's (`sdk.Host.mayMerge`), so one
+/// hand's typing never joins another's run. Returns what it did, or null when there was nothing to
+/// commit.
+pub fn end(self: *History, gpa: Allocator, sel_after: Range, may_join: bool) ?Committed {
     var p = self.pending orelse return null;
     self.pending = null;
 
@@ -261,7 +263,7 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range) ?Committed {
 
     self.clearRedo(gpa);
 
-    const can_merge = self.group_open and
+    const can_merge = may_join and self.group_open and
         self.undo_stack.items.len > 0 and
         !shouldBreakGroup(prev_kind, kind);
 
@@ -473,7 +475,7 @@ const Harness = struct {
             try self.text.insertSlice(self.gpa, self.cursor, ch);
             self.hist.note(self.gpa, self.cursor, "", ch);
             self.cursor += ch.len;
-            _ = self.hist.end(self.gpa, .collapsed(self.cursor));
+            _ = self.hist.end(self.gpa, .collapsed(self.cursor), true);
         }
     }
 
@@ -485,7 +487,7 @@ const Harness = struct {
             self.hist.note(self.gpa, self.cursor - 1, removed, "");
             try self.text.replaceRange(self.gpa, self.cursor - 1, 1, "");
             self.cursor -= 1;
-            _ = self.hist.end(self.gpa, .collapsed(self.cursor));
+            _ = self.hist.end(self.gpa, .collapsed(self.cursor), true);
         }
     }
 
@@ -584,7 +586,7 @@ test "undo restores the selection, not just an offset" {
     hist.begin(.init(6, 11));
     hist.note(a, 6, "world", "X");
     try text.replaceRange(a, 6, 5, "X");
-    _ = hist.end(a, .collapsed(7));
+    _ = hist.end(a, .collapsed(7), true);
 
     const sel = hist.applyUndo(a, &text).?;
     try t.expectEqualStrings("hello world", text.items);
@@ -673,7 +675,7 @@ test "cut-shaped deletion is one undoable step" {
     h.hist.note(h.gpa, 6, "world", "");
     try h.text.replaceRange(h.gpa, 6, 5, "");
     h.cursor = 6;
-    _ = h.hist.end(h.gpa, .collapsed(6));
+    _ = h.hist.end(h.gpa, .collapsed(6), true);
 
     try t.expectEqualStrings("hello ", h.text.items);
     _ = h.undo();
@@ -716,13 +718,13 @@ test "a commit says whether it started a step or joined one, and what it added" 
 
     hist.begin(.collapsed(0));
     hist.note(a, 0, "", "a");
-    const first = hist.end(a, .collapsed(1)).?;
+    const first = hist.end(a, .collapsed(1), true).?;
     try t.expect(!first.joined);
     try t.expectEqual(@as(usize, 1), first.edits.len);
 
     hist.begin(.collapsed(1));
     hist.note(a, 1, "", "b");
-    const second = hist.end(a, .collapsed(2)).?;
+    const second = hist.end(a, .collapsed(2), true).?;
     // Typing runs on: the same step, and only the new keystroke.
     try t.expect(second.joined);
     try t.expectEqual(first.step, second.step);
@@ -731,7 +733,7 @@ test "a commit says whether it started a step or joined one, and what it added" 
 
     // An empty commit commits nothing.
     hist.begin(.collapsed(2));
-    try t.expect(hist.end(a, .collapsed(2)) == null);
+    try t.expect(hist.end(a, .collapsed(2), true) == null);
 
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(a);
@@ -741,4 +743,21 @@ test "a commit says whether it started a step or joined one, and what it added" 
     try t.expectEqual(@as(usize, 2), hist.lastUndone().?.edits.len);
     _ = hist.applyRedo(a, &text).?;
     try t.expectEqual(first.step, hist.lastApplied().?.step);
+}
+
+test "an edit another hand may not join starts a step of its own" {
+    const a = t.allocator;
+    var hist: History = .{};
+    defer hist.deinit(a);
+
+    hist.begin(.collapsed(0));
+    hist.note(a, 0, "", "a");
+    const first = hist.end(a, .collapsed(1), true).?;
+    hist.begin(.collapsed(1));
+    hist.note(a, 1, "", "b");
+    // Typing on, which VSCode's rule would join, but the step on top is another hand's.
+    const second = hist.end(a, .collapsed(2), false).?;
+    try t.expect(!second.joined);
+    try t.expect(second.step != first.step);
+    try t.expectEqual(@as(usize, 2), hist.undo_stack.items.len);
 }

@@ -576,9 +576,7 @@ pub const step_format = 1;
 /// Report a step of this document's history to whoever records it (`sdk.Host.recordStep`), when
 /// anyone does: nothing is encoded otherwise.
 fn recordStep(self: *const Document, step: sdk.Step) void {
-    const host = sdk.host();
-    if (!host.recording(self.id)) return;
-    host.recordStep(self.id, step);
+    sdk.host().recordStep(self.id, step);
 }
 
 /// What `history.end` or `pushComplete` did, reported as a step.
@@ -589,7 +587,9 @@ pub fn recordCommitted(self: *const Document, c: tc.History.Committed) void {
 /// `edits` of history step `id` reported as a step, forward or (`reverse`) as their undo, `sel`
 /// the selection they leave.
 fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool) void {
-    if (!sdk.host().recording(self.id)) return;
+    // Every step reaches the host, which keeps who made it; its bytes only while it is recorded.
+    const top: u64 = if (self.history.lastApplied()) |r| r.step else 0;
+    if (!sdk.host().recording(self.id)) return self.recordStep(.{ .kind = kind, .id = id, .top = top });
     const gpa = sdk.allocator();
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
@@ -597,7 +597,7 @@ fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []con
         std.log.err("text: a step of {s} was not recorded: out of memory", .{self.path});
         return;
     };
-    self.recordStep(.{ .kind = kind, .id = id, .effect = out.written() });
+    self.recordStep(.{ .kind = kind, .id = id, .effect = out.written(), .top = top });
 }
 
 /// Apply a recorded step (`step_format`) as a new step of this document's history: the edits
