@@ -155,8 +155,8 @@ const fizzy_commands = [_]FizzyCommand{
     // No dvui bind name: its default comes from the profile table (`close_defaults`).
     .{ .id = "fizzy.close", .title = "Close", .bind = null, .run = cmdClose, .isEnabled = anyDocOpen, .params = ClosePath.params, .runWith = ClosePath.bind(cmdClosePath), .icon = icons.tvg.lucide.x },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll, .icon = icons.tvg.lucide.@"save-all" },
-    .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = cmdUndoEnabled, .icon = icons.tvg.lucide.undo },
-    .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = cmdRedoEnabled, .icon = icons.tvg.lucide.redo },
+    .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdUndoWith), .icon = icons.tvg.lucide.undo },
+    .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
     .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
@@ -412,6 +412,64 @@ fn cmdUndo(state: *anyopaque) anyerror!void {
 fn cmdRedo(state: *anyopaque) anyerror!void {
     try editorFromState(state).redo();
 }
+
+const HistoryStep = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document, by its path. Empty: the active one." }) = .init(""),
+    expect: sdk.Command.Arg(u64, .{ .description = "The step you mean, by its id: for undo the last change, for redo the next one. Refused when it is not, so a step someone made since is never taken back. 0: whichever it is." }) = .init(0),
+});
+
+/// Enabled while any document is open, as text's by-path commands are: a call may name a document
+/// that is not the active one, and says why when there is nothing to take. The menus grey Undo by
+/// the active document's own (`menu_model.canUndo`). An enabled check that sees the call's target
+/// is the control server's to decide (`plans/CONTROL_SERVER_PLAN.md`, "Commands that take a
+/// document").
+fn cmdUndoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Call) anyerror!void {
+    try historyStepWith(editorFromState(state), args, call, .undo);
+}
+fn cmdRedoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Call) anyerror!void {
+    try historyStepWith(editorFromState(state), args, call, .redo);
+}
+
+/// Undo or redo one step of a document named by path, or of the active one, as any caller: the
+/// person's palette, a script, an agent. Over the owner's history line (`historyLine`,
+/// `historyGoTo`), so it reaches a document that is not active. With `expect`, only when that
+/// step is the one it would take, so a caller never takes back a step made since it looked
+/// (`plans/SHARED_HISTORY_PLAN.md`, step 5). Answers the step and whose it was.
+fn historyStepWith(editor: *Editor, args: HistoryStep.Args, call: *sdk.Command.Call, action: enum { undo, redo }) !void {
+    const doc = if (args.path.len == 0)
+        editor.activeDoc() orelse return call.fail("no document is active", .{})
+    else
+        editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
+    const line = doc.owner.historyLine(doc, call.arena) orelse {
+        // An owner with no line undoes the active document only, through its own command.
+        const active = editor.activeDoc();
+        if (args.expect != 0 or active == null or active.?.id != doc.id)
+            return call.fail("{s} keeps no history line, so it can only undo the active document, with no expect", .{doc.owner.id});
+        return switch (action) {
+            .undo => editor.undo(),
+            .redo => editor.redo(),
+        };
+    };
+    const host = &editor.app.host;
+    const step: sdk.Plugin.HistoryLine.Entry, const to: u64 = switch (action) {
+        .undo => blk: {
+            if (line.at == 0) return call.fail("nothing to undo", .{});
+            break :blk .{ line.entries[line.at - 1], if (line.at >= 2) line.entries[line.at - 2].id else 0 };
+        },
+        .redo => blk: {
+            if (line.at >= line.entries.len) return call.fail("nothing to redo", .{});
+            break :blk .{ line.entries[line.at], line.entries[line.at].id };
+        },
+    };
+    const whose = host.stepAuthor(doc.id, step.id);
+    const by = if (whose.kind == .person) "the person" else if (whose.label.len > 0) whose.label else @tagName(whose.kind);
+    if (args.expect != 0 and args.expect != step.id) return call.fail(
+        "step {d} is not the one to {s}: that is step {d}, {s}, by {s}. The document changed since; fix it forward",
+        .{ args.expect, @tagName(action), step.id, step.title, by },
+    );
+    if (!doc.owner.historyGoTo(doc, to)) return call.fail("{s} could not {s} step {d}", .{ doc.owner.id, @tagName(action), step.id });
+    try call.returns(.{ .step = step.id, .title = step.title, .by = by });
+}
 /// Set while `tick` is running a command because of a live key event. That event is never
 /// marked handled, so it goes on to reach the focused widget under its own steam — a clipboard
 /// command that also synthesized one would make the widget act twice. False for menu clicks and
@@ -493,12 +551,6 @@ fn cmdFitView(state: *anyopaque) anyerror!void {
 }
 fn cmdFitViewEnabled(state: *anyopaque) bool {
     return editorFromState(state).activeDocCommandEnabled("fitView");
-}
-fn cmdUndoEnabled(state: *anyopaque) bool {
-    return editorFromState(state).activeDocCommandEnabled("undo");
-}
-fn cmdRedoEnabled(state: *anyopaque) bool {
-    return editorFromState(state).activeDocCommandEnabled("redo");
 }
 /// Enabled when *either* target of `clipboardVerb` can act: the active document, or a focused
 /// text input that the synthetic event would reach. Gating on the document alone would grey out

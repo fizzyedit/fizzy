@@ -7418,6 +7418,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = true") != null);
         try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = false") != null);
 
+        // `fizzy.undo`/`fizzy.redo` by path, on a document behind the one in front, as a script or
+        // an agent calls them: only the step `expect` names, and the answer says whose it was.
+        {
+            const notes_doc = editor.docFromPath(notes) orelse return error.TestUnexpectedResult;
+            const before = (try read(host, notes_args)).text;
+            const notes_write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"# Notes, by Claude\\n\" }}", .{notes});
+            defer gpa.free(notes_write);
+            const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
+            try std.testing.expect(host.callCommand("text.write", notes_write, host.arena()) == .ok);
+            host.endAct(outer);
+            const line = notes_doc.owner.historyLine(notes_doc, host.arena()) orelse return error.TestUnexpectedResult;
+            const top = line.entries[line.at - 1].id;
+
+            const stale = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top + 1000 });
+            defer gpa.free(stale);
+            switch (host.callCommand("fizzy.undo", stale, host.arena())) {
+                .failed => |m| try std.testing.expect(std.mem.indexOf(u8, m, "by Claude") != null),
+                else => return error.TestUnexpectedResult,
+            }
+            try std.testing.expectEqualStrings("# Notes, by Claude\n", (try read(host, notes_args)).text);
+
+            const named = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top });
+            defer gpa.free(named);
+            const undid = host.callCommand("fizzy.undo", named, host.arena());
+            try std.testing.expect(undid == .ok);
+            try std.testing.expect(std.mem.indexOf(u8, undid.ok.?, ".by = \"Claude\"") != null);
+            try std.testing.expectEqualStrings(before, (try read(host, notes_args)).text);
+            // The document in front is untouched, and still in front.
+            try std.testing.expectEqualStrings(main_zig, (editor.activeDoc() orelse return error.TestUnexpectedResult).owner.documentPath(editor.activeDoc().?));
+
+            try std.testing.expect(host.callCommand("fizzy.redo", named, host.arena()) == .ok);
+            try std.testing.expectEqualStrings("# Notes, by Claude\n", (try read(host, notes_args)).text);
+            try std.testing.expect(host.callCommand("fizzy.undo", named, host.arena()) == .ok);
+            try std.testing.expectEqualStrings(before, (try read(host, notes_args)).text);
+        }
+
         // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));
