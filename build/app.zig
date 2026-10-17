@@ -651,6 +651,12 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // step a point on its line is. std-only (see history_transport.zig); `HistoryTransport`
         // draws it.
         .{ "fizzy-history-transport-tests", "app/history_transport.zig" },
+        // The control server's JSON at its edge, ZON inside, and its transport: a request over
+        // the socket reaching the UI thread and its answer going back. std-only (see
+        // control/json.zig, control/Server.zig); `control/routes.zig` answers over the Host,
+        // covered by `tests/integration.zig`.
+        .{ "fizzy-control-json-tests", "app/control/json.zig" },
+        .{ "fizzy-control-server-tests", "app/control/Server.zig" },
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
