@@ -6278,7 +6278,7 @@ pub fn deinit(editor: *Editor) !void {
     // command would reach goes.
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (editor.app.control) |*c| {
-            c.stop();
+            @import("app").control.routes.stop(c, &editor.app.host);
             editor.app.gpa.free(c.socket_path);
             editor.app.control = null;
         }

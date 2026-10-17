@@ -6,6 +6,8 @@
 //!   GET  /commands         every command: id, title, owner, whether it is enabled, its params
 //!   GET  /commands/{id}    one of them
 //!   POST /commands/{id}    run it: the body is its arguments, the response its result
+//!   GET  /events           the app's events as Server-Sent Events, `?topics=a,b` to choose
+//!                          (a name, or a prefix ending in `*`); every event when absent
 //!
 //! Bodies are JSON, converted at this edge (`json.zig`). A request sent as `application/zon` is
 //! passed through as ZON and answered in ZON. Errors are HTTP's: 404 for an unknown command, 400
@@ -18,6 +20,8 @@ const json = @import("json.zig");
 const Server = @import("Server.zig");
 
 pub const Answer = struct {
+    /// Stream the app's events to this connection instead (`GET /events`).
+    stream: bool = false,
     status: std.http.Status,
     /// Static: a string literal.
     content_type: []const u8 = "application/json",
@@ -31,13 +35,63 @@ const zon_type = "application/zon";
 pub fn answerPending(server: *Server, host: *sdk.Host) void {
     var taken: std.ArrayListUnmanaged(*Server.Request) = .empty;
     defer taken.deinit(server.gpa);
-    server.take(&taken);
+    var streaming = server.take(&taken) > 0;
     for (taken.items) |req| {
         var arena: std.heap.ArenaAllocator = .init(server.gpa);
         defer arena.deinit();
         const a = handle(host, req.method, req.path(), req.content_type, req.body, arena.allocator());
-        req.answer(server, a.status, a.content_type, a.body);
+        if (a.stream) {
+            req.answerStream(server);
+            streaming = true;
+        } else req.answer(server, a.status, a.content_type, a.body);
     }
+    relay(host, server, streaming);
+}
+
+/// Stop relaying and stop `server`. On the UI thread, at quit: after it, no event reaches the
+/// stopped server.
+pub fn stop(server: *Server, host: *sdk.Host) void {
+    relay(host, server, false);
+    server.stop();
+}
+
+/// What owns the subscription that relays the app's events to the server's streams. A pseudo-plugin,
+/// as fizzy's own commands have (`fizzy_plugin` in fizzy's `Keybinds.zig`): never in
+/// `host.plugins`, so no hook fires on it. It listens only while a stream is open, so with none an
+/// emitted event costs the bus its one atomic load, as before.
+var relay_plugin: sdk.Plugin = .{
+    .state = undefined, // the server, set when it starts listening
+    .vtable = &relay_vtable,
+    .id = "fizzy.control",
+    .display_name = "Control server",
+};
+const relay_vtable: sdk.Plugin.VTable = .{};
+var relaying = false;
+
+fn relay(host: *sdk.Host, server: *Server, on: bool) void {
+    if (on == relaying) return;
+    if (on) {
+        relay_plugin.state = server;
+        host.subscribe(.{ .event = "*", .owner = &relay_plugin, .handler = relayEvent }) catch return;
+    } else host.withdrawPlugin(&relay_plugin);
+    relaying = on;
+}
+
+/// One event, as JSON once, to every stream that wants it (`Server.publish`).
+fn relayEvent(state: *anyopaque, event: sdk.events.Event) void {
+    const server: *Server = @ptrCast(@alignCast(state));
+    var arena_state: std.heap.ArenaAllocator = .init(server.gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const data = json.jsonFromZon(arena, event.payload) catch |err| switch (err) {
+        // A payload that is not ZON goes as its text, which JSON can carry while it is UTF-8.
+        error.NotZon => if (std.unicode.utf8ValidateSlice(event.payload))
+            std.json.Stringify.valueAlloc(arena, .{ .zon = event.payload }, .{}) catch return
+        else
+            return,
+        else => return,
+    };
+    server.publish(event.name, data);
 }
 
 /// Answer one request. Everything returned lives in `arena`.
@@ -64,6 +118,10 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
         var list: std.ArrayListUnmanaged(CommandInfo) = .empty;
         for (host.commands.items) |*c| try list.append(arena, try describe(c, arena));
         return ok(arena, list.items);
+    }
+    if (std.mem.eql(u8, trimmed, "/events")) {
+        if (method != .GET) return notAllowed(arena, "GET");
+        return .{ .status = .ok, .stream = true, .body = "" };
     }
     const prefix = "/commands/";
     if (std.mem.startsWith(u8, trimmed, prefix)) {

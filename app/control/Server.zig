@@ -19,6 +19,12 @@ const Io = std.Io;
 
 /// The most a request body may hold. A command's arguments can be a whole drawing, but not this.
 pub const max_body = 64 * 1024 * 1024;
+/// The most a stream may fall behind: a client that reads no faster than events come is closed
+/// rather than kept buffering without end.
+pub const max_backlog = 8 * 1024 * 1024;
+/// How long a stream may stay quiet before a keep-alive comment: how a client that went away
+/// without closing is noticed.
+pub const keep_alive_ms = 15_000;
 
 gpa: std.mem.Allocator,
 io: Io,
@@ -41,6 +47,30 @@ socket_inode: ?Io.File.INode = null,
 /// Requests waiting for the UI thread, under `lock`.
 lock: Io.Mutex = .init,
 pending: std.ArrayListUnmanaged(*Request) = .empty,
+/// Connections streaming events (`publish`), under `lock`.
+streams: std.ArrayListUnmanaged(*Stream) = .empty,
+
+/// A connection that asked for events: what it wants, and what is waiting to be written to it.
+pub const Stream = struct {
+    /// Event names or prefixes ending in `*` (`fizzy.document.*`), from `?topics=a,b`; `*` alone
+    /// takes everything. In the connection's arena.
+    topics: []const []const u8,
+    /// Under the server's `lock`: whole SSE messages, appended by `publish`, written and emptied
+    /// by the connection's thread. `gpa`-owned.
+    backlog: std.ArrayListUnmanaged(u8) = .empty,
+    /// It fell more than `max_backlog` behind: its thread closes it.
+    overrun: bool = false,
+    ready: Io.Event = .unset,
+
+    fn wants(self: *const Stream, name: []const u8) bool {
+        for (self.topics) |t| {
+            if (t.len > 0 and t[t.len - 1] == '*') {
+                if (std.mem.startsWith(u8, name, t[0 .. t.len - 1])) return true;
+            } else if (std.mem.eql(u8, t, name)) return true;
+        }
+        return false;
+    }
+};
 
 const Conn = struct {
     stream: Io.net.Stream,
@@ -68,6 +98,12 @@ pub const Request = struct {
         return self.target[0 .. std.mem.indexOfScalar(u8, self.target, '?') orelse self.target.len];
     }
 
+    /// Answer by streaming events to this connection from now on, from the UI thread.
+    pub fn answerStream(self: *Request, server: *Server) void {
+        self.response = .{ .stream = true, .status = .ok };
+        self.done.set(server.io);
+    }
+
     /// Answer, from the UI thread. `body` is copied with the server's `gpa`.
     pub fn answer(self: *Request, server: *Server, status: std.http.Status, content_type: []const u8, body: []const u8) void {
         self.response = .{
@@ -81,6 +117,9 @@ pub const Request = struct {
 };
 
 pub const Response = struct {
+    /// Answered by turning the connection into an event stream (`GET /events`): the status and
+    /// body are not sent, the connection stays open and `publish` writes to it.
+    stream: bool = false,
     status: std.http.Status = .internal_server_error,
     /// Static: a string literal, never freed.
     content_type: []const u8 = "text/plain",
@@ -112,12 +151,32 @@ pub fn start(self: *Server) !void {
     self.accept_task = try self.io.concurrent(run, .{self});
 }
 
-/// Requests the UI thread should answer now. On the UI thread, each frame; each must be answered.
-pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) void {
+/// Requests the UI thread should answer now, each of which must be answered, and how many
+/// connections stream events. On the UI thread, each frame.
+pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) usize {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
-    out.appendSlice(self.gpa, self.pending.items) catch return;
+    out.appendSlice(self.gpa, self.pending.items) catch {};
     self.pending.clearRetainingCapacity();
+    return self.streams.items.len;
+}
+
+/// Send the event `name`, its payload already JSON on one line, to every stream that wants it.
+/// The message is built once and copied to each. From any thread.
+pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    for (self.streams.items) |st| {
+        if (st.overrun or !st.wants(name)) continue;
+        if (st.backlog.items.len + name.len + json.len + 16 > max_backlog) {
+            st.overrun = true;
+        } else {
+            st.backlog.print(self.gpa, "event: {s}\ndata: {s}\n\n", .{ name, json }) catch {
+                st.overrun = true;
+            };
+        }
+        st.ready.set(self.io);
+    }
 }
 
 pub fn stop(self: *Server) void {
@@ -129,6 +188,8 @@ pub fn stop(self: *Server) void {
         // waiting, and writes it before it sees `stopping` and ends.
         for (self.pending.items) |r| r.answer(self, .service_unavailable, "text/plain", "fizzy is closing\n");
         self.pending.clearRetainingCapacity();
+        // Streams wake to find `stopping` and end.
+        for (self.streams.items) |st| st.ready.set(self.io);
         // The rest are reading their next request: end those reads. Only the ones still open,
         // since shutting down a closed descriptor is a panic in std.
         for (self.conns.items) |c| if (!c.done.load(.acquire) and !c.waiting) c.stream.shutdown(self.io, .both) catch {};
@@ -149,6 +210,7 @@ pub fn stop(self: *Server) void {
         } else |_| {}
     }
     self.pending.deinit(self.gpa);
+    self.streams.deinit(self.gpa);
 }
 
 fn run(self: *Server) void {
@@ -264,6 +326,7 @@ fn serve(self: *Server, conn: *Conn) void {
         // Uncancelable: `&req` is queued, and an early return would leave the UI thread writing
         // into a frame that is gone.
         req.done.waitUncancelable(self.io);
+        if (req.response.stream) return self.serveStream(&head, req.target);
         const body = req.response.body orelse "out of memory\n";
         defer if (req.response.body) |b| self.gpa.free(b);
         const sent = head.respond(body, .{
@@ -278,6 +341,80 @@ fn serve(self: *Server, conn: *Conn) void {
         sent catch return;
         if (!head.head.keep_alive) return;
     }
+}
+
+/// Write events to the connection until the client goes, falls too far behind, or the server
+/// stops. Its `waiting` stays set, so `stop` leaves the socket to it: it wakes on `ready` and ends
+/// itself.
+fn serveStream(self: *Server, head: *std.http.Server.Request, target: []const u8) void {
+    var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var stream: Stream = .{ .topics = topicsOf(arena, target) catch return };
+    // No buffer of its own: `BodyWriter.flush` sends only the connection's, so whatever the body
+    // writer held would wait. Its writes go straight into the connection's buffer instead.
+    var body = head.respondStreaming(&.{}, .{ .respond_options = .{
+        .keep_alive = false,
+        .transfer_encoding = .none,
+        .extra_headers = &.{
+            .{ .name = "content-type", .value = "text/event-stream" },
+            .{ .name = "cache-control", .value = "no-cache" },
+        },
+    } }) catch return;
+    body.flush() catch return;
+    {
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        if (self.stopping.load(.acquire)) return;
+        self.streams.append(self.gpa, &stream) catch return;
+    }
+    defer {
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        for (self.streams.items, 0..) |st, i| if (st == &stream) {
+            _ = self.streams.swapRemove(i);
+            break;
+        };
+        stream.backlog.deinit(self.gpa);
+    }
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(self.gpa);
+    while (true) {
+        const quiet = if (stream.ready.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(keep_alive_ms), .clock = .awake } })) |_| false else |err| switch (err) {
+            error.Timeout => true,
+            error.Canceled => return,
+        };
+        {
+            self.lock.lockUncancelable(self.io);
+            defer self.lock.unlock(self.io);
+            if (self.stopping.load(.acquire) or stream.overrun) return;
+            // Taken whole: `publish` goes on appending to an empty list while this one is written.
+            std.mem.swap(std.ArrayListUnmanaged(u8), &out, &stream.backlog);
+            stream.ready.reset();
+        }
+        if (out.items.len > 0) {
+            body.writer.writeAll(out.items) catch return;
+        } else if (quiet) {
+            body.writer.writeAll(": keep-alive\n\n") catch return;
+        } else continue;
+        body.flush() catch return;
+        out.clearRetainingCapacity();
+    }
+}
+
+/// `?topics=a,b` as a list; everything when absent or empty.
+fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
+    const query = target[(std.mem.indexOfScalar(u8, target, '?') orelse return &.{"*"}) + 1 ..];
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var params = std.mem.tokenizeScalar(u8, query, '&');
+    while (params.next()) |param| {
+        const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
+        if (!std.mem.eql(u8, param[0..eq], "topics")) continue;
+        const value = std.Uri.percentDecodeInPlace(try arena.dupe(u8, param[eq + 1 ..]));
+        var names = std.mem.tokenizeScalar(u8, value, ',');
+        while (names.next()) |n| try list.append(arena, std.mem.trim(u8, n, " "));
+    }
+    return if (list.items.len == 0) &.{"*"} else list.items;
 }
 
 // ---- tests ---------------------------------------------------------------------------------
@@ -334,7 +471,7 @@ test "a request reaches the UI thread and its answer goes back" {
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
-        server.take(&taken);
+        _ = server.take(&taken);
         if (taken.items.len == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
     }
     try std.testing.expectEqual(@as(usize, 1), taken.items.len);
@@ -420,7 +557,7 @@ test "what cannot be served is refused before its body, and never reaches the ap
     }
     var taken: std.ArrayListUnmanaged(*Request) = .empty;
     defer taken.deinit(gpa);
-    server.take(&taken);
+    _ = server.take(&taken);
     try std.testing.expectEqual(@as(usize, 0), taken.items.len);
 }
 
@@ -455,11 +592,64 @@ test "a server that took over the path keeps it when the old one stops" {
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
-        new.take(&taken);
+        _ = new.take(&taken);
         if (taken.items.len == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
     }
     try std.testing.expectEqual(@as(usize, 1), taken.items.len);
     taken.items[0].answer(&new, .ok, "text/plain", "new");
     thread.join();
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.reply_len], "\r\n\r\nnew"));
+}
+
+test "a stream gets the events it asked for, once each, until the server stops" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    var client: TestClient = .{ .io = io, .path = path, .request = "GET /events?topics=fizzy.document.*,chat.turn_ended HTTP/1.1\r\nHost: x\r\n\r\n" };
+    const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
+
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(gpa);
+    var streams: usize = 0;
+    var waited: usize = 0;
+    while (streams == 0 and waited < 2000) : (waited += 1) {
+        streams = server.take(&taken);
+        for (taken.items) |r| r.answerStream(&server);
+        taken.clearRetainingCapacity();
+        if (streams == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), streams);
+    server.publish("fizzy.document.saved", "{\"path\":\"/a\"}");
+    server.publish("fizzy.folder.opened", "{\"path\":\"/p\"}");
+    server.publish("chat.turn_ended", "{}");
+    // Let the stream write before the stop ends it.
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    server.stop();
+    thread.join();
+
+    const reply = client.reply[0..client.reply_len];
+    try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, reply, "content-type: text/event-stream\r\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\nevent: fizzy.document.saved\ndata: {\"path\":\"/a\"}\n\nevent: chat.turn_ended\ndata: {}\n\n"));
+}
+
+test "topics come from the query, and none means everything" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"*"}), try topicsOf(a, "/events"));
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"*"}), try topicsOf(a, "/events?topics="));
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "fizzy.document.*", "x.y" }), try topicsOf(a, "/events?a=1&topics=fizzy.document.%2A,%20x.y"));
+    const st: Stream = .{ .topics = &.{ "fizzy.document.*", "x.y" } };
+    try std.testing.expect(st.wants("fizzy.document.saved"));
+    try std.testing.expect(st.wants("x.y"));
+    try std.testing.expect(!st.wants("x.yz"));
+    try std.testing.expect(!st.wants("fizzy.folder.opened"));
 }
