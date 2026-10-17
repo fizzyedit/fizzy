@@ -331,3 +331,36 @@ test "fingerprint catches function-pointer signature changes" {
     const v2 = comptime hashAll(seed, .{V2}, 6);
     try std.testing.expect(v1 != v2);
 }
+
+test "both hashes are the ones Zig 0.16 gave for the same types" {
+    // Computed by Zig 0.16 with this file as it was before 0.17 made `@typeInfo` struct-of-arrays
+    // (fizzy `main` at 7b538aa): the 0.17 loops hash the same facts in the same order. A type of
+    // every kind the hashes look into, at a depth that reaches them all.
+    const Tag = enum(u8) { a, b, c };
+    const Inner = extern struct { x: i16, y: f32 };
+    const Packed = packed struct { lo: u4, hi: u12 };
+    const Choice = union(enum) { none, int: i64, pair: [2]u16 };
+    const Opaque = opaque {};
+    const Probe = struct {
+        tag: Tag,
+        inner: Inner,
+        bits: Packed,
+        choice: Choice,
+        maybe: ?*const Inner,
+        many: [3]u16,
+        name: []const u8,
+        raw: [*]u8,
+        len: usize,
+        delta: isize,
+        ratio: f64,
+        on: bool,
+        hook: *const fn (state: *Opaque, n: u32, s: []const u8) callconv(.c) bool,
+        plain: *const fn (f32) void,
+        result: ?*const fn (?*anyopaque) callconv(.c) u64,
+    };
+    // Fixed widths only: `hashAll` folds in sizes, which this keeps the same on every target.
+    const Fixed = extern struct { a: u8, b: u32, c: i64, d: [4]u16, e: f32, t: Tag };
+    @setEvalBranchQuota(1_000_000);
+    try std.testing.expectEqual(@as(u64, 0x2ae9f3848d7d3d9f), comptime hashAllShape(seed, .{ Probe, Fixed }, 6));
+    try std.testing.expectEqual(@as(u64, 0xc0b59f8f6303fb84), comptime hashAll(seed, .{Fixed}, 6));
+}
