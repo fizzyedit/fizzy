@@ -14,6 +14,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("fizzy");
+const Tracks = @import("app").Tracks;
 const shim = @import("fizzy_shim.zig");
 const TextEntryWidget = @import("text").TextEntryWidget;
 const sdk = @import("fizzy_sdk");
@@ -1900,6 +1901,72 @@ test "assigning a region overrides keyword matching, duplicates and empties" {
     try std.testing.expectEqualStrings("test.other", layout.matching(sidebar)[0].id);
 }
 
+// A pane adds or drops a tab by reading its assignment, editing the list and writing it back
+// (`Workspace.addTab`), so the list it writes borrows the ids it replaces. On 2026-10-16 that
+// crashed fizzy in `evictIdFromOthers`, reading ids the write had just freed, on a document an
+// agent opened beside the person. The page allocator unmaps every free, so a read of one faults
+// here every time rather than whenever the freed slot's page happened to go.
+test "assigning a region a list borrowed from the assignments it replaces" {
+    const gpa = std.heap.page_allocator;
+    var state: fizzy.Editor.Layout.State = .{};
+    defer state.deinitAssignments(gpa);
+
+    try state.assign(gpa, "pane.1", &.{ "doc.a", "doc.b" });
+    try state.assign(gpa, "pane.2", &.{ "doc.c", "doc.d" });
+
+    // Pane 1 takes doc.c as a tab: its own ids, then the new one borrowed from pane 2's list.
+    const one = state.assignment("pane.1").?;
+    const two = state.assignment("pane.2").?;
+    try state.assign(gpa, "pane.1", &.{ one[0], one[1], two[0] });
+    try std.testing.expectEqual(@as(usize, 3), state.assignment("pane.1").?.len);
+    try std.testing.expectEqualStrings("doc.c", state.assignment("pane.1").?[2]);
+    try std.testing.expectEqual(@as(usize, 1), state.assignment("pane.2").?.len);
+    try std.testing.expectEqualStrings("doc.d", state.assignment("pane.2").?[0]);
+
+    // Pane 2 drops back to its first tab, written from its own list, under its own key.
+    const keyed = state.assignments.getEntry("pane.2").?;
+    try state.assign(gpa, keyed.key_ptr.*, keyed.value_ptr.*[0..1]);
+    try std.testing.expectEqualStrings("doc.d", state.assignment("pane.2").?[0]);
+}
+
+// Taking a region's ids out of the others rewrites them, and rewriting even an existing entry
+// can grow the map (`getOrPut` makes room first), moving every entry. Whatever `assign` holds of
+// its own entry must outlive that. Some count of regions leaves the map full at the rewrite;
+// trying every count up to well past a resize reaches it, and the page allocator faults on a
+// stale read.
+test "assigning a region whose ids other regions hold, whatever the map's fill" {
+    const gpa = std.heap.page_allocator;
+    for (1..64) |count| {
+        var state: fizzy.Editor.Layout.State = .{};
+        defer state.deinitAssignments(gpa);
+        var names: [64][16]u8 = undefined;
+        var ids: [64][]const u8 = undefined;
+        for (0..count) |i| {
+            const name = try std.fmt.bufPrint(&names[i], "pane.{d}", .{i});
+            try state.assign(gpa, name, &.{name});
+            ids[i] = name;
+        }
+        // One region takes every id: each other region is emptied, none twice.
+        try state.assign(gpa, "all", ids[0..count]);
+        try std.testing.expectEqual(count, state.assignment("all").?.len);
+        for (ids[0..count]) |name| try std.testing.expectEqual(@as(usize, 0), state.assignment(name).?.len);
+    }
+}
+
+// A place of many tabs keeps every one when another place takes one of them.
+test "taking one id out of a region of many keeps the rest" {
+    const gpa = std.testing.allocator;
+    var state: fizzy.Editor.Layout.State = .{};
+    defer state.deinitAssignments(gpa);
+    var bufs: [40][16]u8 = undefined;
+    var ids: [40][]const u8 = undefined;
+    for (&ids, 0..) |*id, i| id.* = try std.fmt.bufPrint(&bufs[i], "doc.{d}", .{i});
+    try state.assign(gpa, "pane.1", &ids);
+    try state.assign(gpa, "pane.2", &.{ids[0]});
+    try std.testing.expectEqual(@as(usize, 39), state.assignment("pane.1").?.len);
+    try std.testing.expectEqualStrings("doc.39", state.assignment("pane.1").?[38]);
+}
+
 // -- regions inside regions ----------------------------------------------------------------------
 
 // A region declared inside another names a place *within* it: a document pane inside the main area
@@ -2430,6 +2497,104 @@ test "a split before a region that hides itself is not drawn, and nothing draws 
     try std.testing.expectEqual(@as(usize, 2), editor.app.layout.regions.items.len);
 }
 
+/// Sidebar beside Main over Panel, with the picker drawn over them as fizzy's frame does.
+const PickerFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        fizzy.core.anchor.want();
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        {
+            var content = try layout.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+            defer content.deinit();
+            {
+                var sidebar = try layout.region(@src(), .{ .name = "Sidebar", .keywords = sdk.keywords.ide.sidebar, .shows = .many }, .{ .min_size_content = .{ .w = 200 }, .expand = .vertical });
+                defer sidebar.deinit();
+            }
+            layout.split(@src(), .{});
+            {
+                var right = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+                defer right.deinit();
+                {
+                    var main = try layout.region(@src(), .{ .name = "Main", .keywords = sdk.keywords.ide.main }, .{ .expand = .both });
+                    defer main.deinit();
+                }
+                layout.split(@src(), .{});
+                {
+                    var panel = try layout.region(@src(), .{ .name = "Panel", .keywords = sdk.keywords.ide.panel, .shows = .many }, .{ .min_size_content = .{ .h = 200 }, .expand = .horizontal });
+                    defer panel.deinit();
+                }
+            }
+        }
+        e.app.layout.publishRegions();
+        layout.captureUnplaced();
+        e.app.layout.picker.draw(&layout);
+        return .ok;
+    }
+};
+
+test "the picker lists each view under the place it is made for, the open place first" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.picker.close(editor.app.gpa);
+    defer editor.app.layout.discardSnapshots(editor.app.gpa);
+
+    try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = sdk.keywords.ide.sidebar, .draw = PickerFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = sdk.keywords.ide.panel, .draw = PickerFrame.draw });
+    try editor.app.host.registerSurface(.{ .id = "test.misc", .title = "Misc", .keywords = &.{"inspector"}, .draw = PickerFrame.draw });
+
+    PickerFrame.editor = editor;
+    defer PickerFrame.editor = null;
+    try dvui.testing.settle(PickerFrame.frame);
+
+    const y = struct {
+        fn of(id: []const u8) !f32 {
+            var buf: [64]u8 = undefined;
+            return (try dvui.testing.tagGet(try std.fmt.bufPrint(&buf, "picker:{s}", .{id}))).rect.y;
+        }
+    }.of;
+
+    // From the panel: its own view first, then the sidebar's, then the one no place asks for.
+    // Stepped, not settled: the open popup keeps asking for frames.
+    editor.app.layout.openPicker(editor.app.gpa, "Panel", null);
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expect(try y("test.output") < try y("test.files"));
+    try std.testing.expect(try y("test.files") < try y("test.misc"));
+
+    // From the sidebar, the sidebar's view leads instead.
+    editor.app.layout.openPicker(editor.app.gpa, "Sidebar", null);
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expect(try y("test.files") < try y("test.output"));
+    try std.testing.expect(try y("test.output") < try y("test.misc"));
+
+    // Files moved into the panel reads under the panel, in one row with Output, from either
+    // picker.
+    try editor.app.layout.assign(editor.app.gpa, "Panel", &.{ "test.output", "test.files" });
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expectEqual(try y("test.output"), try y("test.files"));
+    try std.testing.expect(try y("test.output") < try y("test.misc"));
+    // The sidebar holds nothing now, and still leads, empty, under its own name.
+    try std.testing.expect((try dvui.testing.tagGet("picker.empty")).rect.y < try y("test.files"));
+    editor.app.layout.openPicker(editor.app.gpa, "Panel", null);
+    for (0..4) |_| _ = try dvui.testing.step(PickerFrame.frame);
+    try std.testing.expectEqual(try y("test.output"), try y("test.files"));
+    try std.testing.expect(try y("test.output") < try y("test.misc"));
+    try std.testing.expect(dvui.tagGet("picker.empty") == null);
+}
+
 test "a hide_when_empty panel stays while its view is dragged onto main" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -2712,6 +2877,38 @@ const FizzySplitFrame = struct {
     }
 };
 
+test "picker: its controls are named for a tape or an agent to aim at, while they can be pressed" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.picker.close(editor.app.gpa);
+
+    PickerFrame.editor = editor;
+    defer PickerFrame.editor = null;
+
+    try dvui.testing.settle(PickerFrame.frame);
+    editor.app.layout.picker.open(editor.app.gpa, "Main", null);
+    _ = try dvui.testing.step(PickerFrame.frame);
+    _ = try dvui.testing.step(PickerFrame.frame);
+
+    for ([_][]const u8{ "picker.mode:one", "picker.mode:many", "picker.action:split" }) |name| {
+        if (dvui.tagGet(name) == null) {
+            std.debug.print("no anchor {s}\n", .{name});
+            return error.TestExpectedEqual;
+        }
+    }
+    // Main shows nothing, so Clear is dimmed and has no name; a shape's place has no Remove.
+    try std.testing.expect(dvui.tagGet("picker.action:clear") == null);
+    try std.testing.expect(dvui.tagGet("picker.action:remove") == null);
+}
+
 test "a fizzy Main split is a removable slot, not main.slot" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -2794,6 +2991,195 @@ test "a fizzy Main split keeps the workspace on the leftover side" {
     try std.testing.expect(editor.app.layout.splits.canForget("Main/r1"));
     const created = editor.app.layout.assignment("Main/r1") orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, 0), created.len);
+}
+
+/// fizzy's own Main: a carded place that hands its card to its panes, in a column of the window.
+const ColumnCardFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        layout.card = .{ .background = true, .padding = .all(8) };
+        {
+            var column = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer column.deinit();
+            var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .card = true, .pane_cards = true }, .{ .expand = .both });
+            defer main.deinit();
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+
+    /// What the place takes on screen: its border box in physical pixels, measured where it was
+    /// drawn rather than read back from the `size` a split halves.
+    fn sizeOf(e: *fizzy.Editor, name: []const u8) !dvui.Size {
+        for (e.app.layout.regions.items) |r| {
+            if (std.mem.eql(u8, r.name, name)) return .{ .w = r.bounds.w, .h = r.bounds.h };
+        }
+        return error.TestExpectedEqual;
+    }
+};
+
+// A split's extent is the new half's whole reach, card and all. Measured from the place's content
+// instead, every split of a carded place came out uneven by the card's padding, twice over.
+test "a split of a carded place, and of its new half, opens even halves" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1", layout.splitOn("Main", .right) orelse return error.TestExpectedEqual);
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    const right = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expect(left.w > 40);
+    try std.testing.expectApproxEqAbs(left.w, right.w, 1);
+
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1/b1", layout.splitOn("Main/r1", .bottom) orelse return error.TestExpectedEqual);
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1/b1");
+    try std.testing.expect(top.h > 40);
+    try std.testing.expectApproxEqAbs(top.h, bottom.h, 1);
+}
+
+/// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
+/// things at once: the half Main's split minted, and the half its own split kept.
+const NestedSplitCase = struct {
+    ctx: shim.Ctx,
+
+    fn init() !NestedSplitCase {
+        var ctx = try shim.init(std.testing.allocator);
+        errdefer ctx.deinit(std.testing.allocator);
+        const editor = ctx.editor;
+        editor.app.gpa = std.testing.allocator;
+        ColumnCardFrame.editor = editor;
+        const draw = struct {
+            fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+                return .ok;
+            }
+        }.f;
+        for ([_][]const u8{ "test.left", "test.top", "test.bottom", "test.right" }) |id| {
+            try editor.app.host.registerSurface(.{ .id = id, .title = id, .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+        }
+        try dvui.testing.settle(ColumnCardFrame.frame);
+        try editor.app.layout.assign(editor.app.gpa, "Main", &.{"test.left"});
+        try split(editor, "Main", .right, "Main/r1", "test.top");
+        try split(editor, "Main/r1", .bottom, "Main/r1/b1", "test.bottom");
+        return .{ .ctx = ctx };
+    }
+
+    fn split(editor: *fizzy.Editor, name: []const u8, side: fizzy.Editor.Layout.SplitTree.Side, want: []const u8, view: []const u8) !void {
+        {
+            var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+            try std.testing.expectEqualStrings(want, layout.splitOn(name, side) orelse return error.TestExpectedEqual);
+        }
+        try editor.app.layout.assign(editor.app.gpa, want, &.{view});
+        try dvui.testing.settle(ColumnCardFrame.frame);
+    }
+
+    fn deinit(self: *NestedSplitCase) void {
+        const editor = self.ctx.editor;
+        editor.app.layout.regions.deinit(editor.app.gpa);
+        editor.app.layout.regions_building.deinit(editor.app.gpa);
+        editor.app.layout.deinitExtents(editor.app.gpa);
+        editor.app.layout.deinitAssignments(editor.app.gpa);
+        editor.app.layout.deinitQualified(editor.app.gpa);
+        ColumnCardFrame.editor = null;
+        self.ctx.deinit(std.testing.allocator);
+    }
+
+    fn trash(self: *NestedSplitCase, name: []const u8) !void {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, name, name, .remove);
+        try dvui.testing.settle(ColumnCardFrame.frame);
+        try dvui.testing.settle(ColumnCardFrame.frame);
+    }
+};
+
+test "split: emptying the half that was split again closes only that half" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const state = &case.ctx.editor.app.layout;
+    const column = (try ColumnCardFrame.sizeOf(case.ctx.editor, "Main/r1")).w;
+
+    try case.trash("Main/r1");
+
+    // The column stays, one place again under the name Main's split knows, holding what its
+    // other half held — the same merge as emptying a split's origin anywhere else.
+    try std.testing.expectEqualStrings("Main", state.splits.siblingLeaf("Main/r1") orelse return error.TestExpectedEqual);
+    try std.testing.expect(state.splits.rootOf("Main/r1/b1") == null);
+    const kept = state.assignment("Main/r1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), kept.len);
+    try std.testing.expectEqualStrings("test.bottom", kept[0]);
+    try std.testing.expectApproxEqAbs(column, (try ColumnCardFrame.sizeOf(case.ctx.editor, "Main/r1")).w, 1);
+
+    const links = state.splits.collectLinks(std.testing.allocator);
+    defer std.testing.allocator.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqualStrings("Main/r1", links[0].name);
+}
+
+test "split: emptying the half that was split again stays when its other half is split too" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try NestedSplitCase.split(editor, "Main/r1/b1", .right, "Main/r1/b1/r1", "test.right");
+
+    try case.trash("Main/r1");
+
+    // No one place to merge into: the column and every split in it stay, Main/r1 empty.
+    const leaves = editor.app.layout.splits.leavesUnder(dvui.currentWindow().arena(), "Main");
+    try std.testing.expectEqual(@as(usize, 4), leaves.len);
+    const kept = editor.app.layout.assignment("Main/r1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 0), kept.len);
+    try std.testing.expectEqualStrings("test.bottom", editor.app.layout.assignment("Main/r1/b1").?[0]);
+}
+
+test "split: a column shut by its sash goes only once every place in it is empty" {
+    var case = try NestedSplitCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const state = &editor.app.layout;
+    // The branch registers before the half that kept its name, so the first `Main/r1` is the
+    // column: the box its parent's sash sizes.
+    const column = for (state.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Main/r1")) break r.id;
+    } else return error.TestExpectedEqual;
+
+    // Shut with a view still in its bottom half: the column stays, and so does every place in it.
+    try state.assign(editor.app.gpa, "Main/r1", &.{});
+    fizzy.core.widgets.Split.close(column);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try std.testing.expectEqual(@as(usize, 3), state.splits.leavesUnder(dvui.currentWindow().arena(), "Main").len);
+    try std.testing.expectEqualStrings("test.bottom", state.assignment("Main/r1/b1").?[0]);
+
+    // Nothing left in it, the whole column goes, and nothing it held is left behind.
+    try state.assign(editor.app.gpa, "Main/r1/b1", &.{});
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    try std.testing.expect(state.splits.root("Main") == null);
+    try std.testing.expect(state.assignment("Main/r1/b1") == null);
+    try std.testing.expectEqual(@as(f32, -1), state.extent("Main/r1/b1", -1));
 }
 
 test "a view-drag split opens on the dropped edge" {
@@ -5147,7 +5533,7 @@ test "demo: every bundled demo builds into a valid tape" {
         try std.testing.expect(std.mem.endsWith(u8, owned.tape.keyframes[0].root, e.name));
 
         // And it travels as a `.tape` (what a site hosts) unchanged.
-        const bytes = try automation.binary.encode(std.testing.allocator, owned.tape);
+        const bytes = try automation.binary.encode(std.testing.allocator, owned.tape, .{});
         defer std.testing.allocator.free(bytes);
         var back = try automation.Tape.load(std.testing.allocator, bytes, automation.Input.check);
         defer back.deinit();
@@ -5191,7 +5577,7 @@ test "demo: the hand-written sample tape parses and round-trips" {
     // `Tape.load` takes the source as it is and the binary form alike.
     var loaded = try automation.Tape.load(std.testing.allocator, source, automation.Input.check);
     defer loaded.deinit();
-    const bytes = try automation.binary.encode(std.testing.allocator, owned.tape);
+    const bytes = try automation.binary.encode(std.testing.allocator, owned.tape, .{});
     defer std.testing.allocator.free(bytes);
     var from_binary = try automation.Tape.load(std.testing.allocator, bytes, automation.Input.check);
     defer from_binary.deinit();
@@ -6915,12 +7301,18 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     const lookback = fizzy.core.profile.lookback() orelse return error.TestUnexpectedResult;
     lookback.budget_ns = 0;
     defer lookback.budget_ns = std.time.ns_per_s / 60;
+    const unattributed_before = editor.app.host.unattributed_steps;
     try editor.demo.play("tour");
     var frames: usize = 0;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
         _ = try dvui.testing.step(headlessFrame);
     }
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
+    // Every step the tour made has an author: its own where it drives the frame, or its commands'
+    // (`Host.act` in the demo's stage). A step nobody acted for is a missed site
+    // (`plans/SHARED_HISTORY_PLAN.md`). Owners report every step once that plan's step 3 lands;
+    // until then this guards the steps reported while recording.
+    try std.testing.expectEqual(unattributed_before, editor.app.host.unattributed_steps);
     {
         var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer out.deinit();
@@ -7160,6 +7552,34 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
     }
 
+    // Documents a command creates open beside the person (`Host.openBeside`), as an agent's
+    // `pixi.create` does, into panes whose tabs have come and gone. Each pane's tab list is
+    // rewritten from itself (`Workspace.addTab`), the crash of 2026-10-16 (`Layout.State.assign`).
+    {
+        const host = &editor.app.host;
+        const here = editor.workbench.open_workspace_grouping;
+        const grid: sdk.EditorAPI.NewDocGrid = .{ .column_width = 16, .row_height = 16 };
+        var made: [4]u64 = undefined;
+        for (&made, 0..) |*id, i| {
+            const p = try std.fmt.allocPrint(gpa, "{s}/beside-{d}.txt", .{ project, i });
+            defer gpa.free(p);
+            host.openBeside();
+            defer host.endOpenBeside();
+            const doc = try editor.newFile(p, grid);
+            id.* = doc.id;
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqual(here, editor.workbench.open_workspace_grouping);
+            // Every other one goes again, leaving its pane's list shorter for the next.
+            if (i % 2 == 1) try editor.closeFileID(made[i - 1]);
+            try dvui.testing.settle(headlessFrame);
+        }
+        const last = editor.app.docById(made[made.len - 1]) orelse return error.TestUnexpectedResult;
+        const beside = for (editor.workbench.workspaces.values()) |ws| {
+            if (ws.grouping != here) if (ws.active) |a| if (a.id == last.id) break true;
+        } else false;
+        try std.testing.expect(beside);
+    }
+
     // A document's history as a line (`Plugin.historyLine`): each step keeps its id through
     // undo and redo, and going to one (`historyGoTo`) is so many undos or redos.
     {
@@ -7208,6 +7628,285 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("321", try readText(host));
 
         // Gone again, and the document before it active, as what follows expects.
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // A document's steps (`Host.recordStep`): while recorded, each change is reported as it
+    // happens, forward, and played into a fresh document (`Plugin.applyStep`) they make the same
+    // text. Typing runs join a step; an undo is its step reversed; nothing is encoded unrecorded.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const newDoc = struct {
+            fn newDoc(ed: *fizzy.Editor, h: *sdk.Host, not: u64) !sdk.DocHandle {
+                try h.runCommand("fizzy.newFile");
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (d.id != not and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.newDoc;
+        const textOf = struct {
+            fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
+                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const zon = switch (h.callCommand("text.read", args, h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const rest = zon[at + ".text = \"".len ..];
+                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+            }
+        }.textOf;
+        const Recorded = struct {
+            doc: u64 = 0,
+            kinds: std.ArrayList(sdk.Step.Kind) = .empty,
+            effects: std.ArrayList([]u8) = .empty,
+
+            fn wants(ctx: *anyopaque, id: u64) bool {
+                return @as(*@This(), @ptrCast(@alignCast(ctx))).doc == id;
+            }
+            fn step(ctx: *anyopaque, id: u64, st: sdk.Step) void {
+                const self: *@This() = @ptrCast(@alignCast(ctx));
+                std.debug.assert(id == self.doc);
+                self.kinds.append(std.testing.allocator, st.kind) catch unreachable;
+                self.effects.append(std.testing.allocator, std.testing.allocator.dupe(u8, st.effect) catch unreachable) catch unreachable;
+            }
+            fn deinit(self: *@This()) void {
+                for (self.effects.items) |e| std.testing.allocator.free(e);
+                self.effects.deinit(std.testing.allocator);
+                self.kinds.deinit(std.testing.allocator);
+            }
+        };
+        var rec: Recorded = .{};
+        defer rec.deinit();
+        host.recorder = .{ .ctx = &rec, .vtable = &.{ .wants = Recorded.wants, .step = Recorded.step } };
+        defer host.recorder = null;
+
+        const a = try newDoc(editor, host, was.id);
+        rec.doc = a.id;
+        // Typed a keystroke at a time: one step, joined.
+        for ([_][]const u8{ "a", "b" }) |key| {
+            try dvui.testing.writeText(key);
+            try dvui.testing.settle(headlessFrame);
+        }
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"X\", .line = 1 }", host.arena()) == .ok);
+        try editor.undo();
+        try editor.redo();
+        try editor.undo();
+        // An edit after going back: the step gone back over stays undone.
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"Y\", .line = 1 }", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("Yab", try textOf(host, a));
+        try std.testing.expectEqualSlices(sdk.Step.Kind, &.{ .added, .joined, .added, .undone, .redone, .undone, .added }, rec.kinds.items);
+
+        // Played into a document of its own, forward, in order: the same text.
+        const b = try newDoc(editor, host, a.id);
+        try std.testing.expect(b.owner.step_format == a.owner.step_format and a.owner.step_format != 0);
+        for (rec.effects.items) |effect| try std.testing.expect(b.owner.applyStep(b, effect, "", 0));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("Yab", try textOf(host, b));
+        // Unrecorded, B reported nothing; and a step that does not fit is refused, B untouched:
+        // the undo takes back an `X` that is not there.
+        try std.testing.expectEqual(@as(usize, 7), rec.kinds.items.len);
+        // (Through the hook itself: the wrapper logs the refusal as an error, which fails a run.)
+        try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.applyStep.?(b.owner.state, b, rec.effects.items[3], "", 0));
+        try std.testing.expectEqualStrings("Yab", try textOf(host, b));
+
+        try editor.rawCloseFileID(b.id);
+        try editor.rawCloseFileID(a.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // Tracks (`app.Tracks`): with tracking on, an open document's steps are kept with their times,
+    // beside its state when the track began and every so often since; any moment of the track
+    // replays into another document. A replay target records nothing of it.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const newDoc = struct {
+            fn newDoc(ed: *fizzy.Editor, h: *sdk.Host, not: u64) !sdk.DocHandle {
+                try h.runCommand("fizzy.newFile");
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (d.id != not and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.newDoc;
+        const textOf = struct {
+            fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
+                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const zon = switch (h.callCommand("text.read", args, h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const rest = zon[at + ".text = \"".len ..];
+                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+            }
+        }.textOf;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+
+        const a = try newDoc(editor, host, was.id);
+        try dvui.testing.settle(headlessFrame);
+        for ([_][]const u8{ "a", "b" }) |key| {
+            try dvui.testing.writeText(key);
+            try dvui.testing.settle(headlessFrame);
+        }
+        // Enough steps for a checkpoint, then an undo.
+        for (0..Tracks.checkpoint_steps + 44) |_| {
+            try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"x\", .line = 1 }", host.arena()) == .ok);
+        }
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        const want = try std.testing.allocator.dupe(u8, try textOf(host, a));
+        defer std.testing.allocator.free(want);
+        try std.testing.expectEqual(Tracks.checkpoint_steps + 43 + 2, want.len);
+
+        const track = tracks.trackOf(a.id) orelse return error.TestUnexpectedResult;
+        const n = track.steps.items.len;
+        try std.testing.expectEqual(@as(usize, 2 + Tracks.checkpoint_steps + 44 + 1), n);
+        try std.testing.expect(track.base != null);
+        try std.testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
+        try std.testing.expectEqual(n, track.checkpoints.items[0].step);
+        try std.testing.expectEqual(sdk.Step.Kind.undone, track.steps.items[n - 1].kind);
+        for (track.steps.items[1..], track.steps.items[0 .. n - 1]) |later, earlier| try std.testing.expect(later.at >= earlier.at);
+        try std.testing.expectEqual(a.id, tracks.focus.items[tracks.focus.items.len - 1].doc_id);
+
+        // All of it, from the checkpoint, to the fingerprint it recorded; and the start of it,
+        // from the base.
+        const b = try newDoc(editor, host, a.id);
+        try dvui.testing.settle(headlessFrame);
+        try tracks.replayInto(a.id, b, n);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings(want, try textOf(host, b));
+        try std.testing.expectEqual(a.owner.documentFingerprint(a), b.owner.documentFingerprint(b));
+        try tracks.replayInto(a.id, b, 2);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("ab", try textOf(host, b));
+        // The target kept its own track, and recorded none of the replay.
+        const tb = tracks.trackOf(b.id) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 0), tb.steps.items.len);
+
+        // A frame nothing asked of does no tracks work: an idle app, recording, costs a branch.
+        const worked = tracks.worked;
+        for (0..120) |_| {
+            dvui.refresh(null, @src(), null);
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expectEqual(worked, tracks.worked);
+        // What they hold, as devtools and an agent read it.
+        const report = switch (host.callCommand("fizzy.tracks", "", host.arena())) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(std.mem.indexOf(u8, report, ".on = true") != null);
+        const steps_row = try std.fmt.allocPrint(host.arena(), ".steps = {d}", .{n});
+        try std.testing.expect(std.mem.indexOf(u8, report, steps_row) != null);
+
+        // Closed, a document's track is kept for the session.
+        try editor.rawCloseFileID(b.id);
+        try editor.rawCloseFileID(a.id);
+        try std.testing.expect(tracks.open.get(a.id) == null);
+        try std.testing.expectEqual(track, tracks.trackOf(a.id).?);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // A document's transport (`app.HistoryTransport`): undo shows it over the document's pane; a
+    // press on its line goes to that step, its buttons step, a drag along it follows; and an undo
+    // held down goes further each press.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try host.runCommand("fizzy.newFile");
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (d.id != was.id and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+        }
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(doc.id != was.id);
+        const path = doc.owner.documentPath(doc);
+        for (0..40) |_| try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"x\", .line = 1 }", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        const at = struct {
+            fn at(h: *sdk.Host, d: sdk.DocHandle) !usize {
+                return (d.owner.historyLine(d, h.arena()) orelse return error.TestUnexpectedResult).at;
+            }
+        }.at;
+        const ds = editor.doc_surfaces.get(doc.id) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+
+        try editor.undo();
+        for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
+        try std.testing.expectEqual(@as(usize, 39), try at(host, doc));
+
+        const play = struct {
+            fn play(ed: *fizzy.Editor, script: *automation.Script) !void {
+                try ed.demo.live.play(try script.finish());
+                for (0..300) |_| {
+                    if (!ed.demo.live.playing()) break;
+                    _ = try dvui.testing.step(headlessFrame);
+                }
+                try std.testing.expect(ed.demo.live.outcome.? == .finished);
+            }
+        }.play;
+        const line_tag = try std.fmt.allocPrint(gpa, "history.line:{s}", .{path});
+        defer gpa.free(line_tag);
+        const forward_tag = try std.fmt.allocPrint(gpa, "history.forward:{s}", .{path});
+        defer gpa.free(forward_tag);
+        {
+            // A press on the title, over the line's start, is the bar's and goes nowhere.
+            var s: automation.Script = .init(gpa, "transport-title", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0, .y = 0.15 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 39), try at(host, doc));
+        {
+            // The line's start: before any change.
+            var s: automation.Script = .init(gpa, "transport-start", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 0), try at(host, doc));
+        {
+            // Redo: one step on.
+            var s: automation.Script = .init(gpa, "transport-forward", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = forward_tag }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 1), try at(host, doc));
+        {
+            // A drag from the start to the end follows the pointer there.
+            var s: automation.Script = .init(gpa, "transport-drag", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.drag(.{ .tag = line_tag, .x = 0 }, .{ .tag = line_tag, .x = 1 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 40), try at(host, doc));
+
+        // Held down, ten presses in a frame: one step each for six, then two each.
+        for (0..10) |_| try editor.undo();
+        try std.testing.expectEqual(@as(usize, 40 - 14), try at(host, doc));
+
         try editor.rawCloseFileID(doc.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
@@ -7293,6 +7992,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         inline_md_text = "**One** paragraph.\n\nAnd another, with `code`.\n\n- and\n- a list";
         for (0..3) |_| _ = try dvui.testing.step(inlineMarkdownFrame);
         try std.testing.expect(inline_md_height > one_para * 2);
+        inline_md.?.release(0x1d1e);
+
+        // Streamed in a few bytes a frame, as a chat reply arrives, it only ever grows. Each
+        // re-parse left the edited block with an estimate that a pin then emitted for a frame, so
+        // a streaming reply shrank by a line and grew back, over and over.
+        const reply = "Sure. Let me look at how the view lays out a message while it streams, because that is where the motion comes from.\n\nThe **scroll area** sizes its content from last frame's sizes, and a message that grows by a line is a frame late.\n\n- one point\n- and a second that goes on long enough to wrap at this width, and then some more";
+        var last: f32 = 0;
+        var n: usize = 0;
+        while (n < reply.len) {
+            n = @min(reply.len, n + 9);
+            inline_md_text = reply[0..n];
+            _ = try dvui.testing.step(inlineMarkdownFrame);
+            if (inline_md_height + 0.5 < last) {
+                std.debug.print("inline markdown shrank from {d:.1} to {d:.1} at byte {d}\n", .{ last, inline_md_height, n });
+                return error.TestUnexpectedResult;
+            }
+            last = inline_md_height;
+        }
         inline_md.?.release(0x1d1e);
     }
 
@@ -7396,6 +8113,56 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         editor.session = null;
     }
 
+    // A document never saved comes back from its unsaved bytes (`Plugin.loadUntitledDocument`),
+    // kept as its owner would save them (`Plugin.bytesPath`), not from a file named by its title,
+    // which there is none of. Here it has no state (its owner might keep none): all it has is
+    // its bytes, and it is still untitled, dirty and whole.
+    {
+        const before = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!before.owner.documentHasRecognizedSaveExtension(before));
+        const path = try gpa.dupe(u8, before.owner.documentPath(before));
+        defer gpa.free(path);
+        const grouping = before.owner.documentGrouping(before);
+        const dir = try fizzy.Editor.KeptDocuments.sessionDir(gpa, editor.app.config_folder);
+        defer gpa.free(dir);
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            defer kept.deinit();
+            for (kept.docs.items) |d| if (std.mem.eql(u8, d.path, path)) {
+                try std.testing.expect(d.save_as != null and d.unsaved != null);
+            };
+            try kept.save(dir);
+        }
+        {
+            var d = try std.Io.Dir.cwd().openDir(dvui.io, dir, .{ .iterate = true });
+            defer d.close(dvui.io);
+            var it = d.iterate();
+            while (try it.next(dvui.io)) |file| {
+                if (std.mem.endsWith(u8, file.name, ".state")) try d.deleteFile(dvui.io, file.name);
+            }
+            const zon = try d.readFileAlloc(dvui.io, "session.zon", gpa, .unlimited);
+            defer gpa.free(zon);
+            const stateless = try std.mem.replaceOwned(u8, gpa, zon, ".has_state = true", ".has_state = false");
+            defer gpa.free(stateless);
+            try d.writeFile(dvui.io, .{ .sub_path = "session.zon", .data = stateless });
+        }
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer ids.deinit(gpa);
+        for (editor.app.open_files.values()) |d| try ids.append(gpa, d.id);
+        for (ids.items) |id| editor.detachFileID(id);
+
+        editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
+        _ = try editor.app.host.openFile(.{ .path = path, .grouping = grouping });
+        const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("text", after.owner.id);
+        try std.testing.expect(after.owner.isDirty(after));
+        try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
+        const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        if (editor.session) |*kept| kept.deinit();
+        editor.session = null;
+    }
+
     // A checkpoint (`Checkpoint`): what a run that did not quit cleanly left is read once at the
     // next launch. Each write is a generation of files in the same folder (`saveGeneration`), the
     // last one's removed once the new `session.zon` is in place; one cut off before any
@@ -7441,6 +8208,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }
         try std.testing.expect(Checkpoint.recover(gpa, config, true) == null);
         try expectEmptyFolder(dir);
+    }
+
+    // A plugin's New flow writes its file itself and asks the `files` service to show it
+    // (`reveal`): fizzy emits `fizzy.files.reveal`, and the tree, which hears it, reveals the row
+    // with its name open for editing. The tree holds the path until the row is laid out, then
+    // takes it, so heard-then-taken is the whole round trip.
+    {
+        try editor.setProjectFolder(project);
+        editor.explorer.open(editor);
+        editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, fizzy.Editor.workbench_files_view);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/made-by-a-plugin.md", .data = "" });
+        const made = try std.fs.path.join(gpa, &.{ project, "made-by-a-plugin.md" });
+        defer gpa.free(made);
+        const files_api = editor.app.host.getServiceTyped(sdk.services.files.Api) orelse return error.TestUnexpectedResult;
+        files_api.reveal(made);
+        var heard = false;
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (editor.workbench.pending_new_file_path) |pending| {
+                if (std.mem.eql(u8, pending, made)) heard = true;
+            } else if (heard) break;
+        }
+        try std.testing.expect(heard);
+        try std.testing.expect(editor.workbench.pending_new_file_path == null);
     }
 
     // A quit straight after a pane slid shut (`snapshotClosingPane`): the pane still holds its
@@ -7608,7 +8399,7 @@ test "automation service: tape bytes in, a ticket back, the outcome by ticket" {
     // The binary form plays the same; the first tape's outcome is still there to ask for.
     var owned = try liveTape();
     defer owned.deinit();
-    const encoded = try automation.binary.encode(std.testing.allocator, owned.tape);
+    const encoded = try automation.binary.encode(std.testing.allocator, owned.tape, .{});
     defer std.testing.allocator.free(encoded);
     const second = try started(api.play(encoded));
     try std.testing.expect(second != ticket);

@@ -232,6 +232,13 @@ shape-declared place can only be emptied. Removing
 the last leaf collapses the branch and the origin becomes a whole place again, with its extent
 and assignment untouched throughout — a split and its undo are symmetric.
 
+A minted half split again is two things under one name: the half its parent split made, and the
+half its own split kept. Emptied or removed, it goes the way an origin goes — its other half's
+views move into it and that half closes, so the column it stands for keeps its name, its size and
+its link in `layout.zon` — and when that other half is split too, it stays, empty. Only the column
+as a whole, every place in it empty, closes into its parent's other half (`Forest.collapse` takes
+the branch, never the leaf that kept the name).
+
 ## Where this lives
 
 | File | Holds |

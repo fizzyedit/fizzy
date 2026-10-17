@@ -103,12 +103,15 @@ pub const Host = sdk.Host;
 /// Workbench: the file-management home — file tree, open/load flow, and the
 /// workspace/tabs/splits system, plus the per-branch explorer decoration registry.
 pub const Workbench = workbench_mod.Workbench;
+pub const Workspaces = @import("Workspaces.zig");
 
 /// The host runtime — everything an application on fizzy runs unchanged.
 app: App,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
+/// The workbench's panes as the app's own views, when `FIZZY_WORKSPACES=1` asked (`Workspaces`).
+workspaces: Workspaces = .{},
 /// The first claim id not yet shown beside the person (`showClaimed`).
 claims_seen: u32 = 1,
 
@@ -625,7 +628,7 @@ pub fn init(
 
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light));
 
-    editor.explorer.* = .init();
+    editor.explorer.* = .{};
     editor.app.open_files = .empty;
     try editor.workbench.initDefaultWorkspace();
 
@@ -667,7 +670,7 @@ pub const view_settings = "fizzy.settings";
 pub const workbench_files_view = workbench_mod.view_files;
 
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return;
 
     const plugins_dir = std.fs.path.join(editor.app.gpa, &.{ config_folder, "plugins" }) catch return;
     defer editor.app.gpa.free(plugins_dir);
@@ -1424,7 +1427,7 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 /// dvui/render-bridge sync path as `loadUserPlugins`. Caller ensures `id` is not already
 /// registered. On success the lib is appended to `loaded_plugin_libs`.
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
     const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
         editor.userPluginLoadFailed(id, path, err);
@@ -1632,7 +1635,7 @@ const WebPluginRequest = struct {
 /// The page asks for a plugin: `?plugin=<id>` on the URL (`plugins/<id>/<id>.wasm` beside
 /// the app), or one it remembered from a store install (by its URL).
 export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void {
-    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    if (comptime builtin.target.cpu.arch != .wasm32 or !App.loads_plugins) return;
     const editor = web_editor orelse return;
     const id = id_ptr[0..id_len];
     // The id reaches this from the page's query string, and with no URL it is interpolated
@@ -2027,6 +2030,9 @@ fn storeUninstalled(arena: std.mem.Allocator) []const @import("app").layout.Stat
 }
 
 pub fn postInit(editor: *Editor) !void {
+    // Documents' tracks, while they are behind a switch (plans/RECORDING_PLAN.md, step 3).
+    editor.app.tracks = .init(editor.app.gpa);
+    if (Popout.envSwitch("FIZZY_TRACKS") orelse false) editor.setTracking(true);
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});
     } else {
@@ -2046,6 +2052,12 @@ pub fn postInit(editor: *Editor) !void {
         } else |_| {}
     }
     sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
+    // Before the plugins register: the workbench offers its one surface of every pane only where
+    // the app does not place each pane itself.
+    if (Workspaces.wanted(editor.app.gpa)) {
+        editor.workspaces.install(&editor.workbench);
+        dvui.log.info("layout: workspaces are views (FIZZY_WORKSPACES)", .{});
+    }
 
     editor.demo.attach(editor);
     // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made — and
@@ -2083,6 +2095,11 @@ pub fn postInit(editor: *Editor) !void {
         .description = "Files under the project folder changed on disk (coalesced, ignore rules applied); truncated means rescan.",
         .payload = ".{ .events = .{ .{ .path = \"/abs\", .kind = .created, .object = .file, .old_path = \"\" } }, .truncated = false }",
     }) catch {};
+    editor.app.host.declareEvent(.{
+        .name = "fizzy.files.reveal",
+        .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",
+        .payload = ".{ .path = \"/absolute/path\" }",
+    }) catch {};
 
     // Publish the shared file set. Same reason as the commands above: `env.ctx` is this
     // editor's final address. The table answers three questions it can't itself — where the
@@ -2114,9 +2131,11 @@ pub fn postInit(editor: *Editor) !void {
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
     // Every bundled plugin: its dylib beside the exe when there is one, else the copy linked
-    // in. None of the bundled four ship as dylibs today, so the load "fails" and the static
-    // copy registers on every run; not worth logging until that changes. The workbench's
-    // dylib entry takes the workbench state fizzy still holds as `arg_c`.
+    // in. The build puts the dylibs of fizzy's own (workbench, text, markdown, image) in
+    // `<exe_dir>/plugins/`, so fizzy's own features load the way a third-party plugin does
+    // and that path is exercised every run; a plugin with no dylib (archive, devtools, an
+    // app's own, every one on the web) fails the load quietly and its static copy registers.
+    // The workbench's dylib entry takes the workbench state fizzy still holds as `arg_c`.
     // What this build bundles, for anything that needs to know a plugin is compiled in rather
     // than installed (the store, which must not offer to uninstall one).
     editor.app.bundled_plugin_ids = comptime blk: {
@@ -2368,8 +2387,6 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
     .folderWatchActive = fizzyFolderWatchActive,
-    .explorerBranchIsOpen = fizzyExplorerBranchIsOpen,
-    .setExplorerBranchOpen = fizzySetExplorerBranchOpen,
     .drawWorkspaces = fizzyDrawWorkspaces,
     .showOpenFolderDialog = fizzyShowOpenFolderDialog,
     .showOpenFileDialog = fizzyShowOpenFileDialog,
@@ -2378,7 +2395,6 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .refresh = fizzyRefresh,
     .allocUntitledPath = fizzyAllocUntitledPath,
     .createDocument = fizzyCreateDocument,
-    .setExplorerNewFilePath = fizzySetExplorerNewFilePath,
     .saveState = fizzySaveState,
     .logLine = fizzyLogLine,
     .panic = fizzyPanic,
@@ -2654,17 +2670,6 @@ fn fizzyIsPathIgnored(
 ) bool {
     return fizzyCtx(ctx).ignore.isIgnored(project_root, abs_path, name, kind);
 }
-fn fizzyExplorerBranchIsOpen(ctx: *anyopaque, branch_id: dvui.Id) bool {
-    return fizzyCtx(ctx).explorer.open_branches.contains(branch_id);
-}
-fn fizzySetExplorerBranchOpen(ctx: *anyopaque, branch_id: dvui.Id, open: bool) void {
-    const editor = fizzyCtx(ctx);
-    if (open) {
-        editor.explorer.open_branches.put(branch_id, {}) catch {};
-    } else {
-        _ = editor.explorer.open_branches.remove(branch_id);
-    }
-}
 fn fizzyDrawWorkspaces(ctx: *anyopaque, index: usize) anyerror!dvui.App.Result {
     return fizzyCtx(ctx).workbench.drawWorkspaces(index);
 }
@@ -2712,17 +2717,6 @@ fn fizzyAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
 fn fizzyCreateDocument(ctx: *anyopaque, path: []const u8, grid: sdk.EditorAPI.NewDocGrid) anyerror!sdk.DocHandle {
     return fizzyCtx(ctx).newFile(path, grid);
 }
-fn fizzySetExplorerNewFilePath(ctx: *anyopaque, path: []const u8) anyerror!void {
-    const editor = fizzyCtx(ctx);
-    try editor.workbench.setPendingNewFilePath(path);
-    // A plugin reaching this has just written `path` with its own save routine, not through
-    // `files.createFilePath`, so nothing has dropped the shared listing cache and that cache
-    // still predates the file. Left stale, the row never appears on the next frame: the match in
-    // `files.zig` never runs, no inline rename opens, and the dialog still closing over the top
-    // of it has no row to fly into. This is the only thing standing between "the file exists"
-    // and "the user can see and rename it".
-    editor.app.file_table.invalidateAll();
-}
 fn fizzySaveState(ctx: *anyopaque, doc_id: u64) sdk.EditorAPI.SaveState {
     return fizzyCtx(ctx).doc_io.state(doc_id);
 }
@@ -2737,6 +2731,8 @@ const DocSurface = struct {
     focus_inside: bool = false,
     /// The commands just run on it, shown on its pane.
     feed: @import("app").ActivityFeed = .{},
+    /// Its history as a line at the bottom of the pane: undo and redo show it.
+    transport: @import("app").HistoryTransport = .{},
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2754,6 +2750,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
     if (editor.document_watcher) |*w| {
         if (editor.app.docById(id)) |doc| w.track(doc);
     }
+    if (editor.app.tracks) |*t| if (editor.app.docById(id)) |doc| t.opened(doc);
     if (editor.app.docById(id)) |doc| {
         editor.registerDocSurface(doc) catch |err| {
             dvui.log.err("document surface for {s}: {t}", .{ owner.documentPath(doc), err });
@@ -2952,9 +2949,12 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     if (editor.app.host.activity_muted) ds.feed.clear() else {
         const now = dvui.frameTimeNS();
         ds.feed.take(&editor.app.host, doc.id, now);
-        // Above the pill, while someone holds the document.
+        // Above the pill while someone holds the document, and above the transport while it shows.
         var area = canvas.data().borderRectScale().r;
         if (claim_pill) |pill| area.h = pill.physical.y - area.y + 6 * dvui.windowRectScale().s;
+        if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
+            area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
+        };
         ds.feed.draw(area, @truncate(ds.doc_id), now);
     }
 
@@ -2978,18 +2978,21 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             }, false);
         }
     }
-    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc));
+    // Its history, while undo or redo or the pointer keep it: not while someone else holds it.
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id));
     return .ok;
+}
+
+/// Record documents' tracks, or stop. Documents open now get one; those opened after too.
+pub fn setTracking(editor: *Editor, on: bool) void {
+    const t = &(editor.app.tracks orelse return);
+    t.on = on;
+    editor.app.host.recorder = if (on) t.recorder() else null;
+    if (on) for (editor.app.open_files.values()) |doc| t.opened(doc);
 }
 
 pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
     return editor.workbench.activeDoc();
-}
-
-/// Files sidebar inactive — drop the tree's dvui stash id, which the tree sets again each frame
-/// it draws.
-pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
-    editor.workbench.clearFileTreeDataId();
 }
 
 /// Draws whichever center provider is active, blur-fading when that changes.
@@ -3973,6 +3976,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.app.file_table.pump();
     // Saves whose encode finished on their worker: on to their write, or done.
     editor.doc_io.tick();
+    // The document states tracks asked for since last frame, before anything draws.
+    if (editor.app.tracks) |*t| t.tick();
     editor.promoteEditedPreviews();
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
@@ -4317,6 +4322,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // layout needed these five calls verbatim, and getting one wrong is a bug an app
             // author has no way to diagnose. A shape declares regions; it does not run the
             // frame.
+            // The frame's input is consumed from here to the palette: whatever it changes is the
+            // person's, or a tape's while one drives (`Host.setInputAuthor`). Plugins' frame hooks
+            // outside it act for themselves, or are nobody's.
+            editor.app.host.setInputAuthor(editor.demo.author() orelse .person);
             var layout_root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
             for (editor.app.host.plugins.items) |plugin| plugin.tickActiveDocument(layout_root.data().id);
             editor.flushQueuedNativeMenuActions();
@@ -4369,6 +4378,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 .{layout.depth},
             );
 
+            editor.app.host.setInputAuthor(null);
             for (editor.app.host.plugins.items) |plugin| plugin.endFrame();
             layout_root.deinit();
 
@@ -4376,6 +4386,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
 
         { // Plugin keybinds + per-frame overlays (e.g. pixel-art's radial menu)
+            editor.app.host.setInputAuthor(editor.demo.author() orelse .person);
+            defer editor.app.host.setInputAuthor(null);
             // While the palette owns the keyboard, plugin ticks must not run — otherwise a
             // plugin's `matchBind` (e.g. pixi Export on the same chord as Quick Open) steals
             // focus before the palette entry can claim it.
@@ -4548,6 +4560,7 @@ pub fn setWindowStyle(_: *Editor) void {
 
 pub fn rebuildWorkspaces(editor: *Editor) !void {
     try editor.workbench.rebuildWorkspaces();
+    editor.workspaces.sync();
 }
 
 /// Write every region's extent and assignment to `layout.zon`, by name. One record per region
@@ -5204,7 +5217,7 @@ pub fn openFile(editor: *Editor, opts: sdk.EditorAPI.OpenOptions) !bool {
     else
         null;
 
-    const started = try editor.openPath(opts.path, opts.grouping, .{ .preview = preview, .take_slot_of = slot });
+    const started = try editor.openPath(opts.path, opts.grouping, .{ .preview = preview, .take_slot_of = slot, .beside = opts.beside });
     if (preview) {
         if (editor.docFromPath(opts.path)) |doc| editor.setDocumentPreview(doc.id, true);
     }
@@ -5264,9 +5277,11 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
 }
 
 /// Where an open's placeholder tab goes (see `Openings.begin`).
-const Placement = struct {
+pub const Placement = struct {
     preview: bool = false,
     take_slot_of: ?[]const u8 = null,
+    /// `OpenOptions.beside`.
+    beside: bool = false,
 };
 
 /// Watch this executable while `restart_on_rebuild` is on, and stop when it goes off. Once a frame;
@@ -5367,9 +5382,16 @@ fn keepSessionForRestart(editor: *Editor) bool {
     return true;
 }
 
-fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Placement) !bool {
+fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement_in: Placement) !bool {
+    var placement = placement_in;
+    placement.beside = placement.beside or editor.app.host.open_beside > 0;
     // Last session's document, as a restart kept it: from its state, not the disk.
-    if (comptime restart.supported) if (editor.session) |*kept| if (kept.openKept(editor, path_in, grouping) != null) return true;
+    // One never saved that it could not bring back has no file to open instead.
+    if (comptime restart.supported) if (editor.session) |*kept| switch (kept.openKept(editor, path_in, grouping)) {
+        .opened => return true,
+        .lost => return false,
+        .not_kept => {},
+    };
 
     const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
@@ -5377,7 +5399,9 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Plac
     // Already open? Just focus it. (`docFromPath` also collapses lexical variants, so a doc
     // opened under a pre-normalization spelling is still found.)
     if (editor.docFromPath(path)) |doc| {
-        if (editor.app.open_files.getIndex(doc.id)) |i| {
+        if (placement.beside) {
+            editor.workbench.showBeside(doc);
+        } else if (editor.app.open_files.getIndex(doc.id)) |i| {
             editor.workbench.setActiveDocIndex(i);
         }
         return false;
@@ -5397,7 +5421,7 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Plac
         const started = try editor.doc_io.open(path, grouping);
         if (started) {
             if (editor.app.host.pluginForExtension(std.fs.path.extension(path))) |owner| {
-                editor.openings.begin(editor, path, grouping, placement.preview, owner, placement.take_slot_of);
+                editor.openings.begin(editor, path, grouping, placement, owner);
             }
         }
         return started;
@@ -5438,7 +5462,7 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement: Plac
         job.destroy(io);
         return err;
     };
-    editor.openings.begin(editor, path, grouping, placement.preview, owner, placement.take_slot_of);
+    editor.openings.begin(editor, path, grouping, placement, owner);
 
     return true;
 }
@@ -5679,16 +5703,23 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
     const id = owner.documentIdFromBuffer(staging.buf.ptr);
     try editor.insertOpenDoc(staging.buf.ptr, owner, id);
     editor.documentOpened(id);
-    editor.workbench.setActiveDocIndex(editor.app.open_files.count() - 1);
+    const doc = editor.app.docById(id) orelse return error.FailedToCreateFile;
+    // Created beside the person (`Host.open_beside`), it lands there at once: never first over
+    // the document they are in, fitted to that pane, and then moved.
+    if (editor.app.host.open_beside > 0) {
+        editor.workbench.showBeside(doc);
+    } else {
+        editor.workbench.setActiveDocIndex(editor.app.open_files.count() - 1);
+    }
     editor.pending_composite_warmup = true;
 
-    return editor.app.docById(id) orelse return error.FailedToCreateFile;
+    return doc;
 }
 
 /// Dispatch a generic fizzy action to the active document owner's command (`<owner_id>.<action>`).
 /// No active doc, or an owner that registered no such command, is a clean no-op. This is how the
 /// fizzy's Edit menu / keybinds reach per-editor actions without naming any plugin.
-fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
+pub fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
     const doc = editor.activeDoc() orelse return;
     const id = try std.fmt.allocPrint(editor.app.arena.allocator(), "{s}.{s}", .{ doc.owner.id, action });
     try editor.app.host.runCommand(id);
@@ -6044,11 +6075,26 @@ pub fn processPendingSaveAs(editor: *Editor) void {
 }
 
 pub fn undo(editor: *Editor) !void {
-    try editor.runActiveDocCommand("undo");
+    try editor.historyStep(.undo);
 }
 
 pub fn redo(editor: *Editor) !void {
-    try editor.runActiveDocCommand("redo");
+    try editor.historyStep(.redo);
+}
+
+/// An undo or a redo of the active document, through its owner's command: its transport shows,
+/// and a key held down goes further each press (`HistoryTransport.press`), the command run that
+/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar.
+fn historyStep(editor: *Editor, action: enum { undo, redo }) !void {
+    const doc = editor.activeDoc() orelse return;
+    const name = @tagName(action);
+    const shows = editor.app.host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
+    const ds = if (shows) editor.doc_surfaces.get(doc.id) else null;
+    const by = if (ds) |d| d.transport.press(dvui.frameTimeNS(), action == .redo) else 1;
+    for (0..by) |_| {
+        if (!editor.activeDocCommandEnabled(name)) break;
+        try editor.runActiveDocCommand(name);
+    }
 }
 
 pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
@@ -6127,7 +6173,8 @@ pub fn closeFile(editor: *Editor, index: usize) !void {
 /// only its image stays for the slide.
 fn snapshotClosingPane(editor: *Editor, doc: sdk.DocHandle) void {
     const wb = editor.workbench;
-    if (wb.panes.nodes.items[wb.panes.root] == .leaf) return;
+    // Where the app arranges the panes, the place slides shut on its own and draws no picture.
+    if (wb.places != null or wb.solePane()) return;
     const id = sdk.document.surfaceId(editor.app.host.arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
     for (wb.workspaces.values()) |*ws| {
         if (!ws.hasTab(id) or ws.tabCount() != 1) continue;
@@ -6190,6 +6237,8 @@ pub fn deinit(editor: *Editor) !void {
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
     editor.black_box.deinit(editor.app.gpa);
+    editor.app.host.recorder = null;
+    if (editor.app.tracks) |*t| t.deinit();
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
@@ -6229,6 +6278,7 @@ pub fn deinit(editor: *Editor) !void {
 
     // Tear workspaces down first, while the plugins whose documents they hold are still alive.
     editor.workbench.deinitWorkspaces(fizzy.entry().window.backend);
+    editor.workspaces.deinit(editor.app.gpa);
 
     // Drain & join the save-queue worker before tearing anything else down. Any
     // queued jobs need to finish writing or be dropped before File data is freed.
@@ -6306,7 +6356,6 @@ pub fn deinit(editor: *Editor) !void {
     }
     editor.app.settings.deinit(editor.app.gpa);
 
-    editor.explorer.deinit();
     editor.app.gpa.destroy(editor.explorer);
 
     PluginStore.deinit();

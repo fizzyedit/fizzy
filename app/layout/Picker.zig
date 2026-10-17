@@ -11,6 +11,10 @@
 //! Cards assign a surface here. That is how a sidebar view stays in the
 //! sidebar, and how a plugin readme lands in the center — keywords are the
 //! default guess, an assignment is the answer. "Back to defaults" undoes it.
+//! The cards are listed under the place holding them, or else the place their
+//! keywords are for — this place first, then each other place by its name, then
+//! "Other" — so a view made for the panel reads as one, wherever the picker was
+//! opened, and a view the user moved reads under where it went.
 //!
 //! A card is also a handle. Dragged out of the popup it becomes the same
 //! floating view the corner button lifts out of a place (`ViewDrag`), and
@@ -28,6 +32,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
+const icons = @import("icons");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
 const State = @import("State.zig");
@@ -143,7 +148,10 @@ pub fn draw(self: *Picker, f: *Layout) void {
             // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
             // sibling. Off it, only a minted leaf can. A float can always go: it closes, and what
             // it holds goes home.
-            const removable = created or state.canRemove(region.name) or state.floats.find(region.name) != null;
+            // A minted half split again goes by merging its other half into it (`ViewDrag.closeEmptied`);
+            // with that half split too there is nothing to merge, and Remove would only clear it.
+            const merges = !state.splits.isSplit(region.name) or state.siblingLeaf(region.name) != null;
+            const removable = (created and merges) or state.canRemove(region.name) or state.floats.find(region.name) != null;
             const assigned = state.assignment(region.name);
             const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
 
@@ -156,10 +164,10 @@ pub fn draw(self: *Picker, f: *Layout) void {
                 .padding = .{ .y = 4 },
             });
             defer controls.deinit();
-            if (modeButton(@src(), "Single", region.shows == .one, 1)) {
+            if (modeButton(@src(), "Single", "picker.mode:one", region.shows == .one, 1)) {
                 setShows(f, &region, .one);
             }
-            if (modeButton(@src(), "Multiple", region.shows == .many, 2)) {
+            if (modeButton(@src(), "Multiple", "picker.mode:many", region.shows == .many, 2)) {
                 setShows(f, &region, .many);
             }
 
@@ -185,6 +193,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
                     .style = .control,
                 });
                 const split_from = split.activeRect();
+                core.anchor.mark(split.data(), "picker.action:split", .{});
                 {
                     var label = dvui.box(@src(), .{ .dir = .horizontal }, .{});
                     defer label.deinit();
@@ -207,14 +216,14 @@ pub fn draw(self: *Picker, f: *Layout) void {
                         .frost = core.widgets.menuFrost(),
                     }, core.widgets.menuSurfaceOptions());
                     defer choices.deinit();
-                    if (core.widgets.menuRow(@src(), "Vertical", .{}) != null) {
+                    if (core.widgets.menuRow(@src(), "Vertical", .{ .icon = icons.tvg.lucide.@"columns-2", .anchor = "picker.split:vertical" }) != null) {
                         choices.close();
                         f.splitNamed(region.name, .horizontal);
                         self.close(gpa);
                         state.discardSnapshots(gpa);
                         return;
                     }
-                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .id_extra = 1 }) != null) {
+                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .icon = icons.tvg.lucide.@"rows-2", .id_extra = 1, .anchor = "picker.split:horizontal" }) != null) {
                         choices.close();
                         f.splitNamed(region.name, .vertical);
                         self.close(gpa);
@@ -224,17 +233,17 @@ pub fn draw(self: *Picker, f: *Layout) void {
                 }
             }
             if (!created) {
-                if (actionButton(@src(), "Clear", showing, 2)) {
+                if (actionButton(@src(), "Clear", "picker.action:clear", showing, 2)) {
                     clearRegion(f, region.name);
                 }
-                if (actionButton(@src(), "Defaults", assigned != null, 4)) {
+                if (actionButton(@src(), "Defaults", "picker.action:defaults", assigned != null, 4)) {
                     state.unassign(gpa, region.name);
                     state.markDirty();
                     dvui.refresh(null, @src(), null);
                 }
             }
             if (removable) {
-                if (actionButton(@src(), "Remove", true, 3)) {
+                if (actionButton(@src(), "Remove", "picker.action:remove", true, 3)) {
                     removeRegion(f, &region);
                     self.close(gpa);
                     state.discardSnapshots(gpa);
@@ -269,11 +278,32 @@ pub fn draw(self: *Picker, f: *Layout) void {
     var row: ?*dvui.BoxWidget = null;
     defer if (row) |r| r.deinit();
     var col: usize = 0;
-    for (offered(f, &region, &query)) |ranked| {
+    const places = placesFor(f, &region);
+    const ranked_all = offered(f, &region, &query);
+    // Each card under the place holding it, or else the place its keywords make it for; this one
+    // first, so what belongs in the explorer and what in the panel reads off the headers. A
+    // query ranks within each. Each card's section is worked out once, not once per section.
+    const sections = f.arena.alloc(usize, ranked_all.len) catch return;
+    for (ranked_all, sections) |ranked, *section| {
+        const s = &f.host.surfaces.items[ranked.item];
+        section.* = sectionOf(places, s.id, s.keywords) orelse places.len;
+    }
+    var current: ?usize = null;
+    for (0..places.len + 1) |section| for (ranked_all, sections) |ranked, card_section| {
         // `i` is the surface's place in the registry, not in this list: a card keeps its widget
         // id while the filter reorders what is around it.
         const i = ranked.item;
         const s = &f.host.surfaces.items[i];
+        if (card_section != section) continue;
+        if (current != section) {
+            // This place's own header was drawn above, empty, when nothing else came first.
+            if (current == null and section != 0) emptyHome(&region, &query);
+            current = section;
+            if (row) |r| r.deinit();
+            row = null;
+            col = 0;
+            sectionHeader(if (section < places.len) places[section].name else "Other", section);
+        }
         if (col == 0) {
             if (row) |r| r.deinit();
             row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .horizontal });
@@ -330,7 +360,8 @@ pub fn draw(self: *Picker, f: *Layout) void {
         }
         state.markDirty();
         dvui.refresh(null, @src(), null);
-    }
+    };
+    if (current == null) emptyHome(&region, &query);
 
     if (state.store_catalog) |store| drawStoreSection(f, &region, store, &row, &col, &query);
 }
@@ -348,6 +379,106 @@ fn offered(f: *Layout, region: *const Layout.Region, query: *const core.fuzzy.Qu
     }
     if (!query.isEmpty()) core.fuzzy.sort(usize, out.items);
     return out.items;
+}
+
+/// A place a card can be listed under: a region's name, the keywords it accepts and the views it
+/// holds now.
+const Place = struct {
+    name: []const u8,
+    keywords: []const []const u8,
+    holds: []const *sdk.Surface = &.{},
+};
+
+/// The places the picker sorts cards under: `region` itself first, then each other place the
+/// shape declared, in its order — never a document pane, which offers only documents. Places
+/// resolved by keywords are one per keyword group (the icon rail and the explorer it chooses for
+/// are one place); a place resolved by name (a split's leaf, a float) is its own.
+fn placesFor(f: *Layout, region: *const Layout.Region) []const Place {
+    var out: std.ArrayListUnmanaged(Place) = .empty;
+    out.append(f.arena, .{ .name = region.name, .keywords = region.keywords, .holds = f.matchingIn(region) }) catch return &.{};
+    for (f.state.regions.items) |*r| {
+        if (r.name.len == 0 or r.kind_slot) continue;
+        const seen = for (out.items) |p| {
+            if (std.mem.eql(u8, p.name, r.name)) break true;
+            if (!r.by_name and sdk.keywords.groupKey(p.keywords) == sdk.keywords.groupKey(r.keywords)) break true;
+        } else false;
+        if (!seen) out.append(f.arena, .{ .name = r.name, .keywords = r.keywords, .holds = f.matchingIn(r) }) catch break;
+    }
+    return out.items;
+}
+
+/// The place a card is listed under. The place holding the view, when one does: a view the user
+/// moved reads under where it is, not where it came from. Otherwise the place its keywords are
+/// for, by the fit `Layout` binds with (`sdk.keywords.strength`); between equals the first,
+/// which puts `places[0]`, the place being edited, ahead of the rest. Null when neither.
+fn sectionOf(places: []const Place, id: []const u8, keywords: []const []const u8) ?usize {
+    for (places, 0..) |p, i| if (contains(p.holds, id)) return i;
+    var best: ?usize = null;
+    var best_fit: sdk.keywords.Fit = .none;
+    for (places, 0..) |p, i| {
+        const fit = sdk.keywords.strength(p.keywords, keywords);
+        if (@backingInt(fit) > @backingInt(best_fit)) {
+            best = i;
+            best_fit = fit;
+        }
+    }
+    return best;
+}
+
+test "a view is listed under the place its keywords are for, the edited place first" {
+    const kw = sdk.keywords.ide;
+    const places = [_]Place{
+        .{ .name = "Panel", .keywords = kw.panel },
+        .{ .name = "Sidebar", .keywords = kw.sidebar },
+        .{ .name = "Main", .keywords = kw.main },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), sectionOf(&places, "v", &.{"explorer"}));
+    try std.testing.expectEqual(@as(?usize, 0), sectionOf(&places, "v", &.{"output"}));
+    // Made for both: the place being edited wins the tie.
+    try std.testing.expectEqual(@as(?usize, 0), sectionOf(&places, "v", &.{ "sidebar", "panel" }));
+    // A specific sub-place still lands under the area that holds it.
+    try std.testing.expectEqual(@as(?usize, 2), sectionOf(&places, "v", &.{"main.document"}));
+    try std.testing.expectEqual(@as(?usize, null), sectionOf(&places, "v", &.{"inspector"}));
+    try std.testing.expectEqual(@as(?usize, null), sectionOf(&places, "v", &.{}));
+}
+
+test "a view a place holds is listed under that place, whatever its keywords" {
+    var files: sdk.Surface = .{ .id = "files", .title = "Files", .keywords = sdk.keywords.ide.sidebar, .draw = undefined };
+    const holding = [_]*sdk.Surface{&files};
+    const places = [_]Place{
+        .{ .name = "Sidebar", .keywords = sdk.keywords.ide.sidebar },
+        .{ .name = "Panel", .keywords = sdk.keywords.ide.panel, .holds = &holding },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), sectionOf(&places, "files", files.keywords));
+    // A split's new leaf accepts no view's keywords, and still takes the one put in it.
+    const leaf = [_]Place{
+        .{ .name = "Panel/r1", .keywords = &.{"slot"}, .holds = &holding },
+        .{ .name = "Sidebar", .keywords = sdk.keywords.ide.sidebar },
+    };
+    try std.testing.expectEqual(@as(?usize, 0), sectionOf(&leaf, "files", files.keywords));
+}
+
+/// The place being edited, when no card falls under it: its header still leads, so the popup
+/// says which place it fills — a split's new leaf accepts no view's keywords until one is put in.
+fn emptyHome(region: *const Layout.Region, query: *const core.fuzzy.Query) void {
+    var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    defer box.deinit();
+    core.anchor.mark(box.data(), "picker.empty", .{});
+    sectionHeader(region.name, 0);
+    dvui.labelNoFmt(@src(), if (query.isEmpty()) "Nothing here yet." else "No matching views here.", .{}, .{
+        .padding = .{ .x = 4, .h = 4 },
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.45) },
+    });
+}
+
+/// A heading over a run of cards — a place's name, or the store.
+fn sectionHeader(title: []const u8, id_extra: usize) void {
+    dvui.labelNoFmt(@src(), title, .{}, .{
+        .id_extra = id_extra,
+        .font = dvui.Font.theme(.heading),
+        .padding = .{ .y = 10, .x = 4 },
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
+    });
 }
 
 /// Where a view comes from, as its card says it: the plugin's name, or "Built-in" for one the app
@@ -606,9 +737,9 @@ fn setShows(f: *Layout, region: *const Layout.Region, shows: Layout.Region.Shows
     dvui.refresh(null, @src(), null);
 }
 
-fn modeButton(src: std.builtin.SourceLocation, label: []const u8, on: bool, id_extra: usize) bool {
+fn modeButton(src: std.builtin.SourceLocation, label: []const u8, name: []const u8, on: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
-    return dvui.button(src, label, .{}, .{
+    return namedButton(src, label, name, .{
         .font = actionFont(),
         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
         .margin = .{ .x = 4 },
@@ -625,9 +756,11 @@ fn actionFont() dvui.Font {
 
 /// One of the picker's actions. Disabled, it keeps its place (dimmed, no hover, never clicked)
 /// rather than leaving a gap the row closes up over.
-fn actionButton(src: std.builtin.SourceLocation, label: []const u8, enabled: bool, id_extra: usize) bool {
+fn actionButton(src: std.builtin.SourceLocation, label: []const u8, name: []const u8, enabled: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
-    const clicked = dvui.button(src, label, .{}, .{
+    // Named only while it can be pressed: a dimmed one swallows the click, and a driver waiting
+    // for the name should wait for the action, not for the button.
+    const clicked = namedButton(src, label, if (enabled) name else null, .{
         .font = actionFont(),
         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
         .margin = .{ .w = 4 },
@@ -638,6 +771,23 @@ fn actionButton(src: std.builtin.SourceLocation, label: []const u8, enabled: boo
         .color_fill_press = if (enabled) null else .{ .color = theme.color(.control, .fill) },
     });
     return enabled and clicked;
+}
+
+/// `dvui.button`, named `name` (when there is one) for a demo or an agent to aim at (`core.anchor`, `picker.*` in
+/// docs/AUTOMATION.md). The row's buttons come and go with the place — Remove sits where Split
+/// sat on a place with nothing to Clear — so a point read off one place's picker can land on
+/// another action in the next; a name cannot.
+fn namedButton(src: std.builtin.SourceLocation, label: []const u8, name: ?[]const u8, opts: dvui.Options) bool {
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(src, .{}, opts);
+    defer bw.deinit();
+    if (name) |n| core.anchor.mark(bw.data(), "{s}", .{n});
+    bw.processEvents();
+    bw.drawBackground();
+    const clicked = bw.clicked();
+    dvui.labelNoFmt(@src(), label, .{ .align_x = 0.5, .align_y = 0.5 }, opts.strip().override(bw.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    bw.drawFocus();
+    return clicked;
 }
 
 fn contains(list: []const *sdk.Surface, id: []const u8) bool {
@@ -685,7 +835,11 @@ fn removeRegion(f: *Layout, region: *const Layout.Region) void {
         }
     }
     const forget = region.forget_when_empty or f.state.splits.canForget(region.name);
-    if (forget) {
+    if (forget and f.state.splits.canForget(region.name) and f.state.splits.isSplit(region.name)) {
+        // Split again, the place under this name is its whole split: the half that kept the
+        // name goes the way emptying it does, its other half's views merging into it.
+        _ = ViewDrag.closeEmptied(f, region.name);
+    } else if (forget) {
         if (region.id != .zero and (dvui.dataGet(null, region.id, "_size", f32) orelse 0) > 0) {
             Split.close(region.id);
             f.extents_changed = true;
@@ -746,11 +900,7 @@ fn drawStoreSection(
     }
     col.* = 0;
 
-    dvui.labelNoFmt(@src(), "Store", .{}, .{
-        .font = dvui.Font.theme(.heading),
-        .padding = .{ .y = 10, .x = 4 },
-        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
-    });
+    sectionHeader("Store", 10_000);
 
     for (offers.items, 0..) |offer, i| {
         if (col.* == 0) {

@@ -147,8 +147,9 @@ pub fn buildOptsModule(opts: *std.Build.Step.Options) *std.Build.Module {
 pub const BundledPlugin = struct {
     /// The plugin's import name and id — `plugin_id` in its root, `plugin.zig.zon`'s `.id`.
     name: []const u8,
-    /// Null for a plugin this target does not build (markdown on wasm); it is left out.
-    module: ?*std.Build.Module,
+    /// The plugin's static module. Null for one of fizzy's own (`fizzy.plugins`), which fizzy
+    /// builds for each executable.
+    module: ?*std.Build.Module = null,
 };
 
 /// The generated `bundled_plugins` module: `pub const modules = .{ @import("a"), @import("b") … }`

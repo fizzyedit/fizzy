@@ -17,7 +17,7 @@ pub fn main() !void {
     _ = try core.label("host-drawn"); // host renders 1 widget itself
     std.debug.print("[host] after host label(): widget_count={d} shape_calls={d}\n", .{ win.widget_count, ft.shape_calls });
 
-    const ext = switch (builtin.os.tag) {
+    const ext = switch (builtin.target.os.tag) {
         .macos => "dylib",
         .windows => "dll",
         else => "so",

@@ -21,6 +21,8 @@
 //!     path a point per `path_step_ms`, the frames live play would have drawn, so whatever it
 //!     crosses sees the pointer pass — a text field it leaves forgets its click count, as it did
 //!     live — and typing still arrives a keystroke at a time.
+//!   * **Steps land together.** A `step` is a document's own change, not input: it needs no frame
+//!     drawn before the next op, so a seek over an hour of drawing applies it all in one call.
 //!   * **Waits hold time still.** A `wait` that does not hold yet stops the clock at the wait until
 //!     it does (or its timeout passes, in wall time), so the ops after it land on an app that has
 //!     caught up — at any speed, on any machine.
@@ -88,6 +90,9 @@ pub const Sink = struct {
         holds: *const fn (ctx: *anyopaque, until: Tape.Until) bool,
         /// A wait gave up. The sink says so where a person will see it.
         timedOut: *const fn (ctx: *anyopaque, until: Tape.Until) void,
+        /// Apply a step to its file, shown being made over `ms` (the op's). Null for a sink that
+        /// plays only live tapes, which have none (`Tape.validate`).
+        step: ?*const fn (ctx: *anyopaque, step: Tape.Step, ms: u32) void = null,
     };
 };
 
@@ -175,8 +180,10 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
         const next_at: f64 = if (self.cursor < ops.len) @floatFromInt(ops[self.cursor].at) else std.math.inf(f64);
         // Spans run up to the next op's start: anything still in flight then lands before it.
         if (self.advanceSpans(@min(until, next_at), sink)) |p| return p;
-        if (next_at > until) {
-            self.now = @max(self.now, until);
+        // Past the last op, `until` may itself be infinite: `nextAt`'s "nothing next", which a
+        // live driver asks for as it is. Infinity is not past infinity, so the end is its own test.
+        if (self.cursor >= ops.len or next_at > until) {
+            if (std.math.isFinite(until)) self.now = @max(self.now, until);
             return .reached;
         }
         self.finishSpans(sink);
@@ -199,6 +206,10 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
             .type => {
                 self.typing = .{ .op = self.cursor };
                 self.cursor += 1;
+            },
+            .step => |st| {
+                self.cursor += 1;
+                if (sink.vtable.step) |f| f(sink.ctx, st, op.ms);
             },
             .keyframe => |i| {
                 self.cursor += 1;
@@ -429,6 +440,7 @@ const Log = struct {
             .keyframe = keyframe,
             .holds = holds,
             .timedOut = timedOut,
+            .step = step,
         } };
     }
     fn from(ctx: *anyopaque) *Log {
@@ -470,6 +482,9 @@ const Log = struct {
     fn timedOut(ctx: *anyopaque, _: Tape.Until) void {
         from(ctx).print("timeout", .{});
     }
+    fn step(ctx: *anyopaque, st: Tape.Step, ms: u32) void {
+        from(ctx).print("step {s} {s} {d}", .{ st.file, st.effect, ms });
+    }
 };
 
 const test_keyframes = [_]Tape.Keyframe{ .{ .root = "demo://a" }, .{ .root = "demo://b" } };
@@ -499,6 +514,27 @@ fn playTo(seq: *Sequencer, t: f64, frame_ms: f64, sink: Sink) void {
     while (seq.now < t and guard < 10_000) : (guard += 1) {
         _ = seq.advance(@min(t, seq.now + frame_ms), frame_ms, sink);
     }
+}
+
+test "asked for what is next with nothing left, it has reached the end" {
+    // A live driver asks for `nextAt`, which is infinite once the ops are spent — at once, for an
+    // empty tape (valid live: `Tape.validate`).
+    var log: Log = .{};
+    defer log.deinit();
+    const empty: Tape = .{ .name = "empty", .ops = &.{} };
+    var seq: Sequencer = .init(&empty);
+    try testing.expect(seq.done());
+    try testing.expectEqual(Progress.reached, seq.advance(seq.nextAt(), 16, log.sink()));
+    try testing.expectEqual(@as(f64, 0), seq.now);
+    try testing.expectEqualStrings("", log.out.items);
+
+    const ops = [_]Tape.Op{.{ .at = 40, .do = .{ .key = "mod+s" } }};
+    const one: Tape = .{ .name = "one", .ops = &ops };
+    seq = .init(&one);
+    try testing.expectEqual(Progress.yielded, seq.advance(seq.nextAt(), 16, log.sink()));
+    try testing.expect(seq.done());
+    try testing.expectEqual(Progress.reached, seq.advance(seq.nextAt(), 16, log.sink()));
+    try testing.expectEqual(@as(f64, 40), seq.now);
 }
 
 test "a click lands a frame after the glide that brought the pointer to it" {
@@ -532,6 +568,35 @@ test "a click lands a frame after the glide that brought the pointer to it" {
         \\
     , landed);
     try testing.expect(seq.done());
+}
+
+test "steps land together, with no frame between them, each at its own time" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .ms = 40, .do = .{ .step = .{ .file = "a.pixi", .effect = "one" } } },
+        .{ .at = 200, .do = .{ .step = .{ .file = "a.pixi", .effect = "two" } } },
+        .{ .at = 300, .ms = 90, .do = .{ .step = .{ .file = "a.pixi", .effect = "three" } } },
+        .{ .at = 400, .do = .{ .key = "a" } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+
+    var seq: Sequencer = .init(&tape);
+    try testing.expectEqual(Progress.yielded, seq.advance(0, 16, log.sink()));
+    // Played live, each lands when it is due.
+    try testing.expectEqual(Progress.reached, seq.advance(150, 16, log.sink()));
+    try testing.expectEqualStrings("keyframe demo://a\nstep a.pixi one 40\n", log.out.items);
+    // Sought past, the rest land in the one call, up to the key that needs a frame of its own.
+    try testing.expectEqual(Progress.yielded, seq.advance(1000, 16, log.sink()));
+    try testing.expectEqualStrings(
+        \\keyframe demo://a
+        \\step a.pixi one 40
+        \\step a.pixi two 0
+        \\step a.pixi three 90
+        \\key a
+        \\
+    , log.out.items);
 }
 
 test "a glide covered in one call still passes along its path, a frame's worth at a time" {

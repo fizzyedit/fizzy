@@ -53,6 +53,11 @@
 //! `MAX_VEC4` for the length of its uniforms, `uniform vec4 uData[MAX_VEC4]`. Inputs are
 //! `vColor` and `vTextureCoord`; samplers are `uSampler` (unit 0, the draw's own texture),
 //! `uTex1` and `uTex2` (the extra textures `begin` binds).
+//!
+//! **Or generated.** A complete GLSL ES 3.00 source — one starting with its `#version` line — is
+//! compiled as it is, on WebGL2 only. That is what `scripts/compile-shaders.sh` makes from a
+//! program written once in HLSL, with the names above; fizzy's glass is one
+//! (`shaders/liquid_glass.fragment.hlsl`).
 const std = @import("std");
 const dvui = @import("dvui");
 

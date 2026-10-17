@@ -23,6 +23,7 @@ const store = @import("registry/store.zig");
 const Page = @import("PluginPage.zig");
 const PluginLoader = @import("PluginLoader.zig");
 const PluginManager = @import("PluginManager.zig");
+const App = @import("../App.zig");
 /// Pretend two installed plugins have store updates waiting, so the update flow (the app's
 /// offer, or the silent path's logging) can be exercised without an actually out-of-date
 /// plugin. A build-time flag: flip it, run, flip it back.
@@ -406,6 +407,9 @@ const app = &PluginManager.current;
 
 pub fn register(manager: PluginManager) !void {
     PluginManager.current = manager;
+    // A link-only build has no store: nothing to fetch, nowhere to install to. The manager is
+    // still set, because settings name plugins through it (`displayName`).
+    if (comptime !App.loads_plugins) return;
     const host = manager.host;
     const url = resolveRegistryUrl();
     const fp_hex = try std.fmt.allocPrint(manager.gpa, "0x{x}", .{dylib.abi_fingerprint});
@@ -1333,6 +1337,7 @@ fn offerPendingUpdates() void {
 /// before the Host-registry iterations, so a freshly-registered or unloaded plugin never
 /// mutates a list mid-iteration.
 pub fn tick() void {
+    if (comptime !App.loads_plugins) return;
     if (comptime builtin.target.cpu.arch == .wasm32) {
         if (catalog) |*c| c.pump(web_fetch);
         StoreIcon.pump();
@@ -2870,8 +2875,7 @@ const store_optimize_class = "fast";
 /// shard URL the store never publishes under, and *every* plugin — including ones whose SDK
 /// version matches this host exactly — reads "No compatible build in store". That message points
 /// at the store, but the cause is entirely local and comptime-known, so say so instead. Same
-/// condition the local load path reports as `error.AbiBuildEnvMismatch` ("SDK versions match, but
-/// optimize mode does not match").
+/// condition the local load path reports as `error.AbiOptimizeMismatch`.
 const host_optimize_matches_store = std.mem.eql(u8, dylib.optimize_safety_class, store_optimize_class);
 
 /// Cap on the reported min width of the no-build message (same `max_size_content` trick as

@@ -441,6 +441,15 @@ test "cancel returns at once while the server is still holding the connection" {
     const Hold = struct {
         fn run(s: *std.Io.net.Server, held_io: std.Io, release: *std.atomic.Value(bool)) void {
             const stream = s.accept(held_io) catch return;
+            // Read the request before holding: a socket closed with bytes still unread is reset,
+            // not closed, and Zig 0.16 reads a reset on Windows as `error.Unexpected`, dumping a
+            // stack trace into the test's stderr that reads as a failure.
+            var in_buf: [1024]u8 = undefined;
+            var out_buf: [64]u8 = undefined;
+            var reader = stream.reader(held_io, &in_buf);
+            var writer = stream.writer(held_io, &out_buf);
+            var http_server = std.http.Server.init(&reader.interface, &writer.interface);
+            _ = http_server.receiveHead() catch {};
             while (!release.load(.acquire)) std.Io.sleep(held_io, .fromMicroseconds(1000), .awake) catch {};
             stream.close(held_io);
         }

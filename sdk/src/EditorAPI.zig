@@ -36,6 +36,11 @@ pub const OpenOptions = struct {
     /// The pane. 0 is the one the user is in.
     grouping: u64 = 0,
     mode: OpenMode = .keep,
+    /// Beside the pane the person is in rather than in it, leaving them that pane and their
+    /// focus: a document a plugin is working on, seen as it changes while the person stays where
+    /// they were. An open document goes there now; one still to open, once it has loaded.
+    /// `grouping` is ignored.
+    beside: bool = false,
 };
 
 /// What a context menu is about, for whoever is drawing rows into it. Valid only during that
@@ -301,8 +306,8 @@ pub const VTable = struct {
     /// plugin can address a region it is not drawing right now: a tab dropped on another pane,
     /// a pane that does not exist yet, a session being restored before anything has drawn.
     assignSurfaces: *const fn (ctx: *anyopaque, region: []const u8, ids: ?[]const []const u8) anyerror!void,
-    /// The assignment for a region name, or null if the user never chose. Borrowed from the app;
-    /// copy before the next assignment write.
+    /// The assignment for a region name, or null if the user never chose. Borrowed from the app
+    /// until the next assignment write, which may itself be given these ids: read, edit, write.
     assignedSurfaces: *const fn (ctx: *anyopaque, region: []const u8) ?[]const []const u8,
     /// Every region name that has an assignment, arena-allocated. How a plugin finds the panes
     /// it declared last session before it has declared any this one.
@@ -345,9 +350,6 @@ pub const VTable = struct {
     /// `fizzy.files.changed` can be relied on to be emitted. False with no folder open,
     /// on a platform with no watcher backend, or when starting one failed.
     folderWatchActive: *const fn (ctx: *anyopaque) bool,
-    /// Explorer tree branch expanded state.
-    explorerBranchIsOpen: *const fn (ctx: *anyopaque, branch_id: dvui.Id) bool,
-    setExplorerBranchOpen: *const fn (ctx: *anyopaque, branch_id: dvui.Id, open: bool) void,
     /// Draw workspace panes (center region); `index` is the root pane (usually 0).
     drawWorkspaces: *const fn (ctx: *anyopaque, index: usize) anyerror!dvui.App.Result,
     /// Native open-folder dialog (no-op on web).
@@ -371,8 +373,6 @@ pub const VTable = struct {
     allocUntitledPath: *const fn (ctx: *anyopaque) anyerror![]u8,
     /// Create and open a new document at `path` (path ownership transfers to fizzy).
     createDocument: *const fn (ctx: *anyopaque, path: []const u8, grid: NewDocGrid) anyerror!DocHandle,
-    /// Hint the files tree to scroll/highlight a path just created (e.g. New File dialog).
-    setExplorerNewFilePath: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
 
     // ---- saving ----
     /// How a document's saving stands, as fizzy runs it (`SaveState`): for a tab's or a file
@@ -682,14 +682,6 @@ pub fn folderWatchActive(self: EditorAPI) bool {
     return self.vtable.folderWatchActive(self.ctx);
 }
 
-pub fn explorerBranchIsOpen(self: EditorAPI, branch_id: dvui.Id) bool {
-    return self.vtable.explorerBranchIsOpen(self.ctx, branch_id);
-}
-
-pub fn setExplorerBranchOpen(self: EditorAPI, branch_id: dvui.Id, open: bool) void {
-    self.vtable.setExplorerBranchOpen(self.ctx, branch_id, open);
-}
-
 pub fn drawWorkspaces(self: EditorAPI, index: usize) !dvui.App.Result {
     return self.vtable.drawWorkspaces(self.ctx, index) catch |err| self.failed("drawWorkspaces", err);
 }
@@ -726,10 +718,6 @@ pub fn allocUntitledPath(self: EditorAPI) ![]u8 {
 
 pub fn createDocument(self: EditorAPI, path: []const u8, grid: NewDocGrid) !DocHandle {
     return self.vtable.createDocument(self.ctx, path, grid) catch |err| self.failed("createDocument", err);
-}
-
-pub fn setExplorerNewFilePath(self: EditorAPI, path: []const u8) !void {
-    return self.vtable.setExplorerNewFilePath(self.ctx, path) catch |err| self.failed("setExplorerNewFilePath", err);
 }
 
 pub fn saveState(self: EditorAPI, doc_id: u64) SaveState {

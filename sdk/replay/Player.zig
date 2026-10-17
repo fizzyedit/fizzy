@@ -933,6 +933,7 @@ const sink_vtable: Sequencer.Sink.VTable = .{
     .keyframe = keyframe,
     .holds = holds,
     .timedOut = timedOut,
+    .step = step,
 };
 
 fn from(ctx: *anyopaque) *Player {
@@ -967,6 +968,12 @@ fn text(_: *anyopaque, bytes: []const u8) void {
 
 fn command(ctx: *anyopaque, cmd: Tape.Command) void {
     from(ctx).stage.command(cmd.id, cmd.args);
+}
+
+fn step(ctx: *anyopaque, st: Tape.Step, ms: u32) void {
+    const self = from(ctx);
+    // A seek, or a frame run unseen to catch up, lands it at once.
+    self.stage.step(st, if (self.state == .seeking or self.catching_up) 0 else ms);
 }
 
 fn keyframe(ctx: *anyopaque, kf: *const Tape.Keyframe) void {

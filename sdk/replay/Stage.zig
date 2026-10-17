@@ -48,6 +48,12 @@ pub const VTable = struct {
     /// Replaying fast (a seek): turn animation off so every replayed frame lands where it is
     /// going, and back on after.
     fastForward: ?*const fn (ctx: *anyopaque, on: bool) void = null,
+    /// Apply a step to a file of the keyframe the demo cut to, as its owner encoded it
+    /// (`Tape.Step`), shown being made over `ms`: 0 while a seek catches up, when it lands at once.
+    /// An app that sets this puts a keyframe's files in place opened by their `owner`, and says
+    /// whose steps it can apply (`Tape.Check.steps`); one that leaves it null refuses tapes with
+    /// steps at load.
+    step: ?*const fn (ctx: *anyopaque, step: Tape.Step, ms: u32) void = null,
 
     /// The app's model now, as something `restore` can put back — or null when this is not a
     /// moment to keep (work in flight, a popup open, a document whose owner cannot say what it
@@ -90,6 +96,9 @@ pub fn commandTitle(self: Stage, id: []const u8) ?[]const u8 {
 }
 pub fn fastForward(self: Stage, on: bool) void {
     if (self.vtable.fastForward) |f| f(self.ctx, on);
+}
+pub fn step(self: Stage, st: Tape.Step, ms: u32) void {
+    if (self.vtable.step) |f| f(self.ctx, st, ms);
 }
 pub fn snapshots(self: Stage) bool {
     return self.vtable.capture != null and self.vtable.restore != null and self.vtable.release != null;

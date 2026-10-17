@@ -10,6 +10,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 pub const Secrets = @import("Secrets.zig");
+const Tracks = @import("Tracks.zig");
 const sdk = @import("fizzy_sdk");
 const builtin = @import("builtin");
 const build_opts = @import("build_opts");
@@ -202,6 +203,9 @@ folder_retired: std.ArrayListUnmanaged([]const u8) = .empty,
 pending_folder_close: bool = false,
 
 open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
+/// Each open document's history, timed (`Tracks`): set up once the app is at its final address,
+/// and only then the host's recorder.
+tracks: ?Tracks = null,
 
 file_id_counter: u64 = 0,
 
@@ -885,7 +889,14 @@ const missing_symbols_reason = "the plugin is missing required entry symbols —
 
 const load_failure_reasons = .{
     .AbiMismatch = "built against an incompatible Fizzy SDK — rebuild the plugin against this Fizzy build",
-    .AbiBuildEnvMismatch = "SDK versions match, but optimize mode does not match",
+    .AbiOptimizeMismatch = if (std.mem.eql(u8, sdk.dylib.optimize_safety_class, "safe"))
+        "built ReleaseFast or ReleaseSmall, but this Fizzy is a " ++ @tagName(builtin.mode) ++
+            " build — rebuild the plugin in Debug, or run a release build of Fizzy"
+    else
+        "built Debug or ReleaseSafe, but this Fizzy is a " ++ @tagName(builtin.mode) ++
+            " build — rebuild the plugin with -Doptimize=ReleaseFast",
+    .AbiShapeMismatch = "same SDK version but a different SDK shape — a Fizzy built from main past " ++
+        "a release needs plugins built with zig build --fork=<fizzy>/sdk (or this Fizzy is older than the plugin's SDK)",
     .SdkVersionMismatch = "requires a newer Fizzy SDK — update Fizzy or install a matching plugin build",
     .PluginIdMismatch = "plugin id in the dylib does not match its filename — rename the file or fix manifest.id",
     .DylibOpenFailed = "the plugin library could not be opened (missing file, wrong architecture, or unresolved symbols)",
@@ -918,8 +929,11 @@ pub fn formatPluginProbeDetail(allocator: std.mem.Allocator, info: PluginLoader.
 /// Removes the entry from the plugin's document registry; fizzy still removes
 /// the matching `DocHandle` from `open_files`.
 pub fn closeDocumentResources(app: *App, doc: sdk.DocHandle) void {
+    if (app.tracks) |*t| t.closed(doc.id);
     // Whoever held it is holding nothing now (`sdk.Claim`).
     app.host.releaseDocumentClaims(doc.id);
+    // Nor are its steps anyone's now (`Host.stepAuthor`).
+    app.host.forgetDocumentAuthors(doc.id);
     _ = doc.owner.closeDocument(doc);
     doc.owner.unregisterDocument(doc.id);
 }
@@ -1141,12 +1155,17 @@ pub fn syncLoadedPluginRenderBridge(app: *App) void {
     }
 }
 
+/// Whether this build loads plugins at runtime (`-Ddynamic-plugins`, default on): fizzy's own
+/// dylibs, the user plugins directory, the store, and on the web a page's `?plugin=`. Off, the
+/// app runs exactly the plugins it links.
+pub const loads_plugins = if (@hasDecl(build_opts, "dynamic_plugins")) build_opts.dynamic_plugins else true;
+
 /// Whether a bundled plugin should be loaded from `{exe_dir}/plugins/<id>/` rather than the
-/// copy linked in: never on wasm, not when the build pinned it static
+/// copy linked in: never on wasm or in a link-only build, not when the build pinned it static
 /// (`build_opts.static_<id>`), and not when `FIZZY_STATIC_<ID>=1` is set — the bisection
 /// switch for dylib loading trouble.
 pub fn bundledDylibEnabled(gpa: std.mem.Allocator, comptime id: []const u8) bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    if (comptime builtin.target.cpu.arch == .wasm32 or !loads_plugins) return false;
     if (comptime @hasDecl(build_opts, "static_" ++ id)) {
         if (comptime @field(build_opts, "static_" ++ id)) return false;
     }

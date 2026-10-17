@@ -48,10 +48,12 @@
 //!
 //! Optional, like every service: an app with nothing to play tapes on registers none.
 
+const Author = @import("../Author.zig");
+
 pub const Api = struct {
     /// Bump whenever this struct's layout changes: `getServiceTyped` refuses a provider whose
     /// version differs rather than reinterpreting one shape as another across `dlopen`.
-    pub const service_version: u32 = 5;
+    pub const service_version: u32 = 6;
     pub const service_name = "automation";
 
     ctx: *anyopaque,
@@ -89,6 +91,8 @@ pub const Api = struct {
 
     pub const VTable = struct {
         play: *const fn (ctx: *anyopaque, bytes: []const u8) Play,
+        /// `play`, the tape acting for `author` (`Host.act`): an agent's pointer tape is the agent's.
+        playAs: *const fn (ctx: *anyopaque, bytes: []const u8, author: Author) Play,
         stop: *const fn (ctx: *anyopaque, ticket: Ticket) void,
         outcome: *const fn (ctx: *anyopaque, ticket: Ticket) Outcome,
         settled: *const fn (ctx: *anyopaque) bool,
@@ -116,6 +120,12 @@ pub const Api = struct {
     /// caller keeps them.
     pub fn play(self: Api, bytes: []const u8) Play {
         return self.vtable.play(self.ctx, bytes);
+    }
+
+    /// `play`, with what the tape changes made by `author` (an agent playing pointer input on the
+    /// person's behalf): `play` alone leaves the tape its own author.
+    pub fn playAs(self: Api, bytes: []const u8, author: Author) Play {
+        return self.vtable.playAs(self.ctx, bytes, author);
     }
 
     /// Stop the tape `ticket` names where it is. Nothing when that tape is not the one playing:

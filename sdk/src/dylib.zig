@@ -307,6 +307,22 @@ pub fn fingerprintMatches(plugin_fp: u64) bool {
     return plugin_fp == abi_fingerprint;
 }
 
+/// The optimize class a plugin's `abi_fingerprint` was folded with, when its boundary shape is
+/// this build's; null when the shape itself differs. A fingerprint is only the shape and the
+/// class, so a refused plugin is one or the other, and the host can say which: a plugin built in
+/// another mode, or one built against another SDK shape that kept the version number (a host
+/// built from `main` after an `sdk` feature PR, before the release).
+pub fn optimizeClassOf(plugin_fp: u64) ?[]const u8 {
+    inline for (.{ "safe", "fast" }) |class| {
+        const fp = comptime blk: {
+            @setEvalBranchQuota(1_000_000);
+            break :blk fingerprint.foldString(sdk_shape_fingerprint, class);
+        };
+        if (plugin_fp == fp) return class;
+    }
+    return null;
+}
+
 pub fn tripletFromSemver(v: std.SemanticVersion) VersionTriplet {
     return .{
         .major = @intCast(v.major),
@@ -457,4 +473,11 @@ test "abi fingerprint is non-zero and self-consistent" {
     try std.testing.expect(abi_fingerprint != 0);
     try std.testing.expect(fingerprintMatches(abi_fingerprint));
     try std.testing.expect(!fingerprintMatches(abi_fingerprint +% 1));
+}
+
+test "optimizeClassOf tells a mode mismatch from a shape mismatch" {
+    try std.testing.expectEqualStrings(optimize_safety_class, optimizeClassOf(abi_fingerprint).?);
+    const other = if (std.mem.eql(u8, optimize_safety_class, "safe")) "fast" else "safe";
+    try std.testing.expectEqualStrings(other, optimizeClassOf(fingerprint.foldString(sdk_shape_fingerprint, other)).?);
+    try std.testing.expectEqual(null, optimizeClassOf(fingerprint.foldString(sdk_shape_fingerprint +% 1, other)));
 }

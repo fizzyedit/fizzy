@@ -11,7 +11,6 @@ const icon = assets.files.@"icon.png";
 
 const fizzy = @import("fizzy.zig");
 const workbench = @import("workbench");
-const text = @import("text");
 const auto_update = @import("app").update.auto_update;
 const file_assoc = @import("backend/file_assoc.zig");
 const update_notify = @import("app").update.update_notify;

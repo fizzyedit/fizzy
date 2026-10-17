@@ -429,6 +429,7 @@ pub fn reloadFromDisk(self: *Document) !void {
     try tc.encoding.appendLossy(&self.text, gpa, bytes);
     self.history.deinit(gpa);
     self.history = .{};
+    self.recordStep(.{ .kind = .restarted, .id = 0 });
     self.clean_op_id = 0;
     self.refreshLineCount();
     self.sel_start = 0;
@@ -446,10 +447,11 @@ pub fn reloadFromDisk(self: *Document) !void {
 /// contents, selection with the caret's end, scroll, preview, and whether it is dirty
 /// (`doc_state`).
 pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
+    const sel = self.selection();
     return doc_state.encode(allocator, .{
         .text = self.text.items,
-        .anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start,
-        .head = self.sel_cursor,
+        .anchor = sel.anchor,
+        .head = sel.head,
         .dirty = self.isDirty(),
         .focused = self.editor_focused,
         .untitled = self.unsaved,
@@ -464,9 +466,19 @@ pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
 pub fn fingerprint(self: *const Document) u64 {
     var h = std.hash.Wyhash.init(0x7e47_f1);
     h.update(self.text.items);
-    const anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start;
-    h.update(std.mem.asBytes(&[_]u64{ anchor, self.sel_cursor, @intFromBool(self.isDirty()), @backingInt(self.preview_mode) }));
+    const sel = self.selection();
+    h.update(std.mem.asBytes(&[_]u64{ sel.anchor, sel.head, @intFromBool(self.isDirty()), @backingInt(self.preview_mode) }));
     return h.final();
+}
+
+/// The selection as the document has it: one an edit from outside the widget set
+/// (`pending_sel`, which the next draw installs, clamped as it does), else the widget's.
+pub fn selection(self: *const Document) tc.Range {
+    if (self.pending_sel) |r| {
+        const len = self.text.items.len;
+        return .init(@min(r.anchor, len), @min(r.head, len));
+    }
+    return .init(if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start, self.sel_cursor);
 }
 
 /// Put the document back as `captureState` found it, in place — the buffer replaced as a reload
@@ -480,6 +492,7 @@ pub fn restoreState(self: *Document, bytes: []const u8) !void {
     try self.text.appendSlice(gpa, st.text);
     self.history.deinit(gpa);
     self.history = .{};
+    self.recordStep(.{ .kind = .restarted, .id = 0 });
     // Clean is a history at its saved id; dirty is anything else.
     self.clean_op_id = if (st.dirty) std.math.maxInt(u64) else self.history.topOpId();
     self.refreshLineCount();
@@ -522,7 +535,8 @@ pub fn saveAs(self: *Document, new_path: []const u8) !void {
 pub fn replaceRange(self: *Document, start: usize, end: usize, new: []const u8) !void {
     const gpa = sdk.allocator();
     const after: tc.Range = .collapsed(start + new.len);
-    try self.history.pushComplete(gpa, start, self.text.items[start..end], new, .init(start, end), after);
+    const committed = try self.history.pushComplete(gpa, start, self.text.items[start..end], new, .init(start, end), after);
+    if (committed) |c| self.recordCommitted(c);
     try self.text.replaceRange(gpa, start, end - start, new);
     self.refreshLineCount();
     self.sel_start = after.head;
@@ -536,6 +550,7 @@ pub fn replaceRange(self: *Document, start: usize, end: usize, new: []const u8) 
 pub fn undo(self: *Document) void {
     const gpa = sdk.allocator();
     const sel = self.history.applyUndo(gpa, &self.text) orelse return;
+    if (self.history.lastUndone()) |s| self.recordEdits(.undone, s.step, s.edits, s.sel_before, true);
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
@@ -547,9 +562,64 @@ pub fn undo(self: *Document) void {
 pub fn redo(self: *Document) void {
     const gpa = sdk.allocator();
     const sel = self.history.applyRedo(gpa, &self.text) orelse return;
+    if (self.history.lastApplied()) |s| self.recordEdits(.redone, s.step, s.edits, s.sel_after, false);
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
+    self.pending_sel = sel;
+    sdk.host().documentEdited(self.id);
+}
+
+/// The text plugin's step encoding (`sdk.Plugin.step_format`): `tc.Transaction.encodeStep`'s.
+pub const step_format = 1;
+
+/// Report a step of this document's history to whoever records it (`sdk.Host.recordStep`), when
+/// anyone does: nothing is encoded otherwise.
+fn recordStep(self: *const Document, step: sdk.Step) void {
+    sdk.host().recordStep(self.id, step);
+}
+
+/// What `history.end` or `pushComplete` did, reported as a step.
+pub fn recordCommitted(self: *const Document, c: tc.History.Committed) void {
+    self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false);
+}
+
+/// `edits` of history step `id` reported as a step, forward or (`reverse`) as their undo, `sel`
+/// the selection they leave.
+fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool) void {
+    // Every step reaches the host, which keeps who made it; its bytes only while it is recorded.
+    const top: u64 = if (self.history.lastApplied()) |r| r.step else 0;
+    if (!sdk.host().recording(self.id)) return self.recordStep(.{ .kind = kind, .id = id, .top = top });
+    const gpa = sdk.allocator();
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    tc.Transaction.encodeStep(&out.writer, edits, sel, reverse) catch {
+        std.log.err("text: a step of {s} was not recorded: out of memory", .{self.path});
+        return;
+    };
+    self.recordStep(.{ .kind = kind, .id = id, .effect = out.written(), .top = top });
+}
+
+/// Apply a recorded step (`step_format`) as a new step of this document's history: the edits
+/// checked against the text and landed together, the selection where they left it. `error.BadStep`
+/// or `error.StepDoesNotApply` leave the document as it was. Lands at once: showing it typed out
+/// over a replay's `ms` is the seam for later (`sdk.Plugin.VTable.applyStep`).
+pub fn applyStep(self: *Document, effect: []const u8) !void {
+    const gpa = sdk.allocator();
+    const view = try tc.Transaction.StepView.init(effect);
+    var txn = try tc.Transaction.applyStepTo(gpa, &self.text, view);
+    const committed = self.history.push(gpa, txn) catch |err| {
+        // Kept out of the history, the text would not undo: take it back.
+        txn.applyInverse(gpa, &self.text) catch {};
+        txn.deinit(gpa);
+        return err;
+    };
+    self.recordCommitted(committed);
+    self.refreshLineCount();
+    const sel = view.sel;
+    self.sel_start = @min(sel.start(), self.text.items.len);
+    self.sel_end = @min(sel.end(), self.text.items.len);
+    self.sel_cursor = @min(sel.head, self.text.items.len);
     self.pending_sel = sel;
     sdk.host().documentEdited(self.id);
 }

@@ -22,6 +22,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
+const icons = @import("icons");
 const sdk = @import("fizzy_sdk");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
@@ -67,7 +68,8 @@ resize: bool = false,
 forget_when_empty: bool = false,
 /// How this place lays its children.
 dir: dvui.enums.Direction = .vertical,
-/// This frame's content size, in points. A menu split halves one axis.
+/// This frame's border box, in its parent's units (points, unless something above it scales):
+/// the reach a split of it halves along one axis.
 size: dvui.Size = .{},
 /// This frame's border in physical pixels, for hit-testing a view drag.
 bounds: dvui.Rect.Physical = .{},
@@ -476,7 +478,8 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
         extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0) persistExtent(self, init_opts, id, chosen, extent);
+        // A leaf draws on regardless: it walks no tree node.
+        if (init_opts.name.len > 0) _ = persistExtent(self, init_opts, id, chosen, extent);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the split appears to
@@ -579,8 +582,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
     if (init_opts.name.len > 0) {
-        const cr = box.data().contentRect();
-        self.state.setPlaceMetrics(init_opts.name, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+        self.state.setPlaceMetrics(init_opts.name, box.data());
         core.anchor.mark(box.data(), "region:{s}", .{init_opts.name});
     }
     self.containers[self.depth] = .{
@@ -650,8 +652,10 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 /// How close the pointer must be to a region's top-right corner, in points, before the button
 /// shows. Far enough that a glance toward the corner finds it; near enough that it never
 /// appears while the user is working in the middle of the region: the button and a margin round it.
-const corner_reach: f32 = core.widgets.round_button_size + 28;
-const corner_button_size: f32 = core.widgets.round_button_size;
+const corner_reach: f32 = core.widgets.glass_button.size + 28;
+const corner_button_size: f32 = core.widgets.glass_button.size;
+/// The button's distance in from the place's corner: room for the glass's shadow ring.
+const corner_inset: f32 = 8;
 
 /// The small button in a region's top-right corner that opens the picker for it. This is the
 /// piece that makes placement *visual*: a user looks at the place in the window they want to
@@ -736,19 +740,17 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         .label = .{ .text = "Arrange" },
         .tab_index = 0,
         .rect = .{
-            .x = content.w - corner_button_size - 4,
-            .y = 4,
+            .x = content.w - corner_button_size - corner_inset,
+            .y = corner_inset,
             .w = corner_button_size,
             .h = corner_button_size,
         },
-        // Entypo's grid draws its squares well inside its own box, so the glyph is given nearly
-        // all of the button.
-        .padding = dvui.Rect.all(2),
-        .corners = dvui.CornerRect.all(corner_button_size / 2),
-        .background = true,
-        .color_fill = .{ .color = theme.color(.control, .fill).opacity(@max(alpha, 0.35)) },
-        .border = dvui.Rect.all(1),
-        .color_border = .{ .color = theme.color(.control, .border).opacity(@max(alpha, 0.35)) },
+        .padding = .all(0),
+        .margin = .{},
+        .corners = .round(corner_button_size / 2),
+        .background = false,
+        .border = .all(0),
+        .box_shadow = null,
     });
     defer bw.deinit();
     bw.processEvents();
@@ -794,14 +796,25 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     }
 
     if (alpha > 0.01 and !dragged and !self.state.view_drag.active()) {
-        bw.drawBackground();
-        core.icon.icon(@src(), "regions", dvui.entypo.grid, .{
-            .fill_color = .{ .color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .fill).lerp(theme.color(.control, .text), alpha) },
-            // A clear stroke makes it one flat colour, which the icon cache tints rather than
-            // bakes: baked, every step of the fade (it comes and goes as a drag crosses a place)
-            // rasterized a new texture, two render-target switches a frame.
-            .stroke_color = .transparent,
-        }, .{ .expand = .both });
+        // A glass bubble, as the controls over a document are (`core.widgets.glass_button`). Glass
+        // has no opacity, so it fades by growing in from its centre, its shadow with it.
+        const br = bw.data().borderRectScale();
+        const grown = br.r.insetAll(br.r.w * (1 - alpha) / 2);
+        // An empty place's corner is its hatch, which does not change: read the frost once. A
+        // filled one's is the view's own content, read while the button shows.
+        const witness: ?u64 = if (filled) null else core.widgets.glass_button.witness(grown, 0);
+        core.dialogs.glassBubbles(bw.data().id, &.{.{ .rect = grown, .light = core.widgets.glass_button.light(&bw) }}, br.s, .{ .shadow = alpha, .witness = witness });
+        // White, tinted by the text colour: the icon cache tints a flat colour rather than baking
+        // it, and every step of the fade (it comes and goes as a drag crosses a place) would
+        // otherwise rasterize a new texture, two render-target switches a frame.
+        core.icon.icon(@src(), "regions", icons.tvg.lucide.@"layout-grid", .{ .fill_color = .white, .stroke_color = .white }, .{
+            .expand = .ratio,
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+            .min_size_content = .{ .w = 1, .h = 1 },
+            .padding = .all(corner_button_size * 0.3 * alpha + (1 - alpha) * corner_button_size / 2),
+            .color_text = .{ .color = theme.color(.content, .text).opacity(alpha) },
+        });
     }
     if (bw.clicked() and !dragged) {
         self.state.openPicker(self.gpa, opts.name, bw.data().rectScale().r.toNatural().bottomLeft());
@@ -902,29 +915,39 @@ fn drawContentsPhotographed(
     ViewDrag.keepShot(self, shot, &pic);
 }
 
-fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) void {
+/// Remember the extent of the place `opts` names, or forget the place when it has closed with
+/// nothing in it. Returns true when it forgot it: the split tree no longer has it, and the nodes
+/// a caller is walking to draw it may be gone, so it draws nothing more of it this frame.
+fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) bool {
     _ = shown;
-    const kept = if (self.state.assignment(opts.name)) |ids| ids.len > 0 else false;
     // A live drag writes a zero on the way through closed; forgetting here removes the
     // region and the next frame recreates a sentinel under the pointer — the pop.
     const dragging = dvui.dataGet(null, id, "_drag", bool) orelse false;
-    if (opts.forget_when_empty and !kept and !dragging) {
-        if (chosen <= 0) {
-            // Still travelling shut: collapsing here drops the leaf and the
-            // next frame has nothing to ease. `shown` can rest above zero
-            // after the curve, so "animation finished" is the real signal.
-            if (dvui.animationGet(id, "_ease") != null) {
-                if (self.state.setExtent(self.gpa, opts.name, 0)) self.extents_changed = true;
-                return;
-            }
-            if (self.state.clearExtent(self.gpa, opts.name)) self.extents_changed = true;
-            if (self.state.splits.collapse(self.gpa, opts.name)) self.extents_changed = true;
-            self.state.unassign(self.gpa, opts.name);
-            dvui.refresh(null, @src(), id);
-            return;
+    if (opts.forget_when_empty and !dragging and chosen <= 0) forget: {
+        // A place split again is every place in it (`SplitTree.Forest.collapse`): kept while any
+        // of them holds a view, and all of them forgotten with it.
+        const covered = self.state.splits.placeLeaves(self.arena, opts.name);
+        for (covered) |n| {
+            if (self.state.assignment(n)) |ids| if (ids.len > 0) break :forget;
         }
+        // Still travelling shut: collapsing here drops the leaf and the
+        // next frame has nothing to ease. `shown` can rest above zero
+        // after the curve, so "animation finished" is the real signal.
+        if (dvui.animationGet(id, "_ease") != null) {
+            if (self.state.setExtent(self.gpa, opts.name, 0)) self.extents_changed = true;
+            return false;
+        }
+        const dropped = self.state.splits.collapse(self.gpa, opts.name);
+        if (dropped) self.extents_changed = true;
+        for (covered) |n| {
+            if (self.state.clearExtent(self.gpa, n)) self.extents_changed = true;
+            self.state.unassign(self.gpa, n);
+        }
+        dvui.refresh(null, @src(), id);
+        return dropped;
     }
     if (self.state.setExtent(self.gpa, opts.name, chosen)) self.extents_changed = true;
+    return false;
 }
 
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.
@@ -985,6 +1008,9 @@ fn initTree(
     const branch = node.kind.branch;
     var box_opts = opts;
     var default_extent: f32 = 0;
+    // Forgotten this frame, the tree `branch` points into may be freed: its children wait for
+    // the next frame (`persistExtent` asked for it).
+    var dropped = false;
     if (init_opts.resize) {
         const given = opts.min_size_content orelse dvui.Size{};
         const default: f32 = switch (axis) {
@@ -1002,7 +1028,7 @@ fn initTree(
         }
         const extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0) persistExtent(self, init_opts, id, chosen, extent);
+        if (init_opts.name.len > 0) dropped = persistExtent(self, init_opts, id, chosen, extent);
         box_opts.min_size_content = switch (axis) {
             .horizontal => .{ .w = extent, .h = given.h },
             .vertical => .{ .w = given.w, .h = extent },
@@ -1059,7 +1085,7 @@ fn initTree(
     };
     self.depth += 1;
 
-    try drawTreeChildren(self, src, init_opts, opts, branch);
+    if (!dropped) try drawTreeChildren(self, src, init_opts, opts, branch);
 
     return .{
         .name = init_opts.name,
@@ -1261,7 +1287,8 @@ fn drawTreeNode(
                 const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
                 const shown = Split.eased(id, chosen);
                 dvui.dataSet(null, id, "_size", chosen);
-                persistExtent(self, .{ .name = b.origin, .forget_when_empty = true }, id, chosen, shown);
+                // Forgotten, its nodes are freed with it: nothing more of it to draw this frame.
+                if (persistExtent(self, .{ .name = b.origin, .forget_when_empty = true }, id, chosen, shown)) return;
                 box_opts.min_size_content = switch (parent_dir) {
                     .horizontal => .{ .w = shown },
                     .vertical => .{ .h = shown },
@@ -1292,8 +1319,7 @@ fn drawTreeNode(
                     .forget_when_empty = true,
                     .dir = b.dir,
                 });
-                const cr = box.data().contentRect();
-                self.state.setPlaceMetrics(b.origin, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+                self.state.setPlaceMetrics(b.origin, box.data());
             }
             self.containers[self.depth] = .{
                 .dir = b.dir,
@@ -1342,8 +1368,7 @@ pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !v
         .dir = init_opts.dir,
     });
 
-    const cr = box.data().contentRect();
-    self.state.setPlaceMetrics(init_opts.name, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+    self.state.setPlaceMetrics(init_opts.name, box.data());
 
     if (self.depth >= Layout.max_nesting) return;
     self.containers[self.depth] = .{
@@ -1387,8 +1412,13 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
     if (self.state.floatRoot(name) == null) {
         if (self.state.dock) |*dock| return splitDock(self, dock, name, side);
     }
+    return splitOnSized(self, name, side, ViewDrag.placeSize(self.state, name) orelse return null, 0.5);
+}
 
-    const size = ViewDrag.placeSize(self.state, name) orelse return null;
+/// `splitOn` for a place of `size` that need not have been drawn yet — a split of a half another
+/// split made this frame, as a saved arrangement is rebuilt — with `share` of it for the new half.
+/// Only the split forest's: a seed's dock tree splits its own drawn leaves (`splitOn`).
+pub fn splitOnSized(self: *Layout, name: []const u8, side: SplitTree.Side, size: dvui.Size, share: f32) ?[]const u8 {
     const span = switch (SplitTree.axisOf(side)) {
         .horizontal => size.w,
         .vertical => size.h,
@@ -1403,7 +1433,7 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
     intern.state = self.state;
     // Halved the way the preview halves it — the sash out of the middle, both
     // sides the same — so what slid open is the size that lands.
-    const want = @max(1, (span - Split.handle_size) / 2);
+    const want = @max(1, (span - Split.handle_size) * std.math.clamp(share, 0, 1));
     const new = self.state.splits.split(self.gpa, intern.go, name, side, want, null) orelse return null;
     if (self.state.setExtent(self.gpa, new, want)) self.extents_changed = true;
     self.state.assign(self.gpa, new, &.{}) catch {};

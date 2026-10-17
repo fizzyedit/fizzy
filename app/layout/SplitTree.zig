@@ -139,7 +139,12 @@ pub const Forest = struct {
         return new_leaf.kind.leaf;
     }
 
-    /// Remove an empty new leaf. The sibling takes the branch's place.
+    /// Remove the place `name` from the split it is a half of. The sibling takes the branch's place.
+    ///
+    /// A place split again is the whole branch its split made, not the leaf that kept its name
+    /// inside it: that is how the split it is a half of sees it, and how it is sized there. Taking
+    /// only the leaf would hand the place's slot to its other half, sized along the wrong axis and
+    /// under a name no link records.
     pub fn collapse(self: *Forest, gpa: std.mem.Allocator, name: []const u8) bool {
         var it = self.roots.iterator();
         while (it.next()) |e| {
@@ -307,6 +312,49 @@ pub const Forest = struct {
         freeNode(gpa, kv.value);
     }
 
+    /// Whether `name` was split again: the origin of a split, so the place under that name is
+    /// that split's whole branch, its kept leaf one half of it.
+    pub fn isSplit(self: *const Forest, name: []const u8) bool {
+        if (self.root(name) != null) return true;
+        const node = self.findPlace(name) orelse return false;
+        return node.kind == .branch;
+    }
+
+    /// Every single place `collapse(name)` would take, in drawing order: `name` alone for a leaf
+    /// or a name the forest does not know, each leaf of its branch for a place split again. A
+    /// root's is its own kept half, as `collapse` sees it, not the whole tree it is keyed by.
+    /// Allocated in `arena`.
+    pub fn placeLeaves(self: *const Forest, arena: std.mem.Allocator, name: []const u8) []const []const u8 {
+        const node = self.findPlace(name) orelse {
+            const one = arena.alloc([]const u8, 1) catch return &.{};
+            one[0] = name;
+            return one;
+        };
+        var out: std.ArrayListUnmanaged([]const u8) = .empty;
+        leavesIn(node, arena, &out);
+        return out.items;
+    }
+
+    /// The node the place `name` is in its parent's split: the outermost that carries the name.
+    fn findPlace(self: *const Forest, name: []const u8) ?*Node {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| {
+            if (placeIn(n.*, name)) |hit| return hit;
+        }
+        return null;
+    }
+
+    fn placeIn(node: *Node, name: []const u8) ?*Node {
+        switch (node.kind) {
+            .leaf => return null,
+            .branch => |b| {
+                if (isPlaceNamed(b.a, name)) return b.a;
+                if (isPlaceNamed(b.b, name)) return b.b;
+                return placeIn(b.a, name) orelse placeIn(b.b, name);
+            },
+        }
+    }
+
     /// A leaf minted by a split, not a shape-declared root. The picker can Remove these.
     pub fn canForget(self: *const Forest, name: []const u8) bool {
         return self.root(name) == null and self.findLeaf(name) != null;
@@ -355,8 +403,13 @@ pub const Forest = struct {
     }
 };
 
-fn isLeafNamed(node: *Node, name: []const u8) bool {
-    return if (leafName(node.*)) |n| std.mem.eql(u8, n, name) else false;
+/// Whether `node` is the place `name` in its parent's split: its leaf, or the branch a split of
+/// it made.
+fn isPlaceNamed(node: *Node, name: []const u8) bool {
+    return switch (node.kind) {
+        .leaf => |n| std.mem.eql(u8, n, name),
+        .branch => |b| std.mem.eql(u8, b.origin, name),
+    };
 }
 
 fn tryCollapse(gpa: std.mem.Allocator, slot: **Node, name: []const u8) bool {
@@ -364,15 +417,16 @@ fn tryCollapse(gpa: std.mem.Allocator, slot: **Node, name: []const u8) bool {
     switch (node.kind) {
         .leaf => return false,
         .branch => |*b| {
-            if (isLeafNamed(b.a, name)) {
+            // Children before descending: the outermost node carrying the name is the place.
+            if (isPlaceNamed(b.a, name)) {
                 slot.* = b.b;
-                gpa.destroy(b.a);
+                freeNode(gpa, b.a);
                 gpa.destroy(node);
                 return true;
             }
-            if (isLeafNamed(b.b, name)) {
+            if (isPlaceNamed(b.b, name)) {
                 slot.* = b.a;
-                gpa.destroy(b.b);
+                freeNode(gpa, b.b);
                 gpa.destroy(node);
                 return true;
             }
@@ -516,4 +570,40 @@ test "a split's places know their root, list as its leaves, and go with it" {
     f.forget(gpa, "Float 1");
     try std.testing.expect(f.root("Float 1") == null);
     try std.testing.expect(f.rootOf("Float 1/r1") == null);
+}
+
+test "collapsing a place split again drops its whole branch, never just the leaf that kept the name" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    _ = f.split(gpa, internLiteral, "Center", .right, 80, "Center/r1").?;
+    _ = f.split(gpa, internLiteral, "Center/r1", .bottom, 40, "Center/r1/b1").?;
+    try std.testing.expect(f.isSplit("Center/r1"));
+    try std.testing.expect(!f.isSplit("Center/r1/b1"));
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const covered = f.placeLeaves(arena.allocator(), "Center/r1");
+    try std.testing.expectEqual(@as(usize, 2), covered.len);
+    try std.testing.expectEqualStrings("Center/r1", covered[0]);
+    try std.testing.expectEqualStrings("Center/r1/b1", covered[1]);
+    try std.testing.expectEqual(@as(usize, 1), f.placeLeaves(arena.allocator(), "Center/r1/b1").len);
+
+    try std.testing.expect(f.collapse(gpa, "Center/r1"));
+    try std.testing.expect(f.root("Center") == null);
+    try std.testing.expect(f.rootOf("Center/r1/b1") == null);
+}
+
+test "collapsing the minted half of a nested split leaves its origin in the outer split" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    _ = f.split(gpa, internLiteral, "Center", .right, 80, "Center/r1").?;
+    _ = f.split(gpa, internLiteral, "Center/r1", .bottom, 40, "Center/r1/b1").?;
+    try std.testing.expect(f.collapse(gpa, "Center/r1/b1"));
+    try std.testing.expectEqualStrings("Center", f.siblingLeaf("Center/r1").?);
+    const links = f.collectLinks(gpa);
+    defer gpa.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqualStrings("Center/r1", links[0].name);
 }

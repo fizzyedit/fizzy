@@ -23,6 +23,7 @@ const Snapshot = @import("replay").Snapshot;
 const anim = @import("anim.zig");
 const draw = @import("draw.zig");
 const screens = @import("screens.zig");
+const native_glass = @import("native_glass.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by
 /// fizzy so core stays decoupled from the editor. When a modal is open fizzy
@@ -186,6 +187,21 @@ pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
         r.fill(corners.scale(scale, dvui.CornerRect.Physical), .{ .color = .{ .color = dialogFill() }, .fade = 1 });
     }
     glassShadow(r, corners, scale, surfaceShadow(), 1);
+}
+
+/// A carried thing's glass where it is drawn in a floating widget of its own (`layer`, its id):
+/// the OS's where the OS draws glass declared outside a view drag (`native_glass.offered`: macOS
+/// 26), as a view's card carried there is, and what the layer holds goes over that glass in the
+/// OS's overlay (`screens.markCarried`), drawn in none of the app's own windows; elsewhere
+/// `carriedGlass`. A row lifted out of a list carried this way is the same glass a tab or a file
+/// is when it is carried.
+pub fn carriedCard(layer: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
+    if (native_glass.offered()) {
+        native_glass.add(.{ .rect = r, .radius = @min(rounding.scaled(rounding.card) * scale, @min(r.w, r.h) / 2) });
+        screens.markCarried(layer);
+        return;
+    }
+    carriedGlass(layer, r, scale);
 }
 
 /// Whether carried things are shown in windows of their own this run (fizzy's float windows on

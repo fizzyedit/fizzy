@@ -24,7 +24,7 @@ const std = @import("std");
 pub const Api = struct {
     /// Bump whenever this struct's layout changes: `getServiceTyped` refuses a provider whose
     /// version differs rather than reinterpreting one shape as another across `dlopen`.
-    pub const service_version: u32 = 1;
+    pub const service_version: u32 = 2;
     pub const service_name = "files";
 
     ctx: *anyopaque,
@@ -45,6 +45,11 @@ pub const Api = struct {
         /// Move `path` into `target_dir`, keeping its basename. False when it is already there —
         /// a drop onto the folder a file is already in is a no-op, not a failure.
         move: *const fn (ctx: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!bool,
+        /// Show `path`, just made, the way a new file is shown: whatever lists the project's files
+        /// reveals it, selected, with its name open for editing (fizzy emits `fizzy.files.reveal`).
+        /// For a path the caller wrote itself rather than through this service, too: the listing
+        /// is refreshed first, so the row exists to reveal.
+        reveal: *const fn (ctx: *anyopaque, path: []const u8) void,
     };
 
     pub fn createFile(self: Api, path: []const u8) !void {
@@ -61,5 +66,8 @@ pub const Api = struct {
     }
     pub fn move(self: Api, path: []const u8, target_dir: []const u8) !bool {
         return self.vtable.move(self.ctx, path, target_dir);
+    }
+    pub fn reveal(self: Api, path: []const u8) void {
+        self.vtable.reveal(self.ctx, path);
     }
 };
