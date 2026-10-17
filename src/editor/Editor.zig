@@ -132,9 +132,9 @@ command_palette: @import("CommandPalette.zig") = .{},
 demo: Demo = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
 tape_tabs: @import("TapeTabs.zig") = .{},
-/// A document whose transport's share was pressed: shared at the top of the next frame, before
+/// A share the person asked for (`Dialogs.ShareTape`): made at the top of the next frame, before
 /// anything draws, since the export walks the document's history back and forth.
-share_pending: ?u64 = null,
+share_pending: ?struct { doc_id: u64, opts: @import("app").Tracks.ExportOptions = .{} } = null,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
@@ -2987,20 +2987,19 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else {
         const shareable = if (editor.app.tracks) |*t| if (t.trackOf(doc.id)) |tr| tr.steps.items.len > 0 else false else false;
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{ .share = shareable });
-        if (pressed.share) {
-            editor.share_pending = doc.id;
-            dvui.refresh(null, @src(), null);
-        }
+        // What it would share, first: the range, how long, whose steps.
+        if (pressed.share) Dialogs.ShareTape.request(doc.id);
     }
     return .ok;
 }
 
-/// How `doc` was made, as a tape: its track exported (`Tracks.exportTape`), kept in the config
-/// folder's `tapes/` and opened in a tab of its own to play (`TapeTabs`). The transport's share.
-pub fn shareDocument(editor: *Editor, doc: sdk.DocHandle) void {
+/// How `doc` was made, as a tape: the range `opts` names of its track exported
+/// (`Tracks.exportTape`), kept in the config folder's `tapes/` and opened in a tab of its own to
+/// play (`TapeTabs`). The transport's share, once its summary says go.
+pub fn shareDocument(editor: *Editor, doc: sdk.DocHandle, opts: @import("app").Tracks.ExportOptions) void {
     const gpa = editor.app.gpa;
     const t = &(editor.app.tracks orelse return);
-    const bytes = t.exportTape(&editor.app.host, doc, gpa, .{}) catch |err| {
+    const bytes = t.exportTape(&editor.app.host, doc, gpa, opts) catch |err| {
         dvui.log.warn("share: could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
         _ = editor.noteOnDocument(doc.id, "Could not share");
         return;
@@ -4037,9 +4036,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.doc_io.tick();
     // The document states tracks asked for since last frame, before anything draws.
     if (editor.app.tracks) |*t| t.tick();
-    if (editor.share_pending) |id| {
+    if (editor.share_pending) |p| {
         editor.share_pending = null;
-        if (editor.app.open_files.get(id)) |doc| editor.shareDocument(doc);
+        if (editor.app.open_files.get(p.doc_id)) |doc| editor.shareDocument(doc, p.opts);
     }
     editor.tape_tabs.tick(editor);
     editor.promoteEditedPreviews();
