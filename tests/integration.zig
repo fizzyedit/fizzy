@@ -6780,6 +6780,85 @@ test "demo: fizzy's stage runs a command op's arguments through callCommand" {
     try std.testing.expectEqual(PaletteArgs.Side.right, got.side);
 }
 
+// The control server's routes over a Host: the commands as the API, JSON in and out, errors as
+// HTTP's (plans/CONTROL_SERVER_PLAN.md). The socket half is `app/control/Server.zig`'s own test.
+const ControlFixture = struct {
+    fn place(_: *anyopaque, args: PaletteArgs.Params.Args, call: *sdk.Command.Call) anyerror!void {
+        if (args.line > 100) return call.fail("line {d} is past the end", .{args.line});
+        try call.returns(.{ .line = args.line, .side = args.side, .column = args.column, .note = "placed" });
+    }
+    fn never(_: *anyopaque) bool {
+        return false;
+    }
+    fn nothing(_: *anyopaque) anyerror!void {}
+};
+
+test "control: commands are listed, described and run over the routes" {
+    const gpa = std.testing.allocator;
+    const routes = @import("app").control.routes;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    const vtable = sdk.Plugin.VTable{};
+    var state: u8 = 0;
+    var plugin = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(ControlFixture.place),
+    });
+    try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off", .run = ControlFixture.nothing, .isEnabled = ControlFixture.never });
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Who is answering.
+    const root = routes.handle(&host, .GET, "/", null, "", arena);
+    try std.testing.expectEqual(std.http.Status.ok, root.status);
+    try std.testing.expect(std.mem.indexOf(u8, root.body, "\"sdk_version\":") != null);
+
+    // The listing: each command with its params, an enum's choices and a default.
+    const list = routes.handle(&host, .GET, "/commands", null, "", arena);
+    try std.testing.expectEqual(std.http.Status.ok, list.status);
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, list.body, .{});
+    try std.testing.expectEqual(@as(usize, 2), parsed.array.items.len);
+    const place = parsed.array.items[0].object;
+    try std.testing.expectEqualStrings("t.place", place.get("id").?.string);
+    try std.testing.expectEqualStrings("t", place.get("owner").?.string);
+    try std.testing.expect(place.get("enabled").?.bool);
+    const params = place.get("params").?.array.items;
+    try std.testing.expectEqualStrings("line", params[0].object.get("key").?.string);
+    try std.testing.expect(params[0].object.get("required").?.bool);
+    try std.testing.expectEqualStrings("enum", params[1].object.get("kind").?.string);
+    try std.testing.expectEqualStrings("right", params[1].object.get("choices").?.array.items[1].string);
+    try std.testing.expectEqual(@as(i64, 1), params[2].object.get("default").?.integer);
+    try std.testing.expect(!parsed.array.items[1].object.get("enabled").?.bool);
+
+    // Run it: JSON in (an enum as its name), the result back as JSON.
+    const ran = routes.handle(&host, .POST, "/commands/t.place", "application/json", "{\"line\":4,\"side\":\"right\"}", arena);
+    try std.testing.expectEqual(std.http.Status.ok, ran.status);
+    try std.testing.expectEqualStrings("{\"line\":4,\"side\":\"right\",\"column\":1,\"note\":\"placed\"}", ran.body);
+
+    // ZON in, ZON out.
+    const zon = routes.handle(&host, .POST, "/commands/t.place", "application/zon", ".{ .line = 5, .side = .left }", arena);
+    try std.testing.expectEqual(std.http.Status.ok, zon.status);
+    try std.testing.expectEqualStrings("application/zon", zon.content_type);
+    try std.testing.expect(std.mem.indexOf(u8, zon.body, ".side = .left") != null or std.mem.indexOf(u8, zon.body, ".side=.left") != null);
+
+    // Errors as HTTP's.
+    try std.testing.expectEqual(std.http.Status.not_found, routes.handle(&host, .POST, "/commands/t.missing", null, "", arena).status);
+    try std.testing.expectEqual(std.http.Status.not_found, routes.handle(&host, .GET, "/nowhere", null, "", arena).status);
+    try std.testing.expectEqual(std.http.Status.bad_request, routes.handle(&host, .POST, "/commands/t.place", null, "{\"side\":\"right\"}", arena).status);
+    try std.testing.expectEqual(std.http.Status.bad_request, routes.handle(&host, .POST, "/commands/t.place", null, "not json", arena).status);
+    try std.testing.expectEqual(std.http.Status.conflict, routes.handle(&host, .POST, "/commands/t.off", null, "", arena).status);
+    try std.testing.expectEqual(std.http.Status.method_not_allowed, routes.handle(&host, .DELETE, "/commands/t.place", null, "", arena).status);
+    const failed = routes.handle(&host, .POST, "/commands/t.place", null, "{\"line\":200,\"side\":\"left\"}", arena);
+    try std.testing.expectEqual(std.http.Status.internal_server_error, failed.status);
+    try std.testing.expectEqualStrings("{\"error\":\"line 200 is past the end\"}", failed.body);
+}
+
 test "a failed open is not a load in flight: settled and live tapes go on" {
     const gpa = std.testing.allocator;
     const Openings = @FieldType(fizzy.Editor, "openings");

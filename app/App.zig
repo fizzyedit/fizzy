@@ -44,6 +44,7 @@ const Layout = @import("layout/Layout.zig");
 const Host = sdk.Host;
 const PluginLoader = @import("root.zig").store.Loader;
 const SettingsWatcher = @import("watch/SettingsWatcher.zig");
+const ControlServer = @import("control/Server.zig");
 const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
 const FolderWatcher = @import("watch/FolderWatcher.zig");
 const Keymap = @import("keymap/Keymap.zig");
@@ -259,6 +260,11 @@ settings_save_deadline_ns: i128 = 0,
 /// reconciliation. Set up in `postInit` (needs `editor` at its final heap address — see
 /// `SettingsWatcher.start`'s doc comment), torn down first in `deinit`.
 settings_watcher: ?SettingsWatcher = null,
+
+/// The control server (`app.control`), while it runs: started in `postInit` when `FIZZY_CONTROL=1`
+/// (plans/CONTROL_SERVER_PLAN.md, steps 1–3 land dark), answered each frame, stopped at quit.
+/// Always void on wasm, which has no socket.
+control: if (builtin.target.cpu.arch == .wasm32) void else ?ControlServer = if (builtin.target.cpu.arch == .wasm32) {} else null,
 
 /// Watches the app's own executable while `settings.restart_on_rebuild` is on: a rebuild restarts
 /// the app into it, keeping every document. Null while the setting is off, and wherever

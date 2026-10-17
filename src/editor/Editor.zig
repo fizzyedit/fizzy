@@ -2263,6 +2263,23 @@ pub fn postInit(editor: *Editor) !void {
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
 
+    // The control server: the app's commands over HTTP on `<config>/control.sock`, while
+    // `FIZZY_CONTROL=1` asks for it (plans/CONTROL_SERVER_PLAN.md: dark until step 4).
+    if (comptime builtin.target.cpu.arch != .wasm32) control: {
+        const v = std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_CONTROL") catch break :control;
+        defer editor.app.gpa.free(v);
+        if (!std.mem.eql(u8, v, "1")) break :control;
+        const path = std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, @import("app").control.socket_name }) catch break :control;
+        editor.app.control = .{ .gpa = editor.app.gpa, .io = dvui.io, .socket_path = path, .wake = wakeEventLoop };
+        editor.app.control.?.start() catch |err| {
+            dvui.log.warn("control: could not listen on {s}: {s}", .{ path, @errorName(err) });
+            editor.app.gpa.free(path);
+            editor.app.control = null;
+            break :control;
+        };
+        dvui.log.info("control: listening on {s}", .{path});
+    }
+
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
     // nightwatch retains `&editor.app.settings_watcher.handler`, so `editor` has to already be at
@@ -4128,6 +4145,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         defer t.end();
         // What was announced since last frame first, so a plugin's frame sees what it heard.
         editor.app.host.deliverEvents();
+        // Requests from the control server, so the frame that follows sees what they ran.
+        if (comptime builtin.target.cpu.arch != .wasm32) {
+            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.host);
+        }
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         editor.showClaimed();
@@ -6253,6 +6274,15 @@ pub fn deinit(editor: *Editor) !void {
     // this function still runs code that would otherwise query it — `saveSettingsRaw` below
     // reaches `writeMergedSettings`' `notifyPathChanged` (only on a real write, which is why
     // this crashed rarely rather than always).
+    // The control server first: what it still holds is answered "closing", before anything a
+    // command would reach goes.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (editor.app.control) |*c| {
+            c.stop();
+            editor.app.gpa.free(c.socket_path);
+            editor.app.control = null;
+        }
+    }
     if (editor.document_watcher) |*w| {
         w.stop();
         editor.document_watcher = null;
