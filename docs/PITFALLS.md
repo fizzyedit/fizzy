@@ -51,6 +51,25 @@ Four things in that split cost time on the move to 0.17:
   the package's root, an unnamed `N-V-…` hash, and "hash mismatch" (dvui-dev `bd7736d`). Pin the
   same commit as `git+https://github.com/<owner>/<repo>#<sha>`; the hash is the same.
 
+### Windows, on 0.17
+
+Three that the release builds (`zig build package`, MSVC) hit and the macOS build never shows:
+
+- **An `*-windows-msvc` exe must link `oldnames` itself.** MSVC's C runtime spells the POSIX
+  calls `_getcwd`, `_chdir`, …, and `oldnames.lib` maps the plain names onto them. Zig 0.16
+  linked it into every MSVC exe; 0.17 does not, so C that calls `getcwd` (dvui's
+  tinyfiledialogs, fizzy's startup) fails to link with unresolved symbols. `build/exe.zig` adds
+  it for `abi == .msvc`; any other MSVC exe built from this tree needs the same line.
+- **The `translate-c` tool takes `--libc=<ini>` before its `--`.** Everything after `--` goes to
+  the C front end, which doesn't know the flag, so a `--libc` appended at the end is lost and the
+  MSVC headers aren't found. `build/msvc.zig` inserts it ahead of the `--`. (The deprecated
+  `addTranslateC` step has no way to pass a libc file at all; it gets the include dirs instead.)
+- **sdl_zig must leave SDL's `core/linux/` out of a Windows build.** SDL lists those sources as
+  generic because they compile to nothing off Linux, but `core/linux/SDL_dbus.c` includes
+  `<unistd.h>` before its guard, and MSVC has no `unistd.h`. fizzyedit/sdl_zig filters them
+  (`ef7eb36`, pinned in `backend/build.zig.zon`); a move to upstream sdl_zig or a new SDL must
+  keep the filter.
+
 ## Running a second fizzy
 
 - **`fizzy --profile <dir>`** keeps config, recents, plugins, the single-instance lock and its
