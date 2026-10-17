@@ -305,7 +305,13 @@ plugin that applies it and its encoding: `.{ .path = "sprite.pixi", .text = <the
 included (ZON escapes them). `Check.steps` says whose steps, in which format, the app can apply;
 without it a tape with steps is refused (`error.StepsUnsupported`), since a step nobody applied
 would play a document that never changes. The app applies them through its stage
-(`Stage.step`). Fizzy does not apply steps yet.
+(`Stage.step`).
+
+Fizzy applies them: a tape's steps are checked against the plugins loaded (`Demo.stepsCheck`: the
+owner loaded, writing that step format) and played on the demo stage into the documents its
+keyframe opened. A document's own history becomes such a tape with `fizzy.tracks.export` (while
+tracks record, `FIZZY_TRACKS=1` or `fizzy.tracks.record`): its file as the track began, then its
+steps, pauses past 2 s played as 0.6 s unless `real_time`. `fizzy.demo.playTape` plays it.
 
 ### The binary form (`.tape`)
 

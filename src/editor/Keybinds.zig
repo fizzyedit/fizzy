@@ -155,8 +155,8 @@ const fizzy_commands = [_]FizzyCommand{
     // No dvui bind name: its default comes from the profile table (`close_defaults`).
     .{ .id = "fizzy.close", .title = "Close", .bind = null, .run = cmdClose, .isEnabled = anyDocOpen, .params = ClosePath.params, .runWith = ClosePath.bind(cmdClosePath), .icon = icons.tvg.lucide.x },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll, .icon = icons.tvg.lucide.@"save-all" },
-    .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = cmdUndoEnabled, .icon = icons.tvg.lucide.undo },
-    .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = cmdRedoEnabled, .icon = icons.tvg.lucide.redo },
+    .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdUndoWith), .icon = icons.tvg.lucide.undo },
+    .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
     .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
@@ -178,6 +178,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.capture", .title = "Capture the Last 30 Seconds", .bind = null, .run = cmdCapture, .params = CaptureArgs.params, .runWith = CaptureArgs.bind(cmdCaptureWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.record", .title = "Tracks: Record…", .bind = null, .run = cmdTracks, .params = TracksRecord.params, .runWith = TracksRecord.bind(cmdTracksRecord), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.replay", .title = "Tracks: Replay…", .bind = null, .run = cmdTracks, .params = TracksReplay.params, .runWith = TracksReplay.bind(cmdTracksReplay), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks.export", .title = "Tracks: Export as a Tape…", .bind = null, .run = cmdTracks, .params = TracksExport.params, .runWith = TracksExport.bind(cmdTracksExport), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks", .title = "Tracks: Report", .bind = null, .run = cmdTracks, .params = TracksArgs.params, .runWith = TracksArgs.bind(cmdTracksWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
@@ -206,8 +207,9 @@ fn playTapeCallback(paths: ?[][:0]const u8) void {
     playTapeFile(fizzy.editor(), list[0]) catch |err| dvui.log.err("tape {s}: {t}", .{ list[0], err });
 }
 
-/// Plays a tape file in the player, with its transport: seek, chapters, play and pause. A tape
-/// that opens on a keyframe sets the person's session aside and gives it back when it ends.
+/// Plays a tape file: one document's track in a tab of its own (`TapeTabs`), anything else in the
+/// player, with its transport: seek, chapters, play and pause. A tape that opens on a keyframe
+/// sets the person's session aside and gives it back when it ends.
 fn cmdPlayTapePath(state: *anyopaque, args: TapePath.Args, call: *sdk.Command.Call) anyerror!void {
     if (args.path.len == 0) return cmdPlayTape(state);
     if (comptime is_web) return call.fail("a page plays a tape from its address (?demo=<url>)", .{});
@@ -220,7 +222,12 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
     const gpa = editor.app.gpa;
     const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(256 << 20));
     defer gpa.free(bytes);
-    editor.demo.playTapeSoon(bytes);
+    // One document's track (a shared tape) plays in a tab of its own, beside the person's work;
+    // anything else on the demo stage.
+    editor.tape_tabs.open(editor, bytes, .{}) catch |err| switch (err) {
+        error.NotOneDocument, error.BadTape => editor.demo.playTapeSoon(bytes),
+        else => return err,
+    };
 }
 
 const DemoSpeed = sdk.Command.Params(struct {
@@ -412,6 +419,64 @@ fn cmdUndo(state: *anyopaque) anyerror!void {
 fn cmdRedo(state: *anyopaque) anyerror!void {
     try editorFromState(state).redo();
 }
+
+const HistoryStep = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document, by its path. Empty: the active one." }) = .init(""),
+    expect: sdk.Command.Arg(u64, .{ .description = "The step you mean, by its id: for undo the last change, for redo the next one. Refused when it is not, so a step someone made since is never taken back. 0: whichever it is." }) = .init(0),
+});
+
+/// Enabled while any document is open, as text's by-path commands are: a call may name a document
+/// that is not the active one, and says why when there is nothing to take. The menus grey Undo by
+/// the active document's own (`menu_model.canUndo`). An enabled check that sees the call's target
+/// is the control server's to decide (`plans/CONTROL_SERVER_PLAN.md`, "Commands that take a
+/// document").
+fn cmdUndoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Call) anyerror!void {
+    try historyStepWith(editorFromState(state), args, call, .undo);
+}
+fn cmdRedoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Call) anyerror!void {
+    try historyStepWith(editorFromState(state), args, call, .redo);
+}
+
+/// Undo or redo one step of a document named by path, or of the active one, as any caller: the
+/// person's palette, a script, an agent. Over the owner's history line (`historyLine`,
+/// `historyGoTo`), so it reaches a document that is not active. With `expect`, only when that
+/// step is the one it would take, so a caller never takes back a step made since it looked
+/// (`plans/SHARED_HISTORY_PLAN.md`, step 5). Answers the step and whose it was.
+fn historyStepWith(editor: *Editor, args: HistoryStep.Args, call: *sdk.Command.Call, action: enum { undo, redo }) !void {
+    const doc = if (args.path.len == 0)
+        editor.activeDoc() orelse return call.fail("no document is active", .{})
+    else
+        editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
+    const line = doc.owner.historyLine(doc, call.arena) orelse {
+        // An owner with no line undoes the active document only, through its own command.
+        const active = editor.activeDoc();
+        if (args.expect != 0 or active == null or active.?.id != doc.id)
+            return call.fail("{s} keeps no history line, so it can only undo the active document, with no expect", .{doc.owner.id});
+        return switch (action) {
+            .undo => editor.undo(),
+            .redo => editor.redo(),
+        };
+    };
+    const host = &editor.app.host;
+    const step: sdk.Plugin.HistoryLine.Entry, const to: u64 = switch (action) {
+        .undo => blk: {
+            if (line.at == 0) return call.fail("nothing to undo", .{});
+            break :blk .{ line.entries[line.at - 1], if (line.at >= 2) line.entries[line.at - 2].id else 0 };
+        },
+        .redo => blk: {
+            if (line.at >= line.entries.len) return call.fail("nothing to redo", .{});
+            break :blk .{ line.entries[line.at], line.entries[line.at].id };
+        },
+    };
+    const whose = host.stepAuthor(doc.id, step.id);
+    const by = if (whose.kind == .person) "the person" else if (whose.label.len > 0) whose.label else @tagName(whose.kind);
+    if (args.expect != 0 and args.expect != step.id) return call.fail(
+        "step {d} is not the one to {s}: that is step {d}, {s}, by {s}. The document changed since; fix it forward",
+        .{ args.expect, @tagName(action), step.id, step.title, by },
+    );
+    if (!doc.owner.historyGoTo(doc, to)) return call.fail("{s} could not {s} step {d}", .{ doc.owner.id, @tagName(action), step.id });
+    try call.returns(.{ .step = step.id, .title = step.title, .by = by });
+}
 /// Set while `tick` is running a command because of a live key event. That event is never
 /// marked handled, so it goes on to reach the focused widget under its own steam — a clipboard
 /// command that also synthesized one would make the widget act twice. False for menu clicks and
@@ -493,12 +558,6 @@ fn cmdFitView(state: *anyopaque) anyerror!void {
 }
 fn cmdFitViewEnabled(state: *anyopaque) bool {
     return editorFromState(state).activeDocCommandEnabled("fitView");
-}
-fn cmdUndoEnabled(state: *anyopaque) bool {
-    return editorFromState(state).activeDocCommandEnabled("undo");
-}
-fn cmdRedoEnabled(state: *anyopaque) bool {
-    return editorFromState(state).activeDocCommandEnabled("redo");
 }
 /// Enabled when *either* target of `clipboardVerb` can act: the active document, or a focused
 /// text input that the synthetic event would reach. Gating on the document alone would grey out
@@ -610,6 +669,33 @@ fn cmdTracksReplay(state: *anyopaque, args: TracksReplay.Args, call: *sdk.Comman
     const n = if (args.steps == 0) track.steps.items.len else args.steps;
     t.replayInto(from.id, into, n) catch |err| return call.fail("the replay stopped: {t}", .{err});
     try call.returns(.{ .steps = @min(n, track.steps.items.len), .checkpoints = track.checkpoints.items.len });
+}
+
+const TracksExport = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document whose track to export, by its path. Empty: the active one." }) = .init(""),
+    out: sdk.Command.Arg([]const u8, .{ .description = "Where to write the tape. Empty: the config folder's tapes/, named for the document and the time." }) = .init(""),
+    real_time: sdk.Command.Arg(bool, .{ .description = "Keep every pause as long as it was. Off: a pause past 2 s plays as 0.6 s." }) = .init(false),
+    from: sdk.Command.Arg(u32, .{ .description = "Start after this many of the track's steps: the tape opens on the document as it was then. 0: where the track began." }) = .init(0),
+    to: sdk.Command.Arg(u32, .{ .description = "End after this many of the track's steps. 0: the last." }) = .init(0),
+});
+
+/// A document's track as a tape (`Tracks.exportTape`): how it was made, from where its track
+/// began, to play anywhere (`fizzy.demo.playTape`). Returns where it went and what it holds.
+fn cmdTracksExport(state: *anyopaque, args: TracksExport.Args, call: *sdk.Command.Call) anyerror!void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return call.fail("the web has no file to write a tape to yet", .{});
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return call.fail("no tracks in this app", .{}));
+    const doc = (if (args.path.len == 0) editor.activeDoc() else editor.docFromPath(args.path)) orelse
+        return call.fail("no open document at {s}", .{if (args.path.len == 0) "(active)" else args.path});
+    const gpa = editor.app.gpa;
+    const opts: @import("app").Tracks.ExportOptions = .{ .real_time = args.real_time, .from = args.from, .to = if (args.to == 0) null else args.to };
+    const sum = t.summarize(&editor.app.host, doc, call.arena, opts) catch |err| return call.fail("could not sum up {s}'s track: {t}", .{ doc.owner.documentPath(doc), err });
+    const bytes = t.exportTape(&editor.app.host, doc, gpa, opts) catch |err| return call.fail("could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
+    defer gpa.free(bytes);
+    const out = editor.keepTape(call.arena, doc, bytes, args.out) catch |err| return call.fail("could not write the tape: {t}", .{err});
+    const authors = try call.arena.alloc([]const u8, sum.authors.len);
+    for (sum.authors, authors) |a, *l| l.* = if (a.kind == .person) "the person" else if (a.label.len > 0) a.label else @tagName(a.kind);
+    try call.returns(.{ .path = out, .bytes = bytes.len, .steps = sum.steps, .from = sum.from, .to = sum.to, .recorded_ms = sum.recorded_ms, .played_ms = sum.played_ms, .authors = authors });
 }
 
 fn cmdTracksRecord(state: *anyopaque, args: TracksRecord.Args, call: *sdk.Command.Call) anyerror!void {

@@ -62,26 +62,41 @@ fn stopId(line: sdk.Plugin.HistoryLine, i: usize) u64 {
     return if (i == 0) 0 else line.entries[i - 1].id;
 }
 
+pub const DrawOptions = struct {
+    /// A share button at the bar's end: the app has a way to share how the document was made
+    /// (fizzy: its track as a tape). What a press does is the app's (`Pressed.share`).
+    share: bool = false,
+};
+
+/// What was pressed on the bar this frame that is the app's to act on.
+pub const Pressed = struct {
+    share: bool = false,
+};
+
 /// Draw the bar over `area` (the document's pane, physical) when it shows, and take its input.
 /// `id_extra` keeps one pane's bar apart from another's.
-pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physical, id_extra: usize) void {
+pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physical, id_extra: usize, opts: DrawOptions) Pressed {
+    var pressed: Pressed = .{};
     const now = dvui.frameTimeNS();
     // The pointer on it, or a drag in it, keeps it.
     if (self.drag != null) self.shown.stir(now) else if (self.place(area, now)) |b| if (b.contains(dvui.currentWindow().mouse_pt)) self.shown.stir(now);
     const p = self.shown.openness(now);
-    if (p <= 0) return;
+    if (p <= 0) return pressed;
     const arena = dvui.currentWindow().arena();
-    const line = doc.owner.historyLine(doc, arena) orelse return;
+    const line = doc.owner.historyLine(doc, arena) orelse return pressed;
     const n = line.entries.len;
 
     const wrs = dvui.windowRectScale();
     const s = wrs.s;
-    const whole = geometry(area.toNatural()) orelse return;
+    const whole = geometry(area.toNatural()) orelse return pressed;
     const w = whole.w;
     const center = whole.center();
+    // Share, when there is a way to: the last bubble, inside the bar's width.
+    const end_w: f32 = if (opts.share) button_d + gap else 0;
     const back: dvui.Rect = .{ .x = whole.x, .y = center.y - button_d / 2, .w = button_d, .h = button_d };
-    const fwd: dvui.Rect = .{ .x = whole.x + w - button_d, .y = back.y, .w = button_d, .h = button_d };
-    const track: dvui.Rect = .{ .x = back.x + button_d + gap, .y = whole.y, .w = w - 2 * (button_d + gap), .h = bar_h };
+    const fwd: dvui.Rect = .{ .x = whole.x + w - button_d - end_w, .y = back.y, .w = button_d, .h = button_d };
+    const share: dvui.Rect = .{ .x = whole.x + w - button_d, .y = back.y, .w = if (opts.share) button_d else 0, .h = button_d };
+    const track: dvui.Rect = .{ .x = back.x + button_d + gap, .y = whole.y, .w = w - 2 * (button_d + gap) - end_w, .h = bar_h };
     const hit = wrs.rectToPhysical(whole.outsetAll(4));
 
     var float: dvui.FloatingWidget = undefined;
@@ -93,7 +108,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // and went), it holds nothing, and the knob is the document's again.
     if (self.drag != null and !dvui.captured(fid)) self.drag = null;
 
-    const phys = [3]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd) };
+    const phys = [4]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd), wrs.rectToPhysical(share) };
     const pad = 14;
     const x0 = phys[1].x + pad * s;
     const x1 = phys[1].x + phys[1].w - pad * s;
@@ -106,6 +121,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     core.anchor.markRect(fid, phys[0], true, "history.back:{s}", .{path});
     core.anchor.markRect(fid, .{ .x = x0, .y = phys[1].y, .w = x1 - x0, .h = phys[1].h }, true, "history.line:{s}", .{path});
     core.anchor.markRect(fid, phys[2], true, "history.forward:{s}", .{path});
+    if (opts.share) core.anchor.markRect(fid, phys[3], true, "history.share:{s}", .{path});
 
     // Input: the buttons step, the line goes where it is pressed and follows a drag.
     var go: ?usize = null;
@@ -122,6 +138,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                     go = line.at -| 1;
                 } else if (phys[2].contains(me.p)) {
                     go = @min(n, line.at + 1);
+                } else if (opts.share and phys[3].contains(me.p)) {
+                    pressed.share = true;
                 } else if (line_hit.contains(me.p)) {
                     dvui.captureMouse(float.data(), e.num);
                     self.drag = rules.stopAt(me.p.x, x0, x1, n);
@@ -149,16 +167,22 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const prev_alpha = dvui.alpha(p);
     defer dvui.alphaSet(prev_alpha);
     const pt = dvui.currentWindow().mouse_pt;
-    var bubbles: [3]core.dialogs.Bubble = undefined;
+    var bubbles: [4]core.dialogs.Bubble = undefined;
     for (phys, &bubbles, 0..) |r, *b, i| b.* = .{
         .rect = r,
-        .light = if (i != 1 and r.contains(pt) and (if (i == 0) at > 0 else at < n)) core.dialogs.bubble_hover else 0,
+        .light = if (r.contains(pt) and switch (i) {
+            0 => at > 0,
+            2 => at < n,
+            3 => true,
+            else => false,
+        }) core.dialogs.bubble_hover else 0,
     };
-    core.dialogs.glassBubbles(fid, &bubbles, s, .{ .merge = 14, .shadow = 1 });
+    core.dialogs.glassBubbles(fid, bubbles[0..if (opts.share) 4 else 3], s, .{ .merge = 14, .shadow = 1 });
 
     const ink = dvui.themeGet().color(.window, .text);
     button(bounds, back, "history_back", icons.tvg.lucide.undo, ink.opacity(if (at > 0) 0.85 else 0.3));
     button(bounds, fwd, "history_forward", icons.tvg.lucide.redo, ink.opacity(if (at < n) 0.85 else 0.3));
+    if (opts.share) button(bounds, share, "history_share", icons.tvg.lucide.@"share-2", ink.opacity(0.85));
 
     // What the document is at, over the line: the step's title, and how far along.
     const font = dvui.Font.theme(.body).larger(-2);
@@ -178,6 +202,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // own (it starts to go, it is gone).
     if (p < 1) dvui.refresh(null, @src(), fid);
     if (self.shown.nextChange(now)) |t| dvui.timer(fid, @intCast(@min(@divTrunc(t - now, 1000) + 1, std.math.maxInt(i32))));
+    return pressed;
 }
 
 /// A step button's icon, in the middle of its bubble `r` (window-natural; `bounds` the layer's).
