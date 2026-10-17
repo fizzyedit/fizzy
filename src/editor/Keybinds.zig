@@ -224,7 +224,7 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
     defer gpa.free(bytes);
     // One document's track (a shared tape) plays in a tab of its own, beside the person's work;
     // anything else on the demo stage.
-    editor.tape_tabs.open(editor, bytes, null) catch |err| switch (err) {
+    editor.tape_tabs.open(editor, bytes, .{}) catch |err| switch (err) {
         error.NotOneDocument, error.BadTape => editor.demo.playTapeSoon(bytes),
         else => return err,
     };

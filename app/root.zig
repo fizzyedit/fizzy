@@ -44,6 +44,7 @@ pub const ActivityFeed = @import("ActivityFeed.zig");
 pub const Tracks = @import("Tracks.zig");
 /// A document's transport: its history as a line at the bottom of its pane, undo and redo as seeks.
 pub const HistoryTransport = @import("HistoryTransport.zig");
+pub const TrimBar = @import("TrimBar.zig");
 pub const history_transport = @import("history_transport.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
@@ -172,4 +173,5 @@ test {
     _ = store.Loader;
     _ = Tracks;
     _ = HistoryTransport;
+    _ = TrimBar;
 }

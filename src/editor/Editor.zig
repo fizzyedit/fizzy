@@ -95,6 +95,7 @@ pub const FileLoadJob = workbench_mod.FileLoadJob;
 pub const sdk = fizzy.sdk;
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
+const TapeTabs = @import("TapeTabs.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
 /// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
 pub const Popout = @import("Popout.zig");
@@ -131,10 +132,10 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// address (the stage's context is this field).
 demo: Demo = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
-tape_tabs: @import("TapeTabs.zig") = .{},
-/// A share the person asked for (`Dialogs.ShareTape`): made at the top of the next frame, before
+tape_tabs: TapeTabs = .{},
+/// A document whose transport's share was pressed: exported at the top of the next frame, before
 /// anything draws, since the export walks the document's history back and forth.
-share_pending: ?struct { doc_id: u64, opts: @import("app").Tracks.ExportOptions = .{} } = null,
+share_pending: ?u64 = null,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
@@ -2984,35 +2985,55 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         }
     }
     // Its history, while undo or redo or the pointer keep it: not while someone else holds it.
-    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else {
+    // A shared tape being trimmed has the trim bar instead.
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else if (editor.tape_tabs.trimOf(doc.id, dvui.currentWindow().arena())) |trim| {
+        TapeTabs.drawTrim(doc, trim[0], trim[1], canvas.data().borderRectScale().r, @truncate(ds.doc_id));
+    } else {
         const shareable = if (editor.app.tracks) |*t| if (t.trackOf(doc.id)) |tr| tr.steps.items.len > 0 else false else false;
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{ .share = shareable });
-        // What it would share, first: the range, how long, whose steps.
-        if (pressed.share) Dialogs.ShareTape.request(doc.id);
+        if (pressed.share) {
+            editor.share_pending = doc.id;
+            dvui.refresh(null, @src(), null);
+        }
     }
     return .ok;
 }
 
-/// How `doc` was made, as a tape: the range `opts` names of its track exported
-/// (`Tracks.exportTape`), kept in the config folder's `tapes/` and opened in a tab of its own to
-/// play (`TapeTabs`). The transport's share, once its summary says go.
-pub fn shareDocument(editor: *Editor, doc: sdk.DocHandle, opts: @import("app").Tracks.ExportOptions) void {
+/// How `doc` was made, as a tape to trim: its whole track exported (`Tracks.exportTape`) and
+/// opened in a tab of its own, played in at once, for the person to trim and share
+/// (`TapeTabs`, `TrimBar`). Nothing is written until they share. The transport's share.
+pub fn shareDocument(editor: *Editor, doc: sdk.DocHandle) void {
     const gpa = editor.app.gpa;
     const t = &(editor.app.tracks orelse return);
-    const bytes = t.exportTape(&editor.app.host, doc, gpa, opts) catch |err| {
+    const bytes = t.exportTape(&editor.app.host, doc, gpa, .{}) catch |err| {
         dvui.log.warn("share: could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
         _ = editor.noteOnDocument(doc.id, "Could not share");
         return;
     };
     defer gpa.free(bytes);
+    // Whose each step is, for the trim to say.
     const arena = dvui.currentWindow().arena();
-    const saved = if (comptime builtin.target.cpu.arch == .wasm32) null else editor.keepTape(arena, doc, bytes, "") catch |err| saved: {
-        dvui.log.warn("share: could not keep the tape: {t}", .{err});
-        break :saved null;
-    };
-    // Said on the tape's tab, which the pane turns to.
-    const note = if (saved) |path| std.fmt.allocPrint(arena, "Saved {s}", .{std.fs.path.basename(path)}) catch null else null;
-    editor.tape_tabs.open(editor, bytes, note) catch |err| {
+    const steps = (t.trackOf(doc.id) orelse return).steps.items;
+    const by = arena.alloc(u8, steps.len) catch return;
+    var names: std.ArrayListUnmanaged([]const u8) = .empty;
+    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    for (steps, by) |r, *b| {
+        const who = editor.app.host.stepAuthor(doc.id, r.id);
+        const i = for (authors.items, 0..) |a, i| {
+            if (a.same(who)) break i;
+        } else i: {
+            if (authors.items.len == 255) break :i 254;
+            authors.append(arena, who) catch return;
+            names.append(arena, switch (who.kind) {
+                .person => "you",
+                .unattributed => "someone unknown",
+                else => if (who.label.len > 0) who.label else @tagName(who.kind),
+            }) catch return;
+            break :i authors.items.len - 1;
+        };
+        b.* = @intCast(i);
+    }
+    editor.tape_tabs.open(editor, bytes, .{ .trim = .{ .by = by, .names = names.items } }) catch |err| {
         dvui.log.warn("share: could not open the tape: {t}", .{err});
         _ = editor.noteOnDocument(doc.id, "Could not open the tape");
     };
@@ -4036,9 +4057,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.doc_io.tick();
     // The document states tracks asked for since last frame, before anything draws.
     if (editor.app.tracks) |*t| t.tick();
-    if (editor.share_pending) |p| {
+    if (editor.share_pending) |id| {
         editor.share_pending = null;
-        if (editor.app.open_files.get(p.doc_id)) |doc| editor.shareDocument(doc, p.opts);
+        if (editor.app.open_files.get(id)) |doc| editor.shareDocument(doc);
     }
     editor.tape_tabs.tick(editor);
     editor.promoteEditedPreviews();

@@ -76,20 +76,68 @@ pub const Repeat = struct {
     }
 };
 
-/// The range of a track's `n` steps a share's two slider fractions name (`Dialogs.ShareTape`):
-/// from after `from` steps to after `to`, at least one step and inside the track.
-pub fn shareRange(n: usize, from_f: f32, to_f: f32) struct { usize, usize } {
-    const nf: f32 = @floatFromInt(n);
-    const from = @min(n -| 1, @as(usize, @intFromFloat(@floor(from_f * nf))));
-    const to = @max(from + 1, @min(n, @as(usize, @intFromFloat(@ceil(to_f * nf)))));
-    return .{ from, to };
+/// A trim of a history of `n` steps (`TrimBar`): the steps from after `from` through `to` are
+/// kept, at least one, as macOS's trim keeps the part of a recording between its two handles.
+pub const Trim = struct {
+    from: usize,
+    to: usize,
+    n: usize,
+
+    pub fn all(n: usize) Trim {
+        return .{ .from = 0, .to = n, .n = n };
+    }
+
+    /// What a press at `x` takes hold of on a line from `x0` to `x1`: the nearer handle within
+    /// `slop` of the press, else the playhead.
+    pub fn grab(self: Trim, x: f32, x0: f32, x1: f32, slop: f32) Grip {
+        const xf = stopX(self.from, x0, x1, self.n);
+        const xt = stopX(self.to, x0, x1, self.n);
+        const df = @abs(x - xf);
+        const dt = @abs(x - xt);
+        if (@min(df, dt) > slop) return .head;
+        // Both as close (a range of one step on a long line): the side the press is on.
+        if (df == dt) return if (x < xf) .from else .to;
+        return if (df < dt) .from else .to;
+    }
+
+    /// Move what `grip` holds to `stop`, kept inside the history and at least one step apart.
+    /// Returns the stop the document shows: the handle's, or the playhead's inside the range.
+    pub fn drag(self: *Trim, grip: Grip, stop: usize) usize {
+        switch (grip) {
+            .from => {
+                self.from = @min(stop, self.to - 1);
+                return self.from;
+            },
+            .to => {
+                self.to = @max(@min(stop, self.n), self.from + 1);
+                return self.to;
+            },
+            .head => return std.math.clamp(stop, self.from, self.to),
+        }
+    }
+
+    pub const Grip = enum { from, to, head };
+};
+
+test "a trim keeps one step at least, its handles inside the history" {
+    var t: Trim = .all(10);
+    try std.testing.expectEqual(@as(usize, 9), t.drag(.from, 12));
+    try std.testing.expectEqual(@as(usize, 10), t.drag(.to, 3));
+    t = .all(10);
+    try std.testing.expectEqual(@as(usize, 4), t.drag(.to, 4));
+    try std.testing.expectEqual(@as(usize, 3), t.drag(.from, 7));
+    try std.testing.expectEqual(@as(usize, 4), t.drag(.head, 9));
+    try std.testing.expectEqual(@as(usize, 3), t.drag(.head, 0));
 }
 
-test "a share's range is at least one step, and inside the track" {
-    try std.testing.expectEqual(.{ 0, 10 }, shareRange(10, 0, 1));
-    try std.testing.expectEqual(.{ 9, 10 }, shareRange(10, 1, 1));
-    try std.testing.expectEqual(.{ 5, 6 }, shareRange(10, 0.5, 0.1));
-    try std.testing.expectEqual(.{ 2, 8 }, shareRange(10, 0.25, 0.75));
+test "a press takes the nearer handle, else the playhead" {
+    const t: Trim = .{ .from = 2, .to = 8, .n = 10 };
+    // Stops 10 apart over 0..100.
+    try std.testing.expectEqual(Trim.Grip.from, t.grab(22, 0, 100, 5));
+    try std.testing.expectEqual(Trim.Grip.to, t.grab(79, 0, 100, 5));
+    try std.testing.expectEqual(Trim.Grip.head, t.grab(50, 0, 100, 5));
+    const one: Trim = .{ .from = 5, .to = 6, .n = 1000 };
+    try std.testing.expectEqual(Trim.Grip.from, one.grab(0.4, 0, 100, 5));
 }
 
 /// The step a point `x` on a line from `x0` to `x1` means, in a history of `n` steps: how many
