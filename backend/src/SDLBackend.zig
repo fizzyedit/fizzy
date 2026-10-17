@@ -93,6 +93,17 @@ sdl_quit: bool = true,
 clear_window_on_begin: bool = false,
 /// See `mainPicture`.
 main_picture: ?viewport_map.Rect = null,
+/// The backend lays the main window's frame down where its picture is (`mainPicture`), the app
+/// drawing straight to the window: a plain dvui app's, whose picture is also below the title bar
+/// (`platform.macos_monitor.titlebarStrip`). Fizzy draws to a target and lays it down itself
+/// (`core.gfx.FrameTarget`), and keeps its content clear of the traffic lights itself.
+places_main_picture: bool = false,
+/// A plain dvui app's main window's size its shadow was last taken at, and the frames it is taken
+/// again for: clear over its backdrop (`platform.window.nativeTitleBar`), AppKit shapes the shadow
+/// — and the outline that comes with it — from what is drawn, as a float's window has it
+/// (`Viewport.shadow_size`).
+main_shadow_size: [2]i32 = .{ 0, 0 },
+main_shadow_frames: u8 = 0,
 /// Added to the wall clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
@@ -1378,6 +1389,17 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
         if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_still(cocoaWindow(window));
         const theme = dvui.themeGet();
         platform.window.nativeTitleBar(window, theme.color(.window, .fill), theme.color(.window, .text), theme.dark);
+        // Through Spaces, zooms and live resizes as the main window goes.
+        if (comptime builtin.target.os.tag == .macos) platform.macos_monitor.watch(window);
+        // Its part of the frame below the title bar's band (`platform.macos_monitor.titlebarStrip`):
+        // the window that much taller, and as far up, for that part to be where it was asked.
+        const band = platform.macos_monitor.titlebarStrip(window, 0, 0);
+        if (band > 0) {
+            const up: c_int = @intFromFloat(@round(band));
+            _ = c.SDL_SetWindowPosition(window, vp.screen.x, vp.screen.y - up);
+            _ = c.SDL_SetWindowSize(window, vp.screen.w, vp.screen.h + up);
+            vp.picture_at = .{ 0, @intFromFloat(@round(band * vp.density)) };
+        }
         return vp;
     }
     // The slot holds it for the window's life, so SDL may keep the pointer.
@@ -1991,17 +2013,19 @@ fn viewportFollowWindow(vp: *Viewport) void {
     var h: c_int = 0;
     _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
     _ = c.SDL_GetWindowSize(vp.window, &w, &h);
+    // A window of the OS's own frame: its part of the frame below the title bar's band.
+    const band: f32 = if (vp.native) platform.macos_monitor.titlebarStrip(vp.window, 0, 0) else 0;
     // Standing still on its way into or out of full screen: its float goes where the picture is.
     if (platform.window.windowSpacePicture(vp.window)) |p| {
         const at: viewport_map.ScreenRect = .{
             .x = x + @as(c_int, @intFromFloat(@round(p.x))),
-            .y = y + @as(c_int, @intFromFloat(@round(p.y))),
+            .y = y + @as(c_int, @intFromFloat(@round(p.y + band))),
             .w = @intFromFloat(@round(p.w)),
-            .h = @intFromFloat(@round(p.h)),
+            .h = @intFromFloat(@round(@max(1, p.h - band))),
         };
         vp.picture_at = .{
             @intFromFloat(@max(0, @round(p.x * vp.density))),
-            @intFromFloat(@max(0, @round(p.y * vp.density))),
+            @intFromFloat(@max(0, @round((p.y + band) * vp.density))),
         };
         if (std.meta.eql(at, vp.screen)) return;
         vp.screen = at;
@@ -2009,8 +2033,9 @@ fn viewportFollowWindow(vp: *Viewport) void {
         vp.os_placed = true;
         return;
     }
-    vp.picture_at = .{ 0, 0 };
-    const now: viewport_map.ScreenRect = .{ .x = x, .y = y, .w = w, .h = h };
+    const b: c_int = @intFromFloat(@round(band));
+    vp.picture_at = .{ 0, @intFromFloat(@round(band * vp.density)) };
+    const now: viewport_map.ScreenRect = .{ .x = x, .y = y + b, .w = w, .h = @max(1, h - b) };
     // Where the app put it: its own doing, reported back.
     if (std.meta.eql(now, vp.screen)) return;
     // Placing a window is asynchronous on X11: just after the app put it somewhere, what it says
@@ -2117,11 +2142,17 @@ pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
     if (rect) |rect_frame| {
         var r = rect_frame;
         if (vp) |v| {
-            // From the frame into the viewport's window: its band offset, in points.
+            // From the frame into the viewport's window: its band offset, in points, and where its
+            // picture lies in the window (below a title band, or on its way into full screen).
             const d = c.SDL_GetWindowPixelDensity(v.window);
-            r.x -= v.frame.x / (if (d > 0) d else 1);
-            r.y -= v.frame.y / (if (d > 0) d else 1);
-        }
+            const dd = if (d > 0) d else 1;
+            r.x += (@as(f32, @floatFromInt(v.picture_at[0])) - v.frame.x) / dd;
+            r.y += (@as(f32, @floatFromInt(v.picture_at[1])) - v.frame.y) / dd;
+        } else if (self.places_main_picture) if (self.mainPicture()) |p| {
+            // The main window's frame lies at its picture (`main_picture`): below the title band.
+            r.x += p.x;
+            r.y += p.y;
+        };
         // This is the offset from r.x in window coords, supposed to be the
         // location of the cursor I think so that the IME window can be put
         // at the cursor location.  We will use 0 for now, might need to
@@ -2191,9 +2222,22 @@ pub fn renderPresent(self: *SDLBackend) void {
     var transacted: [max_viewports]bool = @splat(false);
     var any = false;
     if (comptime builtin.target.os.tag == .macos) {
+        if (self.places_main_picture) {
+            var w: c_int = 0;
+            var h: c_int = 0;
+            _ = c.SDL_GetWindowSize(self.window, &w, &h);
+            if (self.main_shadow_size[0] != w or self.main_shadow_size[1] != h) {
+                self.main_shadow_size = .{ w, h };
+                self.main_shadow_frames = 2;
+            }
+            if (self.main_shadow_frames > 0) {
+                self.main_shadow_frames -= 1;
+                fizzy_macos_viewport_reshadow(cocoaWindow(self.window));
+            }
+        }
         for (&self.viewport_slots, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
-            if (vp.app_frame and vp.shown) {
+            if ((vp.app_frame or vp.native) and vp.shown) {
                 if (vp.shadow_size[0] != vp.screen.w or vp.shadow_size[1] != vp.screen.h) {
                     vp.shadow_size = .{ vp.screen.w, vp.screen.h };
                     vp.shadow_frames = 2;
@@ -2245,7 +2289,14 @@ pub fn renderPresent(self: *SDLBackend) void {
     // a float's or a dialog's window keeps its picture until it is over. AppKit hands their layers
     // drawables back slowly while the main window goes through a Space transition, and waiting on
     // them every frame halved the move's rate with one open.
+    // Or another float's window moving itself: one left on the Space it leaves is held as the main
+    // window is (`mainHeld`). Presented into while a sibling's way ran, every frame waited on its
+    // drawable, and the moving window's way ran at 55 frames a second, the main window's at 120.
     const main_moving = platform.window.windowMovingItself(self.window);
+    var moving_vp: ?*Viewport = null;
+    for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.shown and platform.window.windowMovingItself(v.window)) {
+        moving_vp = v;
+    };
     for (&self.viewport_slots, 0..) |*slot, i| {
         const vp = if (slot.*) |*v| v else continue;
         const target = vp.pending orelse continue;
@@ -2254,7 +2305,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         // for up to a second: skipped, once it has been shown (it is created hidden, and covered
         // then by its own account).
         if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
-        if (vp.shown and main_moving and !platform.window.windowMovingItself(vp.window)) continue;
+        if (vp.shown and (main_moving or moving_vp != null) and vp != moving_vp and !platform.window.windowMovingItself(vp.window)) continue;
         const presented = self.gpu.presentInto(vp.window, target, vp.picture_at);
         if (vp.shown) continue;
         if (presented) {
@@ -2388,6 +2439,23 @@ pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     if (self.begin_hook) |hook| hook(self);
     // Its step for this frame taken (`begin_hook`): where the main window's picture is now.
     self.main_picture = if (platform.window.windowSpacePicture(self.window)) |p| .{ .x = p.x, .y = p.y, .w = p.w, .h = p.h } else null;
+    // A plain dvui app's: below the title bar, all the time (`platform.macos_monitor.titlebarStrip`).
+    if (comptime builtin.target.os.tag == .macos) if (self.places_main_picture) {
+        var p: viewport_map.Rect = self.main_picture orelse whole: {
+            var w: c_int = 0;
+            var h: c_int = 0;
+            _ = c.SDL_GetWindowSize(self.window, &w, &h);
+            break :whole .{ .w = @floatFromInt(w), .h = @floatFromInt(h) };
+        };
+        const band = platform.macos_monitor.titlebarStrip(self.window, 0, 0);
+        p.y += band;
+        p.h = @max(1, p.h - band);
+        self.main_picture = p;
+    };
+    self.gpu.window_offset = .{ 0, 0 };
+    if (self.places_main_picture) if (self.pictureInWindow()) |p| {
+        self.gpu.window_offset = .{ p.at.x, p.at.y };
+    };
     // A float's window standing still on its way into or out of full screen: its picture has
     // taken this frame's step (`begin_hook`), and the float follows it there — as it did the
     // window's moves — and back to the window as the way ends.
@@ -2406,14 +2474,15 @@ pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
 /// full-screen size, the app drawn growing or shrinking in it. dvui is told the window is the
 /// picture's size (`windowSize`, `pixelSize`), the frame is laid down where the picture is
 /// (`pictureInWindow`, `core.gfx.FrameTarget`) and the pointer is read against it (`mainOnScreen`,
-/// the main window's motion). Null on no such way.
+/// the main window's motion). Null on no such way — but for a plain dvui app's window
+/// (`places_main_picture`), whose picture is always set: the window below its title band.
 fn mainPicture(self: *const SDLBackend) ?viewport_map.Rect {
     return self.main_picture;
 }
 
 /// Where the main window's frame is laid down in it this frame, physical, and all of it: its
-/// picture, while it stands still on its way into or out of full screen (`main_picture`). Null:
-/// the frame is the window.
+/// picture, while it stands still on its way into or out of full screen (`main_picture`), and
+/// always for a plain dvui app's window, below its title band. Null: the frame is the window.
 pub fn pictureInWindow(self: *SDLBackend) ?struct { at: dvui.Rect.Physical, all: dvui.Rect.Physical } {
     if (comptime builtin.target.os.tag != .macos) return null;
     const p = self.mainPicture() orelse return null;
@@ -3379,7 +3448,9 @@ pub fn main(main_init: std.process.Init) !u8 {
         .org = init_opts.org,
         .icon = init_opts.icon,
         .hidden = init_opts.hidden,
-        .transparent = init_opts.transparent,
+        // Clear on macOS, over the backdrop a plain dvui app's window is dressed with
+        // (`platform.window.nativeTitleBar`): SDL fills an opaque window's view with black.
+        .transparent = init_opts.transparent or builtin.target.os.tag == .macos,
         .persist_window_geometry = init_opts.persist_window_geometry,
         .pref_path = init_opts.pref_path,
     });
@@ -3531,7 +3602,9 @@ fn appInit(appstate: ?*?*anyopaque, argc: c_int, argv: ?[*:null]?[*:0]u8) callco
         .org = init_opts.org,
         .icon = init_opts.icon,
         .hidden = init_opts.hidden,
-        .transparent = init_opts.transparent,
+        // Clear on macOS, over the backdrop a plain dvui app's window is dressed with
+        // (`platform.window.nativeTitleBar`): SDL fills an opaque window's view with black.
+        .transparent = init_opts.transparent or builtin.target.os.tag == .macos,
         .persist_window_geometry = init_opts.persist_window_geometry,
         .pref_path = init_opts.pref_path,
     }) catch |err| {
@@ -3573,6 +3646,13 @@ fn appInit(appstate: ?*?*anyopaque, argc: c_int, argv: ?[*:null]?[*:0]u8) callco
             return c.SDL_APP_FAILURE;
         };
     }
+    // Through Spaces, zooms and live resizes, each step drawn in time with the window: for an app
+    // that has not installed it itself, with its own chrome, as fizzy does (`restoreWindowState`).
+    if (comptime builtin.target.os.tag == .macos) if (appState.back.begin_hook == null) {
+        appState.back.places_main_picture = true;
+        platform.macos_monitor.install(&appState.win, true);
+        platform.macos_monitor.launchComplete();
+    };
 
     return c.SDL_APP_CONTINUE;
 }

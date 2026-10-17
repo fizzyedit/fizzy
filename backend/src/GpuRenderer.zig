@@ -243,6 +243,10 @@ verts: std.ArrayList(Vertex) = .empty,
 indices: std.ArrayList(Index) = .empty,
 draws: std.ArrayList(Draw) = .empty,
 uniforms: std.ArrayList([4]f32) = .empty,
+/// Where the frame is laid down in the window, physical pixels from its top left: nothing but while
+/// the main window stands still on its way into or out of full screen, its picture growing or
+/// shrinking in it (`SDLBackend.places_main_picture`).
+window_offset: [2]f32 = .{ 0, 0 },
 
 active: ?Active = null,
 blend_override: ?Blend = null,
@@ -881,6 +885,8 @@ fn clearPass(self: *GpuRenderer, tex: *Tex) !void {
 }
 
 fn encodePass(self: *GpuRenderer, dest: *c.SDL_GPUTexture, dw: u32, dh: u32, format: c.SDL_GPUTextureFormat, load: c.SDL_GPULoadOp) !void {
+    // Into the window: moved by `window_offset`, physical pixels.
+    const off: [2]f32 = if (self.swapchain == dest) self.window_offset else .{ 0, 0 };
     if (self.target != null) try self.clearSampled();
     // Before the rings are asked for room: they cycle per command buffer (`epoch`).
     const cmd = try self.ensureCmd();
@@ -898,7 +904,7 @@ fn encodePass(self: *GpuRenderer, dest: *c.SDL_GPUTexture, dw: u32, dh: u32, for
         const sx = 2.0 / @as(f32, @floatFromInt(dw));
         const sy = 2.0 / @as(f32, @floatFromInt(dh));
         for (self.verts.items, 0..) |v, i| {
-            out[i] = .{ .x = v.x * sx - 1.0, .y = 1.0 - v.y * sy, .col = v.col, .u = v.u, .v = v.v };
+            out[i] = .{ .x = (v.x + off[0]) * sx - 1.0, .y = 1.0 - (v.y + off[1]) * sy, .col = v.col, .u = v.u, .v = v.v };
         }
         @memcpy(staged.ptr[ioff..total], std.mem.sliceAsBytes(self.indices.items));
         self.stream_ring.unmap(self.device);
@@ -939,7 +945,10 @@ fn encodePass(self: *GpuRenderer, dest: *c.SDL_GPUTexture, dw: u32, dh: u32, for
     var last_n: u32 = 0;
     for (self.draws.items) |d| {
         var r = full;
-        if (d.clip) |cr| {
+        if (d.clip) |clip| {
+            var cr = clip;
+            cr.x += @intFromFloat(off[0]);
+            cr.y += @intFromFloat(off[1]);
             const x0 = @max(cr.x, 0);
             const y0 = @max(cr.y, 0);
             const x1 = @min(cr.x + cr.w, full.w);

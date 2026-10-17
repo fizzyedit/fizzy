@@ -876,6 +876,9 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             break;
         case 1: // didEnter
             finish_space_animation(m);
+            /* Its backdrop square, its corners the screen's: however it got here — AppKit's own way
+             * in, Split View — and not only the monitor's own animation. */
+            fizzy_macos_window_glass_follow(win);
             /* Full screen in AppKit's eyes from here: its frame view square now, not at whatever
              * next asks for a layout (`still_frame_square`). */
             if (m->still) relayout_frame((__bridge NSWindow *)win);
@@ -896,6 +899,8 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             break;
         case 3: // didExit
             finish_space_animation(m);
+            /* Its corners back, however it came out: AppKit's own way out of Split View too. */
+            fizzy_macos_window_glass_follow(win);
             m->space_transition = NO;
             m->space_entering = NO;
             m->unzoom_animating = NO;

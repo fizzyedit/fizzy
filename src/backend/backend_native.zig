@@ -126,7 +126,7 @@ pub fn restoreWindowState(win: *dvui.Window) void {
         platform.geometry.setStore(.{ .load = layoutStoreLoad, .save = layoutStoreSave });
     };
     platform.geometry.restore(win);
-    platform.macos_monitor.install(win);
+    platform.macos_monitor.install(win, false);
 }
 
 /// Keep where the window is for the next launch. Call at shutdown (AppDeinit).
@@ -184,18 +184,7 @@ fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
 /// pane mid-transition; a zoom without a Space keeps the full strip. Fizzy's titlebar heights
 /// over the window's state (`platform.macos_monitor.titlebarState`).
 pub fn titlebarStripHeight(win: *dvui.Window) f32 {
-    if (builtin.target.os.tag != .macos) return Constants.titlebar_height;
-    const t = platform.macos_monitor.titlebarState(win);
-    const in: platform.window_layout.StripInputs = .{
-        .collapsed = t.collapsed,
-        .restoring_chrome = t.restoring_chrome,
-        .live_inset = t.live_inset,
-        .saved_inset = t.saved_inset,
-        .titlebar_height = Constants.titlebar_height,
-        .titlebar_top_buffer = Constants.titlebar_top_buffer,
-    };
-    if (platform.window.spaceFullness(win)) |f| return platform.window_layout.titlebarStripAtFullness(in, f);
-    return platform.window_layout.chooseTitlebarStrip(in);
+    return platform.macos_monitor.titlebarStrip(win.backend.impl.window, Constants.titlebar_height, Constants.titlebar_top_buffer);
 }
 
 // ---- The native menu bar: fizzy's menus (`menu_model`) on the platform's (`platform.menu`) ----
