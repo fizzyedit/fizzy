@@ -449,6 +449,14 @@ pub fn unwatch(window: *c.SDL_Window) void {
     }
 }
 
+/// Whether `window` is on its way into or out of a fullscreen Space, or un-zooming: from AppKit's
+/// will-enter or will-exit until it has landed.
+pub fn inTransition(window: *c.SDL_Window) bool {
+    if (comptime builtin.target.os.tag != .macos) return false;
+    const cocoa = cocoaWindowOf(window) orelse return false;
+    return fizzy_macos_window_space_transition_active(cocoa) != 0 or fizzy_macos_window_transition_sync_active(cocoa) != 0;
+}
+
 /// Whether AppKit owns a watched window's frame: in a fullscreen Space, or on its way into or out
 /// of one, or un-zooming. Nothing may move it then.
 pub fn osOwnsFrame(window: *c.SDL_Window) bool {
