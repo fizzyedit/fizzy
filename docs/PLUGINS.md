@@ -223,6 +223,11 @@ libraries (vendored C, packed assets). See `fizzy.plugin.addCModule` and
 [pixi's `build.zig`](https://github.com/fizzyedit/pixi/blob/main/build.zig) for a worked example
 with vendored C deps.
 
+A plugin that ships a program of its own (a helper it starts, as the agent plugin starts
+`fizzy-mcp`) builds it as usual and passes it to `fizzy.plugin.installBeside(b, exe, .{ .plugin =
+"<id>" })`: `zig build install` then copies it into the plugin's own directory, beside the
+library and still executable, where the plugin finds it at run time.
+
 Under `create`, the dylib's C-ABI entry point (the five symbols the host looks up at `dlopen`
 time — ABI fingerprint check, the `register` entry, and injection hooks for the
 allocator/`*Host`/dvui-context/render-bridge — see §7 for the full list) is a tiny **generated**

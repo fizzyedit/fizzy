@@ -1,8 +1,8 @@
-//! Copy a built plugin into fizzy's plugins directory: `zig build install`'s dev convenience,
-//! wired by `fizzy.plugin.install`. A program run by a Run step, because Zig 0.17's build has no
-//! custom steps.
+//! Copy a built plugin, or a program it installs beside itself, into fizzy's plugins directory:
+//! `zig build install`'s dev convenience, wired by `fizzy.plugin.install` and `.installBeside`.
+//! A program run by a Run step, because Zig 0.17's build has no custom steps.
 //!
-//! Usage: `plugin_sdk_install <built dylib> <name> <file name>`. It lands at
+//! Usage: `plugin_sdk_install <built artifact> <name> <file name>`. It lands at
 //! `<plugins>/<name>/<file name>`, where `<plugins>` is `$FIZZY_PROFILE/plugins` when that is set
 //! (a relative profile is taken from the working directory, the plugin's own) and otherwise the
 //! host's fizzy plugins directory, the one the editor scans. Read here, at make time, so the
@@ -34,14 +34,16 @@ pub fn main(init: std.process.Init) !void {
 
     const dest = try std.fs.path.join(arena, &.{ dir, file_name });
     const data = try cwd.readFileAlloc(io, src, arena, .limited(512 * 1024 * 1024));
+    // The source's permissions, so a program installed beside the plugin stays executable.
+    const permissions = (try cwd.statFile(io, src, .{})).permissions;
     // Sibling temp file + rename, not a truncating write onto `dest`: a running fizzy may be
     // reading `dest` right now (`PluginLoader.stableLoadCopyPath` copies from it), and on Windows
     // a plain overwrite of a file the editor still has open fails outright. The rename also means
     // a crash mid-write never leaves a half-written dylib at the load path.
     const tmp = try std.fmt.allocPrint(arena, "{s}.part", .{dest});
-    try cwd.writeFile(io, .{ .sub_path = tmp, .data = data });
+    try cwd.writeFile(io, .{ .sub_path = tmp, .data = data, .flags = .{ .permissions = permissions } });
     try std.Io.Dir.rename(cwd, tmp, cwd, dest, io);
-    std.log.info("fizzy: installed plugin → {s}", .{dest});
+    std.log.info("fizzy: installed {s} → {s}", .{ file_name, dest });
 }
 
 /// `{local_config}/fizzy/plugins`, mirroring the runtime loader (`core/paths.zig`), or
