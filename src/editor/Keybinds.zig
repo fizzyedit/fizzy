@@ -207,8 +207,9 @@ fn playTapeCallback(paths: ?[][:0]const u8) void {
     playTapeFile(fizzy.editor(), list[0]) catch |err| dvui.log.err("tape {s}: {t}", .{ list[0], err });
 }
 
-/// Plays a tape file in the player, with its transport: seek, chapters, play and pause. A tape
-/// that opens on a keyframe sets the person's session aside and gives it back when it ends.
+/// Plays a tape file: one document's track in a tab of its own (`TapeTabs`), anything else in the
+/// player, with its transport: seek, chapters, play and pause. A tape that opens on a keyframe
+/// sets the person's session aside and gives it back when it ends.
 fn cmdPlayTapePath(state: *anyopaque, args: TapePath.Args, call: *sdk.Command.Call) anyerror!void {
     if (args.path.len == 0) return cmdPlayTape(state);
     if (comptime is_web) return call.fail("a page plays a tape from its address (?demo=<url>)", .{});
@@ -221,7 +222,12 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
     const gpa = editor.app.gpa;
     const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(256 << 20));
     defer gpa.free(bytes);
-    editor.demo.playTapeSoon(bytes);
+    // One document's track (a shared tape) plays in a tab of its own, beside the person's work;
+    // anything else on the demo stage.
+    editor.tape_tabs.open(editor, bytes, null) catch |err| switch (err) {
+        error.NotOneDocument, error.BadTape => editor.demo.playTapeSoon(bytes),
+        else => return err,
+    };
 }
 
 const DemoSpeed = sdk.Command.Params(struct {
@@ -630,14 +636,7 @@ fn cmdTracksExport(state: *anyopaque, args: TracksExport.Args, call: *sdk.Comman
     const gpa = editor.app.gpa;
     const bytes = t.exportTape(&editor.app.host, doc, gpa, .{ .real_time = args.real_time }) catch |err| return call.fail("could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
     defer gpa.free(bytes);
-    const io = dvui.io;
-    const out = if (args.out.len > 0) args.out else out: {
-        const stem = std.fs.path.stem(doc.owner.documentPath(doc));
-        const file = try std.fmt.allocPrint(call.arena, "{s}-{d}.tape", .{ stem, std.Io.Clock.real.now(io).toSeconds() });
-        break :out try std.fs.path.join(call.arena, &.{ editor.app.config_folder, "tapes", file });
-    };
-    if (std.fs.path.dirname(out)) |dir| std.Io.Dir.cwd().createDirPath(io, dir) catch |err| return call.fail("could not make {s}: {t}", .{ dir, err });
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out, .data = bytes }) catch |err| return call.fail("could not write {s}: {t}", .{ out, err });
+    const out = editor.keepTape(call.arena, doc, bytes, args.out) catch |err| return call.fail("could not write the tape: {t}", .{err});
     const track = t.trackOf(doc.id).?;
     try call.returns(.{ .path = out, .bytes = bytes.len, .steps = track.steps.items.len });
 }

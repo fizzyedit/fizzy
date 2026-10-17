@@ -130,6 +130,11 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// The demo player and fizzy's stage for it. Attached in `postInit`, at the Editor's final
 /// address (the stage's context is this field).
 demo: Demo = .detached,
+/// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
+tape_tabs: @import("TapeTabs.zig") = .{},
+/// A document whose transport's share was pressed: shared at the top of the next frame, before
+/// anything draws, since the export walks the document's history back and forth.
+share_pending: ?u64 = null,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
@@ -2979,8 +2984,63 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         }
     }
     // Its history, while undo or redo or the pointer keep it: not while someone else holds it.
-    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id));
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else {
+        const shareable = if (editor.app.tracks) |*t| if (t.trackOf(doc.id)) |tr| tr.steps.items.len > 0 else false else false;
+        const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{ .share = shareable });
+        if (pressed.share) {
+            editor.share_pending = doc.id;
+            dvui.refresh(null, @src(), null);
+        }
+    }
     return .ok;
+}
+
+/// How `doc` was made, as a tape: its track exported (`Tracks.exportTape`), kept in the config
+/// folder's `tapes/` and opened in a tab of its own to play (`TapeTabs`). The transport's share.
+pub fn shareDocument(editor: *Editor, doc: sdk.DocHandle) void {
+    const gpa = editor.app.gpa;
+    const t = &(editor.app.tracks orelse return);
+    const bytes = t.exportTape(&editor.app.host, doc, gpa, .{}) catch |err| {
+        dvui.log.warn("share: could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
+        _ = editor.noteOnDocument(doc.id, "Could not share");
+        return;
+    };
+    defer gpa.free(bytes);
+    const arena = dvui.currentWindow().arena();
+    const saved = if (comptime builtin.target.cpu.arch == .wasm32) null else editor.keepTape(arena, doc, bytes, "") catch |err| saved: {
+        dvui.log.warn("share: could not keep the tape: {t}", .{err});
+        break :saved null;
+    };
+    // Said on the tape's tab, which the pane turns to.
+    const note = if (saved) |path| std.fmt.allocPrint(arena, "Saved {s}", .{std.fs.path.basename(path)}) catch null else null;
+    editor.tape_tabs.open(editor, bytes, note) catch |err| {
+        dvui.log.warn("share: could not open the tape: {t}", .{err});
+        _ = editor.noteOnDocument(doc.id, "Could not open the tape");
+    };
+}
+
+/// Say `message` on the document's own panes, in the glass its commands show in
+/// (`ActivityFeed`), rather than in a toast over the whole window. False while the document has
+/// no panes yet (it is still opening).
+pub fn noteOnDocument(editor: *Editor, doc_id: u64, message: []const u8) bool {
+    const ds = editor.doc_surfaces.get(doc_id) orelse return false;
+    ds.feed.push(message, dvui.frameTimeNS());
+    dvui.refresh(null, @src(), null);
+    return true;
+}
+
+/// Write a tape of `doc` to `out`, or (empty) to the config folder's `tapes/`, named for the
+/// document and the time. Returns where it went.
+pub fn keepTape(editor: *Editor, arena: std.mem.Allocator, doc: sdk.DocHandle, bytes: []const u8, out: []const u8) ![]const u8 {
+    const io = dvui.io;
+    const path = if (out.len > 0) out else path: {
+        const stem = std.fs.path.stem(doc.owner.documentPath(doc));
+        const file = try std.fmt.allocPrint(arena, "{s}-{d}.tape", .{ stem, std.Io.Clock.real.now(io).toSeconds() });
+        break :path try std.fs.path.join(arena, &.{ editor.app.config_folder, "tapes", file });
+    };
+    if (std.fs.path.dirname(path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    return path;
 }
 
 /// Record documents' tracks, or stop. Documents open now get one; those opened after too.
@@ -3977,6 +4037,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.doc_io.tick();
     // The document states tracks asked for since last frame, before anything draws.
     if (editor.app.tracks) |*t| t.tick();
+    if (editor.share_pending) |id| {
+        editor.share_pending = null;
+        if (editor.app.open_files.get(id)) |doc| editor.shareDocument(doc);
+    }
+    editor.tape_tabs.tick(editor);
     editor.promoteEditedPreviews();
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
@@ -6235,6 +6300,7 @@ pub fn deinit(editor: *Editor) !void {
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
+    editor.tape_tabs.deinit(editor);
     editor.black_box.deinit(editor.app.gpa);
     editor.app.host.recorder = null;
     if (editor.app.tracks) |*t| t.deinit();

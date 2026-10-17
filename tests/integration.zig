@@ -7961,9 +7961,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, out, gpa, .limited(1 << 20));
         defer gpa.free(bytes);
         // What it holds: fizzy reads it (its owner and format known), its keyframe is the file as
-        // the track began (a new document's: empty), and its steps, applied in order to a
-        // document of their own, make the same text. (Playing it on the demo stage replaces the
-        // open files and waits for unsaved ones, which this run has.)
+        // the track began (a new document's: empty).
         var check = app.automation.Input.check;
         check.steps = fizzy.Editor.Demo.stepsCheck;
         var owned = try app.automation.Tape.load(gpa, bytes, check);
@@ -7972,27 +7970,64 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqual(@as(usize, 1), kf.files.len);
         try std.testing.expectEqualStrings("text", kf.files[0].owner);
         try std.testing.expectEqualStrings("", kf.files[0].text);
-        try host.runCommand("fizzy.newFile");
-        for (0..200) |_| {
+        // Played in a tab of its own (`TapeTabs`, the transport's share), each step at its moment:
+        // the same text, under the tape's own mount, with the person's documents untouched.
+        try editor.tape_tabs.open(editor, bytes, null);
+        const played_path = try std.fmt.allocPrint(gpa, "tape://1/{s}", .{std.fs.path.basename(path)});
+        defer gpa.free(played_path);
+        for (0..2000) |_| {
             _ = try dvui.testing.step(headlessFrame);
-            const d = editor.activeDoc() orelse continue;
-            if (d.id != doc.id and d.id != was.id and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+            if (!editor.tape_tabs.isPlaying(played_path)) break;
+            std.Io.sleep(dvui.io, .fromMilliseconds(5), .awake) catch {};
         }
-        const replay = editor.activeDoc() orelse return error.TestUnexpectedResult;
-        try std.testing.expect(replay.id != doc.id);
-        var applied: usize = 0;
-        for (owned.tape.ops) |op| switch (op.do) {
-            .step => |st| {
-                try std.testing.expect(replay.owner.applyStep(replay, st.effect, st.motion, 0));
-                applied += 1;
-            },
-            else => {},
-        };
-        try std.testing.expectEqual(@as(usize, 6), applied);
+        const replay = editor.docFromPath(played_path) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!editor.tape_tabs.isPlaying(played_path));
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expectEqualStrings(want, try textOf(host, replay.owner.documentPath(replay)));
+        try std.testing.expectEqualStrings(want, try textOf(host, played_path));
+        try std.testing.expectEqualStrings(want, try textOf(host, path));
+        const played_line = replay.owner.historyLine(replay, host.arena()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 6), played_line.at);
+        // Played out, it is kept as played in its own mount: closing it asks nothing.
+        for (0..200) |_| {
+            if (!replay.owner.isDirty(replay)) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expect(!replay.owner.isDirty(replay));
+        try editor.closeFileID(replay.id);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(editor.docFromPath(played_path) == null);
+        try std.testing.expectEqual(@as(usize, 0), editor.tape_tabs.playing.items.len);
 
-        try editor.rawCloseFileID(replay.id);
+        // The transport's share (pressed: `share_pending`), at the top of the next frame: the
+        // tape kept in the config folder's tapes/, and played in a tab of its own.
+        const tapes_dir = try std.fs.path.join(gpa, &.{ editor.app.config_folder, "tapes" });
+        defer gpa.free(tapes_dir);
+        const count = struct {
+            fn count(dir_path: []const u8) !usize {
+                var dir = try std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true });
+                defer dir.close(dvui.io);
+                var it = dir.iterate();
+                var n: usize = 0;
+                while (try it.next(dvui.io)) |_| n += 1;
+                return n;
+            }
+        }.count;
+        const kept_before = try count(tapes_dir);
+        editor.share_pending = doc.id;
+        const shared_path = try std.fmt.allocPrint(gpa, "tape://2/{s}", .{std.fs.path.basename(path)});
+        defer gpa.free(shared_path);
+        for (0..2000) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (editor.docFromPath(shared_path) != null and !editor.tape_tabs.isPlaying(shared_path)) break;
+            std.Io.sleep(dvui.io, .fromMilliseconds(5), .awake) catch {};
+        }
+        try std.testing.expectEqual(kept_before + 1, try count(tapes_dir));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings(want, try textOf(host, shared_path));
+        const shared = editor.docFromPath(shared_path) orelse return error.TestUnexpectedResult;
+        try editor.closeFileID(shared.id);
+        try dvui.testing.settle(headlessFrame);
+
         try editor.rawCloseFileID(doc.id);
 
         // A track whose start is gone from the history (undone past, and edited over) is
