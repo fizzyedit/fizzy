@@ -46,7 +46,7 @@ const fizzy_branch_title = @import("app").AppInfo.current.display_name;
 /// made a collapsed plugin flash open on first draw. Second, `Branch` rewrites its own
 /// `_expanded` dvui data every frame, so force-expanding during a search would destroy the user's
 /// hand-picked state with nothing left to restore; a separate map (the same thing the file tree
-/// does with `Explorer.open_branches`) lets a search pass `expanded = true` freely as long as it
+/// does with `Workbench.open_branches`) lets a search pass `expanded = true` freely as long as it
 /// doesn't *write back*. A path key also survives rows being reordered by relevance.
 var open_branches: std.AutoHashMapUnmanaged(u64, void) = .empty;
 

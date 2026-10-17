@@ -27,6 +27,8 @@ gpa: std.mem.Allocator,
 driver: *LiveDriver,
 /// Something else that drives the app, refusing a tape while it does — fizzy's demos.
 other: ?Other = null,
+/// Told who each live tape plays for (`OnAuthor`). Null: nobody listens, and authors are dropped.
+on_author: ?OnAuthor = null,
 /// What `snapshot` takes, framed by the app (`Snapshot.beginFrame` / `endFrame`). Null: no
 /// snapshots, and `snapshotText` is always null.
 snapshots: ?*Snapshot = null,
@@ -51,6 +53,13 @@ pub const Other = struct {
     driving: *const fn (ctx: *anyopaque) bool,
 };
 
+/// Who the next live tape plays for (`Api.playAs`; null: itself), told to the app that runs its
+/// commands and frames: fizzy's demo, which acts as them (`Host.act`).
+pub const OnAuthor = struct {
+    ctx: *anyopaque,
+    set: *const fn (ctx: *anyopaque, author: ?sdk.Author) void,
+};
+
 const Past = struct {
     ticket: Api.Ticket,
     outcome: Api.Outcome,
@@ -63,6 +72,7 @@ pub fn bind(self: *Service) void {
 
 const vtable: Api.VTable = .{
     .play = play,
+    .playAs = playAs,
     .stop = stop,
     .outcome = outcome,
     .settled = settled,
@@ -82,13 +92,21 @@ fn othersDriving(self: *Service) bool {
 }
 
 fn play(ctx: *anyopaque, bytes: []const u8) Api.Play {
-    const self = from(ctx);
+    return playFor(from(ctx), bytes, null);
+}
+
+fn playAs(ctx: *anyopaque, bytes: []const u8, author: sdk.Author) Api.Play {
+    return playFor(from(ctx), bytes, author);
+}
+
+fn playFor(self: *Service, bytes: []const u8, author: ?sdk.Author) Api.Play {
     if (self.driver.playing() or self.othersDriving()) return .busy;
     var check = Input.check;
     check.live = true;
     const owned = Tape.load(self.gpa, bytes, check) catch |err| return .{ .invalid = @errorName(err) };
     // Read before the driver starts over and forgets it.
     const last = self.driverOutcome();
+    if (self.on_author) |o| o.set(o.ctx, author);
     self.driver.play(owned) catch |err| return switch (err) {
         error.Busy => .busy,
         else => .{ .invalid = @errorName(err) },

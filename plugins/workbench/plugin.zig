@@ -62,12 +62,19 @@ pub fn register(host: *sdk.Host) !void {
             .draw = drawFiles,
         });
     }
-    try host.registerSurface(.{
+    // Where the app arranges the panes, each is a view of its own (`Workbench.places`), and
+    // there is no one surface drawing them all.
+    if (runtime.workbench().places == null) try host.registerSurface(.{
         .id = center_workspaces,
         .owner = &plugin,
         .title = "Workspace",
         .keywords = sdk.keywords.ide.main,
         .draw = drawCenter,
+    });
+    if (comptime has_file_tree) try host.subscribe(.{
+        .event = "fizzy.files.reveal",
+        .owner = &plugin,
+        .handler = revealNewPath,
     });
     try host.declareEvent(.{
         .name = "workbench.pane.closed",
@@ -82,6 +89,14 @@ pub fn register(host: *sdk.Host) !void {
 /// which runs in the copy linked into the app.
 fn deinit(_: *anyopaque) void {
     files.deinitCaches();
+}
+
+/// A path just made, from a plugin's New flow or the app: the tree reveals it, selected, with its
+/// inline rename open, once its row exists.
+fn revealNewPath(_: *anyopaque, event: sdk.events.Event) void {
+    const reveal = sdk.events.parse(sdk.events.Path, runtime.host().arena(), event) catch return;
+    runtime.workbench().setPendingNewFilePath(reveal.path) catch |err|
+        dvui.log.err("workbench: could not queue {s} to reveal: {t}", .{ reveal.path, err });
 }
 
 fn drawFiles(_: ?*anyopaque) anyerror!dvui.App.Result {

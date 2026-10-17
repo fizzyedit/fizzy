@@ -36,6 +36,12 @@ display_name: []const u8,
 /// not share.
 internal: bool = false,
 
+/// The encoding of the steps this plugin records and applies (`Step`, `VTable.applyStep`), which
+/// it numbers: bumped when a step it writes would be misread by the build before. A tape names it
+/// beside each file (`Tape.File.format`), and an app plays only the steps of formats the owner
+/// reads. 0: records no steps.
+step_format: u32 = 0,
+
 /// Names an error this plugin returned. Zig numbers errors per compilation, so `@errorName` in
 /// the host on a dylib's error reads the host's table and prints an unrelated name. The default
 /// is evaluated in the binary that builds this struct — the plugin's own — so it reads the
@@ -159,6 +165,13 @@ pub const VTable = struct {
     /// `loadDocument`, but from in-memory bytes (browser file picker). `path` is used
     /// for extension detection + display name. Synchronous (web has no load worker).
     loadDocumentFromBytes: ?*const fn (state: *anyopaque, path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
+    /// Open `bytes` as an untitled document named `title` (`untitled-1`), as `createDocument`
+    /// would have made it with these contents: never saved, and dirty. `bytes` are what
+    /// `documentBytes` encoded for it under `bytes_path` (`bytesPath`: the name Save As offers,
+    /// `untitled.pixi`), which says their format. How a crash or a restart brings back a document
+    /// that was never saved; without it, one comes back only as far as its state restores
+    /// into an empty document. Synchronous.
+    loadUntitledDocument: ?*const fn (state: *anyopaque, title: []const u8, bytes_path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
     /// Size of the plugin's document type for stack/heap staging buffers (`loadDocument`, etc.).
     documentStackSize: ?*const fn (state: *anyopaque) usize = null,
     documentStackAlign: ?*const fn (state: *anyopaque) usize = null,
@@ -224,6 +237,12 @@ pub const VTable = struct {
     /// Undo or redo `doc` until step `id` (`HistoryLine.Entry.id`) is the last one applied; 0
     /// goes back before the first. An id not on the line is an error, and nothing moves.
     historyGoTo: ?*const fn (state: *anyopaque, doc: DocHandle, id: u64) anyerror!void = null,
+    /// Apply a step this owner recorded (`Step`, `Host.recordStep`) to `doc`, forward, as a new
+    /// entry on its history: `effect` and `motion` in the owner's `step_format`. `ms` asks for it
+    /// to be shown being made over that long (a replay at pace); 0 lands it at once (a seek). A
+    /// step that does not fit what `doc` holds is an error, and `doc` is left as it was. Absent =
+    /// tapes of this owner's documents cannot be played.
+    applyStep: ?*const fn (state: *anyopaque, doc: DocHandle, effect: []const u8, motion: []const u8, ms: u32) anyerror!void = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
 
     /// Register a loaded/created document in the plugin's open-doc map. `file` points at
@@ -507,6 +526,17 @@ pub fn loadDocumentFromBytes(self: Plugin, path: []const u8, bytes: []const u8, 
     return false;
 }
 
+/// `loadUntitledDocument`. Returns whether the plugin handled it (`false` = no hook).
+pub fn loadUntitledDocument(self: Plugin, title: []const u8, bytes_path: []const u8, bytes: []const u8, out_doc: *anyopaque) !bool {
+    const prof = core.profile.begin(self.id, "loadUntitledDocument");
+    defer prof.end();
+    if (self.vtable.loadUntitledDocument) |f| {
+        f(self.state, title, bytes_path, bytes, out_doc) catch |err| return self.failed("loadUntitledDocument", err);
+        return true;
+    }
+    return false;
+}
+
 pub fn isDirty(self: Plugin, doc: DocHandle) bool {
     const prof = core.profile.begin(self.id, "isDirty");
     defer prof.end();
@@ -536,6 +566,16 @@ pub fn encodeSnapshot(self: Plugin, snapshot: *anyopaque, path: []const u8, allo
 
 pub fn releaseSnapshot(self: Plugin, snapshot: *anyopaque) void {
     if (self.vtable.releaseSnapshot) |f| f(self.state, snapshot);
+}
+
+/// The path `doc`'s bytes are encoded under (`documentBytes`), owned by `allocator`: its own, or
+/// for one never saved (`untitled-1`, which names no format), the name Save As offers
+/// (`untitled.pixi`), so the bytes are what a save would write.
+pub fn bytesPath(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) ![]const u8 {
+    if (!self.documentHasRecognizedSaveExtension(doc)) {
+        if (self.documentDefaultSaveAsFilename(doc, allocator)) |name| return name else |_| {}
+    }
+    return allocator.dupe(u8, self.documentPath(doc));
 }
 
 /// Both halves at once, on the calling thread: for the few who need the bytes now (a crash
@@ -577,6 +617,18 @@ pub fn historyLine(self: Plugin, doc: DocHandle, arena: std.mem.Allocator) ?Hist
         std.log.err("{s}: historyLine failed: {s}", .{ self.id, self.errorName(err) });
         return null;
     };
+}
+
+/// Apply a recorded step to `doc` (`applyStep`). Returns whether it landed.
+pub fn applyStep(self: Plugin, doc: DocHandle, effect: []const u8, motion: []const u8, ms: u32) bool {
+    const prof = core.profile.begin(self.id, "applyStep");
+    defer prof.end();
+    const f = self.vtable.applyStep orelse return false;
+    f(self.state, doc, effect, motion, ms) catch |err| {
+        std.log.err("{s}: applyStep failed: {s}", .{ self.id, self.errorName(err) });
+        return false;
+    };
+    return true;
 }
 
 /// Go to step `id` of `doc`'s history (`historyGoTo`). Returns whether it went.

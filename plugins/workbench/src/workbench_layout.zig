@@ -21,6 +21,8 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 
     if (!wb.restored) {
         wb.restored = true;
+        // Where the app arranges the panes, it brought them back itself — and carries an
+        // arrangement saved before it did over into its own (fizzy's `Workspaces.carryOver`).
         loadPanes(wb);
         for (host.assignedRegionNames()) |region_name| {
             const grouping = Workspace.groupingOfName(region_name) orelse continue;
@@ -50,9 +52,10 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     }
 
     // A document nobody holds lands in the pane it was opened toward: the grouping the app
-    // stamped on it, which is the "open to the side" answer or the current pane.
+    // stamped on it, which is the "open to the side" answer or the current pane. Where the app
+    // arranges the panes, it seats them too (fizzy's `Workspaces.seat`).
     var i: usize = 0;
-    while (i < host.openDocCount()) : (i += 1) {
+    while (wb.places == null and i < host.openDocCount()) : (i += 1) {
         const doc = host.docByIndex(i) orelse continue;
         const id = try sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc));
         var held = false;
@@ -92,11 +95,14 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
         if (live > 0 or ws.expecting) {
             // Filled (or about to be) — including one that was on its way out when its
             // document landed, which is a pane to keep, not a hole to finish closing.
-            if (wb.paneLeaf(ws.grouping)) |leaf| wb.panes.reopenLeaf(leaf);
+            if (wb.places == null) if (wb.paneLeaf(ws.grouping)) |leaf| wb.panes.reopenLeaf(leaf);
             k += 1;
             continue;
         }
-        if (wb.paneLeaf(ws.grouping) != null) {
+        // The app's place slides shut by itself once it is closed, and the pane goes now.
+        if (wb.places) |p| {
+            p.close(p.ctx, ws.grouping);
+        } else if (wb.paneLeaf(ws.grouping) != null) {
             wb.closePane(ws.grouping);
             k += 1;
             continue;
@@ -223,6 +229,14 @@ fn loadPanes(wb: *Workbench) void {
     if (wb.workspaces.count() > 0 and wb.paneLeaf(wb.open_workspace_grouping) == null) {
         wb.open_workspace_grouping = wb.workspaces.keys()[0];
     }
+}
+
+/// Delete the saved arrangement: the app has taken it over (`Workbench.places`).
+pub fn forgetPanes(wb: *Workbench) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const path = panesPath(wb) orelse return;
+    defer wb.allocator.free(path);
+    std.Io.Dir.cwd().deleteFile(dvui.io, path) catch {};
 }
 
 fn panesPath(wb: *Workbench) ?[]u8 {

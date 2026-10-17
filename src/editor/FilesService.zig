@@ -40,6 +40,7 @@ const vtable: sdk.services.files.Api.VTable = .{
     .rename = rename,
     .delete = delete,
     .move = move,
+    .reveal = reveal,
 };
 
 /// Create an empty file at `path`.
@@ -225,6 +226,19 @@ fn move(ctx: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!bool
         .file;
     try rename(ctx, path, new_path, kind);
     return true;
+}
+
+/// Show `path` the way a new file is shown, through whatever lists the project's files: the file
+/// tree hears `fizzy.files.reveal` and reveals it, selected, with its name open for editing.
+///
+/// A plugin calling this has usually just written `path` with its own save routine, not through
+/// `createFile`, so nothing has dropped the shared listing cache and it still predates the file.
+/// Left stale, the row never appears: the tree has nothing to reveal, no rename opens, and a dialog
+/// still closing over it has no row to fly into. So the listing goes first.
+fn reveal(ctx: *anyopaque, path: []const u8) void {
+    const self = hostOf(ctx);
+    if (self.files) |files| files.invalidateAll();
+    self.emitZon("fizzy.files.reveal", sdk.events.Path{ .path = path });
 }
 
 /// Whether `child` sits strictly below `ancestor`, comparing whole path components so that

@@ -27,8 +27,8 @@ pub const WebPluginDir = struct {
 };
 
 pub const Options = struct {
-    /// Plugins the application bundles beyond fizzy's own — see `build.zig`'s `buildApp`.
-    app_plugins: []const @import("sdk.zig").BundledPlugin = &.{},
+    /// Every plugin the application links, fizzy's own among them — see `build.zig`'s `buildApp`.
+    app_plugins: []const @import("sdk.zig").BundledPlugin = &@import("plugins.zig").entries.all,
     /// Dependencies (by the name in `build.zig.zon`) whose `"plugin"` module the **web** build
     /// links in. The browser cannot `dlopen`, so a plugin exists there only if the application
     /// bundles it; this is fizzy-the-app's list, resolved for the wasm target. Each is looked
@@ -85,6 +85,7 @@ pub const Config = struct {
     static_workbench: bool,
     static_text: bool,
     static_image: bool,
+    dynamic_plugins: bool,
     workbench_opts: *std.Build.Step.Options,
     /// Null on the configure pass that fetches Velopack (see `readConfig`).
     msvcup_before_compile: ?*std.Build.Step.Run,
@@ -228,6 +229,11 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     build_opts.addOption([]const u8, "app_repo_url", app_repo_url);
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
+    // Off, the app runs only the plugins it links (`buildApp`'s list): no plugin dylib is built,
+    // and nothing loads at runtime — not fizzy's own dylibs, not the user plugins directory, not
+    // the store, not a web page's `?plugin=`. Comptime, so none of it is checked per frame.
+    const dynamic_plugins = b.option(bool, "dynamic-plugins", "Load plugins at runtime: fizzy's own dylibs, the user plugins directory, the store (default: true)") orelse true;
+    build_opts.addOption(bool, "dynamic_plugins", dynamic_plugins);
 
     // A consumer that wants its own shape passes `-Dapp-layout=` (a LazyPath to
     // `pub fn layout(?*anyopaque, *Layout)`). Fizzy itself uses `src/editor/layout.zig`.
@@ -302,6 +308,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .static_workbench = static_workbench,
         .static_text = static_text,
         .static_image = static_image,
+        .dynamic_plugins = dynamic_plugins,
         .workbench_opts = workbench_opts,
         .msvcup_before_compile = msvcup_before_compile,
         .accesskit = accesskit,
@@ -352,6 +359,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const static_workbench = cfg.static_workbench;
     const static_text = cfg.static_text;
     const static_image = cfg.static_image;
+    const dynamic_plugins = cfg.dynamic_plugins;
     const workbench_opts = cfg.workbench_opts;
     const msvcup_before_compile = cfg.msvcup_before_compile;
     const accesskit = cfg.accesskit;
@@ -375,7 +383,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs);
 
-    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins);
+    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
     const exe = main_fizzy.exe;
 
     const package_fizzy: FizzyExecutable = package_blk: {
@@ -397,8 +405,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
+        pack_opts.addOption(bool, "dynamic_plugins", dynamic_plugins);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
-        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins);
+        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
     };
     const exe_for_package = package_fizzy.exe;
 
@@ -645,6 +654,13 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
         .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
+        // A document state as the bytes that differ from another: how a track's checkpoints
+        // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
+        .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
+        // When a document's transport shows and for how long, how far a held undo goes, which
+        // step a point on its line is. std-only (see history_transport.zig); `HistoryTransport`
+        // draws it.
+        .{ "fizzy-history-transport-tests", "app/history_transport.zig" },
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
@@ -940,6 +956,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
+        .icons = icons_test,
     }, fizzy_test_module);
     const devtools_module_test = plugins.devtools.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
@@ -1229,6 +1246,32 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
         const bench_step = b.step("bench-replay", "Benchmark a demo seek, silent against shown frame by frame (prints timings)");
         const run_bench = b.addRunArtifact(bench_replay);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
+    // `zig build bench-tracks` — what a document's track costs (`app.Tracks`): a step, a frame's
+    // top idle and with a checkpoint, a replay, what a session holds. Same rules as `bench-text`.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_tracks.zig"),
+        });
+        bench_module.addImport("app", app_module_test);
+        bench_module.addImport("fizzy_sdk", sdk_module_test);
+
+        const bench_tracks = b.addTest(.{ .name = "fizzy-bench-tracks", .root_module = bench_module });
+        bench_tracks.root_module.link_libcpp = !target_is_windows_msvc;
+        if (target.result.os.tag == .windows) {
+            bench_tracks.root_module.linkSystemLibrary("comctl32", .{});
+        }
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, bench_tracks, .{ .target = target, .optimize = optimize });
+        };
+
+        const bench_step = b.step("bench-tracks", "Benchmark a document's track: steps, checkpoints, replays (prints timings)");
+        const run_bench = b.addRunArtifact(bench_tracks);
         run_bench.has_side_effects = true;
         bench_step.dependOn(&run_bench.step);
     }

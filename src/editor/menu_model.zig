@@ -209,6 +209,7 @@ const view_items = [_]Item{
     .{ .command = .{ .id = "fizzy.toggleExplorer", .title = .{ .dynamic = explorerTitle } } },
     .{ .command = .{ .id = "fizzy.resetLayout", .title = .{ .static = "Reset Layout" }, .sf_symbol = "arrow.counterclockwise" } },
     .{ .command = .{ .id = "fizzy.toggleFullScreen", .title = .{ .static = "Toggle Full Screen" }, .sf_symbol = "arrow.up.left.and.arrow.down.right" } },
+    .{ .command = .{ .id = "fizzy.fitView", .title = .{ .static = "Fit to View" }, .sf_symbol = "viewfinder" } },
     .{ .plugin_section = "fizzy.menu.view" },
     .separator,
 } ++ demo_items ++ [_]Item{

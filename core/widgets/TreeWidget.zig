@@ -487,8 +487,16 @@ pub const Branch = struct {
 
                 // Reserve the original slot so tree shape does not collapse; row chrome is drawn only
                 // in the floating subwindow below (same for primary and secondary multi-drag rows).
+                // As tall as the row was, and as wide as the list is now where the row took the
+                // list's width: held at the row's width when it was lifted, a list that narrowed
+                // under the drag (its scroll bar coming in for the drop row below the last) was
+                // pushed wider than itself, and its scroll bars and a pane fitting it chased each
+                // other for as long as the row was held.
                 self.wd = WidgetData.init(self.wd.src, .{}, wrapOuter(self.options).override(.{
-                    .min_size_content = drag_min,
+                    .min_size_content = .{
+                        .w = if (self.options.expandGet().isHorizontal()) 0 else drag_min.w,
+                        .h = drag_min.h,
+                    },
                 }));
                 self.wd.register();
                 dvui.parentSet(self.widget());
@@ -504,8 +512,8 @@ pub const Branch = struct {
                 var npt = dp.plus(dvui.dragOffset().plus(.{ .x = 5, .y = 5 })).toNatural();
                 npt.y += @as(f32, @floatFromInt(stack_i)) * (drag_min.h + row_gap);
 
-                // Carried, a row is glass, as a tab carried along its strip is
-                // (`dialogs.carriedGlass`). (A list whose rows another drag can carry hands them
+                // Carried, a row is glass, as a tab or a view carried is
+                // (`dialogs.carriedCard`: the OS's glass where it is offered). (A list whose rows another drag can carry hands them
                 // to it as they are lifted, and reads them back with `carriedOver`: fizzy's file
                 // tree, a file to the app's view drag.) As big as the row was when it was lifted: it is
                 // held where it was grabbed (`dragOffset`), and sized to its name instead, a short
@@ -527,7 +535,7 @@ pub const Branch = struct {
                 // window: carried in a float popped out of it, it was clipped away.
                 dvui.clipSet(screens.pixelsFor(.cast(fd.rect)));
                 const frs = fd.borderRectScale();
-                dialogs.carriedGlass(fd.id, frs.r, frs.s);
+                dialogs.carriedCard(fd.id, frs.r, frs.s);
             } else if (source or self.tree.carried_depth > 0) {
                 // Carried back over the tree: the row stays in its place, faded, and neither it
                 // nor anything inside it takes the drop.

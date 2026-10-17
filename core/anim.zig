@@ -228,6 +228,9 @@ pub const CrossFade = struct {
         const mode: BlitMode = if (self.opaque_snapshots) .over else .lerp;
         if (self.incoming) |tex| blitWith(tex, &self.incoming_frost, self.incoming_rect, self.inner, s.in_blur, s.in_alpha, mode);
         if (self.texture) |tex| blitWith(tex, &self.frost, self.rect, self.inner, s.out_blur, s.out_alpha, mode);
+        // Over the incoming view, whose glass describes only the view: it reads again.
+        if (self.incoming != null) BlurBackdrop.underChanged(self.incoming_rect);
+        if (self.texture != null) BlurBackdrop.underChanged(self.rect);
 
         // Nothing else is animating, so without this an idle app would sleep mid-fade.
         dvui.refresh(null, @src(), null);

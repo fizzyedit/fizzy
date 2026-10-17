@@ -37,6 +37,19 @@ pub const StoreOffer = struct {
     title: []const u8,
 };
 
+/// How an application gives a document a home outside the slots its plugins made: a view of its
+/// own that holds documents (fizzy's workspaces). With one, a document carried in the view drag
+/// lands in any place as a view would, inside a new such view (`ViewDrag.place`).
+pub const Documents = struct {
+    ctx: *anyopaque,
+    /// A new view holding the documents `ids`, the first shown — a document not open yet opened
+    /// in it — for the layout to place like any view it lands. Its id, or null when none went in.
+    house: *const fn (ctx: *anyopaque, ids: []const []const u8) ?[]const u8,
+    /// The view holding document `id` and nothing else, if one does: carried alone, the
+    /// document carries that view, which lands as itself rather than inside a new one.
+    alone: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
+};
+
 pub const StoreCatalog = struct {
     uninstalled: *const fn (arena: std.mem.Allocator) []const StoreOffer,
     install: *const fn (id: []const u8) void,
@@ -83,6 +96,9 @@ picker: Picker = .{},
 /// Filled in by the application when it has a plugin store. Null means the picker only lists
 /// loaded surfaces — tests, and an app that never switched the store on.
 store_catalog: ?StoreCatalog = null,
+/// Filled in by the application when documents can have homes outside their slots. Null means a
+/// document goes only into a slot made for it.
+documents: ?Documents = null,
 /// Region waiting for a store install to finish so its new surfaces can be assigned. Empty
 /// while nothing is pending. gpa-owned.
 pending_store_region: []const u8 = "",
@@ -457,9 +473,17 @@ pub fn assignment(self: *State, name: []const u8) ?[]const []const u8 {
 /// Set what region `name` shows. An empty list is a real choice — "nothing here" — distinct from
 /// `unassign`, which hands the region back to its keywords. A surface lives in one
 /// place: putting it here takes it out of every other assignment.
+///
+/// `surfaces` may borrow from any assignment, this region's included — read, edit, write back
+/// is how a pane adds a tab. So past `setAssignment`, which frees the old lists, only this
+/// region's new, owned copy is read: its key and list, taken out of the map first, since
+/// rewriting the other regions can grow the map and move its entries.
 pub fn assign(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: []const []const u8) !void {
     try self.setAssignment(gpa, name, surfaces);
-    for (surfaces) |id| self.evictIdFromOthers(gpa, name, id);
+    const owned = self.assignments.getEntry(name).?;
+    const key = owned.key_ptr.*;
+    const ids = owned.value_ptr.*;
+    for (ids) |id| try self.evictIdFromOthers(gpa, key, id);
 }
 
 fn setAssignment(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: []const []const u8) !void {
@@ -484,33 +508,24 @@ fn setAssignment(self: *State, gpa: std.mem.Allocator, name: []const u8, surface
     gop.value_ptr.* = owned;
 }
 
-fn evictIdFromOthers(self: *State, gpa: std.mem.Allocator, keep: []const u8, id: []const u8) void {
-    var names: [32][]const u8 = undefined;
-    var n: usize = 0;
+fn evictIdFromOthers(self: *State, gpa: std.mem.Allocator, keep: []const u8, id: []const u8) !void {
+    var names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer names.deinit(gpa);
     var it = self.assignments.iterator();
     while (it.next()) |e| {
         if (std.mem.eql(u8, e.key_ptr.*, keep)) continue;
-        for (e.value_ptr.*) |x| {
-            if (!std.mem.eql(u8, x, id)) continue;
-            if (n < names.len) {
-                names[n] = e.key_ptr.*;
-                n += 1;
-            }
+        for (e.value_ptr.*) |x| if (std.mem.eql(u8, x, id)) {
+            try names.append(gpa, e.key_ptr.*);
             break;
-        }
+        };
     }
-    for (names[0..n]) |region| {
+    var kept: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer kept.deinit(gpa);
+    for (names.items) |region| {
         const ids = self.assignment(region) orelse continue;
-        var kept: [32][]const u8 = undefined;
-        var k: usize = 0;
-        for (ids) |x| {
-            if (std.mem.eql(u8, x, id)) continue;
-            if (k < kept.len) {
-                kept[k] = x;
-                k += 1;
-            }
-        }
-        self.setAssignment(gpa, region, kept[0..k]) catch {};
+        kept.clearRetainingCapacity();
+        for (ids) |x| if (!std.mem.eql(u8, x, id)) try kept.append(gpa, x);
+        try self.setAssignment(gpa, region, kept.items);
     }
 }
 
@@ -791,13 +806,17 @@ fn forgetWidgetSize(id: dvui.Id) void {
     dvui.dataRemove(null, id, "_chooser_press");
 }
 
-pub fn setPlaceMetrics(self: *State, name: []const u8, size: dvui.Size, bounds: dvui.Rect.Physical) void {
+/// Where place `name` was drawn this frame, from the box it was drawn in: its border box, in
+/// points and in physical pixels. The border box, not the content: a split's extent is the whole
+/// reach of the place it opens, padding included, so a split measured from the content rect gave
+/// a carded place's new half the card's padding twice over.
+pub fn setPlaceMetrics(self: *State, name: []const u8, data: *const dvui.WidgetData) void {
     var i = self.regions_building.items.len;
     while (i > 0) {
         i -= 1;
         if (!std.mem.eql(u8, self.regions_building.items[i].name, name)) continue;
-        self.regions_building.items[i].size = size;
-        self.regions_building.items[i].bounds = bounds;
+        self.regions_building.items[i].size = data.borderRect().size();
+        self.regions_building.items[i].bounds = data.borderRectScale().r;
         return;
     }
 }

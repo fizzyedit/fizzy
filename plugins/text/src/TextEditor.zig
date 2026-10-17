@@ -1830,7 +1830,14 @@ fn editNotifyInserted(ctx: *anyopaque, pos: usize, bytes: []const u8) void {
     docFromCtx(ctx).history.note(sdk.allocator(), pos, "", bytes);
 }
 fn editNotifyEnd(ctx: *anyopaque, sel_after: tc.Range) void {
-    docFromCtx(ctx).history.end(sdk.allocator(), sel_after);
+    const doc = docFromCtx(ctx);
+    // One hand's typing never joins another's run (`sdk.Host.mayMerge`).
+    const host = sdk.host();
+    const may_join = if (doc.history.lastApplied()) |top| host.mayMerge(doc.id, top.step) else true;
+    if (doc.history.end(sdk.allocator(), sel_after, may_join)) |c| {
+        doc.recordCommitted(c);
+        host.documentEdited(doc.id);
+    }
 }
 
 const max_text_bytes: usize = 64 * 1024 * 1024;

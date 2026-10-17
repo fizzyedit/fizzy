@@ -27,13 +27,18 @@ cd "$root"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# A directory's files as they are on disk, without build output or version control. On macOS,
-# without AppleDouble `._*` files too: bsdtar writes one per file with extended attributes, and
-# the backend would take `patches/sdl/._0001-….patch` for a patch.
-export COPYFILE_DISABLE=1
+# A directory's files as they are on disk, without build output or version control.
+# macOS's bsdtar would add an AppleDouble `._name` entry beside every file carrying xattrs (every
+# checkout has com.apple.provenance); unpacked, `backend/patches/sdl/._0001-….patch` fails the
+# SDL patch step with NoSections. GNU tar, which CI uses, writes none (see scripts/pack-sdk.sh).
+tar_flags=()
+if tar --version 2>/dev/null | grep -q bsdtar; then
+  export COPYFILE_DISABLE=1
+  tar_flags=(--no-xattrs --no-mac-metadata)
+fi
 pack() {
-  tar -C "$1" -cf - --exclude=./.zig-cache --exclude=./zig-out --exclude=./zig-pkg \
-    --exclude=./.git --exclude=./.jj --exclude=./.profile .
+  tar "${tar_flags[@]}" -C "$1" -cf - --exclude=./.zig-cache --exclude=./zig-out \
+    --exclude=./zig-pkg --exclude=./.git --exclude=./.jj --exclude=./.profile .
 }
 
 pack "$root" | gzip > "$work/fizzy.tar.gz"

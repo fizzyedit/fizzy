@@ -114,6 +114,121 @@ pub fn applyInverse(self: Transaction, gpa: Allocator, text: *std.ArrayList(u8))
     }
 }
 
+// -- as a step --------------------------------------------------------------------------------
+
+/// Edits as a recorded step's effect (`sdk.Step`, the text plugin's step format 1): what fizzy
+/// keeps of a change to replay it. Every count and offset LEB128, then the bytes:
+///
+///   edits · per edit: pos, removed length, removed, inserted length, inserted · selection after:
+///   anchor, head
+///
+/// `removed` is kept although a forward replay only needs its length: it is what makes a step
+/// checkable (`applyStepTo` refuses one whose removed bytes are not there), and what lets a step
+/// be reversed. `reverse` writes the edits' undo as a forward step: inverses, newest first, the
+/// selection the undo restores in `sel`.
+pub fn encodeStep(w: *std.Io.Writer, edits: []const Edit, sel: Range, reverse: bool) std.Io.Writer.Error!void {
+    try w.writeUleb128(edits.len);
+    for (0..edits.len) |i| {
+        const e = edits[if (reverse) edits.len - 1 - i else i];
+        const removed = if (reverse) e.inserted else e.removed;
+        const inserted = if (reverse) e.removed else e.inserted;
+        try w.writeUleb128(e.pos);
+        try w.writeUleb128(removed.len);
+        try w.writeAll(removed);
+        try w.writeUleb128(inserted.len);
+        try w.writeAll(inserted);
+    }
+    try w.writeUleb128(sel.anchor);
+    try w.writeUleb128(sel.head);
+}
+
+/// A step `encodeStep` wrote, read back without copying: slices of `bytes`.
+pub const StepView = struct {
+    bytes: []const u8,
+    edits: usize,
+    sel: Range,
+
+    pub const Error = error{BadStep};
+
+    /// Read the step in `bytes`, checking it holds together, or `error.BadStep`.
+    pub fn init(bytes: []const u8) Error!StepView {
+        var r: std.Io.Reader = .fixed(bytes);
+        const n = take(&r) catch return error.BadStep;
+        for (0..n) |_| {
+            _ = take(&r) catch return error.BadStep;
+            for (0..2) |_| {
+                const len = take(&r) catch return error.BadStep;
+                r.discardAll(len) catch return error.BadStep;
+            }
+        }
+        const anchor = take(&r) catch return error.BadStep;
+        const head = take(&r) catch return error.BadStep;
+        if (r.seek != bytes.len) return error.BadStep;
+        return .{ .bytes = bytes, .edits = n, .sel = .init(anchor, head) };
+    }
+
+    /// Each edit in order: `{ pos, removed, inserted }`, slices of the step's bytes.
+    pub fn iterator(self: StepView) Iterator {
+        var r: std.Io.Reader = .fixed(self.bytes);
+        _ = take(&r) catch unreachable;
+        return .{ .r = r, .left = self.edits };
+    }
+
+    pub const Iterator = struct {
+        r: std.Io.Reader,
+        left: usize,
+
+        pub const Part = struct { pos: usize, removed: []const u8, inserted: []const u8 };
+
+        pub fn next(it: *Iterator) ?Part {
+            if (it.left == 0) return null;
+            it.left -= 1;
+            // `init` checked every length.
+            const pos = take(&it.r) catch unreachable;
+            const removed = it.r.take(take(&it.r) catch unreachable) catch unreachable;
+            const inserted = it.r.take(take(&it.r) catch unreachable) catch unreachable;
+            return .{ .pos = pos, .removed = removed, .inserted = inserted };
+        }
+    };
+
+    fn take(r: *std.Io.Reader) !usize {
+        return r.takeLeb128(usize);
+    }
+};
+
+/// Apply a step to `text` forward as one transaction, which it returns (owned) for the history.
+/// Every edit must find at its `pos` the bytes it says it removes, or `error.StepDoesNotApply`,
+/// and `text` is left as it was.
+pub fn applyStepTo(gpa: Allocator, text: *std.ArrayList(u8), step: StepView) !Transaction {
+    var txn: Transaction = .{ .sel_after = step.sel };
+    errdefer txn.deinit(gpa);
+    var it = step.iterator();
+    var first = true;
+    while (it.next()) |e| {
+        if (first) txn.sel_before = .collapsed(e.pos);
+        first = false;
+        try txn.append(gpa, e.pos, e.removed, e.inserted);
+    }
+    // Checked against the text as each edit reaches it, then applied atomically.
+    var check: usize = 0;
+    errdefer {
+        // Undo the edits already applied, newest first.
+        var j = check;
+        while (j > 0) {
+            j -= 1;
+            const e = txn.edits.items[j];
+            text.replaceRange(gpa, e.pos, e.inserted.len, e.removed) catch {};
+        }
+    }
+    for (txn.edits.items) |e| {
+        if (e.pos > text.items.len or e.removed.len > text.items.len - e.pos) return error.StepDoesNotApply;
+        if (!std.mem.eql(u8, text.items[e.pos..][0..e.removed.len], e.removed)) return error.StepDoesNotApply;
+        try text.replaceRange(gpa, e.pos, e.removed.len, e.inserted);
+        check += 1;
+    }
+    return txn;
+}
+
 // -- tests ------------------------------------------------------------------------------------
 
 const t = std.testing;
@@ -253,5 +368,88 @@ test "random edit sequences round-trip" {
         try t.expectEqualStrings(original, text.items);
         try txn.applyForward(a, &text);
         try t.expectEqualStrings(after, text.items);
+    }
+}
+
+fn stepBytes(gpa: Allocator, edits: []const Edit, sel: Range, reverse: bool) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try encodeStep(&out.writer, edits, sel, reverse);
+    return out.toOwnedSlice();
+}
+
+test "a step replays its edits forward, and its reverse takes them back" {
+    const a = t.allocator;
+    var txn: Transaction = .{ .sel_before = .collapsed(5), .sel_after = .collapsed(12) };
+    defer txn.deinit(a);
+    try txn.append(a, 5, "", ", wide");
+    try txn.append(a, 0, "hello", "HELLO");
+    try txn.append(a, 12, "world", "wörld");
+
+    var text = try listOf(a, "hello world");
+    defer text.deinit(a);
+    var original = try listOf(a, "hello world");
+    defer original.deinit(a);
+
+    const fwd = try stepBytes(a, txn.edits.items, txn.sel_after, false);
+    defer a.free(fwd);
+    var applied = try applyStepTo(a, &text, try .init(fwd));
+    defer applied.deinit(a);
+    try t.expectEqualStrings("HELLO, wide wörld", text.items);
+    try t.expectEqual(txn.sel_after, applied.sel_after);
+    // What the history keeps is the same edits: it undoes as the original would.
+    try applied.applyInverse(a, &text);
+    try t.expectEqualStrings("hello world", text.items);
+
+    try txn.applyForward(a, &original);
+    const back = try stepBytes(a, txn.edits.items, txn.sel_before, true);
+    defer a.free(back);
+    var undone = try applyStepTo(a, &original, try .init(back));
+    defer undone.deinit(a);
+    try t.expectEqualStrings("hello world", original.items);
+    try t.expectEqual(txn.sel_before, undone.sel_after);
+}
+
+test "a step that does not fit the text is refused, and the text is left as it was" {
+    const a = t.allocator;
+    var txn: Transaction = .{};
+    defer txn.deinit(a);
+    try txn.append(a, 0, "ab", "x");
+    try txn.append(a, 1, "cd", "y");
+    const bytes = try stepBytes(a, txn.edits.items, .collapsed(2), false);
+    defer a.free(bytes);
+
+    // The first edit fits; the second finds other bytes. Nothing of either stays.
+    var text = try listOf(a, "abXX");
+    defer text.deinit(a);
+    try t.expectError(error.StepDoesNotApply, applyStepTo(a, &text, try .init(bytes)));
+    try t.expectEqualStrings("abXX", text.items);
+    var short = try listOf(a, "a");
+    defer short.deinit(a);
+    try t.expectError(error.StepDoesNotApply, applyStepTo(a, &short, try .init(bytes)));
+    try t.expectEqualStrings("a", short.items);
+}
+
+test "a damaged step is an error, never a crash" {
+    const a = t.allocator;
+    var txn: Transaction = .{};
+    defer txn.deinit(a);
+    try txn.append(a, 3, "abc", "défg");
+    const bytes = try stepBytes(a, txn.edits.items, .init(1, 4), false);
+    defer a.free(bytes);
+    for (0..bytes.len) |n| try t.expectError(error.BadStep, StepView.init(bytes[0..n]));
+
+    var prng: std.Random.DefaultPrng = .init(0x7e47);
+    const r = prng.random();
+    const copy = try a.dupe(u8, bytes);
+    defer a.free(copy);
+    for (0..4000) |_| {
+        @memcpy(copy, bytes);
+        copy[r.uintLessThan(usize, copy.len)] ^= @as(u8, 1) << r.int(u3);
+        const view = StepView.init(copy) catch continue;
+        var text = try listOf(a, "xyzabcxyz");
+        defer text.deinit(a);
+        var got = applyStepTo(a, &text, view) catch continue;
+        got.deinit(a);
     }
 }

@@ -38,8 +38,10 @@ mkdir -p "$pkg"
 
 # Package root = the sdk/ build surface plus its own src/ (no app-only deps).
 cp -R sdk/. "$pkg/"
-# The one module source that lives outside the package in-repo.
+# The one module source that lives outside the package in-repo, and the license every copy of
+# it carries.
 cp -R core "$pkg/core"
+cp LICENSE "$pkg/LICENSE"
 
 # Drop build/editor-only noise if any leaked into the copy (none expected).
 rm -rf "$pkg/core/.zig-cache" "$pkg/src/.zig-cache" 2>/dev/null || true
@@ -58,12 +60,14 @@ text = open(path).read()
 paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
 if not paths:
     sys.exit("pack-sdk: no .paths list in the package's build.zig.zon")
-if '"core"' not in paths.group(1):
-    text = text[:paths.end(1)] + '\n        "core",' + text[paths.end(1):]
+for entry in ("core", "LICENSE"):
+    if f'"{entry}"' not in paths.group(1):
+        text = text[:paths.end(1)] + f'\n        "{entry}",' + text[paths.end(1):]
+        paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
 text = re.sub(r'\.version = "[^"]*"', f'.version = "{version}"', text, count=1)
 paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
-if '"core",' not in paths.group(1):
-    sys.exit("pack-sdk: could not add core to the package's .paths")
+if '"core",' not in paths.group(1) or '"LICENSE",' not in paths.group(1):
+    sys.exit("pack-sdk: could not add core and LICENSE to the package's .paths")
 open(path, "w").write(text)
 PY
 

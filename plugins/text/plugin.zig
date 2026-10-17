@@ -30,6 +30,7 @@ var plugin: sdk.Plugin = .{
     .vtable = &vtable,
     .id = plugin_id,
     .display_name = plugin_options.name,
+    .step_format = Document.step_format,
 };
 
 const vtable: sdk.Plugin.VTable = .{
@@ -40,6 +41,7 @@ const vtable: sdk.Plugin.VTable = .{
     .loadDocument = loadDocument,
     .loadDocumentFromBytes = loadDocumentFromBytes,
     .createDocument = createDocument,
+    .loadUntitledDocument = loadUntitledDocument,
     .setDocumentGroupingOnBuffer = setDocumentGroupingOnBuffer,
     .documentIdFromBuffer = documentIdFromBuffer,
     .deinitDocumentBuffer = deinitDocumentBuffer,
@@ -67,6 +69,7 @@ const vtable: sdk.Plugin.VTable = .{
     .restoreDocumentState = restoreDocumentState,
     .historyLine = historyLine,
     .historyGoTo = historyGoTo,
+    .applyStep = applyStep,
     .documentFingerprint = documentFingerprint,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
@@ -281,6 +284,14 @@ fn createDocument(_: *anyopaque, path: []const u8, _: sdk.EditorAPI.NewDocGrid, 
     doc.unsaved = true;
     doc.pending_focus = true;
 }
+/// A document never saved, back from its unsaved text (a crash, a restart): untitled, and dirty.
+fn loadUntitledDocument(_: *anyopaque, title: []const u8, _: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void {
+    const doc = docBuf(out_doc);
+    doc.* = try Document.fromBytes(title, bytes);
+    doc.unsaved = true;
+    // Clean is a history at its saved id, and this one was never saved.
+    doc.clean_op_id = std.math.maxInt(u64);
+}
 fn setDocumentGroupingOnBuffer(_: *anyopaque, doc: *anyopaque, grouping: u64) void {
     docBuf(doc).grouping = grouping;
 }
@@ -402,6 +413,10 @@ fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyer
 fn historyGoTo(_: *anyopaque, handle: DocHandle, id: u64) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     try doc.goToStep(id);
+}
+fn applyStep(_: *anyopaque, handle: DocHandle, effect: []const u8, _: []const u8, _: u32) anyerror!void {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    try doc.applyStep(effect);
 }
 fn documentFingerprint(_: *anyopaque, handle: DocHandle) u64 {
     const doc = docFrom(handle) orelse return 0;
