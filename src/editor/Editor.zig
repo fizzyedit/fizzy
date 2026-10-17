@@ -2739,6 +2739,11 @@ const DocSurface = struct {
     feed: @import("app").ActivityFeed = .{},
     /// Its history as a line at the bottom of the pane: undo and redo show it.
     transport: @import("app").HistoryTransport = .{},
+    /// Its history as pictures, for the transport's strip: one taken each time its track moves.
+    frames: @import("app").HistoryFrames = .{},
+    /// The track, and how many steps it held, when a picture was last asked for.
+    frames_track: usize = 0,
+    frames_steps: usize = 0,
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2798,6 +2803,7 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
     const kv = editor.doc_surfaces.fetchRemove(doc_id) orelse return;
+    kv.value.frames.deinit(editor.app.gpa);
     editor.app.host.unregisterSurface(kv.value.id);
     editor.app.gpa.free(kv.value.id);
     editor.app.gpa.destroy(kv.value);
@@ -2947,9 +2953,26 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // the next frame is held here too.
     if (claim_pill) |pill| if (!editor.demo.live.playing()) holdInput(canvas.data(), ds, pill.physical);
 
+    // The picture of it the history asked for, from the last frame, above where the bar sits.
+    const recorded = if (editor.app.tracks) |*t| t.trackOf(doc.id) else null;
+    if (recorded != null) {
+        const pane = canvas.data().borderRectScale().r;
+        // Above the bar as it stands, its strip and the feed over it included.
+        const under = if (ds.transport.place(pane, dvui.frameTimeNS())) |bar| pane.y + pane.h - bar.y + 40 * dvui.windowRectScale().s else 0;
+        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under));
+    }
+
     const focus_before = dvui.lastFocusedIdInFrame();
     _ = try doc.owner.drawDocument(doc);
     ds.focus_inside = dvui.lastFocusedIdInFrameSince(focus_before) != null;
+
+    // Its history moved (a step recorded, undone, redone, scrubbed to): a picture of it as it
+    // stands, a frame from now. The first frame it draws is one too.
+    if (recorded) |tr| if (@intFromPtr(tr) != ds.frames_track or tr.steps.items.len != ds.frames_steps) {
+        ds.frames_track = @intFromPtr(tr);
+        ds.frames_steps = tr.steps.items.len;
+        if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| ds.frames.moved(if (line.at == 0) 0 else line.entries[line.at - 1].id);
+    };
 
     // The commands run on it, as they run; none while a tape seeks, which replays them unseen.
     if (editor.app.host.activity_muted) ds.feed.clear() else {
@@ -2990,7 +3013,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         TapeTabs.drawTrim(doc, trim[0], trim[1], canvas.data().borderRectScale().r, @truncate(ds.doc_id));
     } else {
         const shareable = if (editor.app.tracks) |*t| if (t.trackOf(doc.id)) |tr| tr.steps.items.len > 0 else false else false;
-        const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{ .share = shareable });
+        const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{ .share = shareable, .frames = if (recorded != null) &ds.frames else null });
         if (pressed.share) {
             editor.share_pending = doc.id;
             dvui.refresh(null, @src(), null);
@@ -6263,7 +6286,7 @@ fn snapshotClosingPane(editor: *Editor, doc: sdk.DocHandle) void {
     for (wb.workspaces.values()) |*ws| {
         if (!ws.hasTab(id) or ws.tabCount() != 1) continue;
         const r = ws.pane_rect_physical orelse return;
-        const snap = fizzy.core.FrameTarget.snapshot(r) orelse return;
+        const snap = fizzy.core.FrameTarget.snapshot(r, null) orelse return;
         if (ws.closing_snapshot) |old| dvui.textureDestroyLater(old);
         ws.closing_snapshot = snap;
         return;

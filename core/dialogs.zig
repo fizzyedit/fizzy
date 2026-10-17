@@ -238,6 +238,15 @@ pub const Bubble = struct {
     rect: dvui.Rect.Physical,
     /// White added over it, 0…1: `bubble_hover` under the pointer, `bubble_press` held.
     light: f32 = 0,
+    /// Its corners' radius, physical; null: fully round, a capsule (a circle when square). A bubble
+    /// that grows to hold more than a line (the transport's strip) eases to a surface's radius,
+    /// so what it holds fits inside its corners.
+    radius: ?f32 = null,
+
+    fn cornerRadius(self: Bubble) f32 {
+        const half = @min(self.rect.w, self.rect.h) / 2;
+        return if (self.radius) |r| @min(r, half) else half;
+    }
 };
 pub const bubble_hover: f32 = 0.14;
 pub const bubble_press: f32 = 0.24;
@@ -265,14 +274,16 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     // The ring after the glass, so the glass never blurs it in.
     defer if (opts.shadow > 0) for (bubbles) |b| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
-        glassShadow(b.rect, .round(@min(b.rect.w, b.rect.h) / 2 / scale), scale, bs, opts.shadow);
+        glassShadow(b.rect, .round(b.cornerRadius() / scale), scale, bs, opts.shadow);
     };
     if (widgets.LiquidField.ready()) {
         if (widgets.liquidFrost()) |frost| {
             var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale };
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
-                field.add(.{ .rect = b.rect, .radii = @splat(@min(b.rect.w, b.rect.h)), .round = true, .light = b.light });
+                // A capsule's edge bends round as a drop's does; a rounded box's keeps to its sides.
+                const r = if (b.radius == null) @min(b.rect.w, b.rect.h) else b.cornerRadius();
+                field.add(.{ .rect = b.rect, .radii = @splat(r), .round = b.radius == null, .light = b.light });
             }
             var pane = frost;
             pane.form = 1;
@@ -283,7 +294,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     }
     for (bubbles, 0..) |b, i| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
-        const round: dvui.CornerRect = .round(@min(b.rect.w, b.rect.h) / 2 / scale);
+        const round: dvui.CornerRect = .round(b.cornerRadius() / scale);
         const physical = round.scale(scale, dvui.CornerRect.Physical);
         const piece = id.update(std.mem.asBytes(&i));
         const frosted = if (opts.witness) |w| frostPaneKept(piece, b.rect, round, scale, w) else frostPane(piece, b.rect, round, scale);

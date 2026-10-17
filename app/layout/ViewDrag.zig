@@ -703,7 +703,7 @@ pub fn photographFromFrame(l: *Layout, rect: dvui.Rect.Physical) bool {
     if (core.dialogs.carry_windows) return false;
     const d = &l.state.view_drag;
     const r = rect.intersect(dvui.windowRectPixels());
-    const tex = core.FrameTarget.snapshot(r) orelse return false;
+    const tex = core.FrameTarget.snapshot(r, null) orelse return false;
     if (d.texture) |old| dvui.Texture.destroyLater(old);
     d.texture = backed(tex, r);
     d.texture_rect = r;
