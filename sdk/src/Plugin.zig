@@ -236,6 +236,8 @@ pub const VTable = struct {
     historyLine: ?*const fn (state: *anyopaque, doc: DocHandle, arena: std.mem.Allocator) anyerror!HistoryLine = null,
     /// Undo or redo `doc` until step `id` (`HistoryLine.Entry.id`) is the last one applied; 0
     /// goes back before the first. An id not on the line is an error, and nothing moves.
+    /// `fizzy.undo`/`fizzy.redo` with a `path` or an `expect` go through it too, so a document
+    /// can be undone without being the active one.
     historyGoTo: ?*const fn (state: *anyopaque, doc: DocHandle, id: u64) anyerror!void = null,
     /// Apply a step this owner recorded (`Step`, `Host.recordStep`) to `doc`, forward, as a new
     /// entry on its history: `effect` and `motion` in the owner's `step_format`. `ms` asks for it
