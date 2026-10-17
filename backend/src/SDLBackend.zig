@@ -2089,6 +2089,9 @@ pub fn deinit(self: *SDLBackend) void {
             if (slot.*) |*v| self.viewportClose(v);
         }
         self.gpu.destroy();
+        // Not followed through Spaces from here: the monitor's pump, and a block queued as a way
+        // out of full screen ended, read a window SDL had destroyed while it quit (two crashes).
+        if (comptime builtin.target.os.tag == .macos) platform.macos_monitor.unwatch(self.window);
         c.SDL_DestroyWindow(self.window);
         if (self.sdl_quit) {
             quit_signals.uninstall();
