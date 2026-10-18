@@ -1,11 +1,15 @@
 //! The control server's transport: HTTP/1.1 on a Unix socket only this user can open, served by
-//! threads of its own (plans/CONTROL_SERVER_PLAN.md). Nothing here touches the app: a request is
-//! handed to the UI thread (`take`, once a frame), and the connection's thread waits until it is
+//! `Io` tasks of its own (plans/CONTROL_SERVER_PLAN.md). Nothing here touches the app: a request is
+//! handed to the UI thread (`take`, once a frame), and the connection's task waits until it is
 //! answered (`Request.answer`), then writes the response.
 //!
-//! Each connection has a thread of its own, so a client holding a connection open never makes
-//! another wait, and keep-alive works as curl and every HTTP library expect. The UI thread answers
-//! requests in the order they arrived. Idle, the server costs a thread blocked in `accept`.
+//! Each connection is a task of its own (`Io.concurrent`, a thread each), so a client holding a
+//! connection open never makes another wait, and keep-alive works as curl and every HTTP library
+//! expect. The UI thread answers requests in the order they arrived. Idle, the server costs a task
+//! blocked in `accept`. Tasks, not plain threads, because `stop` must end a read or a write blocked
+//! on a client that went quiet, and std interrupts a task's blocked call on every OS (`cancel`),
+//! where neither `shutdown` nor closing the socket interrupts a blocked write on Windows (closing it
+//! is `unreachable` in std there).
 //!
 //! Lifted from the agent plugin's socket server (`fizzyedit/agent` `src/Server.zig`), which kept a
 //! private ZON-lines wire behind a token; here the socket's permissions are the authorization.
@@ -19,6 +23,29 @@ const Io = std.Io;
 
 /// The most a request body may hold. A command's arguments can be a whole drawing, but not this.
 pub const max_body = 64 * 1024 * 1024;
+/// The most a stream may fall behind: a client that reads no faster than events come is closed
+/// rather than kept buffering without end.
+pub const max_backlog = 8 * 1024 * 1024;
+/// How long a stream may stay quiet before a keep-alive comment: how a client that went away
+/// without closing is noticed.
+pub const keep_alive_ms = 15_000;
+/// The longest socket path the OS takes, without its terminating zero. std's
+/// `UnixAddress.max_len` says 108 everywhere but Windows, where Darwin's `sockaddr_un` holds 104:
+/// a path between them passes `UnixAddress.init` and then overruns the copy in `listen`.
+pub const max_path = if (builtin.target.os.tag == .windows) 107 else @sizeOf(std.posix.sockaddr.un) - @offsetOf(std.posix.sockaddr.un, "path") - 1;
+
+/// Where an app whose config folder is `config_folder` listens: `control/control.sock` in it, a folder
+/// of its own only this user can open (`start` makes it). When that is longer than the OS takes
+/// (`max_path`, a deep profile), a folder in `runtime_dir` (`$TMPDIR`, `$XDG_RUNTIME_DIR`, else
+/// `/tmp`) named by a hash of the config folder: per config folder still, and just as private.
+pub fn socketPath(gpa: std.mem.Allocator, config_folder: []const u8, runtime_dir: ?[]const u8) ![]u8 {
+    const preferred = try std.fs.path.join(gpa, &.{ config_folder, "control", "control.sock" });
+    if (preferred.len <= max_path) return preferred;
+    gpa.free(preferred);
+    var name: [32]u8 = undefined;
+    const folder = try std.fmt.bufPrint(&name, "fizzy-control-{x:0>16}", .{std.hash.Wyhash.hash(0, config_folder)});
+    return std.fs.path.join(gpa, &.{ runtime_dir orelse "/tmp", folder, "control.sock" });
+}
 
 gpa: std.mem.Allocator,
 io: Io,
@@ -41,14 +68,42 @@ socket_inode: ?Io.File.INode = null,
 /// Requests waiting for the UI thread, under `lock`.
 lock: Io.Mutex = .init,
 pending: std.ArrayListUnmanaged(*Request) = .empty,
+/// Connections streaming events (`publish`), under `lock`.
+streams: std.ArrayListUnmanaged(*Stream) = .empty,
+
+/// A connection that asked for events: what it wants, and what is waiting to be written to it.
+pub const Stream = struct {
+    /// Event names or prefixes ending in `*` (`fizzy.document.*`), from `?topics=a,b`; `*` alone
+    /// takes everything. In the connection's arena.
+    topics: []const []const u8,
+    /// Under the server's `lock`: whole SSE messages, appended by `publish`, written and emptied
+    /// by the connection's thread. `gpa`-owned.
+    backlog: std.ArrayListUnmanaged(u8) = .empty,
+    /// It fell more than `max_backlog` behind: nothing more is buffered for it, and it ends once its
+    /// write returns (at once on POSIX, where `publish` shuts the socket down) or at `stop`.
+    overrun: bool = false,
+    ready: Io.Event = .unset,
+    conn: *Conn,
+
+    fn wants(self: *const Stream, name: []const u8) bool {
+        for (self.topics) |t| {
+            if (t.len > 0 and t[t.len - 1] == '*') {
+                if (std.mem.startsWith(u8, name, t[0 .. t.len - 1])) return true;
+            } else if (std.mem.eql(u8, t, name)) return true;
+        }
+        return false;
+    }
+};
 
 const Conn = struct {
     stream: Io.net.Stream,
-    thread: ?std.Thread = null,
+    task: ?Io.Future(void) = null,
     done: std.atomic.Value(bool) = .init(false),
     /// A request of this connection's is queued or being answered, under `lock`: `stop` leaves its
     /// socket open so the answer ("fizzy is closing") can still be written.
     waiting: bool = false,
+    /// It streams events, under `lock`.
+    streaming: bool = false,
 };
 
 /// One request on its way through the UI thread. Everything in it lives in the connection's
@@ -62,10 +117,33 @@ pub const Request = struct {
     /// Set by `answer`. `body` is `gpa`-owned and the connection's thread frees it.
     response: Response = .{},
     done: Io.Event = .unset,
+    conn: *Conn,
+    /// The connection's, which its thread does not touch while it waits for `done`.
+    arena: std.mem.Allocator,
+    /// Set by `answerStream`.
+    stream: Stream = undefined,
 
     /// The path without its query.
     pub fn path(self: *const Request) []const u8 {
         return self.target[0 .. std.mem.indexOfScalar(u8, self.target, '?') orelse self.target.len];
+    }
+
+    /// Answer by streaming events to this connection from now on, from the UI thread. The stream
+    /// is registered here, before the answer: what is published from now on is buffered for it
+    /// while its headers go out, and `take` counts it in the same frame.
+    pub fn answerStream(self: *Request, server: *Server) void {
+        const topics = topicsOf(self.arena, self.target) catch
+            return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
+        self.stream = .{ .topics = topics, .conn = self.conn };
+        {
+            server.lock.lockUncancelable(server.io);
+            defer server.lock.unlock(server.io);
+            server.streams.append(server.gpa, &self.stream) catch
+                return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
+            self.conn.streaming = true;
+        }
+        self.response = .{ .stream = true, .status = .ok };
+        self.done.set(server.io);
     }
 
     /// Answer, from the UI thread. `body` is copied with the server's `gpa`.
@@ -81,6 +159,9 @@ pub const Request = struct {
 };
 
 pub const Response = struct {
+    /// Answered by turning the connection into an event stream (`GET /events`): the status and
+    /// body are not sent, the connection stays open and `publish` writes to it.
+    stream: bool = false,
     status: std.http.Status = .internal_server_error,
     /// Static: a string literal, never freed.
     content_type: []const u8 = "text/plain",
@@ -93,7 +174,19 @@ pub fn start(self: *Server) !void {
     // Windows has AF_UNIX from 10 1803, and std offers it only to a target whose minimum is that
     // (`std.Io.net.has_unix_sockets`); fizzy's build sets it.
     if (!Io.net.has_unix_sockets) return error.UnixSocketsUnsupported;
+    if (self.socket_path.len > max_path) return error.NameTooLong;
     const addr = try Io.net.UnixAddress.init(self.socket_path);
+    // Its folder, this user's only: the socket is unreachable to others from the moment it exists,
+    // before its own permissions are set below. A link in its place is refused, not followed: its
+    // target may be a folder shared with others, which the mode would then be set on.
+    if (std.fs.path.dirname(self.socket_path)) |dir| {
+        try Io.Dir.cwd().createDirPath(self.io, dir);
+        if (comptime builtin.target.os.tag != .windows) {
+            const st = try Io.Dir.cwd().statFile(self.io, dir, .{ .follow_symlinks = false });
+            if (st.kind != .directory) return error.NotAFolder;
+            try Io.Dir.cwd().setFilePermissions(self.io, dir, .fromMode(0o700), .{ .follow_symlinks = false });
+        }
+    }
     // A socket left by a fizzy that did not quit cleanly, or one a fizzy this one takes over from
     // still holds: this run's now. The other leaves it alone at its stop (`socket_inode`).
     Io.Dir.deleteFileAbsolute(self.io, self.socket_path) catch {};
@@ -101,6 +194,7 @@ pub fn start(self: *Server) !void {
     errdefer {
         self.listener.?.deinit(self.io);
         self.listener = null;
+        Io.Dir.deleteFileAbsolute(self.io, self.socket_path) catch {};
     }
     if (comptime builtin.target.os.tag != .windows) {
         // This user only. The umask usually says so already; a shared machine's may not.
@@ -112,32 +206,71 @@ pub fn start(self: *Server) !void {
     self.accept_task = try self.io.concurrent(run, .{self});
 }
 
-/// Requests the UI thread should answer now. On the UI thread, each frame; each must be answered.
-pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) void {
+/// Requests the UI thread should answer now, each of which must be answered, and how many
+/// connections stream events. On the UI thread, each frame.
+pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) usize {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
-    out.appendSlice(self.gpa, self.pending.items) catch return;
+    // Out of memory: left queued for the next frame, never dropped unanswered.
+    out.appendSlice(self.gpa, self.pending.items) catch return self.streams.items.len;
     self.pending.clearRetainingCapacity();
+    return self.streams.items.len;
+}
+
+/// Whether any stream wants the event `name`: the caller skips building a message nobody reads.
+pub fn wants(self: *Server, name: []const u8) bool {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    for (self.streams.items) |st| if (!st.overrun and st.wants(name)) return true;
+    return false;
+}
+
+/// Send the event `name`, its payload already JSON on one line, to every stream that wants it.
+/// The message is built once and copied to each. From any thread.
+pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
+    // A line break would end the `event:` line early, and let a name forge messages of its own.
+    if (std.mem.indexOfAny(u8, name, "\r\n") != null) return;
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    for (self.streams.items) |st| {
+        if (st.overrun or !st.wants(name)) continue;
+        const fits = st.backlog.items.len + name.len + json.len + 16 <= max_backlog;
+        if (fits) {
+            if (st.backlog.print(self.gpa, "event: {s}\ndata: {s}\n\n", .{ name, json })) |_| {
+                st.ready.set(self.io);
+                continue;
+            } else |_| {}
+        }
+        // Too far behind: shut down, which ends a blocked write on POSIX (not on Windows, where the
+        // task ends when its write returns or `stop` cancels it). Nothing more is buffered either way.
+        st.overrun = true;
+        if (!st.conn.done.load(.acquire)) st.conn.stream.shutdown(self.io, .both) catch {};
+        st.ready.set(self.io);
+    }
 }
 
 pub fn stop(self: *Server) void {
     self.stopping.store(true, .release);
+    // The connections whose requests this answers ("fizzy is closing"): each writes it and ends.
+    var answered: std.ArrayListUnmanaged(*Conn) = .empty;
+    defer answered.deinit(self.gpa);
     {
         self.lock.lockUncancelable(self.io);
         defer self.lock.unlock(self.io);
-        // Whatever the UI thread will never answer now, answered: its connection's thread is
-        // waiting, and writes it before it sees `stopping` and ends.
-        for (self.pending.items) |r| r.answer(self, .service_unavailable, "text/plain", "fizzy is closing\n");
+        for (self.pending.items) |r| {
+            answered.append(self.gpa, r.conn) catch {};
+            r.answer(self, .service_unavailable, "text/plain", "the control server is stopping\n");
+        }
         self.pending.clearRetainingCapacity();
-        // The rest are reading their next request: end those reads. Only the ones still open,
-        // since shutting down a closed descriptor is a panic in std.
-        for (self.conns.items) |c| if (!c.done.load(.acquire) and !c.waiting) c.stream.shutdown(self.io, .both) catch {};
     }
     if (self.accept_task) |*t| t.cancel(self.io);
     self.accept_task = null;
-    // No more are accepted: wait for each connection's thread, its read ended above.
+    // No more are accepted, so `conns` holds still. Every other task, reading its next request or
+    // streaming, blocked on a quiet client or not, is cancelled.
     for (self.conns.items) |c| {
-        if (c.thread) |t| t.join();
+        if (c.task) |*t| {
+            if (std.mem.indexOfScalar(*Conn, answered.items, c) != null) t.await(self.io) else t.cancel(self.io);
+        }
         self.gpa.destroy(c);
     }
     self.conns.deinit(self.gpa);
@@ -149,6 +282,7 @@ pub fn stop(self: *Server) void {
         } else |_| {}
     }
     self.pending.deinit(self.gpa);
+    self.streams.deinit(self.gpa);
 }
 
 fn run(self: *Server) void {
@@ -179,7 +313,7 @@ fn run(self: *Server) void {
             self.gpa.destroy(conn);
             continue;
         };
-        conn.thread = std.Thread.spawn(.{}, serveConn, .{ self, conn }) catch {
+        conn.task = self.io.concurrent(serveConn, .{ self, conn }) catch {
             _ = self.conns.pop();
             stream.close(self.io);
             self.gpa.destroy(conn);
@@ -193,6 +327,9 @@ fn serveConn(self: *Server, conn: *Conn) void {
     // Closed under `lock`, with `done`, so `stop` never shuts down a descriptor already closed.
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
+    // The sending side first: a client reading to the end then sees it end. Windows' AF_UNIX
+    // otherwise sometimes never tells a client still reading that the socket closed.
+    conn.stream.shutdown(self.io, .send) catch {};
     conn.stream.close(self.io);
     conn.done.store(true, .release);
 }
@@ -206,7 +343,8 @@ fn reap(self: *Server) void {
             i += 1;
             continue;
         }
-        if (c.thread) |t| t.join();
+        // Done, so this returns at once.
+        if (c.task) |*t| t.await(self.io);
         self.gpa.destroy(c);
         _ = self.conns.swapRemove(i);
     }
@@ -245,6 +383,8 @@ fn serve(self: *Server, conn: *Conn) void {
             .target = arena.dupe(u8, head.head.target) catch return,
             .content_type = if (head.head.content_type) |t| arena.dupe(u8, t) catch return else null,
             .body = "",
+            .conn = conn,
+            .arena = arena,
         };
         var body_buf: [4096]u8 = undefined;
         const body_reader = head.readerExpectContinue(&body_buf) catch return;
@@ -264,6 +404,7 @@ fn serve(self: *Server, conn: *Conn) void {
         // Uncancelable: `&req` is queued, and an early return would leave the UI thread writing
         // into a frame that is gone.
         req.done.waitUncancelable(self.io);
+        if (req.response.stream) return self.serveStream(&head, &req.stream);
         const body = req.response.body orelse "out of memory\n";
         defer if (req.response.body) |b| self.gpa.free(b);
         const sent = head.respond(body, .{
@@ -278,6 +419,69 @@ fn serve(self: *Server, conn: *Conn) void {
         sent catch return;
         if (!head.head.keep_alive) return;
     }
+}
+
+/// Write events to the connection until the client goes, falls too far behind, or the server
+/// stops. `stream` was registered by `answerStream`; it is removed here, whatever happens.
+fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) void {
+    defer {
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        for (self.streams.items, 0..) |st, i| if (st == stream) {
+            _ = self.streams.swapRemove(i);
+            break;
+        };
+        stream.backlog.deinit(self.gpa);
+    }
+    // No buffer of its own: `BodyWriter.flush` sends only the connection's, so whatever the body
+    // writer held would wait. Its writes go straight into the connection's buffer instead.
+    var body = head.respondStreaming(&.{}, .{ .respond_options = .{
+        .keep_alive = false,
+        .transfer_encoding = .none,
+        .extra_headers = &.{
+            .{ .name = "content-type", .value = "text/event-stream" },
+            .{ .name = "cache-control", .value = "no-cache" },
+        },
+    } }) catch return;
+    body.flush() catch return;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(self.gpa);
+    while (true) {
+        const quiet = if (stream.ready.waitTimeout(self.io, .{ .duration = .{ .raw = .fromMilliseconds(keep_alive_ms), .clock = .awake } })) |_| false else |err| switch (err) {
+            error.Timeout => true,
+            error.Canceled => return,
+        };
+        {
+            self.lock.lockUncancelable(self.io);
+            defer self.lock.unlock(self.io);
+            if (self.stopping.load(.acquire) or stream.overrun) return;
+            // Taken whole: `publish` goes on appending to an empty list while this one is written.
+            std.mem.swap(std.ArrayListUnmanaged(u8), &out, &stream.backlog);
+            stream.ready.reset();
+        }
+        if (out.items.len > 0) {
+            body.writer.writeAll(out.items) catch return;
+        } else if (quiet) {
+            body.writer.writeAll(": keep-alive\n\n") catch return;
+        } else continue;
+        body.flush() catch return;
+        out.clearRetainingCapacity();
+    }
+}
+
+/// `?topics=a,b` as a list; everything when absent or empty.
+fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
+    const query = target[(std.mem.indexOfScalar(u8, target, '?') orelse return &.{"*"}) + 1 ..];
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var params = std.mem.tokenizeScalar(u8, query, '&');
+    while (params.next()) |param| {
+        const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
+        if (!std.mem.eql(u8, param[0..eq], "topics")) continue;
+        const value = std.Uri.percentDecodeInPlace(try arena.dupe(u8, param[eq + 1 ..]));
+        var names = std.mem.tokenizeScalar(u8, value, ',');
+        while (names.next()) |n| try list.append(arena, std.mem.trim(u8, n, " "));
+    }
+    return if (list.items.len == 0) &.{"*"} else list.items;
 }
 
 // ---- tests ---------------------------------------------------------------------------------
@@ -302,7 +506,26 @@ const TestClient = struct {
         w.interface.flush() catch return;
         var rbuf: [1024]u8 = undefined;
         var r = stream.reader(self.io, &rbuf);
-        self.reply_len = r.interface.readSliceShort(&self.reply) catch 0;
+        // As an HTTP client does: the head, then `Content-Length` bytes when it says, else to the
+        // end (a stream). Never to the end when it need not: whether Windows' AF_UNIX tells a
+        // reader the other side closed is not something to test here.
+        while (self.reply_len < self.reply.len) {
+            const n = r.interface.readSliceShort(self.reply[self.reply_len..][0..1]) catch return;
+            if (n == 0) return;
+            self.reply_len += 1;
+            if (std.mem.endsWith(u8, self.reply[0..self.reply_len], "\r\n\r\n")) break;
+        }
+        const head = self.reply[0..self.reply_len];
+        const key = "content-length: ";
+        if (std.ascii.findIgnoreCase(head, key)) |i| {
+            const end = std.mem.indexOfPos(u8, head, i, "\r\n") orelse return;
+            const len = std.fmt.parseInt(usize, head[i + key.len .. end], 10) catch return;
+            const want = @min(len, self.reply.len - self.reply_len);
+            r.interface.readSliceAll(self.reply[self.reply_len..][0..want]) catch return;
+            self.reply_len += want;
+        } else {
+            self.reply_len += r.interface.readSliceShort(self.reply[self.reply_len..]) catch 0;
+        }
     }
 };
 
@@ -314,7 +537,8 @@ test "a request reaches the UI thread and its answer goes back" {
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
     defer gpa.free(dir);
-    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    // In a folder of its own that `start` makes, as the app's is (`control/control.sock`).
+    const path = try std.fs.path.join(gpa, &.{ dir, "control", "c.sock" });
     defer gpa.free(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
@@ -334,7 +558,7 @@ test "a request reaches the UI thread and its answer goes back" {
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
-        server.take(&taken);
+        _ = server.take(&taken);
         if (taken.items.len == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
     }
     try std.testing.expectEqual(@as(usize, 1), taken.items.len);
@@ -355,6 +579,9 @@ test "a request reaches the UI thread and its answer goes back" {
     if (builtin.target.os.tag == .windows) return;
     const st = try Io.Dir.cwd().statFile(io, path, .{});
     try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), st.permissions.toMode() & 0o777);
+    // And its folder: nobody else reaches it, even before the socket's own mode is set.
+    const folder = try Io.Dir.cwd().statFile(io, std.fs.path.dirname(path).?, .{});
+    try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), folder.permissions.toMode() & 0o777);
 }
 
 fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
@@ -363,7 +590,7 @@ fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     return std.fs.path.join(gpa, &.{ dir, "c.sock" });
 }
 
-test "a request still queued at quit is answered: fizzy is closing" {
+test "a request still queued at quit is answered: the server is stopping" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -389,7 +616,7 @@ test "a request still queued at quit is answered: fizzy is closing" {
     thread.join();
     const reply = client.reply[0..client.reply_len];
     try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 503 Service Unavailable\r\n"));
-    try std.testing.expect(std.mem.endsWith(u8, reply, "fizzy is closing\n"));
+    try std.testing.expect(std.mem.endsWith(u8, reply, "the control server is stopping\n"));
 }
 
 test "what cannot be served is refused before its body, and never reaches the app" {
@@ -420,13 +647,36 @@ test "what cannot be served is refused before its body, and never reaches the ap
     }
     var taken: std.ArrayListUnmanaged(*Request) = .empty;
     defer taken.deinit(gpa);
-    server.take(&taken);
+    _ = server.take(&taken);
     try std.testing.expectEqual(@as(usize, 0), taken.items.len);
+}
+
+test "a config folder too deep for a socket path listens in a runtime folder instead" {
+    const gpa = std.testing.allocator;
+    const short = try socketPath(gpa, "/home/me/.config/fizzy", "/run/user/1000");
+    defer gpa.free(short);
+    // Joined as the OS joins paths: `\` between them on Windows.
+    const want = try std.fs.path.join(gpa, &.{ "/home/me/.config/fizzy", "control", "control.sock" });
+    defer gpa.free(want);
+    try std.testing.expectEqualStrings(want, short);
+    // Between Darwin's 104 and std's 108, the length that crashed `listen`: not used as it is.
+    const deep = "/" ++ @as([max_path - "/control/control.sock".len + 2]u8, @splat('d'));
+    const fallback = try socketPath(gpa, deep, "/tmp/me");
+    defer gpa.free(fallback);
+    try std.testing.expect(fallback.len <= max_path);
+    const folder = try std.fs.path.join(gpa, &.{ "/tmp/me", "fizzy-control-" });
+    defer gpa.free(folder);
+    try std.testing.expect(std.mem.startsWith(u8, fallback, folder));
+    // Per config folder: another deep one gets another folder.
+    const other = try socketPath(gpa, deep ++ "x", "/tmp/me");
+    defer gpa.free(other);
+    try std.testing.expect(!std.mem.eql(u8, fallback, other));
 }
 
 test "a socket path the OS cannot hold fails at start, not later" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
-    const long = "/" ++ @as([Io.net.UnixAddress.max_len + 8]u8, @splat('d'));
+    // Longer than the OS takes but within std's limit: refused here, not overrun in `listen`.
+    const long = "/" ++ @as([max_path]u8, @splat('d'));
     var server: Server = .{ .gpa = std.testing.allocator, .io = std.testing.io, .socket_path = long, .wake = noWake };
     try std.testing.expectError(error.NameTooLong, server.start());
 }
@@ -455,11 +705,260 @@ test "a server that took over the path keeps it when the old one stops" {
     defer taken.deinit(gpa);
     var waited: usize = 0;
     while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
-        new.take(&taken);
+        _ = new.take(&taken);
         if (taken.items.len == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
     }
     try std.testing.expectEqual(@as(usize, 1), taken.items.len);
     taken.items[0].answer(&new, .ok, "text/plain", "new");
     thread.join();
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.reply_len], "\r\n\r\nnew"));
+}
+
+test "a stream gets the events it asked for, once each, until the server stops" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    errdefer server.stop();
+    var client: TestClient = .{ .io = io, .path = path, .request = "GET /events?topics=fizzy.document.*,chat.turn_ended HTTP/1.1\r\nHost: x\r\n\r\n" };
+    const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
+
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(gpa);
+    var streams: usize = 0;
+    var waited: usize = 0;
+    while (streams == 0 and waited < 2000) : (waited += 1) {
+        streams = server.take(&taken);
+        for (taken.items) |r| r.answerStream(&server);
+        taken.clearRetainingCapacity();
+        if (streams == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), streams);
+    server.publish("fizzy.document.saved", "{\"path\":\"/a\"}");
+    server.publish("fizzy.folder.opened", "{\"path\":\"/p\"}");
+    server.publish("chat.turn_ended", "{}");
+    // Let the stream write before the stop ends it.
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    server.stop();
+    thread.join();
+
+    const reply = client.reply[0..client.reply_len];
+    try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, reply, "content-type: text/event-stream\r\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\nevent: fizzy.document.saved\ndata: {\"path\":\"/a\"}\n\nevent: chat.turn_ended\ndata: {}\n\n"));
+}
+
+test "topics come from the query, and none means everything" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"*"}), try topicsOf(a, "/events"));
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"*"}), try topicsOf(a, "/events?topics="));
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "fizzy.document.*", "x.y" }), try topicsOf(a, "/events?a=1&topics=fizzy.document.%2A,%20x.y"));
+    const st: Stream = .{ .topics = &.{ "fizzy.document.*", "x.y" }, .conn = undefined };
+    try std.testing.expect(st.wants("fizzy.document.saved"));
+    try std.testing.expect(st.wants("x.y"));
+    try std.testing.expect(!st.wants("x.yz"));
+    try std.testing.expect(!st.wants("fizzy.folder.opened"));
+}
+
+/// Connects, asks for events, then reads nothing until `release`: a paused `curl | less`.
+const StalledClient = struct {
+    io: Io,
+    path: []const u8,
+    release: Io.Event = .unset,
+
+    fn run(self: *StalledClient) void {
+        const addr = Io.net.UnixAddress.init(self.path) catch return;
+        const stream = addr.connect(self.io) catch return;
+        defer stream.close(self.io);
+        var wbuf: [256]u8 = undefined;
+        var w = stream.writer(self.io, &wbuf);
+        w.interface.writeAll("GET /events HTTP/1.1\r\nHost: x\r\n\r\n") catch return;
+        w.interface.flush() catch return;
+        self.release.waitUncancelable(self.io);
+    }
+};
+
+fn openStreams(server: *Server) usize {
+    server.lock.lockUncancelable(server.io);
+    defer server.lock.unlock(server.io);
+    return server.streams.items.len;
+}
+
+fn answerStreams(server: *Server, want: usize) !void {
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(server.gpa);
+    var waited: usize = 0;
+    while (openStreams(server) < want and waited < 2000) : (waited += 1) {
+        _ = server.take(&taken);
+        for (taken.items) |r| r.answerStream(server);
+        taken.clearRetainingCapacity();
+        if (openStreams(server) < want) server.io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(want, openStreams(server));
+}
+
+test "a client that stops reading neither holds up the quit nor buffers without end" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    defer server.stop();
+    var client: StalledClient = .{ .io = io, .path = path };
+    const thread = try std.Thread.spawn(.{}, StalledClient.run, .{&client});
+    defer {
+        client.release.set(io);
+        thread.join();
+    }
+    try answerStreams(&server, 1);
+    // Until its task blocks writing and the backlog passes the cap; how much the socket takes first
+    // is the OS's (Windows grows its buffers), so publish until then, up to far more than any.
+    const chunk = "\"" ++ @as([64 * 1024]u8, @splat('x')) ++ "\"";
+    var published: usize = 0;
+    while (!overrun(&server) and published < 256 * 1024 * 1024) : (published += chunk.len) server.publish("e", chunk);
+    try std.testing.expect(overrun(&server));
+    // Buffered no further: the backlog stays under the cap whatever else is published.
+    for (0..64) |_| server.publish("e", chunk);
+    server.lock.lockUncancelable(io);
+    const kept = if (server.streams.items.len > 0) server.streams.items[0].backlog.items.len else 0;
+    server.lock.unlock(io);
+    try std.testing.expect(kept <= max_backlog);
+    // And the quit (the deferred `stop`) returns, its write blocked or not.
+}
+
+fn overrun(server: *Server) bool {
+    server.lock.lockUncancelable(server.io);
+    defer server.lock.unlock(server.io);
+    // Gone already counts: on POSIX the shutdown ended it at once.
+    return server.streams.items.len == 0 or server.streams.items[0].overrun;
+}
+
+test "a stopped server ends a stream whose client stopped reading" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    // A failed expectation still stops it, so the test binary is not left running.
+    errdefer server.stop();
+    var client: StalledClient = .{ .io = io, .path = path };
+    const thread = try std.Thread.spawn(.{}, StalledClient.run, .{&client});
+    defer {
+        client.release.set(io);
+        thread.join();
+    }
+    try answerStreams(&server, 1);
+    // Enough to block its write, not enough to overrun.
+    const chunk = "\"" ++ @as([64 * 1024]u8, @splat('x')) ++ "\"";
+    for (0..16) |_| server.publish("e", chunk);
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    // Returns: the stream's socket is shut down under its blocked write.
+    server.stop();
+}
+
+test "an event published as the stream is answered is not lost" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    var client: TestClient = .{ .io = io, .path = path, .request = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n" };
+    const thread = try std.Thread.spawn(.{}, TestClient.run, .{&client});
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(gpa);
+    var waited: usize = 0;
+    while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
+        _ = server.take(&taken);
+        if (taken.items.len == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    // Registered by the answer itself, on this thread: the publish right after reaches it even
+    // though its connection has not written the headers yet.
+    taken.items[0].answerStream(&server);
+    server.publish("first", "1");
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    server.stop();
+    thread.join();
+    try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.reply_len], "\r\n\r\nevent: first\ndata: 1\n\n"));
+}
+
+test "a stopped server ends a keep-alive connection waiting for its next request" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    errdefer server.stop();
+    // Asks once, keeps the connection, and sends nothing more until `release`.
+    const Idle = struct {
+        io: Io,
+        path: []const u8,
+        got: usize = 0,
+        release: Io.Event = .unset,
+        fn run(self: *@This()) void {
+            const addr = Io.net.UnixAddress.init(self.path) catch return;
+            const stream = addr.connect(self.io) catch return;
+            defer stream.close(self.io);
+            var wbuf: [256]u8 = undefined;
+            var w = stream.writer(self.io, &wbuf);
+            w.interface.writeAll("GET / HTTP/1.1\r\nHost: x\r\n\r\n") catch return;
+            w.interface.flush() catch return;
+            var rbuf: [256]u8 = undefined;
+            var r = stream.reader(self.io, &rbuf);
+            var reply: [256]u8 = undefined;
+            // The answer below is 2 bytes, after a head of known shape: read to its end.
+            while (self.got < reply.len) {
+                const n = r.interface.readSliceShort(reply[self.got..][0..1]) catch return;
+                if (n == 0) return;
+                self.got += 1;
+                if (std.mem.endsWith(u8, reply[0..self.got], "\r\n\r\nhi")) break;
+            }
+            self.release.waitUncancelable(self.io);
+        }
+    };
+    var client: Idle = .{ .io = io, .path = path };
+    const thread = try std.Thread.spawn(.{}, Idle.run, .{&client});
+    defer {
+        client.release.set(io);
+        thread.join();
+    }
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(gpa);
+    var waited: usize = 0;
+    while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
+        _ = server.take(&taken);
+        if (taken.items.len == 0) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), taken.items.len);
+    taken.items[0].answer(&server, .ok, "text/plain", "hi");
+    // Its task is back reading the next request when the server stops: that read ends.
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    server.stop();
 }

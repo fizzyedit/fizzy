@@ -32,6 +32,9 @@ version: []const u8,
 repo_url: []const u8,
 repo_url_fallback: []const u8,
 
+/// Where Report a Bug goes (`-Dapp-issues-url`). Empty disables it.
+issues_url: []const u8,
+
 /// Plugin registry catalog endpoint. An app that ships its own store points this at its own
 /// registry; empty means "no store".
 registry_url: []const u8,
@@ -46,7 +49,16 @@ pub const current: AppInfo = .{
     .repo_url = build_opts.app_repo_url,
     .repo_url_fallback = build_opts.app_repo_url_fallback,
     .registry_url = build_opts.app_registry_url,
+    .issues_url = build_opts.app_issues_url,
 };
+
+/// Fizzy itself rather than an app built on it: the build's root package, not a dependency. What
+/// is fizzy's own (the fox, fizzyed.it) shows only here.
+pub const is_fizzy = build_opts.app_is_fizzy;
+
+/// `repo_url` is this app's own: fizzy's, or one the app set. Every app gets fizzy's by default,
+/// so an app that set none has no repo to show and no updates of its own to offer.
+pub const own_repo_url = build_opts.app_repo_url.len > 0 and (is_fizzy or build_opts.app_repo_url_set);
 
 /// Null-terminated forms, for the C APIs that need them (SDL metadata, window title).
 pub const display_name_z: [:0]const u8 = build_opts.app_display_name ++ "";

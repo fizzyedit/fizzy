@@ -1284,7 +1284,7 @@ pub fn tabsIn(f: *Layout, r: *const Region) void {
     for (strip.views()) |view| {
         var it = strip.item(@src(), view, .{});
         defer it.deinit();
-        Chooser.label(view, it.selected);
+        Chooser.label(view, it.selected, it.hovered());
     }
 }
 

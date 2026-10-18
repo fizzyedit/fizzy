@@ -64,7 +64,7 @@ pub fn keptTarget(_: *const Viewport, _: *?dvui.Texture.Target, _: u32, _: u32) 
     return null;
 }
 /// No windows besides the main one: dvui's own screen only.
-pub fn publishScreens() void {
+pub fn publishScreens(_: ?dvui.Rect.Natural) void {
     dvui.screensSet(&.{});
 }
 pub fn inMain(_: *const Viewport) Rect {

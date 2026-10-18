@@ -41,8 +41,8 @@
         // working branch and can be rebased freely — the tag, never.
         .dvui = .{
             // zig-0.17 branch (zig/0.17 pins a commit; tagged when it merges to main)
-            .url = "git+https://github.com/foxnne/dvui-dev#98a0e0770cb025f392dc64f0e499933a81135dc6",
-            .hash = "dvui-0.6.0-dev-AQFJmXhpBAHqmVI6Hvf-kak1SuWCEgXk7Mi9dXQkurgO",
+            .url = "git+https://github.com/foxnne/dvui-dev#8fa9b9c95a0156f0432753a53aa4e6e364b757d3",
+            .hash = "dvui-0.6.0-dev-AQFJmTePBAGK0KDGkqXrunv-ITWyshn9EpeUIFRlzRNj",
             //.path = "../../dvui-dev",
         },
         .zf = .{
