@@ -1074,6 +1074,45 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 
 /// The theme's window colours `dressPlainWindows` last gave the windows.
 var plain_dressed: ?[2]dvui.Color = null;
+/// The material `dressPlainWindows` last gave the windows.
+var plain_material: ?WindowMaterial = null;
+
+/// The kinds of window material, field for field with fizzy's `core.material.Kind`: from the
+/// plainest to the richest, what `effectiveMaterial` falls back through.
+pub const MaterialKind = enum(u8) { none, transparent, blur, frost, liquid };
+
+pub const WindowMaterial = struct {
+    kind: MaterialKind = .none,
+    /// How much of the theme's window colour covers what is behind, 0 (clear) to 1. Ignored by
+    /// `none`.
+    opacity: f32 = 1,
+};
+
+/// What the windows this backend dresses itself are made of (`dressPlainWindows`: a plain dvui
+/// app's main window and its OS-framed floats): set by the app (`setWindowMaterial`), shown as the
+/// backend can (`effectiveMaterial`). Fizzy hands it `core.material`'s effective value each frame;
+/// fizzy's own windows, which it dresses itself (`platform.window.app_dresses_windows`), are not
+/// made of it yet.
+pub var window_material: WindowMaterial = .{};
+
+/// The windows' material from now on (`window_material`), applied as it changes.
+pub fn setWindowMaterial(material: MaterialKind, opacity: f32) void {
+    window_material = .{ .kind = material, .opacity = opacity };
+}
+
+/// `window_material`, or the best kind below it this backend can show (`materialKinds`).
+fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
+    const offered = self.materialKinds();
+    var k = @backingInt(window_material.kind);
+    while (k > 0) : (k -= 1) {
+        const material: MaterialKind = @fromBackingInt(k);
+        const has = switch (material) {
+            inline else => |t| @field(offered, @tagName(t)),
+        };
+        if (has) return .{ .kind = material, .opacity = window_material.opacity };
+    }
+    return .{ .kind = .none, .opacity = window_material.opacity };
+}
 
 /// The OS's own title bar on a plain dvui app's windows — the main one and each of the OS's own
 /// frame (`Viewport.native`) — in the theme's colour: set again only when the theme's colours
@@ -1081,11 +1120,15 @@ var plain_dressed: ?[2]dvui.Color = null;
 fn dressPlainWindows(self: *SDLBackend) void {
     const theme = dvui.themeGet();
     const colors: [2]dvui.Color = .{ theme.color(.window, .fill), theme.color(.window, .text) };
-    if (plain_dressed) |d| if (std.meta.eql(d, colors)) return;
+    const material = self.effectiveMaterial();
+    if (plain_dressed) |d| if (std.meta.eql(d, colors)) if (plain_material) |m| if (std.meta.eql(m, material)) return;
     plain_dressed = colors;
+    plain_material = material;
     platform.window.nativeTitleBar(self.window, colors[0], colors[1], theme.dark);
+    platform.window.plainMaterial(self.window, @backingInt(material.kind), material.opacity);
     for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) {
         platform.window.nativeTitleBar(v.window, colors[0], colors[1], theme.dark);
+        platform.window.plainMaterial(v.window, @backingInt(material.kind), material.opacity);
     };
 }
 
@@ -1420,6 +1463,8 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
         if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_still(cocoaWindow(window));
         const theme = dvui.themeGet();
         platform.window.nativeTitleBar(window, theme.color(.window, .fill), theme.color(.window, .text), theme.dark);
+        // Made of what the main window is (`dressPlainWindows`).
+        if (plain_material) |m| platform.window.plainMaterial(window, @backingInt(m.kind), m.opacity);
         // Through Spaces, zooms and live resizes as the main window goes.
         if (comptime builtin.target.os.tag == .macos) platform.macos_monitor.watch(window);
         // Its part of the frame below the title bar's band (`platform.macos_monitor.titlebarStrip`):

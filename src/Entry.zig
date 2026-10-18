@@ -552,6 +552,14 @@ fn frameOnce() !dvui.App.Result {
     // asked for until the app has a setting for it, so each platform shows the best it can;
     // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`) asks for less, to see each.
     fizzy.core.material.publish((fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered()));
+    // And the backend, which makes the windows it dresses itself of it: the one decision, one
+    // applier (`SDLBackend.window_material`).
+    if (comptime @hasDecl(dvui.backend, "setWindowMaterial")) {
+        const m = fizzy.core.material.get();
+        dvui.backend.setWindowMaterial(switch (m.kind) {
+            inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
+        }, m.opacity);
+    }
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);
