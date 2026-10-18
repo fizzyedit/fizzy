@@ -7673,19 +7673,17 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             _ = try tmp.dir.statFile(dvui.io, "plugins/text/keep", .{});
             try tmp.dir.deleteTree(dvui.io, "plugins/text");
         }
-        // A folder already in `plugins/` in another case clashes too, before a store install
-        // writes anything: an installed plugin that is not loaded.
+        // A folder already in `plugins/` in another case clashes too, read fresh at each ask: an
+        // installed plugin that is not loaded.
         {
-            // `plugins/` is read once until something is installed or removed: a folder made
-            // behind the app's back after that read is not seen until then.
-            try std.testing.expect(editor.app.pluginCaseClash("graphl") == null);
+            var clash_buf: [std.fs.max_name_bytes]u8 = undefined;
+            try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "graphl") == null);
             try tmp.dir.createDirPath(dvui.io, "plugins/Graphl");
             try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/Graphl/keep", .data = "" });
             defer tmp.dir.deleteTree(dvui.io, "plugins/Graphl") catch {};
-            try std.testing.expect(editor.app.pluginCaseClash("graphl") == null);
-            editor.app.forgetPluginFolders();
-            try std.testing.expectEqualStrings("Graphl", editor.app.pluginCaseClash("graphl") orelse return error.TestUnexpectedResult);
-            try std.testing.expect(editor.app.pluginCaseClash("Graphl") == null);
+            const found = editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("Graphl", found.other);
+            try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "Graphl") == null);
             // Its refused variant's card, uninstalled, never takes the installed plugin's folder,
             // though on macOS and Windows `plugins/graphl` is that folder.
             editor.app.recordCaseClash("graphl", "Graphl", null);

@@ -182,6 +182,8 @@ pub const store = struct {
     else
         @import("store/PluginLoader.zig");
     pub const registry = @import("store/registry/store.zig");
+    /// The folders in `plugins/` and what a plugin id may do among them.
+    pub const folders = @import("store/plugin_folders.zig");
 };
 
 // The root of `zig build test-integration`'s `fizzy-app-tests` (`build/app.zig`): the files here

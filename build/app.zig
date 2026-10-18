@@ -829,6 +829,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
+        // Which plugin folders a case variant clashes with, and what an uninstall may delete
+        // there. std-only (see plugin_folders.zig); the store and the loader ask it.
+        .{ "fizzy-plugin-folders-tests", "app/store/plugin_folders.zig" },
         // Where a floating view's window opens, what keeps it reachable, its name, the floats'
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
