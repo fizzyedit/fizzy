@@ -142,7 +142,7 @@ plugin_reloads: @import("PluginReloads.zig") = .{},
 /// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
 black_box: @import("app").automation.BlackBox = .{},
 /// `fizzy.screen` calls waiting for their snapshot (`answerLaterCommands`).
-later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket }) = .empty,
+later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, frames: u32 = 0 }) = .empty,
 /// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
 later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
 /// The control server would not start (`syncControlServer`): not retried until the setting goes
@@ -5390,19 +5390,29 @@ fn answerLaterCommands(editor: *Editor) void {
     const api = editor.demo.service.api;
     var i: usize = 0;
     while (i < editor.later_screens.items.len) {
-        const w = editor.later_screens.items[i];
+        const w = &editor.later_screens.items[i];
         if (!host.callWanted(w.ticket)) {
             _ = editor.later_screens.swapRemove(i);
             continue;
         }
-        const text = api.snapshotText(w.snapshot) orelse {
-            // Taken over the next frame: ask for it.
-            host.refresh();
-            i += 1;
+        if (api.snapshotText(w.snapshot)) |text| {
+            const ticket = w.ticket;
+            _ = editor.later_screens.swapRemove(i);
+            host.finishCall(ticket, .{ .ok = text });
             continue;
-        };
-        _ = editor.later_screens.swapRemove(i);
-        host.finishCall(w.ticket, .{ .ok = text });
+        }
+        // Not taken yet. Asked again, which wakes the app for it and asks anew should the last
+        // asking have come to nothing; a snapshot that never comes is given up on, not waited
+        // for frame after frame.
+        w.frames += 1;
+        if (w.frames > 120) {
+            const ticket = w.ticket;
+            _ = editor.later_screens.swapRemove(i);
+            host.finishCall(ticket, .{ .failed = "no snapshot came in 120 frames" });
+            continue;
+        }
+        w.snapshot = api.snapshot();
+        i += 1;
     }
     if (editor.later_settles.items.len == 0) return;
     const settled = api.settled();

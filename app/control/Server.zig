@@ -138,13 +138,15 @@ pub const Request = struct {
         const topics = topicsOf(self.arena, self.target) catch
             return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
         self.stream = .{ .topics = topics, .conn = self.conn };
-        {
+        const added = added: {
             server.lock.lockUncancelable(server.io);
             defer server.lock.unlock(server.io);
-            server.streams.append(server.gpa, &self.stream) catch
-                return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
+            server.streams.append(server.gpa, &self.stream) catch break :added false;
             self.conn.streaming = true;
-        }
+            break :added true;
+        };
+        // Answered outside the lock, which `answer` takes.
+        if (!added) return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
         self.response = .{ .stream = true, .status = .ok };
         server.settle(self);
         self.done.set(server.io);
@@ -272,20 +274,22 @@ pub fn stop(self: *Server) void {
     // Queued, or taken and still to be answered (a command answering later).
     var answered: std.ArrayListUnmanaged(*Conn) = .empty;
     defer answered.deinit(self.gpa);
-    var owed: std.ArrayListUnmanaged(*Request) = .empty;
-    defer owed.deinit(self.gpa);
+    // Moved out whole, not copied: running out of memory here must not drop one unanswered, whose
+    // task would then wait for good.
+    var queued: std.ArrayListUnmanaged(*Request) = .empty;
+    defer queued.deinit(self.gpa);
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(self.gpa);
     {
         self.lock.lockUncancelable(self.io);
         defer self.lock.unlock(self.io);
-        owed.appendSlice(self.gpa, self.pending.items) catch {};
-        owed.appendSlice(self.gpa, self.outstanding.items) catch {};
-        self.pending.clearRetainingCapacity();
-        self.outstanding.clearRetainingCapacity();
+        std.mem.swap(std.ArrayListUnmanaged(*Request), &queued, &self.pending);
+        std.mem.swap(std.ArrayListUnmanaged(*Request), &taken, &self.outstanding);
     }
-    for (owed.items) |r| {
+    for ([_][]const *Request{ queued.items, taken.items }) |owed| for (owed) |r| {
         answered.append(self.gpa, r.conn) catch {};
         r.answer(self, .service_unavailable, "text/plain", "the control server is stopping\n");
-    }
+    };
     if (self.accept_task) |*t| t.cancel(self.io);
     self.accept_task = null;
     // No more are accepted, so `conns` holds still. Every other task, reading its next request or

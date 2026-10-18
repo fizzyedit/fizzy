@@ -111,13 +111,18 @@ pub const Call = struct {
     ticket: u32 = 0,
     /// Set by `later`: the answer comes in a later frame, through `Host.finishCall`.
     deferred: bool = false,
+    /// Set when a deferred call was answered as failed before `runWith` returned (`Host.finishCall`
+    /// on the running call): `message` says why.
+    failed: bool = false,
 
     /// Answer in a later frame instead of now: for a command whose work outlives the frame (a
     /// language server's reply, a build, a picture taken at the end of the next frame). Keep the
     /// ticket, return from `runWith` without a result, and call `Host.finishCall(ticket, …)` once
-    /// it is done, on the UI thread. A caller that can wait (`Host.callCommandAwaiting`, the control
-    /// server) hears the answer then; one that cannot (a menu, a keybind) has started it, and the
-    /// answer is dropped. `Host.callWanted(ticket)` says whether anyone still waits.
+    /// it is done, on the UI thread (a worker posts back to the UI thread first). Answering before
+    /// `runWith` returns (a cache hit) is fine: the caller gets it now. A caller that can wait
+    /// (`Host.callCommandAwaiting`, the control server) hears the answer then; one that cannot (a
+    /// menu, a keybind, a tape) has only started it, and the answer is dropped.
+    /// `Host.callWanted(ticket)` says whether anyone still waits: stop when nobody does.
     pub fn later(self: *Call) u32 {
         self.deferred = true;
         return self.ticket;

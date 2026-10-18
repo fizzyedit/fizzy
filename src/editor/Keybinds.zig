@@ -660,7 +660,6 @@ const ScreenArgs = sdk.Command.Params(struct {});
 fn cmdScreen(state: *anyopaque, _: ScreenArgs.Args, call: *sdk.Command.Call) anyerror!void {
     const editor = editorFromState(state);
     try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot() });
-    editor.app.host.refresh();
 }
 
 const SettledArgs = sdk.Command.Params(struct {

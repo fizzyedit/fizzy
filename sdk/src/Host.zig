@@ -312,6 +312,9 @@ next_claim_id: u32 = 1,
 /// Commands answering in a later frame (`Command.Call.later`), until `finishCall`. UI thread.
 calls_pending: std.ArrayListUnmanaged(PendingCall) = .empty,
 next_call_ticket: u32 = 1,
+/// The `runWith` call running now, innermost (`callCommandInner`): `finishCall` on its ticket answers
+/// it before it returns.
+running_call: ?*Command.Call = null,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 /// Who listens for which events (`subscribe`), and what plugins say they announce
@@ -1888,8 +1891,8 @@ pub fn runCommand(self: *Host, id: []const u8) !void {
 pub const PendingCall = struct {
     ticket: u32,
     owner: *Plugin,
-    /// Null when nobody waits: the answer is dropped when it comes.
-    sink: ?CallSink,
+    /// Who waits. Kept only while someone does (a call nobody waits for keeps nothing).
+    sink: CallSink,
 };
 
 /// Who hears a later answer (`callCommandAwaiting`): `done` is called once, on the UI thread, with
@@ -1897,6 +1900,9 @@ pub const PendingCall = struct {
 pub const CallSink = struct {
     ctx: *anyopaque,
     done: *const fn (ctx: *anyopaque, outcome: CommandOutcome) void,
+    /// The plugin whose image holds `done` and `ctx`, when a plugin waits: its sinks are let go of
+    /// when it goes, never called into an image that is gone. Null for the app.
+    owner: ?*Plugin = null,
 };
 
 /// What `callCommandAwaiting` answers: what came of the command now, or the ticket of its answer
@@ -2024,83 +2030,108 @@ pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.m
 /// (`Command.Call.later`) gives its ticket, and `sink` hears the answer once it comes
 /// (`finishCall`). A null sink drops it, as `callCommand` does.
 pub fn callCommandAwaiting(self: *Host, id: []const u8, args: []const u8, results: std.mem.Allocator, sink: ?CallSink) AwaitedOutcome {
-    return .{ .now = self.callCommandInner(id, args, results, sink) catch |e| switch (e) {
-        error.Later => return .{ .later = self.next_call_ticket - 1 },
-    } };
+    const c = self.command(id) orelse return .{ .now = .unknown };
+    const owner = c.owner orelse return .{ .now = .unknown };
+    if (c.isEnabled) |enabled| {
+        if (!enabled(owner.state)) return .{ .now = .disabled };
+    }
+    return self.callCommandInner(c, owner, args, results, sink);
 }
 
-fn callCommandInner(self: *Host, id: []const u8, args: []const u8, results: std.mem.Allocator, sink: ?CallSink) error{Later}!CommandOutcome {
-    const c = self.command(id) orelse return .unknown;
-    const owner = c.owner orelse return .unknown;
-    if (c.isEnabled) |enabled| {
-        if (!enabled(owner.state)) return .disabled;
-    }
+fn callCommandInner(self: *Host, c: *const Command, owner: *Plugin, args: []const u8, results: std.mem.Allocator, sink: ?CallSink) AwaitedOutcome {
     const prof = core.profile.begin(owner.id, c.id);
     defer prof.end();
     const run_with = c.runWith orelse {
         const trimmed = std.mem.trim(u8, args, " \t\r\n");
-        if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .bad_args = "this command takes no arguments" };
+        if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .now = .{ .bad_args = "this command takes no arguments" } };
         const outer = self.running(c);
         defer self.running_command = outer;
-        c.run.?(owner.state) catch |err| return .{ .failed = owner.errorName(err) };
-        return .{ .ok = null };
+        c.run.?(owner.state) catch |err| return .{ .now = .{ .failed = owner.errorName(err) } };
+        return .{ .now = .{ .ok = null } };
     };
     self.last_showing_ms = 0;
-    var call: Command.Call = .{ .args = args, .arena = results, .ticket = self.next_call_ticket };
+    // Its own ticket, taken before it runs: a command it calls that defers takes the next.
+    const ticket = self.next_call_ticket;
+    self.next_call_ticket +%= 1;
+    if (self.next_call_ticket == 0) self.next_call_ticket = 1;
+    var call: Command.Call = .{ .args = args, .arena = results, .ticket = ticket };
     const outer = self.running(c);
     defer self.running_command = outer;
+    const outer_call = self.running_call;
+    self.running_call = &call;
+    defer self.running_call = outer_call;
     run_with(owner.state, &call) catch |err| {
         const msg = call.message orelse owner.errorName(err);
-        return if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg };
+        return .{ .now = if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg } };
     };
     self.last_showing_ms = call.showing_ms;
-    if (call.deferred) {
-        // Out of memory: answered now as failed, rather than owed to a waiter that never hears.
-        self.calls_pending.append(self.allocator, .{ .ticket = call.ticket, .owner = owner, .sink = sink }) catch
-            return .{ .failed = "out of memory" };
-        self.next_call_ticket +%= 1;
-        if (self.next_call_ticket == 0) self.next_call_ticket = 1;
-        return error.Later;
-    }
-    return .{ .ok = call.result };
+    if (call.failed) return .{ .now = if (call.bad_args) .{ .bad_args = call.message orelse "bad arguments" } else .{ .failed = call.message orelse "failed" } };
+    if (!call.deferred) return .{ .now = .{ .ok = call.result } };
+    // Nobody waits: started, with nothing kept for an answer nobody hears (`callWanted` is false).
+    const s = sink orelse return .{ .later = ticket };
+    // Out of memory: answered now as failed, rather than owed to a waiter that never hears.
+    self.calls_pending.append(self.allocator, .{ .ticket = ticket, .owner = owner, .sink = s }) catch
+        return .{ .now = .{ .failed = "out of memory" } };
+    return .{ .later = ticket };
 }
 
 /// Answer the command whose ticket is `ticket` (`Command.Call.later`), on the UI thread: `.ok`
 /// with its result as ZON (or null), `.failed` or `.bad_args` with why. Whoever waits hears it
 /// now; nobody, and it is dropped. A ticket already answered or unknown is ignored.
 pub fn finishCall(self: *Host, ticket: u32, outcome: CommandOutcome) void {
+    // The call still running (`runWith` answering what it deferred, before returning): its caller
+    // gets it now, copied, since `outcome` is the command's to free.
+    if (self.running_call) |call| if (call.ticket == ticket and call.deferred) {
+        call.deferred = false;
+        switch (outcome) {
+            .ok => |r| call.result = if (r) |text| call.arena.dupe(u8, text) catch null else null,
+            .bad_args, .failed => |m| {
+                call.failed = true;
+                call.bad_args = outcome == .bad_args;
+                call.message = call.arena.dupe(u8, m) catch "failed";
+            },
+            .unknown, .disabled => {
+                call.failed = true;
+                call.message = @tagName(outcome);
+            },
+        }
+        return;
+    };
     for (self.calls_pending.items, 0..) |p, i| {
         if (p.ticket != ticket) continue;
         _ = self.calls_pending.swapRemove(i);
-        if (p.sink) |sink| sink.done(sink.ctx, outcome);
+        p.sink.done(p.sink.ctx, outcome);
         return;
     }
 }
 
 /// Whether anyone still waits for `ticket`'s answer: a command can stop work nobody wants.
 pub fn callWanted(self: *const Host, ticket: u32) bool {
-    for (self.calls_pending.items) |p| if (p.ticket == ticket) return p.sink != null;
+    for (self.calls_pending.items) |p| if (p.ticket == ticket) return true;
     return false;
 }
 
-/// Stop waiting for `ticket`'s answer (the caller went away): it is dropped when it comes.
+/// Stop waiting for `ticket`'s answer (the caller went away): nothing is kept for it, and the
+/// command, asking `callWanted`, can stop.
 pub fn abandonCall(self: *Host, ticket: u32) void {
-    for (self.calls_pending.items) |*p| if (p.ticket == ticket) {
-        p.sink = null;
+    for (self.calls_pending.items, 0..) |p, i| if (p.ticket == ticket) {
+        _ = self.calls_pending.swapRemove(i);
+        return;
     };
 }
 
-/// A plugin going away answers the calls it still owes as failed, so nobody waits for good.
+/// A plugin going away: the calls it still owes are answered as failed, so nobody waits for good,
+/// and the waits it holds are let go of, so nothing calls into its image once it is gone.
 fn failCallsOf(self: *Host, plugin: *Plugin) void {
     var i: usize = 0;
     while (i < self.calls_pending.items.len) {
         const p = self.calls_pending.items[i];
-        if (p.owner != plugin) {
+        if (p.owner != plugin and p.sink.owner != plugin) {
             i += 1;
             continue;
         }
         _ = self.calls_pending.swapRemove(i);
-        if (p.sink) |sink| sink.done(sink.ctx, .{ .failed = "the plugin that was answering went away" });
+        if (p.sink.owner != plugin) p.sink.done(p.sink.ctx, .{ .failed = "the plugin that was answering went away" });
     }
 }
 
@@ -3335,4 +3366,68 @@ test "a command answering later: its waiter hears it once, a caller that cannot 
     try testing.expectEqual(@as(u32, 1), owed.count);
     try testing.expect(owed.failed != null);
     try testing.expectEqual(@as(usize, 0), host.calls_pending.items.len);
+}
+
+const NestedFixture = struct {
+    host: *Host,
+    inner_ticket: u32 = 0,
+    outer_ticket: u32 = 0,
+    fn inner(state: *anyopaque, call: *Command.Call) anyerror!void {
+        const self: *NestedFixture = @ptrCast(@alignCast(state));
+        self.inner_ticket = call.later();
+    }
+    fn outer(state: *anyopaque, call: *Command.Call) anyerror!void {
+        const self: *NestedFixture = @ptrCast(@alignCast(state));
+        // A command that, while it runs, calls another that defers, then defers itself.
+        _ = self.host.callCommand("t.inner", "", call.arena);
+        self.outer_ticket = call.later();
+    }
+    fn cached(state: *anyopaque, call: *Command.Call) anyerror!void {
+        const self: *NestedFixture = @ptrCast(@alignCast(state));
+        // Deferred, then answered before returning: a cache hit.
+        const t = call.later();
+        self.host.finishCall(t, .{ .ok = ".{ .cached = true }" });
+    }
+};
+
+test "later answers: nested calls keep their own tickets, an early answer is the caller's now, a gone waiter is never called" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var fixture: NestedFixture = .{ .host = &host };
+    var plugin = Plugin{ .state = &fixture, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.inner", .owner = &plugin, .title = "Inner", .runWith = NestedFixture.inner });
+    try host.registerCommand(.{ .id = "t.outer", .owner = &plugin, .title = "Outer", .runWith = NestedFixture.outer });
+    try host.registerCommand(.{ .id = "t.cached", .owner = &plugin, .title = "Cached", .runWith = NestedFixture.cached });
+    var results: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer results.deinit();
+
+    var heard: LaterFixture.Heard = .{};
+    const sink: CallSink = .{ .ctx = &heard, .done = LaterFixture.Heard.done };
+    const out = host.callCommandAwaiting("t.outer", "", results.allocator(), sink);
+    try testing.expectEqual(fixture.outer_ticket, out.later);
+    try testing.expect(fixture.inner_ticket != fixture.outer_ticket);
+    // The inner one, nobody waiting, keeps nothing; the outer one is the waiter's alone.
+    try testing.expect(!host.callWanted(fixture.inner_ticket));
+    host.finishCall(fixture.inner_ticket, .{ .ok = ".{ .inner = true }" });
+    try testing.expectEqual(@as(u32, 0), heard.count);
+    host.finishCall(fixture.outer_ticket, .{ .ok = ".{ .outer = true }" });
+    try testing.expectEqualStrings(".{ .outer = true }", heard.result.?);
+
+    // Answered before it returned: the caller has it now, and nothing is left pending.
+    const now = host.callCommandAwaiting("t.cached", "", results.allocator(), sink);
+    try testing.expectEqualStrings(".{ .cached = true }", now.now.ok.?);
+    try testing.expectEqual(@as(usize, 0), host.calls_pending.items.len);
+
+    // A plugin waiting on another's command goes away: its sink is let go of, never called.
+    var waiter_vtable = Plugin.VTable{};
+    _ = &waiter_vtable;
+    var waiter_state: u8 = 0;
+    var waiter = Plugin{ .state = &waiter_state, .vtable = &waiter_vtable, .id = "w", .display_name = "W" };
+    var unheard: LaterFixture.Heard = .{};
+    _ = host.callCommandAwaiting("t.inner", "", results.allocator(), .{ .ctx = &unheard, .done = LaterFixture.Heard.done, .owner = &waiter });
+    host.withdrawPlugin(&waiter);
+    try testing.expect(!host.callWanted(fixture.inner_ticket));
+    host.finishCall(fixture.inner_ticket, .{ .ok = null });
+    try testing.expectEqual(@as(u32, 0), unheard.count);
 }
