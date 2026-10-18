@@ -61,6 +61,12 @@ pub fn mainHolds(vp: *const Viewport) bool {
 /// Physical pixels from the frame's origin to the first viewport's band, and between bands.
 pub const band_stride = @import("viewport_map.zig").band_stride;
 
+/// Where the pointer is on the desktop, in the main window's frame (physical): whichever window a
+/// press began in (`SDLBackend.pointerInMain`).
+pub fn pointerInMain() dvui.Point.Physical {
+    return dvui.currentWindow().backend.impl.pointerInMain();
+}
+
 /// The OS's title bar over a window of its own frame, physical (`SDLBackend.titleBand`).
 pub fn titleBand() f32 {
     return dvui.currentWindow().backend.impl.titleBand();
