@@ -2595,6 +2595,103 @@ test "the picker lists each view under the place it is made for, the open place 
     try std.testing.expect(dvui.tagGet("picker.empty") == null);
 }
 
+/// Views no place shows, each counting its draws: what the picker draws offscreen for its cards.
+const UnplacedViews = struct {
+    const ids = [_][]const u8{ "test.u0", "test.u1", "test.u2", "test.u3", "test.u4", "test.u5", "test.u6" };
+    var draws: [ids.len]u32 = @splat(0);
+
+    fn drawFor(comptime n: usize) fn (?*anyopaque) anyerror!dvui.App.Result {
+        return struct {
+            fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+                draws[n] += 1;
+                return .ok;
+            }
+        }.draw;
+    }
+
+    /// Whether the picker's list had view `n`'s card in view on the last frame.
+    fn shown(n: usize) !bool {
+        var buf: [64]u8 = undefined;
+        return (try dvui.testing.tagGet(try std.fmt.bufPrint(&buf, "picker:{s}", .{ids[n]}))).visible;
+    }
+
+    /// Step a frame; fails if two of the views were drawn in it.
+    fn step() !void {
+        const before = draws;
+        _ = try dvui.testing.step(PickerFrame.frame);
+        var drew: usize = 0;
+        for (before, draws) |b, a| drew += a - b;
+        try std.testing.expect(drew <= 1);
+    }
+};
+
+test "picker: a view that draws nowhere is drawn for its card one at a time, only while the list shows it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.picker.close(editor.app.gpa);
+    defer editor.app.layout.discardSnapshots(editor.app.gpa);
+
+    UnplacedViews.draws = @splat(0);
+    // Only views no place shows: one on screen would be captured first, and fail, and with no
+    // texture targets that ends capture for the session before any is drawn offscreen.
+    inline for (UnplacedViews.ids, 0..) |id, n| {
+        try editor.app.host.registerSurface(.{ .id = id, .title = id, .keywords = &.{"inspector"}, .draw = UnplacedViews.drawFor(n) });
+    }
+
+    PickerFrame.editor = editor;
+    defer PickerFrame.editor = null;
+    try dvui.testing.settle(PickerFrame.frame);
+
+    editor.app.layout.openPicker(editor.app.gpa, "Sidebar", null);
+    // The frame it opens on, and the list's first, when no card has a size yet: no card shows,
+    // and nothing is drawn for one.
+    for (0..2) |_| try UnplacedViews.step();
+    try std.testing.expectEqual(@as([UnplacedViews.ids.len]u32, @splat(0)), UnplacedViews.draws);
+
+    // The cards in view are the list's first ones, in order: some of the views and not all, in the
+    // shim's 600 by 400 window. The views are drawn one at a time, first card first. The testing
+    // backend has no texture targets, so no capture can start: after three in a row, capture is
+    // given up for the session, and nothing more is drawn.
+    try std.testing.expectEqual(dvui.Size.Natural{ .w = 600, .h = 400 }, dvui.windowRect().size());
+    for (0..600) |_| try UnplacedViews.step();
+    try std.testing.expect(editor.app.layout.capture_unavailable);
+    var shown: usize = 0;
+    while (shown < UnplacedViews.ids.len and try UnplacedViews.shown(shown)) shown += 1;
+    try std.testing.expect(shown > 0 and shown < UnplacedViews.ids.len);
+    for (0..UnplacedViews.ids.len) |i| try std.testing.expectEqual(i < shown, try UnplacedViews.shown(i));
+    for (UnplacedViews.draws, 0..) |n, i| try std.testing.expectEqual(i < @min(shown, 3), n > 0);
+    const settled = UnplacedViews.draws;
+    for (0..30) |_| try UnplacedViews.step();
+    try std.testing.expectEqual(settled, UnplacedViews.draws);
+
+    // Reopened, with the views in view already failed: the ones left are past the fold, and are
+    // not drawn.
+    UnplacedViews.draws = @splat(0);
+    editor.app.layout.openPicker(editor.app.gpa, "Sidebar", null);
+    for (0..shown) |i| editor.app.layout.recordCaptureFailed(UnplacedViews.ids[i], true);
+    for (0..200) |_| try UnplacedViews.step();
+    try std.testing.expectEqual(@as([UnplacedViews.ids.len]u32, @splat(0)), UnplacedViews.draws);
+
+    // Filtered: with those views gone from the list, the next card moves up into view and its view
+    // is drawn. (Hidden rather than typed or scrolled: the testing backend's input does not reach
+    // the popup.)
+    for (0..shown) |i| editor.app.host.setSurfaceHidden(UnplacedViews.ids[i], true);
+    for (0..200) |_| try UnplacedViews.step();
+    try std.testing.expect(try UnplacedViews.shown(shown));
+    try std.testing.expect(UnplacedViews.draws[shown] > 0);
+    for (shown..UnplacedViews.ids.len) |i| {
+        if (!try UnplacedViews.shown(i)) try std.testing.expectEqual(@as(u32, 0), UnplacedViews.draws[i]);
+    }
+}
+
 test "a hide_when_empty panel stays while its view is dragged onto main" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

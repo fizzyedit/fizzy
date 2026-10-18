@@ -667,7 +667,8 @@ fn pick(items: []const *Surface, current: ?[]const u8) ?*Surface {
 ///
 /// While the picker is collecting (`State.snapshots_wanted`), a surface without a snapshot is
 /// drawn through a texture target and the result both kept and put on screen — the pixels are
-/// the same ones, so nothing blinks, and the surface still ran exactly once.
+/// the same ones, so nothing blinks, and the surface still ran exactly once. Not once capture has
+/// failed for it, or here at all (`State.captureFailed`, `State.capture_unavailable`).
 pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(s.id);
@@ -683,7 +684,7 @@ pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
 /// `draw` without the fade-in: for a swap, whose overlay already carries the change.
 fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
     self.drawn.append(self.arena, s) catch {};
-    if (self.state.snapshots_wanted and self.state.snapshot(s.id) == null) {
+    if (self.state.snapshots_wanted and !self.state.capture_unavailable and self.state.snapshot(s.id) == null and !self.state.captureFailed(s.id)) {
         if (try self.drawCaptured(s)) |r| return r;
     }
     return surfaceDraw(s);
@@ -691,7 +692,9 @@ fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
 
 /// `s.draw` into a texture the size of the current parent's content, then that texture onto the
 /// screen where the surface would have drawn. Null when there is nothing to capture into — a
-/// zero-sized parent, or a backend without render targets — and the caller draws normally.
+/// zero-sized parent, or a backend without render targets — and the caller draws normally. A
+/// failure is remembered for the picker's session (`State.capture_unavailable`,
+/// `State.capture_failed`), so it is not tried every frame.
 ///
 /// Through `dvui.Picture` rather than a bare `renderTarget` switch: dvui defers part of its
 /// drawing (strokes after fills, subwindow content) to queues flushed later, and a bare switch
@@ -699,8 +702,14 @@ fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
 /// flushes them inside `stop`, which is the difference between a snapshot of a scroll area and
 /// a snapshot of its background.
 fn drawCaptured(self: *Layout, s: *Surface) !?dvui.App.Result {
+    const prof = core.profile.begin("fizzy", "picker: capture");
+    defer prof.end();
     const rs = dvui.parentGet().data().contentRectScale();
-    var pic = dvui.Picture.start(rs.r) orelse return null;
+    if (rs.r.empty()) return null;
+    var pic = dvui.Picture.start(rs.r) orelse {
+        self.state.recordCaptureFailed(s.id, false);
+        return null;
+    };
     // Some backends leave a fresh target uninitialised; the cross-fade learned this the hard way.
     pic.texture.clear();
     const old_clip = dvui.clipGet();
@@ -708,7 +717,11 @@ fn drawCaptured(self: *Layout, s: *Surface) !?dvui.App.Result {
     const result = surfaceDraw(s);
     dvui.clipSet(old_clip);
     pic.stop();
-    const texture = dvui.textureFromTarget(pic.texture) catch return try result;
+    const texture = dvui.textureFromTarget(pic.texture) catch {
+        self.state.recordCaptureFailed(s.id, true);
+        return try result;
+    };
+    self.state.capture_unstarted = 0;
     dvui.renderTexture(texture, .{ .r = pic.r, .s = rs.s }, .{}) catch {};
     self.state.takeSnapshot(self.gpa, s.id, .{ .texture = texture, .natural = .{ .w = pic.r.w / rs.s, .h = pic.r.h / rs.s } });
     return try result;
@@ -737,26 +750,57 @@ pub fn closeFloat(self: *Layout, name: []const u8) void {
     Floats.close(self, name, .home);
 }
 
-/// Snapshot every surface that drew nowhere this frame, by drawing each once offscreen at a
-/// fixed size. Only while the picker is collecting and only for surfaces still missing a
-/// snapshot, so a frame with nothing to do costs a lookup. The application calls this after
-/// its shape has run, from the base window.
+/// Draw the view the picker chose for a picture (`State.offscreen`, picked from the cards it
+/// shows) offscreen at a fixed size, one draw a frame: a few frames of warm-up, then its capture.
+/// Only while the picker is collecting, so a frame with nothing to do costs a check. The
+/// application calls this after its shape has run and before the picker draws, from the base
+/// window: what the view opens (a popup, a float) stacks under the picker, and a picture taken
+/// here shows on its card the same frame.
 ///
-/// "Drew nowhere" is decided by `drawn`, not by the missing snapshot: the picker opens
-/// mid-frame, after some regions have already run, and those surfaces must be captured where
-/// they live on the *next* frame rather than photographed offscreen now — an offscreen
-/// picture of the workspace is a picture of an empty box.
+/// Only a view that drew nowhere this frame (`drawn`) is drawn here: one on screen is captured
+/// where it lives (`draw`), and an offscreen picture of the workspace is a picture of an empty box.
+///
+/// Offscreen, a view costs what it draws: its first draw lays out a whole subtree from nothing,
+/// and its capture is the one draw that renders any of it (the warm-up draws are clipped away).
+/// The picker opening used to pay both for every view, each in one frame. One at a time, a view
+/// scrolled or filtered out of the list is never drawn for it, and a card waiting for its picture
+/// shows an empty tile.
 pub fn captureUnplaced(self: *Layout) void {
-    if (!self.state.snapshots_wanted) return;
-    var pending = false;
-    outer: for (self.host.surfaces.items, 0..) |*s, i| {
-        if (s.hidden or self.state.snapshot(s.id) != null) continue;
-        for (self.drawn.items) |d| if (d == s) {
-            pending = true; // drew this frame before the request: in-place capture next frame
-            continue :outer;
-        };
+    const state = self.state;
+    if (!state.snapshots_wanted or state.capture_unavailable) return;
+    const prof = core.profile.begin("fizzy", "picker: capture unplaced");
+    defer prof.end();
+    // Opened this frame, after some views drew: they are captured where they live on the next.
+    // (One drawn since is captured as it draws, `drawSolid`; one with no room to draw in waits,
+    // asking for nothing, until it has some.)
+    var pending = state.snapshots_requested;
+    state.snapshots_requested = false;
+
+    if (state.offscreen) |*o| step: {
+        const surfaces = self.host.surfaces.items;
+        // Where the picker found it, unless the registry changed since: then wherever it is now.
+        if (o.index >= surfaces.len or std.hash.Wyhash.hash(0, surfaces[o.index].id) != o.id) {
+            o.index = for (surfaces, 0..) |c, i| {
+                if (std.hash.Wyhash.hash(0, c.id) == o.id) break i;
+            } else {
+                state.offscreen = null;
+                break :step;
+            };
+        }
+        const s = &surfaces[o.index];
+        // Hidden, given its picture on screen, or drawn there this frame: not drawn twice.
+        const on_screen = for (self.drawn.items) |d| {
+            if (d == s) break true;
+        } else false;
+        // Its card left the list before it got far (filtered out, scrolled away): dropped, to be
+        // chosen again if its card comes back. Further in, it is finished.
+        const out_of_view = !o.in_view and o.warm < offscreen_warmup_frames / 2;
+        if (s.hidden or on_screen or out_of_view or state.snapshot(s.id) != null) {
+            state.offscreen = null;
+            break :step;
+        }
         var box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = i,
+            .id_extra = @truncate(o.id),
             .rect = .{ .x = -20_000, .y = -20_000, .w = offscreen_capture.w, .h = offscreen_capture.h },
             .background = true,
             .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
@@ -765,15 +809,20 @@ pub fn captureUnplaced(self: *Layout) void {
         // A subtree drawn for the first time is not yet what it will look like: dvui lays it
         // out from last frame's sizes, which it has none of, and anything inside that reveals
         // itself starts hidden. So it is drawn unphotographed for a few frames first — the same
-        // settle-then-show the reveal does on screen, just without an audience.
-        const warm = dvui.dataGet(null, box.data().id, "_warm", u8) orelse 0;
-        if (warm < offscreen_warmup_frames) {
+        // settle-then-show the reveal does on screen, just without an audience: a few frames, and
+        // the reveal's whole fade, however fast the frames come.
+        const now = dvui.frameTimeNS();
+        if (o.warm == 0) o.since_ns = now;
+        if (o.warm < offscreen_warmup_frames or now - o.since_ns < offscreenWarmupNs()) {
             _ = surfaceDraw(s) catch {};
-            dvui.dataSet(null, box.data().id, "_warm", warm + 1);
+            o.warm +|= 1;
             pending = true;
-            continue;
+            break :step;
         }
+        // Taken or failed (`drawCaptured` remembers which), it is done: the picker, drawing next,
+        // shows the picture and chooses the next view.
         _ = self.drawCaptured(s) catch null;
+        state.offscreen = null;
     }
     if (pending) dvui.refresh(null, @src(), null);
 }
@@ -783,6 +832,12 @@ pub fn captureUnplaced(self: *Layout) void {
 const offscreen_capture: dvui.Size = .{ .w = 360, .h = 480 };
 /// Long enough for a 120 ms reveal to finish at 60 fps, with a little to spare.
 const offscreen_warmup_frames: u8 = 10;
+
+/// How long the warm-up lasts at the least: a reveal's fade (`core.anim.reveal`) at the
+/// interface's speed (`core.motion`), so a picture is never taken mid-fade on a fast display.
+fn offscreenWarmupNs() i128 {
+    return @as(i128, core.motion.duration((core.anim.RevealOptions{}).duration_micros)) * std.time.ns_per_us;
+}
 
 /// Draw whichever surface is selected for these keywords, into the current parent. Everything
 /// it does is reachable through `matching` / `selected` / `draw`; `region` uses it to fill a

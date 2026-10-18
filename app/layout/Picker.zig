@@ -77,7 +77,12 @@ pub fn close(self: *Picker, gpa: std.mem.Allocator) void {
 pub fn draw(self: *Picker, f: *Layout) void {
     if (self.lifted) return self.drawLifted(f);
     if (!self.is_open) return;
+    const prof = core.profile.begin("fizzy", "picker");
+    defer prof.end();
     const state = f.state;
+    // Whether the view being drawn for its picture still has its card in view: its card says so
+    // as it draws (`nextOffscreen`).
+    if (state.offscreen) |*o| o.in_view = false;
     const gpa = f.gpa;
 
     const region = blk: {
@@ -525,6 +530,25 @@ const Hit = union(enum) {
     lifted: struct { tile: dvui.Rect.Physical, event_num: u16 },
 };
 
+/// Choose surface `s` (at `index` in the registry) to be drawn offscreen for its picture
+/// (`State.offscreen`, `Layout.captureUnplaced`) when none is: its card in view, as the list laid
+/// it out, its view drawn nowhere this frame, and no picture or failed capture yet. Not on the
+/// card's first frame, before it has a size: every card then packs into the top of the list. The
+/// card of the view already chosen says whether it is still in view.
+fn nextOffscreen(f: *Layout, s: *const sdk.Surface, index: usize, card_data: *dvui.WidgetData) void {
+    const state = f.state;
+    if (state.capture_unavailable) return;
+    const in_view = !dvui.firstFrame(card_data.id) and !card_data.borderRectScale().r.intersect(dvui.clipGet()).empty();
+    if (state.offscreen) |*o| {
+        if (o.index == index and in_view) o.in_view = true;
+        return;
+    }
+    if (!in_view or state.snapshot(s.id) != null or state.captureFailed(s.id)) return;
+    for (f.drawn.items) |d| if (d == s) return;
+    state.offscreen = .{ .index = index, .id = std.hash.Wyhash.hash(0, s.id) };
+    dvui.refresh(null, @src(), null);
+}
+
 /// One surface: its snapshot scaled to fit, its title, its owner, and a highlight when it is in
 /// the region. A press that moves far enough lifts the card into a drag instead of clicking.
 fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
@@ -542,6 +566,7 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
     });
     defer bw.deinit();
     const id = bw.data().id;
+    nextOffscreen(f, s, id_extra, bw.data());
     // For demo tapes (`docs/AUTOMATION.md`): the card, to lift a view out of the picker by.
     core.anchor.mark(bw.data(), "picker:{s}", .{s.id});
 
