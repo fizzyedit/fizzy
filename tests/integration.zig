@@ -9663,6 +9663,64 @@ test "settings watcher: the app's state folders come and go under it without an 
     }
 }
 
+// The watcher's callback runs on nightwatch's own thread, and calls through a pointer to the
+// watcher. So `stop` must not return while a callback is still running: the watcher is freed (or,
+// in a test, its stack frame reused) straight after. On macOS that thread is FSEvents' dispatch
+// queue, and stopping the stream does not wait for a callback already on it. Under load, the one
+// the test above leaves running reached the next test's frame and aborted it.
+test "settings watcher: stop waits for a callback already running" {
+    if (comptime !SettingsWatcher.have_impl) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const config = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+
+    var w = try SettingsWatcher.init(gpa, config);
+    const Handler = @TypeOf(w.impl.handler);
+    const change_params = @typeInfo(@typeInfo(@FieldType(Handler.VTable, "change")).pointer.child).@"fn".param_types;
+    const EventType = change_params[2].?;
+    const ObjectType = change_params[3].?;
+    // The first callback holds on long enough for `stop` to be called while it runs.
+    const Slow = struct {
+        var entered: std.atomic.Value(bool) = .init(false);
+        var stopped: std.atomic.Value(bool) = .init(false);
+        var left: std.atomic.Value(bool) = .init(false);
+        var outlived_stop: std.atomic.Value(bool) = .init(false);
+
+        fn change(_: *Handler, _: []const u8, _: EventType, _: ObjectType) error{HandlerFailed}!void {
+            if (entered.swap(true, .acq_rel)) return;
+            std.testing.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            outlived_stop.store(stopped.load(.acquire), .release);
+            left.store(true, .release);
+        }
+
+        fn rename(h: *Handler, _: []const u8, dst: []const u8, o: ObjectType) error{HandlerFailed}!void {
+            return change(h, dst, .modified, o);
+        }
+    };
+    const vtable: Handler.VTable = .{ .change = Slow.change, .rename = Slow.rename };
+    w.impl.handler = .{ .vtable = &vtable };
+    try w.start();
+
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "settings.zon", .data = ".{}" });
+    for (0..5000) |_| {
+        if (Slow.entered.load(.acquire)) break;
+        try std.testing.io.sleep(.fromMilliseconds(1), .awake);
+    } else return error.TestUnexpectedResult;
+    w.stop();
+    Slow.stopped.store(true, .release);
+    for (0..2000) |_| {
+        if (Slow.left.load(.acquire)) break;
+        try std.testing.io.sleep(.fromMilliseconds(1), .awake);
+    }
+    try std.testing.expect(Slow.left.load(.acquire));
+    try std.testing.expect(!Slow.outlived_stop.load(.acquire));
+}
+
 // ── The automation service ──────────────────────────────────────────────────────────────────────
 // `automation.Service` over the live driver above: what a plugin sees — tape bytes in, a ticket
 // back, and the outcome asked for by ticket.
