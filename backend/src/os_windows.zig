@@ -460,7 +460,10 @@ fn dropContent(size: dvui.Rect.Physical, grab: dvui.Point.Physical) dvui.Rect.Ph
         .x = mouse.x - grab.x,
         .y = mouse.y - std.math.clamp(grab.y, 0, @max(0, band - 1)),
         .w = size.w,
-        .h = size.h + band,
+        // The floating window's rect holds its header, which the title bar takes the place of: its
+        // content is that much shorter. Given the whole rect, the window came back from each trip
+        // out and in a header taller (`Merge` puts the header back above the content; the user).
+        .h = @max(1, size.h - headerHeight()) + band,
     };
     const u = viewports.usableAtPointer();
     if (u.w > 0 and u.h > 0) {
