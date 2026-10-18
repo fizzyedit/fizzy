@@ -1918,7 +1918,16 @@ fn noteAuthor(self: *Host, doc_id: u64, step: Step) void {
         },
         // A step joined keeps the author it began with (`mayMerge` decided it could join).
         .joined => doc.top = if (step.top != 0) step.top else step.id,
-        .undone, .redone => doc.top = step.top,
+        .undone, .redone => {
+            doc.top = step.top;
+            const made = self.stepAuthor(doc_id, step.id);
+            if (!made.same(who)) self.emitZon(if (step.kind == .undone) "fizzy.history.undone" else "fizzy.history.redone", events.StepTaken{
+                .path = if (self.docById(doc_id)) |d| d.owner.documentPath(d) else "",
+                .step = step.id,
+                .made_by = made,
+                .by = who,
+            });
+        },
     }
 }
 
@@ -3841,4 +3850,41 @@ test "historyGoToWhy answers the owner's reason by name, and nothing when it wen
     const doc: DocHandle = .{ .ptr = &state, .owner = &plugin, .id = 1 };
     try testing.expectEqualStrings("PersonBusy", plugin.historyGoToWhy(doc, 7).?);
     try testing.expect(plugin.historyGoToWhy(doc, 3) == null);
+}
+
+test "undoing a step someone else made is announced, with whose it was; one's own is not" {
+    var host: Host = .init(std.testing.allocator);
+    defer host.deinit();
+    // Something listens (the control server's `/events`), so events are queued.
+    host.listening.store(true, .release);
+    const doc: u64 = 7;
+    const claude: Author = .{ .kind = .agent, .plugin = "agent", .session = 1, .label = "Claude" };
+
+    const outer = host.act(claude);
+    host.recordStep(doc, .{ .kind = .added, .id = 1, .top = 1 });
+    host.endAct(outer);
+    host.setInputAuthor(.person);
+    host.recordStep(doc, .{ .kind = .added, .id = 2, .top = 2 });
+
+    // The person undoes their own step: nothing to say.
+    host.recordStep(doc, .{ .kind = .undone, .id = 2, .top = 1 });
+    try std.testing.expectEqual(@as(usize, 0), host.event_queue.items.len);
+
+    // The person undoes Claude's: said, with whose it was and who took it back.
+    host.recordStep(doc, .{ .kind = .undone, .id = 1, .top = 0 });
+    try std.testing.expectEqual(@as(usize, 1), host.event_queue.items.len);
+    const e = host.event_queue.items[0];
+    try std.testing.expectEqualStrings("fizzy.history.undone", e.name);
+    var scratch: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer scratch.deinit();
+    const taken = try events.parse(events.StepTaken, scratch.allocator(), .{ .name = e.name, .payload = e.payload });
+    try std.testing.expectEqual(@as(u64, 1), taken.step);
+    try std.testing.expect(taken.made_by.same(claude));
+    try std.testing.expectEqual(Author.Kind.person, taken.by.kind);
+
+    // Claude puts it back itself: its own step, nothing to say.
+    const again = host.act(claude);
+    host.recordStep(doc, .{ .kind = .redone, .id = 1, .top = 1 });
+    host.endAct(again);
+    try std.testing.expectEqual(@as(usize, 1), host.event_queue.items.len);
 }

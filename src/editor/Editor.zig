@@ -2134,6 +2134,14 @@ pub fn postInit(editor: *Editor) !void {
         .description = "Files under the project folder changed on disk (coalesced, ignore rules applied); truncated means rescan.",
         .payload = ".{ .events = .{ .{ .path = \"/abs\", .kind = .created, .object = .file, .old_path = \"\" } }, .truncated = false }",
     }) catch {};
+    inline for (.{
+        .{ "fizzy.history.undone", "Someone took back a step another made: the person undoing an agent's draw, or the reverse." },
+        .{ "fizzy.history.redone", "Someone put back a step another made, after it was undone." },
+    }) |e| editor.app.host.declareEvent(.{
+        .name = e[0],
+        .description = e[1],
+        .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
+    }) catch {};
     editor.app.host.declareEvent(.{
         .name = "fizzy.files.reveal",
         .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",
