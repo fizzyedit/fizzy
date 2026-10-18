@@ -7563,6 +7563,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = true") != null);
         try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = false") != null);
 
+        // `fizzy.undo`/`fizzy.redo` by path, on a document behind the one in front, as a script or
+        // an agent calls them: only the step `expect` names, and the answer says whose it was.
+        {
+            const notes_doc = editor.docFromPath(notes) orelse return error.TestUnexpectedResult;
+            const before = (try read(host, notes_args)).text;
+            const notes_write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"# Notes, by Claude\\n\" }}", .{notes});
+            defer gpa.free(notes_write);
+            const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
+            try std.testing.expect(host.callCommand("text.write", notes_write, host.arena()) == .ok);
+            host.endAct(outer);
+            const line = notes_doc.owner.historyLine(notes_doc, host.arena()) orelse return error.TestUnexpectedResult;
+            const top = line.entries[line.at - 1].id;
+
+            const stale = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top + 1000 });
+            defer gpa.free(stale);
+            switch (host.callCommand("fizzy.undo", stale, host.arena())) {
+                .failed => |m| try std.testing.expect(std.mem.indexOf(u8, m, "by Claude") != null),
+                else => return error.TestUnexpectedResult,
+            }
+            try std.testing.expectEqualStrings("# Notes, by Claude\n", (try read(host, notes_args)).text);
+
+            const named = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top });
+            defer gpa.free(named);
+            const undid = host.callCommand("fizzy.undo", named, host.arena());
+            try std.testing.expect(undid == .ok);
+            try std.testing.expect(std.mem.indexOf(u8, undid.ok.?, ".by = \"Claude\"") != null);
+            try std.testing.expectEqualStrings(before, (try read(host, notes_args)).text);
+            // The document in front is untouched, and still in front.
+            try std.testing.expectEqualStrings(main_zig, (editor.activeDoc() orelse return error.TestUnexpectedResult).owner.documentPath(editor.activeDoc().?));
+
+            try std.testing.expect(host.callCommand("fizzy.redo", named, host.arena()) == .ok);
+            try std.testing.expectEqualStrings("# Notes, by Claude\n", (try read(host, notes_args)).text);
+            try std.testing.expect(host.callCommand("fizzy.undo", named, host.arena()) == .ok);
+            try std.testing.expectEqualStrings(before, (try read(host, notes_args)).text);
+        }
+
         // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));
@@ -8042,6 +8078,250 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqual(@as(usize, 40 - 14), try at(host, doc));
 
         try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // A document's track as a tape (`fizzy.tracks.export`): its file as the track began, then its
+    // steps; the person's document and history as they were; played (`Demo.playTape`), it makes
+    // the same text in a document of its own.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        try host.runCommand("fizzy.newFile");
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (d.id != was.id and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+        }
+        const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(doc.id != was.id);
+        try dvui.testing.settle(headlessFrame);
+        for ([_][]const u8{ "one", "two", "three", "four", "five" }) |word| {
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\\n\", .line = 1 }}", .{word});
+            try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+        }
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        const textOf = struct {
+            fn textOf(h: *sdk.Host, path: []const u8) ![]const u8 {
+                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{path});
+                const zon = switch (h.callCommand("text.read", args, h.arena())) {
+                    .ok => |r| r orelse return error.TestUnexpectedResult,
+                    else => return error.TestUnexpectedResult,
+                };
+                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const rest = zon[at + ".text = \"".len ..];
+                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+            }
+        }.textOf;
+        const path = doc.owner.documentPath(doc);
+        const want = try gpa.dupe(u8, try textOf(host, path));
+        defer gpa.free(want);
+        const line_before = (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult);
+
+        const out = try std.fmt.allocPrint(gpa, "{s}/tapes/export-test.tape", .{editor.app.config_folder});
+        defer gpa.free(out);
+        const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ path, out });
+        const result = switch (host.callCommand("fizzy.tracks.export", args, host.arena())) {
+            .ok => |r| r orelse return error.TestUnexpectedResult,
+            else => |r| {
+                std.debug.print("export: {any}\n", .{r});
+                return error.TestUnexpectedResult;
+            },
+        };
+        try std.testing.expect(std.mem.indexOf(u8, result, ".steps = 6") != null);
+        // A range (`from`): the tape opens on the document as it was after two steps, and holds
+        // the four after; its summary names whose they are.
+        {
+            const ranged = try std.fmt.allocPrint(gpa, "{s}/tapes/export-range.tape", .{editor.app.config_folder});
+            defer gpa.free(ranged);
+            const range_args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\", .from = 2 }}", .{ path, ranged });
+            const range_result = switch (host.callCommand("fizzy.tracks.export", range_args, host.arena())) {
+                .ok => |r| r orelse return error.TestUnexpectedResult,
+                else => return error.TestUnexpectedResult,
+            };
+            try std.testing.expect(std.mem.indexOf(u8, range_result, ".steps = 4") != null);
+            // One author, named (a command run with no one acting is nobody known).
+            try std.testing.expect(std.mem.indexOf(u8, range_result, ".authors = .{\"unattributed\"}") != null);
+            const range_bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, ranged, gpa, .limited(1 << 20));
+            defer gpa.free(range_bytes);
+            var range_check = app.automation.Input.check;
+            range_check.steps = fizzy.Editor.Demo.stepsCheck;
+            var range_tape = try app.automation.Tape.load(gpa, range_bytes, range_check);
+            defer range_tape.deinit();
+            try std.testing.expectEqualStrings("two\none\n", range_tape.tape.keyframes[0].files[0].text);
+            var range_steps: usize = 0;
+            for (range_tape.tape.ops) |op| range_steps += @intFromBool(op.do == .step);
+            try std.testing.expectEqual(@as(usize, 4), range_steps);
+            // The person's document is where it was.
+            try std.testing.expectEqualStrings(want, try textOf(host, path));
+        }
+        // The person's document is where it was, its history too.
+        try std.testing.expectEqualStrings(want, try textOf(host, path));
+        const line_after = (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqual(line_before.at, line_after.at);
+        try std.testing.expectEqual(line_before.entries.len, line_after.entries.len);
+
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, out, gpa, .limited(1 << 20));
+        defer gpa.free(bytes);
+        // What it holds: fizzy reads it (its owner and format known), its keyframe is the file as
+        // the track began (a new document's: empty).
+        var check = app.automation.Input.check;
+        check.steps = fizzy.Editor.Demo.stepsCheck;
+        var owned = try app.automation.Tape.load(gpa, bytes, check);
+        defer owned.deinit();
+        const kf = owned.tape.keyframes[0];
+        try std.testing.expectEqual(@as(usize, 1), kf.files.len);
+        try std.testing.expectEqualStrings("text", kf.files[0].owner);
+        try std.testing.expectEqualStrings("", kf.files[0].text);
+        // Played in a tab of its own (`TapeTabs`, the transport's share), each step at its moment:
+        // the same text, under the tape's own mount, with the person's documents untouched.
+        try editor.tape_tabs.open(editor, bytes, .{});
+        const played_path = try std.fmt.allocPrint(gpa, "tape://1/{s}", .{std.fs.path.basename(path)});
+        defer gpa.free(played_path);
+        for (0..2000) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (!editor.tape_tabs.isPlaying(played_path)) break;
+            std.Io.sleep(dvui.io, .fromMilliseconds(5), .awake) catch {};
+        }
+        const replay = editor.docFromPath(played_path) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!editor.tape_tabs.isPlaying(played_path));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings(want, try textOf(host, played_path));
+        try std.testing.expectEqualStrings(want, try textOf(host, path));
+        const played_line = replay.owner.historyLine(replay, host.arena()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 6), played_line.at);
+        // Played out, it is kept as played in its own mount: closing it asks nothing.
+        for (0..200) |_| {
+            if (!replay.owner.isDirty(replay)) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expect(!replay.owner.isDirty(replay));
+        try editor.closeFileID(replay.id);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(editor.docFromPath(played_path) == null);
+        try std.testing.expectEqual(@as(usize, 0), editor.tape_tabs.playing.items.len);
+
+        // The transport's share (pressed: `share_pending`), at the top of the next frame: the
+        // whole track opened in a tab to trim, played in at once, nothing written yet. Trimmed
+        // to the part after two steps and shared, the tape kept holds that part: the document as
+        // it was after two steps, then the four after. Cancelled, nothing is written and the tab
+        // goes.
+        const tapes_dir = try std.fs.path.join(gpa, &.{ editor.app.config_folder, "tapes" });
+        defer gpa.free(tapes_dir);
+        const newest = struct {
+            /// How many tapes there are, and the newest name not in `before` (owned by `a`).
+            fn newest(a: std.mem.Allocator, dir_path: []const u8, before: []const []const u8) !struct { usize, ?[]const u8 } {
+                var dir = try std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true });
+                defer dir.close(dvui.io);
+                var it = dir.iterate();
+                var n: usize = 0;
+                var fresh: ?[]const u8 = null;
+                while (try it.next(dvui.io)) |e| {
+                    n += 1;
+                    for (before) |b| {
+                        if (std.mem.eql(u8, b, e.name)) break;
+                    } else fresh = try a.dupe(u8, e.name);
+                }
+                return .{ n, fresh };
+            }
+        }.newest;
+        var keep_state: std.heap.ArenaAllocator = .init(gpa);
+        defer keep_state.deinit();
+        const keep = keep_state.allocator();
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        {
+            var dir = try std.Io.Dir.cwd().openDir(dvui.io, tapes_dir, .{ .iterate = true });
+            defer dir.close(dvui.io);
+            var it = dir.iterate();
+            while (try it.next(dvui.io)) |e| try names.append(keep, try keep.dupe(u8, e.name));
+        }
+        const kept_before = names.items.len;
+        const openTrim = struct {
+            fn open(ed: *fizzy.Editor, id: u64, at_path: []const u8) !sdk.DocHandle {
+                ed.share_pending = id;
+                for (0..400) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    if (ed.docFromPath(at_path)) |d| if (ed.tape_tabs.trimOf(d.id, dvui.currentWindow().arena()) != null) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.open;
+        const shared_path = try std.fmt.allocPrint(gpa, "tape://2/{s}", .{std.fs.path.basename(path)});
+        defer gpa.free(shared_path);
+        const shared = try openTrim(editor, doc.id, shared_path);
+        try std.testing.expectEqual(kept_before, (try newest(keep, tapes_dir, names.items))[0]);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings(want, try textOf(host, shared_path));
+        {
+            const trim, const said = editor.tape_tabs.trimOf(shared.id, host.arena()).?;
+            try std.testing.expectEqual(@as(usize, 6), trim.span.n);
+            try std.testing.expect(std.mem.startsWith(u8, said, "6 steps"));
+            trim.span.from = 2;
+            trim.action = .share;
+        }
+        for (0..20) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expect(editor.tape_tabs.trimOf(shared.id, host.arena()) == null);
+        const kept_after, const fresh = try newest(keep, tapes_dir, names.items);
+        try std.testing.expectEqual(kept_before + 1, kept_after);
+        {
+            const kept_path = try std.fs.path.join(keep, &.{ tapes_dir, fresh.? });
+            const kept = try std.Io.Dir.cwd().readFileAlloc(dvui.io, kept_path, gpa, .limited(1 << 20));
+            defer gpa.free(kept);
+            var kept_check = app.automation.Input.check;
+            kept_check.steps = fizzy.Editor.Demo.stepsCheck;
+            var kept_tape = try app.automation.Tape.load(gpa, kept, kept_check);
+            defer kept_tape.deinit();
+            try std.testing.expectEqualStrings("two\none\n", kept_tape.tape.keyframes[0].files[0].text);
+            var kept_steps: usize = 0;
+            for (kept_tape.tape.ops) |op| kept_steps += @intFromBool(op.do == .step);
+            try std.testing.expectEqual(@as(usize, 4), kept_steps);
+        }
+        // The tab and the person's document are where they were.
+        try std.testing.expectEqualStrings(want, try textOf(host, shared_path));
+        try std.testing.expectEqualStrings(want, try textOf(host, path));
+        try editor.rawCloseFileID(shared.id);
+        try dvui.testing.settle(headlessFrame);
+
+        const cancelled_path = try std.fmt.allocPrint(gpa, "tape://3/{s}", .{std.fs.path.basename(path)});
+        defer gpa.free(cancelled_path);
+        const cancelled = try openTrim(editor, doc.id, cancelled_path);
+        editor.tape_tabs.trimOf(cancelled.id, host.arena()).?[0].action = .cancel;
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(editor.docFromPath(cancelled_path) == null);
+        try std.testing.expectEqual(kept_after, (try newest(keep, tapes_dir, names.items))[0]);
+
+        try editor.rawCloseFileID(doc.id);
+
+        // A track whose start is gone from the history (undone past, and edited over) is
+        // refused, and the document is left as it was.
+        editor.setTracking(false);
+        try host.runCommand("fizzy.newFile");
+        for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (d.id != doc.id and d.id != was.id and std.mem.startsWith(u8, std.fs.path.basename(d.owner.documentPath(d)), "untitled")) break;
+        }
+        const gone = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        for ([_][]const u8{ "a", "b" }) |word| {
+            const insert = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\\n\", .line = 1 }}", .{word});
+            try std.testing.expect(host.callCommand("text.insert", insert, host.arena()) == .ok);
+        }
+        editor.setTracking(true);
+        try dvui.testing.settle(headlessFrame);
+        try editor.undo();
+        try editor.undo();
+        try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"c\\n\", .line = 1 }", host.arena()) == .ok);
+        const gone_path = gone.owner.documentPath(gone);
+        const before_text = try gpa.dupe(u8, try textOf(host, gone_path));
+        defer gpa.free(before_text);
+        const gone_args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ gone_path, out });
+        try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) != .ok);
+        try std.testing.expectEqualStrings(before_text, try textOf(host, gone_path));
+        try editor.rawCloseFileID(gone.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
     }
