@@ -1803,9 +1803,10 @@ pub fn actAgain(self: *Host, stored: Acting) Acting {
     return outer;
 }
 
-/// Who is acting now, to store with work done later (`actAgain`).
+/// Who is acting now, to store with work done later (`actAgain`): the innermost `act`, else the
+/// frame's input author (the person at the keys), as `author` answers.
 pub fn acted(self: *const Host) Acting {
-    return self.acting;
+    return .{ .author = self.acting.author orelse self.input_author, .run = self.acting.run };
 }
 
 pub fn endAct(self: *Host, outer: Acting) void {

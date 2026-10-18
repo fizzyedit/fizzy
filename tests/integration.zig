@@ -7908,6 +7908,46 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(before, (try read(host, "")).text);
         }
 
+        // Going back is a step, and the jump is whoever went back's: Claude writes, the person
+        // takes it back, Claude writes again. Claude's first write is still on the line, its
+        // reverse is the person's, and Claude's new write is Claude's.
+        {
+            const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            const claude: sdk.Author = .{ .kind = .agent, .plugin = "test", .session = 2, .label = "Claude" };
+            const first = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// first\\n\" }}", .{main_zig});
+            defer gpa.free(first);
+            const second = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// second\\n\" }}", .{main_zig});
+            defer gpa.free(second);
+            const before = try gpa.dupe(u8, (try read(host, "")).text);
+            defer gpa.free(before);
+
+            var outer = host.act(claude);
+            try std.testing.expect(host.callCommand("text.write", first, host.arena()) == .ok);
+            host.endAct(outer);
+            const claudes = (try editor.stepToTake(front, .undo, host.arena())).step.id;
+            outer = host.act(.person);
+            try editor.undo();
+            host.endAct(outer);
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+            outer = host.act(claude);
+            try std.testing.expect(host.callCommand("text.write", second, host.arena()) == .ok);
+            host.endAct(outer);
+
+            const hist = front.owner.historyLine(front, host.arena()) orelse return error.TestUnexpectedResult;
+            const top = hist.entries[hist.at - 1];
+            const reverse = hist.entries[hist.at - 2];
+            try std.testing.expectEqual(claudes, hist.entries[hist.at - 3].id);
+            try std.testing.expect(std.mem.startsWith(u8, reverse.title, "Back to "));
+            try std.testing.expectEqual(sdk.Author.Kind.person, host.stepAuthor(front.id, reverse.id).kind);
+            try std.testing.expectEqualStrings("Claude", host.stepAuthor(front.id, top.id).label);
+            try std.testing.expectEqualStrings("Claude", host.stepAuthor(front.id, claudes).label);
+            // Claude's first write is still there to go to, and before it the text as it was.
+            try std.testing.expect(front.owner.historyGoTo(front, claudes));
+            try std.testing.expectEqualStrings("// first\n", (try read(host, "")).text);
+            try std.testing.expect(front.owner.historyGoTo(front, hist.entries[hist.at - 4].id));
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+        }
+
         // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));
@@ -8177,11 +8217,12 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try editor.undo();
         try editor.redo();
         try editor.undo();
-        // An edit after going back: the step gone back over stays undone.
+        // An edit after going back: the step gone back over comes back on the line, then its
+        // reverse, then the edit, so the text is as it was gone back to and nothing is lost.
         try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"Y\", .line = 1 }", host.arena()) == .ok);
         try dvui.testing.settle(headlessFrame);
         try std.testing.expectEqualStrings("Yab", try textOf(host, a));
-        try std.testing.expectEqualSlices(sdk.Step.Kind, &.{ .added, .joined, .added, .undone, .redone, .undone, .added }, rec.kinds.items);
+        try std.testing.expectEqualSlices(sdk.Step.Kind, &.{ .added, .joined, .added, .undone, .redone, .undone, .redone, .added, .added }, rec.kinds.items);
 
         // Played into a document of its own, forward, in order: the same text.
         const b = try newDoc(editor, host, a.id);
@@ -8191,7 +8232,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("Yab", try textOf(host, b));
         // Unrecorded, B reported nothing; and a step that does not fit is refused, B untouched:
         // the undo takes back an `X` that is not there.
-        try std.testing.expectEqual(@as(usize, 7), rec.kinds.items.len);
+        try std.testing.expectEqual(@as(usize, 9), rec.kinds.items.len);
         // (Through the hook itself: the wrapper logs the refusal as an error, which fails a run.)
         try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.applyStep.?(b.owner.state, b, rec.effects.items[3], "", 0));
         try std.testing.expectEqualStrings("Yab", try textOf(host, b));
@@ -8592,8 +8633,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         try editor.rawCloseFileID(doc.id);
 
-        // A track whose start is gone from the history (undone past, and edited over) is
-        // refused, and the document is left as it was.
+        // A track whose start was undone past and edited over still exports: going back is a
+        // step, so its start is still on the line. The document is left as it was.
         editor.setTracking(false);
         try host.runCommand("fizzy.newFile");
         for (0..200) |_| {
@@ -8615,7 +8656,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const before_text = try gpa.dupe(u8, try textOf(host, gone_path));
         defer gpa.free(before_text);
         const gone_args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ gone_path, out });
-        try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) != .ok);
+        try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) == .ok);
         try std.testing.expectEqualStrings(before_text, try textOf(host, gone_path));
         try editor.rawCloseFileID(gone.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
