@@ -7103,6 +7103,13 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     const refused = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"side\":\"right\"}}}", arena);
     try std.testing.expect(std.mem.indexOf(u8, refused.body, "\"isError\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"nope\"}", arena).body, "-32601") != null);
+    // A response from the client, as a notification is, is taken (202), not refused.
+    try std.testing.expectEqual(std.http.Status.accepted, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}", arena).status);
+    // An id comes back as it was sent; one that is neither a string nor a number is refused.
+    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":12345678901234567890,\"method\":\"ping\"}", arena).body, "\"id\":12345678901234567890,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":true,\"method\":\"ping\"}", arena).body, "-32600") != null);
+    // Told only of commands the app has: no fizzy.screen here.
+    try std.testing.expect(std.mem.indexOf(u8, init.body, "fizzy.screen") == null);
 
     // Over the socket, a tool whose command answers later answers its call then.
     var tmp = std.testing.tmpDir(.{});

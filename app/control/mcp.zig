@@ -16,7 +16,8 @@ const openapi = @import("openapi.zig");
 const Stringify = std.json.Stringify;
 
 /// The protocol versions this answers, newest first: an `initialize` asking for another gets the
-/// newest, as the protocol says.
+/// newest, as the protocol says. 2025-03-26 asked servers to take JSON-RPC batches, which 2025-06-18
+/// dropped: none are taken here (no client sends them), a deliberate gap.
 const versions = [_][]const u8{ "2025-06-18", "2025-03-26" };
 
 /// What to send back for one message.
@@ -33,7 +34,8 @@ pub const Reply = union(enum) {
 /// Answer one JSON-RPC message, `body`. Everything returned lives in `arena`. `sink` hears a
 /// command that answers later; without one, such a call is answered as started.
 pub fn handle(host: *sdk.Host, body: []const u8, arena: std.mem.Allocator, sink: ?sdk.Host.CallSink) error{OutOfMemory}!Reply {
-    const value = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch |err| switch (err) {
+    // Numbers kept as written, so an id comes back exactly as it was sent.
+    const value = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{ .parse_numbers = false }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .now = try failure(arena, "null", -32700, "the body is not JSON") },
     };
@@ -41,13 +43,16 @@ pub fn handle(host: *sdk.Host, body: []const u8, arena: std.mem.Allocator, sink:
     const msg = value.object;
     const method = if (msg.get("method")) |m| if (m == .string) m.string else null else null;
     const id_value = msg.get("id");
-    // No id: a notification (or a response to us, which we never ask for). Nothing to answer.
-    if (id_value == null) return .none;
-    const id = try std.json.Stringify.valueAlloc(arena, id_value.?, .{});
-    const name = method orelse return .{ .now = try failure(arena, id, -32600, "a request needs a method") };
+    // No id: a notification. No method: a response to a request of ours. Neither is answered.
+    if (id_value == null or method == null) return .none;
+    const id = switch (id_value.?) {
+        .string, .integer, .number_string => try std.json.Stringify.valueAlloc(arena, id_value.?, .{}),
+        else => return .{ .now = try failure(arena, "null", -32600, "an id is a string or a number") },
+    };
+    const name = method.?;
     const params: ?std.json.ObjectMap = if (msg.get("params")) |p| if (p == .object) p.object else null else null;
 
-    if (std.mem.eql(u8, name, "initialize")) return .{ .now = try initialize(arena, id, params) };
+    if (std.mem.eql(u8, name, "initialize")) return .{ .now = try initialize(host, arena, id, params) };
     if (std.mem.eql(u8, name, "ping")) return .{ .now = try result(arena, id, "{}") };
     if (std.mem.eql(u8, name, "tools/list")) return .{ .now = try listTools(host, arena, id) };
     if (std.mem.eql(u8, name, "tools/call")) return callTool(host, arena, id, params, sink);
@@ -61,7 +66,9 @@ pub fn outcomeReply(arena: std.mem.Allocator, id: []const u8, outcome: sdk.Host.
             // The result as JSON text, which reads as it is; ZON JSON cannot say goes as it is.
             const text = json.jsonFromZon(arena, zon) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => zon orelse "null",
+                error.NotUtf8 => return toolResult(arena, id, "the result holds text that is not UTF-8", true),
+                // Not ZON: as it is, which JSON can carry while it is UTF-8.
+                else => if (std.unicode.utf8ValidateSlice(zon orelse "")) zon orelse "null" else return toolResult(arena, id, "the result is not ZON", true),
             };
             return toolResult(arena, id, text, false);
         },
@@ -72,7 +79,7 @@ pub fn outcomeReply(arena: std.mem.Allocator, id: []const u8, outcome: sdk.Host.
     };
 }
 
-fn initialize(arena: std.mem.Allocator, id: []const u8, params: ?std.json.ObjectMap) error{OutOfMemory}![]const u8 {
+fn initialize(host: *sdk.Host, arena: std.mem.Allocator, id: []const u8, params: ?std.json.ObjectMap) error{OutOfMemory}![]const u8 {
     const asked = if (params) |p| if (p.get("protocolVersion")) |v| if (v == .string) v.string else "" else "" else "";
     const version = for (versions) |v| {
         if (std.mem.eql(u8, v, asked)) break v;
@@ -81,11 +88,23 @@ fn initialize(arena: std.mem.Allocator, id: []const u8, params: ?std.json.Object
         .protocolVersion = version,
         .capabilities = .{ .tools = .{ .listChanged = false } },
         .serverInfo = .{ .name = AppInfo.current.name, .title = AppInfo.current.display_name, .version = AppInfo.current.version },
-        .instructions = "Each tool is one of " ++ AppInfo.current.display_name ++ "'s commands, run as a person " ++
-            "running it from the palette would, on the document it names or the active one. " ++
-            "fizzy.screen says what is on screen; fizzy.settled waits for a load to land.",
+        .instructions = try instructions(host, arena),
     }, .{});
     return result(arena, id, body);
+}
+
+/// What a model is told on connecting: what the tools are, and the app's own screen and settled
+/// commands when it has them (fizzy does; an app built on fizzy may not).
+fn instructions(host: *sdk.Host, arena: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const w = &out.writer;
+    w.writeAll("Each tool is one of " ++ AppInfo.current.display_name ++ "'s commands, the same ones its menus, " ++
+        "keybindings and plugins run. A command acting on a document takes its path, or acts on the active one.") catch return error.OutOfMemory;
+    for ([_][2][]const u8{
+        .{ "fizzy.screen", " fizzy.screen says what is on screen." },
+        .{ "fizzy.settled", " fizzy.settled waits until nothing is loading or animating." },
+    }) |t| if (host.command(t[0]) != null) w.writeAll(t[1]) catch return error.OutOfMemory;
+    return out.written();
 }
 
 fn listTools(host: *sdk.Host, arena: std.mem.Allocator, id: []const u8) error{OutOfMemory}![]const u8 {
@@ -131,7 +150,8 @@ fn callTool(host: *sdk.Host, arena: std.mem.Allocator, id: []const u8, params: ?
     const tool = name orelse return .{ .now = try failure(arena, id, -32602, "tools/call needs a name") };
     const c = host.command(tool) orelse return .{ .now = try failure(arena, id, -32602, try std.fmt.allocPrint(arena, "no tool {s}", .{tool})) };
     // The arguments, through the same JSON-to-ZON edge as a REST call (`json.zig`).
-    const arguments = if (p.get("arguments")) |a| try Stringify.valueAlloc(arena, a, .{}) else "{}";
+    // Absent and null are none.
+    const arguments = if (p.get("arguments")) |a| if (a == .null) "{}" else try Stringify.valueAlloc(arena, a, .{}) else "{}";
     var enum_keys: std.ArrayListUnmanaged([]const u8) = .empty;
     for (c.params) |param| if (param.kind == .enumeration) try enum_keys.append(arena, param.key);
     const args = json.zonFromJson(arena, arguments, enum_keys.items) catch |err| switch (err) {
