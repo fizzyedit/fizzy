@@ -313,6 +313,12 @@ keyframe opened. A document's own history becomes such a tape with `fizzy.tracks
 tracks record, `FIZZY_TRACKS=1` or `fizzy.tracks.record`): its file as the track began, then its
 steps, pauses past 2 s played as 0.6 s unless `real_time`. `fizzy.demo.playTape` plays it.
 
+A link plays one on the web: `fizzyed.it/app?tape=<url>` fetches the tape, loads each plugin its
+documents belong to from the store if the page has not (for the visit: not installed, not
+remembered, nothing asked), and plays it in a tab of its own with nothing else in view
+(`TapeTabs.openWhenReady`). On the desktop, `Demo: Play a Tape…` opens one the same way, and says
+which plugin a tape needs when it is not loaded.
+
 ### The binary form (`.tape`)
 
 `tape.binary` writes and reads the same `Tape` as a few flat tables: a header (`FZTP`, a

@@ -6,6 +6,7 @@ const build_opts = @import("build_opts");
 const auto_update = @import("app").update.auto_update;
 const update_notify = @import("app").update.update_notify;
 const assets = @import("assets");
+const AppInfo = @import("app").AppInfo;
 
 /// True if the about dialog is already showing.
 pub fn active(win: *dvui.Window) bool {
@@ -24,7 +25,7 @@ pub fn request() void {
     var mutex = fizzy.core.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
-        .title = "About Fizzy",
+        .title = AppInfo.about_title_z,
         .ok_label = "",
         .cancel_label = "",
         .resizeable = false,
@@ -200,29 +201,31 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     const body_small = body.larger(-1.0);
     const heading = dvui.Font.theme(.heading);
 
-    // Fox at the top, centered. Use a fixed natural size (96×96) so it
-    // doesn't blow out the dialog regardless of the source PNG's resolution.
-    // `.imageFile` so dvui decodes once and caches the texture — `fromImageFileBytes`
-    // re-decoded the PNG and leaked the pixels every frame, which halved the frame rate
-    // for as long as this dialog was open.
-    const fox_src: dvui.ImageSource = .{ .imageFile = .{
-        .bytes = assets.files.@"fox.png",
-        .name = "fox.png",
-        .interpolation = .nearest,
-    } };
-    _ = dvui.image(@src(), .{ .source = fox_src, .shrink = .ratio }, .{
-        .gravity_x = 0.5,
-        .min_size_content = .{ .w = 96, .h = 96 },
-    });
-
-    // Website link.
-    {
-        var link_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .gravity_x = 0.5, .padding = .{ .y = 4, .h = 6 } });
-        defer link_row.deinit();
-        dvui.link(@src(), .{ .url = "https://fizzyed.it", .label = "fizzyed.it" }, .{
-            .font = heading,
-            .color_text = .{ .color = dvui.themeGet().color(.highlight, .fill) },
+    if (comptime AppInfo.is_fizzy) {
+        // Fox at the top, centered. Use a fixed natural size (96×96) so it
+        // doesn't blow out the dialog regardless of the source PNG's resolution.
+        // `.imageFile` so dvui decodes once and caches the texture — `fromImageFileBytes`
+        // re-decoded the PNG and leaked the pixels every frame, which halved the frame rate
+        // for as long as this dialog was open.
+        const fox_src: dvui.ImageSource = .{ .imageFile = .{
+            .bytes = assets.files.@"fox.png",
+            .name = "fox.png",
+            .interpolation = .nearest,
+        } };
+        _ = dvui.image(@src(), .{ .source = fox_src, .shrink = .ratio }, .{
+            .gravity_x = 0.5,
+            .min_size_content = .{ .w = 96, .h = 96 },
         });
+
+        // Website link.
+        {
+            var link_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .gravity_x = 0.5, .padding = .{ .y = 4, .h = 6 } });
+            defer link_row.deinit();
+            dvui.link(@src(), .{ .url = "https://fizzyed.it", .label = "fizzyed.it" }, .{
+                .font = heading,
+                .color_text = .{ .color = dvui.themeGet().color(.highlight, .fill) },
+            });
+        }
     }
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 8 } });
@@ -244,7 +247,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         }
 
         // GitHub link (clickable).
-        if (build_opts.app_repo_url.len > 0) {
+        if (AppInfo.own_repo_url) {
             var gh_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .gravity_x = 0.5 });
             defer gh_row.deinit();
             dvui.labelNoFmt(@src(), "GitHub:", .{}, .{ .font = body_small, .gravity_y = 0.5, .padding = .{ .w = 6 } });
@@ -255,8 +258,6 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         } else {
             dvui.labelNoFmt(@src(), "Updates: configure build with -Drepo-url", .{}, .{ .font = body_small, .gravity_x = 0.5 });
         }
-    } else {
-        dvui.labelNoFmt(@src(), "Automatic updates are not included in this build.", .{}, .{ .font = body_small, .gravity_x = 0.5 });
     }
 
     // `std.c.getenv` requires libc (not available on wasm32-freestanding).
