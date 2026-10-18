@@ -48,6 +48,8 @@ The `.m` files in `src/platform/macos/` are built **without ARC**, under a frame
   - AppKit pictures the after-state synchronously *inside* `toggleFullScreen:`.
   - Whoever moves a window's frame sets its drawable size, because SDL hears of the new size late.
   - Take frame jumps only inside the app's frame transaction.
+  - Step a still window's way (`WindowMonitor.still`) only in the app's frames. Stepped by the
+    pump between them, its backdrop runs ahead of a late picture and shows as a band round it.
   - Read the pixel density from `backingScaleFactor`.
   - A sandbox fizzy launched from a shell isn't the active app, and AppKit stalls or refuses its
     transitions.

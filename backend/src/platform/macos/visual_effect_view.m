@@ -198,6 +198,13 @@ void fizzy_macos_viewport_still(void *nswindow) {
     if (window != nil) [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
 }
 
+/* Whether `nswindow` is shown on a Space other than the one the person is looking at
+ * (`SDLBackend.mainHeld`). */
+int fizzy_macos_window_off_active_space(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    return window != nil && [window isVisible] && ![window isOnActiveSpace] ? 1 : 0;
+}
+
 void fizzy_macos_viewport_reshadow(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -1483,6 +1490,16 @@ static void make_layers_clear(NSView *view) {
     for (NSView *sub in view.subviews) make_layers_clear(sub);
 }
 
+/* Whether `nswindow` has the backdrop in its colour (`fizzy_macos_window_plain_backdrop`). */
+int fizzy_macos_window_has_plain_backdrop(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    NSView *frame = [[window contentView] superview];
+    for (NSView *v in [frame subviews]) {
+        if ([v isKindOfClass:[FizzyPlainBackdropView class]]) return 1;
+    }
+    return 0;
+}
+
 void fizzy_macos_window_plain_backdrop(void *nswindow, double r, double g, double b, double radius) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -1549,6 +1566,27 @@ static void backdropFrame(CALayer *layer, BOOL on, double radius, NSWindow *wind
     layer.borderWidth = 1;
 }
 
+/* SDL's view clipped to `picture` (in the frame view), rounded by `radius`, on a still window's way
+ * into or out of full screen; unclipped otherwise (`picture` empty). The OS rounds a window's
+ * content to its corners, but on that way the window is the screen's size and the picture only part
+ * of it: the picture's square corners stood past the backdrop's rounded ones (the user). */
+static void clip_content(NSView *content, NSView *frame, NSRect picture, double radius) {
+    if (NSIsEmptyRect(picture)) {
+        if (content.layer.mask != nil) content.layer.mask = nil;
+        return;
+    }
+    if (![content wantsLayer]) [content setWantsLayer:YES];
+    CAShapeLayer *mask = [content.layer.mask isKindOfClass:[CAShapeLayer class]] ? (CAShapeLayer *)content.layer.mask : nil;
+    if (mask == nil) {
+        mask = [CAShapeLayer layer];
+        content.layer.mask = mask;
+    }
+    mask.frame = content.layer.bounds;
+    CGPathRef path = CGPathCreateWithRoundedRect(NSRectToCGRect([frame convertRect:picture toView:content]), radius, radius, NULL);
+    mask.path = path;
+    CGPathRelease(path);
+}
+
 void fizzy_macos_window_glass_follow(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -1556,7 +1594,8 @@ void fizzy_macos_window_glass_follow(void *nswindow) {
         NSView *frame = [content superview];
         if (content == nil || frame == nil) return;
         NSRect picture;
-        const BOOL still = windowGlassPicture(window, &picture, NULL);
+        double fullness = 0;
+        const BOOL still = windowGlassPicture(window, &picture, &fullness);
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
@@ -1567,8 +1606,11 @@ void fizzy_macos_window_glass_follow(void *nswindow) {
                 FizzyPlainBackdropView *backdrop = (FizzyPlainBackdropView *)v;
                 const NSRect want = still ? picture : [frame bounds];
                 if (!NSEqualRects([v frame], want)) [v setFrame:want];
-                const double radius = (full && !still) ? 0 : backdrop.radius;
+                /* Its corners square as it goes into full screen and round as it comes out, with its
+                 * picture (`fullness`), not at either end. */
+                const double radius = still ? backdrop.radius * (1.0 - fmin(fmax(fullness, 0.0), 1.0)) : (full ? 0 : backdrop.radius);
                 if (v.layer.cornerRadius != radius) v.layer.cornerRadius = radius;
+                clip_content(content, frame, still ? picture : NSZeroRect, radius);
                 /* The OS's shadow and outline again once it is out: AppKit's style changes on the
                  * way turned them off (the user). */
                 if (!full && !still) {
