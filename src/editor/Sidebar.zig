@@ -211,7 +211,7 @@ fn drawIcon(editor: *Editor, c: *Chooser, view: *Layout.Surface, index: usize) f
         if (r.y < strip_h) fizzy.backend.pushTitleBarInteractiveRect(r);
     }
 
-    Chooser.icon(view, it.selected, it.hovered(), rail_icon, index);
+    Chooser.icon(view, it.selected, it.hovered(), it.data(), rail_icon, index);
 
     // Attention badge, same idiom (and colour) as the infobar's app-update dot: a plugin build
     // is sitting in `plugins/` waiting for the user to say whether to load it, and the card that
