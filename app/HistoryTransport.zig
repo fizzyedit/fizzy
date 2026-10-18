@@ -13,6 +13,18 @@
 //! (`DrawOptions.steps`), its colour rising in it as steps are made, and brightens a moment at each
 //! new one: it is recording, and there is more to scrub.
 //!
+//! **Going.** It goes a few seconds after the pointer was last on it, and soon after the pointer
+//! leaves it (`Shown.soon`). A bar grown from a grip has a tab over it, a chevron down, that sends
+//! it back into the grip at once (`Shown.hide`): the growing run backwards. Pressed, the pointer
+//! resting on the bar does not bring it back until it has left.
+//!
+//! **The liquid.** What fills the grip is an opaque liquid in its glass, inside its rim. Grown into
+//! the bar, the liquid runs along the line up to the knob, what is applied, under the bar's glass:
+//! drawn first, so the glass bends and frosts it as it does anything behind it (with no glass, it
+//! lies over the plain fill). A new step or a scrub knocks it (`history_transport.Slosh`), its surface tips
+//! and swings back level; still, it asks for no frames. Each shape is its vessel's outline cut by
+//! its surface (`history_transport.cut`), convex, so dvui's smooth fill draws it.
+//!
 //! Over any owner's history (`Plugin.historyLine`, `historyGoTo`); an owner without them has no
 //! transport. Nothing runs for a bar that is not showing: no history is asked for, no timer is
 //! set. One per document pane, kept by the app beside the pane.
@@ -22,10 +34,10 @@
 //! video's scrubber shows frames: each tile the document at a stretch of its history, the nearest
 //! step to the tile's middle that has a picture. It stays while the pointer is on the bar.
 //!
-//! **Export.** With the strip comes an export button (`DrawOptions.export_from`). Pressed, it opens
-//! a window over the strip, as macOS trims a recording: a yellow bracket over the part to export,
-//! dragged from either side (`history_transport.Trim`), the document going to wherever a side is
-//! dragged and the rest dimmed. Pressed again, the part is the app's (`Pressed.exported`); undo's
+//! **Export.** The bar has an export button whenever the app can export (`DrawOptions.export_from`).
+//! Pressed, it grows the strip and opens a window over it, as macOS trims a recording: a yellow
+//! bracket over the part to export, dragged from either side (`history_transport.Trim`), the
+//! document going to wherever a side is dragged and the rest dimmed. Pressed again, the part is the app's (`Pressed.exported`); undo's
 //! button, a cross while the window is open, closes it.
 const HistoryTransport = @This();
 
@@ -50,6 +62,16 @@ dwelling: ?i128 = null,
 /// brightens a moment.
 grip_steps: ?usize = null,
 stepped_at: ?i128 = null,
+/// The liquid's swing, and the step the document stood at when it was last drawn: a scrub knocks it.
+slosh: rules.Slosh = .{},
+slosh_at: ?usize = null,
+/// The bar has its collapse tab (it grew from a grip): its place reaches up over it.
+tab: bool = false,
+/// The pointer was on the bar last frame: leaving it, the bar goes soon.
+was_on: bool = false,
+/// The tab sent it back: the pointer resting where the bar was does not bring it back until it
+/// has left.
+held_off: bool = false,
 /// The stop the pointer holds the knob at while it drags the line, until the drag ends. Only
 /// while the bar holds the mouse: a drag whose capture went (the bar stopped drawing) is over.
 drag: ?usize = null,
@@ -64,11 +86,19 @@ const max_w: f32 = 460;
 const grip_r: f32 = 9;
 /// How far round the grip the pointer is on it.
 const grip_reach: f32 = 8;
+/// The collapse tab's size, and its gap over the bar.
+const tab_d: f32 = 24;
+const tab_gap: f32 = 6;
+/// How long the bar stays once the pointer has left it.
+const leave_ns: i128 = 700 * std.time.ns_per_ms;
 /// How long the pointer stays on the grip before the bar grows out of it.
 const dwell_ns: i128 = 900 * std.time.ns_per_ms;
 /// How long the grip brightens at a new step.
 const step_glow_ns: i128 = 450 * std.time.ns_per_ms;
-/// The steps that fill the grip to its top; it fills by their logarithm, quickly at first.
+/// How high the grip's liquid reaches at its fullest: three quarters, room left to slosh.
+const fill_top: f32 = 0.75;
+/// The steps that fill the grip as far as it goes (`fill_top`); it fills by their logarithm,
+/// quickly at first.
 const full_steps: f32 = 200;
 
 /// Undo or redo was pressed at `now_ns`, or something else asked for the bar: it shows.
@@ -93,13 +123,20 @@ pub fn press(self: *HistoryTransport, now_ns: i128, forward: bool) usize {
 pub fn place(self: *const HistoryTransport, area: dvui.Rect.Physical, now_ns: i128) ?dvui.Rect.Physical {
     if (self.drag == null and self.shown.openness(now_ns) <= 0) return null;
     const whole = geometry(area.toNatural(), self.strip.openness(now_ns)) orelse return null;
-    return dvui.windowRectScale().rectToPhysical(whole.outsetAll(4));
+    var r = whole.outsetAll(4);
+    if (self.tab) {
+        r.y -= tab_d + tab_gap;
+        r.h += tab_d + tab_gap;
+    }
+    return dvui.windowRectScale().rectToPhysical(r);
 }
 
 /// The grip over `area` (physical), standing on the middle of its bottom edge, `r` its radius, in
 /// natural units as `geometry`'s; null when the pane is too narrow for the bar.
-fn gripRect(area: dvui.Rect.Physical, r: f32) ?dvui.Rect {
-    const nat = area.toNatural();
+fn gripRect(area: dvui.Rect.Physical, r: f32, edge: ?f32) ?dvui.Rect {
+    var on = area;
+    if (edge) |y| on.h = y - on.y;
+    const nat = on.toNatural();
     _ = geometry(nat, 0) orelse return null;
     return .{ .x = nat.x + nat.w / 2 - r, .y = nat.y + nat.h - r, .w = 2 * r, .h = r };
 }
@@ -126,6 +163,9 @@ pub const DrawOptions = struct {
     /// How many steps of it the app has kept (fizzy: its track's), for the grip's fill; 0: none
     /// shows, the grip is plain.
     steps: usize = 0,
+    /// Where the pane's own bottom edge is (physical y), when its card reaches lower than `area`:
+    /// the grip stands on it. Null: `area`'s.
+    edge: ?f32 = null,
     /// The document's pictures, for the strip scrubbing grows; null: no strip.
     frames: ?*const HistoryFrames = null,
     /// An export button with the strip: the app can export a part of the history (fizzy: as a
@@ -150,13 +190,24 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const now = dvui.frameTimeNS();
     // The pointer on it, or a drag in it, keeps it; the pointer held on the grip brings it up.
     const mouse = dvui.currentWindow().mouse_pt;
-    const on_grip = opts.history and area.contains(mouse) and !core.dialogs.modalOverCurrent() and
-        if (gripRect(area, grip_r)) |g| dvui.windowRectScale().rectToPhysical(g.outsetAll(grip_reach)).contains(mouse) else false;
+    // A bar that grows out of its grip takes a surface's opening time to do it; one that fades, a
+    // fade's.
+    self.shown.fade = if (opts.history) @as(i128, core.motion.duration(core.motion.open_us)) * std.time.ns_per_us else rules.fade_ns;
+    var reach = area;
+    if (opts.edge) |y| reach.h = @max(reach.h, y - reach.y);
+    const on_grip = opts.history and reach.contains(mouse) and !core.dialogs.modalOverCurrent() and
+        if (gripRect(area, grip_r, opts.edge)) |g| dvui.windowRectScale().rectToPhysical(g.outsetAll(grip_reach)).contains(mouse) else false;
     if (!on_grip) self.dwelling = null;
+    self.tab = opts.history;
+    const on_bar = if (self.place(area, now)) |b| b.contains(mouse) else false;
+    if (!on_bar) self.held_off = false;
+    // Left: it goes soon, rather than lingering its whole time.
+    if (self.was_on and !on_bar and self.drag == null and self.window == null) self.shown.soon(now, leave_ns);
+    self.was_on = on_bar and !self.held_off;
     if (self.drag != null) {
         self.shown.stir(now);
         if (opts.frames != null) self.strip.stir(now);
-    } else if (if (self.place(area, now)) |b| b.contains(mouse) else false) {
+    } else if (on_bar and !self.held_off) {
         self.shown.stir(now);
         // On the bar, a strip grown stays.
         if (self.strip.openness(now) > 0) self.strip.stir(now);
@@ -180,18 +231,20 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         const held: f32 = if (self.dwelling) |t| @floatCast(@min(1, @as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(dwell_ns)))) else 0;
         if (self.grip_steps) |was| if (opts.steps > was) {
             self.stepped_at = now;
+            self.slosh.knock(now, 0.7);
         };
         self.grip_steps = opts.steps;
         const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
         if (glow == 0) self.stepped_at = null;
         const fill: f32 = @min(1, @log2(1 + @as(f32, @floatFromInt(opts.steps))) / @log2(1 + full_steps));
-        if (gripRect(area, grip_r * (1 + 0.5 * core.motion.fade(held)))) |g| if (drawGrip(g, id_extra, .{
-            .alpha = 1 - p,
+        if (gripRect(area, grip_r * (1 + 0.5 * core.motion.fade(held)), opts.edge)) |g| if (drawGrip(g, id_extra, .{
+            .alpha = 1 - @min(1, p * 4),
             .lit = on_grip,
             .fill = fill,
             .glow = glow,
+            .tilt = self.slosh.tilt(now),
         }, doc.owner.documentPath(doc))) self.stir(now);
-        if (self.dwelling != null or self.stepped_at != null) dvui.refresh(null, @src(), null);
+        if (self.dwelling != null or self.stepped_at != null or !self.slosh.settled(now)) dvui.refresh(null, @src(), null);
     }
     if (p <= 0) return pressed;
     const arena = dvui.currentWindow().arena();
@@ -216,17 +269,20 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const w = whole.w;
     // The buttons and the line keep to the bar's bottom row; the strip grows over them.
     const center: dvui.Point = .{ .x = whole.x + w / 2, .y = whole.y + whole.h - bar_h / 2 };
-    // Export, when there is a way to: the last bubble, growing in with the strip.
-    const export_g: f32 = if (!can_export) 0 else if (self.window != null) 1 else grown;
+    // Export, when there is a way to: the last bubble, there whenever the bar is. Pressed, it opens
+    // the window over the strip, which grows for it.
+    const export_g: f32 = if (can_export) 1 else 0;
     const end_w: f32 = (button_d + gap) * export_g;
     const back: dvui.Rect = .{ .x = whole.x, .y = center.y - button_d / 2, .w = button_d, .h = button_d };
     const fwd: dvui.Rect = .{ .x = whole.x + w - button_d - end_w, .y = back.y, .w = button_d, .h = button_d };
     const share: dvui.Rect = .{ .x = whole.x + w - button_d * export_g, .y = back.y + button_d * (1 - export_g) / 2, .w = button_d * export_g, .h = button_d * export_g };
     const track: dvui.Rect = .{ .x = back.x + button_d + gap, .y = whole.y, .w = w - 2 * (button_d + gap) - end_w, .h = whole.h };
-    const hit = wrs.rectToPhysical(whole.outsetAll(4));
+    // The collapse tab, over the middle of the bar: back into the grip.
+    const tab: dvui.Rect = .{ .x = whole.x + w / 2 - tab_d / 2, .y = whole.y - tab_gap - tab_d, .w = tab_d, .h = tab_d };
+    const hit = if (self.place(area, now)) |pl| pl else wrs.rectToPhysical(whole.outsetAll(4));
 
     var float: dvui.FloatingWidget = undefined;
-    float.init(@src(), .{}, .{ .rect = whole.outsetAll(16), .id_extra = id_extra });
+    float.init(@src(), .{}, .{ .rect = whole.outset(.{ .x = 16, .y = 16 + tab_d + tab_gap, .w = 16, .h = 16 }), .id_extra = id_extra });
     defer float.deinit();
     const bounds = float.data().rect;
     const fid = float.data().id;
@@ -236,6 +292,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (self.grip != null and !dvui.captured(fid)) self.grip = null;
 
     const phys = [4]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd), wrs.rectToPhysical(share) };
+    const tab_p = wrs.rectToPhysical(tab);
     const pad = 14;
     const x0 = phys[1].x + pad * s;
     const x1 = phys[1].x + phys[1].w - pad * s;
@@ -251,6 +308,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     core.anchor.markRect(fid, .{ .x = x0, .y = phys[1].y, .w = x1 - x0, .h = phys[1].h }, true, "history.line:{s}", .{path});
     core.anchor.markRect(fid, phys[2], true, "history.forward:{s}", .{path});
     if (export_g > 0) core.anchor.markRect(fid, phys[3], true, "history.export:{s}", .{path});
+    if (self.tab) core.anchor.markRect(fid, tab_p, true, "history.collapse:{s}", .{path});
 
     // Input: the buttons step, the line goes where it is pressed and follows a drag.
     var go: ?usize = null;
@@ -268,6 +326,11 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                     if (self.window != null) self.window = null else go = line.at -| 1;
                 } else if (phys[2].contains(me.p)) {
                     if (self.window == null) go = @min(n, line.at + 1);
+                } else if (self.tab and tab_p.contains(me.p)) {
+                    self.shown.hide(now);
+                    self.held_off = true;
+                    self.was_on = false;
+                    dvui.refresh(null, @src(), fid);
                 } else if (export_g > 0.5 and phys[3].contains(me.p)) {
                     if (self.window) |win| {
                         pressed.exported = win;
@@ -308,17 +371,29 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (doc.owner.historyGoTo(doc, stopId(line, to))) at = to;
         dvui.refresh(null, @src(), fid);
     };
+    // A scrub knocks the liquid, the way it went and as far.
+    if (self.slosh_at) |was| if (was != at) {
+        const by = (@as(f32, @floatFromInt(at)) - @as(f32, @floatFromInt(was))) / @as(f32, @floatFromInt(@max(1, n))) * 4;
+        self.slosh.knock(now, std.math.clamp(by, -0.8, 0.8));
+    };
+    self.slosh_at = at;
+    const tilt = self.slosh.tilt(now);
 
-    const prev_alpha = dvui.alpha(p);
+    // Coming in and going, a pane with a grip grows the bar out of it and takes it back in: each
+    // bubble from the grip's place to its own, the glass running together while they are close,
+    // and what is on them shows once they are most of the way out. Without a grip, it fades.
+    const from: ?dvui.Rect.Physical = if (opts.history and p < 1) if (gripRect(area, grip_r, opts.edge)) |g| wrs.rectToPhysical(g) else null else null;
+    const out = core.motion.enterFull(p);
+    const prev_alpha = dvui.alpha(if (from != null) @min(1, p * 4) else p);
     defer dvui.alphaSet(prev_alpha);
     const pt = dvui.currentWindow().mouse_pt;
-    var bubbles: [4]core.dialogs.Bubble = undefined;
+    var bubbles: [5]core.dialogs.Bubble = undefined;
     const trimming = self.window != null;
     // The line's bubble: a capsule round the line alone, easing to a surface's corners as the
     // strip grows, so the pictures sit inside them.
     const line_radius = std.math.lerp(phys[1].h / 2, core.corners.scaled(core.corners.card) * s, @min(1, grown * 1.5));
-    for (phys, &bubbles, 0..) |r, *b, i| b.* = .{
-        .rect = r,
+    for (phys, bubbles[0..4], 0..) |r, *b, i| b.* = .{
+        .rect = if (from) |f| lerpRect(f, r, out) else r,
         .radius = if (i == 1 and grown > 0) line_radius else null,
         .light = if (r.contains(pt) and switch (i) {
             0 => trimming or at > 0,
@@ -327,13 +402,29 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
             else => false,
         }) core.dialogs.bubble_hover else 0,
     };
-    core.dialogs.glassBubbles(fid, bubbles[0..if (export_g > 0) 4 else 3], s, .{ .merge = 14, .shadow = 1 });
+    // The tab, a small drop on the bar's top that its glass runs into.
+    var count: usize = if (export_g > 0) 4 else 3;
+    if (self.tab) {
+        bubbles[count] = .{
+            .rect = if (from) |f| lerpRect(f, tab_p, out) else tab_p,
+            .light = if (tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
+        };
+        count += 1;
+    }
+    core.dialogs.glassBubbles(fid, bubbles[0..count], s, .{ .merge = 14, .shadow = 1 });
+    // What is on the bubbles comes once they are most of the way out; the liquid comes with them.
+    const shape_alpha = dvui.alpha(1);
+    if (from != null) {
+        dvui.alphaSet(prev_alpha);
+        _ = dvui.alpha(std.math.clamp((p - 0.55) / 0.45, 0, 1));
+    }
 
     const ink = dvui.themeGet().color(.window, .text);
     if (trimming) {
         button(bounds, back, "history_cancel", icons.tvg.lucide.x, ink.opacity(0.85));
     } else button(bounds, back, "history_back", icons.tvg.lucide.undo, ink.opacity(if (at > 0) 0.85 else 0.3));
     button(bounds, fwd, "history_forward", icons.tvg.lucide.redo, ink.opacity(if (!trimming and at < n) 0.85 else 0.3));
+    if (self.tab) button(bounds, tab, "history_collapse", icons.tvg.lucide.@"chevron-down", ink.opacity(0.85));
     if (export_g > 0.3) {
         if (trimming) {
             button(bounds, share, "history_export_done", icons.tvg.lucide.check, yellow);
@@ -355,12 +446,15 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         .color_text = .{ .color = ink.opacity(0.85) },
     });
     const line_r: dvui.Rect.Physical = .{ .x = x0, .y = phys[1].y + phys[1].h - 16 * s, .w = @max(1, x1 - x0), .h = 10 * s };
-    paintLine(line_r, at, n, ink, s);
+    // The grip's liquid, flowing out of it into the line as the bar grows (`from`, the grip's lower
+    // part), and back as it goes.
+    const pool: ?dvui.Rect.Physical = if (from) |f| .{ .x = f.x + f.w * 0.2, .y = f.y + f.h * 0.4, .w = f.w * 0.6, .h = f.h * 0.6 } else null;
+    paintLine(line_r, at, n, ink, s, .{ .tilt = tilt, .from = pool, .out = out, .alpha = shape_alpha });
     if (self.window) |win| paintWindow(.{ .x = x0, .y = film.y, .w = x1 - x0, .h = line_r.y + line_r.h - film.y }, win, s);
 
     // Comes in, goes: a frame each while it fades, and one wake for when it next changes on its
     // own (it starts to go, it is gone).
-    if (p < 1 or (grown > 0 and grown < 1)) dvui.refresh(null, @src(), fid);
+    if (p < 1 or (grown > 0 and grown < 1) or !self.slosh.settled(now)) dvui.refresh(null, @src(), fid);
     const next = if (self.strip.nextChange(now)) |t| @min(t, self.shown.nextChange(now) orelse t) else self.shown.nextChange(now);
     if (next) |t| dvui.timer(fid, @intCast(@min(@divTrunc(t - now, 1000) + 1, std.math.maxInt(i32))));
     return pressed;
@@ -374,7 +468,28 @@ const GripLook = struct {
     fill: f32,
     /// A new step's brightening, 1 as it lands to 0.
     glow: f32,
+    /// How tipped its liquid is, -1 to 1 (`history_transport.Slosh`).
+    tilt: f32,
 };
+
+fn lerpRect(a: dvui.Rect.Physical, b: dvui.Rect.Physical, t: f32) dvui.Rect.Physical {
+    return .{ .x = std.math.lerp(a.x, b.x, t), .y = std.math.lerp(a.y, b.y, t), .w = std.math.lerp(a.w, b.w, t), .h = std.math.lerp(a.h, b.h, t) };
+}
+
+/// The liquid's colour: the highlight, opaque.
+fn liquidColor(glow: f32) dvui.Color {
+    const c = dvui.themeGet().color(.highlight, .fill);
+    return c.lerp(.white, 0.25 * glow);
+}
+
+/// Fill the convex outline `poly` (physical) with `color`, its edge smoothed as dvui's fills are.
+fn pour(poly: []const rules.Pt, color: dvui.Color) void {
+    if (poly.len < 3) return;
+    var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
+    defer path.deinit();
+    for (poly) |q| path.addPoint(.{ .x = q[0], .y = q[1] });
+    path.build().fillConvex(.{ .color = .{ .color = color }, .fade = 1 });
+}
 
 /// The grip at `r` (natural, the semicircle's box), as `look` says. Returns whether it was
 /// pressed: a press is the grip's, not the document's under it. Named for a tape or a test to aim
@@ -395,17 +510,34 @@ fn drawGrip(r: dvui.Rect, id_extra: usize, look: GripLook, path: []const u8) boo
         }
     }
     const theme = dvui.themeGet();
-    // A circle on the edge, its lower half past the pane: `r` is its upper half. (Corners round to
-    // at most half the shorter side, so a box `r`'s size would be a tab, not a dome.)
+    const s = wrs.s;
+    // A circle on the edge, its lower half past the pane: `pr` is its upper half. (Corners round to
+    // at most half the shorter side, so a box `pr`'s size would be a tab, not a dome.)
+    const R = pr.w / 2;
+    const edge = pr.y + pr.h;
     const disc: dvui.Rect.Physical = .{ .x = pr.x, .y = pr.y, .w = pr.w, .h = pr.w };
     const prev = dvui.clip(pr);
     defer dvui.clipSet(prev);
-    disc.fill(.round(pr.h), .{ .color = .{ .color = theme.color(.window, .text).opacity(look.alpha * @as(f32, if (look.lit) 0.45 else 0.22)) }, .fade = 1 });
-    // The history in it: the highlight's colour, up to its level, from the edge it stands on.
+    const glass = core.widgets.LiquidField.ready() and core.widgets.liquidFrost() != null;
+    if (!glass) disc.fill(.round(R), .{ .color = .{ .color = theme.color(.window, .text).opacity(look.alpha * @as(f32, if (look.lit) 0.45 else 0.22)) }, .fade = 1 });
+    // The glass, and the history in it: a liquid up to its level, its surface tipped by its slosh.
+    // Over the glass, inside its rim: a grip this small frosts nearly all of what is under it.
+    if (glass) core.dialogs.glassBubbles(float.data().id, &.{.{
+        .rect = disc,
+        .light = if (look.lit) core.dialogs.bubble_hover else 0,
+    }}, s, .{ .shadow = 0.5 });
     if (look.fill > 0) {
-        const level = pr.h * look.fill;
-        _ = dvui.clip(.{ .x = pr.x, .y = pr.y + pr.h - level, .w = pr.w, .h = level });
-        disc.fill(.round(pr.h), .{ .color = .{ .color = theme.color(.highlight, .fill).opacity(look.alpha * (0.6 + 0.4 * look.glow)) }, .fade = 1 });
+        const inset = 2 * s;
+        var outline: [4 * (rules.corner_points + 1)]rules.Pt = undefined;
+        var half: [outline.len + 1]rules.Pt = undefined;
+        var kept: [outline.len + 2]rules.Pt = undefined;
+        const vessel = rules.roundedOutline(pr.x + inset, edge - R + inset, 2 * (R - inset), 2 * (R - inset), R - inset, &outline);
+        const above = rules.cut(vessel, .{ 0, edge }, .{ 0, 1 }, &half);
+        const a = look.tilt * 0.45;
+        // Never full: at most `fill_top` of the way up, so there is always room for it to swing.
+        const level = edge - (R - inset) * fill_top * look.fill;
+        const poly = rules.cut(above, .{ pr.x + R, level }, .{ @sin(a), -@cos(a) }, &kept);
+        pour(poly, liquidColor(look.glow).opacity(look.alpha));
     }
     return pressed;
 }
@@ -493,21 +625,44 @@ fn button(bounds: dvui.Rect, r: dvui.Rect, name: []const u8, tvg: []const u8, co
 }
 
 /// The line `r` (physical): the history to `at` lit, a tick per step while they fit, the knob.
-fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32) void {
+/// The line's liquid: what is applied, up to the knob.
+const LineLiquid = struct {
+    /// How tipped its head is, -1 to 1 (`history_transport.Slosh`).
+    tilt: f32 = 0,
+    /// Growing out of the grip: the pool it flows from (physical), and how far it has come, 0 to 1.
+    from: ?dvui.Rect.Physical = null,
+    out: f32 = 1,
+    /// Its own alpha: it shows while the bubbles grow, before what is on them does.
+    alpha: f32 = 1,
+};
+
+fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32, liquid: LineLiquid) void {
     const h = 4 * s;
     const line: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + (r.h - h) / 2, .w = r.w, .h = h };
-    line.fill(.all(h / 2), .{ .color = .{ .color = ink.opacity(0.15) } });
+    line.fill(.round(h / 2), .{ .color = .{ .color = ink.opacity(0.15) } });
     const accent = dvui.themeGet().color(.highlight, .fill);
     const knob_x = rules.stopX(at, r.x, r.x + r.w, n);
-    var done = line;
-    done.w = knob_x - line.x;
-    if (done.w > 0) done.fill(.all(h / 2), .{ .color = .{ .color = accent } });
     // A tick per step while they stand 6 points apart; past that the line is its own scale.
     if (n > 0 and r.w / @as(f32, @floatFromInt(n)) >= 6 * s) for (1..n) |i| {
         const x = rules.stopX(i, r.x, r.x + r.w, n);
         const tick: dvui.Rect.Physical = .{ .x = x - 0.5 * s, .y = r.y + 1 * s, .w = 1 * s, .h = r.h - 2 * s };
         tick.fill(.{}, .{ .color = .{ .color = ink.opacity(0.25) } });
     };
+    // The applied part, a liquid in a tube a little thicker than the line, its head tipped by the
+    // slosh; growing, it runs out of the grip's pool along the line.
+    {
+        const content_alpha = dvui.alpha(1);
+        dvui.alphaSet(liquid.alpha);
+        defer dvui.alphaSet(content_alpha);
+        const th = 6 * s;
+        const done: dvui.Rect.Physical = .{ .x = line.x, .y = line.y + h / 2 - th / 2, .w = @max(th, knob_x - line.x + th / 2), .h = th };
+        const tube = if (liquid.from) |f| lerpRect(f, done, liquid.out) else done;
+        var outline: [4 * (rules.corner_points + 1)]rules.Pt = undefined;
+        var kept: [outline.len + 1]rules.Pt = undefined;
+        const vessel = rules.roundedOutline(tube.x, tube.y, tube.w, tube.h, @min(tube.w, tube.h) / 2, &outline);
+        const a = liquid.tilt * 0.6;
+        pour(rules.cut(vessel, .{ tube.x + tube.w, tube.y + tube.h / 2 }, .{ @cos(a), @sin(a) }, &kept), accent);
+    }
     var knob: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
     defer knob.deinit();
     knob.addArc(.{ .x = knob_x, .y = line.y + h / 2 }, 6 * s, std.math.tau, 0, true);

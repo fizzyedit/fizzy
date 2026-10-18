@@ -2954,6 +2954,19 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // No fill: the place card the region draws is the document's background. A second coat of
     // the same translucent fill here doubled it — darker, and more opaque than the chrome
     // around it.
+    // The card the document is drawn on, the first box round it reaching lower (its padding): its
+    // bottom edge is where the history's grip stands.
+    const card_edge = edge: {
+        var wd = dvui.parentGet().data();
+        const own = wd.borderRectScale().r;
+        for (0..8) |_| {
+            const r = wd.borderRectScale().r;
+            if (r.y + r.h > own.y + own.h + 0.5) break :edge r.y + r.h;
+            if (wd.parent.data() == wd) break;
+            wd = wd.parent.data();
+        }
+        break :edge own.y + own.h;
+    };
     var canvas = sdk.pane_layout.mainCanvasVbox(dvui.themeGet().color(.window, .fill), false, @truncate(ds.doc_id));
     defer {
         dvui.toastsShow(canvas.data().id, canvas.data().contentRectScale().r.toNatural());
@@ -3042,6 +3055,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
             .history = ds.has_history,
             .steps = if (recorded) |tr| tr.steps.items.len else 0,
+            .edge = card_edge,
             .frames = if (recorded != null) &ds.frames else null,
             .export_from = if (track) |tr| tr.base_top else null,
             .window_summary = summary,
