@@ -8074,6 +8074,23 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expect(dvui.frameTimeNS() - held_from >= 800 * std.time.ns_per_ms);
             try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
             try std.testing.expectEqual(@as(usize, 40), (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult).at);
+
+            // Its tab sends it back into the grip, and the pointer resting on it after does not
+            // bring it back.
+            for (0..60) |_| _ = try dvui.testing.step(headlessFrame);
+            const tab_tag = try std.fmt.allocPrint(gpa, "history.collapse:{s}", .{path});
+            defer gpa.free(tab_tag);
+            var fold: automation.Script = .init(gpa, "transport-collapse", "");
+            fold.check = s.check;
+            try fold.click(.{ .tag = tab_tag }, .{});
+            try ed_play(editor, &fold);
+            const folded_at = dvui.frameTimeNS();
+            while (ds.transport.shown.openness(dvui.frameTimeNS()) > 0 and dvui.frameTimeNS() - folded_at < 2 * std.time.ns_per_s)
+                _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+            for (0..20) |_| _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+            try std.testing.expectEqual(@as(usize, 40), (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult).at);
         }
 
         try editor.undo();

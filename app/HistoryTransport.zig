@@ -235,6 +235,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         self.strip.stir(now);
     }
     const p = self.shown.openness(now);
+    const fill: f32 = if (opts.steps == 0) 0 else @max(min_fill, 1 - @exp(-@as(f32, @floatFromInt(opts.steps)) / fill_steps));
     // The grip, giving way to the bar as it comes in, quiet at rest and coming up while in use: a
     // frame each while it changes, and none while it only sits there.
     if (opts.history and p < 1) {
@@ -246,7 +247,6 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         self.grip_steps = opts.steps;
         const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
         if (glow == 0) self.stepped_at = null;
-        const fill: f32 = if (opts.steps == 0) 0 else @max(min_fill, 1 - @exp(-@as(f32, @floatFromInt(opts.steps)) / fill_steps));
         const in_use = on_grip or self.stepped_at != null or !self.slosh.settled(now);
         const want: f32 = if (in_use) 1 else rest_presence;
         const since = now - (self.presence_at orelse now);
@@ -405,7 +405,9 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const from: ?dvui.Rect.Physical = if (opts.history and p < 1) if (gripRect(area, grip_r, opts.edge)) |g| wrs.rectToPhysical(g) else null else null;
     const out = core.motion.enterFull(p);
     const bud: ?dvui.Rect.Physical = if (from) |f| .{ .x = f.x + f.w / 2 - f.h * 0.6, .y = f.y + f.h * 0.15, .w = f.h * 1.2, .h = f.h * 1.2 } else null;
-    const prev_alpha = dvui.alpha(if (from != null) 1 else p);
+    // The grip's glass is as present as the grip was (`presence`), coming up to all of it as the
+    // bar comes out, so neither end of the growing jumps.
+    const prev_alpha = dvui.alpha(if (from != null) std.math.lerp(self.presence, 1, @min(1, p * 3)) else p);
     defer dvui.alphaSet(prev_alpha);
     const pt = dvui.currentWindow().mouse_pt;
     var bubbles: [5]core.dialogs.Bubble = undefined;
@@ -483,7 +485,11 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const line_r: dvui.Rect.Physical = .{ .x = x0, .y = phys[1].y + phys[1].h - 16 * s, .w = @max(1, x1 - x0), .h = 10 * s };
     // The grip's liquid, flowing out of it into the line as the bar grows (`from`, the grip's lower
     // part), and back as it goes.
-    const pool: ?dvui.Rect.Physical = if (from) |f| .{ .x = f.x + f.w * 0.2, .y = f.y + f.h * 0.4, .w = f.w * 0.6, .h = f.h * 0.6 } else null;
+    const pool: ?dvui.Rect.Physical = if (from) |f| pool: {
+        // As much as the grip holds, at its level: the liquid leaves the grip as it stood.
+        const h = @max(1, f.h * fill_top * fill);
+        break :pool .{ .x = f.x + f.w * 0.2, .y = f.y + f.h - h, .w = f.w * 0.6, .h = h };
+    } else null;
     paintLine(line_r, at, n, ink, s, .{ .tilt = tilt, .from = pool, .out = out, .alpha = shape_alpha });
     if (self.window) |win| paintWindow(phys[1], if (grown > 0) line_radius else phys[1].h / 2, x0, x1, win, s);
 
@@ -715,7 +721,7 @@ fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32
     };
     // The applied part, a liquid in a tube a little thicker than the line, its head tipped by the
     // slosh; growing, it runs out of the grip's pool along the line.
-    {
+    if (at > 0 or liquid.from != null) {
         const content_alpha = dvui.alpha(1);
         dvui.alphaSet(liquid.alpha);
         defer dvui.alphaSet(content_alpha);
