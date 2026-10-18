@@ -119,6 +119,13 @@ the whole screen first, then each frame's changes on the one before, each change
 `seq` of the event before it, and the whole screen again whenever it would miss a step, or when
 the change would be larger than the screen (about 7× less data through a tab opening).
 
+Keys follow from the path, which has two consequences. A node without a tag that is renamed or
+moves is removed and added, with everything under it that has no tag of its own. And like
+siblings are numbered by position, so removing the first of two unnamed buttons reads as the
+second removed and the first moved. Widgets that matter publish tags, which neither touches. In a
+change, a name, parent or window that went away is `""`. Screen numbers start somewhere new each
+run, so a `since` kept from an earlier run gets the whole screen.
+
 `/openapi.json` lists the events plugins declared, with an example payload each. A stream gets a
 keep-alive comment every 15 seconds; one that falls more than 8 MB behind gets nothing more. With
 no stream open, events cost the bus nothing extra.

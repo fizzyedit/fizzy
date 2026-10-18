@@ -7,7 +7,14 @@
 //! **Keys.** A node with a tag is its tag: tags are what widgets publish to be found by. One without
 //! is the path to it from the nearest node with a tag, a `role:name` per step, numbered among its
 //! like siblings (`fizzy.window:main/tab:notes.md`, `…/button:#2`). A snapshot's `parent` is an
-//! index, which shifts whenever anything above changes; a key does not.
+//! index, which shifts whenever anything above changes; a key does not. Keys are unique within a
+//! screen: one already given out is never given again.
+//!
+//! **What follows from keying by path.** A node without a tag that is renamed, or moves to another
+//! parent, is a different key: removed and added, with everything under it that has no tag of its
+//! own. Like siblings are numbered by position, so removing the first of two unnamed buttons
+//! reads as the second removed and the first moved to where the second was. Widgets that matter to
+//! an agent publish tags (`anchor`), which none of this touches.
 //!
 //! std-only, with a unit-test root of its own (`build/app.zig`).
 const std = @import("std");
@@ -37,14 +44,18 @@ pub const Keyed = struct {
     window: ?[]const u8 = null,
 };
 
-/// What changed in a node both screens have: only what did, the rest null.
+/// What changed in a node both screens have: only what did, the rest null. A name, parent or
+/// window that changed to none is `""`.
 pub const Change = struct {
     key: []const u8,
+    role: ?[]const u8 = null,
     name: ?[]const u8 = null,
     rect: ?Node.Rect = null,
     focused: ?bool = null,
     /// The node it now sits in, when that changed.
     parent: ?[]const u8 = null,
+    /// The window it is now in (a view floated out into one of its own), when that changed.
+    window: ?[]const u8 = null,
 };
 
 pub const Diff = struct {
@@ -67,19 +78,29 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) ![]const Keyed {
 /// `nodes` keyed. A node's parent comes before it (tree order), as a snapshot writes them.
 pub fn key(arena: std.mem.Allocator, nodes: []const Node) ![]const Keyed {
     const out = try arena.alloc(Keyed, nodes.len);
+    // How many of each base have been seen, and every key given out: a numbered key (`x#2`) must
+    // not be one some node already has as its own (a tag `x#2`, a tab named `a#2`).
     var seen: std.StringHashMapUnmanaged(u32) = .empty;
+    var given: std.StringHashMapUnmanaged(void) = .empty;
     for (nodes, out, 0..) |n, *k, i| {
         const parent: ?[]const u8 = if (n.parent) |p| if (p < i) out[p].key else null else null;
         const base: []const u8 = if (n.tag) |t| t else blk: {
             const step = try std.fmt.allocPrint(arena, "{s}:{s}", .{ n.role orelse "", n.name orelse "" });
             break :blk if (parent) |p| try std.fmt.allocPrint(arena, "{s}/{s}", .{ p, step }) else step;
         };
-        // Like siblings (or a tag used twice) numbered from the second, in tree order.
+        // Like siblings (or a tag used twice) numbered from the second, in tree order, past any
+        // number already given out.
         const gop = try seen.getOrPut(arena, base);
         if (!gop.found_existing) gop.value_ptr.* = 0;
-        gop.value_ptr.* += 1;
+        var unique = base;
+        while (true) {
+            gop.value_ptr.* += 1;
+            if (gop.value_ptr.* > 1) unique = try std.fmt.allocPrint(arena, "{s}#{d}", .{ base, gop.value_ptr.* });
+            if (!given.contains(unique)) break;
+        }
+        try given.put(arena, unique, {});
         k.* = .{
-            .key = if (gop.value_ptr.* == 1) base else try std.fmt.allocPrint(arena, "{s}#{d}", .{ base, gop.value_ptr.* }),
+            .key = unique,
             .role = n.role,
             .name = n.name,
             .tag = n.tag,
@@ -121,6 +142,14 @@ pub fn diff(arena: std.mem.Allocator, old: []const Keyed, new: []const Keyed) !D
         }
         if (!eqlOpt(o.parent, n.parent)) {
             c.parent = n.parent orelse "";
+            any = true;
+        }
+        if (!eqlOpt(o.window, n.window)) {
+            c.window = n.window orelse "";
+            any = true;
+        }
+        if (!eqlOpt(o.role, n.role)) {
+            c.role = n.role orelse "";
             any = true;
         }
         if (any) try changed.append(arena, c);
@@ -198,4 +227,50 @@ test "a diff says what was added, removed and changed, and nothing else" {
     try std.testing.expectEqual(false, d.changed[1].focused.?);
     // The same screen twice: nothing.
     try std.testing.expect((try diff(a, new, new)).empty());
+}
+
+test "keys are unique, whatever names and tags look like" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Two tags `x` and a third node whose own tag is `x#2`; two tabs named `a` and one named `a#2`.
+    const nodes = try parse(a,
+        \\.{
+        \\    .{.tag="x",.rect=.{.x=0,.y=0,.w=1,.h=1}},
+        \\    .{.tag="x",.rect=.{.x=1,.y=0,.w=1,.h=1}},
+        \\    .{.tag="x#2",.rect=.{.x=2,.y=0,.w=1,.h=1}},
+        \\    .{.role="tab",.name="a",.rect=.{.x=0,.y=1,.w=1,.h=1},.parent=0},
+        \\    .{.role="tab",.name="a",.rect=.{.x=1,.y=1,.w=1,.h=1},.parent=0},
+        \\    .{.role="tab",.name="a#2",.rect=.{.x=2,.y=1,.w=1,.h=1},.parent=0},
+        \\}
+    );
+    var keys: std.StringHashMapUnmanaged(void) = .empty;
+    for (nodes) |n| {
+        try std.testing.expect(!keys.contains(n.key));
+        try keys.put(a, n.key, {});
+    }
+}
+
+test "a node floated into a window of its own, or given another role, is changed" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const old = try parse(a,
+        \\.{
+        \\    .{.role="window",.tag="fizzy.window:main",.rect=.{.x=0,.y=0,.w=100,.h=100}},
+        \\    .{.role="window",.tag="fizzy.window:float",.rect=.{.x=0,.y=0,.w=50,.h=50}},
+        \\    .{.tag="view",.role="group",.rect=.{.x=0,.y=0,.w=10,.h=10}},
+        \\}
+    );
+    const new = try parse(a,
+        \\.{
+        \\    .{.role="window",.tag="fizzy.window:main",.rect=.{.x=0,.y=0,.w=100,.h=100}},
+        \\    .{.role="window",.tag="fizzy.window:float",.rect=.{.x=0,.y=0,.w=50,.h=50}},
+        \\    .{.tag="view",.role="dialog",.rect=.{.x=0,.y=0,.w=10,.h=10},.window=1},
+        \\}
+    );
+    const d = try diff(a, old, new);
+    try std.testing.expectEqual(@as(usize, 1), d.changed.len);
+    try std.testing.expectEqualStrings("fizzy.window:float", d.changed[0].window.?);
+    try std.testing.expectEqualStrings("dialog", d.changed[0].role.?);
 }

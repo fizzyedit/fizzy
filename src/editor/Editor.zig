@@ -5420,25 +5420,25 @@ fn noteScreen(editor: *Editor, seq: u32, text: []const u8) void {
 /// `.{ .seq, .nodes }`, or, with `since` a snapshot still kept, what changed since it,
 /// `.{ .seq, .since, .added, .removed, .changed }` (`control.screen_diff`). A `since` no longer
 /// kept (or none) is answered in full: the caller takes it as its new base.
-pub fn screenAnswer(editor: *Editor, arena: std.mem.Allocator, seq: u32, text: []const u8, since: u32, kind: enum { answer, stream }) ![]const u8 {
+pub fn screenAnswer(editor: *Editor, arena: std.mem.Allocator, seq: u32, text: []const u8, since: u32) ![]const u8 {
     const screen_diff = @import("app").control.screen_diff;
     const nodes = try screen_diff.parse(arena, text);
     // Kept once answered, after `since` is looked up: kept first, it could push that one out.
-    defer if (kind == .answer) editor.noteScreen(seq, text);
+    defer editor.noteScreen(seq, text);
+    const base: ?[]const u8 = if (since == 0) null else if (since == seq) text else if (since == editor.screen_streamed_seq and editor.screen_streamed_text.len > 0) editor.screen_streamed_text else for (editor.screen_history.items) |h| {
+        if (h.seq == since) break h.text;
+    } else null;
+    return screenZon(arena, seq, nodes, since, if (base) |b| try screen_diff.parse(arena, b) else null);
+}
+
+/// A screen as ZON: `.{ .seq, .nodes }`, or what changed since `base` (screen `since`).
+fn screenZon(arena: std.mem.Allocator, seq: u32, nodes: []const @import("app").control.screen_diff.Keyed, since: u32, base: ?[]const @import("app").control.screen_diff.Keyed) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const opts: std.zon.stringify.SerializeOptions = .{ .whitespace = false, .emit_default_optional_fields = false };
-    if (since != 0) {
-        const streamed = since == editor.screen_streamed_seq and editor.screen_streamed_text.len > 0;
-        const base: ?[]const u8 = if (since == seq) text else if (streamed) editor.screen_streamed_text else for (editor.screen_history.items) |h| {
-            if (h.seq == since) break h.text;
-        } else null;
-        if (base) |b| {
-            const d = try screen_diff.diff(arena, try screen_diff.parse(arena, b), nodes);
-            try std.zon.stringify.serialize(.{ .seq = seq, .since = since, .added = d.added, .removed = d.removed, .changed = d.changed }, opts, &out.writer);
-            return out.written();
-        }
-    }
-    try std.zon.stringify.serialize(.{ .seq = seq, .nodes = nodes }, opts, &out.writer);
+    if (base) |b| {
+        const d = try @import("app").control.screen_diff.diff(arena, b, nodes);
+        try std.zon.stringify.serialize(.{ .seq = seq, .since = since, .added = d.added, .removed = d.removed, .changed = d.changed }, opts, &out.writer);
+    } else try std.zon.stringify.serialize(.{ .seq = seq, .nodes = nodes }, opts, &out.writer);
     return out.written();
 }
 
@@ -5461,7 +5461,7 @@ pub fn answerLaterCommands(editor: *Editor, at_frame_end: bool) void {
         }
         if (api.snapshotText(w.snapshot)) |text| {
             const ticket = w.ticket;
-            const answer = editor.screenAnswer(dvui.currentWindow().arena(), @intFromEnum(w.snapshot), text, w.since, .answer);
+            const answer = editor.screenAnswer(dvui.currentWindow().arena(), @intFromEnum(w.snapshot), text, w.since);
             _ = editor.later_screens.swapRemove(i);
             host.finishCall(ticket, if (answer) |a| .{ .ok = a } else |err| .{ .failed = @errorName(err) });
             continue;
@@ -5534,21 +5534,32 @@ pub fn streamScreen(editor: *Editor) void {
     if (!changed and streams.new == 0) return;
     const arena = dvui.currentWindow().arena();
     const json = @import("app").control.json;
-    const seq = snapshot.taken;
+    // Unchanged (a stream joining): sent by the number the others already have, the screen being
+    // the same, so every stream's next change is on one number and the chain each sees holds.
+    const seq = if (!changed and editor.screen_streamed_seq != 0) editor.screen_streamed_seq else snapshot.taken;
     // In full, keyed (`screenAnswer`); and, for the streams taking changes, what changed since the
     // screen last streamed, while it is still kept.
-    const whole = json.jsonFromZon(arena, editor.screenAnswer(arena, seq, text, 0, .stream) catch |err| return editor.streamFailed(err)) catch |err| return editor.streamFailed(err);
-    const delta: ?@import("app").control.Server.Delta = if (streams.diffing > 0 and editor.screen_streamed_seq != 0) delta: {
-        const zon = editor.screenAnswer(arena, seq, text, editor.screen_streamed_seq, .stream) catch break :delta null;
+    // Keyed once, for the whole and the change alike.
+    const screen_diff = @import("app").control.screen_diff;
+    const nodes = screen_diff.parse(arena, text) catch |err| return editor.streamFailed(err);
+    const whole = json.jsonFromZon(arena, screenZon(arena, seq, nodes, 0, null) catch |err| return editor.streamFailed(err)) catch |err| return editor.streamFailed(err);
+    const delta: ?@import("app").control.Server.Delta = if (streams.diffing > 0 and editor.screen_streamed_text.len > 0) delta: {
+        const base = screen_diff.parse(arena, editor.screen_streamed_text) catch break :delta null;
+        const zon = screenZon(arena, seq, nodes, editor.screen_streamed_seq, base) catch break :delta null;
         break :delta .{ .since = editor.screen_streamed_seq, .json = json.jsonFromZon(arena, zon) catch break :delta null };
     } else null;
     editor.screen_stream_failed = false;
     // A change bigger than the screen is no change worth sending: the whole goes instead.
     const worth = if (delta) |d| if (d.json.len < whole.len) d else null else null;
-    server.publishNamed("fizzy.screen", whole, seq, worth, changed);
+    if (!changed) {
+        server.publishNamed("fizzy.screen", whole, seq, null, false);
+        return;
+    }
+    // The text and its number move together: a change on the wrong base would corrupt a stream.
+    const kept = editor.app.gpa.dupe(u8, text) catch return editor.streamFailed(error.OutOfMemory);
+    server.publishNamed("fizzy.screen", whole, seq, worth, true);
     editor.screen_streamed_hash = hash;
     editor.screen_streamed_seq = seq;
-    const kept = editor.app.gpa.dupe(u8, text) catch return;
     editor.app.gpa.free(editor.screen_streamed_text);
     editor.screen_streamed_text = kept;
 }

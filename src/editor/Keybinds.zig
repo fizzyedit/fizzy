@@ -671,7 +671,7 @@ fn cmdScreen(state: *anyopaque, args: ScreenArgs.Args, call: *sdk.Command.Call) 
     // what that did is not drawn yet, so the next frame is taken instead.
     const undrawn = editor.app.host.command_runs - 1 > editor.command_runs_at_snapshot;
     if (!undrawn) if (snapshot.latest()) |text| {
-        call.result = try editor.screenAnswer(call.arena, snapshot.taken, text, args.since, .answer);
+        call.result = try editor.screenAnswer(call.arena, snapshot.taken, text, args.since);
         return;
     };
     try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot(), .since = args.since });
