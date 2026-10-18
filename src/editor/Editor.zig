@@ -6709,6 +6709,8 @@ pub fn deinit(editor: *Editor) !void {
         // The registry itself goes with `host.deinit` below; these are the app's own strings.
         var it = editor.doc_surfaces.valueIterator();
         while (it.next()) |ds| {
+            // Its history's pictures, taken while it recorded.
+            ds.*.frames.deinit(editor.app.gpa);
             editor.app.gpa.free(ds.*.id);
             editor.app.gpa.destroy(ds.*);
         }
