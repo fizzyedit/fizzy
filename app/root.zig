@@ -112,6 +112,7 @@ pub const control = struct {
     pub const Server = @import("control/Server.zig");
     pub const routes = @import("control/routes.zig");
     pub const json = @import("control/json.zig");
+    pub const openapi = @import("control/openapi.zig");
     /// The socket's name in the config folder.
     pub const socket_name = "control.sock";
 };

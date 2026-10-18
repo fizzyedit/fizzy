@@ -6859,6 +6859,77 @@ test "control: commands are listed, described and run over the routes" {
     try std.testing.expectEqualStrings("{\"error\":\"line 200 is past the end\"}", failed.body);
 }
 
+test "control: /openapi.json describes each command's body and the declared events" {
+    const gpa = std.testing.allocator;
+    const routes = @import("app").control.routes;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    const vtable = sdk.Plugin.VTable{};
+    var state: u8 = 0;
+    var plugin = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(ControlFixture.place),
+    });
+    try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off", .run = ControlFixture.nothing });
+    try host.declareEvent(.{ .name = "t.placed", .owner = &plugin, .description = "Something was placed.", .payload = ".{ .line = 4, .side = .left }" });
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const answer = routes.handle(&host, .GET, "/openapi.json", null, "", arena);
+    try std.testing.expectEqual(std.http.Status.ok, answer.status);
+    const spec = (try std.json.parseFromSliceLeaky(std.json.Value, arena, answer.body, .{})).object;
+    try std.testing.expectEqualStrings("3.1.0", spec.get("openapi").?.string);
+    const paths = spec.get("paths").?.object;
+    for ([_][]const u8{ "/", "/commands", "/events", "/commands/t.place", "/commands/t.off" }) |p| {
+        if (paths.get(p) == null) {
+            std.debug.print("\nmissing path {s}\n", .{p});
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    // The body: each parameter typed from its kind, the required ones listed.
+    const place = paths.get("/commands/t.place").?.object.get("post").?.object;
+    try std.testing.expectEqualStrings("t.place", place.get("operationId").?.string);
+    const body = place.get("requestBody").?.object;
+    try std.testing.expect(body.get("required").?.bool);
+    const schema = body.get("content").?.object.get("application/json").?.object.get("schema").?.object;
+    const props = schema.get("properties").?.object;
+    try std.testing.expectEqualStrings("integer", props.get("line").?.object.get("type").?.string);
+    try std.testing.expectEqual(@as(i64, 1), props.get("line").?.object.get("minimum").?.integer);
+    try std.testing.expectEqualStrings("right", props.get("side").?.object.get("enum").?.array.items[1].string);
+    try std.testing.expectEqual(@as(i64, 1), props.get("column").?.object.get("default").?.integer);
+    const required = schema.get("required").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), required.len);
+    try std.testing.expectEqualStrings("line", required[0].string);
+    // Every error status a command can answer, sharing one schema.
+    const responses = place.get("responses").?.object;
+    for ([_][]const u8{ "200", "400", "404", "409", "500" }) |code| try std.testing.expect(responses.get(code) != null);
+    // A command without parameters takes no body it must send.
+    const off = paths.get("/commands/t.off").?.object.get("post").?.object;
+    try std.testing.expect(!off.get("requestBody").?.object.get("required").?.bool);
+
+    // The declared event, its example payload as JSON.
+    const events = paths.get("/events").?.object.get("get").?.object.get("x-fizzy-events").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), events.len);
+    try std.testing.expectEqualStrings("t.placed", events[0].object.get("name").?.string);
+    try std.testing.expectEqualStrings("left", events[0].object.get("example").?.object.get("side").?.string);
+
+    // Each `$ref` names a schema the description has.
+    const schemas = spec.get("components").?.object.get("schemas").?.object;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, answer.body, at, "#/components/schemas/")) |i| {
+        const name_start = i + "#/components/schemas/".len;
+        const name_end = std.mem.indexOfScalarPos(u8, answer.body, name_start, '"').?;
+        try std.testing.expect(schemas.get(answer.body[name_start..name_end]) != null);
+        at = name_end;
+    }
+}
+
 const ControlStreamClient = struct {
     path: []const u8,
     reply: [4096]u8 = undefined,
