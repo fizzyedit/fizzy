@@ -272,19 +272,29 @@ pub fn installBeside(b: *std.Build, artifact: *std.Build.Step.Compile, opts: Ins
     addDevInstall(b, artifact, opts.plugin, artifact.out_filename, b.fmt("install '{s}' beside plugin '{s}'", .{ artifact.out_filename, opts.plugin }));
 }
 
+/// The helper `addDevInstall` runs, one per builder however many artifacts it installs. Debug:
+/// it only copies a file, and a ReleaseFast compile of it cost a cold plugin build about 4 s.
+fn devInstallExe(b: *std.Build) *std.Build.Step.Compile {
+    const gop = dev_install_exes.getOrPut(b.allocator, b) catch @panic("OOM");
+    if (!gop.found_existing) {
+        const fizzy_dep = fizzyDep(b, .{ .target = b.graph.host, .optimize = .fast });
+        gop.value_ptr.* = b.addExecutable(.{
+            .name = "fizzy-plugin-dev-install",
+            .root_module = b.createModule(.{
+                .root_source_file = fizzy_dep.path("plugin_sdk_install.zig"),
+                .target = b.graph.host,
+                .optimize = .debug,
+            }),
+        });
+    }
+    return gop.value_ptr.*;
+}
+var dev_install_exes: std.AutoHashMapUnmanaged(*std.Build, *std.Build.Step.Compile) = .empty;
+
 /// Copy `artifact` to `{plugins}/{dir_name}/{file_name}` on every `zig build install`, through
 /// `plugin_sdk_install.zig`: Zig 0.17's build has no custom steps.
 fn addDevInstall(b: *std.Build, artifact: *std.Build.Step.Compile, dir_name: []const u8, file_name: []const u8, step_name: []const u8) void {
-    const fizzy_dep = fizzyDep(b, .{ .target = b.graph.host, .optimize = .fast });
-    const dev_exe = b.addExecutable(.{
-        .name = "fizzy-plugin-dev-install",
-        .root_module = b.createModule(.{
-            .root_source_file = fizzy_dep.path("plugin_sdk_install.zig"),
-            .target = b.graph.host,
-            .optimize = .fast,
-        }),
-    });
-    const dev = b.addRunArtifact(dev_exe);
+    const dev = b.addRunArtifact(devInstallExe(b));
     dev.setName(step_name);
     dev.addArtifactArg(artifact);
     dev.addArgs(&.{ dir_name, file_name });
