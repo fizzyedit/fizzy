@@ -311,7 +311,7 @@ fn tearFrame() void {
                 // Let go over the desktop: the card grows into the window, its content where the
                 // floating window's would be under the pointer, its title bar's band over it.
                 const r = t.last;
-                const mouse = cw.mouse_pt;
+                const mouse = viewports.pointerInMain();
                 const band = viewports.titleBand();
                 const content: dvui.Rect.Physical = .{ .x = mouse.x - t.grab.x, .y = mouse.y - t.grab.y, .w = r.w, .h = r.h };
                 grow = .{
@@ -385,7 +385,12 @@ fn tearFrame() void {
     const k = ease(cw.frame_time_ns - t.out_ns.?, shrink_ns);
     const scale = 1 + (small - 1) * k;
     if (k < 1) dvui.refresh(null, @src(), null);
-    const card = whole(.{ .x = mouse.x - t.grab.x * scale, .y = mouse.y - t.grab.y * scale, .w = r.w * scale, .h = r.h * scale });
+    // Where the pointer is on the desktop, in the main window's frame: a floating window pressed in
+    // another OS window's band was read in that band (`SDLBackend.heldPoint`), and its card and its
+    // window went a band's width off — 32,000 points — and back on screen as macOS put them (the user,
+    // traced).
+    const at = viewports.pointerInMain();
+    const card = whole(.{ .x = at.x - t.grab.x * scale, .y = at.y - t.grab.y * scale, .w = r.w * scale, .h = r.h * scale });
     if (t.card == null) t.card = viewports.openCarry(viewRect(card)) orelse return;
     drawCard(t.card.?, &t.card_target, t.live.?, card, headerHeight() * (1 - k) * scale, scale);
     t.place = card;

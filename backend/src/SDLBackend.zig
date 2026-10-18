@@ -1228,6 +1228,18 @@ pub fn titleBand(self: *SDLBackend) f32 {
     return (if (points > 0) points else 28) * self.density();
 }
 
+/// Where the pointer is on the desktop, in the main window's frame (physical pixels from its top
+/// left), as a held pointer over the main window is read (`heldPoint`): not in the band of the
+/// window a press began in.
+pub fn pointerInMain(self: *SDLBackend) dvui.Point.Physical {
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    const origin = self.mainOnScreen();
+    const d = self.density();
+    return .{ .x = (gx - origin.x) * d, .y = (gy - origin.y) * d };
+}
+
 /// Whether a pointer button is held, wherever the pointer is.
 pub fn pointerHeld(_: *SDLBackend) bool {
     return c.SDL_GetGlobalMouseState(null, null) != 0;
