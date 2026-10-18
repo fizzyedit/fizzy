@@ -60,6 +60,9 @@ grip: ?rules.Trim.Grip = null,
 repeat: rules.Repeat = .{},
 /// When the pointer came onto the grip, while it stays there; null off it.
 dwelling: ?i128 = null,
+/// The wait ran out and the bar came up: no other comes until the pointer has left the grip, or
+/// one resting there would bring the bar back each time it went.
+dwelt: bool = false,
 /// The steps the grip last showed (null before it first drew), and when a new one came: it
 /// brightens a moment.
 grip_steps: ?usize = null,
@@ -207,7 +210,10 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (opts.edge) |y| reach.h = @max(reach.h, y - reach.y);
     const on_grip = opts.history and reach.contains(mouse) and !core.dialogs.modalOverCurrent() and
         if (gripRect(area, grip_r, opts.edge)) |g| dvui.windowRectScale().rectToPhysical(g.outsetAll(grip_reach)).contains(mouse) else false;
-    if (!on_grip) self.dwelling = null;
+    if (!on_grip) {
+        self.dwelling = null;
+        self.dwelt = false;
+    }
     self.tab = opts.history;
     const on_bar = if (self.place(area, now)) |b| b.contains(mouse) else false;
     if (!on_bar) self.held_off = false;
@@ -221,11 +227,12 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         self.shown.stir(now);
         // On the bar, a strip grown stays.
         if (self.strip.openness(now) > 0) self.strip.stir(now);
-    } else if (on_grip and self.shown.openness(now) <= 0) {
+    } else if (on_grip and !self.dwelt and self.shown.openness(now) <= 0) {
         const since = self.dwelling orelse now;
         self.dwelling = since;
         if (now - since >= dwell_ns) {
             self.dwelling = null;
+            self.dwelt = true;
             self.stir(now);
         }
     }
@@ -345,6 +352,9 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                 } else if (phys[2].contains(me.p)) {
                     if (self.window == null) go = @min(n, line.at + 1);
                 } else if (self.tab and tab_p.contains(me.p)) {
+                    // An open window, which keeps the bar, goes with it.
+                    self.window = null;
+                    self.grip = null;
                     self.shown.hide(now);
                     self.held_off = true;
                     self.was_on = false;

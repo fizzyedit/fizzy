@@ -48,11 +48,10 @@ pub const Shown = struct {
     /// full time. Sooner already, it keeps its time.
     pub fn soon(self: *Shown, now_ns: i128, ns: i128) void {
         const at = self.at_ns orelse return;
-        const goes = at + linger_ns;
-        if (goes > now_ns + ns) self.at_ns = now_ns + ns - linger_ns;
-        // Still coming in: it finishes coming in first.
-        if (self.at_ns.? > at) self.at_ns = at;
-        if (now_ns - self.at_ns.? < self.fade) self.at_ns = @min(at, now_ns - self.fade);
+        // Still coming in: it finishes, and lingers its time. (Moving its start then would put it
+        // fully in at once: the growing snapped open.)
+        if (now_ns - at < self.fade) return;
+        self.at_ns = @min(at, now_ns + ns - linger_ns);
     }
 
     /// When the bar next changes on its own (comes fully in, starts to go, is gone): what its timer
@@ -264,19 +263,22 @@ pub fn roundedOutline(x: f32, y: f32, w: f32, h: f32, r_in: f32, out: []Pt) []Pt
 pub const corner_points = 10;
 
 /// The part of convex `poly` on the near side of the line through `at` whose far side `away`
-/// points to (`(p - at) · away <= 0` is kept), into `out` (at least `poly.len + 1` long). Still
-/// convex: a liquid is its vessel cut by its surface.
+/// points to (`(p - at) · away <= 0` is kept), into `out` (`poly.len + 1` long is enough for a
+/// convex outline; past `out`'s end, points are dropped rather than written). Still convex: a
+/// liquid is its vessel cut by its surface.
 pub fn cut(poly: []const Pt, at: Pt, away: Pt, out: []Pt) []Pt {
     var n: usize = 0;
     for (poly, 0..) |p, i| {
         const q = poly[(i + 1) % poly.len];
         const dp = (p[0] - at[0]) * away[0] + (p[1] - at[1]) * away[1];
         const dq = (q[0] - at[0]) * away[0] + (q[1] - at[1]) * away[1];
-        if (dp <= 0) {
+        // An outline with a point twice over (a capsule's ends, where the corners meet) and a
+        // surface touching it there crosses more often than a convex one can: never past `out`.
+        if (dp <= 0 and n < out.len) {
             out[n] = p;
             n += 1;
         }
-        if ((dp <= 0) != (dq <= 0)) {
+        if ((dp <= 0) != (dq <= 0) and n < out.len) {
             const t = dp / (dp - dq);
             out[n] = .{ p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t };
             n += 1;
@@ -405,9 +407,26 @@ test "a bar told to go goes from where it is, and one left goes soon" {
     left.soon(1000 * ms, 600 * ms);
     try testing.expectEqual(@as(f32, 1), left.openness(1500 * ms));
     try testing.expectEqual(@as(f32, 0), left.openness(1600 * ms + fade_ns));
+    // Still coming in: it keeps coming in, rather than snapping fully in.
+    var coming: Shown = .{};
+    coming.stir(0);
+    coming.soon(fade_ns / 4, 600 * ms);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), coming.openness(fade_ns / 4), 0.01);
     // Gone sooner anyway: unchanged.
     var near: Shown = .{};
     near.stir(0);
     near.soon(linger_ns - 100 * ms, 600 * ms);
     try testing.expectEqual(@as(f32, 0), near.openness(linger_ns + fade_ns));
+}
+
+test "a surface touching a doubled point never writes past the outline" {
+    var outline: [4 * (corner_points + 1)]Pt = undefined;
+    // A capsule: its rounded ends meet with a point twice over at top and bottom of each end.
+    const capsule = roundedOutline(0, 0, 40, 10, 5, &outline);
+    var kept: [outline.len + 1]Pt = undefined;
+    // Lines through each doubled point, every way: the cut stays inside its buffer.
+    for (capsule) |q| for (0..16) |k| {
+        const a = @as(f32, @floatFromInt(k)) * std.math.pi / 8;
+        _ = cut(capsule, q, .{ @cos(a), @sin(a) }, &kept);
+    };
 }
