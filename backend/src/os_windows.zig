@@ -71,10 +71,11 @@ var keyed: ?dvui.Id = null;
 /// window grows to the floating window's size (`Grow`) and is its window from then (`torn`). Moved
 /// by the OS wholly back into the main window, the window shrinks into its place there, dvui's
 /// header for the OS's title bar (`Merge`). One window all the way: a borderless card that grew and
-/// then gave way to a window opened for it jumped as one replaced the other (the user). dvui says nothing of a drag, so it is read from what dvui shows: the
-/// floating window that has the mouse, its rect moving while its size stays — moved by its header,
-/// not resized from an edge. Over another of the app's windows the held pointer already takes it
-/// into that window (`SDLBackend.heldPoint`).
+/// then gave way to a window opened for it jumped as one replaced the other (the user). Only one
+/// that can close (`open_flag`, `named`): a window's close clears it. dvui says nothing of a drag,
+/// so it is read from what dvui shows: the floating window that has the mouse, its rect moving
+/// while its size stays — moved by its header, not resized from an edge. Over another of the app's
+/// windows the held pointer already takes it into that window (`SDLBackend.heldPoint`).
 const Tear = struct {
     id: dvui.Id,
     /// Where on it the pointer took it, from its top left (physical, at its size).
@@ -351,7 +352,9 @@ fn tearFrame() void {
     const over = viewports.windowAtPointer();
     if (t.moving and over != t.over) if (over) |w| viewports.bringForward(w);
     t.over = over;
-    if (!t.moving or over != null) {
+    // One with no `open_flag` gets no window (`named`), and its window could not close: it stays
+    // in the window it was dragged in, as dvui keeps it.
+    if (!t.moving or over != null or namedOf(t.id) == null) {
         // In a window of the app's: drawn there, as dvui draws it, its header back — from where the
         // pointer took it, back over a window: dvui kept it at the edge it left by (`screenFor`)
         // while the pointer went on, and it came back that far from the pointer (the user).
