@@ -450,7 +450,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // part), and back as it goes.
     const pool: ?dvui.Rect.Physical = if (from) |f| .{ .x = f.x + f.w * 0.2, .y = f.y + f.h * 0.4, .w = f.w * 0.6, .h = f.h * 0.6 } else null;
     paintLine(line_r, at, n, ink, s, .{ .tilt = tilt, .from = pool, .out = out, .alpha = shape_alpha });
-    if (self.window) |win| paintWindow(.{ .x = x0, .y = film.y, .w = x1 - x0, .h = line_r.y + line_r.h - film.y }, win, s);
+    if (self.window) |win| paintWindow(phys[1], if (grown > 0) line_radius else phys[1].h / 2, x0, x1, win, s);
 
     // Comes in, goes: a frame each while it fades, and one wake for when it next changes on its
     // own (it starts to go, it is gone).
@@ -526,6 +526,13 @@ fn drawGrip(r: dvui.Rect, id_extra: usize, look: GripLook, path: []const u8) boo
         .rect = disc,
         .light = if (look.lit) core.dialogs.bubble_hover else 0,
     }}, s, .{ .shadow = 0.5 });
+    // Its body and rim of its own, over the glass: glass at full opacity is the card's colour,
+    // and a dome of only that is not there.
+    if (glass) {
+        const ink = theme.color(.window, .text);
+        disc.fill(.round(R), .{ .color = .{ .color = ink.opacity(look.alpha * @as(f32, if (look.lit) 0.16 else 0.08)) }, .fade = 1 });
+        disc.insetAll(0.5 * s).stroke(.round(R), .{ .color = .{ .color = ink.opacity(look.alpha * 0.28) }, .thickness = 1 * s });
+    }
     if (look.fill > 0) {
         const inset = 2 * s;
         var outline: [4 * (rules.corner_points + 1)]rules.Pt = undefined;
@@ -553,23 +560,30 @@ fn dragWindow(win: *rules.Trim, grip: rules.Trim.Grip, stop: usize, min_from: us
 
 /// The export window over `r` (physical: the strip and the line under it): the rest dimmed, a
 /// yellow bracket over the part, a handle at each side.
-fn paintWindow(r: dvui.Rect.Physical, win: rules.Trim, s: f32) void {
-    const xf = rules.stopX(win.from, r.x, r.x + r.w, win.n);
-    const xt = rules.stopX(win.to, r.x, r.x + r.w, win.n);
-    const dim: dvui.Color = dvui.Color.black.opacity(0.6);
-    if (xf > r.x) (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = xf - r.x, .h = r.h }).fill(.all(4 * s), .{ .color = .{ .color = dim } });
-    if (xt < r.x + r.w) (dvui.Rect.Physical{ .x = xt, .y = r.y, .w = r.x + r.w - xt, .h = r.h }).fill(.all(4 * s), .{ .color = .{ .color = dim } });
+fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: rules.Trim, s: f32) void {
+    // Inside the line's bubble, by its own corners less the inset, so the bracket never reaches
+    // past the glass round it.
+    const inset = 5 * s;
+    const r = vessel.insetAll(inset);
+    const ro = @max(2 * s, radius - inset);
+    const ri: dvui.Corner.Physical = .round(1.5 * s);
+    const outer: dvui.Corner.Physical = .round(ro);
+    const xf = rules.stopX(win.from, x0, x1, win.n);
+    const xt = rules.stopX(win.to, x0, x1, win.n);
     const handle_w = 8 * s;
     const edge = 2.5 * s;
-    const top: dvui.Rect.Physical = .{ .x = xf, .y = r.y - edge, .w = xt - xf, .h = edge };
-    top.fill(.{}, .{ .color = .{ .color = yellow } });
-    const bottom: dvui.Rect.Physical = .{ .x = xf, .y = r.y + r.h, .w = xt - xf, .h = edge };
-    bottom.fill(.{}, .{ .color = .{ .color = yellow } });
-    for ([_]f32{ xf - handle_w, xt }) |x| {
-        const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y - edge, .w = handle_w, .h = r.h + 2 * edge };
-        hr.fill(.all(3 * s), .{ .color = .{ .color = yellow } });
+    const dim: dvui.Color = dvui.Color.black.opacity(0.6);
+    const left = xf - handle_w;
+    const right = xt + handle_w;
+    if (left > r.x) (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = left - r.x, .h = r.h }).fill(.{ .tl = outer, .bl = outer, .tr = ri, .br = ri }, .{ .color = .{ .color = dim }, .fade = 1 });
+    if (right < r.x + r.w) (dvui.Rect.Physical{ .x = right, .y = r.y, .w = r.x + r.w - right, .h = r.h }).fill(.{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = dim }, .fade = 1 });
+    (dvui.Rect.Physical{ .x = xf, .y = r.y, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
+    (dvui.Rect.Physical{ .x = xf, .y = r.y + r.h - edge, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
+    for ([_]f32{ left, xt }, [_]bool{ true, false }) |x, is_left| {
+        const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y, .w = handle_w, .h = r.h };
+        hr.fill(if (is_left) .{ .tl = outer, .bl = outer, .tr = ri, .br = ri } else .{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = yellow }, .fade = 1 });
         const notch: dvui.Rect.Physical = .{ .x = x + handle_w / 2 - 0.75 * s, .y = r.y + r.h / 2 - 6 * s, .w = 1.5 * s, .h = 12 * s };
-        notch.fill(.all(0.75 * s), .{ .color = .{ .color = .black } });
+        notch.fill(.round(0.75 * s), .{ .color = .{ .color = .black } });
     }
 }
 
