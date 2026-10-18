@@ -3067,12 +3067,19 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // around it.
     // The card the document is drawn on, the first box round it reaching lower (its padding): its
     // bottom edge is where the history's grip stands.
+    // Its rect and corners too: the history's grip is a vial in its bottom-right corner.
+    var card_corner: ?@import("app").dome.Corner = null;
     const card_edge = edge: {
         var wd = dvui.parentGet().data();
         const own = wd.borderRectScale().r;
         for (0..8) |_| {
-            const r = wd.borderRectScale().r;
-            if (r.y + r.h > own.y + own.h + 0.5) break :edge r.y + r.h;
+            const rs = wd.borderRectScale();
+            const r = rs.r;
+            if (r.y + r.h > own.y + own.h + 0.5) {
+                const cr = wd.options.cornersGet().scale(rs.s, dvui.CornerRect.Physical);
+                card_corner = .{ .card = r, .radii = .{ cr.tl.radius(), cr.tr.radius(), cr.br.radius(), cr.bl.radius() } };
+                break :edge r.y + r.h;
+            }
             if (wd.parent.data() == wd) break;
             wd = wd.parent.data();
         }
@@ -3126,6 +3133,11 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
             area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
         };
+        // And above the history's vial in the card's corner, which the feed's newest would sit on.
+        if (claim_pill == null and ds.has_history) if (card_corner) |c| {
+            const s = dvui.windowRectScale().s;
+            area.h = @min(area.h, c.point()[1] - c.radiusPx(s) - area.y + 6 * s);
+        };
         if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |step| editor.redoFromFeed(doc, step);
     }
 
@@ -3167,6 +3179,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             .history = ds.has_history,
             .steps = if (recorded) |tr| tr.steps.items.len else 0,
             .edge = card_edge,
+            .corner = card_corner,
             .frames = if (recorded != null) &ds.frames else null,
             .export_from = if (track) |tr| tr.base_top else null,
             .window_summary = summary,
