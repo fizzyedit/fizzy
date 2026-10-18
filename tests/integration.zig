@@ -6897,6 +6897,7 @@ test "control: the app's events reach a stream, and the bus listens only while o
     };
     var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
     try server.start();
+    var relay: control.routes.Relay = .{};
     try std.testing.expect(!host.listening.load(.acquire));
 
     var client: ControlStreamClient = .{ .path = path };
@@ -6904,7 +6905,7 @@ test "control: the app's events reach a stream, and the bus listens only while o
     // Frames, as the app would run them, until the stream is open and the relay listens.
     var frames: usize = 0;
     while (frames < 2000) : (frames += 1) {
-        control.routes.answerPending(&server, &host);
+        control.routes.answerPending(&server, &relay, &host);
         server.lock.lockUncancelable(io);
         const open = server.streams.items.len;
         server.lock.unlock(io);
@@ -6917,7 +6918,7 @@ test "control: the app's events reach a stream, and the bus listens only while o
     host.emitZon("u.other", .{ .n = 2 });
     host.deliverEvents();
     io.sleep(.fromMilliseconds(50), .awake) catch {};
-    control.routes.stop(&server, &host);
+    control.routes.stop(&server, &relay, &host);
     thread.join();
     // Stopped: nothing listens, so an emit costs the bus its one load again.
     try std.testing.expect(!host.listening.load(.acquire));

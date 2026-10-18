@@ -45,6 +45,7 @@ const Host = sdk.Host;
 const PluginLoader = @import("root.zig").store.Loader;
 const SettingsWatcher = @import("watch/SettingsWatcher.zig");
 const ControlServer = @import("control/Server.zig");
+const ControlRelay = @import("control/routes.zig").Relay;
 const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
 const FolderWatcher = @import("watch/FolderWatcher.zig");
 const Keymap = @import("keymap/Keymap.zig");
@@ -265,6 +266,8 @@ settings_watcher: ?SettingsWatcher = null,
 /// (plans/CONTROL_SERVER_PLAN.md, steps 1–3 land dark), answered each frame, stopped at quit.
 /// Always void on wasm, which has no socket.
 control: if (builtin.target.cpu.arch == .wasm32) void else ?ControlServer = if (builtin.target.cpu.arch == .wasm32) {} else null,
+/// What relays the app's events to the control server's streams (`control.routes.Relay`).
+control_relay: if (builtin.target.cpu.arch == .wasm32) void else ControlRelay = if (builtin.target.cpu.arch == .wasm32) {} else .{},
 
 /// Watches the app's own executable while `settings.restart_on_rebuild` is on: a rebuild restarts
 /// the app into it, keeping every document. Null while the setting is off, and wherever

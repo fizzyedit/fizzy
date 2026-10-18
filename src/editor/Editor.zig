@@ -4232,7 +4232,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.app.host.deliverEvents();
         // Requests from the control server, so the frame that follows sees what they ran.
         if (comptime builtin.target.cpu.arch != .wasm32) {
-            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.host);
+            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_relay, &editor.app.host);
         }
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
@@ -6364,7 +6364,7 @@ pub fn deinit(editor: *Editor) !void {
     // command would reach goes.
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (editor.app.control) |*c| {
-            @import("app").control.routes.stop(c, &editor.app.host);
+            @import("app").control.routes.stop(c, &editor.app.control_relay, &editor.app.host);
             editor.app.gpa.free(c.socket_path);
             editor.app.control = null;
         }

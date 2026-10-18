@@ -32,7 +32,7 @@ const zon_type = "application/zon";
 
 /// Answer what waits on `server`. On the UI thread, once a frame, before plugins' `beginFrame`, so
 /// a command run here is seen by the frame that follows.
-pub fn answerPending(server: *Server, host: *sdk.Host) void {
+pub fn answerPending(server: *Server, relay: *Relay, host: *sdk.Host) void {
     var taken: std.ArrayListUnmanaged(*Server.Request) = .empty;
     defer taken.deinit(server.gpa);
     var streaming = server.take(&taken) > 0;
@@ -45,51 +45,58 @@ pub fn answerPending(server: *Server, host: *sdk.Host) void {
             streaming = true;
         } else req.answer(server, a.status, a.content_type, a.body);
     }
-    relay(host, server, streaming);
+    relay.follow(host, server, streaming);
 }
 
 /// Stop relaying and stop `server`. On the UI thread, at quit: after it, no event reaches the
 /// stopped server.
-pub fn stop(server: *Server, host: *sdk.Host) void {
-    relay(host, server, false);
+pub fn stop(server: *Server, relay: *Relay, host: *sdk.Host) void {
+    relay.follow(host, server, false);
     server.stop();
 }
 
-/// What owns the subscription that relays the app's events to the server's streams. A pseudo-plugin,
-/// as fizzy's own commands have (`fizzy_plugin` in fizzy's `Keybinds.zig`): never in
-/// `host.plugins`, so no hook fires on it. It listens only while a stream is open, so with none an
-/// emitted event costs the bus its one atomic load, as before.
-var relay_plugin: sdk.Plugin = .{
-    .state = undefined, // the server, set when it starts listening
-    .vtable = &relay_vtable,
-    .id = "fizzy.control",
-    .display_name = "Control server",
-};
-const relay_vtable: sdk.Plugin.VTable = .{};
-var relaying = false;
+/// The subscription that relays the app's events to the server's streams, owned beside the server
+/// (`App.control_relay`). Its plugin is a pseudo-plugin, as fizzy's own commands have
+/// (`fizzy_plugin` in fizzy's `Keybinds.zig`): never in `host.plugins`, so no hook fires on it. It
+/// listens only while a stream is open, so with none an emitted event costs the bus its one atomic
+/// load, as before.
+pub const Relay = struct {
+    plugin: sdk.Plugin = .{
+        .state = undefined, // the server, set when it starts listening
+        .vtable = &relay_vtable,
+        .id = "fizzy.control",
+        .display_name = "Control server",
+    },
+    on: bool = false,
 
-fn relay(host: *sdk.Host, server: *Server, on: bool) void {
-    if (on == relaying) return;
-    if (on) {
-        relay_plugin.state = server;
-        host.subscribe(.{ .event = "*", .owner = &relay_plugin, .handler = relayEvent }) catch return;
-    } else host.withdrawPlugin(&relay_plugin);
-    relaying = on;
-}
+    const relay_vtable: sdk.Plugin.VTable = .{};
+
+    fn follow(self: *Relay, host: *sdk.Host, server: *Server, on: bool) void {
+        if (on == self.on) return;
+        if (on) {
+            self.plugin.state = server;
+            host.subscribe(.{ .event = "*", .owner = &self.plugin, .handler = relayEvent }) catch return;
+        } else host.withdrawPlugin(&self.plugin);
+        self.on = on;
+    }
+};
 
 /// One event, as JSON once, to every stream that wants it (`Server.publish`).
 fn relayEvent(state: *anyopaque, event: sdk.events.Event) void {
     const server: *Server = @ptrCast(@alignCast(state));
+    // Built only for a stream that reads it: a client on one topic costs the others nothing.
+    if (!server.wants(event.name)) return;
     var arena_state: std.heap.ArenaAllocator = .init(server.gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const data = json.jsonFromZon(arena, event.payload) catch |err| switch (err) {
         // A payload that is not ZON goes as its text, which JSON can carry while it is UTF-8.
         error.NotZon => if (std.unicode.utf8ValidateSlice(event.payload))
-            std.json.Stringify.valueAlloc(arena, .{ .zon = event.payload }, .{}) catch return
+            std.json.Stringify.valueAlloc(arena, .{ .zon = event.payload }, .{}) catch "null"
         else
-            return,
-        else => return,
+            "null",
+        // Said as `null` rather than dropped: the client still learns that it happened.
+        error.NotUtf8, error.OutOfMemory, error.NotJson, error.NotAnObject => "null",
     };
     server.publish(event.name, data);
 }
@@ -120,8 +127,12 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
         return ok(arena, list.items);
     }
     if (std.mem.eql(u8, trimmed, "/events")) {
-        if (method != .GET) return notAllowed(arena, "GET");
-        return .{ .status = .ok, .stream = true, .body = "" };
+        return switch (method) {
+            .GET => .{ .status = .ok, .stream = true, .body = "" },
+            // The headers alone: a stream that sends no body would never end.
+            .HEAD => .{ .status = .ok, .content_type = "text/event-stream", .body = "" },
+            else => notAllowed(arena, "GET"),
+        };
     }
     const prefix = "/commands/";
     if (std.mem.startsWith(u8, trimmed, prefix)) {
