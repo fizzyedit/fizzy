@@ -53,7 +53,7 @@ pub fn applyChrome(win: *dvui.Window) void {
 
         _ = win32.graphics.dwm.DwmSetWindowAttribute(
             hwnd_h,
-            @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE)),
+            @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_WINDOW_CORNER_PREFERENCE))),
             &DWMWCP_ROUND,
             @sizeOf(u32),
         );
@@ -75,7 +75,7 @@ pub fn applyChrome(win: *dvui.Window) void {
     const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
     _ = win32.graphics.dwm.DwmSetWindowAttribute(
         hwnd_h,
-        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_SYSTEMBACKDROP_TYPE)),
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE))),
         &backdrop_type,
         @sizeOf(u32),
     );
@@ -108,10 +108,48 @@ pub fn setDarkMode(win: *dvui.Window, dark: bool) void {
     const value: u32 = @intFromBool(dark);
     _ = win32.graphics.dwm.DwmSetWindowAttribute(
         @as(win32.foundation.HWND, @ptrCast(hwnd)),
-        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE)),
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_USE_IMMERSIVE_DARK_MODE))),
         &value,
         @sizeOf(u32),
     );
+}
+
+/// The OS's caption on `window`, in `color` with its title in `text`, light or dark as the theme
+/// is (`window.nativeTitleBar`). Caption and text colours are Windows 11's; earlier, DWM's own.
+/// A window of the OS's own frame with a most size (`viewports.maxSize`) has no maximize button, as a
+/// Windows app with one has none: `SW_MAXIMIZE`, the button and a double-click on the caption fill
+/// the screen past the most SDL keeps a drag to. Given back once it has no most.
+pub fn allowMaximize(window: *c.SDL_Window, allow: bool) void {
+    if (comptime builtin.target.os.tag != .windows) return;
+    const raw = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return;
+    const h: win32.foundation.HWND = @ptrCast(raw);
+    const wm = win32.ui.windows_and_messaging;
+    const ws_maximizebox: isize = 0x00010000;
+    const style = wm.GetWindowLongPtrW(h, wm.GWL_STYLE);
+    const want = if (allow) style | ws_maximizebox else style & ~ws_maximizebox;
+    if (want == style) return;
+    _ = wm.SetWindowLongPtrW(h, wm.GWL_STYLE, want);
+    // SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED: the caption
+    // drawn again without the button.
+    _ = wm.SetWindowPos(h, null, 0, 0, 0, 0, @bitCast(@as(u32, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)));
+}
+
+pub fn nativeCaption(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color, dark: bool) void {
+    if (builtin.target.os.tag != .windows) return;
+    const hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return;
+    const hwnd_h = @as(win32.foundation.HWND, @ptrCast(hwnd));
+    const dark_value: u32 = @intFromBool(dark);
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(
+        hwnd_h,
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_USE_IMMERSIVE_DARK_MODE))),
+        &dark_value,
+        @sizeOf(u32),
+    );
+    // COLORREF: 0x00BBGGRR.
+    const caption: u32 = @as(u32, color.b) << 16 | @as(u32, color.g) << 8 | color.r;
+    const title: u32 = @as(u32, text.b) << 16 | @as(u32, text.g) << 8 | text.r;
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_CAPTION_COLOR, &caption, @sizeOf(u32));
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(hwnd_h, win32.graphics.dwm.DWMWA_TEXT_COLOR, &title, @sizeOf(u32));
 }
 
 /// No caption or border tint: the app draws its own title bar in the client area.
@@ -238,7 +276,7 @@ fn win32MicaSubclassProc(
         const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
         _ = win32.graphics.dwm.DwmSetWindowAttribute(
             hWnd,
-            @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_SYSTEMBACKDROP_TYPE)),
+            @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE))),
             &backdrop_type,
             @sizeOf(u32),
         );
@@ -277,8 +315,8 @@ fn win32MicaSubclassProc(
 
         // Resize edges/corners only while not maximized.
         const frame: titlebar.Frame = if (win32.ui.windows_and_messaging.IsZoomed(hWnd) != 0) .{} else .{
-            .w = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @enumFromInt(SM_CXSIZEFRAME))), 4),
-            .h = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @enumFromInt(SM_CYSIZEFRAME))), 4),
+            .w = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @fromBackingInt(@intCast(SM_CXSIZEFRAME)))), 4),
+            .h = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @fromBackingInt(@intCast(SM_CYSIZEFRAME)))), 4),
         };
         // The caption-button codes are also what make the Win11 snap-layouts flyout appear on
         // the maximize button.
@@ -384,7 +422,7 @@ pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radi
     const h: win32.foundation.HWND = @ptrCast(hwnd);
     const dwm = win32.graphics.dwm;
     const corner: u32 = if (radius_pt < 1) DWMWCP_DONOTROUND else if (radius_pt < 6) DWMWCP_ROUNDSMALL else DWMWCP_ROUND;
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_WINDOW_CORNER_PREFERENCE)), &corner, @sizeOf(u32));
     // No border and no caption colour, as the main window has none (`clearCaptionColors`): DWM
     // treats the window as framed (its caption taken away, `WM_NCCALCSIZE`) and tinted the strip
     // where a title bar would be — the accent colour, where Windows shows it on title bars — so
@@ -393,11 +431,11 @@ pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radi
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_CAPTION_COLOR, &none, @sizeOf(u32));
     const dark_value: u32 = @intFromBool(dark);
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_USE_IMMERSIVE_DARK_MODE)), &dark_value, @sizeOf(u32));
     // No DWM animation as it shows or closes: it appears and goes exactly where its float is drawn,
     // in the frame it changes in (macOS: `NSWindowAnimationBehaviorNone`).
     const no_transitions: u32 = 1;
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_TRANSITIONS_FORCEDISABLED), &no_transitions, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_TRANSITIONS_FORCEDISABLED)), &no_transitions, @sizeOf(u32));
     _ = win32.ui.shell.SetWindowSubclass(h, viewportSubclassProc, viewport_subclass_id, @intFromPtr(loop));
     // No system menu: with the frame extended over the window, DWM draws the caption buttons
     // `WS_SYSMENU` brings, over the float's header (as `applyChrome` strips it from the main
@@ -445,7 +483,7 @@ pub fn viewportMenuChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
     const dwm = win32.graphics.dwm;
     const wm = win32.ui.windows_and_messaging;
     const corner: u32 = if (radius_pt < 1) DWMWCP_DONOTROUND else if (radius_pt < 6) DWMWCP_ROUNDSMALL else DWMWCP_ROUND;
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_WINDOW_CORNER_PREFERENCE)), &corner, @sizeOf(u32));
     // No border and no caption colour, as the main window has none (`clearCaptionColors`): DWM
     // treats the window as framed (its caption taken away, `WM_NCCALCSIZE`) and tinted the strip
     // where a title bar would be — the accent colour, where Windows shows it on title bars — so
@@ -454,9 +492,9 @@ pub fn viewportMenuChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_CAPTION_COLOR, &none, @sizeOf(u32));
     const dark_value: u32 = @intFromBool(dark);
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_USE_IMMERSIVE_DARK_MODE)), &dark_value, @sizeOf(u32));
     const no_transitions: u32 = 1;
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_TRANSITIONS_FORCEDISABLED), &no_transitions, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_TRANSITIONS_FORCEDISABLED)), &no_transitions, @sizeOf(u32));
     _ = win32.ui.shell.SetWindowSubclass(h, menuSubclassProc, menu_subclass_id, 0);
     // No system menu, whose caption buttons DWM would draw over the menu with the frame extended
     // (as for a float's window, `viewportChrome`); SDL's caption style stays, collapsed by its
@@ -491,7 +529,7 @@ fn menuSubclassProc(
     // Always active to DWM, so its backdrop stays Acrylic rather than the inactive fallback.
     if (uMsg == wm.WM_NCACTIVATE) return win32.ui.shell.DefSubclassProc(hWnd, uMsg, 1, lParam);
     // SDL sets the window's style again as it likes: never the system menu.
-    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @backingInt(wm.GWL_STYLE)) {
         const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
         ss.styleNew &= ~@as(u32, @intCast(viewport_ws_sysmenu));
     }
@@ -506,7 +544,7 @@ fn menuSubclassProc(
 /// every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
 fn applyViewportBackdrop(h: win32.foundation.HWND) bool {
     const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
-    const hr = win32.graphics.dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_SYSTEMBACKDROP_TYPE), &backdrop_type, @sizeOf(u32));
+    const hr = win32.graphics.dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_SYSTEMBACKDROP_TYPE)), &backdrop_type, @sizeOf(u32));
     _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(h, &win32_mica_margins);
     return hr >= 0;
 }
@@ -574,12 +612,12 @@ fn viewportSubclassProc(
         if (hWnd) |h| _ = applyViewportBackdrop(h);
     }
     // SDL sets the window's style again as it likes (`viewportChrome`): never the system menu.
-    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @backingInt(wm.GWL_STYLE)) {
         const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
         ss.styleNew &= ~@as(u32, @intCast(viewport_ws_sysmenu));
     }
     // Nor its taskbar button.
-    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_EXSTYLE)) {
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @backingInt(wm.GWL_EXSTYLE)) {
         const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
         ss.styleNew |= @as(u32, @intCast(viewport_ws_ex_appwindow));
     }

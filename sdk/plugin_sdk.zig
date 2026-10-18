@@ -18,8 +18,6 @@ const std = @import("std");
 
 /// Shared with the runtime loader so install + load locations never drift (see its doc comment).
 /// Lives in this package; keep `localConfigRoot` in sync with `core/paths.zig`.
-const core_paths = @import("paths.zig");
-
 /// The `core` module's import set, shared with the app build so a dependency can't reach four of
 /// the five `core` compiles and miss this one (see its doc comment).
 const core_module = @import("core_module.zig");
@@ -32,9 +30,8 @@ const core_module = @import("core_module.zig");
 /// release tarball (`fizzy-sdk-v*.tar.gz`) it is vendored at the archive root, which *is* this
 /// package — so the access check below picks whichever layout is present.
 fn repoPath(b: *std.Build, sub_path: []const u8) std.Build.LazyPath {
-    b.build_root.handle.access(b.graph.io, sub_path, .{}) catch {
-        const root = b.build_root.path orelse @panic("fizzy sdk: missing build_root");
-        return .{ .cwd_relative = b.pathJoin(&.{ root, "..", sub_path }) };
+    b.root.access(b.graph.io, sub_path, .{}) catch {
+        return .{ .cwd_relative = b.root.joinString(b.allocator, b.pathJoin(&.{ "..", sub_path })) catch @panic("OOM") };
     };
     return b.path(sub_path);
 }
@@ -100,19 +97,22 @@ pub fn readManifest(b: *std.Build) IdentityManifest {
 }
 
 fn readManifestAt(b: *std.Build, rel_path: []const u8) IdentityManifest {
-    const raw = b.build_root.handle.readFileAlloc(b.graph.io, rel_path, b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
+    b.dependOnFileContents(b.path(rel_path));
+    const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, rel_path) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
         std.debug.panic(
             "fizzy: could not read {s}: {}\nEvery plugin needs a `plugin.zig.zon` manifest at its root (id/name/version) — see docs/PLUGINS.md.",
             .{ rel_path, e },
         );
-    const src = b.allocator.dupeZ(u8, raw) catch @panic("OOM");
+    const src = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");
     const Target = struct {
         id: []const u8,
         name: []const u8,
         version: []const u8,
         min_sdk_version: []const u8 = "",
     };
-    const parsed = std.zon.parse.fromSliceAlloc(Target, b.allocator, src, null, .{ .ignore_unknown_fields = true }) catch |e|
+    // The build's allocator is freed only when the build ends: the manifest is read into it.
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const parsed = std.zon.parse.fromSlice(Target, .{ .gpa = b.allocator, .arena = b.allocator, .source = src, .diagnostics = &diag, .ignore_unknown_fields = true }) catch |e|
         std.debug.panic("fizzy: failed to parse {s}: {}", .{ rel_path, e });
     _ = std.SemanticVersion.parse(parsed.version) catch
         std.debug.panic("fizzy: {s} .version \"{s}\" is not valid semver (expected e.g. 1.2.3)", .{ rel_path, parsed.version });
@@ -253,19 +253,56 @@ pub fn install(b: *std.Build, lib: *std.Build.Step.Compile, opts: InstallOptions
     // convenience). Not for a wasm build: the browser has no plugins directory, and the desktop
     // editor would only find a file it cannot open.
     if (lib.rootModuleTarget().cpu.arch == .wasm32) return;
-    const dev = b.allocator.create(DevInstall) catch @panic("OOM");
-    dev.* = .{
-        .step = std.Build.Step.init(.{
-            .id = .custom,
-            .name = b.fmt("install plugin '{s}' into fizzy plugins dir", .{name}),
-            .owner = b,
-            .makeFn = DevInstall.make,
-        }),
-        .lib = lib,
-        .name = name,
-        .file_name = dest,
-    };
-    dev.step.dependOn(&lib.step);
+    addDevInstall(b, lib, name, dest, b.fmt("install plugin '{s}' into fizzy plugins dir", .{name}));
+}
+
+pub const InstallBesideOptions = struct {
+    /// The plugin's manifest `id`: the directory the artifact joins.
+    plugin: []const u8,
+};
+
+/// Wire `zig build install` to drop a second artifact (a helper program the plugin starts, say)
+/// into the plugin's own `{plugins}/{plugin}/` directory, beside the library `install` puts there,
+/// under the artifact's own file name and with its permissions. Like `install`'s copy, a dev
+/// convenience: a release ships what the plugin's `release.yml` uploads.
+///
+///     fizzy.plugin.installBeside(b, helper_exe, .{ .plugin = "agent" });
+pub fn installBeside(b: *std.Build, artifact: *std.Build.Step.Compile, opts: InstallBesideOptions) void {
+    if (artifact.rootModuleTarget().cpu.arch == .wasm32) return;
+    addDevInstall(b, artifact, opts.plugin, artifact.out_filename, b.fmt("install '{s}' beside plugin '{s}'", .{ artifact.out_filename, opts.plugin }));
+}
+
+/// The helper `addDevInstall` runs, one per builder however many artifacts it installs. Debug:
+/// it only copies a file, and a ReleaseFast compile of it cost a cold plugin build about 4 s.
+fn devInstallExe(b: *std.Build) *std.Build.Step.Compile {
+    const gop = dev_install_exes.getOrPut(b.allocator, b) catch @panic("OOM");
+    if (!gop.found_existing) {
+        const fizzy_dep = fizzyDep(b, .{ .target = b.graph.host, .optimize = .fast });
+        gop.value_ptr.* = b.addExecutable(.{
+            .name = "fizzy-plugin-dev-install",
+            .root_module = b.createModule(.{
+                .root_source_file = fizzy_dep.path("plugin_sdk_install.zig"),
+                .target = b.graph.host,
+                .optimize = .debug,
+            }),
+        });
+    }
+    return gop.value_ptr.*;
+}
+var dev_install_exes: std.AutoHashMapUnmanaged(*std.Build, *std.Build.Step.Compile) = .empty;
+
+/// Copy `artifact` to `{plugins}/{dir_name}/{file_name}` on every `zig build install`, through
+/// `plugin_sdk_install.zig`: Zig 0.17's build has no custom steps.
+fn addDevInstall(b: *std.Build, artifact: *std.Build.Step.Compile, dir_name: []const u8, file_name: []const u8, step_name: []const u8) void {
+    const dev = b.addRunArtifact(devInstallExe(b));
+    dev.setName(step_name);
+    dev.addArtifactArg(artifact);
+    dev.addArgs(&.{ dir_name, file_name });
+    // A relative `FIZZY_PROFILE` is taken from the plugin's own directory.
+    dev.setCwd(b.path("."));
+    // Every install, not only when the artifact changed: the copy in the plugins dir may have
+    // been replaced or removed since.
+    dev.has_side_effects = true;
     b.getInstallStep().dependOn(&dev.step);
 }
 
@@ -273,7 +310,7 @@ pub fn install(b: *std.Build, lib: *std.Build.Step.Compile, opts: InstallOptions
 /// abi_fingerprint safety class matches the dylib). Identity comes from `plugin.zig.zon`.
 /// No dlopen — works for Windows and cross-compiles.
 fn addSdkMeta(b: *std.Build, lib: *std.Build.Step.Compile) *std.Build.Step {
-    const optimize = lib.root_module.optimize orelse .Debug;
+    const optimize = lib.root_module.optimize orelse .debug;
     // One meta emitter per optimize class — Debug vs ReleaseFast disagree on abi_fingerprint.
     const step_name = b.fmt("sdk-meta-{s}", .{@tagName(optimize)});
     if (b.top_level_steps.get(step_name)) |existing| return &existing.step;
@@ -316,13 +353,14 @@ fn addSdkCheck(b: *std.Build) *std.Build.Step {
     const step = b.step("check", "Print pinned fizzy SDK version + abi fingerprint (and catch legacy release.yml drift)");
 
     const release_yml = ".github/workflows/release.yml";
-    b.build_root.handle.access(b.graph.io, release_yml, .{}) catch return step;
+    dependOnPathExistence(b, release_yml);
+    b.root.access(b.graph.io, release_yml, .{}) catch return step;
 
-    const fizzy_dep = fizzyDep(b, .{ .target = b.graph.host, .optimize = .ReleaseFast });
+    const fizzy_dep = fizzyDep(b, .{ .target = b.graph.host, .optimize = .fast });
     const check_mod = b.createModule(.{
         .root_source_file = fizzy_dep.path("plugin_sdk_check.zig"),
         .target = b.graph.host,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     check_mod.addImport("fizzy_sdk", fizzy_dep.module("fizzy_sdk"));
     const check_exe = b.addExecutable(.{ .name = "fizzy-plugin-sdk-check", .root_module = check_mod });
@@ -331,6 +369,17 @@ fn addSdkCheck(b: *std.Build) *std.Build.Step {
     step.dependOn(&run_check.step);
     return step;
 }
+
+/// `-Dplugin-use-llvm`, declared on the first plugin a builder makes and remembered for the rest:
+/// fizzy's own build makes several plugins on one builder, and an option may be declared only
+/// once. An option, not an environment variable: Zig 0.17 caches the build's configuration
+/// without regard to the environment, so a variable read here would be seen once and then ignored.
+fn pluginUseLlvm(b: *std.Build) ?bool {
+    const gop = plugin_use_llvm.getOrPut(b.allocator, b) catch @panic("OOM");
+    if (!gop.found_existing) gop.value_ptr.* = b.option(bool, "plugin-use-llvm", "Force (true) or forbid (false) LLVM for plugin builds; unset, Zig chooses");
+    return gop.value_ptr.*;
+}
+var plugin_use_llvm: std.AutoHashMapUnmanaged(*std.Build, ?bool) = .empty;
 
 /// Platform extension for a dynamic plugin library, for the given target OS.
 fn pluginExt(os_tag: std.Target.Os.Tag) []const u8 {
@@ -341,74 +390,6 @@ fn pluginExt(os_tag: std.Target.Os.Tag) []const u8 {
         else => "so",
     };
 }
-
-/// Resolve `{local_config}/fizzy/plugins` on the build host — exactly where the app scans for
-/// user plugins. Must mirror `known-folders` `.local_configuration` (what the runtime loader
-/// uses, see `core/paths.zig`) + `fizzy/plugins`:
-///   macOS   `~/Library/Application Support/fizzy/plugins`
-///   Linux   `$XDG_CONFIG_HOME/fizzy/plugins` (or `~/.config/fizzy/plugins`)
-///   Windows `%LOCALAPPDATA%/fizzy/plugins`   (FOLDERID_LocalAppData — *not* Roaming/`%APPDATA%`)
-///
-/// With `FIZZY_PROFILE` set, `<profile>/plugins` instead — the plugins directory of a fizzy run
-/// with that profile (`app/profile.zig`), so a sandbox build never replaces the plugin a person
-/// has installed. A relative profile is taken from the plugin's directory, where `zig build`
-/// runs; give an absolute one to share it with a fizzy started elsewhere.
-fn fizzyPluginsDir(b: *std.Build) ![]const u8 {
-    const env = &b.graph.environ_map;
-    if (env.get("FIZZY_PROFILE")) |profile| {
-        if (profile.len > 0) return std.fs.path.resolve(b.allocator, &.{ b.build_root.path orelse ".", profile, "plugins" });
-    }
-    const config_root = (try core_paths.localConfigRoot(
-        b.graph.host.result.os.tag,
-        b.allocator,
-        env.get("HOME"),
-        env.get("XDG_CONFIG_HOME"),
-        env.get("LOCALAPPDATA"),
-    )) orelse return error.NoConfigHome;
-    return std.fs.path.join(b.allocator, &.{ config_root, "fizzy", "plugins" });
-}
-
-/// Custom step: copy the built dylib into the host's fizzy plugins dir, under its own
-/// `{id}/{id}.{ext}` directory (see plans/PLUGIN_MANIFEST_PLAN.md R10). No `.zon` sidecar — the
-/// dylib's own exports (`fizzy_plugin_id`/`fizzy_plugin_manifest_zon`/…) are identity's only
-/// on-disk-adjacent copy.
-const DevInstall = struct {
-    step: std.Build.Step,
-    lib: *std.Build.Step.Compile,
-    /// Bare plugin name (the manifest `id`) — its own subdirectory name under the plugins dir.
-    name: []const u8,
-    file_name: []const u8,
-
-    fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {
-        const self: *DevInstall = @fieldParentPtr("step", step);
-        const b = step.owner;
-        const io = b.graph.io;
-
-        // Skip gracefully if the host has no resolvable config home (e.g. a bare CI runner) so a
-        // plain `zig build` for packaging never fails on the dev convenience.
-        const plugins_dir = fizzyPluginsDir(b) catch |err| {
-            std.log.warn("fizzy: skipping plugin dev install (no config home: {s})", .{@errorName(err)});
-            return;
-        };
-        // This plugin's own `{plugins}/{name}` directory, and whatever above it is missing — a
-        // profile's whole tree, the first time a sandbox is built into. "Already exists" is fine.
-        const dir = try std.fs.path.join(b.allocator, &.{ plugins_dir, self.name });
-        std.Io.Dir.cwd().createDirPath(io, dir) catch {};
-
-        // `getPath2` is relative to the build root (the runner's cwd); the dest is absolute.
-        const src = self.lib.getEmittedBin().getPath2(b, step);
-        const dest = try std.fs.path.join(b.allocator, &.{ dir, self.file_name });
-        const data = try std.Io.Dir.cwd().readFileAlloc(io, src, b.allocator, .limited(512 * 1024 * 1024));
-        // Sibling temp file + rename, not a truncating write onto `dest`: a running fizzy may be
-        // reading `dest` right now (`PluginLoader.stableLoadCopyPath` copies from it), and on
-        // Windows a plain overwrite of a file the editor still has open fails outright. The rename
-        // also means a crash mid-write never leaves a half-written dylib at the load path.
-        const tmp = try std.fmt.allocPrint(b.allocator, "{s}.part", .{dest});
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = tmp, .data = data });
-        try std.Io.Dir.renameAbsolute(tmp, dest, io);
-        std.log.info("fizzy: installed plugin → {s}", .{dest});
-    }
-};
 
 /// A C source file + its compile flags, for `addCModule`.
 pub const CSourceFile = struct {
@@ -555,12 +536,10 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
     // The id a crash report names this exact binary by (fizzy's `app/crash/image.zig`). Mach-O
     // always carries one (LC_UUID) and PE one with its PDB; an ELF image only when asked.
     if (opts.target.result.ofmt == .elf) lib.build_id = .fast;
-    // `FIZZY_PLUGIN_USE_LLVM=1` / `=0` forces the code generator for a plugin build; unset, Zig
-    // chooses its default for the target. For measuring the rebuild
-    // loop per backend (`scripts/plugin-loop/bench.py --backend`, `.github/workflows/plugin-loop.yml`):
-    // an environment variable rather than a `-D` option, because fizzy's own build creates several
-    // plugins on one builder, and an option may be declared only once.
-    if (b.graph.environ_map.get("FIZZY_PLUGIN_USE_LLVM")) |v| lib.use_llvm = !std.mem.eql(u8, v, "0");
+    // `-Dplugin-use-llvm=true|false` forces the code generator for a plugin build; unset, Zig
+    // chooses its default for the target. For measuring the rebuild loop per backend
+    // (`scripts/plugin-loop/bench.py --backend`, `.github/workflows/plugin-loop.yml`).
+    if (pluginUseLlvm(b)) |v| lib.use_llvm = v;
     if (is_wasm) {
         // A wasm *side module* (Emscripten's term): position-independent, no entry, no
         // threads, loaded into the web host's memory and function table at runtime — the
@@ -671,4 +650,20 @@ pub fn installBuiltinPlugin(
         .dest_dir = .{ .override = plugins_install_dir },
         .dest_sub_path = b.fmt("{s}/{s}.{s}", .{ name, name, ext }),
     });
+}
+
+/// Declare to Zig 0.17's configure cache that the build read whether `rel` exists: the file itself
+/// when it does, and otherwise the nearest directory that exists, since the maker cannot load a
+/// configuration that depends on a path inside a missing directory ("configuration failed:
+/// FileSystemFailure"). Making the file changes that directory, so the build still reconfigures.
+fn dependOnPathExistence(b: *std.Build, rel: []const u8) void {
+    b.root.access(b.graph.io, rel, .{}) catch {
+        var dir = std.fs.path.dirname(rel);
+        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
+            b.root.access(b.graph.io, d, .{}) catch continue;
+            return b.dependOnDirectoryMetadata(b.path(d));
+        }
+        return b.dependOnDirectoryMetadata(b.path("."));
+    };
+    b.dependOnFileMetadata(b.path(rel));
 }

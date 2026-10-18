@@ -45,7 +45,7 @@ const Host = sdk.Host;
 const PluginLoader = @import("root.zig").store.Loader;
 const SettingsWatcher = @import("watch/SettingsWatcher.zig");
 const ControlServer = @import("control/Server.zig");
-const ControlRelay = @import("control/routes.zig").Relay;
+const ControlState = @import("control/routes.zig").State;
 const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
 const FolderWatcher = @import("watch/FolderWatcher.zig");
 const Keymap = @import("keymap/Keymap.zig");
@@ -278,8 +278,9 @@ settings_watcher: ?SettingsWatcher = null,
 /// The control server (`app.control`), while the `control_server` setting has it run: followed
 /// once a frame, answered each frame, stopped at quit. Always void on wasm, which has no socket.
 control: if (builtin.target.cpu.arch == .wasm32) void else ?ControlServer = if (builtin.target.cpu.arch == .wasm32) {} else null,
-/// What relays the app's events to the control server's streams (`control.routes.Relay`).
-control_relay: if (builtin.target.cpu.arch == .wasm32) void else ControlRelay = if (builtin.target.cpu.arch == .wasm32) {} else .{},
+/// What the control server's routes keep between frames: the relay of the app's events to its
+/// streams, and the requests whose commands answer later (`control.routes.State`).
+control_state: if (builtin.target.cpu.arch == .wasm32) void else ControlState = if (builtin.target.cpu.arch == .wasm32) {} else .{},
 
 /// Watches the app's own executable while `settings.restart_on_rebuild` is on: a rebuild restarts
 /// the app into it, keeping every document. Null while the setting is off, and wherever
@@ -993,7 +994,8 @@ pub fn pluginCaseClash(app: *App, buf: *[64]u8, id: []const u8) ?[]const u8 {
 pub fn recordCaseClash(app: *App, id: []const u8, other: []const u8, path: ?[]const u8) void {
     const why = std.fmt.allocPrint(app.arena.allocator(), "id '{s}' differs only in case from the plugin '{s}'", .{ id, other }) catch "id differs only in case from another plugin";
     std.log.warn("plugin '{s}': {s}; not loaded", .{ id, why });
-    const probe = if (path) |p| PluginLoader.probeVersionInfo(p) else null;
+    // The web's loader has no build on disk to read a version from.
+    const probe = if (comptime builtin.target.cpu.arch == .wasm32) null else if (path) |p| PluginLoader.probeVersionInfo(p) else null;
     app.clearFailedUserPlugin(id);
     app.recordPluginFailure(id, why, null, if (probe) |info| info.plugin_version else null, if (path) |p| .of(p) else .{});
 }
@@ -1092,11 +1094,11 @@ pub fn readPluginReservedField(gpa: std.mem.Allocator, settings_data: ?[:0]const
     const data = settings_data orelse return null;
     const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
     defer gpa.free(plugins);
-    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    const plugins_z = gpa.dupeSentinel(u8, plugins, 0) catch return null;
     defer gpa.free(plugins_z);
     const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
     defer gpa.free(id_block);
-    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    const id_z = gpa.dupeSentinel(u8, id_block, 0) catch return null;
     defer gpa.free(id_z);
     return SettingsPluginsZon.extractField(gpa, id_z, field);
 }
@@ -1106,11 +1108,11 @@ pub fn readPluginSettingsText(gpa: std.mem.Allocator, settings_data: ?[:0]const 
     const data = settings_data orelse return null;
     const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
     defer gpa.free(plugins);
-    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    const plugins_z = gpa.dupeSentinel(u8, plugins, 0) catch return null;
     defer gpa.free(plugins_z);
     const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
     defer gpa.free(id_block);
-    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    const id_z = gpa.dupeSentinel(u8, id_block, 0) catch return null;
     defer gpa.free(id_z);
     return SettingsPluginsZon.extractField(gpa, id_z, "settings");
 }

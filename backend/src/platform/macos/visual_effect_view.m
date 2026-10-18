@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/CAGradientLayer.h>
+#import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CAShapeLayer.h>
 #import <QuartzCore/CATransaction.h>
 
@@ -107,6 +108,21 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
 }
 @end
 
+/* A plain dvui app's window's backdrop (`fizzy_macos_window_plain_backdrop`): the window's colour
+ * under SDL's view, with the window's corners, in a window otherwise clear — the part of the window
+ * that follows its picture on its way into or out of full screen, as glass does
+ * (`fizzy_macos_window_glass_follow`). */
+@interface FizzyPlainBackdropView : NSView
+@property double radius;
+@end
+
+@implementation FizzyPlainBackdropView
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
 /*
  * A float popped out of the main window into a window of its own (fizzy's viewports): its glass
  * shows the desktop behind it through vibrancy, as the main window's chrome does, so the float's
@@ -173,6 +189,49 @@ void fizzy_macos_viewport_plain(void *nswindow) {
          * out there would leave the app it belongs to behind. */
         [window setCollectionBehavior:([window collectionBehavior] & ~NSWindowCollectionBehaviorFullScreenPrimary) | NSWindowCollectionBehaviorFullScreenAuxiliary];
     }
+}
+
+/* No show or close animation for `nswindow` (`viewportDress`): a window of the OS's own frame
+ * (`SDLBackend.ViewportFrame.native`), dressed by nothing else of fizzy's. */
+void fizzy_macos_viewport_still(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    if (window != nil) [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+}
+
+/* Whether `nswindow` is shown on a Space other than the one the person is looking at
+ * (`SDLBackend.mainHeld`). */
+int fizzy_macos_window_off_active_space(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    return window != nil && [window isVisible] && ![window isOnActiveSpace] ? 1 : 0;
+}
+
+/* The app's window the pointer is over, the front one where several are, of those that take the
+ * pointer: shown, on the Space being shown, not click-through (`SDLBackend.windowAtPointer`); null
+ * over none. Not the window in front under the pointer (`fizzy_macos_window_at_pointer`): a
+ * tear-off's card follows the pointer, and asked that, the card — or the glass the OS puts with it —
+ * answered, none of the app's ordinary windows, and the pointer read as over the desktop over a
+ * window of the app's (the user, traced). */
+void *fizzy_macos_app_window_at_pointer(void) {
+    const NSPoint p = [NSEvent mouseLocation];
+    for (NSWindow *w in [NSApp orderedWindows]) {
+        if (![w isVisible] || ![w isOnActiveSpace] || [w ignoresMouseEvents]) continue;
+        if (NSPointInRect(p, [w frame])) return (__bridge void *)w;
+    }
+    return NULL;
+}
+
+/* `nswindow` in front of the app's other windows, not made key: a window a drag is over
+ * (`os_windows`' tear-off), brought forward to show where it would land. */
+void fizzy_macos_window_bring_forward(void *nswindow) {
+    NSWindow *w = (__bridge NSWindow *)nswindow;
+    if (w != nil) [w orderFront:nil];
+}
+
+/* The app's window in front under the pointer, or nil where another app's is
+ * (`SDLBackend.heldAcrossWindows`). */
+void *fizzy_macos_window_at_pointer(void) {
+    const NSInteger n = [NSWindow windowNumberAtPoint:[NSEvent mouseLocation] belowWindowWithWindowNumber:0];
+    return (__bridge void *)[NSApp windowWithWindowNumber:n];
 }
 
 void fizzy_macos_viewport_reshadow(void *nswindow) {
@@ -1452,6 +1511,111 @@ static BOOL windowGlassPicture(NSWindow *window, NSRect *in_frame_view, double *
 /* The glass behind a float's window — its vibrancy, or its Liquid Glass — where the float is drawn:
  * only where its picture is while the window stands still on its way into or out of full screen,
  * all of the window otherwise. Each step of the way, and as it ends. */
+/* `nswindow` made a plain dvui app's (`SDLBackend.titleBand`): clear, SDL's Metal layer too, over a
+ * backdrop of `r`,`g`,`b` with corners of `radius` points — square in full screen. Again with a new
+ * colour as the theme changes. */
+static void make_layers_clear(NSView *view) {
+    if ([view.layer isKindOfClass:[CAMetalLayer class]]) view.layer.opaque = NO;
+    for (NSView *sub in view.subviews) make_layers_clear(sub);
+}
+
+/* Whether `nswindow` has the backdrop in its colour (`fizzy_macos_window_plain_backdrop`). */
+int fizzy_macos_window_has_plain_backdrop(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    NSView *frame = [[window contentView] superview];
+    for (NSView *v in [frame subviews]) {
+        if ([v isKindOfClass:[FizzyPlainBackdropView class]]) return 1;
+    }
+    return 0;
+}
+
+void fizzy_macos_window_plain_backdrop(void *nswindow, double r, double g, double b, double radius) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSView *content = [window contentView];
+        NSView *frame = [content superview];
+        if (window == nil || content == nil || frame == nil) return;
+        if ([window isOpaque]) [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        /* The OS's shadow, and the 1-point outline that comes with it round a titled window: SDL
+         * makes a transparent window without one (`viewportDress`). */
+        if (![window hasShadow]) [window setHasShadow:YES];
+        make_layers_clear(content);
+        FizzyPlainBackdropView *backdrop = nil;
+        for (NSView *v in [frame subviews]) {
+            if ([v isKindOfClass:[FizzyPlainBackdropView class]]) backdrop = (FizzyPlainBackdropView *)v;
+        }
+        if (backdrop == nil) {
+            backdrop = [[FizzyPlainBackdropView alloc] initWithFrame:[frame bounds]];
+            /* Layer-hosting: its layer its own, which AppKit does not redraw over. */
+            [backdrop setLayer:[CALayer layer]];
+            [backdrop setWantsLayer:YES];
+            [backdrop setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [frame addSubview:backdrop positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+            /* Held by the frame view now; this file is built without ARC. */
+            [backdrop release];
+#endif
+        }
+        backdrop.radius = radius;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        CGColorRef color = CGColorCreateSRGB(r, g, b, 1);
+        backdrop.layer.backgroundColor = color;
+        CGColorRelease(color);
+        const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+        backdrop.layer.cornerRadius = full ? 0 : radius;
+        backdrop.layer.masksToBounds = NO;
+        [CATransaction commit];
+        [window invalidateShadow];
+    }
+}
+
+/* The OS's shadow and 1-point outline round a titled window, drawn by the backdrop's own layer
+ * while `on` (`fizzy_macos_window_glass_follow`): a soft shadow below it, and an outline light on a
+ * dark window and dark on a light one. */
+static void backdropFrame(CALayer *layer, BOOL on, double radius, NSWindow *window) {
+    if (!on) {
+        if (layer.shadowOpacity != 0) layer.shadowOpacity = 0;
+        if (layer.borderWidth != 0) layer.borderWidth = 0;
+        return;
+    }
+    const BOOL dark = [[[window effectiveAppearance] bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]] isEqualToString:NSAppearanceNameDarkAqua];
+    layer.masksToBounds = NO;
+    layer.shadowColor = CGColorGetConstantColor(kCGColorBlack);
+    layer.shadowOpacity = dark ? 0.6f : 0.35f;
+    layer.shadowRadius = 20;
+    layer.shadowOffset = CGSizeMake(0, -10);
+    CGPathRef path = CGPathCreateWithRoundedRect(layer.bounds, radius, radius, NULL);
+    layer.shadowPath = path;
+    CGPathRelease(path);
+    CGColorRef edge = CGColorCreateSRGB(dark ? 1 : 0, dark ? 1 : 0, dark ? 1 : 0, dark ? 0.18 : 0.22);
+    layer.borderColor = edge;
+    CGColorRelease(edge);
+    layer.borderWidth = 1;
+}
+
+/* SDL's view clipped to `picture` (in the frame view), rounded by `radius`, on a still window's way
+ * into or out of full screen; unclipped otherwise (`picture` empty). The OS rounds a window's
+ * content to its corners, but on that way the window is the screen's size and the picture only part
+ * of it: the picture's square corners stood past the backdrop's rounded ones (the user). */
+static void clip_content(NSView *content, NSView *frame, NSRect picture, double radius) {
+    if (NSIsEmptyRect(picture)) {
+        if (content.layer.mask != nil) content.layer.mask = nil;
+        return;
+    }
+    if (![content wantsLayer]) [content setWantsLayer:YES];
+    CAShapeLayer *mask = [content.layer.mask isKindOfClass:[CAShapeLayer class]] ? (CAShapeLayer *)content.layer.mask : nil;
+    if (mask == nil) {
+        mask = [CAShapeLayer layer];
+        content.layer.mask = mask;
+    }
+    mask.frame = content.layer.bounds;
+    CGPathRef path = CGPathCreateWithRoundedRect(NSRectToCGRect([frame convertRect:picture toView:content]), radius, radius, NULL);
+    mask.path = path;
+    CGPathRelease(path);
+}
+
 void fizzy_macos_window_glass_follow(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -1459,10 +1623,35 @@ void fizzy_macos_window_glass_follow(void *nswindow) {
         NSView *frame = [content superview];
         if (content == nil || frame == nil) return;
         NSRect picture;
-        const BOOL still = windowGlassPicture(window, &picture, NULL);
+        double fullness = 0;
+        const BOOL still = windowGlassPicture(window, &picture, &fullness);
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
+        const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         for (NSView *v in [frame subviews]) {
+            if ([v isKindOfClass:[FizzyPlainBackdropView class]]) {
+                /* The window's shape where the window is, through its way: its corners until it
+                 * stands at full screen. */
+                FizzyPlainBackdropView *backdrop = (FizzyPlainBackdropView *)v;
+                const NSRect want = still ? picture : [frame bounds];
+                if (!NSEqualRects([v frame], want)) [v setFrame:want];
+                /* Its corners square as it goes into full screen and round as it comes out, with its
+                 * picture (`fullness`), not at either end. */
+                const double radius = still ? backdrop.radius * (1.0 - fmin(fmax(fullness, 0.0), 1.0)) : (full ? 0 : backdrop.radius);
+                if (v.layer.cornerRadius != radius) v.layer.cornerRadius = radius;
+                clip_content(content, frame, still ? picture : NSZeroRect, radius);
+                /* The OS's shadow and outline again once it is out: AppKit's style changes on the
+                 * way turned them off (the user). */
+                if (!full && !still) {
+                    if (![window hasShadow]) [window setHasShadow:YES];
+                    [window invalidateShadow];
+                }
+                /* On its way into or out of full screen the window is the screen's size, and the OS
+                 * draws no shadow or outline round a full-screen window: the backdrop draws them
+                 * round itself, where the window seems to be, until it lands and the OS's are back. */
+                backdropFrame(v.layer, still, radius, window);
+                continue;
+            }
             if (![v isKindOfClass:[FizzyViewportGlassView class]]) continue;
             const NSRect want = still ? picture : [content frame];
             if (!NSEqualRects([v frame], want)) [v setFrame:want];

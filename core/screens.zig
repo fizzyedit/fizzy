@@ -11,7 +11,7 @@
 //! carries its own copy of `core`, and its menus and tooltips must read the same as the app's.
 const dvui = @import("dvui");
 
-const key_id: dvui.Id = @enumFromInt(0x6669_7a7a_7363_726e); // "fizzscrn"
+const key_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_7363_726e)); // "fizzscrn"
 
 /// The screen `r` (natural) is on: the one set this frame (`dvui.screensSet`) its middle is in,
 /// else the main window's (`mainScreen`).

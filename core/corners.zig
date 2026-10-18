@@ -26,7 +26,7 @@ pub const control: f32 = 10;
 pub const row: f32 = 4;
 pub const small: f32 = 6;
 
-const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_636f_726e); // "fizzcorn"
+const publish_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_636f_726e)); // "fizzcorn"
 const publish_key = "_corner_roundness";
 
 /// Host only, each frame: the Corner roundness setting, 0 (square) to 1 (twice as round).

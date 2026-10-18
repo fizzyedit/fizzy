@@ -167,7 +167,7 @@ test "bench tape: ZON against the binary form" {
         var zon: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer zon.deinit();
         const zon_write = try best(zonWrite, .{ t, &zon });
-        const source = try std.testing.allocator.dupeZ(u8, zon.written());
+        const source = try std.testing.allocator.dupeSentinel(u8, zon.written(), 0);
         defer std.testing.allocator.free(source);
         const zon_read = try best(zonRead, .{source});
 

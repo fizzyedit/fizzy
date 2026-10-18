@@ -397,7 +397,7 @@ var host_spans: ?*Spans = null;
 /// work on other threads.
 var frame_span: OpenSpan = .{};
 
-const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7970_7266); // "fizzyprf"
+const publish_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_7970_7266)); // "fizzyprf"
 const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
 const lookback_key = std.fmt.comptimePrint("_profiler_lookback{d}", .{Lookback.abi});
 const causes_key = std.fmt.comptimePrint("_profiler_causes{d}", .{FrameCauses.abi});
@@ -867,7 +867,8 @@ test "a report says what each owner and scope cost, as ZON that reads back" {
     };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const r = try std.zon.parse.fromSliceAlloc(Report, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const r = try std.zon.parse.fromSlice(Report, .{ .gpa = std.testing.allocator, .arena = arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &diag });
     // The plugin's own time is what it spent; fizzy's own is what was left once that is taken out.
     try std.testing.expectEqualStrings("text", r.owners[0].owner);
     try std.testing.expect(r.owners[0].self_ms >= 1.5);

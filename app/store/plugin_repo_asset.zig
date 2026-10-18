@@ -29,7 +29,7 @@ pub fn fetchOk(io: std.Io, url: []const u8, limit: std.Io.Limit) ?[]u8 {
     if (result.status != .ok) return null;
 
     const written = body.written();
-    if (limit != .unlimited and limit != .nothing and written.len > @intFromEnum(limit)) return null;
+    if (limit != .unlimited and limit != .nothing and written.len > @backingInt(limit)) return null;
     return gpa().dupe(u8, written) catch null;
 }
 

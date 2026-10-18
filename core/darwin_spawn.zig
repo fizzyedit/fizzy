@@ -175,7 +175,7 @@ fn buildArgv(gpa: std.mem.Allocator, items: []const []const u8) ![:null]?[*:0]co
         gpa.free(argv);
     }
     for (items, 0..) |item, i| {
-        argv[i] = (try gpa.dupeZ(u8, item)).ptr;
+        argv[i] = (try gpa.dupeSentinel(u8, item, 0)).ptr;
         built = i + 1;
     }
     return argv;

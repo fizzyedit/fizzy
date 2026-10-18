@@ -25,8 +25,8 @@ pub const Variant = enum {
 
     pub fn next(v: ?Variant) ?Variant {
         const cur = v orelse return .layered;
-        const i = @intFromEnum(cur) + 1;
-        return if (i >= @typeInfo(Variant).@"enum".fields.len) null else @enumFromInt(i);
+        const i = @backingInt(cur) + 1;
+        return if (i >= @typeInfo(Variant).@"enum".fields.len) null else @fromBackingInt(@intCast(i));
     }
 };
 
