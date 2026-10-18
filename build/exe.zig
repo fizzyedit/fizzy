@@ -189,6 +189,10 @@ pub fn addFizzyExecutableForTarget(
     build_opts: *std.Build.Step.Options,
     workbench_opts: *std.Build.Step.Options,
     assets_module: *std.Build.Module,
+    /// `pub const png`: the window's icon (`app.Branding.png`).
+    app_icon_module: *std.Build.Module,
+    /// The resource script embedded on Windows (`app.Branding.rc`).
+    windows_rc: std.Build.LazyPath,
     macos_sdl_paths: ?MacosSdlPaths,
     velopack_enabled: bool,
     /// The application's short name (see app/AppInfo.zig) — the executable's name. Passed in
@@ -239,6 +243,7 @@ pub fn addFizzyExecutableForTarget(
     if (resolved_target.result.ofmt == .elf) exe.build_id = .fast;
 
     exe.root_module.addImport("assets", assets_module);
+    exe.root_module.addImport("app_icon", app_icon_module);
     exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
     if (optimize != .Debug) {
@@ -406,14 +411,11 @@ pub fn addFizzyExecutableForTarget(
         }
         exe.root_module.linkSystemLibrary("comctl32", .{});
 
-        // Embed assets/windows/fizzy.rc -> fizzy.ico into the exe so Explorer,
-        // Taskbar, Alt-Tab and the Velopack-generated Start Menu shortcut all
-        // show the right icon without any runtime work. fizzy.ico must be a
-        // multi-resolution ICO with 16/32/48/256 px frames (see the README in
-        // that directory).
-        exe.root_module.addWin32ResourceFile(.{
-            .file = b.path("assets/windows/fizzy.rc"),
-        });
+        // Embed the resource script (fizzy's: assets/windows/fizzy.rc -> fizzy.ico) into the
+        // exe so Explorer, Taskbar, Alt-Tab and the Velopack-generated Start Menu shortcut all
+        // show the right icon without any runtime work. The .ico must be a multi-resolution
+        // ICO with 16/32/48/256 px frames (see the README in assets/windows).
+        exe.root_module.addWin32ResourceFile(.{ .file = windows_rc });
     }
 
     // Zig's bundled libc++/libcxxabi cannot compile against MSVC headers

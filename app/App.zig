@@ -209,7 +209,10 @@ open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
 /// and only then the host's recorder.
 tracks: ?Tracks = null,
 
-file_id_counter: u64 = 0,
+/// Atomic: plugins allocate ids through `Host.allocDocId` from `loadDocument`, on the load
+/// worker thread, while the UI thread may be creating a document of its own. `usize`, since
+/// wasm32 has no 64-bit atomics (and no room for 2^32 documents).
+file_id_counter: std.atomic.Value(usize) = .init(0),
 
 /// Filled from the async SDL save dialog callback, then applied inside `tick` (when `currentWindow` is valid).
 pending_save_as_path: ?[]u8 = null,
@@ -540,6 +543,15 @@ pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.
     const Api = sdk.services.plugins.Api;
     var out: std.ArrayList(Api.Info) = .empty;
     const host = &app.host;
+    // Every command registration each plugin holds, base, reserve and override, in one pass.
+    var command_counts: std.AutoHashMapUnmanaged(*sdk.Plugin, u32) = .empty;
+    var slots = host.command_slots.valueIterator();
+    while (slots.next()) |slot| for ([_][]const sdk.Command{ slot.bases.items, slot.overrides.items }) |list| {
+        for (list) |c| if (c.owner) |o| {
+            const gop = try command_counts.getOrPut(arena, o);
+            gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+        };
+    };
     for (host.plugins.items) |plugin| {
         if (plugin.internal) continue;
         var info: Api.Info = .{
@@ -556,7 +568,7 @@ pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.
         };
         const r = &info.registered;
         r.surfaces = countOwned(host.surfaces.items, plugin);
-        r.commands = countOwned(host.commands.items, plugin);
+        r.commands = command_counts.get(plugin) orelse 0;
         r.services = countOwned(host.services.items, plugin);
         r.menus = countOwned(host.menus.items, plugin) + countOwned(host.menu_sections.items, plugin) +
             countOwned(host.native_menu_items.items, plugin) + countOwned(host.rail_items.items, plugin) +
@@ -706,8 +718,7 @@ pub fn docById(app: *App, id: u64) ?sdk.DocHandle {
 }
 
 pub fn newFileID(app: *App) u64 {
-    app.file_id_counter += 1;
-    return app.file_id_counter;
+    return app.file_id_counter.fetchAdd(1, .monotonic) + 1;
 }
 
 /// Heap-owned path like `untitled-1`, unique among open-document basenames.

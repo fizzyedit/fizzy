@@ -5,9 +5,8 @@ const build_opts = @import("build_opts");
 /// The app's version for SDL's app metadata, which takes a C string.
 const app_version_z = std.fmt.comptimePrint("{s}", .{build_opts.app_version});
 
-const assets = @import("assets");
-
-const icon = assets.files.@"icon.png";
+/// The app's own (`-Dapp-icon`), fizzy's by default.
+const icon = @import("app_icon").png;
 
 const fizzy = @import("fizzy.zig");
 const workbench = @import("workbench");
