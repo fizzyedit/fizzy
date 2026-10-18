@@ -7674,13 +7674,31 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try tmp.dir.deleteTree(dvui.io, "plugins/text");
         }
         // A folder already in `plugins/` in another case clashes too, before a store install
-        // writes anything.
+        // writes anything: an installed plugin that is not loaded.
         {
+            // `plugins/` is read once until something is installed or removed: a folder made
+            // behind the app's back after that read is not seen until then.
+            try std.testing.expect(editor.app.pluginCaseClash("graphl") == null);
             try tmp.dir.createDirPath(dvui.io, "plugins/Graphl");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/Graphl/keep", .data = "" });
             defer tmp.dir.deleteTree(dvui.io, "plugins/Graphl") catch {};
-            var clash_buf: [64]u8 = undefined;
-            try std.testing.expectEqualStrings("Graphl", editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult);
-            try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "Graphl") == null);
+            try std.testing.expect(editor.app.pluginCaseClash("graphl") == null);
+            editor.app.forgetPluginFolders();
+            try std.testing.expectEqualStrings("Graphl", editor.app.pluginCaseClash("graphl") orelse return error.TestUnexpectedResult);
+            try std.testing.expect(editor.app.pluginCaseClash("Graphl") == null);
+            // Its refused variant's card, uninstalled, never takes the installed plugin's folder,
+            // though on macOS and Windows `plugins/graphl` is that folder.
+            editor.app.recordCaseClash("graphl", "Graphl", null);
+            try editor.uninstallPlugin("graphl", true);
+            _ = try tmp.dir.statFile(dvui.io, "plugins/Graphl/keep", .{});
+            try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, editor.app.pluginStatus("graphl").state);
+        }
+        // A plugin's own folder, alone under its name, is still what uninstalling deletes.
+        {
+            try tmp.dir.createDirPath(dvui.io, "plugins/solo");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/solo/build", .data = "" });
+            try editor.uninstallPlugin("solo", true);
+            try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(dvui.io, "plugins/solo", .{}));
         }
     }
     // The app offers its plugins the `automation` service, and nothing is in flight.

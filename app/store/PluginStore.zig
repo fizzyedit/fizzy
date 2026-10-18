@@ -1698,10 +1698,12 @@ fn startDownload(id: []const u8, release: store.ShardRelease, opts: DownloadOpti
 /// wasm *compile* error rather than dead code.
 fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
+    removeJob(id); // replace any prior failed job
     // Before anything is written into `plugins/<id>`: on macOS and Windows a case variant's
     // folder is that folder, and the download would overwrite the plugin installed there.
-    if (app.refuseCaseClash(id)) return;
-    removeJob(id); // replace any prior failed job
+    // Refused, the row fails as a failed download does: Retry on a card, or the update offer
+    // marked failed for the automatic pass (`tick`), never left "Installing…".
+    if (app.refuseCaseClash(id)) return refuseDownload(id, url, sha256, opts);
 
     const job = buildJob(id, url, sha256, opts) catch {
         reportError("could not prepare download for '{s}'", .{id});
@@ -1718,6 +1720,37 @@ fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: D
         reportError("could not start download for '{s}'", .{id});
         return;
     };
+}
+
+/// A download refused before it started (`PluginManager.refuseCaseClash`): a job already failed,
+/// with no worker and nothing on disk, so the row shows it as `tick` and `drawCardControls` show
+/// any failed download.
+fn refuseDownload(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) void {
+    const a = app.gpa;
+    const job = a.create(Job) catch return;
+    const reason = "id differs only in case";
+    job.* = .{
+        .status = .init(@backingInt(JobStatus.failed)),
+        .id = a.dupe(u8, id) catch return a.destroy(job),
+        .url = a.dupe(u8, url) catch return freeRefused(job, 1),
+        .sha256 = a.dupe(u8, sha256) catch return freeRefused(job, 2),
+        .dest = a.dupe(u8, "") catch return freeRefused(job, 3),
+        .is_update = opts.is_update,
+        .quiet = opts.quiet,
+        .win = dvui.currentWindow(),
+    };
+    @memcpy(job.err_buf[0..reason.len], reason);
+    job.err_len = reason.len;
+    jobs.put(a, job.id, job) catch freeJob(job);
+}
+
+/// Unwind a `refuseDownload` that ran out of memory after its first `n` strings.
+fn freeRefused(job: *Job, n: u2) void {
+    const a = app.gpa;
+    if (n > 0) a.free(job.id);
+    if (n > 1) a.free(job.url);
+    if (n > 2) a.free(job.sha256);
+    a.destroy(job);
 }
 
 /// Allocate a `Job` with all strings owned; `errdefer` unwinds every partial allocation so a

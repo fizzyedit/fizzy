@@ -81,6 +81,9 @@ palette_folder: []const u8,
 /// `plugin_data_lock`: a plugin may ask from a worker thread (an indexer, an LSP client).
 plugin_data_folders: std.StringHashMapUnmanaged(PluginDataFolder) = .empty,
 plugin_data_lock: std.Io.Mutex = .init,
+/// The folders in `plugins/` by the names the filesystem keeps (`pluginCaseClash`), read on first
+/// need and kept until something is installed or removed (`forgetPluginFolders`). Owned.
+plugin_folders: ?std.ArrayListUnmanaged([]u8) = null,
 /// Registered plugins whose entry could not be made when they registered (out of memory), by the
 /// plugin's own id (its memory, good while it is registered): made on their next ask instead.
 plugin_data_missed: [8]?[]const u8 = @splat(null),
@@ -960,32 +963,83 @@ pub fn deinit(app: *App) void {
     app.undecided_plugin_ids.deinit(app.gpa);
     for (app.auto_update_off_ids.items) |id| app.gpa.free(id);
     app.auto_update_off_ids.deinit(app.gpa);
+    app.forgetPluginFolders();
 }
 
 /// The id another plugin goes by that `id` is in another case: a loaded plugin's
 /// (`Host.pluginByIdIgnoringCase`), or a folder in `plugins/`. Asked before anything keyed by
 /// `id` touches the disk (a store install or update, a load): on macOS and Windows `plugins/Graphl`
-/// *is* `plugins/graphl`, so writing one would overwrite the other. Written into `buf`.
-pub fn pluginCaseClash(app: *App, buf: *[64]u8, id: []const u8) ?[]const u8 {
-    if (app.host.pluginByIdIgnoringCase(id)) |p| if (!std.mem.eql(u8, p.id, id)) {
-        const n = @min(p.id.len, buf.len);
-        @memcpy(buf[0..n], p.id[0..n]);
-        return buf[0..n];
-    };
-    if (comptime builtin.target.cpu.arch == .wasm32) return null;
-    const plugins_dir = std.fs.path.join(app.gpa, &.{ app.config_folder, "plugins" }) catch return null;
+/// *is* `plugins/graphl`, so writing one would overwrite the other. Borrowed: the loaded plugin's
+/// id, or a name in `plugin_folders`, until `forgetPluginFolders`.
+pub fn pluginCaseClash(app: *App, id: []const u8) ?[]const u8 {
+    if (app.host.pluginByIdIgnoringCase(id)) |p| if (!std.mem.eql(u8, p.id, id)) return p.id;
+    for (app.pluginFolders()) |name| {
+        if (!std.mem.eql(u8, name, id) and std.ascii.eqlIgnoreCase(name, id)) return name;
+    }
+    return null;
+}
+
+/// The folders in `plugins/`, by the names the filesystem keeps for them: read once and kept
+/// (`plugin_folders`), so asking about a clash for every plugin in an update pass reads the disk
+/// once, not once each. Empty on the web, or when the folder can't be read.
+fn pluginFolders(app: *App) []const []const u8 {
+    if (app.plugin_folders) |names| return names.items;
+    var names: std.ArrayListUnmanaged([]u8) = .empty;
+    defer app.plugin_folders = names;
+    if (comptime builtin.target.cpu.arch == .wasm32) return &.{};
+    const plugins_dir = std.fs.path.join(app.gpa, &.{ app.config_folder, "plugins" }) catch return &.{};
     defer app.gpa.free(plugins_dir);
-    var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return null;
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return &.{};
     defer dir.close(dvui.io);
     var it = dir.iterate();
     while (it.next(dvui.io) catch null) |entry| {
         if (entry.kind != .directory) continue;
-        if (std.mem.eql(u8, entry.name, id) or !std.ascii.eqlIgnoreCase(entry.name, id)) continue;
-        const n = @min(entry.name.len, buf.len);
-        @memcpy(buf[0..n], entry.name[0..n]);
-        return buf[0..n];
+        const name = app.gpa.dupe(u8, entry.name) catch continue;
+        names.append(app.gpa, name) catch app.gpa.free(name);
     }
-    return null;
+    return names.items;
+}
+
+/// Read `plugins/` again on the next ask: something was installed or removed there.
+pub fn forgetPluginFolders(app: *App) void {
+    const names = app.plugin_folders orelse return;
+    for (names.items) |name| app.gpa.free(name);
+    var list = names;
+    list.deinit(app.gpa);
+    app.plugin_folders = null;
+}
+
+/// Whether uninstalling `id` may delete `plugins/<id>`: only when it is a folder of exactly that
+/// name and no other plugin's folder is the same one. On macOS and Windows `plugins/graphl` *is*
+/// `plugins/Graphl`, so a refused build's card (`recordCaseClash`) must not take the installed
+/// plugin with it, whether that plugin is loaded or not.
+///
+/// Decided by what the filesystem lists, read now: the names it keeps, and each folder's inode. A
+/// name not listed exactly (a case variant stands there), or another folder with the same inode,
+/// keeps it. Every entry is in the one `plugins/` folder, so the inodes are on one device unless
+/// a plugin folder is itself a mount point, where a coincidence only keeps a folder, never deletes
+/// one. Anything that cannot be read keeps it too.
+pub fn pluginFolderDeletable(app: *App, id: []const u8) bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    // An id that is not a plain name could reach outside `plugins/`.
+    if (!isValidPluginId(id)) return false;
+    const plugins_dir = std.fs.path.join(app.gpa, &.{ app.config_folder, "plugins" }) catch return false;
+    defer app.gpa.free(plugins_dir);
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return false;
+    defer dir.close(dvui.io);
+    var mine: ?std.Io.File.INode = null;
+    var others: std.ArrayListUnmanaged(std.Io.File.INode) = .empty;
+    defer others.deinit(app.gpa);
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch return false) |entry| {
+        if (std.mem.eql(u8, entry.name, id)) {
+            if (entry.kind != .directory) return false;
+            mine = entry.inode;
+        } else others.append(app.gpa, entry.inode) catch return false;
+    }
+    const own = mine orelse return false;
+    for (others.items) |inode| if (inode == own) return false;
+    return true;
 }
 
 /// The card for a build of `id` refused because `other`, the same id in another case, is loaded or
@@ -998,16 +1052,6 @@ pub fn recordCaseClash(app: *App, id: []const u8, other: []const u8, path: ?[]co
     const probe = if (comptime builtin.target.cpu.arch == .wasm32) null else if (path) |p| PluginLoader.probeVersionInfo(p) else null;
     app.clearFailedUserPlugin(id);
     app.recordPluginFailure(id, why, null, if (probe) |info| info.plugin_version else null, if (path) |p| .of(p) else .{});
-}
-
-/// Whether two paths name one folder: the same file on the same device, so a case-insensitive
-/// filesystem's `plugins/Graphl` and `plugins/graphl` are one, and a case-sensitive one's are
-/// two. False when either cannot be read.
-pub fn sameFolder(a: []const u8, b: []const u8) bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    const sa = std.Io.Dir.cwd().statFile(dvui.io, a, .{}) catch return false;
-    const sb = std.Io.Dir.cwd().statFile(dvui.io, b, .{}) catch return false;
-    return sa.inode == sb.inode;
 }
 
 /// `<config>/plugins/<id>/<id>.<ext>` — where a user plugin's build lives. Caller frees.

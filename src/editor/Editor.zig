@@ -741,16 +741,23 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         // Skip `.load-tmp` and any other dotfile/directory — not a plugin id.
         if (plugin_id.len == 0 or plugin_id[0] == '.') continue;
 
-        // Two folders whose names differ only in case (a case-sensitive filesystem lets both
-        // exist) are one id twice: neither loads. Which one was meant cannot be told from the
-        // folders, and loading whichever sorts first would let byte order choose. One card, on
-        // the first by that order, names them both.
-        const twin: ?[]const u8 = for (ids.items) |other| {
-            if (other.ptr != plugin_id.ptr and std.ascii.eqlIgnoreCase(other, plugin_id)) break other;
-        } else null;
-        if (twin) |other| {
-            if (std.mem.lessThan(u8, plugin_id, other)) {
-                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders '{s}' and '{s}' differ only in case, so neither is loaded: remove one", .{ plugin_id, other }) catch "two plugin folders differ only in case, so neither is loaded";
+        // Folders whose names differ only in case (a case-sensitive filesystem lets them all
+        // exist) are one id several times: none loads. Which one was meant cannot be told from
+        // the folders, and loading whichever sorts first would let byte order choose. One card,
+        // on the first by that order, names every one.
+        const twins = for (ids.items) |other| {
+            if (other.ptr != plugin_id.ptr and std.ascii.eqlIgnoreCase(other, plugin_id)) break true;
+        } else false;
+        if (twins) {
+            const first = for (ids.items) |other| {
+                if (std.ascii.eqlIgnoreCase(other, plugin_id)) break other;
+            } else plugin_id;
+            if (first.ptr == plugin_id.ptr) {
+                var names: std.Io.Writer.Allocating = .init(editor.app.arena.allocator());
+                for (ids.items) |other| if (std.ascii.eqlIgnoreCase(other, plugin_id)) {
+                    names.writer.print("{s}'{s}'", .{ if (names.written().len > 0) ", " else "", other }) catch {};
+                };
+                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders {s} differ only in case, so none is loaded: keep one", .{names.written()}) catch "plugin folders differ only in case, so none is loaded";
                 dvui.log.warn("user plugin '{s}': {s}", .{ plugin_id, why });
                 editor.app.recordPluginFailure(plugin_id, why, null, null, .{});
             }
@@ -1462,8 +1469,7 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
     // Asked before the build is opened: a case variant of a loaded or installed id fails saying so.
-    var clash_buf: [64]u8 = undefined;
-    if (editor.app.pluginCaseClash(&clash_buf, id)) |other| {
+    if (editor.app.pluginCaseClash(id)) |other| {
         editor.app.recordCaseClash(id, other, path);
         editor.app.gpa.free(path);
         return error.DuplicatePluginId;
@@ -1810,6 +1816,8 @@ fn takeWebFileTypePrompt(gpa: std.mem.Allocator, id: []const u8) bool {
 pub fn installAndLoadPlugin(editor: *Editor, id: []const u8) !void {
     if (isBundledPluginId(id)) return error.NotUnloadable;
     if (editor.app.host.pluginById(id) != null) return; // already loaded
+    // The download just made `plugins/<id>`.
+    editor.app.forgetPluginFolders();
     editor.app.untrackDisabledPlugin(id);
     try editor.setPluginEnabledPersisted(id, true);
     try editor.loadUserPluginById(id);
@@ -2072,16 +2080,13 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
     const plugin_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", id });
     defer editor.app.gpa.free(plugin_dir);
     // A build refused for its case (`App.recordCaseClash`) names a folder that, on macOS and
-    // Windows, is the loaded plugin's own: its card drops, and that folder stays. Told apart by
-    // what the folder is on disk, not by its name.
-    const keep = if (editor.app.host.pluginByIdIgnoringCase(id)) |loaded| keep: {
-        if (std.mem.eql(u8, loaded.id, id)) break :keep false;
-        const loaded_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", loaded.id });
-        defer editor.app.gpa.free(loaded_dir);
-        break :keep App.sameFolder(plugin_dir, loaded_dir);
-    } else false;
-    if (!keep) std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
-        dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) });
+    // Windows, is another installed plugin's own, loaded or not: its card drops, and that folder
+    // stays. Told apart by what the filesystem lists, never by the name asked for.
+    if (editor.app.pluginFolderDeletable(id)) {
+        std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
+            dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) });
+    } else dvui.log.info("uninstallPlugin '{s}': {s} is not this plugin's own folder alone; kept", .{ id, plugin_dir });
+    editor.app.forgetPluginFolders();
     // A broken (failed-to-load) build can be uninstalled too; clear its failure record so the
     // card disappears instead of lingering as "Failed".
     editor.app.clearFailedUserPlugin(id);
@@ -7101,8 +7106,7 @@ const plugin_manager_vtable: PluginManager.VTable = .{
     .refuseCaseClash = struct {
         fn f(ctx: *anyopaque, id: []const u8) bool {
             const app = &pmSelf(ctx).app;
-            var buf: [64]u8 = undefined;
-            const other = app.pluginCaseClash(&buf, id) orelse return false;
+            const other = app.pluginCaseClash(id) orelse return false;
             app.recordCaseClash(id, other, null);
             return true;
         }
