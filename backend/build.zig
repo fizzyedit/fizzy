@@ -166,10 +166,12 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
         addMacosSdk(m, opts);
         m.addCSourceFile(.{ .file = b.path("src/macos_monitor.m") });
     }
-    // Fizzy's in-app glass (`glassModule`): a plain app's floating windows are made of it
-    // (`floatingWindowBackground`).
-    m.addImport("glass", glassModule(dep, dvui_mod));
     m.addImport("glass_look", glassLookModule(dep));
+    // A plain dvui app's frame is drawn through the glass's frame target (`plainFrameBegin`), and
+    // its floating windows are made of the glass (`floatingWindowBackground`). The
+    // same module as the app's `core` takes (`glassModule`, one per dvui); it imports dvui, never
+    // the backend.
+    m.addImport("glass", glassModule(dep, dvui_mod));
     dvui_mod.addImport("backend", m);
     backend_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
     return m;
