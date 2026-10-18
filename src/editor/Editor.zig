@@ -5105,7 +5105,11 @@ fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void
 }
 
 fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {
-    return onLayout(fizzyCtx(ctx), Layout.reveal, id);
+    const editor = fizzyCtx(ctx);
+    // Mid-frame, after the hides asked this frame (`Layout.revealLater`): a hide then a reveal
+    // ends shown.
+    if (editor.app.frame_layout) |layout| return layout.revealLater(id);
+    return onLayout(editor, Layout.reveal, id);
 }
 
 fn fizzyHideSurface(ctx: *anyopaque, id: []const u8) bool {
@@ -5116,11 +5120,11 @@ fn fizzyHideSurface(ctx: *anyopaque, id: []const u8) bool {
     return onLayout(editor, Layout.hide, id);
 }
 
-/// `act` on the shape drawing now, or, for a command between shapes (a keybind, the palette, an
-/// agent), on last frame's regions, published for exactly this (`Layout.State.regions`), with
-/// what it changed of the extents saved as the frame's own would be.
+/// `act` between shapes (a keybind, the palette, an agent), on last frame's regions, published
+/// for exactly this (`Layout.State.regions`), with what it changed of the extents saved as the
+/// frame's own would be. Mid-frame the two calls queue instead (`Layout.hideLater`,
+/// `revealLater`).
 fn onLayout(editor: *Editor, comptime act: fn (*Layout, []const u8) bool, id: []const u8) bool {
-    if (editor.app.frame_layout) |layout| return act(layout, id);
     var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
     defer if (layout.extents_changed) editor.markWindowRatiosDirty();
     return act(&layout, id);

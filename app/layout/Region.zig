@@ -150,7 +150,8 @@ pub fn close(self: Region) void {
     // Deliberately before `Split.close`: shutting a region is also the user withdrawing the peek
     // that kept it open on a narrow window (see `collapseTarget`).
     dvui.dataSet(null, self.id, "_peek", false);
-    Split.close(self.id, self.openTo());
+    // Only a tray is shut when it keeps no size; anything else is left as it was.
+    Split.close(self.id, if (self.tray) self.openTo() else null);
 }
 
 /// `reopen_extent`, or `default_extent` for a region that has not registered (the shape's own
@@ -422,6 +423,13 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0 and !cleared) {
         // A boundary with nothing on one side is not a boundary.
         if (parent) |p| p.pending_split = null;
+        // Not drawn, but still declared: what it is sized and shut at is read, so dvui keeps it
+        // for as long as the place is here, and it comes back as it was rather than seeded open.
+        if (init_opts.resize) {
+            _ = dvui.dataGet(null, id, "_size", f32);
+            _ = dvui.dataGet(null, id, "_open", f32);
+            _ = dvui.dataGet(null, id, "_shown", f32);
+        }
         // Still a place, even with nothing in it: it stays in the registry so the picker and
         // the settings table can put something back. Emptied through the picker and then
         // gone from the picker was a region the user could not get back.
@@ -445,7 +453,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     const tree_origin = init_opts.omit_edge != null and self.state.splits.root(init_opts.name) != null;
     if (!tree_origin and init_opts.name.len > 0) {
         if (self.state.splits.root(init_opts.name)) |node| {
-            if (node.kind == .branch) return try initTree(self, src, init_opts, opts, node);
+            if (node.kind == .branch) return try initTree(self, src, init_opts, opts, node, default_extent);
         }
     }
     // The split declared before this region divides it from the one before: drawn now, with
@@ -1140,6 +1148,8 @@ fn initTree(
     init_opts: InitOptions,
     opts: dvui.Options,
     node: *SplitTree.Node,
+    /// `init`'s: what this tray opens to, padding and border included.
+    default_extent: f32,
 ) anyerror!Region {
     const parent: ?*Layout.Container = if (self.depth == 0) null else &self.containers[self.depth - 1];
     const axis: dvui.enums.Direction = if (parent) |p| p.dir else .horizontal;
@@ -1150,17 +1160,12 @@ fn initTree(
 
     const branch = node.kind.branch;
     var box_opts = opts;
-    var default_extent: f32 = 0;
     // Forgotten this frame, the tree `branch` points into may be freed: its children wait for
     // the next frame (`persistExtent` asked for it).
     var dropped = false;
     if (init_opts.resize) {
         const given = opts.min_size_content orelse dvui.Size{};
-        const default: f32 = switch (axis) {
-            .horizontal => given.w,
-            .vertical => given.h,
-        };
-        default_extent = default;
+        const default = default_extent;
         if (dvui.dataGet(null, id, "_size", f32) == null) {
             dvui.dataSet(null, id, "_size", self.state.extent(init_opts.name, default));
         }
@@ -1498,8 +1503,9 @@ fn placePrefix(keywords: []const []const u8, parent_prefix: []const u8) []const 
 /// one place that decides it.
 fn register(self: *Layout, init_opts: InitOptions, entry: Region) void {
     var r = entry;
-    // A place a split made is `resize` too, but goes by being emptied or joined, never shut.
-    r.tray = init_opts.resize and !self.state.isMinted(init_opts.name);
+    // A place a split made is `resize` too, but goes by being emptied or joined, never shut; one
+    // that forgets itself empty (`forget_when_empty`) could not be opened again once forgotten.
+    r.tray = init_opts.resize and !init_opts.forget_when_empty and !self.state.isMinted(init_opts.name);
     self.state.registerRegion(self.gpa, r);
 }
 

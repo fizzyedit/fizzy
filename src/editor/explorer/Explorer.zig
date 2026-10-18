@@ -32,8 +32,8 @@ collapse_btn_anim_started: bool = false,
 
 /// Whether the user (or a plugin, `Host.hideSurface`) shut the explorer: its sidebar region's own
 /// state, which the rail, Toggle Explorer and `hideSurface` all write. Not folded away by a narrow
-/// window, which is the window's doing, not anyone's choice: what the menu title, the keybind
-/// context and a demo's snapshot read, none of which may change with the window's width. No
+/// window, which is the window's doing, not anyone's choice: what the keybind context and a
+/// demo's snapshot read, neither of which may change with the window's width. No
 /// sidebar declared (before the first frame, a shape without one): not shut.
 pub fn isShut(editor: *fizzy.Editor) bool {
     const r = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return false;
@@ -41,7 +41,8 @@ pub fn isShut(editor: *fizzy.Editor) bool {
 }
 
 /// Whether the explorer is on screen: its sidebar region neither shut nor folded away. What
-/// Toggle Explorer decides by, so a folded explorer opens in one press.
+/// Toggle Explorer, its menu title and a rail tap decide by, so a folded explorer opens in one
+/// press and the title says so.
 pub fn inSight(editor: *fizzy.Editor) bool {
     const r = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return false;
     return !r.isClosed() and !r.isFolded();

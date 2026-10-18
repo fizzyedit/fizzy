@@ -2666,6 +2666,14 @@ pub fn canFloatViewHome(l: *Layout, float: []const u8, id: []const u8) bool {
     return homeLanding(l, id, f.home) != null;
 }
 
+/// The place view `id` would land in, taken out of float `float` now (`homeLanding`): null when no
+/// place is named for it (its keywords bring it back) or the float is gone.
+pub fn floatHomeFor(l: *Layout, float: []const u8, id: []const u8) ?[]const u8 {
+    const i = l.state.floats.find(float) orelse return null;
+    const to = homeLanding(l, id, l.state.floats.items.items[i].home) orelse return null;
+    return to.place;
+}
+
 /// One view out of float `float` and home, as closing the float would send it (`sendHome`): the
 /// float's other views stay where the user arranged them, and a place of it left empty closes as
 /// any emptied place does (`withdraw`), the float itself when it was its last view. False, with

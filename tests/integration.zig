@@ -5811,6 +5811,30 @@ const HidesItself = struct {
     }
 };
 
+test "hide: a hide and then a reveal asked in one frame end with the view shown" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    try std.testing.expect(layout.hideLater("test.output"));
+    try std.testing.expect(layout.revealLater("test.output"));
+    try std.testing.expect(!try isShut(editor, "Panel"));
+    layout.applyLater();
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(!try isShut(editor, "Panel"));
+}
+
+test "hide: a floating view that lands in sight where nothing shuts answers false, asked now or later" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Main", "Main", .swap);
+    try std.testing.expect(holds(case.shows("Float 1"), "test.main"));
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    try std.testing.expect(!layout.hideLater("test.main"));
+    try std.testing.expect(!hideView(editor, "test.main"));
+}
+
 test "hide: asked from inside a floating view's draw, it waits for the frame's end" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
@@ -6932,11 +6956,6 @@ test "a key bound with arguments runs its command with them, and is not its shor
     const gpa = editor.app.host.allocator;
     defer editor.app.keymap.deinit(gpa);
     PaletteArgs.got = null;
-    // `tick` reads which context the keys land in; the shim's editor has no explorer of its own.
-    var explorer: fizzy.Editor.Explorer = undefined;
-    @memset(std.mem.asBytes(&explorer), 0);
-    editor.explorer = &explorer;
-
     const vtable = sdk.Plugin.VTable{};
     var state: u8 = 0;
     var plugin = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };

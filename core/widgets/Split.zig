@@ -223,31 +223,20 @@ pub fn isClosed(id: dvui.Id) bool {
     return sizeOf(id) <= 0;
 }
 
-/// Shut it, remembering how big it was so `open` can put it back. Something that keeps no size
-/// at all (nothing drew it lately: a tray left empty and folded away) is shut as though it had
-/// been open at `fallback`, which `open` then brings it back to, with nothing to slide: it was
-/// not on screen. Without that it was left as it was, and seeded open the next time it drew.
-///
-/// The remembered extent is *retained*: dvui frees a value nothing touched during a frame, and
-/// while the region is shut nothing does — the layout reads `_size` and `_shown` every frame but
-/// has no reason to read `_open`. Without the retain the memory of how wide the explorer was
-/// evaporated a frame after it closed, and reopening fell back to `default_extent`, which is why
-/// it always came back the same width.
-/// Seeds `_shown` from the current extent so `eased` has somewhere to travel
-/// from — the same trick `takeSlideOpen` uses the other way. Without that, a
-/// missing or leftover-zero `_shown` makes the next frame treat target 0 as
-/// already there, and the pane vanishes instead of folding.
-pub fn close(id: dvui.Id, fallback: f32) void {
+/// Shut it, remembering how big it was so `open` can put it back. With a `fallback`, something
+/// that keeps no size at all (nothing drew it lately: a tray left empty and folded away) is shut
+/// as though it had been open at `fallback`, which `open` then brings it back to, with nothing to
+/// slide: it was not on screen. Without one (a region that is not a tray), it is left as it was.
+/// Nothing here outlives its owner: the region reads these keys every frame it is declared.
+pub fn close(id: dvui.Id, fallback: ?f32) void {
     if (dvui.dataGet(null, id, "_size", f32) == null) {
-        if (fallback > 0) {
-            dvui.dataSet(null, id, "_open", fallback);
+        const to = fallback orelse return;
+        if (to > 0) {
+            dvui.dataSet(null, id, "_open", to);
             dvui.dataRetain(null, id, "_open", .zero);
         }
         dvui.dataSet(null, id, "_shown", @as(f32, 0));
         dvui.dataSet(null, id, "_size", @as(f32, 0));
-        // Kept like `_open`: nothing may draw it for a while, and dvui frees what no frame
-        // touched, after which it would be seeded open again.
-        dvui.dataRetain(null, id, "_size", .zero);
         dvui.refresh(null, @src(), id);
         return;
     }
@@ -1100,18 +1089,20 @@ test "reopening a shut region restores the extent it was shut at" {
     try testing.expectApproxEqAbs(@as(f32, 220), t_size, 1.0);
 }
 
-test "closing something that keeps no size shuts it at the fallback, to open back to" {
+test "closing something that keeps no size shuts it at the fallback, to open back to, or not at all without one" {
     // A tray left empty and folded away drew nothing, so it keeps no `_size`: shut, it must stay
     // shut when it next draws, and open to the size it would have had.
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
     defer t.deinit();
     const id = dvui.Id.extendId(null, @src(), 0);
     close(id, 180);
-    // Frames pass with nothing drawing it, and it is still shut, not forgotten.
-    for (0..3) |_| _ = try dvui.testing.step(twoPaneFrame);
-    try testing.expectEqual(@as(?f32, 0), dvui.dataGet(null, id, "_size", f32));
+    try testing.expect(isClosed(id));
     open(id, 1);
     try testing.expectEqual(@as(f32, 180), sizeOf(id));
+    // Without a fallback (not a tray), something that keeps no size is left as it was.
+    const other = dvui.Id.extendId(null, @src(), 1);
+    close(other, null);
+    try testing.expectEqual(@as(?f32, null), dvui.dataGet(null, other, "_size", f32));
 }
 
 test "opening something already open leaves the width the user dragged it to" {

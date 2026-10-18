@@ -170,14 +170,10 @@ const rail_icon: f32 = 20;
 fn pickAction(editor: *Editor, c: *const Chooser, so_far: Action) Action {
     if (c.picked() != null) return .open;
     if (c.reselected() == null) return so_far;
-    // Folded counts as out of sight here: on a narrow window the explorer is folded away by the
-    // layout without anyone having closed it, and a tap there means "show me", not "hide it
-    // again".
-    const explorer_visible = if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r|
-        !r.isClosed() and !r.isFolded()
-    else
-        false;
-    return if (explorer_visible) .close else .open;
+    // Folded counts as out of sight (`Explorer.inSight`): on a narrow window the explorer is
+    // folded away by the layout without anyone having closed it, and a tap there means "show
+    // me", not "hide it again".
+    return if (Editor.Explorer.inSight(editor)) .close else .open;
 }
 
 /// One rail icon: the chooser's item, drawn as the view's glyph with the store's attention badge.

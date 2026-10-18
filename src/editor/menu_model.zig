@@ -162,7 +162,8 @@ fn pasteEnabled(editor: *Editor) bool {
 }
 
 fn explorerTitle(editor: *Editor) [:0]const u8 {
-    return if (Editor.Explorer.isShut(editor)) "Show Explorer" else "Hide Explorer";
+    // What Toggle Explorer will do: show one shut or folded away.
+    return if (Editor.Explorer.inSight(editor)) "Hide Explorer" else "Show Explorer";
 }
 
 /// TEMPORARY: only meaningful on macOS, where the in-app dvui menu bar is normally suppressed

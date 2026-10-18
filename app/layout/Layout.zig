@@ -158,9 +158,9 @@ extents_changed: bool = false,
 /// Every surface `draw` ran this frame, so `captureUnplaced` knows which ones genuinely drew
 /// nowhere — as opposed to drew before the picker asked. Arena-backed, per frame.
 drawn: std.ArrayListUnmanaged(*Surface) = .empty,
-/// Views put away mid-frame (`hideLater`), for `applyLater` once nothing walks the places.
-/// Arena-backed, per frame.
-later_hides: std.ArrayListUnmanaged([]const u8) = .empty,
+/// Views put away or shown mid-frame (`hideLater`, `revealLater`), in the order asked, for
+/// `applyLater` once nothing walks the places. Arena-backed, per frame.
+later: std.ArrayListUnmanaged(Later) = .empty,
 
 /// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
 /// `split` know which axis it divides and which neighbour it resizes, without a shape having to
@@ -620,23 +620,61 @@ pub fn hide(self: *Layout, id: []const u8) bool {
 }
 
 /// `hide`, asked mid-frame (a button in a surface): kept for `applyLater`, which the application
-/// calls once the shape and the floats have drawn. True when it will put the view away: it is in
-/// sight in a tray, or in a float it will leave. Whether a view leaving a float lands in sight is
-/// known only once it lands, as `hide` says.
+/// calls once the shape and the floats have drawn, in the order asked with `revealLater`'s. The
+/// answer is the one `hide` would give: it is in sight in a tray, or in a float it will leave
+/// for a place that does not leave it in sight.
 pub fn hideLater(self: *Layout, id: []const u8) bool {
     const s = self.surface(id) orelse return false;
-    _ = self.away(s) orelse return false;
-    const kept = self.arena.dupe(u8, id) catch return false;
-    self.later_hides.append(self.arena, kept) catch return false;
+    const will = switch (self.away(s) orelse return false) {
+        .shut => true,
+        .float => |float| self.floatHomeHides(float, s),
+    };
+    self.keepLater(id, .hide) catch return false;
+    return will;
+}
+
+/// `reveal`, asked mid-frame: kept for `applyLater` with the hides, so a hide and then a reveal
+/// in one frame end with the view shown. The answer is the one `reveal` would give.
+pub fn revealLater(self: *Layout, id: []const u8) bool {
+    const s = self.surface(id) orelse return false;
+    if (s.hidden) return false;
+    _ = self.locate(s, .any) orelse return false;
+    self.keepLater(id, .reveal) catch return false;
     return true;
 }
 
-/// Apply what `hideLater` kept. The application calls it after the shape, the floats, the drag
-/// overlay and the picker have drawn, before it reads `extents_changed`.
-pub fn applyLater(self: *Layout) void {
-    for (self.later_hides.items) |id| _ = self.hide(id);
-    self.later_hides.clearRetainingCapacity();
+fn keepLater(self: *Layout, id: []const u8, act: Later.Act) !void {
+    try self.later.append(self.arena, .{ .id = try self.arena.dupe(u8, id), .act = act });
 }
+
+/// Apply what `hideLater` and `revealLater` kept, in the order they were asked. The application
+/// calls it after the shape, the floats, the drag overlay and the picker have drawn, before it
+/// reads `extents_changed`.
+pub fn applyLater(self: *Layout) void {
+    for (self.later.items) |l| switch (l.act) {
+        .hide => _ = self.hide(l.id),
+        .reveal => _ = self.reveal(l.id),
+    };
+    self.later.clearRetainingCapacity();
+}
+
+/// Whether taking `s` out of float `float` leaves it out of sight, as `hide` finds once it has:
+/// where it will land (`ViewDrag.floatHomeFor`) is a tray, which shuts, or a place shut or folded.
+/// Landing where no place names it (its keywords bring it back), it is not selected anywhere.
+fn floatHomeHides(self: *Layout, float: []const u8, s: *const Surface) bool {
+    const name = ViewDrag.floatHomeFor(self, float, s.id) orelse return true;
+    const r = ViewDrag.regionNamed(self.state, name) orelse return true;
+    if (self.trayOf(r) != null) return true;
+    return r.isClosed() or r.isFolded();
+}
+
+/// A hide or reveal asked mid-frame.
+const Later = struct {
+    id: []const u8,
+    act: Act,
+
+    const Act = enum { hide, reveal };
+};
 
 /// What putting `s` away does, worked out before anything changes; null when it is not in sight
 /// or nothing round it shuts.
@@ -649,7 +687,7 @@ const Away = union(enum) {
 
 fn away(self: *Layout, s: *const Surface) ?Away {
     if (s.hidden) return null;
-    const at = self.locate(s, .any) orelse return null;
+    const at = self.locate(s, .open) orelse return null;
     if (!self.inSight(at, s)) return null;
     if (self.state.floats.rootOf(at.place.name)) |float| {
         if (!ViewDrag.canFloatViewHome(self, float, s.id)) return null;
@@ -662,24 +700,33 @@ fn away(self: *Layout, s: *const Surface) ?Away {
 const Located = struct { place: *const Region, tray: ?*const Region };
 
 /// The one place showing `s` (the rule `claimedElsewhere` states: its assignment, else the place
-/// that accepts it best), among this frame's places so far and last frame's rest, with its tray:
-/// the place itself, or the one a split of it grew from (`SplitTree.Forest.rootOf`).
-/// `main_window` leaves out the floats' places.
-fn locate(self: *Layout, s: *const Surface, among: enum { any, main_window }) ?Located {
+/// that accepts it best), among this frame's places so far and last frame's rest, with its tray.
+/// `main_window` leaves out the floats' places, `open` only the places of a float flying shut
+/// (what it holds is going home: there is nothing there to put away, though `reveal` still finds
+/// a view not home yet).
+fn locate(self: *Layout, s: *const Surface, among: enum { any, open, main_window }) ?Located {
     var it = self.declaredRegions();
     const place = find: while (it.next()) |r| {
-        if (self.state.floats.rootOf(r.name)) |float| {
-            if (among == .main_window) continue;
-            // Flying shut: what it held has gone home already.
-            const i = self.state.floats.find(float) orelse continue;
-            if (self.state.floats.items.items[i].closing) continue;
-        }
+        if (self.state.floats.rootOf(r.name)) |float| switch (among) {
+            .any => {},
+            .main_window => continue,
+            .open => {
+                const i = self.state.floats.find(float) orelse continue;
+                if (self.state.floats.items.items[i].closing) continue;
+            },
+        };
         for (self.matchingIn(r)) |m| if (m == s) break :find r;
     } else return null;
-    if (place.tray) return .{ .place = place, .tray = place };
-    const root = self.state.splits.rootOf(place.name) orelse return .{ .place = place, .tray = null };
-    const tray = ViewDrag.regionNamed(self.state, root) orelse return .{ .place = place, .tray = null };
-    return .{ .place = place, .tray = if (tray.tray) tray else null };
+    return .{ .place = place, .tray = self.trayOf(place) };
+}
+
+/// The tray `place` is, or the one a split of it grew from (`SplitTree.Forest.rootOf`); null in
+/// none.
+fn trayOf(self: *Layout, place: *const Region) ?*const Region {
+    if (place.tray) return place;
+    const root = self.state.splits.rootOf(place.name) orelse return null;
+    const tray = ViewDrag.regionNamed(self.state, root) orelse return null;
+    return if (tray.tray) tray else null;
 }
 
 /// Whether `s` is what the place `at` shows now: its selection, with neither the place nor its

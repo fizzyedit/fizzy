@@ -588,7 +588,8 @@ neither the place nor the tray round it is shut, or folded away by a narrow wind
 - A view not in sight (another view is its place's selection, its tray is shut or folded) is
   left alone, and it returns false.
 - Called while a frame draws (a button in your surface), it happens at the frame's end, once
-  nothing is drawing the places it changes; the answer is then whether it will happen.
+  nothing is drawing the places it changes, and `revealSurface` waits with it, so the two keep
+  the order they were called in; each answers then as it would between frames.
 
 So a toggle is
 
