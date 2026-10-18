@@ -64,18 +64,18 @@ var named_n: usize = 0;
 /// main window's own subwindow.
 var keyed: ?dvui.Id = null;
 
-/// A floating window dragged by its header past every window of the app's (`tearFrame`) becomes a
-/// small card of itself at the pointer, in a carry window (`viewports.openCarry`): its header gone,
-/// its content live. Let go over the desktop, the card grows to its window's size where it opens,
-/// a title bar's place opening at its top (`Grow`), and it is in an OS window of its own there
-/// (`torn`), its content under the OS's title bar where the card's was. Moved by the OS wholly back
-/// into the main window, the window shrinks into its place there, dvui's header for the OS's title
-/// bar (`Merge`). A card, not the floating window at its size made up as an OS window: it never
-/// could look like one, and became one with a jump; a card that changes into the window is a change
-/// it shows (the user). dvui says nothing of a drag, so it is read from what dvui shows: the
-/// floating window that has the mouse, its rect moving while its size stays — moved by its header,
-/// not resized from an edge. Over another of the app's windows the held pointer already takes it
-/// into that window (`SDLBackend.heldPoint`).
+/// A floating window dragged by its header past every window of the app's (`tearFrame`) becomes an
+/// OS window of its own at once — the OS's title bar and buttons under the pointer — shrunk to a
+/// miniature of itself: its content laid out at its size, shown scaled, live. Back over a window of
+/// the app's, the window hides and the floating window is there again. Let go over the desktop, the
+/// window grows to the floating window's size (`Grow`) and is its window from then (`torn`). Moved
+/// by the OS wholly back into the main window, the window shrinks into its place there, dvui's
+/// header for the OS's title bar (`Merge`). One window all the way: a borderless card that grew and
+/// then gave way to a window opened for it jumped as one replaced the other (the user). Only one
+/// that can close (`open_flag`, `named`): a window's close clears it. dvui says nothing of a drag,
+/// so it is read from what dvui shows: the floating window that has the mouse, its rect moving
+/// while its size stays — moved by its header, not resized from an edge. Over another of the app's
+/// windows the held pointer already takes it into that window (`SDLBackend.heldPoint`).
 const Tear = struct {
     id: dvui.Id,
     /// Where on it the pointer took it, from its top left (physical, at its size).
@@ -86,11 +86,13 @@ const Tear = struct {
     /// When it went past the app's windows: drawn without its header from the frame after
     /// (`frameless`), and shrinking into the card from then (`shrink_ns`).
     out_ns: ?i128 = null,
-    /// Its picture this frame, at its size, without its header: what the card shows.
+    /// Its picture this frame, at its size, without its header: what its window shows, scaled.
     live: ?dvui.Texture.Target = null,
+    /// Its window, moved by the app while the drag holds it (`viewports.held`).
     card: ?*viewports.Viewport = null,
     card_target: ?dvui.Texture.Target = null,
-    /// The card this frame, in the main window's frame (physical); null over a window of the app's.
+    /// Its window's content this frame, below its title bar, in the main window's frame
+    /// (physical); null over a window of the app's.
     place: ?dvui.Rect.Physical = null,
     /// The app's window it was last over, brought forward as it came over it.
     over: ?*anyopaque = null,
@@ -107,21 +109,17 @@ pub fn heldFrameless(id: dvui.Id) bool {
     return frameless == id;
 }
 
-/// The card growing into the window let go over the desktop (`tearFrame`): from where it was to the
-/// window's frame, a title bar's place opening at its top, the window asked for as it gets there,
-/// and the card gone once that window shows.
+/// The window let go over the desktop growing to the floating window's size (`tearFrame`), and the
+/// floating window's own once it has.
 const Grow = struct {
     id: dvui.Id,
     card: *viewports.Viewport,
     card_target: ?dvui.Texture.Target,
     live: ?dvui.Texture.Target,
+    /// Its content's place, below its title bar, from and to (physical, the main window's frame).
     from: dvui.Rect.Physical,
-    /// The window's frame (physical): its title bar's band over its content.
     to: dvui.Rect.Physical,
-    band: f32,
     start_ns: i128,
-    /// The window asked for (`tearOff`), once the card has grown.
-    asked: bool = false,
 };
 var grow: ?Grow = null;
 
@@ -156,9 +154,9 @@ fn headerHeight() f32 {
 }
 
 /// Torn off the window it was in by a drop over no window (`tearFrame`): shown in an OS window
-/// though it did not ask (`SDLBackend.floatingWindowOs`), opened where it was let go (`at`, once).
-/// Its window closed, it is an ordinary floating window again.
-const Torn = struct { id: dvui.Id, at: ?dvui.Rect.Physical };
+/// though it did not ask (`SDLBackend.floatingWindowOs`). Its window closed, it is an ordinary
+/// floating window again.
+const Torn = struct { id: dvui.Id };
 var torn_list: [max_outs]?Torn = @splat(null);
 
 /// Whether floating window `id` was torn off into an OS window of its own (`tearFrame`).
@@ -229,18 +227,23 @@ pub fn beforeFrame() void {
         // go, as a floating window of its own again (`torn`). Wholly, so a window only overlapping
         // the main one stays a window.
         if (viewports.osMoveEnded(o.viewport)) |end| if (!end.resized and torn(o.id) and viewports.mainHolds(o.viewport)) {
+            // Its content where it was and at its size, dvui's header above it where the title bar
+            // was: the floating window's rect holds its header, and given only the content's, the
+            // content came back a header shorter (the user).
             const content = viewports.inMain(o.viewport);
-            dvui.dataSet(null, o.id, "_rect", natural(content, s));
+            const header = headerHeight();
+            const c: dvui.Rect.Physical = .{ .x = content.x, .y = content.y, .w = content.w, .h = content.h };
+            const to: dvui.Rect.Physical = .{ .x = c.x, .y = c.y - header, .w = c.w, .h = c.h + header };
+            dvui.dataSet(null, o.id, "_rect", natural(viewRect(to), s));
             for (&torn_list) |*ts| if (ts.*) |tt| if (tt.id == o.id) {
                 ts.* = null;
             };
             // Shrinking into its place from its window, its last picture in a card over it
             // (`Merge`); or there at once where no card can be made.
             const band = viewports.titleBand();
-            const c: dvui.Rect.Physical = .{ .x = content.x, .y = content.y, .w = content.w, .h = content.h };
             const from: dvui.Rect.Physical = .{ .x = c.x, .y = c.y - band, .w = c.w, .h = c.h + band };
             if (merge == null and o.target != null and viewports.tears()) if (viewports.openCarry(viewRect(from))) |card| {
-                merge = .{ .id = o.id, .card = card, .snap = o.target.?, .from = from, .band = band, .to = c, .header = headerHeight(), .start_ns = dvui.currentWindow().frame_time_ns };
+                merge = .{ .id = o.id, .card = card, .snap = o.target.?, .from = from, .band = band, .to = to, .header = header, .start_ns = dvui.currentWindow().frame_time_ns };
                 o.target = null;
             };
             viewports.close(o.viewport);
@@ -308,20 +311,16 @@ fn tearFrame() void {
     const sw = dragged orelse {
         if (tear) |*t| {
             if (!held and t.place != null and t.live != null and t.card != null and grow == null) {
-                // Let go over the desktop: the card grows into the window, its content where the
-                // floating window's would be under the pointer, its title bar's band over it.
-                const r = t.last;
-                const mouse = viewports.pointerInMain();
-                const band = viewports.titleBand();
-                const content: dvui.Rect.Physical = .{ .x = mouse.x - t.grab.x, .y = mouse.y - t.grab.y, .w = r.w, .h = r.h };
+                // Let go over the desktop: the window grows to the floating window's size, down from
+                // its title bar under the pointer. Its content kept where the header was, it grew
+                // upward and moved under the pointer as it grew (the user).
                 grow = .{
                     .id = t.id,
                     .card = t.card.?,
                     .card_target = t.card_target,
                     .live = t.live.?,
                     .from = t.place.?,
-                    .to = .{ .x = content.x, .y = content.y - band, .w = content.w, .h = content.h + band },
-                    .band = band,
+                    .to = dropContent(t.last, t.grab),
                     .start_ns = cw.frame_time_ns,
                 };
                 t.card = null;
@@ -353,7 +352,9 @@ fn tearFrame() void {
     const over = viewports.windowAtPointer();
     if (t.moving and over != t.over) if (over) |w| viewports.bringForward(w);
     t.over = over;
-    if (!t.moving or over != null) {
+    // One with no `open_flag` gets no window (`named`), and its window could not close: it stays
+    // in the window it was dragged in, as dvui keeps it.
+    if (!t.moving or over != null or namedOf(t.id) == null) {
         // In a window of the app's: drawn there, as dvui draws it, its header back — from where the
         // pointer took it, back over a window: dvui kept it at the edge it left by (`screenFor`)
         // while the pointer went on, and it came back that far from the pointer (the user).
@@ -364,7 +365,7 @@ fn tearFrame() void {
         }
         t.out_ns = null;
         if (frameless == t.id) frameless = null;
-        if (t.card) |c| viewports.carryShape(c, null, 0);
+        if (t.card) |c| viewports.fade(c, 0);
         t.place = null;
         return;
     }
@@ -381,7 +382,7 @@ fn tearFrame() void {
     if (!livePicture(&t.live, sw)) return;
     const ns = dvui.windowNaturalScale();
     const small = @min(card_scale, card_max_w * ns / @max(1, r.w));
-    // From its size into the card, round the pointer, its header's place closing up as it goes.
+    // From its size into the miniature, round the pointer.
     const k = ease(cw.frame_time_ns - t.out_ns.?, shrink_ns);
     const scale = 1 + (small - 1) * k;
     if (k < 1) dvui.refresh(null, @src(), null);
@@ -390,10 +391,66 @@ fn tearFrame() void {
     // window went a band's width off — 32,000 points — and back on screen as macOS put them (the user,
     // traced).
     const at = viewports.pointerInMain();
-    const card = whole(.{ .x = at.x - t.grab.x * scale, .y = at.y - t.grab.y * scale, .w = r.w * scale, .h = r.h * scale });
-    if (t.card == null) t.card = viewports.openCarry(viewRect(card)) orelse return;
-    drawCard(t.card.?, &t.card_target, t.live.?, card, headerHeight() * (1 - k) * scale, scale);
-    t.place = card;
+    const band = viewports.titleBand();
+    // The pointer on its title bar, as far along it as it took the header; the title bar is the
+    // OS's, at its size, and the content below it the miniature.
+    const top = at.y - std.math.clamp(t.grab.y, 0, @max(0, band - 1));
+    const content = whole(.{ .x = at.x - t.grab.x * scale, .y = top + band, .w = r.w * scale, .h = r.h * scale });
+    if (t.card == null) {
+        const title = if (namedOf(t.id)) |n| std.mem.sliceTo(&n.title, 0) else "";
+        t.card = viewports.open(viewRect(content), title, .native) orelse return;
+        viewports.held(t.card.?, true);
+    }
+    viewports.fade(t.card.?, 1);
+    drawScaled(t.card.?, &t.card_target, t.live.?, content);
+    t.place = content;
+}
+
+/// `content` (physical, the main window's frame) in window `vp`, below its title bar, and `live` —
+/// a floating window's picture at its own size — scaled into it.
+fn drawScaled(vp: *viewports.Viewport, slot: *?dvui.Texture.Target, live: dvui.Texture.Target, content: dvui.Rect.Physical) void {
+    const placed = viewports.placeMain(vp, viewRect(content));
+    const shown: dvui.Rect.Physical = .{ .x = placed.x, .y = placed.y, .w = placed.w, .h = placed.h };
+    const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
+    const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
+    const target = viewports.sizedTarget(slot, w, h) orelse return;
+    const picture: viewports.Picture = .begin(target, viewRect(shown));
+    {
+        // Clipped to the window, not the main window it lies outside of.
+        const prev_clip = dvui.clipGet();
+        defer dvui.clipSet(prev_clip);
+        dvui.clipSet(shown);
+        if (dvui.Texture.fromTargetTemp(live)) |tex| {
+            dvui.renderTexture(tex, .{ .r = shown, .s = 1 }, .{}) catch {};
+        } else |_| {}
+    }
+    picture.end();
+    viewports.present(vp, target);
+}
+
+/// Where the content of the window a floating window of `size` let go over the desktop grows to
+/// (physical, the main window's frame): below its title bar, which is under the pointer as far
+/// along as the pointer took the floating window's header (`grab`, from its top left). The whole
+/// window on the usable part of the screen under the pointer, as much of it as fits: the OS moved a
+/// window let go partly off the screen back onto it as it opened, a jump at the end of its growing,
+/// so it grows to where it can be (the user).
+fn dropContent(size: dvui.Rect.Physical, grab: dvui.Point.Physical) dvui.Rect.Physical {
+    const mouse = viewports.pointerInMain();
+    const band = viewports.titleBand();
+    var window: dvui.Rect.Physical = .{
+        .x = mouse.x - grab.x,
+        .y = mouse.y - std.math.clamp(grab.y, 0, @max(0, band - 1)),
+        .w = size.w,
+        .h = size.h + band,
+    };
+    const u = viewports.usableAtPointer();
+    if (u.w > 0 and u.h > 0) {
+        window.w = @min(window.w, u.w);
+        window.h = @min(window.h, u.h);
+        window.x = std.math.clamp(window.x, u.x, u.x + u.w - window.w);
+        window.y = std.math.clamp(window.y, u.y, u.y + u.h - window.h);
+    }
+    return whole(.{ .x = window.x, .y = window.y + band, .w = window.w, .h = window.h - band });
 }
 
 /// `sw`'s drawing this frame into `slot`'s target at its size, taken out of the frame: smoothly
@@ -440,53 +497,61 @@ fn drawCard(card: *viewports.Viewport, card_target: *?dvui.Texture.Target, conte
     viewports.present(card, target);
 }
 
-/// The card growing into the window let go over the desktop (`Grow`): eased from where it was to
-/// the window's frame, the title bar's band opening at its top, the window asked for as it gets
-/// there, and the card gone once that window shows. The floating window, drawn without its header
-/// meanwhile (`frameless`), nowhere but in the card.
+/// The window let go over the desktop growing to the floating window's size (`Grow`), its picture
+/// scaled up with it, and the floating window's own window once it has: the floating window, drawn
+/// without its header meanwhile (`frameless`), laid out in it from the next frame.
 fn growFrame(cw: *dvui.Window) void {
     const g = if (grow) |*g| g else return;
     var drawn = false;
     for (cw.subwindows.stack.items) |*sw| if (sw.id == g.id) {
         drawn = true;
-        if (outOf(sw.id)) |o| {
-            if (o.fresh) viewports.Picture.drop(sw);
-        } else _ = livePicture(&g.live, sw);
+        _ = livePicture(&g.live, sw);
     };
-    // Given up: the floating window closed on its way, or no window opened for it in a second past
-    // the card's growing (none to spare, or one it cannot have: no `open_flag` to close it by). The
-    // card goes, and the floating window is an ordinary one again; kept, the card stayed and every
-    // frame asked for the next.
-    if (!drawn or (g.asked and outOf(g.id) == null and cw.frame_time_ns - g.start_ns > grow_ns + std.time.ns_per_s)) {
+    // Given up: the floating window closed on its way.
+    if (!drawn) {
         endGrow(g);
         return;
     }
     const live = g.live orelse return;
     const k = ease(cw.frame_time_ns - g.start_ns, grow_ns);
-    const at = whole(lerp(g.from, g.to, k));
-    const scale = at.w / @max(1, g.to.w);
-    drawCard(g.card, &g.card_target, live, at, g.band * k * scale, scale);
-    if (k >= 1 and !g.asked) {
-        g.asked = true;
-        tearOff(g.id, .{ .x = g.to.x, .y = g.to.y + g.band, .w = g.to.w, .h = g.to.h - g.band });
+    drawScaled(g.card, &g.card_target, live, whole(lerp(g.from, g.to, k)));
+    if (k < 1) {
+        dvui.refresh(null, @src(), null);
+        return;
     }
-    // Its window on screen: the card goes, and the window is where it was.
-    if (outOf(g.id)) |o| if (!o.fresh and viewports.shown(o.viewport)) {
+    // Grown: its window, an ordinary one from here — the floating window laid out in its part of
+    // the frame from the next frame, this one's picture shown till then (`Out.fresh`).
+    const slot = for (&outs) |*slot| {
+        if (slot.* == null) break slot;
+    } else {
         endGrow(g);
         return;
     };
+    const torn_slot = for (&torn_list) |*ts| {
+        if (ts.* == null) break ts;
+    } else {
+        endGrow(g);
+        return;
+    };
+    torn_slot.* = .{ .id = g.id };
+    viewports.held(g.card, false);
+    slot.* = .{ .id = g.id, .viewport = g.card };
+    if (namedOf(g.id)) |n| slot.*.?.title = n.title;
+    dvui.dataSet(null, g.id, "_rect", natural(viewports.frameOf(g.card), dvui.windowNaturalScale()));
+    if (frameless == g.id) frameless = null;
+    if (g.card_target) |ct| ct.destroyLater();
+    if (g.live) |l| l.destroyLater();
+    grow = null;
     dvui.refresh(null, @src(), null);
 }
 
+/// The window let go over the desktop gone before it grew (`growFrame`): the floating window an
+/// ordinary one again.
 fn endGrow(g: *Grow) void {
     viewports.close(g.card);
     if (g.card_target) |ct| ct.destroyLater();
     if (g.live) |live| live.destroyLater();
     if (frameless == g.id) frameless = null;
-    // Asked for and never opened: not torn off after all.
-    if (outOf(g.id) == null) for (&torn_list) |*ts| if (ts.*) |tt| if (tt.id == g.id) {
-        ts.* = null;
-    };
     grow = null;
     dvui.refresh(null, @src(), null);
 }
@@ -535,16 +600,6 @@ fn endTear(t: *Tear) void {
     t.live = null;
 }
 
-/// Floating window `id` in an OS window of its own from the next frame, opened at `at` (the main
-/// window's frame, physical) rather than where dvui keeps it, at the window's edge.
-fn tearOff(id: dvui.Id, at: dvui.Rect.Physical) void {
-    for (&torn_list) |*slot| if (slot.* == null) {
-        slot.* = .{ .id = id, .at = at };
-        dvui.refresh(null, @src(), null);
-        return;
-    };
-}
-
 /// After the app's frame, before `dvui.Window.end`.
 pub fn afterFrame() void {
     tearFrame();
@@ -589,13 +644,7 @@ pub fn afterFrame() void {
         // which would take it out of its window's band again.
         if (r.w < 1 or r.h < 1) continue;
         if (dvui.dataGet(null, w.id, "_auto_pos", bool) orelse true) continue;
-        // Torn off: where it was let go.
-        var at = physical(r, s);
-        for (&torn_list) |*ts| if (ts.*) |*tt| if (tt.id == w.id) if (tt.at) |a| {
-            at = viewRect(a);
-            tt.at = null;
-        };
-        const vp = viewports.open(at, &w.title, .native) orelse {
+        const vp = viewports.open(physical(r, s), &w.title, .native) orelse {
             open_failed = true;
             break;
         };

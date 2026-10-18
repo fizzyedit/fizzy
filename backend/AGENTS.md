@@ -4,6 +4,12 @@ SDL3, the SDL_GPU renderer (`GpuRenderer.zig`) and the platform pieces (`platfor
 the OS's glass, OS windows for floats, menus, dialogs). A package of its own (`build.zig` says
 how an app wires it).
 
+- **Fizzy's in-app glass is here,** in `src/glass/` (its own module, `glassModule`): the frame
+  target, the frosted backdrops, the liquid glass and its program, motion. So a plain dvui app on
+  this backend can be made of the same glass as fizzy's surfaces. `core` re-exports each name
+  (`core.FrameTarget`, `core.widgets.BlurBackdrop`, …) and takes the backend's instance over the
+  same dvui (`core_module.addImports`); it depends on dvui and `glass_look` only. Its profiler
+  scopes reach `core.profile` through `glass/prof.zig`, which the profiler hands its scopes to.
 - **dvui is the caller's.** It is never pinned here; the backend compiles against the app's dvui.
 - **SDL is patched here,** not in a fork: `patches/sdl/*.patch`, applied by zig-patch. How to
   change, add or bump them is `docs/DEPENDENCIES.md` ("SDL", "Bumping"). Touching a patch or this

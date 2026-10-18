@@ -387,6 +387,22 @@ fn keepGoneBack(self: *History, gpa: Allocator) usize {
     return 0;
 }
 
+/// Keep the line to `limit` steps (0 keeps every one): past it by some slack, the oldest go, down
+/// to `limit`, in one move rather than a copy of the stack per step. Going back is a step, so the
+/// line grows by the steps gone back over each time (`keepGoneBack`); this is what bounds it, as
+/// an undo history's limit does. A step a jump went back to may go: the jump's steps keep naming
+/// it (`back_to`), and a caller reads that as an earlier step.
+pub fn trim(self: *History, gpa: Allocator, limit: usize) void {
+    if (limit == 0) return;
+    const items = self.undo_stack.items;
+    if (items.len < limit + @max(16, limit / 16)) return;
+    const drop = items.len - limit;
+    for (items[0..drop]) |*e| e.deinit(gpa);
+    std.mem.copyForwards(Entry, items[0..limit], items[drop..]);
+    self.undo_stack.shrinkRetainingCapacity(limit);
+    self.version += 1;
+}
+
 /// The `i`th step below the top of the line (0 is the top), as `lastApplied` gives the top: how
 /// a caller reads the steps `keepGoneBack` added below a commit.
 pub fn appliedBelowTop(self: *const History, i: usize) ?StepRef {
@@ -730,6 +746,25 @@ test "an edit after going back keeps what was gone back over, then its reverse" 
     try t.expectEqualStrings("abc", h.text.items);
     goTo(&h, after[5].step);
     try t.expectEqualStrings("abcz", h.text.items);
+}
+
+test "the line keeps to its limit, the oldest going first" {
+    var h: Harness = .{ .gpa = t.allocator };
+    defer h.deinit();
+    // Forty steps of their own, then trimmed to twenty: at the slack (16 past), not before.
+    for (0..40) |i| {
+        h.hist.closeGroup();
+        try h.type_(&.{@as(u8, 'a') + @as(u8, @intCast(i % 26))});
+        h.hist.trim(t.allocator, 20);
+        if (i + 1 < 36) try t.expectEqual(i + 1, h.steps());
+    }
+    try t.expect(h.steps() <= 36 and h.steps() >= 20);
+    const kept = h.steps();
+    // What is left still undoes, newest first, to the oldest kept step's start.
+    for (0..kept) |_| _ = h.undo();
+    try t.expectEqual(@as(usize, 40 - kept), h.text.items.len);
+    // No limit keeps every one.
+    h.hist.trim(t.allocator, 0);
 }
 
 test "an edit with nothing gone back over adds only itself" {

@@ -114,9 +114,27 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
  * (`fizzy_macos_window_glass_follow`). */
 @interface FizzyPlainBackdropView : NSView
 @property double radius;
+/* How much of the window's colour covers what is behind it (`fizzy_macos_window_plain_material`):
+ * 1, opaque, for no material. */
+@property double fill;
+@property double r, g, b;
 @end
 
 @implementation FizzyPlainBackdropView
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
+/* A plain dvui app's window's material under its backdrop (`fizzy_macos_window_plain_material`): the
+ * OS's frost or blur (vibrancy) or Liquid Glass, behind the window, where the backdrop is — it
+ * follows the backdrop through full screen (`fizzy_macos_window_glass_follow`). */
+@interface FizzyPlainMaterialView : NSView
+@property int kind;
+@end
+
+@implementation FizzyPlainMaterialView
 - (NSView *)hitTest:(NSPoint)point {
     (void)point;
     return nil;
@@ -225,6 +243,19 @@ void *fizzy_macos_app_window_at_pointer(void) {
 void fizzy_macos_window_bring_forward(void *nswindow) {
     NSWindow *w = (__bridge NSWindow *)nswindow;
     if (w != nil) [w orderFront:nil];
+}
+
+/* `nswindow` moved by the app under a drag another window holds (`SDLBackend.viewportHeld`): the
+ * pointer through it, so asking which of the app's windows is under the pointer finds the one
+ * below; and above the app's windows, the key one among them, which it is not made — shown not
+ * key, it opened behind the window it was dragged out of (the user). Let go, an ordinary window
+ * again, in front and key. */
+void fizzy_macos_window_held(void *nswindow, int on) {
+    NSWindow *w = (__bridge NSWindow *)nswindow;
+    if (w == nil) return;
+    [w setIgnoresMouseEvents:on != 0];
+    [w setLevel:on != 0 ? NSFloatingWindowLevel : NSNormalWindowLevel];
+    if (on == 0 && [w isVisible]) [w makeKeyAndOrderFront:nil];
 }
 
 /* The app's window in front under the pointer, or nil where another app's is
@@ -1243,6 +1274,34 @@ int fizzy_macos_window_has_liquid_glass(void *nswindow) {
  */
 /* The glass parts beside SDL's view in `window`'s frame view (`window_glass_ids`), once; 1 where they
  * are (or already were), 0 where the OS has no Liquid Glass. A titled window's and a menu's alike. */
+/* A window glass part's feather mask (`windowFeatherMask`) sized with the part as AppKit resizes
+ * it, not at the next frame's look: a mask left at the old size for a frame, anchored at the
+ * bottom, masked the frost out along the top of a window growing under a live resize, its old
+ * corner showing as a diagonal (the user). One observer for every part
+ * (`windowGlassMaskFollows`), each part's registration gone with it (`windowGlassRemove`). */
+@interface FizzyGlassMaskFollower : NSObject
+@end
+
+@implementation FizzyGlassMaskFollower
+- (void)partResized:(NSNotification *)note {
+    CALayer *layer = [(NSView *)[note object] layer];
+    CALayer *mask = [layer mask];
+    if (mask == nil || CGRectEqualToRect([mask frame], [layer bounds])) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [mask setFrame:[layer bounds]];
+    [CATransaction commit];
+}
+@end
+
+static FizzyGlassMaskFollower *g_glass_mask_follower = nil;
+
+static void windowGlassMaskFollows(NSView *part) {
+    if (g_glass_mask_follower == nil) g_glass_mask_follower = [[FizzyGlassMaskFollower alloc] init];
+    [part setPostsFrameChangedNotifications:YES];
+    [[NSNotificationCenter defaultCenter] addObserver:g_glass_mask_follower selector:@selector(partResized:) name:NSViewFrameDidChangeNotification object:part];
+}
+
 static int windowGlassInstall(NSWindow *window, long blur_material) {
     if (window == nil || !fizzy_macos_liquid_glass_available()) return 0;
     if (windowGlassPart(window, window_glass_under) != nil) return 1;
@@ -1283,9 +1342,21 @@ static int windowGlassInstall(NSWindow *window, long blur_material) {
         /* Its own layer, which keeps the feather's mask: one AppKit lends a view not asking
          * for a layer (the glass, the blur) drops the mask set on it. */
         [part setWantsLayer:YES];
+        if (k == window_glass_over || k == window_glass_fill) windowGlassMaskFollows(part);
         [frame addSubview:part positioned:NSWindowBelow relativeTo:content];
     }
     return 1;
+}
+
+/* `window`'s glass parts gone (`windowGlassInstall`): a plain dvui app's window made of another
+ * material (`fizzy_macos_window_plain_material`). */
+static void windowGlassRemove(NSWindow *window) {
+    for (int k = 0; k < window_glass_parts; k++) {
+        NSView *part = windowGlassPart(window, k);
+        if (part == nil) continue;
+        if (g_glass_mask_follower != nil) [[NSNotificationCenter defaultCenter] removeObserver:g_glass_mask_follower name:NSViewFrameDidChangeNotification object:part];
+        [part removeFromSuperview];
+    }
 }
 
 int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
@@ -1558,14 +1629,79 @@ void fizzy_macos_window_plain_backdrop(void *nswindow, double r, double g, doubl
 #endif
         }
         backdrop.radius = radius;
+        backdrop.r = r;
+        backdrop.g = g;
+        backdrop.b = b;
+        /* Opaque until it has a material (`fizzy_macos_window_plain_material`); clear on glass. */
+        if (backdrop.fill <= 0 && windowGlassPart(window, window_glass_under) == nil) backdrop.fill = 1;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
-        CGColorRef color = CGColorCreateSRGB(r, g, b, 1);
+        CGColorRef color = CGColorCreateSRGB(r, g, b, backdrop.fill);
         backdrop.layer.backgroundColor = color;
         CGColorRelease(color);
         const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         backdrop.layer.cornerRadius = full ? 0 : radius;
         backdrop.layer.masksToBounds = NO;
+        [CATransaction commit];
+        [window invalidateShadow];
+    }
+}
+
+/* A plain dvui app's window made of `kind` (`core.material`'s order: 0 none, 1 transparent, 2 blur,
+ * 3 frost, 4 liquid): its backdrop's colour `opacity` opaque over what is behind (opaque for none),
+ * and under it the OS's material — a plain blur or frost (vibrancy) — or nothing. Liquid Glass
+ * (macOS 26) is fizzy's own window glass instead (`windowGlassInstall`, `blur_material` its plain
+ * blur), over a clear backdrop: its colour is the glass's, set each frame
+ * (`fizzy_macos_window_liquid_glass_look`). After `fizzy_macos_window_plain_backdrop`; again as the
+ * material changes. */
+void fizzy_macos_window_plain_material(void *nswindow, int kind, double opacity, long blur_material) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSView *frame = [[window contentView] superview];
+        if (window == nil || frame == nil) return;
+        FizzyPlainBackdropView *backdrop = nil;
+        FizzyPlainMaterialView *mat = nil;
+        for (NSView *v in [frame subviews]) {
+            if ([v isKindOfClass:[FizzyPlainBackdropView class]]) backdrop = (FizzyPlainBackdropView *)v;
+            if ([v isKindOfClass:[FizzyPlainMaterialView class]]) mat = (FizzyPlainMaterialView *)v;
+        }
+        if (backdrop == nil) return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        const BOOL liquid = kind == 4 && windowGlassInstall(window, blur_material);
+        if (!liquid) windowGlassRemove(window);
+        backdrop.fill = liquid ? 0 : kind == 0 ? 1 : fmin(fmax(opacity, 0), 1);
+        CGColorRef color = CGColorCreateSRGB(backdrop.r, backdrop.g, backdrop.b, backdrop.fill);
+        backdrop.layer.backgroundColor = color;
+        CGColorRelease(color);
+        /* The OS's material under it, made again only as its kind changes. */
+        const BOOL wants = kind >= 2 && !liquid;
+        if (mat != nil && (!wants || mat.kind != kind)) {
+            [mat removeFromSuperview];
+            mat = nil;
+        }
+        if (wants && mat == nil) {
+            mat = [[FizzyPlainMaterialView alloc] initWithFrame:[backdrop frame]];
+            mat.kind = kind;
+            /* Sized with the window, as the backdrop is: without, a window resized kept its glass
+             * at the size it was made at (the user). */
+            [mat setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [mat setWantsLayer:YES];
+            mat.layer.masksToBounds = YES;
+            mat.layer.cornerRadius = backdrop.layer.cornerRadius;
+            NSVisualEffectView *inner = [[NSVisualEffectView alloc] initWithFrame:[mat bounds]];
+            inner.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            inner.state = NSVisualEffectStateActive;
+            /* Frost the window's own frosted material; blur the plainer one of full screen UI. */
+            inner.material = kind == 3 ? NSVisualEffectMaterialUnderWindowBackground : NSVisualEffectMaterialFullScreenUI;
+            [inner setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [mat addSubview:inner];
+            [frame addSubview:mat positioned:NSWindowBelow relativeTo:backdrop];
+#if !__has_feature(objc_arc)
+            [inner release];
+            [mat release];
+#endif
+        }
         [CATransaction commit];
         [window invalidateShadow];
     }
@@ -1650,6 +1786,12 @@ void fizzy_macos_window_glass_follow(void *nswindow) {
                  * draws no shadow or outline round a full-screen window: the backdrop draws them
                  * round itself, where the window seems to be, until it lands and the OS's are back. */
                 backdropFrame(v.layer, still, radius, window);
+                /* Its material under it, where it is and in its shape. */
+                for (NSView *m in [frame subviews]) {
+                    if (![m isKindOfClass:[FizzyPlainMaterialView class]]) continue;
+                    if (!NSEqualRects([m frame], want)) [m setFrame:want];
+                    if (m.layer.cornerRadius != radius) m.layer.cornerRadius = radius;
+                }
                 continue;
             }
             if (![v isKindOfClass:[FizzyViewportGlassView class]]) continue;

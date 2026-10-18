@@ -50,6 +50,10 @@ anchor: ?dvui.Point.Natural = null,
 /// `ViewDrag`. The popup is closed; `draw` drives the drag instead until the
 /// button comes up.
 lifted: bool = false,
+/// When the list last laid its cards out (`dvui.frameTimeNS`): a view being drawn for its picture
+/// whose card was not in view then has left the list (`Layout.captureUnplaced`). A draw that
+/// returned before the list leaves it alone.
+list_ns: i128 = 0,
 
 /// Card geometry, in points. The preview keeps the snapshot's aspect inside this box.
 const preview: dvui.Size = .{ .w = 150, .h = 100 };
@@ -77,6 +81,8 @@ pub fn close(self: *Picker, gpa: std.mem.Allocator) void {
 pub fn draw(self: *Picker, f: *Layout) void {
     if (self.lifted) return self.drawLifted(f);
     if (!self.is_open) return;
+    const prof = core.profile.begin("fizzy", "picker");
+    defer prof.end();
     const state = f.state;
     const gpa = f.gpa;
 
@@ -273,6 +279,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
     defer core.widgets.scrollShadows(scroll);
 
     var grid = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    self.list_ns = dvui.frameTimeNS();
     defer grid.deinit();
 
     var row: ?*dvui.BoxWidget = null;
@@ -525,6 +532,24 @@ const Hit = union(enum) {
     lifted: struct { tile: dvui.Rect.Physical, event_num: u16 },
 };
 
+/// Choose surface `s` (at `index` in the registry) to be drawn offscreen for its picture
+/// (`State.offscreen`, `Layout.captureUnplaced`) when none is: its card in view, as the list laid
+/// it out, and the view one that may be (`Layout.mayDrawOffscreen`). Not on the card's first
+/// frame, before it has a size: every card then packs into the top of the list. The card of the
+/// view already chosen stamps that it is still in view (`card_ns`).
+fn nextOffscreen(f: *Layout, s: *const sdk.Surface, index: usize, card_data: *dvui.WidgetData) void {
+    const state = f.state;
+    if (dvui.firstFrame(card_data.id) or card_data.borderRectScale().r.intersect(dvui.clipGet()).empty()) return;
+    const now = dvui.frameTimeNS();
+    if (state.offscreen) |*o| {
+        if (o.index == index) o.card_ns = now;
+        return;
+    }
+    if (!f.mayDrawOffscreen(s)) return;
+    state.offscreen = .{ .index = index, .id = std.hash.Wyhash.hash(0, s.id), .card_ns = now };
+    dvui.refresh(null, @src(), null);
+}
+
 /// One surface: its snapshot scaled to fit, its title, its owner, and a highlight when it is in
 /// the region. A press that moves far enough lifts the card into a drag instead of clicking.
 fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
@@ -542,6 +567,7 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
     });
     defer bw.deinit();
     const id = bw.data().id;
+    nextOffscreen(f, s, id_extra, bw.data());
     // For demo tapes (`docs/AUTOMATION.md`): the card, to lift a view out of the picker by.
     core.anchor.mark(bw.data(), "picker:{s}", .{s.id});
 

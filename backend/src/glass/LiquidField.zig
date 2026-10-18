@@ -29,7 +29,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const programs = @import("programs.zig");
 const liquid_glass = @import("liquid_glass.zig");
-const glass_look = @import("glass_look.zig");
+const glass_look = @import("glass_look");
 
 const LiquidField = @This();
 
@@ -83,6 +83,10 @@ refraction: f32 = 1,
 /// It carries text — a dialog, a menu — and takes the window's colour as the opacity has it
 /// (`glass_look.forText`).
 text: bool = false,
+/// Drawn as over an opaque window wherever it is (`publishOpaqueWindow`): glass that must be glass
+/// even where the window is see-through behind it, as a place's corner button over the explorer,
+/// which is the window's own material. Off, it is as see-through there as the window is.
+solid: bool = false,
 /// Its tint and mix are its own, kept over the look the app publishes (`publishLook`): glass that
 /// must read as part of a surface, as a place's corner at rest does its card's fill.
 surface: bool = false,
@@ -371,7 +375,7 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     const groups = self.clusters();
     var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
     // The window behind the glass, published for this frame.
-    u.backdrop[0] = if (opaqueWindow()) 1 else 0;
+    u.backdrop[0] = if (opaqueWindow() or self.solid) 1 else 0;
     // And the glass the sliders make of it this frame (`publishLook`).
     if (publishedLook()) |l| self.applyLook(&u, if (self.lens) glass_look.forLens(l) else if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
     const textures = [_]?*anyopaque{programs.handle(sharp)};

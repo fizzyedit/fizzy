@@ -42,8 +42,8 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 
 1. **render: a custom draw command (`deferRender`)** (`c703519`). A callback queued among a
    subwindow's render commands, run when they replay. The frost and liquid glass read back what
-   the windows under them drew, which only exists at that point (`core/widgets/BlurBackdrop.zig`,
-   `DropZones.zig`, `core/gfx/programs.zig`). Upstream: david-vanderson/dvui#988, open.
+   the windows under them drew, which only exists at that point (`backend/src/glass/BlurBackdrop.zig`,
+   `core/widgets/DropZones.zig`, `backend/src/glass/programs.zig`). Upstream: david-vanderson/dvui#988, open.
 2. **Texture: precision option for render targets** (`f091da0`). `CreateOptions.precision =
    .high` and `Backend.support_precise_targets`: float targets for the blur pyramid, which 8 bits
    a channel steps into contour blobs. Upstream: david-vanderson/dvui#989, open.
@@ -146,6 +146,14 @@ above rebased onto upstream `main` (`41f6703`), then:
    `FloatingWindowWidget.InitOptions.os_window`, set by `dvui.osWindow`'s floating window, passed
    to `floatingWindowOs` as `asked`. The backend's `floating_os_windows` (`.asked`, `.all`,
    `.none`) says which it shows.
+11. **render: front-to-back blocks and deferred queues** (`ca8d4f8`, `8fa9b9c`): blocks close in
+   O(1), `Window.renderSubwindow` takes a subwindow's commands, and the deferred queues are one
+   unit, replayed in one place.
+12. **floatingWindow: one shown in an OS window draws no background of its own** (`59c45df`): the
+   OS window's material shows through.
+13. **The pointer and its cursor** (`48496b7`, `186a87f`, `1b29a16`): `Window` knows the pointer's
+   kind and a lifted finger hovers nothing; `cursorSet` takes a priority, so a resize handle's
+   cursor wins, and a floating window's edges ask at normal priority.
 
 Tagged `fizzy-sdk-*` when `zig/0.17` merges to `main`, as rule 2 says.
 

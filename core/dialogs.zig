@@ -10,9 +10,9 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const rounding = @import("corners.zig");
-const liquid_glass = @import("gfx/liquid_glass.zig");
-const liquid_blob = @import("gfx/liquid_blob.zig");
-const motion = @import("motion.zig");
+const liquid_glass = @import("glass").liquid_glass;
+const liquid_blob = @import("glass").liquid_blob;
+const motion = @import("glass").motion;
 const icon_tex = @import("gfx/icon.zig");
 const builtin = @import("builtin");
 const icons = @import("icons");
@@ -292,6 +292,9 @@ pub const BubblesOptions = struct {
     /// Without the glass program, the fill it falls back to.
     tint: ?dvui.Color = null,
     mix: f32 = 1,
+    /// Glass even where the window behind it is see-through (`LiquidField.solid`): a control that
+    /// must look the same over a bare stretch of the window's material as over a card.
+    solid: bool = false,
 };
 
 /// Controls of glass over content, one look wherever they float: the demo player's transport, a
@@ -311,7 +314,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     };
     if (widgets.LiquidField.ready()) {
         if (widgets.liquidFrost()) |frost| {
-            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale, .edge = opts.edge };
+            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale, .edge = opts.edge, .solid = opts.solid };
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
                 // A capsule's edge bends round as a drop's does; a rounded box's keeps to its sides.

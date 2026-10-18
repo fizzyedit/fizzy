@@ -13,31 +13,52 @@ pub const fade_ns: i128 = 160 * std.time.ns_per_ms;
 /// When the bar was last asked for: an undo, a redo, the pointer on it.
 pub const Shown = struct {
     at_ns: ?i128 = null,
+    /// How long it takes to come in and to go: `fade_ns`, or longer for a bar that grows.
+    fade: i128 = fade_ns,
 
     /// Asked for at `now_ns`. Still coming in, it carries on; showing, it stays in and its linger
     /// starts over; gone, it comes in from nothing.
     pub fn stir(self: *Shown, now_ns: i128) void {
-        if (self.at_ns) |at| if (now_ns - at < fade_ns) return;
-        self.at_ns = if (self.openness(now_ns) > 0) now_ns - fade_ns else now_ns;
+        if (self.at_ns) |at| if (now_ns - at < self.fade) return;
+        self.at_ns = if (self.openness(now_ns) > 0) now_ns - self.fade else now_ns;
     }
 
-    /// How much of the bar shows at `now_ns`, 0 gone to 1 in: in over `fade_ns`, held, and out over
-    /// `fade_ns` once it has lingered.
+    /// How much of the bar shows at `now_ns`, 0 gone to 1 in: in over `fade`, held, and out over
+    /// `fade` once it has lingered.
     pub fn openness(self: Shown, now_ns: i128) f32 {
         const at = self.at_ns orelse return 0;
         const since = now_ns - at;
         if (since < 0) return 1;
-        if (since < fade_ns) return frac(since, fade_ns);
-        const left = linger_ns + fade_ns - since;
+        if (since < self.fade) return frac(since, self.fade);
+        const left = linger_ns + self.fade - since;
         if (left <= 0) return 0;
-        return if (left < fade_ns) frac(left, fade_ns) else 1;
+        return if (left < self.fade) frac(left, self.fade) else 1;
+    }
+
+    /// Going at `now_ns`: from as much of it as shows, out over `fade`, as if it had lingered.
+    pub fn hide(self: *Shown, now_ns: i128) void {
+        const o = self.openness(now_ns);
+        if (o <= 0) return;
+        // Where its linger would have put it: `left` of its fade still to go.
+        const left: i128 = @intFromFloat(@as(f64, o) * @as(f64, @floatFromInt(self.fade)));
+        self.at_ns = now_ns - (linger_ns + self.fade - left);
+    }
+
+    /// Going by `ns` from `now_ns` at the latest: the pointer left it, and it need not linger its
+    /// full time. Sooner already, it keeps its time.
+    pub fn soon(self: *Shown, now_ns: i128, ns: i128) void {
+        const at = self.at_ns orelse return;
+        // Still coming in: it finishes coming in and keeps its linger. Moved earlier now, it would
+        // jump to fully in, its growing cut short.
+        if (now_ns - at < self.fade) return;
+        if (at + linger_ns > now_ns + ns) self.at_ns = now_ns + ns - linger_ns;
     }
 
     /// When the bar next changes on its own (comes fully in, starts to go, is gone): what its timer
     /// waits for. Null when it is gone, so a bar not showing wakes nothing.
     pub fn nextChange(self: Shown, now_ns: i128) ?i128 {
         const at = self.at_ns orelse return null;
-        for ([_]i128{ at + fade_ns, at + linger_ns, at + linger_ns + fade_ns }) |t| if (t > now_ns) return t;
+        for ([_]i128{ at + self.fade, at + linger_ns, at + linger_ns + self.fade }) |t| if (t > now_ns) return t;
         return null;
     }
 
@@ -156,8 +177,6 @@ pub fn stopX(i: usize, x0: f32, x1: f32, n: usize) f32 {
     return x0 + (x1 - x0) * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(n));
 }
 
-// ---- tests ---------------------------------------------------------------------------------
-
 const testing = std.testing;
 const ms = std.time.ns_per_ms;
 
@@ -208,4 +227,35 @@ test "a point on the line is the nearest step" {
     try testing.expectEqual(@as(usize, 10), stopAt(140, 0, 100, 10));
     try testing.expectEqual(@as(usize, 0), stopAt(50, 0, 100, 0));
     for (0..11) |i| try testing.expectEqual(i, stopAt(stopX(i, 20, 220, 10), 20, 220, 10));
+}
+
+test "a bar told to go goes from where it is, and one left goes soon" {
+    var sh: Shown = .{};
+    sh.stir(0);
+    try testing.expectEqual(@as(f32, 1), sh.openness(fade_ns));
+    sh.hide(500 * ms);
+    try testing.expectApproxEqAbs(@as(f32, 1), sh.openness(500 * ms), 0.001);
+    try testing.expect(sh.openness(500 * ms + fade_ns / 2) < 0.6);
+    try testing.expectEqual(@as(f32, 0), sh.openness(500 * ms + fade_ns));
+    // Half in, it goes from half.
+    var half: Shown = .{};
+    half.stir(0);
+    half.hide(fade_ns / 2);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), half.openness(fade_ns / 2), 0.01);
+    // Left: it goes after `ns`, not its whole linger.
+    var left: Shown = .{};
+    left.stir(0);
+    left.soon(1000 * ms, 600 * ms);
+    try testing.expectEqual(@as(f32, 1), left.openness(1500 * ms));
+    try testing.expectEqual(@as(f32, 0), left.openness(1600 * ms + fade_ns));
+    // Left while still coming in: it finishes coming in rather than jumping to fully in.
+    var growing: Shown = .{};
+    growing.stir(0);
+    growing.soon(fade_ns / 4, 600 * ms);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), growing.openness(fade_ns / 2), 0.01);
+    // Gone sooner anyway: unchanged.
+    var near: Shown = .{};
+    near.stir(0);
+    near.soon(linger_ns - 100 * ms, 600 * ms);
+    try testing.expectEqual(@as(f32, 0), near.openness(linger_ns + fade_ns));
 }

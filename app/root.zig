@@ -46,6 +46,10 @@ pub const Tracks = @import("Tracks.zig");
 pub const HistoryTransport = @import("HistoryTransport.zig");
 pub const HistoryFrames = @import("HistoryFrames.zig");
 pub const history_transport = @import("history_transport.zig");
+/// A transport's dome: the glass on an edge its bar hides into and grows out of, its liquid how
+/// far along. The history transport and the demo's tape player share it.
+pub const dome = @import("dome.zig");
+pub const dome_rules = @import("dome_rules.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {
@@ -192,6 +196,7 @@ test {
     _ = store.Loader;
     _ = Tracks;
     _ = HistoryTransport;
+    _ = dome;
     _ = control.routes;
     _ = HistoryFrames;
 }

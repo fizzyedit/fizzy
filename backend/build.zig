@@ -95,6 +95,36 @@ pub const Options = struct {
 /// it. dvui imports it by name, and a second module over the same file in one compilation is an
 /// error.
 var backend_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+var glass_look_module: ?*std.Build.Module = null;
+
+/// What every glass is at the window's opacity (`src/glass_look.zig`), std-only: one module for the
+/// whole build, so the backend and the app's `core` that a build links together share it (a file
+/// may belong to only one module). Pass it to `core_module.addImports` for a `core` linked beside
+/// this backend.
+pub fn glassLookModule(dep: *std.Build.Dependency) *std.Build.Module {
+    if (glass_look_module) |m| return m;
+    const m = dep.builder.createModule(.{ .root_source_file = dep.builder.path("src/glass_look.zig") });
+    glass_look_module = m;
+    return m;
+}
+
+/// The glass module for each dvui (`glassModule`), for the same reason.
+var glass_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+
+/// Fizzy's in-app glass (`src/glass/root.zig`: the frame target, the frosted backdrops, the liquid
+/// glass and its program, motion) over `dvui_mod`: one per dvui, as the backend is, so the backend
+/// and the app's `core` that a build links together share it. Pass it to `core_module.addImports`
+/// for a `core` linked beside this backend.
+pub fn glassModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module) *std.Build.Module {
+    if (glass_modules.get(dvui_mod)) |m| return m;
+    const b = dep.builder;
+    const m = b.createModule(.{ .root_source_file = b.path("src/glass/root.zig") });
+    m.addImport("dvui", dvui_mod);
+    m.addImport("glass_look", glassLookModule(dep));
+    glass_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
+    return m;
+}
+
 /// The `platform` module for each backend module, for the same reason.
 var platform_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
 
@@ -136,6 +166,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
         addMacosSdk(m, opts);
         m.addCSourceFile(.{ .file = b.path("src/macos_monitor.m") });
     }
+    m.addImport("glass_look", glassLookModule(dep));
     dvui_mod.addImport("backend", m);
     backend_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
     return m;
