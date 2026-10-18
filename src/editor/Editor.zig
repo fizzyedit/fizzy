@@ -2776,6 +2776,8 @@ const DocSurface = struct {
     /// The track, and how many steps it held, when a picture was last asked for.
     frames_track: usize = 0,
     frames_steps: usize = 0,
+    /// The document has history (its grip shows): once it has, it keeps it (`drawDocSurface`).
+    has_history: bool = false,
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -3044,7 +3046,18 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         // Exported from where its track began on; while the export window is open, what it holds.
         const track = if (recorded) |tr| if (tr.steps.items.len > 0 and tr.base != null) tr else null else null;
         const summary: []const u8 = if (track != null) if (ds.transport.window) |win| exportSummary(editor, doc, win.from, win.to) else "" else "";
+        // Whether it has history, for its grip: asked of its owner each frame it has none, which
+        // costs next to nothing (an empty line), and never again once it has. A recorded step says
+        // so without asking. Its history never empties but on a reload.
+        if (!ds.has_history) {
+            if (recorded) |tr| ds.has_history = tr.steps.items.len > 0;
+            if (!ds.has_history) if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| {
+                ds.has_history = line.entries.len > 0;
+            };
+        }
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
+            .history = ds.has_history,
+            .steps = if (recorded) |tr| tr.steps.items.len else 0,
             .frames = if (recorded != null) &ds.frames else null,
             .export_from = if (track) |tr| tr.base_top else null,
             .window_summary = summary,
