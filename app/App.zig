@@ -81,6 +81,9 @@ palette_folder: []const u8,
 /// `plugin_data_lock`: a plugin may ask from a worker thread (an indexer, an LSP client).
 plugin_data_folders: std.StringHashMapUnmanaged(PluginDataFolder) = .empty,
 plugin_data_lock: std.Io.Mutex = .init,
+/// Registered plugins whose entry could not be made when they registered (out of memory), by the
+/// plugin's own id (its memory, good while it is registered): made on their next ask instead.
+plugin_data_missed: [8]?[]const u8 = @splat(null),
 
 /// Plugin registry + service locator exposed to plugins
 host: Host,
@@ -764,6 +767,15 @@ pub fn retireFolder(app: *App) void {
 pub fn releaseRetiredFolders(app: *App) void {
     for (app.folder_retired.items) |folder| app.gpa.free(folder);
     app.folder_retired.clearRetainingCapacity();
+    // Plugins unregistered last frame have run their `deinit` by now: their data folders stop
+    // being handed out (`pluginUnregistered`).
+    app.lockPluginData();
+    defer app.unlockPluginData();
+    var it = app.plugin_data_folders.valueIterator();
+    while (it.next()) |f| if (f.leaving) {
+        f.leaving = false;
+        f.registered = false;
+    };
 }
 
 pub const PluginDataFolder = struct {
@@ -772,6 +784,9 @@ pub const PluginDataFolder = struct {
     /// Its plugin is registered now. A path stays in the table after its plugin goes, since a
     /// caller may hold it, but is not handed out again until the plugin is back.
     registered: bool = true,
+    /// Its plugin was unregistered this frame. Still handed out, since its `deinit` (which runs
+    /// after) may write there; `releaseRetiredFolders`, at the next frame's top, makes it gone.
+    leaving: bool = false,
     /// When the folder was last found or made, on `std.Io.Clock.awake`: an ask within
     /// `plugin_data_recheck_ns` of it trusts it is there.
     made_at: ?i96 = null,
@@ -809,7 +824,8 @@ fn unlockPluginData(app: *App) void {
 
 /// A plugin registered (`Host.registerPlugin`, through `EditorAPI.pluginRegistered`), on the main
 /// thread: its data folder's entry is made ready here, so `pluginDataFolder`, asked from any
-/// thread, never walks the host's plugin list.
+/// thread, never walks the host's plugin list. Out of memory, it is remembered and made on the
+/// plugin's next ask.
 pub fn pluginRegistered(app: *App, id: []const u8) void {
     var buf: [64]u8 = undefined;
     const name = pluginDataKey(&buf, id) orelse return;
@@ -817,32 +833,49 @@ pub fn pluginRegistered(app: *App, id: []const u8) void {
     defer app.unlockPluginData();
     if (app.plugin_data_folders.getPtr(name)) |f| {
         f.registered = true;
+        f.leaving = false;
         return;
     }
-    const key = app.gpa.dupe(u8, name) catch return std.log.warn("plugin '{s}' data folder: out of memory", .{id});
-    const path: ?[]const u8 = if (isValidPluginId(id))
-        std.fs.path.join(app.gpa, &.{ app.config_folder, "plugin-data", name }) catch {
-            app.gpa.free(key);
-            return std.log.warn("plugin '{s}' data folder: out of memory", .{id});
-        }
-    else
-        null;
-    app.plugin_data_folders.put(app.gpa, key, .{ .path = path }) catch {
-        app.gpa.free(key);
-        if (path) |p| app.gpa.free(p);
-        std.log.warn("plugin '{s}' data folder: out of memory", .{id});
+    if (app.addPluginDataEntry(name, id) != null) return;
+    std.log.warn("plugin '{s}' data folder: out of memory; tried again on its first ask", .{id});
+    for (&app.plugin_data_missed) |*slot| if (slot.* == null) {
+        slot.* = id;
+        return;
     };
 }
 
-/// A plugin went (unloaded, disabled, uninstalled, replaced by a reload), after its `deinit`,
-/// which may still have written into its folder: the folder is not handed out until it is back.
-/// Its entry stays, since a worker may still hold the path.
-pub fn pluginGone(app: *App, id: []const u8) void {
+/// A plugin was unregistered (`Host.unregisterPlugin`, through `EditorAPI.pluginUnregistered`),
+/// before its `deinit` runs: its folder is still handed out for that, and stops being at the next
+/// frame's top (`releaseRetiredFolders`). The entry stays, since a worker may still hold the path.
+pub fn pluginUnregistered(app: *App, id: []const u8) void {
     var buf: [64]u8 = undefined;
     const name = pluginDataKey(&buf, id) orelse return;
     app.lockPluginData();
     defer app.unlockPluginData();
-    if (app.plugin_data_folders.getPtr(name)) |f| f.registered = false;
+    for (&app.plugin_data_missed) |*slot| if (slot.*) |missed| {
+        if (std.mem.eql(u8, missed, id)) slot.* = null;
+    };
+    if (app.plugin_data_folders.getPtr(name)) |f| f.leaving = true;
+}
+
+/// The entry for plugin `id` under `name` (`pluginDataKey`), made now. Null out of memory. Under
+/// `plugin_data_lock`.
+fn addPluginDataEntry(app: *App, name: []const u8, id: []const u8) ?*PluginDataFolder {
+    const key = app.gpa.dupe(u8, name) catch return null;
+    const path: ?[]const u8 = if (isValidPluginId(id))
+        std.fs.path.join(app.gpa, &.{ app.config_folder, "plugin-data", name }) catch {
+            app.gpa.free(key);
+            return null;
+        }
+    else
+        null;
+    const entry = app.plugin_data_folders.getOrPut(app.gpa, key) catch {
+        app.gpa.free(key);
+        if (path) |p| app.gpa.free(p);
+        return null;
+    };
+    entry.value_ptr.* = .{ .path = path };
+    return entry.value_ptr;
 }
 
 /// `<config>/plugin-data/<id>` for the registered plugin `id` (`Host.pluginDataFolder`), the id
@@ -866,7 +899,16 @@ pub fn pluginDataFolder(app: *App, id: []const u8) ?[]const u8 {
     const path = path: {
         app.lockPluginData();
         defer app.unlockPluginData();
-        const f = app.plugin_data_folders.getPtr(name) orelse return null;
+        const f = app.plugin_data_folders.getPtr(name) orelse missed: {
+            // Registered while memory ran out (`pluginRegistered`): made now.
+            for (&app.plugin_data_missed) |*slot| if (slot.*) |missed| {
+                if (!std.ascii.eqlIgnoreCase(missed, id)) continue;
+                const made = app.addPluginDataEntry(name, missed) orelse return null;
+                slot.* = null;
+                break :missed made;
+            };
+            return null;
+        };
         if (!f.registered) return null;
         const path = f.path orelse {
             if (!f.said) std.log.warn("plugin '{s}' has no data folder: its id is not a plain identifier (letters, digits, '-', '_')", .{id});
@@ -917,6 +959,53 @@ pub fn deinit(app: *App) void {
     app.undecided_plugin_ids.deinit(app.gpa);
     for (app.auto_update_off_ids.items) |id| app.gpa.free(id);
     app.auto_update_off_ids.deinit(app.gpa);
+}
+
+/// The id another plugin goes by that `id` is in another case: a loaded plugin's
+/// (`Host.pluginByIdIgnoringCase`), or a folder in `plugins/`. Asked before anything keyed by
+/// `id` touches the disk (a store install or update, a load): on macOS and Windows `plugins/Graphl`
+/// *is* `plugins/graphl`, so writing one would overwrite the other. Written into `buf`.
+pub fn pluginCaseClash(app: *App, buf: *[64]u8, id: []const u8) ?[]const u8 {
+    if (app.host.pluginByIdIgnoringCase(id)) |p| if (!std.mem.eql(u8, p.id, id)) {
+        const n = @min(p.id.len, buf.len);
+        @memcpy(buf[0..n], p.id[0..n]);
+        return buf[0..n];
+    };
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    const plugins_dir = std.fs.path.join(app.gpa, &.{ app.config_folder, "plugins" }) catch return null;
+    defer app.gpa.free(plugins_dir);
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return null;
+    defer dir.close(dvui.io);
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.eql(u8, entry.name, id) or !std.ascii.eqlIgnoreCase(entry.name, id)) continue;
+        const n = @min(entry.name.len, buf.len);
+        @memcpy(buf[0..n], entry.name[0..n]);
+        return buf[0..n];
+    }
+    return null;
+}
+
+/// The card for a build of `id` refused because `other`, the same id in another case, is loaded or
+/// installed (`pluginCaseClash`, `Host.registerPlugin`): logged, and shown in the store as a failure
+/// that says so. `path` is the build's, when there is one to read a version from.
+pub fn recordCaseClash(app: *App, id: []const u8, other: []const u8, path: ?[]const u8) void {
+    const why = std.fmt.allocPrint(app.arena.allocator(), "id '{s}' differs only in case from the plugin '{s}'", .{ id, other }) catch "id differs only in case from another plugin";
+    std.log.warn("plugin '{s}': {s}; not loaded", .{ id, why });
+    const probe = if (path) |p| PluginLoader.probeVersionInfo(p) else null;
+    app.clearFailedUserPlugin(id);
+    app.recordPluginFailure(id, why, null, if (probe) |info| info.plugin_version else null, if (path) |p| .of(p) else .{});
+}
+
+/// Whether two paths name one folder: the same file on the same device, so a case-insensitive
+/// filesystem's `plugins/Graphl` and `plugins/graphl` are one, and a case-sensitive one's are
+/// two. False when either cannot be read.
+pub fn sameFolder(a: []const u8, b: []const u8) bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    const sa = std.Io.Dir.cwd().statFile(dvui.io, a, .{}) catch return false;
+    const sb = std.Io.Dir.cwd().statFile(dvui.io, b, .{}) catch return false;
+    return sa.inode == sb.inode;
 }
 
 /// `<config>/plugins/<id>/<id>.<ext>` — where a user plugin's build lives. Caller frees.

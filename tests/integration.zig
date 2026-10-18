@@ -7381,9 +7381,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(want_cased, host.pluginDataFolder(&cased) orelse return error.TestUnexpectedResult);
             var lower = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "casetest", .display_name = "Case Test" };
             try std.testing.expectError(error.DuplicatePluginId, host.registerPlugin(&lower));
-            // Gone, as `unloadPlugin` says once its `deinit` has run, its path is not handed out.
+            // Unregistered, its path is still handed out for its `deinit`, which runs after; from
+            // the next frame's top it is not.
             host.unregisterPlugin(&cased);
-            editor.app.pluginGone(cased.id);
+            try std.testing.expect(host.pluginDataFolder(&cased) != null);
+            editor.app.releaseRetiredFolders();
             try std.testing.expect(host.pluginDataFolder(&cased) == null);
         }
         // An id that is not a plain identifier names no folder.
@@ -7424,9 +7426,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             const status = editor.app.pluginStatus("Text");
             try std.testing.expectEqual(sdk.services.plugins.Api.State.failed, status.state);
             try std.testing.expect(std.mem.indexOf(u8, status.why, "differs only in case") != null);
+            // Uninstalling from that card never deletes the loaded plugin's folder, which on macOS
+            // and Windows is the same folder by another name.
+            try tmp.dir.createDirPath(dvui.io, "plugins/text");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/text/keep", .data = "" });
             try editor.uninstallPlugin("Text", true);
             try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, editor.app.pluginStatus("Text").state);
             try std.testing.expect(host.pluginById("text") != null);
+            _ = try tmp.dir.statFile(dvui.io, "plugins/text/keep", .{});
+            try tmp.dir.deleteTree(dvui.io, "plugins/text");
+        }
+        // A folder already in `plugins/` in another case clashes too, before a store install
+        // writes anything.
+        {
+            try tmp.dir.createDirPath(dvui.io, "plugins/Graphl");
+            defer tmp.dir.deleteTree(dvui.io, "plugins/Graphl") catch {};
+            var clash_buf: [64]u8 = undefined;
+            try std.testing.expectEqualStrings("Graphl", editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult);
+            try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "Graphl") == null);
         }
     }
     // The app offers its plugins the `automation` service, and nothing is in flight.

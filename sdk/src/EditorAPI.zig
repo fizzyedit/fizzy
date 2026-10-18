@@ -157,9 +157,12 @@ pub const VTable = struct {
     pluginDataFolder: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
     /// A plugin registered, on the main thread (`Host.registerPlugin`): what the app keeps per
     /// plugin is made ready here, so asks from other threads never walk the host's plugin list.
-    /// Its going is the app's own to note, after the plugin's `deinit` (which may still use what
-    /// it kept). Null where the app keeps nothing per plugin.
+    /// Null where the app keeps nothing per plugin.
     pluginRegistered: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
+    /// A plugin was unregistered (`Host.unregisterPlugin`), before its `deinit` runs: what the app
+    /// keeps for it must still serve that `deinit`, and goes once it has run. Null where the app
+    /// keeps nothing per plugin.
+    pluginUnregistered: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
     /// Mark fizzy's settings dirty so the debounced autosave persists them.
     markSettingsDirty: *const fn (ctx: *anyopaque) void,
     /// A credential kept for a plugin, by key (`<plugin>.<what>`), outside `settings.zon` —

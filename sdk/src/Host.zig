@@ -979,6 +979,7 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
 /// this *before* `dlclose`, so that the active-selection ids (which may point into that
 /// image) are compared and reset while the memory is still mapped.
 pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
+    if (self.fizzy_api) |a| if (a.vtable.pluginUnregistered) |gone| gone(a.ctx, plugin.id);
     for (self.surfaces.items) |s| if (s.owner == plugin) self.dropSurfaceTitle(s.id);
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
@@ -2773,6 +2774,7 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
     // Only the one vtable member `pluginForExtension` reaches; the rest stay unreachable here.
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
+    api_vt.pluginUnregistered = null;
     api_vt.extensionOwnerOverride = Fake.extensionOwnerOverride;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
@@ -3164,6 +3166,7 @@ test "a claim on a document holds an override of its owner's command too" {
     S.owner = &pixi;
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
+    api_vt.pluginUnregistered = null;
     api_vt.activeDoc = S.active;
     api_vt.refresh = S.refresh;
     var ctx: u8 = 0;
@@ -3472,6 +3475,7 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
     // ...and something required has the app ask for it.
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
+    api_vt.pluginUnregistered = null;
     api_vt.askCommandArguments = S.ask;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
