@@ -143,6 +143,12 @@ plugin_reloads: @import("PluginReloads.zig") = .{},
 black_box: @import("app").automation.BlackBox = .{},
 /// `fizzy.screen` calls waiting for their snapshot (`answerLaterCommands`).
 later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, frames: u32 = 0 }) = .empty,
+/// Until when someone is watching the screen (`fizzy.screen`): every frame is taken until then
+/// (`Snapshot.keepTaking`), so the next asking is answered at once.
+screen_watched_until_ns: i96 = 0,
+/// `host.command_runs` as this frame's requests began to be answered: a command run since has not
+/// been drawn yet, so the frame last drawn no longer shows what is on screen (`fizzy.screen`).
+command_runs_at_requests: u64 = 0,
 /// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
 later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
 /// The control server would not start (`syncControlServer`): not retried until the setting goes
@@ -4223,6 +4229,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // What was announced since last frame first, so a plugin's frame sees what it heard.
         editor.app.host.deliverEvents();
         // Requests from the control server, so the frame that follows sees what they ran.
+        editor.command_runs_at_requests = editor.app.host.command_runs;
         if (comptime builtin.target.cpu.arch != .wasm32) {
             if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_state, &editor.app.host);
         }
@@ -5384,10 +5391,14 @@ pub const Placement = struct {
 };
 
 /// Answer fizzy's own commands that answer a frame or more later (`fizzy.screen`, `fizzy.settled`),
-/// once what they wait for has come; drop those nobody waits for any more. Once a frame.
-fn answerLaterCommands(editor: *Editor) void {
+/// once what they wait for has come; drop those nobody waits for any more. At a frame's start, and
+/// again at its end, once its snapshot is written (`Entry`).
+pub fn answerLaterCommands(editor: *Editor) void {
     const host = &editor.app.host;
     const api = editor.demo.service.api;
+    // Nobody has asked what is on screen for a while: stop taking every frame.
+    if (editor.demo.snapshot.continuous and std.Io.Clock.awake.now(dvui.io).nanoseconds > editor.screen_watched_until_ns)
+        editor.demo.snapshot.keepTaking(false);
     var i: usize = 0;
     while (i < editor.later_screens.items.len) {
         const w = &editor.later_screens.items[i];

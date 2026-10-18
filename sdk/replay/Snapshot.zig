@@ -52,6 +52,11 @@ frame: ?u64 = null,
 /// How many have been taken; the last one's text is `text`.
 taken: u32 = 0,
 text: std.ArrayListUnmanaged(u8) = .empty,
+/// Taking every frame (`keepTaking`): each frame's end arms the next one's capture, asking for no
+/// frame of its own, so `latest` is always the frame last drawn.
+continuous: bool = false,
+/// The last frame drawn was taken: `text` is what is on screen until the next is drawn.
+current: bool = false,
 
 pub fn init(gpa: std.mem.Allocator) Snapshot {
     return .{ .gpa = gpa };
@@ -72,9 +77,34 @@ pub fn request(self: *Snapshot) u32 {
     return self.taken + 1;
 }
 
+/// Take every frame from the next one on, or stop. While on, `latest` answers at once with the
+/// frame last drawn, for a caller looking often (an agent watching what it does), at the cost of
+/// a capture per frame drawn: none while the app draws nothing. Asks for no frame: the next one
+/// drawn, for whatever reason, is the first taken.
+pub fn keepTaking(self: *Snapshot, on: bool) void {
+    if (on == self.continuous) return;
+    self.continuous = on;
+    if (!on) {
+        self.current = false;
+        return;
+    }
+    if (!self.pending) {
+        self.pending = true;
+        dvui.debug.captureFrame();
+    }
+}
+
+/// What is on screen, at once: the frame last drawn, while every frame is taken (`keepTaking`) and
+/// it was. Null otherwise. Valid until the next snapshot is taken.
+pub fn latest(self: *const Snapshot) ?[]const u8 {
+    return if (self.continuous and self.current) self.text.items else null;
+}
+
 /// At the start of the app's frame, before anything draws: in the frame being captured, every
 /// widget that marks itself is named, and a dialog captures itself (`scopeBegin`).
 pub fn beginFrame(self: *Snapshot) void {
+    // A frame drawn without being taken: once drawn, `text` is no longer what is on screen.
+    if (self.continuous and !dvui.debug.capturing) self.current = false;
     if (!self.pending or self.frame != null or !dvui.debug.capturing) return;
     const f = dvui.debug.lastCapture() orelse return;
     self.frame = f.index;
@@ -88,7 +118,16 @@ pub fn endFrame(self: *Snapshot) void {
     const first = self.frame orelse return;
     self.frame = null;
     self.pending = false;
-    defer dvui.debug.clearCaptures(dvui.currentWindow().gpa);
+    defer {
+        dvui.debug.clearCaptures(dvui.currentWindow().gpa);
+        // The next frame's capture, armed without asking for it: taken whenever it is drawn.
+        if (self.continuous) {
+            self.pending = true;
+            dvui.debug.captureFrame();
+        }
+    }
+    // Until written below, the frame on screen is not the one in `text`.
+    self.current = false;
 
     var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
     defer arena_state.deinit();
@@ -102,6 +141,7 @@ pub fn endFrame(self: *Snapshot) void {
     write(nodes, &out.writer) catch |err| dvui.log.warn("snapshot: could not write: {t}", .{err});
     self.text = out.toArrayList();
     self.taken += 1;
+    self.current = self.continuous;
 }
 
 /// The nodes of the frame whose capture is `first`: its build phase's widgets, then each dialog's,
@@ -497,4 +537,37 @@ test "a snapshot has the dialogs dvui shows after its capture, and says which wi
     try std.testing.expectEqual(@as(usize, 0), dvui.debug.capturedFrameCount());
     // Taken, nothing more is captured: a dialog drawn in a frame nobody asked for is free.
     try std.testing.expect(!taking());
+}
+
+test "taken every frame, the latest is the frame last drawn, at once, until it stops" {
+    var t = try dvui.testing.init(.{});
+    defer t.deinit();
+    test_snapshot = .init(std.testing.allocator);
+    defer test_snapshot.deinit();
+    try dvui.testing.settle(testFrame);
+
+    // Not yet: nothing is taken until a frame is drawn with the capture armed.
+    test_snapshot.keepTaking(true);
+    try std.testing.expect(test_snapshot.latest() == null);
+    // As with `request`, one step arms it and the next is captured.
+    for (0..3) |_| {
+        if (test_snapshot.latest() != null) break;
+        _ = try dvui.testing.step(testFrame);
+    }
+    const first = test_snapshot.latest() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, first, "Save") != null);
+    // Each frame drawn after is taken too, without asking.
+    const taken = test_snapshot.taken;
+    _ = try dvui.testing.step(testFrame);
+    _ = try dvui.testing.step(testFrame);
+    try std.testing.expectEqual(taken + 2, test_snapshot.taken);
+    try std.testing.expect(test_snapshot.latest() != null);
+
+    // Stopped: no answer at once, and the one capture still armed is let go once written.
+    test_snapshot.keepTaking(false);
+    try std.testing.expect(test_snapshot.latest() == null);
+    _ = try dvui.testing.step(testFrame);
+    _ = try dvui.testing.step(testFrame);
+    try std.testing.expectEqual(@as(usize, 0), dvui.debug.capturedFrameCount());
+    try std.testing.expect(test_snapshot.latest() == null);
 }

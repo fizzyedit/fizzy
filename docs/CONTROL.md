@@ -84,6 +84,11 @@ curl --unix-socket "$SOCK" localhost/commands/fizzy.settled -d '{"timeout_ms":50
 curl --unix-socket "$SOCK" localhost/commands/fizzy.screen                           # what is on screen: windows, widgets, rects
 ```
 
+Asked for often, `fizzy.screen` answers at once from the frame last drawn: once asked, every frame
+fizzy draws is taken until two seconds pass without asking, which adds about 0.04 ms to a frame
+in ReleaseFast (more in Debug, whose allocator makes the capture dear). The first asking, and one right behind a command in the same frame, wait for
+the next frame instead.
+
 ## Events
 
 `GET /events` streams every event on the app's bus: fizzy's `fizzy.document.*` (opened, changed,

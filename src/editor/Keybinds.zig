@@ -655,10 +655,21 @@ fn cmdCaptureWith(state: *anyopaque, args: CaptureArgs.Args, call: *sdk.Command.
 const ScreenArgs = sdk.Command.Params(struct {});
 
 /// What is on screen, as ZON (`automation` service `snapshot`): each window, then each widget's
-/// role, name, tag, rect and parent. Taken over the next frame, so answered then
-/// (`Editor.answerLaterCommands`).
+/// role, name, tag, rect and parent. Asked for often, every frame is taken (`Snapshot.keepTaking`)
+/// until two seconds pass without asking, and the answer is the frame last drawn, at once.
+/// Otherwise it is taken over the next frame, and answered then (`Editor.answerLaterCommands`).
 fn cmdScreen(state: *anyopaque, _: ScreenArgs.Args, call: *sdk.Command.Call) anyerror!void {
     const editor = editorFromState(state);
+    const snapshot = &editor.demo.snapshot;
+    editor.screen_watched_until_ns = std.Io.Clock.awake.now(dvui.io).nanoseconds + 2 * std.time.ns_per_s;
+    snapshot.keepTaking(true);
+    // The frame last drawn, unless a command ran this frame before this one (this one is counted):
+    // what that did is not drawn yet, so the next frame is taken instead.
+    const undrawn = editor.app.host.command_runs > editor.command_runs_at_requests + 1;
+    if (!undrawn) if (snapshot.latest()) |text| {
+        call.result = try call.arena.dupe(u8, text);
+        return;
+    };
     try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot() });
 }
 
