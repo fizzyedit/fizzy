@@ -22,7 +22,7 @@ struct main0_in
 fragment main0_out main0(main0_in in [[stage_in]], constant type_Uniforms& Uniforms [[buffer(0)]], texture2d<float> Frost [[texture(0)]], texture2d<float> Sharp [[texture(1)]], sampler FrostSampler [[sampler(0)]], sampler SharpSampler [[sampler(1)]])
 {
     main0_out out = {};
-    float4 _803;
+    float4 _829;
     do
     {
         int _94 = int((in.in_var_COLOR.y * 255.0) + 0.5);
@@ -374,7 +374,7 @@ fragment main0_out main0(main0_in in [[stage_in]], constant type_Uniforms& Unifo
         }
         if (in.in_var_COLOR.x < 0.5)
         {
-            _803 = float4(0.0, 0.0, 0.0, _446);
+            _829 = float4(0.0, 0.0, 0.0, _446);
             break;
         }
         float4 _457 = mix(_404, _403, float4(_423));
@@ -470,146 +470,173 @@ fragment main0_out main0(main0_in in [[stage_in]], constant type_Uniforms& Unifo
             _591 = _521;
             _592 = _511;
         }
-        float _600;
-        if (Uniforms.uData[6].x > 0.5)
+        bool _594 = Uniforms.uData[4].x > 1.5;
+        float _607;
+        if (_594)
         {
-            _600 = 1.0;
+            _607 = Uniforms.uData[3].w;
         }
         else
         {
-            _600 = _592.w;
-        }
-        float4 _609 = float4(_592.xyz / float3(precise::max(_592.w, 9.9999997473787516355514526367188e-05)), 1.0);
-        float4 _618 = float4(_591.xyz / float3(precise::max(_591.w, 9.9999997473787516355514526367188e-05)), 1.0);
-        bool _620 = Uniforms.uData[4].z > 0.5;
-        float _625;
-        if (_620)
-        {
-            _625 = Uniforms.uData[4].x;
-        }
-        else
-        {
-            _625 = 0.0;
-        }
-        float _634;
-        if (_115)
-        {
-            _634 = _625 * (1.0 - ((_505 * _505) * (1.0 - smoothstep(0.800000011920928955078125, 1.0, _625))));
-        }
-        else
-        {
-            _634 = _625;
-        }
-        float _637 = 1.0 - _634;
-        float _645;
-        if (_115)
-        {
-            _645 = _505;
-        }
-        else
-        {
-            _645 = _465 * _465;
-        }
-        float _648 = fast::clamp(((Uniforms.uData[2].y * _471) * _645) * _637, 0.0, 1.0);
-        float4 _654 = ((_618 * _648) + ((mix(_618, _609, float4(fast::clamp(_457.x, 0.0, 1.0))) * _637) * (1.0 - _648))) + (Uniforms.uData[3] * _634);
-        float _659 = dot(_459, float2(-0.707106769084930419921875));
-        float _660 = precise::max(_659, 0.0);
-        float _662 = precise::max(-_659, 0.0);
-        float _665 = abs(_659);
-        bool _670;
-        if (_115)
-        {
-            _670 = Uniforms.uData[6].z > 0.0;
-        }
-        else
-        {
-            _670 = false;
-        }
-        float _690;
-        if (_670)
-        {
-            _690 = (Uniforms.uData[6].z * (1.0 - smoothstep(0.20000000298023223876953125, 0.699999988079071044921875, _665))) * exp((-precise::max(0.0, -_427)) / (Uniforms.uData[2].z * 2.5));
-        }
-        else
-        {
-            _690 = 0.85000002384185791015625 * (1.0 - smoothstep(0.0, Uniforms.uData[2].z * 0.625, -_427));
-        }
-        float _700;
-        if (_115)
-        {
-            _700 = precise::max((Uniforms.uData[5].w * _505) * _505, _690) * precise::min(_471, 1.0);
-        }
-        else
-        {
-            _700 = 0.0;
-        }
-        float _703 = _600 * (1.0 - _700);
-        float4 _709 = float4((_654 + (_609 * (1.0 - _654.w))).xyz * _703, _703 + _700);
-        float _728;
-        if (_115)
-        {
-            float _719;
-            if (_670)
+            float _606;
+            if (Uniforms.uData[6].x > 0.5)
             {
-                _719 = Uniforms.uData[6].z * smoothstep(0.75, 1.0, _665);
+                _606 = 1.0;
             }
             else
             {
-                _719 = 0.25;
+                _606 = _592.w;
             }
-            _728 = _719;
+            _607 = _606;
+        }
+        float4 _616 = float4(_592.xyz / float3(precise::max(_592.w, 9.9999997473787516355514526367188e-05)), 1.0);
+        float4 _625 = float4(_591.xyz / float3(precise::max(_591.w, 9.9999997473787516355514526367188e-05)), 1.0);
+        float _632;
+        if (_594)
+        {
+            _632 = 1.0;
         }
         else
         {
-            _728 = (0.449999988079071044921875 * ((_660 * sqrt(_660)) + ((0.75 * _662) * sqrt(_662)))) + 0.0599999986588954925537109375;
+            _632 = (Uniforms.uData[4].z > 0.5) ? Uniforms.uData[4].x : 0.0;
         }
-        float _755;
-        if (_670)
+        bool _636;
+        if (_115)
         {
-            _755 = exp((-precise::max(0.0, -_427)) / (Uniforms.uData[2].z * 1.25));
+            _636 = !_594;
         }
         else
         {
-            float _754;
+            _636 = false;
+        }
+        float _645;
+        if (_636)
+        {
+            _645 = _632 * (1.0 - ((_505 * _505) * (1.0 - smoothstep(0.800000011920928955078125, 1.0, _632))));
+        }
+        else
+        {
+            _645 = _632;
+        }
+        float _648 = 1.0 - _645;
+        float _656;
+        if (_115)
+        {
+            _656 = _505;
+        }
+        else
+        {
+            _656 = _465 * _465;
+        }
+        float _659 = fast::clamp(((Uniforms.uData[2].y * _471) * _656) * _648, 0.0, 1.0);
+        float4 _665 = ((_625 * _659) + ((mix(_625, _616, float4(fast::clamp(_457.x, 0.0, 1.0))) * _648) * (1.0 - _659))) + (Uniforms.uData[3] * _645);
+        float4 _682;
+        if (_594)
+        {
+            _682 = float4(Uniforms.uData[3].xyz / float3(precise::max(Uniforms.uData[3].w, 9.9999997473787516355514526367188e-05)), 1.0);
+        }
+        else
+        {
+            _682 = _665 + (_616 * (1.0 - _665.w));
+        }
+        float _683 = dot(_459, float2(-0.707106769084930419921875));
+        float _684 = precise::max(_683, 0.0);
+        float _686 = precise::max(-_683, 0.0);
+        float _689 = abs(_683);
+        bool _694;
+        if (_115)
+        {
+            _694 = Uniforms.uData[6].z > 0.0;
+        }
+        else
+        {
+            _694 = false;
+        }
+        float _714;
+        if (_694)
+        {
+            _714 = (Uniforms.uData[6].z * (1.0 - smoothstep(0.20000000298023223876953125, 0.699999988079071044921875, _689))) * exp((-precise::max(0.0, -_427)) / (Uniforms.uData[2].z * 2.5));
+        }
+        else
+        {
+            _714 = 0.85000002384185791015625 * (1.0 - smoothstep(0.0, Uniforms.uData[2].z * 0.625, -_427));
+        }
+        float _724;
+        if (_115)
+        {
+            _724 = precise::max((Uniforms.uData[5].w * _505) * _505, _714) * precise::min(_471, 1.0);
+        }
+        else
+        {
+            _724 = 0.0;
+        }
+        float _727 = _607 * (1.0 - _724);
+        float4 _733 = float4(_682.xyz * _727, _727 + _724);
+        float _752;
+        if (_115)
+        {
+            float _743;
+            if (_694)
+            {
+                _743 = Uniforms.uData[6].z * smoothstep(0.75, 1.0, _689);
+            }
+            else
+            {
+                _743 = 0.25;
+            }
+            _752 = _743;
+        }
+        else
+        {
+            _752 = (0.449999988079071044921875 * ((_684 * sqrt(_684)) + ((0.75 * _686) * sqrt(_686)))) + 0.0599999986588954925537109375;
+        }
+        float _779;
+        if (_694)
+        {
+            _779 = exp((-precise::max(0.0, -_427)) / (Uniforms.uData[2].z * 1.25));
+        }
+        else
+        {
+            float _778;
             if (_115)
             {
-                float _742 = -_427;
-                _754 = smoothstep(Uniforms.uData[2].z * 0.3125, Uniforms.uData[2].z * 0.625, _742) * (1.0 - smoothstep(Uniforms.uData[2].z * 1.5, Uniforms.uData[2].z * 2.0, _742));
+                float _766 = -_427;
+                _778 = smoothstep(Uniforms.uData[2].z * 0.3125, Uniforms.uData[2].z * 0.625, _766) * (1.0 - smoothstep(Uniforms.uData[2].z * 1.5, Uniforms.uData[2].z * 2.0, _766));
             }
             else
             {
-                _754 = exp((-precise::max(0.0, -_427)) / Uniforms.uData[2].z);
+                _778 = exp((-precise::max(0.0, -_427)) / Uniforms.uData[2].z);
             }
-            _755 = _754;
+            _779 = _778;
         }
-        float _762;
+        float _786;
         if (_115)
         {
-            _762 = 0.0;
+            _786 = 0.0;
         }
         else
         {
-            _762 = (0.039999999105930328369140625 * exp(_462 / Uniforms.uData[1].w)) * _660;
+            _786 = (0.039999999105930328369140625 * exp(_462 / Uniforms.uData[1].w)) * _684;
         }
-        float _768;
-        if (_620)
+        float _794;
+        if (Uniforms.uData[4].z > 0.5)
         {
-            _768 = Uniforms.uData[4].y;
+            _794 = Uniforms.uData[4].y;
         }
         else
         {
-            _768 = 0.0;
+            _794 = 0.0;
         }
-        float3 _778 = _709.xyz + float3(fast::clamp((_768 + _457.z) + ((_471 * Uniforms.uData[2].w) * ((_755 * _728) + _762)), 0.0, 1.0));
-        float4 _780 = fast::clamp(float4(_778.x, _778.y, _778.z, _709.w), float4(0.0), float4(1.0));
-        float _787 = precise::max(_780.w, precise::max(_780.x, precise::max(_780.y, _780.z)));
-        float4 _788 = _780;
-        _788.w = _787;
-        float3 _799 = _788.xyz + float3(((fract(52.98291778564453125 * fract(dot(in.in_var_TEXCOORD0, float2(0.067110560834407806396484375, 0.005837149918079376220703125)))) - 0.5) * Uniforms.uData[5].x) * _787);
-        _803 = fast::clamp(float4(_799.x, _799.y, _799.z, _788.w), float4(0.0), float4(1.0)) * _446;
+        float3 _804 = _733.xyz + float3(fast::clamp((_794 + _457.z) + ((_471 * Uniforms.uData[2].w) * ((_779 * _752) + _786)), 0.0, 1.0));
+        float4 _806 = fast::clamp(float4(_804.x, _804.y, _804.z, _733.w), float4(0.0), float4(1.0));
+        float _813 = precise::max(_806.w, precise::max(_806.x, precise::max(_806.y, _806.z)));
+        float4 _814 = _806;
+        _814.w = _813;
+        float3 _825 = _814.xyz + float3(((fract(52.98291778564453125 * fract(dot(in.in_var_TEXCOORD0, float2(0.067110560834407806396484375, 0.005837149918079376220703125)))) - 0.5) * Uniforms.uData[5].x) * _813);
+        _829 = fast::clamp(float4(_825.x, _825.y, _825.z, _814.w), float4(0.0), float4(1.0)) * _446;
         break;
     } while(false);
-    out.out_var_SV_Target0 = _803;
+    out.out_var_SV_Target0 = _829;
     return out;
 }
 
