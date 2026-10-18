@@ -419,13 +419,12 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
         if (tape_version < 3) return error.Corrupt;
         const len = try pre.int(u32);
         if (len > max_inflated) return error.Corrupt;
-        var in_buffer: [4096]u8 = undefined;
-        var in: Endless = .init(bytes[prefix_size + 4 ..], &in_buffer);
+        var in: std.Io.Reader = .fixed(bytes[prefix_size + 4 ..]);
         const window = try gpa.alloc(u8, flate.max_window_len);
         defer gpa.free(window);
-        var d: flate.Decompress = .init(&in.reader, .zlib, window);
+        var d: flate.Decompress = .init(&in, .zlib, window);
         // One byte more than it should come to, so a stream that runs on is caught; a stream cut
-        // short runs on into the zeros, or stops early, or fails its checksum.
+        // short fails to read, or stops early, or fails its checksum.
         const inflated = d.reader.allocRemaining(a, .limited(@as(usize, len) + 1)) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.ReadFailed, error.StreamTooLong => error.Corrupt,
@@ -567,32 +566,6 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
     try tape.validate(check);
     return .{ .arena = arena, .tape = tape };
 }
-
-/// A deflated stream's bytes, then zeros without end. std's inflate (0.16) misreads a stream that
-/// ends inside its last four bytes (`tossBitsShort` adds the bits it has used where it should take
-/// them away) and asserts past the end of its input — a crash on a tape cut short. Never letting
-/// its input end keeps it off that path; the inflated length, known from the header, bounds what a
-/// stream cut short can run on into. ZIG017: fixed in 0.17's inflate, so this goes with the move;
-/// 0.17 still leaves the checksum unchecked, so `read`'s Adler-32 check stays.
-const Endless = struct {
-    rest: []const u8,
-    reader: std.Io.Reader,
-
-    fn init(bytes: []const u8, buffer: []u8) Endless {
-        return .{ .rest = bytes, .reader = .{ .vtable = &.{ .stream = stream }, .buffer = buffer, .seek = 0, .end = 0 } };
-    }
-
-    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
-        const self: *Endless = @alignCast(@fieldParentPtr("reader", r));
-        const dest = limit.slice(try w.writableSliceGreedy(1));
-        const n = @min(dest.len, self.rest.len);
-        @memcpy(dest[0..n], self.rest[0..n]);
-        @memset(dest[n..], 0);
-        self.rest = self.rest[n..];
-        w.advance(dest.len);
-        return dest.len;
-    }
-};
 
 /// `n` records of `size` bytes, or `error.Corrupt` when that is more than a tape could hold.
 fn sizeOf(n: usize, size: usize) ReadError!usize {

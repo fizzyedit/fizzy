@@ -30,7 +30,7 @@ By default, when you install fizzy, only builtin plugins are included. This give
 
 ## Compilation
 - [Linux] Ensure `gtk+3-devel` or similar is installed (for native file dialogs).
-- Install zig 0.16.0.
+- Install zig 0.17.0.
 - Clone fizzy.
 - Build.
     - ```git clone https://github.com/fizzyedit/fizzy.git```
