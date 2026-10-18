@@ -3827,3 +3827,17 @@ test "later answers: nested calls keep their own tickets, an early answer is the
     host.finishCall(fixture.inner_ticket, .{ .ok = null });
     try testing.expectEqual(@as(u32, 0), unheard.count);
 }
+
+test "historyGoToWhy answers the owner's reason by name, and nothing when it went" {
+    const S = struct {
+        fn goTo(_: *anyopaque, _: DocHandle, id: u64) anyerror!void {
+            if (id == 7) return error.PersonBusy;
+        }
+    };
+    const vtable = Plugin.VTable{ .historyGoTo = S.goTo };
+    var state: u8 = 0;
+    var plugin = Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    const doc: DocHandle = .{ .ptr = &state, .owner = &plugin, .id = 1 };
+    try testing.expectEqualStrings("PersonBusy", plugin.historyGoToWhy(doc, 7).?);
+    try testing.expect(plugin.historyGoToWhy(doc, 3) == null);
+}

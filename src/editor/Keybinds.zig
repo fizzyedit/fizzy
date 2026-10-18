@@ -472,7 +472,11 @@ fn historyStepWith(editor: *Editor, args: HistoryStep.Args, call: *sdk.Command.C
         "step {d} is not the one to {s}: that is step {d}, {s}, by {s}. The document changed since; fix it forward",
         .{ args.expect, @tagName(action), t.step.id, t.step.title, by },
     );
-    if (!doc.owner.historyGoTo(doc, t.to)) return call.fail("{s} could not {s} step {d}", .{ doc.owner.id, @tagName(action), t.step.id });
+    if (doc.owner.historyGoToWhy(doc, t.to)) |why| {
+        if (std.mem.eql(u8, why, "PersonBusy"))
+            return call.fail("the person is drawing in {s}; try again when they stop", .{doc.owner.documentPath(doc)});
+        return call.fail("{s} could not {s} step {d}: {s}", .{ doc.owner.id, @tagName(action), t.step.id, why });
+    }
     try call.returns(.{ .step = t.step.id, .title = t.step.title, .by = by });
 }
 /// Set while `tick` is running a command because of a live key event. That event is never
