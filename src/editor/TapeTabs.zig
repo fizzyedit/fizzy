@@ -39,6 +39,9 @@ const Waiting = struct {
     bytes: []u8,
     /// The plugins its documents belong to, owned.
     owners: [][]u8,
+    /// Which of `owners` the store has been asked to load (on the web): asked once, so a build
+    /// that fails is not fetched again every look.
+    asked: []bool,
     /// The frame it was first looked at; null before.
     since_ns: ?i128,
     /// Played with nothing else in view (a page that is only the tape, `?tape=`).
@@ -48,6 +51,7 @@ const Waiting = struct {
         gpa.free(self.bytes);
         for (self.owners) |o| gpa.free(o);
         gpa.free(self.owners);
+        gpa.free(self.asked);
     }
 };
 
@@ -150,8 +154,14 @@ pub fn openWhenReady(self: *TapeTabs, editor: *Editor, bytes: []const u8, alone:
         } else try owners.append(gpa, try gpa.dupe(u8, f.owner));
     };
     if (self.waiting) |w| w.deinit(gpa);
+    self.waiting = null;
+    const asked = try gpa.alloc(bool, owners.items.len);
+    errdefer gpa.free(asked);
+    @memset(asked, false);
+    const copy = try gpa.dupe(u8, bytes);
+    errdefer gpa.free(copy);
     // Looked at from the next frame's top (`tick`): the page can call this between frames.
-    self.waiting = .{ .bytes = try gpa.dupe(u8, bytes), .owners = try owners.toOwnedSlice(gpa), .since_ns = null, .alone = alone };
+    self.waiting = .{ .bytes = copy, .owners = try owners.toOwnedSlice(gpa), .asked = asked, .since_ns = null, .alone = alone };
     editor.app.host.refresh();
 }
 
@@ -165,19 +175,25 @@ fn wait(self: *TapeTabs, editor: *Editor) void {
     };
     const gpa = editor.app.gpa;
     var missing: ?[]const u8 = null;
-    for (w.owners) |o| {
+    // A plugin asked for whose load has ended without it: it failed, and will not come.
+    var failed = false;
+    for (w.owners, w.asked) |o, *asked| {
         if (editor.app.host.pluginById(o) != null) continue;
         missing = o;
         if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+            if (asked.*) {
+                if (!app.store.Store.isInstalling(o)) failed = true;
+                continue;
+            }
             // The catalog first, on a page that has not opened the store; then the plugin, for
             // this visit: playing a tape installs nothing.
             app.store.Store.wantCatalog();
-            app.store.Store.loadForVisit(o);
+            asked.* = app.store.Store.loadForVisit(o);
         }
     }
     if (missing) |o| {
         const native = comptime @import("builtin").target.cpu.arch != .wasm32;
-        if (native or dvui.frameTimeNS() - since > wait_limit_ns) {
+        if (native or failed or dvui.frameTimeNS() - since > wait_limit_ns) {
             dvui.log.warn("tape: it needs the plugin '{s}', which is not loaded", .{o});
             dvui.toast(@src(), .{ .message = std.fmt.allocPrint(dvui.currentWindow().arena(), "This tape needs the {s} plugin", .{o}) catch "This tape needs a plugin that is not loaded" });
             w.deinit(gpa);

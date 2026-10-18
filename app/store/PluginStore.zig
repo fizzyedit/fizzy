@@ -213,22 +213,24 @@ pub fn wantCatalog() void {
 /// Load `id`'s release for this visit only, on the web (`PluginManager.loadFromUrl`): not an
 /// install, so not remembered or asked about. For a page that plays a shared tape whose
 /// documents need it. No-op without a compatible release in the catalog (`wantCatalog`), while
-/// one is loading, or natively.
-pub fn loadForVisit(id: []const u8) void {
-    if (comptime builtin.target.cpu.arch != .wasm32) return;
-    if (web_in_flight.contains(id)) return;
-    const c = &(catalog orelse return);
+/// one is loading, or natively. Whether the load started: false while there is nothing yet to
+/// start it from (the catalog still fetching), so the caller asks again.
+pub fn loadForVisit(id: []const u8) bool {
+    if (comptime builtin.target.cpu.arch != .wasm32) return false;
+    if (web_in_flight.contains(id)) return true;
+    const c = &(catalog orelse return false);
     const snap = c.acquire();
     defer c.release();
-    const s = snap orelse return;
-    const rel = s.shard.releaseFor(id) orelse return;
-    const dl = rel.downloadFor(compat.hostKey()) orelse return;
-    if (!releaseSdkSatisfied(rel)) return;
+    const s = snap orelse return false;
+    const rel = s.shard.releaseFor(id) orelse return false;
+    const dl = rel.downloadFor(compat.hostKey()) orelse return false;
+    if (!releaseSdkSatisfied(rel)) return false;
     markWebInFlight(id);
     app.loadFromUrl(id, dl.url, dl.sha256) catch |err| {
         clearWebInFlight(id);
         reportError("could not load '{s}': {s}", .{ id, @errorName(err) });
     };
+    return true;
 }
 
 /// Start a download+install for `id`. No-op when there is no compatible release, or on wasm.
