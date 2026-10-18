@@ -854,7 +854,7 @@
       // what only a page can be: where input lands (sent on as dvui would have queued it), and
       // where the worker's cursor, on-screen keyboard, links, downloads, file pickers,
       // clipboard, full screen and OAuth popups happen.
-      function startWorker(wasmUrl) {
+      function startWorker(wasmUrl, wasmModule) {
         const canvas = dvuiCanvas;
         const worker = new Worker("fizzy-worker.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", { type: "module" });
         const post = (msg, transfer) => worker.postMessage(msg, transfer || []);
@@ -909,10 +909,12 @@
 
         let boundKeys = new Set();
         const offscreen = canvas.transferControlToOffscreen();
-        post({
+        // The init waits for the early compile (`wasmModule`), which by now has usually finished.
+        Promise.resolve(wasmModule).then((module) => post({
           type: "init",
           canvas: offscreen,
           wasmUrl: new URL(wasmUrl, document.baseURI).href,
+          wasmModule: module || null,
           webJsUrl: new URL("web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", document.baseURI).href,
           size: size(),
           prefs: prefs(),
@@ -921,7 +923,7 @@
           buildStorageName,
           search: location.search,
           baseURI: document.baseURI,
-        }, [offscreen]);
+        }, [offscreen]));
 
         new ResizeObserver(() => post({ type: "size", size: size() })).observe(canvas);
         window.addEventListener("resize", () => post({ type: "size", size: size() }));
@@ -1159,7 +1161,16 @@
         showError("This browser does not support WebGL, which fizzy needs to run.");
       } else if (workerMode) {
         const wasmUrl = "web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
-        waitForLayout().then(() => startWorker(wasmUrl)).catch((err) => {
+        // Fetched and compiled now, seen or not. A page opened in a background tab gets no
+        // animation frames, so `waitForLayout` holds the worker until the tab is shown; the
+        // editor's download used to wait with it, tens of seconds on a slow link. The worker is
+        // handed the compiled module and fetches nothing itself, so a page shown at once never
+        // downloads it twice. Null on failure: the worker then fetches it as before.
+        const wasmModule = WebAssembly.compileStreaming(fetch(wasmUrl)).catch((err) => {
+          console.warn("fizzy: compiling the editor early failed; the worker fetches it", err);
+          return null;
+        });
+        waitForLayout().then(() => startWorker(wasmUrl, wasmModule)).catch((err) => {
           console.error(err);
           showError(`Failed to load the editor (${err instanceof Error ? err.message : String(err)}).`);
         });

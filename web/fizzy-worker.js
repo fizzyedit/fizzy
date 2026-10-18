@@ -589,11 +589,15 @@ async function start(init) {
         if (len > 0) postMessage({ type: "clipboard", text: app.stringFromPointer(ptr, len) });
     };
 
-    const result = await WebAssembly.instantiateStreaming(fetch(init.wasmUrl), {
+    const wasmImports = {
         dvui: imports,
         fizzy: fizzyImports(() => wasmInstance),
         env: { __indirect_function_table: functionTable },
-    });
+    };
+    // The page compiled the editor while it waited to be shown (`wasmModule`); without one, fetch it.
+    const result = init.wasmModule
+        ? { instance: await WebAssembly.instantiate(init.wasmModule, wasmImports) }
+        : await WebAssembly.instantiateStreaming(fetch(init.wasmUrl), wasmImports);
     wasmInstance = result.instance;
     app.setInstance(result.instance);
     app.setCanvas(env.canvas);
