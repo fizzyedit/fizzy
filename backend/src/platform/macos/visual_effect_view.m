@@ -205,6 +205,13 @@ int fizzy_macos_window_off_active_space(void *nswindow) {
     return window != nil && [window isVisible] && ![window isOnActiveSpace] ? 1 : 0;
 }
 
+/* The app's window in front under the pointer, or nil where another app's is
+ * (`SDLBackend.heldAcrossWindows`). */
+void *fizzy_macos_window_at_pointer(void) {
+    const NSInteger n = [NSWindow windowNumberAtPoint:[NSEvent mouseLocation] belowWindowWithWindowNumber:0];
+    return (__bridge void *)[NSApp windowWithWindowNumber:n];
+}
+
 void fizzy_macos_viewport_reshadow(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;

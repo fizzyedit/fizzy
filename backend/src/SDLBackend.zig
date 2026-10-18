@@ -1753,6 +1753,7 @@ extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) v
 extern fn fizzy_macos_viewport_plain(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_reshadow(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_window_off_active_space(nswindow: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_at_pointer() ?*anyopaque;
 extern fn fizzy_macos_viewport_still(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
@@ -1873,6 +1874,11 @@ fn density(self: *SDLBackend) f32 {
 /// OS keeps sending a held pointer to the window that took the press, so a view carried out of a
 /// float that is out went on landing in the float's part of the frame over the main window, and
 /// one carried from the main window never reached the float's window.
+///
+/// macOS: a pointer's motion with no button held too, when a viewport's window is in front of the
+/// one AppKit sent it to. AppKit sends mouse-moved events to the key window wherever the pointer
+/// is, and SDL reports them as that window's: hovering a float's window in front of the main one
+/// lit up the main window's widgets under it (the user).
 fn heldAcrossWindows(self: *SDLBackend, event: c.SDL_Event) bool {
     switch (event.type) {
         c.SDL_EVENT_MOUSE_MOTION => if (event.motion.which == c.SDL_TOUCH_MOUSEID) return false,
@@ -1884,7 +1890,14 @@ fn heldAcrossWindows(self: *SDLBackend, event: c.SDL_Event) bool {
     } else false;
     if (!any) return false;
     if (event.type == c.SDL_EVENT_MOUSE_BUTTON_UP) return true;
-    return c.SDL_GetGlobalMouseState(null, null) != 0;
+    if (c.SDL_GetGlobalMouseState(null, null) != 0) return true;
+    if (comptime builtin.target.os.tag == .macos) if (event.type == c.SDL_EVENT_MOUSE_MOTION) {
+        const from = c.SDL_GetWindowFromID(event.motion.windowID) orelse return false;
+        const front = fizzy_macos_window_at_pointer() orelse return false;
+        if (front == cocoaWindow(from)) return false;
+        for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (cocoaWindow(vp.window) == front) return true;
+    };
+    return false;
 }
 
 /// Where in the frame the pointer is, by the window of fizzy's it is over on the desktop: a
@@ -1909,7 +1922,7 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     // Over the viewport the press landed on, that one: where two viewports' windows overlap, the
     // OS gave the press to the one on top, which the order of the slots below does not know — a
     // press on the second of two overlapping floats' windows was read in the first's band.
-    if (self.press_window) |pw| if (self.viewportOf(pw)) |vp| if (!vp.passive and !vp.see_through) {
+    if (self.press_window) |pw| if (self.viewportOf(pw)) |vp| if (!vp.passive and !vp.see_through and !platform.window.windowUnseen(vp.window)) {
         const full = c.SDL_GetWindowFlags(vp.window) & c.SDL_WINDOW_FULLSCREEN != 0;
         const s = if (full) liveScreen(vp) else vp.screen;
         if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
@@ -1928,6 +1941,10 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.passive or vp.see_through) continue;
+        // Nobody sees it, on another Space: the pointer is not over it, wherever it lies there.
+        // Read as over it, a float dragged in the main window's full screen Space vanished into the
+        // band of a window left on the desktop as it crossed where that window lies (the user).
+        if (platform.window.windowUnseen(vp.window)) continue;
         // In a fullscreen Space of its own, a window is where the OS put it, and under nothing:
         // read as under the main window, or where it was before it went, every press and release
         // in it landed over the main window — hovering worked, clicking did nothing (the user).
