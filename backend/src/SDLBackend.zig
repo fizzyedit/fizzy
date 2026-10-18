@@ -17,9 +17,9 @@ const dvui = @import("dvui");
 const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
 const TouchSlots = @import("touch_slots.zig");
+const glass_look = @import("glass_look");
 /// The OS windows besides the main one an app draws with (`Viewport`).
-pub const glass_look = @import("glass_look");
-const viewports = @import("viewports.zig");
+pub const viewports = @import("viewports.zig");
 /// dvui's floating windows as OS windows of their own from the one frame (`floatingWindowOs`).
 pub const os_windows = @import("os_windows.zig");
 /// What this backend keeps count of as it runs (`health`).

@@ -265,6 +265,10 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.addImport("platform", platformModule(b, native, resolved_target, optimize, macos_sdl_paths));
     // On dvui's own SDL3 backend (`-Dnative-backend=sdl3`), which has no viewports.
     exe.root_module.addImport("viewports_none", fizzy_backend.viewportsNoneModule(backendDependency(b), dvui_mod));
+    // Which of the two the executable links (`backend_native.viewports`).
+    const native_backend_opts = b.addOptions();
+    native_backend_opts.addOption(bool, "fizzy", native_backend == .fizzy);
+    exe.root_module.addImport("native_backend", native_backend_opts.createModule());
 
     // The glass look the backend dresses OS windows with; `core` takes the same module.
     const glass_look = fizzy_backend.glassLookModule(backendDependency(b));
