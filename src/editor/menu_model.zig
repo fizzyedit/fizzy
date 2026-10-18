@@ -112,6 +112,27 @@ fn canSaveAll(editor: *Editor) bool {
     return false;
 }
 
+/// "Undo Claude's Draw" when the step it would take is someone else's; "Undo" for the person's
+/// own, so working alone reads as it always has.
+fn undoTitle(editor: *Editor) [:0]const u8 {
+    return historyTitle(editor, .undo, "Undo", &undo_title);
+}
+fn redoTitle(editor: *Editor) [:0]const u8 {
+    return historyTitle(editor, .redo, "Redo", &redo_title);
+}
+
+var undo_title: [96:0]u8 = undefined;
+var redo_title: [96:0]u8 = undefined;
+
+fn historyTitle(editor: *Editor, action: Editor.HistoryAction, plain: [:0]const u8, buf: *[96:0]u8) [:0]const u8 {
+    const doc = editor.activeDoc() orelse return plain;
+    // Who made a step is kept only once someone besides the person has acted on the document.
+    if (!editor.app.host.step_authors.contains(doc.id)) return plain;
+    const t = editor.stepToTake(doc, action, editor.app.host.arena()) catch return plain;
+    if (t.by.kind == .person) return plain;
+    return std.fmt.bufPrintZ(buf, "{s} {s}'s {s}", .{ plain, Editor.authorName(t.by), t.step.title }) catch plain;
+}
+
 fn canUndo(editor: *Editor) bool {
     return editor.activeDocCommandEnabled("undo");
 }
@@ -193,8 +214,8 @@ const edit_items = [_]Item{
         .native_always_enabled = true,
     } },
     .separator,
-    .{ .command = .{ .id = "fizzy.undo", .title = .{ .static = "Undo" }, .sf_symbol = "arrow.uturn.backward", .enabled = canUndo } },
-    .{ .command = .{ .id = "fizzy.redo", .title = .{ .static = "Redo" }, .sf_symbol = "arrow.uturn.forward", .enabled = canRedo } },
+    .{ .command = .{ .id = "fizzy.undo", .title = .{ .dynamic = undoTitle }, .sf_symbol = "arrow.uturn.backward", .enabled = canUndo } },
+    .{ .command = .{ .id = "fizzy.redo", .title = .{ .dynamic = redoTitle }, .sf_symbol = "arrow.uturn.forward", .enabled = canRedo } },
     // Transform / Grid Layout are pixel-art concepts, not fizzy's own — pixi parents its own
     // section here rather than fizzy knowing about them.
     .{ .plugin_section = "fizzy.menu.edit" },
