@@ -41,7 +41,7 @@ pub const default_speed: f32 = 0.5;
 /// How much faster the fastest speed is than as written, and the slowest slower.
 pub const speed_range: f32 = 2;
 
-const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_6d6f_7469); // "fizzmoti"
+const publish_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_6d6f_7469)); // "fizzmoti"
 const publish_key = "_motion";
 
 /// What the host publishes each frame.

@@ -68,11 +68,11 @@ pub fn record(self: *BlackBox, gpa: std.mem.Allocator) void {
 fn toRecord(e: *const dvui.Event) ?events.Event {
     return switch (e.evt) {
         .mouse => |me| switch (me.action) {
-            .motion => .{ .kind = .motion, .button = @intFromEnum(me.button), .mod = @intFromEnum(me.mod), .x = me.p.x, .y = me.p.y },
-            .press => .{ .kind = .press, .button = @intFromEnum(me.button), .mod = @intFromEnum(me.mod), .x = me.p.x, .y = me.p.y },
-            .release => .{ .kind = .release, .button = @intFromEnum(me.button), .mod = @intFromEnum(me.mod), .x = me.p.x, .y = me.p.y },
-            .wheel_x => |ticks| .{ .kind = .wheel_x, .mod = @intFromEnum(me.mod), .x = ticks },
-            .wheel_y => |ticks| .{ .kind = .wheel_y, .mod = @intFromEnum(me.mod), .x = ticks },
+            .motion => .{ .kind = .motion, .button = @backingInt(me.button), .mod = @backingInt(me.mod), .x = me.p.x, .y = me.p.y },
+            .press => .{ .kind = .press, .button = @backingInt(me.button), .mod = @backingInt(me.mod), .x = me.p.x, .y = me.p.y },
+            .release => .{ .kind = .release, .button = @backingInt(me.button), .mod = @backingInt(me.mod), .x = me.p.x, .y = me.p.y },
+            .wheel_x => |ticks| .{ .kind = .wheel_x, .mod = @backingInt(me.mod), .x = ticks },
+            .wheel_y => |ticks| .{ .kind = .wheel_y, .mod = @backingInt(me.mod), .x = ticks },
             .focus, .position => null,
         },
         .key => |ke| .{
@@ -81,8 +81,8 @@ fn toRecord(e: *const dvui.Event) ?events.Event {
                 .repeat => .key_repeat,
                 .up => .key_up,
             },
-            .key = @intFromEnum(ke.code),
-            .mod = @intFromEnum(ke.mod),
+            .key = @backingInt(ke.code),
+            .mod = @backingInt(ke.mod),
         },
         .text => |t| switch (t.action) {
             .value => |v| .{ .kind = .text, .selected = v.selected },

@@ -18,12 +18,38 @@ const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 const core = fizzy.core;
 const sdk = fizzy.sdk;
-const automation = @import("app").automation;
+const app = @import("app");
+const automation = app.automation;
 const Editor = @import("Editor.zig");
 
 playing: std.ArrayListUnmanaged(*Playback) = .empty,
 /// The next playback's number, for its root.
 next: u32 = 1,
+/// A tape waiting for the plugins its documents need (`openWhenReady`): its bytes, owned.
+waiting: ?Waiting = null,
+
+const Waiting = struct {
+    bytes: []u8,
+    /// The plugins its documents belong to, owned.
+    owners: [][]u8,
+    /// Which of `owners` the store has been asked to load (on the web): asked once, so a build
+    /// that fails is not fetched again every look.
+    asked: []bool,
+    /// The frame it was first looked at; null before.
+    since_ns: ?i128,
+    /// Played with nothing else in view (a page that is only the tape, `?tape=`).
+    alone: bool,
+
+    fn deinit(self: Waiting, gpa: std.mem.Allocator) void {
+        gpa.free(self.bytes);
+        for (self.owners) |o| gpa.free(o);
+        gpa.free(self.owners);
+        gpa.free(self.asked);
+    }
+};
+
+/// How long a tape waits for its plugins before saying it cannot be played.
+const wait_limit_ns: i128 = 60 * std.time.ns_per_s;
 
 const Playback = struct {
     owned: automation.Tape.Owned,
@@ -55,6 +81,101 @@ const load_limit_ns: i128 = 30 * std.time.ns_per_s;
 pub fn deinit(self: *TapeTabs, editor: *Editor) void {
     for (self.playing.items) |p| free(editor, p);
     self.playing.deinit(editor.app.gpa);
+    if (self.waiting) |w| w.deinit(editor.app.gpa);
+    self.waiting = null;
+}
+
+/// Play the tape in `bytes` once the plugins its documents belong to are loaded: at once when they
+/// are; else, where the app can fetch them from the store on its own (the web, where a link to a
+/// tape is how one is shared), asking the store for each and waiting, up to `wait_limit_ns`. One
+/// document's tape plays in a tab of its own (`open`), anything else on the demo stage. `alone`:
+/// nothing else in view, the tape the page (`Editor.show_only_document`). The bytes are copied.
+pub fn openWhenReady(self: *TapeTabs, editor: *Editor, bytes: []const u8, alone: bool) !void {
+    const gpa = editor.app.gpa;
+    // Read for its owners alone: whether they apply its steps is asked once they are loaded.
+    var check = automation.Input.check;
+    check.steps = struct {
+        fn any(_: []const u8, _: u32) bool {
+            return true;
+        }
+    }.any;
+    var owned = automation.Tape.load(gpa, bytes, check) catch return error.BadTape;
+    defer owned.deinit();
+    var owners: std.ArrayListUnmanaged([]u8) = .empty;
+    errdefer {
+        for (owners.items) |o| gpa.free(o);
+        owners.deinit(gpa);
+    }
+    for (owned.tape.keyframes) |kf| for (kf.files) |f| {
+        if (f.owner.len == 0) continue;
+        for (owners.items) |o| {
+            if (std.mem.eql(u8, o, f.owner)) break;
+        } else try owners.append(gpa, try gpa.dupe(u8, f.owner));
+    };
+    if (self.waiting) |w| w.deinit(gpa);
+    self.waiting = null;
+    const asked = try gpa.alloc(bool, owners.items.len);
+    errdefer gpa.free(asked);
+    @memset(asked, false);
+    const copy = try gpa.dupe(u8, bytes);
+    errdefer gpa.free(copy);
+    // Looked at from the next frame's top (`tick`): the page can call this between frames.
+    self.waiting = .{ .bytes = copy, .owners = try owners.toOwnedSlice(gpa), .asked = asked, .since_ns = null, .alone = alone };
+    editor.app.host.refresh();
+}
+
+/// The waiting tape's next look: played once every owner is loaded; meanwhile each missing one
+/// asked of the store (on the web), and a wake set to look again.
+fn wait(self: *TapeTabs, editor: *Editor) void {
+    const w = if (self.waiting) |*waiting| waiting else return;
+    const since = w.since_ns orelse since: {
+        w.since_ns = dvui.frameTimeNS();
+        break :since w.since_ns.?;
+    };
+    const gpa = editor.app.gpa;
+    var missing: ?[]const u8 = null;
+    // A plugin asked for whose load has ended without it: it failed, and will not come.
+    var failed = false;
+    for (w.owners, w.asked) |o, *asked| {
+        if (editor.app.host.pluginById(o) != null) continue;
+        missing = o;
+        if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+            if (asked.*) {
+                if (!app.store.Store.isInstalling(o)) failed = true;
+                continue;
+            }
+            // The catalog first, on a page that has not opened the store; then the plugin, for
+            // this visit: playing a tape installs nothing.
+            app.store.Store.wantCatalog();
+            asked.* = app.store.Store.loadForVisit(o);
+        }
+    }
+    if (missing) |o| {
+        const native = comptime @import("builtin").target.cpu.arch != .wasm32;
+        if (native or failed or dvui.frameTimeNS() - since > wait_limit_ns) {
+            dvui.log.warn("tape: it needs the plugin '{s}', which is not loaded", .{o});
+            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(dvui.currentWindow().arena(), "This tape needs the {s} plugin", .{o}) catch "This tape needs a plugin that is not loaded" });
+            w.deinit(gpa);
+            self.waiting = null;
+            return;
+        }
+        // The store's catalog, or the plugin, lands in a moment: look again then.
+        dvui.timer(dvui.Id.extendId(null, @src(), 0), 250_000);
+        return;
+    }
+    const ready = w.*;
+    self.waiting = null;
+    defer ready.deinit(gpa);
+    self.open(editor, ready.bytes, .{}) catch |err| switch (err) {
+        // Anything but one document's tape, or steps of a format its owner does not write: the
+        // demo stage plays it, or says why it cannot.
+        error.NotOneDocument, error.BadTape => editor.demo.playTapeSoon(ready.bytes),
+        else => {
+            dvui.log.warn("tape: could not play it: {t}", .{err});
+            return;
+        },
+    };
+    if (ready.alone) editor.show_only_document = true;
 }
 
 pub const OpenError = error{
@@ -115,6 +236,7 @@ pub fn open(self: *TapeTabs, editor: *Editor, bytes: []const u8, opts: OpenOptio
 /// Once a frame, before anything draws: each tape's steps whose moment has come. Returns at once
 /// with nothing playing.
 pub fn tick(self: *TapeTabs, editor: *Editor) void {
+    if (self.waiting != null) self.wait(editor);
     if (self.playing.items.len == 0) return;
     const now = dvui.frameTimeNS();
     var i: usize = 0;

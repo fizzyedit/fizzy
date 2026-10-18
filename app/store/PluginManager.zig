@@ -104,6 +104,10 @@ pub const VTable = struct {
     /// URL (there is no plugins directory to download into). Null for an app that does not
     /// load web plugins.
     installFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void = null,
+    /// The web's load for one visit: link the build at `url` as `installFromUrl` does, without
+    /// installing it. Not remembered for the next visit and nothing asked about it: a shared
+    /// tape's owner, loaded so the tape plays. Null for an app that does not load web plugins.
+    loadFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void = null,
     /// The web's update: link the build at `url` alongside the running one and hand the id over,
     /// within the session. Null for an app that does not load web plugins.
     updateFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void = null,
@@ -158,6 +162,10 @@ pub fn install(self: PluginManager, id: []const u8) anyerror!void {
 /// load is and a store install never is.
 pub fn installFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
     const f = self.vtable.installFromUrl orelse return error.Unsupported;
+    return f(self.ctx, id, url, sha256);
+}
+pub fn loadFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+    const f = self.vtable.loadFromUrl orelse return error.Unsupported;
     return f(self.ctx, id, url, sha256);
 }
 pub fn updateFromUrl(self: PluginManager, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {

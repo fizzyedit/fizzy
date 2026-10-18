@@ -66,7 +66,7 @@ pub const Direction = enum(u8) {
                     if (vy > 0) d = 0b0000_0001 else if (vy < 0) d = 0b0000_0011;
                 }
 
-                return @as(Direction, @enumFromInt(d));
+                return @as(Direction, @fromBackingInt(@intCast(d)));
             },
 
             8 => {
@@ -84,7 +84,7 @@ pub const Direction = enum(u8) {
                     if (vy > 0) d = d | 0b0000_0001 else if (vy < 0) d = d | 0b0000_0011;
                 }
 
-                return @as(Direction, @enumFromInt(d));
+                return @as(Direction, @fromBackingInt(@intCast(d)));
             },
             else => @compileError("Direction size is unsupported"),
         };
@@ -107,17 +107,17 @@ pub const Direction = enum(u8) {
             d = d | 0b0000_0011;
         }
 
-        return @as(Direction, @enumFromInt(d));
+        return @as(Direction, @fromBackingInt(@intCast(d)));
     }
 
     /// Returns horizontal axis of the direction.
     pub fn x(self: Direction) f32 {
-        return @as(f32, @floatFromInt(@as(i8, @bitCast(@intFromEnum(self))) << 4 >> 6));
+        return @as(f32, @floatFromInt(@as(i8, @bitCast(@backingInt(self))) << 4 >> 6));
     }
 
     /// Returns vertical axis of the direction.
     pub fn y(self: Direction) f32 {
-        return @as(f32, @floatFromInt(@as(i8, @bitCast(@intFromEnum(self))) << 6 >> 6));
+        return @as(f32, @floatFromInt(@as(i8, @bitCast(@backingInt(self))) << 6 >> 6));
     }
 
     // /// Returns direction as a F32x4.

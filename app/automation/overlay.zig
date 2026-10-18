@@ -716,14 +716,14 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     var phys: [5]dvui.Rect.Physical = undefined;
     for (pieces, &phys) |r, *out| out.* = wrs.rectToPhysical(r);
     const tab_p = wrs.rectToPhysical(tab);
-    tr.prev = phys[@intFromEnum(Piece.prev)];
-    tr.play = phys[@intFromEnum(Piece.play)];
-    tr.next = phys[@intFromEnum(Piece.next)];
-    tr.close = phys[@intFromEnum(Piece.close)];
+    tr.prev = phys[@backingInt(Piece.prev)];
+    tr.play = phys[@backingInt(Piece.play)];
+    tr.next = phys[@backingInt(Piece.next)];
+    tr.close = phys[@backingInt(Piece.close)];
     tr.tab = tab_p;
     core.anchor.markRect(fw.data().id, tab_p, true, "demo.collapse", .{});
     const hovered: ?Piece = if (pointer) |pt| for (phys, 0..) |r, i| {
-        if (i != @intFromEnum(Piece.track) and r.contains(pt)) break @enumFromInt(i);
+        if (i != @backingInt(Piece.track) and r.contains(pt)) break @fromBackingInt(@intCast(i));
     } else null else null;
 
     // The glass: the bubbles bud out of the dome one after another and pull away to their places
@@ -735,7 +735,7 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         var bubbles: [7]core.dialogs.Bubble = undefined;
         for (phys, bubbles[0..5], 0..) |r, *b, i| b.* = .{
             .rect = dome.lerpRect(bud, r, dome.emerge(p, bud_delays[i])),
-            .light = if (hovered != null and @intFromEnum(hovered.?) == i) core.dialogs.bubble_hover else 0,
+            .light = if (hovered != null and @backingInt(hovered.?) == i) core.dialogs.bubble_hover else 0,
         };
         bubbles[5] = .{ .rect = dome.lerpRect(bud, tab_p, dome.emerge(p, bud_delays[5])), .light = if (on(tab_p, pointer)) core.dialogs.bubble_hover else 0 };
         var count: usize = 6;
@@ -758,12 +758,12 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         defer dvui.alphaSet(prev_alpha);
         const playing = player.state == .playing or (player.state == .seeking and player.after_seek == .play);
         const play_glyph: Glyph = if (playing) .pause else if (player.state == .ended) .replay else .play;
-        barIcon(bounds, pieces[@intFromEnum(Piece.prev)], .prev, ink.opacity(0.8));
-        barIcon(bounds, pieces[@intFromEnum(Piece.play)], play_glyph, ink);
-        barIcon(bounds, pieces[@intFromEnum(Piece.next)], .next, ink.opacity(0.8));
-        barIcon(bounds, pieces[@intFromEnum(Piece.close)], .close, ink.opacity(0.65));
+        barIcon(bounds, pieces[@backingInt(Piece.prev)], .prev, ink.opacity(0.8));
+        barIcon(bounds, pieces[@backingInt(Piece.play)], play_glyph, ink);
+        barIcon(bounds, pieces[@backingInt(Piece.next)], .next, ink.opacity(0.8));
+        barIcon(bounds, pieces[@backingInt(Piece.close)], .close, ink.opacity(0.65));
         dome.chevron(bounds, tab, ink.opacity(0.85));
-        tr.track = barTrack(player, tape, bounds, pieces[@intFromEnum(Piece.track)], ink);
+        tr.track = barTrack(player, tape, bounds, pieces[@backingInt(Piece.track)], ink);
     }
 
     // The played part of the line: the dome's liquid, flowing out of it into the line as the bar
@@ -792,9 +792,9 @@ fn barGeometry(center: dvui.Point, full_w: f32, out: *[5]dvui.Rect) void {
     var widths = piece_d;
     var round_w: f32 = 0;
     for (piece_d, 0..) |d, i| {
-        if (i != @intFromEnum(Piece.track)) round_w += d;
+        if (i != @backingInt(Piece.track)) round_w += d;
     }
-    widths[@intFromEnum(Piece.track)] = @max(80, full_w - round_w - 4 * bar_gap);
+    widths[@backingInt(Piece.track)] = @max(80, full_w - round_w - 4 * bar_gap);
     var total: f32 = 4 * bar_gap;
     for (widths) |w| total += w;
     var x = center.x - total / 2;
@@ -820,7 +820,7 @@ fn barIcon(bounds: dvui.Rect, r: dvui.Rect, glyph: Glyph, color: dvui.Color) voi
         .stroke_color = .{ .color = color },
         .fill_color = .{ .color = color },
     }, .{
-        .id_extra = @intFromEnum(glyph),
+        .id_extra = @backingInt(glyph),
         .rect = .{ .x = r.x + (r.w - d) / 2 - bounds.x, .y = r.y + (r.h - d) / 2 - bounds.y, .w = d, .h = d },
     });
 }

@@ -16,7 +16,7 @@ on:
     inputs:
       zig_version:
         description: "Zig to measure with (a version, or master)"
-        default: "0.16.0"
+        default: "0.17.0"
       backends:
         description: "Comma-separated: default, llvm, self-hosted"
         default: "default,llvm,self-hosted"
@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ZIG_VERSION: ${{ inputs.zig_version || '0.16.0' }}
+  ZIG_VERSION: ${{ inputs.zig_version || '0.17.0' }}
 
 jobs:
   measure:

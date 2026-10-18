@@ -227,7 +227,7 @@ pub fn addFizzyExecutableForTarget(
 
     const exe = b.addExecutable(.{
         .name = app_name,
-        .root_module = b.addModule("App", .{
+        .root_module = b.createModule(.{ // private: one per target, and 0.17 refuses a second public "App"
             .target = resolved_target,
             .optimize = optimize,
             // `b.path`, not `.cwd_relative`: this resolves against *fizzy's* build root, which
@@ -246,17 +246,17 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.addImport("app_icon", app_icon_module);
     exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
-    if (optimize != .Debug) {
+    if (optimize != .debug) {
         switch (resolved_target.result.os.tag) {
             .windows => {
-                exe.subsystem = .Windows;
+                exe.subsystem = .windows;
                 // MSVC's libcmt links `WinMainCRTStartup` (needs `WinMain`) for /SUBSYSTEM:WINDOWS.
                 // Fizzy exposes `main`, so force the C `main` entry which works for either subsystem.
                 if (resolved_target.result.abi == .msvc) {
                     exe.entry = .{ .symbol_name = "mainCRTStartup" };
                 }
             },
-            else => exe.subsystem = .Posix,
+            else => exe.subsystem = .posix,
         }
     }
 
@@ -410,6 +410,10 @@ pub fn addFizzyExecutableForTarget(
             app_module.addImport("win32", win32);
         }
         exe.root_module.linkSystemLibrary("comctl32", .{});
+        // MSVC's C runtime names the POSIX calls `_getcwd`, `_chdir`, …; `oldnames.lib` supplies
+        // the plain names, which dvui's tinyfiledialogs and fizzy's own startup use. Zig 0.16
+        // linked it for every *-windows-msvc exe; 0.17 does not.
+        if (resolved_target.result.abi == .msvc) exe.root_module.linkSystemLibrary("oldnames", .{});
 
         // Embed the resource script (fizzy's: assets/windows/fizzy.rc -> fizzy.ico) into the
         // exe so Explorer, Taskbar, Alt-Tab and the Velopack-generated Start Menu shortcut all
@@ -427,7 +431,7 @@ pub fn addFizzyExecutableForTarget(
         resolved_target.result.abi == .msvc;
     exe.root_module.link_libcpp = !exe_is_windows_msvc;
     if (velopack_enabled) if (vz) |v| {
-        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .include_modules = &.{app_module} });
+        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .c_modules = &.{app_module} });
     };
 
     return .{

@@ -258,7 +258,7 @@ fn enabled() bool {
     return dvui.dataGet(null, enabled_id, "_liquid_field", bool) orelse true;
 }
 
-const enabled_id: dvui.Id = @enumFromInt(0x6c69_7166);
+const enabled_id: dvui.Id = @fromBackingInt(@intCast(0x6c69_7166));
 
 /// Whether the window is opaque behind its content — no desktop material shows through it (Linux,
 /// the web) — published each frame by the app. The glass is as see-through as what it covers
@@ -337,7 +337,7 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();
     for ([_]programs.Blend{ .punch, .add }) |pass| {
-        h.blend(@intFromEnum(pass));
+        h.blend(@backingInt(pass));
         self.quads(groups, pass == .add, frost);
     }
     return true;

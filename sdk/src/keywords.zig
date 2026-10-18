@@ -135,7 +135,7 @@ pub fn strength(region: []const []const u8, surface: []const []const u8) Fit {
     var best: Fit = .none;
     for (region) |r| for (surface) |s| {
         const f = fit(r, s);
-        if (@intFromEnum(f) > @intFromEnum(best)) best = f;
+        if (@backingInt(f) > @backingInt(best)) best = f;
     };
     return best;
 }

@@ -45,7 +45,7 @@ const Host = sdk.Host;
 const PluginLoader = @import("root.zig").store.Loader;
 const SettingsWatcher = @import("watch/SettingsWatcher.zig");
 const ControlServer = @import("control/Server.zig");
-const ControlRelay = @import("control/routes.zig").Relay;
+const ControlState = @import("control/routes.zig").State;
 const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
 const FolderWatcher = @import("watch/FolderWatcher.zig");
 const Keymap = @import("keymap/Keymap.zig");
@@ -265,12 +265,12 @@ settings_save_deadline_ns: i128 = 0,
 /// `SettingsWatcher.start`'s doc comment), torn down first in `deinit`.
 settings_watcher: ?SettingsWatcher = null,
 
-/// The control server (`app.control`), while it runs: started in `postInit` when `FIZZY_CONTROL=1`
-/// (plans/CONTROL_SERVER_PLAN.md, steps 1–3 land dark), answered each frame, stopped at quit.
-/// Always void on wasm, which has no socket.
+/// The control server (`app.control`), while the `control_server` setting has it run: followed
+/// once a frame, answered each frame, stopped at quit. Always void on wasm, which has no socket.
 control: if (builtin.target.cpu.arch == .wasm32) void else ?ControlServer = if (builtin.target.cpu.arch == .wasm32) {} else null,
-/// What relays the app's events to the control server's streams (`control.routes.Relay`).
-control_relay: if (builtin.target.cpu.arch == .wasm32) void else ControlRelay = if (builtin.target.cpu.arch == .wasm32) {} else .{},
+/// What the control server's routes keep between frames: the relay of the app's events to its
+/// streams, and the requests whose commands answer later (`control.routes.State`).
+control_state: if (builtin.target.cpu.arch == .wasm32) void else ControlState = if (builtin.target.cpu.arch == .wasm32) {} else .{},
 
 /// Watches the app's own executable while `settings.restart_on_rebuild` is on: a rebuild restarts
 /// the app into it, keeping every document. Null while the setting is off, and wherever
@@ -544,6 +544,15 @@ pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.
     const Api = sdk.services.plugins.Api;
     var out: std.ArrayList(Api.Info) = .empty;
     const host = &app.host;
+    // Every command registration each plugin holds, base, reserve and override, in one pass.
+    var command_counts: std.AutoHashMapUnmanaged(*sdk.Plugin, u32) = .empty;
+    var slots = host.command_slots.valueIterator();
+    while (slots.next()) |slot| for ([_][]const sdk.Command{ slot.bases.items, slot.overrides.items }) |list| {
+        for (list) |c| if (c.owner) |o| {
+            const gop = try command_counts.getOrPut(arena, o);
+            gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+        };
+    };
     for (host.plugins.items) |plugin| {
         if (plugin.internal) continue;
         var info: Api.Info = .{
@@ -560,7 +569,7 @@ pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.
         };
         const r = &info.registered;
         r.surfaces = countOwned(host.surfaces.items, plugin);
-        r.commands = countOwned(host.commands.items, plugin);
+        r.commands = command_counts.get(plugin) orelse 0;
         r.services = countOwned(host.services.items, plugin);
         r.menus = countOwned(host.menus.items, plugin) + countOwned(host.menu_sections.items, plugin) +
             countOwned(host.native_menu_items.items, plugin) + countOwned(host.rail_items.items, plugin) +
@@ -835,11 +844,11 @@ pub fn readPluginReservedField(gpa: std.mem.Allocator, settings_data: ?[:0]const
     const data = settings_data orelse return null;
     const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
     defer gpa.free(plugins);
-    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    const plugins_z = gpa.dupeSentinel(u8, plugins, 0) catch return null;
     defer gpa.free(plugins_z);
     const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
     defer gpa.free(id_block);
-    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    const id_z = gpa.dupeSentinel(u8, id_block, 0) catch return null;
     defer gpa.free(id_z);
     return SettingsPluginsZon.extractField(gpa, id_z, field);
 }
@@ -849,11 +858,11 @@ pub fn readPluginSettingsText(gpa: std.mem.Allocator, settings_data: ?[:0]const 
     const data = settings_data orelse return null;
     const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
     defer gpa.free(plugins);
-    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    const plugins_z = gpa.dupeSentinel(u8, plugins, 0) catch return null;
     defer gpa.free(plugins_z);
     const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
     defer gpa.free(id_block);
-    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    const id_z = gpa.dupeSentinel(u8, id_block, 0) catch return null;
     defer gpa.free(id_z);
     return SettingsPluginsZon.extractField(gpa, id_z, "settings");
 }

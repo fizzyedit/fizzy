@@ -121,7 +121,7 @@ pub fn get(self: *const Snapshot, n: u32) ?[]const u8 {
     return if (n == self.taken and n != 0) self.text.items else null;
 }
 
-const taking_id: dvui.Id = @enumFromInt(0x6669_7a7a_736e_6170); // "fizzsnap"
+const taking_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_736e_6170)); // "fizzsnap"
 const taking_key = "_snapshot_at";
 
 /// Whether a snapshot is being taken of this frame (`beginFrame`). Shared through the window's
@@ -382,7 +382,8 @@ test "a snapshot names what a person acts on, and what a tape aims at" {
     // It reads back as what it says: two buttons by name, the tagged one by its tag, the mark.
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const nodes = try std.zon.parse.fromSliceAlloc([]const Node, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const nodes = try std.zon.parse.fromSlice([]const Node, .{ .gpa = std.testing.allocator, .arena = arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &diag });
     var buttons: usize = 0;
     var save = false;
     var close = false;
@@ -466,7 +467,8 @@ test "a snapshot has the dialogs dvui shows after its capture, and says which wi
 
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const nodes = try std.zon.parse.fromSliceAlloc([]const Node, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const nodes = try std.zon.parse.fromSlice([]const Node, .{ .gpa = std.testing.allocator, .arena = arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &diag });
     // The windows first, each a node.
     try std.testing.expect(nodes.len > 3);
     for (nodes[0..3], [_][]const u8{ "app.window:main", "app.window:band", "app.window:dialog" }) |node, tag| {

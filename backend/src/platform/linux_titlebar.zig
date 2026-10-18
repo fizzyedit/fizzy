@@ -64,6 +64,15 @@ pub fn frameInsets(window: *c.SDL_Window) Insets {
     return .{};
 }
 
+/// Whether the compositor blurs behind `window` at all (`blurBehind`), asking nothing of it: for
+/// the window materials the backend offers (`SDLBackend.materialKinds`).
+pub fn blurOffered(window: *c.SDL_Window) bool {
+    if (comptime builtin.target.os.tag != .linux) return false;
+    const props = c.SDL_GetWindowProperties(window);
+    const display = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null) orelse return false;
+    return wayland_blur.offered(display);
+}
+
 /// The desktop's blur behind the window's frame (`wayland_blur`), inside the margin its shadow is
 /// drawn in (`frameInsets`), its corners rounded by `radius` points — or none, null. Whether the
 /// compositor blurs behind windows at all: Wayland with `ext-background-effect-v1` (GNOME 51,

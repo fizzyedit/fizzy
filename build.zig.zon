@@ -8,7 +8,6 @@
         "build",
         "build.zig",
         "build.zig.zon",
-        "update.zig",
         "sdk",
         "backend",
         "assets",
@@ -18,7 +17,7 @@
     .fingerprint = 0x3311781b569a8e73,
     .name = .fizzy,
     .version = "0.2.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .icons = .{
             .url = "https://github.com/fizzyedit/icons/archive/41e7d2162b121e3798438a7da25ff4648b204dc7.tar.gz",
@@ -34,31 +33,31 @@
             .path = "backend",
         },
         .assetpack = .{
-            .url = "https://github.com/foxnne/assetpack/archive/ac7592f3f5988857840d0df4610e1e1fad690e2e.tar.gz",
-            .hash = "assetpack-0.2.0-5DA2d1ZkAADJanNVdWrUBOGMhOzUENhrUiqXcHADxY2x",
+            .url = "https://github.com/foxnne/assetpack/archive/91eb632487d38e488a342e5755f55a9955c57807.tar.gz",
+            .hash = "assetpack-0.2.0-5DA2d2NkAADexrzqfFqkTks3i1fR9GKSfd5X5hI7Z9vn",
         },
         // App-only. Plugins depend on `sdk/` (not this root package) so they never see
         // Velopack — see AGENTS.md.
         .velopack_zig = .{
-            .url = "https://github.com/graphl-tech/velopack-zig/archive/0c2f20635a97fde38cc8000e9fb1a75f891cf37d.tar.gz",
-            .hash = "velopack_zig-0.0.1-LzeGcengAACU1f33uDAuLKlWXtek0KCC6i_b3XWeJMjd",
+            .url = "https://github.com/graphl-tech/velopack-zig/archive/3d553b7efb3b9443ac4ad2bffdf85d5ae328177e.tar.gz",
+            .hash = "velopack_zig-0.1.0-bbBwERkwAQBxx5LimM-B5UQrwoqltUUvrthOlyuDbscm",
             .lazy = true,
         },
         .dvui_singleton_app = .{
             .path = "libs/dvui-singleton-app",
         },
         .md4zig = .{
-            .url = "git+https://github.com/fizzyedit/md4zig#2d0a687d28be9849b9abe3453bfb7c9f22ffcda1",
-            .hash = "md4zig-0.1.0-iiatj7oOBgCcrw8ee3UISfYe2LsKVEf7O3osC85HthPX",
+            .url = "git+https://github.com/fizzyedit/md4zig#eb5241c9e46cd0a507c0c7a85b01afe2b51e58a8",
+            .hash = "md4zig-0.1.0-iiatj6AQBgBP6PiK2c4MRhjNK2ZXjVg94GvbIEv5WEl7",
         },
         .nightwatch = .{
-            .url = "git+https://github.com/neurocyte/nightwatch#cac3b9edb3a59f5b3a290cf3b76044ad9b09ef28",
-            .hash = "nightwatch-1.0.0-uXzeHyOgAgCvaBhschfx3LA48n01bLYOVBQUXYjvrREM",
+            .url = "git+https://github.com/neurocyte/nightwatch#023e79f52bde36ac8fa4c967bd8333b14efb93cc",
+            .hash = "nightwatch-1.0.0-uXzeH1ALAwAr6LLM0H1Z0aBO_a5gpxQ1YsXpdlh3Xv6U",
             .lazy = true,
         },
         .zf = .{
-            .url = "git+https://github.com/natecraddock/zf#c35c421f84895193246db06c40683c1a30e616ef",
-            .hash = "zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW",
+            .url = "git+https://github.com/natecraddock/zf#e00f9e978b6a7126d1b35fa8ffd49b62042ad6f3",
+            .hash = "zf-0.11.0-OIRy8XCRAAB6FiMwIrtD6FqlagnFwpI6YyOu7bXeYH5J",
         },
     },
 }

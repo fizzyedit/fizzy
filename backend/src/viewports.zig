@@ -43,6 +43,55 @@ pub fn openCarry(at: Rect) ?*Viewport {
     return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
 }
 
+/// Whether a floating window dragged past the app's windows can tear off into one of its own
+/// (`os_windows`): macOS, where the window under the pointer can be asked, and only in an app that
+/// leaves its floating windows to the backend (`SDLBackend.floating_os_windows`): fizzy carries
+/// its own out (`Popout`). Windows and Linux need the same question of the window under the pointer
+/// (`pointerOverNoWindow`).
+pub fn tears() bool {
+    return builtin.target.os.tag == .macos and SDLBackend.floating_os_windows != .none;
+}
+
+/// Whether `vp`'s window lies wholly inside the main window, on the Space being shown
+/// (`os_windows`: a torn-off window let go there goes back in).
+pub fn mainHolds(vp: *const Viewport) bool {
+    return dvui.currentWindow().backend.impl.viewportMainHolds(vp);
+}
+
+/// Physical pixels from the frame's origin to the first viewport's band, and between bands.
+pub const band_stride = @import("viewport_map.zig").band_stride;
+
+/// Where the pointer is on the desktop, in the main window's frame (physical): whichever window a
+/// press began in (`SDLBackend.pointerInMain`).
+pub fn pointerInMain() dvui.Point.Physical {
+    return dvui.currentWindow().backend.impl.pointerInMain();
+}
+
+/// The OS's title bar over a window of its own frame, physical (`SDLBackend.titleBand`).
+pub fn titleBand() f32 {
+    return dvui.currentWindow().backend.impl.titleBand();
+}
+
+/// Whether the pointer is over no window of the app's (`SDLBackend.pointerOverNoWindow`).
+pub fn pointerOverNoWindow() bool {
+    return dvui.currentWindow().backend.impl.pointerOverNoWindow();
+}
+
+/// The app's window the pointer is over (`SDLBackend.windowAtPointer`), or null.
+pub fn windowAtPointer() ?*anyopaque {
+    return dvui.currentWindow().backend.impl.windowAtPointer();
+}
+
+/// `window` (`windowAtPointer`'s) in front of the app's other windows, not made key.
+pub fn bringForward(window: *anyopaque) void {
+    dvui.currentWindow().backend.impl.bringForward(window);
+}
+
+/// Whether a pointer button is held, wherever the pointer is.
+pub fn pointerHeld() bool {
+    return dvui.currentWindow().backend.impl.pointerHeld();
+}
+
 /// Whether one of the app's windows has the keyboard: the app is the active one.
 pub fn appActive() bool {
     return SDLBackend.appActive();
@@ -324,6 +373,15 @@ pub const Picture = struct {
         _ = dvui.renderTarget(self.rt);
     }
 
+    /// Subwindow `sw`'s drawing this frame out of the frame, drawn nowhere: a floating window shown
+    /// only as a picture taken of it before (`os_windows`' tear-off card). Its queues emptied as
+    /// `dvui.Window.renderSubwindow`'s `take` empties them.
+    pub fn drop(sw: *dvui.Subwindows.Subwindow) void {
+        sw.render_cmds = .empty;
+        sw.render_cmds_after = .empty;
+        sw.render_cmds_front = .{};
+    }
+
     /// Done: drawing goes to the frame's own target again.
     pub fn end(self: Picture) void {
         _ = dvui.renderTarget(self.prev);
@@ -339,6 +397,44 @@ pub fn sizedTarget(slot: *?dvui.Texture.Target, w: u32, h: u32) ?dvui.Texture.Ta
     };
     if (slot.* == null) slot.* = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return null;
     return slot.*.?;
+}
+
+/// `sizedTarget` for `vp`'s picture: the same, but on its window's way into or out of full screen,
+/// its picture a new size every frame, the one in `slot` kept while `w` by `h` fits in it — made
+/// the display's size as the way begins, not anew each frame. The picture is drawn from its top
+/// left; `present` copies what the window holds.
+pub fn keptTarget(vp: *const Viewport, slot: *?dvui.Texture.Target, w: u32, h: u32) ?dvui.Texture.Target {
+    const moving = spaceFullness(vp) != null;
+    if (slot.*) |t| {
+        const fits = t.width >= w and t.height >= h;
+        const exact = t.width == w and t.height == h;
+        if (!fits or (!moving and !exact)) {
+            t.destroyLater();
+            slot.* = null;
+        }
+    }
+    if (slot.* == null) {
+        var tw = w;
+        var th = h;
+        if (moving) {
+            const d = displayInMain();
+            tw = @max(w, @as(u32, @intFromFloat(@max(0, @round(d.w)))));
+            th = @max(h, @as(u32, @intFromFloat(@max(0, @round(d.h)))));
+        }
+        slot.* = dvui.textureCreateTarget(.{ .width = tw, .height = th, .interpolation = .nearest }) catch return null;
+    }
+    return slot.*.?;
+}
+
+/// dvui's screens besides the main window's (`dvui.screensSet`): each window's part of the frame
+/// that shows a floating window, so what opens in it — a menu, a dialog — stays in that window.
+pub fn publishScreens(extra: ?dvui.Rect.Natural) void {
+    dvui.currentWindow().backend.impl.viewportScreens(extra);
+}
+
+/// The most the OS may resize `vp`'s window to, physical pixels: 0 each way for no most.
+pub fn maxSize(vp: *Viewport, w: f32, h: f32) void {
+    dvui.currentWindow().backend.impl.viewportMaxSize(vp, w, h);
 }
 
 /// Where `vp`'s window is now, in the main window's part of the frame (physical pixels from
@@ -387,6 +483,11 @@ pub const os_buttons = builtin.target.os.tag == .macos;
 /// (yet).
 pub fn glass(vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
     return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
+}
+
+/// Whether `vp`'s window has the keyboard: it is the OS's key window.
+pub fn hasKeyboard(vp: *const Viewport) bool {
+    return SDLBackend.viewportHasKeyboard(vp);
 }
 
 /// The OS asked to close `vp`'s window.

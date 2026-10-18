@@ -52,8 +52,9 @@ pub fn matches(pattern: []const u8, name: []const u8) bool {
 /// an emitter can grow a payload without breaking its listeners.
 pub fn parse(comptime T: type, arena: std.mem.Allocator, event: Event) !T {
     const text = std.mem.trim(u8, event.payload, " \t\r\n");
-    const source = try arena.dupeZ(u8, if (text.len == 0) ".{}" else text);
-    return std.zon.parse.fromSliceAlloc(T, arena, source, null, .{ .ignore_unknown_fields = true });
+    const source = try arena.dupeSentinel(u8, if (text.len == 0) ".{}" else text, 0);
+    var diag: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSlice(T, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diag, .ignore_unknown_fields = true });
 }
 
 // ---- what fizzy announces ----

@@ -77,6 +77,8 @@ pub fn get(self: *const HistoryFrames, top: u64) ?dvui.Texture {
 }
 
 pub fn deinit(self: *HistoryFrames, gpa: std.mem.Allocator) void {
-    for (self.frames.values()) |t| dvui.textureDestroyLater(t);
+    // Destroyed with a frame, and only in one: let go of at teardown (the app quitting) there is
+    // no window, and the GPU goes with the process.
+    if (dvui.current_window != null) for (self.frames.values()) |t| dvui.textureDestroyLater(t);
     self.frames.deinit(gpa);
 }

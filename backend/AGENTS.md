@@ -31,6 +31,13 @@ The `.m` files in `src/platform/macos/` are built **without ARC**, under a frame
   - `orderedIndex` is stale right after `setLevel:`: order after a level change, don't ask first.
   - A child window (`addChildWindow:`) drops to its parent's level. Set the level after attaching,
     and attach only once it is shown.
+  - No macOS window both stays above another and has a full screen of its own. A child window
+    moves with its parent and goes into full screen with it. A window above the normal level is
+    taken into the app's full-screen Space as a palette, on the way there and when the person
+    swipes to it, before the app hears the Space changed. A normal window comes forward when
+    clicked. So a float in the OS's frame (`ViewportFrame.native`) is an ordinary window: don't
+    attach it or raise its level to keep it above the main one. Three rounds of that each failed
+    at a new moment (fizzyedit/fizzy#483, #492).
   - Borderless windows join the Window menu only through `changeWindowsItem:`.
 - **A press reaches SDL3View but not SDL:** SDL3View inherits NSView's `-mouseDown:`, which keeps
   the press in a full-screen window. `visual_effect_view.m` adds a forwarding one. Add the
@@ -41,6 +48,8 @@ The `.m` files in `src/platform/macos/` are built **without ARC**, under a frame
   - AppKit pictures the after-state synchronously *inside* `toggleFullScreen:`.
   - Whoever moves a window's frame sets its drawable size, because SDL hears of the new size late.
   - Take frame jumps only inside the app's frame transaction.
+  - Step a still window's way (`WindowMonitor.still`) only in the app's frames. Stepped by the
+    pump between them, its backdrop runs ahead of a late picture and shows as a band round it.
   - Read the pixel density from `backingScaleFactor`.
   - A sandbox fizzy launched from a shell isn't the active app, and AppKit stalls or refuses its
     transitions.

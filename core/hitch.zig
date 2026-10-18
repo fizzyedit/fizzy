@@ -16,7 +16,7 @@ pub const Phase = enum {
     draw,
 };
 
-const phase_count = @typeInfo(Phase).@"enum".fields.len;
+const phase_count = @typeInfo(Phase).@"enum".field_names.len;
 
 pub var enabled: bool = false;
 var threshold_ns: u64 = 16 * std.time.ns_per_ms;
@@ -47,7 +47,7 @@ pub const Timer = struct {
     pub fn end(self: Timer) void {
         self.prof.end();
         if (!enabled) return;
-        phase_ns[@intFromEnum(self.phase)] +%= @intCast(now() - self.start);
+        phase_ns[@backingInt(self.phase)] +%= @intCast(now() - self.start);
     }
 };
 
@@ -73,12 +73,12 @@ pub fn frameEnd() void {
         .{
             frame_index,
             ms(total),
-            ms(phase_ns[@intFromEnum(Phase.watchers)]),
-            ms(phase_ns[@intFromEnum(Phase.loading_jobs)]),
-            ms(phase_ns[@intFromEnum(Phase.rebuild_workspaces)]),
-            ms(phase_ns[@intFromEnum(Phase.plugin_hooks)]),
-            ms(phase_ns[@intFromEnum(Phase.draw)]),
-            ms(total -| accounted -| phase_ns[@intFromEnum(Phase.draw)]),
+            ms(phase_ns[@backingInt(Phase.watchers)]),
+            ms(phase_ns[@backingInt(Phase.loading_jobs)]),
+            ms(phase_ns[@backingInt(Phase.rebuild_workspaces)]),
+            ms(phase_ns[@backingInt(Phase.plugin_hooks)]),
+            ms(phase_ns[@backingInt(Phase.draw)]),
+            ms(total -| accounted -| phase_ns[@backingInt(Phase.draw)]),
         },
     );
 }

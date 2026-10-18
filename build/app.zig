@@ -48,6 +48,8 @@ pub const Options = struct {
     macos_sign_app_identity: ?[]const u8 = null,
     macos_sign_install_identity: ?[]const u8 = null,
     macos_notary_profile: ?[]const u8 = null,
+    /// `-Dmacos-sdk`: the macOS SDK for an explicit `-Dtarget=*-macos`; null asks `xcrun`.
+    macos_sdk: ?[]const u8 = null,
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options) !void {
@@ -264,7 +266,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // package dependency to resolve here. Their canonical `build.zig` is only for the
     // standalone (`cd plugins/<name> && zig build`) third-party-shape build.
 
-    const macos_sdl_paths = try common.macosSdlPathsForExplicitTarget(b, target);
+    const macos_sdl_paths = try common.macosSdlPathsForExplicitTarget(b, target, opts.macos_sdk);
     const zig_out_subdir = common.zigOutSubdirForTarget(b, target);
     const zig_out_install_dir: std.Build.InstallDir = .{ .custom = zig_out_subdir };
 
@@ -286,10 +288,8 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .fetch_if_missing = fetch_msvc,
     });
 
-    var effective_win_libc: ?[]const u8 = win_libc.libc_path;
-    if (effective_win_libc == null) {
-        if (cross_win_msvc) effective_win_libc = b.libc_file;
-    }
+    // Only `-Dwindows-msvc-libc` or the managed `.velopack-msvc/` tree: Zig 0.17 has no global `--libc`.
+    const effective_win_libc: ?[]const u8 = win_libc.libc_path;
 
     // Velopack in the dev/install exe is opt-in (`-Dvelopack=true`). Release
     // packaging (`zig build package`) still links Velopack when the ABI supports
@@ -352,7 +352,8 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // An app's version is its own: it passes `.app_version` (its build root is not this
     // package's, so its VERSION file is out of reach here), else 0.0.0.
     const app_version: []const u8 = if (app_version_opt) |v| v else if (opts.own) |own| blk: {
-        const raw = b.build_root.handle.readFileAlloc(b.graph.io, own.version_file, b.allocator, std.Io.Limit.limited(256)) catch |e| std.debug.panic("read VERSION: {}", .{e});
+        b.dependOnFileContents(b.path(own.version_file));
+        const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, own.version_file) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256)) catch |e| std.debug.panic("read VERSION: {}", .{e});
         version_owned = raw;
         break :blk std.mem.trimEnd(u8, raw, "\r\n");
     } else "0.0.0";
@@ -428,8 +429,6 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     ) orelse true;
     const workbench_opts = b.addOptions();
     workbench_opts.addOption(bool, "file_tree", workbench_file_tree);
-
-    common.addUpdateStep(b);
 
     const msvcup_before_compile: ?*std.Build.Step.Run = if (vz) |v| velopack.addMsvcupSetupStep(b, v, ".velopack-msvc") else null;
     const msvcup_setup_step = b.step("msvcup-setup", "Download MSVC SDK into .velopack-msvc/ via velopack-zig (writes zig-libc-*.ini)");
@@ -508,7 +507,6 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const zig_out_subdir = cfg.zig_out_subdir;
     const zig_out_install_dir = cfg.zig_out_install_dir;
     const target_is_windows_msvc = cfg.target_is_windows_msvc;
-    const cross_win_msvc = cfg.cross_win_msvc;
     const effective_win_libc = cfg.effective_win_libc;
     const velopack_supported_for_target = cfg.velopack_supported_for_target;
     const velopack_enabled = cfg.velopack_enabled;
@@ -558,7 +556,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // web.js, index.html, NotoSansKR-Regular.ttf}`, deployable as-is to a static host.
     // ---------------------------------------------------------------
 
-    web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs);
+    web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
 
     const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
     const exe = main_fizzy.exe;
@@ -615,7 +613,19 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         });
         // A running fizzy holds its executable on Windows: set it aside first, or the install fails.
         if (b.graph.host.result.os.tag == .windows and target.result.os.tag == .windows) {
-            const aside = SetAsideRunningExe.create(b, b.getInstallPath(zig_out_install_dir, exe.out_filename));
+            const aside_exe = b.addExecutable(.{
+                .name = "set-aside",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("build/set_aside.zig"),
+                    .target = b.graph.host,
+                    .optimize = .fast,
+                }),
+            });
+            const aside = b.addRunArtifact(aside_exe);
+            aside.setName("set aside a running executable");
+            aside.addDirectoryArg(common.installDirPath(zig_out_install_dir));
+            aside.addArg(exe.out_filename);
+            aside.has_side_effects = true;
             aside.step.dependOn(&exe.step);
             install_artifact.step.dependOn(&aside.step);
         }
@@ -843,6 +853,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
         .{ "fizzy-glass-look-tests", "core/gfx/glass_look.zig" },
+        // What the app's windows are made of, and the fallback to what the backend can show.
+        // std-only but for `publish`/`get`, which reach dvui and are not under test here.
+        .{ "fizzy-material-tests", "core/material.zig" },
         // The in-app menu bar's order: fizzy's menus, then plugins', then Help. std-only (see
         // menu_order.zig); `Menu.draw` walks it.
         .{ "fizzy-menu-order-tests", "src/editor/menu_order.zig" },
@@ -1245,7 +1258,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // off for the msvc ABI regardless of host (cross or native Windows).
     integration_tests.root_module.link_libcpp = !target_is_windows_msvc;
     if (velopack_enabled) if (vz) |v| {
-        try velopack.linkVelopack(b, v, integration_tests, .{ .target = target, .optimize = optimize });
+        try velopack.linkVelopack(b, v, integration_tests, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
     };
 
     test_integration_step.dependOn(&b.addRunArtifact(integration_tests).step);
@@ -1273,7 +1286,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (target.result.os.tag == .windows) demo_tests.root_module.linkSystemLibrary("comctl32", .{});
         demo_tests.root_module.link_libcpp = !target_is_windows_msvc;
         if (velopack_enabled) if (vz) |v| {
-            try velopack.linkVelopack(b, v, demo_tests, .{ .target = target, .optimize = optimize });
+            try velopack.linkVelopack(b, v, demo_tests, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
         };
         test_integration_step.dependOn(&b.addRunArtifact(demo_tests).step);
         check_integration_step.dependOn(&demo_tests.step);
@@ -1425,7 +1438,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             bench_replay.root_module.linkSystemLibrary("comctl32", .{});
         }
         if (velopack_enabled) if (vz) |v| {
-            try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize });
+            try velopack.linkVelopack(b, v, bench_replay, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
         };
 
         const check_bench_replay_step = b.step("check-bench-replay", "Compile fizzy bench-replay without running it");
@@ -1631,12 +1644,13 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         };
 
         if (effective_win_libc) |ini| {
-            if (cross_win_msvc) b.libc_file = null;
             const libc_lp: std.Build.LazyPath = .{ .cwd_relative = ini };
             velopack.applyWindowsMsvcLibcRecursive(b, roots[0..n], libc_lp);
 
+            // Absolute, and already declared to the configure cache where it was resolved
+            // (`velopack.resolveWindowsMsvcLibc`).
             const ini_exists = blk: {
-                b.build_root.handle.access(b.graph.io, ini, .{}) catch break :blk false;
+                std.Io.Dir.cwd().access(b.graph.io, ini, .{}) catch break :blk false;
                 break :blk true;
             };
             if (ini_exists) {
@@ -1684,45 +1698,3 @@ fn addTestBinaryArgs(
         } else try addTestBinaryArgs(b, run, seen, dep);
     }
 }
-
-/// Windows will not let a file a running process was started from be written or deleted, but it
-/// will let it be renamed. So before the install, an installed executable that is running (it
-/// cannot be opened for writing) is renamed aside, to `<name>.<time>.old` beside it. The running
-/// app goes on from the renamed file; with Restart when rebuilt on it sees the new one land and
-/// restarts into it, and the next launch deletes what was set aside
-/// (`ExecutableWatcher.removeSetAside`). An executable nothing runs is left for the install to
-/// replace as it always has. Only on a Windows host, the one with the lock, and only once the
-/// compile has succeeded, so a failed build leaves the running app's file where it was.
-const SetAsideRunningExe = struct {
-    step: std.Build.Step,
-    path: []const u8,
-
-    fn create(b: *std.Build, path: []const u8) *SetAsideRunningExe {
-        const self = b.allocator.create(SetAsideRunningExe) catch @panic("OOM");
-        self.* = .{
-            .step = std.Build.Step.init(.{ .id = .custom, .name = "set aside a running executable", .owner = b, .makeFn = make }),
-            .path = path,
-        };
-        return self;
-    }
-
-    fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {
-        const self: *SetAsideRunningExe = @fieldParentPtr("step", step);
-        const io = step.owner.graph.io;
-        const cwd = std.Io.Dir.cwd();
-        var file = cwd.openFile(io, self.path, .{ .mode = .read_write }) catch |err| switch (err) {
-            error.FileNotFound => return,
-            else => {
-                // Held: a running app. Renamed, the install's path is free.
-                const aside = try std.fmt.allocPrint(step.owner.allocator, "{s}.{d}.old", .{ self.path, std.Io.Clock.real.now(io).nanoseconds });
-                std.Io.Dir.renameAbsolute(self.path, aside, io) catch |rename_err| {
-                    std.log.warn("{s} is in use and could not be set aside ({t}); the install will fail until it quits", .{ self.path, rename_err });
-                    return;
-                };
-                std.log.info("{s} is running: set aside as {s}", .{ self.path, std.fs.path.basename(aside) });
-                return;
-            },
-        };
-        file.close(io);
-    }
-};

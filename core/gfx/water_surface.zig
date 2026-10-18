@@ -40,8 +40,8 @@ const max_height: f32 = 1.85;
 const max_vel: f32 = 10.5;
 
 pub const WaterSurface = struct {
-    height: [grid_n]f32 = .{0} ** grid_n,
-    vel: [grid_n]f32 = .{0} ** grid_n,
+    height: [grid_n]f32 = @splat(0),
+    vel: [grid_n]f32 = @splat(0),
 
     /// Re-anchor the field when the focused slot shifts by `slots` (so in-flight
     /// ripples keep travelling with the shelf). `new[i] = old[i + slots*cols]`.
