@@ -1,7 +1,8 @@
 //! A document's transport: a bar of glass at the bottom of its pane, its history as a line with a
 //! knob where the document is, and undo and redo either side (`plans/RECORDING_PLAN.md`, "Undo is
-//! a seek"). Undo and redo show it (`stir`); it stays while the pointer is on it and goes a few
-//! seconds after (`history_transport.Shown`). A press or a drag on the line goes to the step under
+//! a seek"). Undo and redo show it (`stir`), and so does the pointer at its place in the pane
+//! (`hotZone`); it stays while the pointer is on it and goes a few seconds after
+//! (`history_transport.Shown`). A press or a drag on the line goes to the step under
 //! it, one `historyGoTo` a frame at most, so a drag across a thousand steps costs a jump a frame.
 //!
 //! Over any owner's history (`Plugin.historyLine`, `historyGoTo`); an owner without them has no
@@ -71,6 +72,14 @@ pub fn place(self: *const HistoryTransport, area: dvui.Rect.Physical, now_ns: i1
     return dvui.windowRectScale().rectToPhysical(whole.outsetAll(4));
 }
 
+/// Where the pointer brings the bar up in `area` (physical) while it is hidden: the place the bar
+/// takes, a little round it. Just the bar's place, so drawing anywhere else in the pane, at its
+/// bottom edge too, never raises it.
+fn hotZone(area: dvui.Rect.Physical) ?dvui.Rect.Physical {
+    const whole = geometry(area.toNatural(), 0) orelse return null;
+    return dvui.windowRectScale().rectToPhysical(whole.outsetAll(6));
+}
+
 /// The bar's rect over a pane's natural rect, its strip `grown` (0 to 1) of the way up, or null
 /// when the pane is too narrow for it.
 fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
@@ -109,7 +118,8 @@ pub const Pressed = struct {
 pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physical, id_extra: usize, opts: DrawOptions) Pressed {
     var pressed: Pressed = .{};
     const now = dvui.frameTimeNS();
-    // The pointer on it, or a drag in it, keeps it.
+    // The pointer on it, or a drag in it, keeps it; the pointer where it would be (the hot zone,
+    // the bar's own place at the bottom of the pane) brings it up.
     if (self.drag != null) {
         self.shown.stir(now);
         if (opts.frames != null) self.strip.stir(now);
@@ -117,6 +127,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         self.shown.stir(now);
         // On the bar, a strip grown stays.
         if (self.strip.openness(now) > 0) self.strip.stir(now);
+    } else {} else if (hotZone(area)) |zone| if (zone.contains(dvui.currentWindow().mouse_pt) and area.contains(dvui.currentWindow().mouse_pt)) {
+        self.shown.stir(now);
     };
     // An open window keeps the bar and its strip.
     if (self.window != null) {

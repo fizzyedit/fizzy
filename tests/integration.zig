@@ -7977,6 +7977,31 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const ds = editor.doc_surfaces.get(doc.id) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
 
+        const ed_play = struct {
+            fn play(ed: *fizzy.Editor, script: *automation.Script) !void {
+                try ed.demo.live.play(try script.finish());
+                for (0..300) |_| {
+                    if (!ed.demo.live.playing()) break;
+                    _ = try dvui.testing.step(headlessFrame);
+                }
+                try std.testing.expect(ed.demo.live.outcome.? == .finished);
+            }
+        }.play;
+        // The pointer where the bar would be (its hot zone, the bottom middle of the pane) brings it
+        // up; nothing else is pressed or moved.
+        {
+            const editor_tag = try std.fmt.allocPrint(gpa, "text.editor:{s}", .{path});
+            defer gpa.free(editor_tag);
+            var s: automation.Script = .init(gpa, "transport-hot-zone", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.moveTo(.{ .tag = editor_tag, .x = 0.5, .y = 0.97 }, .{});
+            try ed_play(editor, &s);
+            for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
+            try std.testing.expectEqual(@as(usize, 40), (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult).at);
+        }
+
         try editor.undo();
         for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
         try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
