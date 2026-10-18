@@ -141,6 +141,24 @@ pub fn isCell(comptime T: type) bool {
 
 /// Compile error for a settings struct field that isn't a `Value(...)` cell. Bare fields used to
 /// be the whole API, so this names the fix rather than just the rule.
+/// True when a value of `T` holds a pointer anywhere in it. A settings payload may hold one only
+/// when it is a string itself: the schema copies strings out of a parse and frees them, and owns
+/// nothing else, so any other pointer would point into a parse's arena after it is freed.
+fn holdsPointers(comptime T: type) bool {
+    return comptime switch (@typeInfo(T)) {
+        .pointer => true,
+        .optional => |o| holdsPointers(o.child),
+        .array => |a| holdsPointers(a.child),
+        .@"struct" => |st| for (st.field_types) |F| {
+            if (holdsPointers(F)) break true;
+        } else false,
+        .@"union" => |u| for (u.field_types) |F| {
+            if (holdsPointers(F)) break true;
+        } else false,
+        else => false,
+    };
+}
+
 fn requireCell(comptime T: type, comptime field_name: []const u8, comptime owner: type) void {
     if (!isCell(T)) @compileError(
         "sdk.settings.Schema: field '" ++ field_name ++ "' of " ++ @typeName(owner) ++
@@ -247,6 +265,11 @@ fn Plain(comptime T: type) type {
     inline for (info.field_names, info.field_types, info.field_attrs, 0..) |f_name, Cell, cell_attrs, i| {
         requireCell(Cell, f_name, T);
         const P = Cell.Payload;
+        if (typeTagFor(P) != .string and holdsPointers(P)) @compileError(
+            "sdk.settings.Schema: field '" ++ f_name ++ "' of " ++ @typeName(T) ++ " is a " ++
+                @typeName(P) ++ ", which holds pointers. A setting owns strings and plain values " ++
+                "only; keep a list as a string, or as several settings.",
+        );
         const cell_default = cell_attrs.defaultValue(Cell) orelse @compileError(
             "sdk.settings.Schema: field '" ++ f_name ++ "' of " ++ @typeName(T) ++
                 " needs a default value (`= .init(<default>)`) — required so settings.zon only " ++
@@ -475,17 +498,29 @@ pub fn Schema(comptime T: type) type {
                 return;
             };
             // The parse's strings are in `arena`. One that is not the declared default is copied
-            // out, so it is this schema's to free (`freeOwned`); a default stays the default.
-            inline for (info.field_names, info.field_types) |f_name, Cell| {
-                if (comptime typeTagFor(Cell.Payload) == .string) {
-                    const parsed_str = @field(parsed, f_name);
-                    if (parsed_str.ptr != @field(default_payloads, f_name).ptr) {
-                        @field(parsed, f_name) = gpa.dupe(u8, parsed_str) catch |err| {
-                            dvui.log.warn("sdk.settings: out of memory keeping settings: {s}", .{@errorName(err)});
-                            return;
-                        };
+            // out, so it is this schema's to free (`freeOwned`); a default stays the default. A
+            // copy that fails frees the ones before it, and the live value is left as it was.
+            var copied: usize = 0;
+            const all_copied = copy: {
+                inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
+                    if (comptime typeTagFor(Cell.Payload) == .string) {
+                        const parsed_str = @field(parsed, f_name);
+                        if (parsed_str.ptr != @field(default_payloads, f_name).ptr) {
+                            @field(parsed, f_name) = gpa.dupe(u8, parsed_str) catch break :copy false;
+                        }
+                    }
+                    copied = i + 1;
+                }
+                break :copy true;
+            };
+            if (!all_copied) {
+                inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
+                    if (comptime typeTagFor(Cell.Payload) == .string) {
+                        if (i < copied and @field(parsed, f_name).ptr != @field(default_payloads, f_name).ptr) gpa.free(@field(parsed, f_name));
                     }
                 }
+                dvui.log.warn("sdk.settings: out of memory keeping settings", .{});
+                return;
             }
             freeOwned(gpa, out.*);
             fromPayloads(out, parsed);
@@ -1020,4 +1055,14 @@ test "a type with no dedicated control is still a legal setting, edited as zon t
 
     // `.other` payloads take part in diff-vs-default like anything else.
     try testing.expect(try S.diffSerialize(testing.allocator, .{}) == null);
+}
+
+test "a settings payload holds pointers only as a string" {
+    try std.testing.expect(!holdsPointers(u32));
+    try std.testing.expect(!holdsPointers(?[4]f32));
+    try std.testing.expect(!holdsPointers(enum { a, b }));
+    try std.testing.expect(holdsPointers([]const u8));
+    try std.testing.expect(holdsPointers([]const []const u8));
+    try std.testing.expect(holdsPointers(struct { n: u8, name: []const u8 }));
+    try std.testing.expect(holdsPointers(?struct { inner: [2]?*const u8 }));
 }

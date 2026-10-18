@@ -57,7 +57,7 @@ pub const IdentityManifest = @import("../../../sdk/src/manifest_identity.zig").I
 /// `@import`s it via `plugin_sdk.readManifest`). Panics clearly on a missing/invalid manifest.
 pub fn readManifestAt(b: *std.Build, zon_rel_path: []const u8) IdentityManifest {
     b.dependOnFileContents(b.path(zon_rel_path));
-    const raw = b.root.root_dir.handle.readFileAlloc(b.graph.io, zon_rel_path, b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
+    const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, zon_rel_path) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
         std.debug.panic("fizzy: could not read {s}: {}", .{ zon_rel_path, e });
     const src = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");
     const Target = struct {
