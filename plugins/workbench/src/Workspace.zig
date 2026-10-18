@@ -312,7 +312,11 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         // Not under a carried tab: what is under it is where it would go in, not a tab to close.
         const tab_hovered = carried == null and core.widgets.hovered(hbox.data());
 
-        hbox.drawBackground();
+        // A tab not on show lifts to the window's hover fill under the pointer.
+        hbox.data().borderAndBackground(.{ .fill_color = if (tab_hovered and !is_selected)
+            .{ .color = dvui.themeGet().color(.window, .fill_hover).opacity(runtime.host().contentOpacity()) }
+        else
+            null });
 
         if (!is_selected and pane_is_active and carried == null) {
             // Edge shadows between the active tab and its neighbours.

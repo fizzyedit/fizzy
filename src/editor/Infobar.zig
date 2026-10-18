@@ -3,7 +3,6 @@ const fizzy = @import("../fizzy.zig");
 const AppInfo = @import("app").AppInfo;
 const dvui = @import("dvui");
 const icons = @import("icons");
-const assets = @import("assets");
 const update_notify = @import("app").update.update_notify;
 const update_install = @import("app").update.update_install;
 const restart = @import("app").restart;
@@ -72,9 +71,9 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
         // it and never grows the bar.
         const logo_side = infobar.iconSide();
         const logo: dvui.ImageSource = .{ .imageFile = .{
-            .bytes = assets.files.@"icon.png",
+            .bytes = @import("app_icon").png,
             .name = "icon.png",
-            .interpolation = .nearest,
+            .interpolation = if (@import("app_icon").pixel_art) .nearest else .linear,
         } };
         {
             // Fixed slot (min == max) so the artwork fits the bar instead of dictating its
@@ -101,8 +100,11 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
         }
         dvui.label(@src(), AppInfo.current.name, .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
 
+        // Through the command, so an app that replaces `fizzy.about` replaces this too.
         if (button.clicked()) {
-            Dialogs.AboutFizzy.request();
+            editor.app.host.runCommand("fizzy.about") catch |err| {
+                dvui.log.err("about command failed: {s}", .{@errorName(err)});
+            };
         }
 
         if (update_notify.badgeVisible()) {

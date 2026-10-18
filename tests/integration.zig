@@ -6859,6 +6859,73 @@ test "control: commands are listed, described and run over the routes" {
     try std.testing.expectEqualStrings("{\"error\":\"line 200 is past the end\"}", failed.body);
 }
 
+const ControlStreamClient = struct {
+    path: []const u8,
+    reply: [4096]u8 = undefined,
+    len: usize = 0,
+    fn run(self: *ControlStreamClient) void {
+        const io = std.testing.io;
+        const addr = std.Io.net.UnixAddress.init(self.path) catch return;
+        const stream = addr.connect(io) catch return;
+        defer stream.close(io);
+        var wbuf: [256]u8 = undefined;
+        var w = stream.writer(io, &wbuf);
+        w.interface.writeAll("GET /events?topics=t.* HTTP/1.1\r\nHost: x\r\n\r\n") catch return;
+        w.interface.flush() catch return;
+        var rbuf: [256]u8 = undefined;
+        var r = stream.reader(io, &rbuf);
+        self.len = r.interface.readSliceShort(&self.reply) catch 0;
+    }
+};
+
+test "control: the app's events reach a stream, and the bus listens only while one is open" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var relay: control.routes.Relay = .{};
+    try std.testing.expect(!host.listening.load(.acquire));
+
+    var client: ControlStreamClient = .{ .path = path };
+    const thread = try std.Thread.spawn(.{}, ControlStreamClient.run, .{&client});
+    // Frames, as the app would run them, until the stream is open and the relay listens.
+    var frames: usize = 0;
+    while (frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &relay, &host);
+        server.lock.lockUncancelable(io);
+        const open = server.streams.items.len;
+        server.lock.unlock(io);
+        if (open == 1) break;
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expect(host.listening.load(.acquire));
+
+    host.emitZon("t.done", .{ .n = 1, .mode = .fast });
+    host.emitZon("u.other", .{ .n = 2 });
+    host.deliverEvents();
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    control.routes.stop(&server, &relay, &host);
+    thread.join();
+    // Stopped: nothing listens, so an emit costs the bus its one load again.
+    try std.testing.expect(!host.listening.load(.acquire));
+    const reply = client.reply[0..client.len];
+    try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\nevent: t.done\ndata: {\"n\":1,\"mode\":\"fast\"}\n\n"));
+}
+
 test "a failed open is not a load in flight: settled and live tapes go on" {
     const gpa = std.testing.allocator;
     const Openings = @FieldType(fizzy.Editor, "openings");
