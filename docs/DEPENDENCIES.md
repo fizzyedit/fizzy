@@ -110,6 +110,26 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    proposing. Test: dvui's `zig build test -Dbackend=testing`, "closed RenderFrontToBack blocks
    are drawn after draw-last strokes, before or after they closed".
 
+11. **Window: the pointer kind, and a lifted finger hovers nothing** (`e04bccc`).
+   `dvui.pointerKind()` is `.touch` or `.mouse`: what the last pointer event came from, set as the
+   backend adds events (a touch button is `.touch`; mouse motion, a mouse button or the wheel is
+   `.mouse`). It is the window's, so the app and every plugin dylib or wasm side module read the
+   same answer. The window keeps which touch buttons are down; after a touch with none, the
+   frame's `.position` event is off every window and targets no widget, so a tapped button, menu
+   row or tab is not left lit. Fizzy's hover looks and the corner button's tap (#555) read it.
+   Upstream: worth proposing. Test: "a finger that lifts hovers nothing, and a mouse hovers again".
+12. **cursorSet: a priority, so a resize handle's cursor wins** (`20e56f1`).
+   `dvui.cursorSetPriority(cursor, priority)` keeps the highest asked in a frame (between
+   equals, the first); `cursorSet` asks at `.normal`. Resize handles ask at `.resize` (dvui's
+   `PanedWidget`, `GridWidget` columns, a floating window's bottom-right corner; fizzy's
+   `Split`), a carried thing at `.drag` (fizzy's view drag), so a hover cursor such as a tab's
+   hand never takes a split's arrow. Which widget takes a press is unchanged. Upstream: worth
+   proposing. Test: "cursorSetPriority: the higher asked wins, whichever asked first".
+13. **FloatingWindowWidget: edges ask for their arrow at normal priority** (`40e664c`). Its
+   edges are handled after the window's children, which take a press there first, so their arrow
+   stays at `.normal` and a child under the band keeps both its cursor and its press. Only the
+   bottom-right corner, handled before the children, asks at `.resize`. Upstream: with 12.
+
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
 
@@ -121,7 +141,9 @@ moves, so the second pin of one version takes a suffix, as the SDL fork's tags d
 (never pinned on `main`: its counter was reworked before merge); `fizzy-sdk-0.2.30-1` →
 `e2c9a85` (item 9 alone, never pinned); `fizzy-sdk-0.2.30-2` → `fdc03d4` (pinned by #540);
 `fizzy-sdk-0.2.30-3` → `cc60612` (never
-pinned); `fizzy-sdk-0.2.30-4` → `44010a3`, what `sdk/build.zig.zon` pins now.
+pinned); `fizzy-sdk-0.2.30-4` → `44010a3`; `fizzy-sdk-0.2.30-5` →
+`20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, what `sdk/build.zig.zon`
+pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`

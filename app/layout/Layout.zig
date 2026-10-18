@@ -240,11 +240,11 @@ pub const slot_keywords: []const []const u8 = &.{"slot"};
 // timing, because a sidebar and a document pane travelling at different speeds reads as broken
 // without ever looking wrong in a screenshot.
 
-/// A frame's layout. Made at the top of the frame, before any place draws — which is why a view
-/// being carried asks for its cursor here: dvui gives the cursor to the first to ask, and the
-/// text under the pointer asking for a caret comes later.
+/// A frame's layout. Made at the top of the frame, before any place draws. A view being carried
+/// asks for its cursor at `.drag`, above the caret of the text under the pointer, a tab's hand or
+/// a split's arrow.
 pub fn init(host: *sdk.Host, state: *State, gpa: std.mem.Allocator, arena: std.mem.Allocator) Layout {
-    if (state.view_drag.active()) dvui.cursorSet(ViewDrag.cursor);
+    if (state.view_drag.active()) dvui.cursorSetPriority(ViewDrag.cursor, .drag);
     return .{ .host = host, .state = state, .gpa = gpa, .arena = arena };
 }
 
