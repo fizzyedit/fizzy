@@ -17,6 +17,9 @@
 
 #define G 7
 #define MAX_SHAPES 16
+// How far past its place's outline the outside of the place begins, in pixels: far enough that no
+// sliver of it shows inside, near enough that a shape at the outline still runs into it.
+#define EDGE_GAP 1.0
 
 // No SV_POSITION: D3D12 links a pixel shader's inputs to the vertex shader's outputs by register,
 // and the default vertex shader's third output (the instance) sits where a pixel position read
@@ -118,11 +121,28 @@ float4 main(PSInput input) : SV_Target0
         }
         if (f < f1) { f2 = f1; o2 = o1; f1 = f; o1 = o; } else if (f < f2) { f2 = f; o2 = o; }
     }
+    // The place the glass belongs to (`LiquidField.edge`), in the last slot, flagged 2. Its outside
+    // is one more shape: a shape near the outline runs into it, a neck that joins it to the edge.
+    // Its outline cuts the glass's coverage, so none of it crosses; the rim and the bend come from
+    // the joined shape, so there is no rim along the cut, as if the glass carried on past it.
+    float inPlace = -1e9;
+    float4 e2 = uData[G + 3 * (MAX_SHAPES - 1) + 2];
+    if (e2.w > 1.5) {
+        float4 e0 = uData[G + 3 * (MAX_SHAPES - 1)];
+        float4 e1 = uData[G + 3 * (MAX_SHAPES - 1) + 1];
+        float2 ge;
+        inPlace = sdRoundBox(p - e0.xy, e0.zw, min(e1, (float4)min(e0.z, e0.w)), ge);
+        float d = EDGE_GAP - inPlace;
+        float hs = h1;
+        if (d < d1) { d2 = d1; m2 = m1; h2 = h1; d1 = d; m1 = e2; h1 = hs; } else if (d < d2) { d2 = d; m2 = e2; h2 = hs; }
+        float2 o = -ge;
+        if (d < f1) { f2 = f1; o2 = o1; f1 = d; o1 = o; } else if (d < f2) { f2 = d; o2 = o; }
+    }
     float k = max(g1.x, 0.0001);
     float wm; float wf;
     float D = smin(d1, d2, k, wm);
     float F = smin(f1, f2, k, wf);
-    float cov = clamp(0.5 - D, 0.0, 1.0);
+    float cov = clamp(0.5 - max(D, inPlace), 0.0, 1.0);
     if (cov <= 0.0) discard;
     if (input.color.r < 0.5) return float4(0.0, 0.0, 0.0, cov);
 
@@ -220,7 +240,9 @@ float4 main(PSInput input) : SV_Target0
     bool diagonal = inward && g6.z > 0.0;
     float edge_dark = diagonal ? g6.z * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
                                : 0.85 * (1.0 - smoothstep(0.0, 0.5 * px, -D));
-    float shade = inward ? max(g5.w * t * t, edge_dark) : 0.0;
+    // As much as the edge has formed (`lens`), as its bend, clearing and light are: glass that is
+    // barely a lens yet — a drop sunk into its place's edge — draws no dark line round itself.
+    float shade = inward ? max(g5.w * t * t, edge_dark) * min(lens, 1.0) : 0.0;
     float4 o = float4(c.rgb * (under * (1.0 - shade)), under * (1.0 - shade) + shade);
 // The lift and the rim's light (`drawLift`), brightest facing the top left.
     float spec = inward ? (diagonal ? g6.z * smoothstep(0.75, 1.0, af) : 0.25)

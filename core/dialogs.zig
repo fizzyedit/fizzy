@@ -246,6 +246,11 @@ pub const Bubble = struct {
     /// `radius`: glass cut to fit a corner of something else, as a place's corner is to its card's
     /// curve. Each is held to half the shorter side.
     radii: ?[4]f32 = null,
+    /// How much of a lens it is, 0…1: its edge's bend, clearing, light and dark line
+    /// (`LiquidField.Shape.lens`). Less, it lies flatter in what it is over.
+    lens: f32 = 1,
+    /// How frosted it is, 0 (what is behind, sharp) to 1 (`LiquidField.Shape.blur`).
+    blur: f32 = 1,
 
     fn cornerRadius(self: Bubble) f32 {
         const half = @min(self.rect.w, self.rect.h) / 2;
@@ -278,6 +283,15 @@ pub const BubblesOptions = struct {
     /// A signature of what lies under the bubbles, as `frostPaneKept`'s: the frost is read again
     /// only when it changes. Null reads it every frame.
     witness: ?u64 = null,
+    /// The place the bubbles belong to (`LiquidField.edge`): a bubble near its outline joins it by a
+    /// neck, and none crosses it. Physical. No shadow rings with it (`shadow`). Without the glass
+    /// program, the bubbles are only cut to its rect.
+    edge: ?widgets.LiquidField.Edge = null,
+    /// The glass's colour and how much of it, over the dialog style's (`LiquidField.surface`): for
+    /// glass that must read as part of a surface, as a place's corner at rest does its card's fill.
+    /// Without the glass program, the fill it falls back to.
+    tint: ?dvui.Color = null,
+    mix: f32 = 1,
 };
 
 /// Controls of glass over content, one look wherever they float: the demo player's transport, a
@@ -289,34 +303,44 @@ pub const BubblesOptions = struct {
 pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: BubblesOptions) void {
     const bs = surfaceShadow();
     // The ring after the glass, so the glass never blurs it in.
-    defer if (opts.shadow > 0) for (bubbles) |b| {
+    // None for bubbles merged with an edge: a ring round each bubble's own outline would lie across
+    // its neck, splitting it from the edge it is one glass with.
+    defer if (opts.shadow > 0 and opts.edge == null) for (bubbles) |b| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
         glassShadow(b.rect, b.corners(scale), scale, bs, opts.shadow);
     };
     if (widgets.LiquidField.ready()) {
         if (widgets.liquidFrost()) |frost| {
-            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale };
+            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale, .edge = opts.edge };
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
                 // A capsule's edge bends round as a drop's does; a rounded box's keeps to its sides.
                 const capsule = b.radius == null and b.radii == null;
                 const radii: [4]f32 = if (capsule) @splat(@min(b.rect.w, b.rect.h)) else b.cornerRadii();
-                field.add(.{ .rect = b.rect, .radii = radii, .round = capsule, .light = b.light });
+                field.add(.{ .rect = b.rect, .radii = radii, .round = capsule, .light = b.light, .lens = b.lens, .blur = b.blur });
             }
             var pane = frost;
             pane.form = 1;
+            if (opts.tint) |t| {
+                pane.tint = t;
+                pane.mix = opts.mix;
+                field.surface = true;
+            }
             pane.witness = opts.witness;
             widgets.BlurBackdrop.fieldPane(id, field, scale, pane);
             return;
         }
     }
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    if (opts.edge) |e| dvui.clipSet(prev_clip.intersect(e.rect));
     for (bubbles, 0..) |b, i| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
         const round = b.corners(scale);
         const physical = round.scale(scale, dvui.CornerRect.Physical);
         const piece = id.update(std.mem.asBytes(&i));
         const frosted = if (opts.witness) |w| frostPaneKept(piece, b.rect, round, scale, w) else frostPane(piece, b.rect, round, scale);
-        if (!frosted) b.rect.fill(physical, .{ .color = .{ .color = dialogFill() }, .fade = 1 });
+        if (!frosted) b.rect.fill(physical, .{ .color = .{ .color = if (opts.tint) |t| t.opacity(opts.mix) else dialogFill() }, .fade = 1 });
         if (b.light >= bubble_press) {
             b.rect.fill(physical, .{ .color = .{ .color = rowPress() }, .fade = 1 });
         } else if (b.light > 0) {

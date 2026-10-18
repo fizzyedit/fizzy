@@ -4880,6 +4880,35 @@ test "liquid field: a rounded box's outline is its rect with its own corner per 
     try std.testing.expect(f.hit(.{ .x = 50, .y = 30 }) and !f.hit(.{ .x = 2, .y = 2 }));
 }
 
+test "liquid field: a shape near its place's edge joins it by a neck, and none of it crosses the edge" {
+    const LF = fizzy.core.LiquidField;
+    // A place 200 x 100 at the origin, a 24 radius at its top right; a drop 6px in from its top.
+    var f: LF = .{ .merge_px = 16, .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 }, .radii = .{ 0, 24, 0, 0 } } };
+    f.add(LF.Shape.circle(.{ .x = 100, .y = 26 }, 20));
+    // Between the drop and the edge, a neck: glass where the drop alone has none.
+    try std.testing.expect(f.sample(.{ .x = 100, .y = 3 }).d < 0);
+    var alone: LF = .{ .merge_px = 16 };
+    alone.add(LF.Shape.circle(.{ .x = 100, .y = 26 }, 20));
+    try std.testing.expect(alone.sample(.{ .x = 100, .y = 3 }).d > 0);
+    // The neck is only near the drop: along the edge away from it, no glass, not even a sliver.
+    try std.testing.expectEqual(@as(f32, 0), f.sample(.{ .x = 20, .y = 0.5 }).coverage);
+    try std.testing.expectEqual(@as(f32, 0), f.sample(.{ .x = 20, .y = 3 }).coverage);
+    // A drop pushed past the edge is cut at it: none of it outside the place.
+    var past: LF = .{ .merge_px = 16, .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 } } };
+    past.add(LF.Shape.circle(.{ .x = 100, .y = 0 }, 20));
+    try std.testing.expectEqual(@as(f32, 0), past.sample(.{ .x = 100, .y = -5 }).coverage);
+    try std.testing.expect(past.sample(.{ .x = 100, .y = 5 }).d < 0);
+    // Round the curved corner too: a point past the curve, inside the rect, is outside the place.
+    var corner: LF = .{ .merge_px = 16, .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 }, .radii = .{ 0, 24, 0, 0 } } };
+    corner.add(LF.Shape.circle(.{ .x = 200, .y = 0 }, 20));
+    try std.testing.expectEqual(@as(f32, 0), corner.sample(.{ .x = 199, .y = 1 }).coverage);
+    try std.testing.expect(corner.sample(.{ .x = 190, .y = 10 }).d < 0);
+    // A field with an edge holds one shape fewer: the last slot is the edge's.
+    var full: LF = .{ .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 } } };
+    for (0..LF.max_shapes) |_| full.add(LF.Shape.circle(.{ .x = 50, .y = 50 }, 5));
+    try std.testing.expectEqual(LF.max_shapes - 1, full.len);
+}
+
 test "liquid field: shapes bridge within the merge width, swell no more than a quarter of it, and part beyond" {
     const LF = fizzy.core.LiquidField;
     var f: LF = .{ .merge_px = 16 };

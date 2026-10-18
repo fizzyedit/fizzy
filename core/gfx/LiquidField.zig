@@ -63,6 +63,12 @@ pub const Shape = struct {
 
 shapes: [max_shapes]Shape = undefined,
 len: usize = 0,
+/// The place the glass belongs to: a view's card, rounded or square. Its outside is one more
+/// shape the others run into, so a shape near its outline joins the edge by a neck, metaball-like,
+/// and its outline cuts the glass, so none of it crosses. Never drawn on its own: only the shapes,
+/// and their necks where they come near the edge. It takes the program's last shape slot, so a
+/// field with it holds one shape fewer.
+edge: ?Edge = null,
 /// Physical pixels: how far apart two shapes still bridge. 0 never joins.
 merge_px: f32 = 0,
 scale: f32 = 1,
@@ -77,11 +83,25 @@ refraction: f32 = 1,
 /// It carries text — a dialog, a menu — and takes the window's colour as the opacity has it
 /// (`glass_look.forText`).
 text: bool = false,
+/// Its tint and mix are its own, kept over the look the app publishes (`publishLook`): glass that
+/// must read as part of a surface, as a place's corner at rest does its card's fill.
+surface: bool = false,
 /// It is a lens over a picture of the caller's own (`drawPicture`): its middle the picture as it
 /// is, only the band along its edge glass (`glass_look.forLens`).
 lens: bool = false,
 
+/// A place's outline (`edge`), physical: its rect and its corner radii, top-left, top-right,
+/// bottom-right, bottom-left.
+pub const Edge = struct {
+    rect: dvui.Rect.Physical,
+    radii: [4]f32 = @splat(0),
+};
+
+/// Pixels past its place's outline the outside of the place begins: `EDGE_GAP` in the program.
+const edge_gap: f32 = 1;
+
 pub fn add(self: *LiquidField, shape: Shape) void {
+    if (self.len >= max_shapes - 1 and self.edge != null) return;
     if (self.len >= max_shapes) return;
     self.shapes[self.len] = shape;
     self.len += 1;
@@ -91,7 +111,15 @@ pub fn add(self: *LiquidField, shape: Shape) void {
 pub fn bounds(self: *const LiquidField) dvui.Rect.Physical {
     var r: dvui.Rect.Physical = .{};
     for (self.shapes[0..self.len], 0..) |s, i| r = if (i == 0) s.rect else r.unionWith(s.rect);
-    return r.outsetAll(self.merge_px * 0.25 + 1);
+    return self.withReach(r);
+}
+
+/// `r`, some shapes' rect, with room for what joins them: the bridges between them, and with an
+/// edge, the neck to it (as far as a shape can be from the outline and still join it, half the
+/// merge width), kept inside the place.
+fn withReach(self: *const LiquidField, r: dvui.Rect.Physical) dvui.Rect.Physical {
+    const e = self.edge orelse return r.outsetAll(self.merge_px * 0.25 + 1);
+    return r.outsetAll(self.merge_px * 0.5 + 1).intersect(e.rect.outsetAll(1));
 }
 
 // ── Groups ──────────────────────────────────────────────────────────────────────────────────────
@@ -223,6 +251,16 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
             .{ sh.blur, sh.lens, sh.light, if (sh.round) 1 else 0 },
         };
     }
+    if (self.edge) |e| {
+        // In the last slot, flagged 2: the program reads it there, whatever the groups. Its glass is
+        // the first shape's, where they meet.
+        const first: Shape = if (self.len > 0) self.shapes[0] else .{ .rect = e.rect };
+        u.shapes[max_shapes - 1] = .{
+            .{ e.rect.x + e.rect.w / 2, e.rect.y + e.rect.h / 2, e.rect.w / 2, e.rect.h / 2 },
+            e.radii,
+            .{ first.blur, first.lens, 0, 2 },
+        };
+    }
     return u;
 }
 
@@ -304,9 +342,12 @@ fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
     u.backdrop[3] = l.bevel_cap * self.scale;
     u.rim[1] = l.clarity * bend_scale;
     u.rim[3] = l.rim;
-    u.face[0] = std.math.clamp(l.mix, 0, 1);
-    u.face[1] = std.math.clamp(l.lift, 0, 1);
+    if (!self.surface) {
+        u.face[0] = std.math.clamp(l.mix, 0, 1);
+        u.face[1] = std.math.clamp(l.lift, 0, 1);
+    }
     for (u.shapes[0..self.len]) |*sh| sh[2][0] *= l.frost;
+    if (self.edge != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }
 
 /// Whether `draw` would draw now: programs here, switched on, compiled.
@@ -403,7 +444,8 @@ fn quads(self: *const LiquidField, groups: Clusters, glass: bool, frost: dvui.Te
         const n = groups.size[g];
         var r = self.shapes[groups.order[first]].rect;
         for (groups.order[first..][0..n]) |i| r = r.unionWith(self.shapes[i].rect);
-        r = r.outsetAll(self.merge_px * 0.25 + 1);
+        r = self.withReach(r);
+        if (r.empty()) continue;
         const col: dvui.Color.PMA = .{ .r = if (glass) 255 else 0, .g = first, .b = n, .a = 255 };
         const base: dvui.Vertex.Index = @intCast(4 * g);
         for ([_]dvui.Point.Physical{ r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft() }) |p| {
@@ -474,6 +516,37 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
             o2 = o;
         }
     }
+    // The place (`edge`): its outside one more shape, its outline cutting the coverage.
+    var in_place: f32 = -big;
+    if (self.edge) |e| {
+        const c: [2]f32 = .{ e.rect.x + e.rect.w / 2, e.rect.y + e.rect.h / 2 };
+        const half: [2]f32 = .{ e.rect.w / 2, e.rect.h / 2 };
+        const lim = @min(half[0], half[1]);
+        const radii: [4]f32 = .{ @min(e.radii[0], lim), @min(e.radii[1], lim), @min(e.radii[2], lim), @min(e.radii[3], lim) };
+        var g: [2]f32 = undefined;
+        in_place = roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
+        const d = edge_gap - in_place;
+        const mat: [3]f32 = .{ m1[0], m1[1], 0 };
+        if (d < d1) {
+            d2 = d1;
+            m2 = m1;
+            d1 = d;
+            m1 = mat;
+        } else if (d < d2) {
+            d2 = d;
+            m2 = mat;
+        }
+        const o: [2]f32 = .{ -g[0], -g[1] };
+        if (d < f1) {
+            f2 = f1;
+            o2 = o1;
+            f1 = d;
+            o1 = o;
+        } else if (d < f2) {
+            f2 = d;
+            o2 = o;
+        }
+    }
     const k = @max(self.merge_px, 0.0001);
     var wm: f32 = 0;
     var wf: f32 = 0;
@@ -481,8 +554,8 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
     const f = smin(f1, f2, k, &wf);
     const soft = @max(0, -f);
     return .{
-        .d = d,
-        .coverage = std.math.clamp(0.5 - d, 0, 1),
+        .d = @max(d, in_place),
+        .coverage = std.math.clamp(0.5 - @max(d, in_place), 0, 1),
         .out = .{ .x = std.math.lerp(o1[0], o2[0], wf), .y = std.math.lerp(o1[1], o2[1], wf) },
         .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
         .blur = std.math.lerp(m1[0], m2[0], wm),
