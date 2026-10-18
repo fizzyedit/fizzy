@@ -603,6 +603,31 @@ Outside a region's draw, `host.assignSurfaces(name, ids)` / `assignedSurfaces(na
 the picker uses — a tab dragged to another pane is an assignment edit, and session restore is
 the assignment list read back.
 
+**Showing and putting away a view.** A plugin names its view, never a place, so a "Show X"
+command works wherever the user moved it, in any app's shape:
+
+```zig
+_ = host.revealSurface(id);                               // show it
+if (!host.hideSurface(id)) _ = host.revealSurface(id);    // toggle it
+```
+
+- `revealSurface(id)` selects `id` in the region that shows it (where the user moved it, floats
+  included) and opens that region if it was shut or folded away. False when no region shows it.
+- `hideSurface(id)` puts it away as the user would, in two cases only:
+  - **It is what a tray shows.** A tray is a place the shape declared resizable and the user did
+    not make by splitting (fizzy's sidebar and bottom panel). If it is open and showing `id`, it
+    shuts, with whatever else it holds, as its own close does. `revealSurface` opens it again at
+    the size the user left it.
+  - **It is alone in a float.** The float closes as its close button does, and the view goes back
+    to the place it floated out of. There it may well be in sight again.
+
+  Anything else returns false and changes nothing: a view in Main, in a place a split made (of
+  a tray too), in a plugin's pane, behind another view, in a float with others, or already out
+  of sight (its tray shut or folded).
+- **Asked from a draw.** Mid-frame, `hideSurface` answers at once and acts when the frame has
+  drawn, since the places it changes are being drawn. `revealSurface` acts at once, so a hide
+  asked first in a frame still lands after a reveal asked later in it: make one call a frame.
+
 **Dragging a view onto a region is the app's gesture, everywhere.** While a view is dragged,
 the region under the pointer shows its drop (`core.widgets.DropZones`): a cluster of glass
 bubbles in its middle — the middle for into the place, one on each side for a split there, and a

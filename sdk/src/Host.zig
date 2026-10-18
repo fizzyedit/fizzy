@@ -681,6 +681,23 @@ pub fn revealSurface(self: *Host, id: []const u8) bool {
     return a.revealSurface(id);
 }
 
+/// Put the surface `id` away, as the user would: `revealSurface`'s other half, so a button can
+/// toggle its view (`if (!host.hideSurface(id)) _ = host.revealSurface(id);`). Only two cases
+/// act, and anything else returns false and changes nothing:
+///
+/// - the view is what a tray shows (a place the shape declared resizable: fizzy's sidebar and
+///   bottom panel), and the tray is open: the tray shuts, with whatever else it holds, as its own
+///   close does. `revealSurface` opens it again at the size the user left it;
+/// - the view is alone in a float: the float closes as its close button does, and the view goes
+///   back to the place it floated out of.
+///
+/// Asked during a frame (from a surface's draw), it answers at once and acts once the frame has
+/// drawn. Full contract: `docs/PLUGINS.md` §3.1.2, "Showing and putting away a view".
+pub fn hideSurface(self: *Host, id: []const u8) bool {
+    const a = self.fizzy_api orelse return false;
+    return a.hideSurface(id);
+}
+
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
 }

@@ -2454,6 +2454,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .assignedRegionNames = fizzyAssignedRegionNames,
     .selectInRegion = fizzySelectInRegion,
     .revealSurface = fizzyRevealSurface,
+    .hideSurface = fizzyHideSurface,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
@@ -4600,15 +4601,18 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
             editor.app.layout.publishRegions();
-            // A drag or a collapse moved a region: fizzy's answer to "remember that" is a
-            // debounced write to `layout.zon`.
-            if (layout.extents_changed) editor.markWindowRatiosDirty();
             // Over every place: a drag's join spans two of them.
             layout.drawDragOverlay();
             // The picker photographs surfaces that drew nowhere this frame, and floats above
             // everything the shape drew.
             layout.captureUnplaced();
             editor.app.layout.picker.draw(&layout);
+            // Everything that walks the places has drawn: what plugins asked to put away during
+            // the frame (`Host.hideSurface`) goes now.
+            if (layout.applyHides()) editor.afterHide();
+            // A drag, a collapse, the picker or a hide moved a region: fizzy's answer to
+            // "remember that" is a debounced write to `layout.zon`.
+            if (layout.extents_changed) editor.markWindowRatiosDirty();
             editor.app.frame_layout = null;
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
@@ -5169,6 +5173,24 @@ fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {
     // published for exactly this (`Layout.State.regions`).
     var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
     return layout.reveal(id);
+}
+
+fn fizzyHideSurface(ctx: *anyopaque, id: []const u8) bool {
+    const editor = fizzyCtx(ctx);
+    // Mid-frame the shape and the floats are walking what a hide changes: done at the frame's end.
+    if (editor.app.frame_layout) |layout| return layout.hideLater(id);
+    var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
+    if (!layout.hide(id)) return false;
+    editor.afterHide();
+    if (layout.extents_changed) editor.markWindowRatiosDirty();
+    return true;
+}
+
+/// A hide acted (`Layout.hide`). One that shut the sidebar goes through the explorer's own close,
+/// as the rail's does, so the `closed` that Toggle Explorer and its menu title read agrees.
+fn afterHide(editor: *Editor) void {
+    const side = editor.regionFor(sdk.keywords.ide.sidebar) orelse return;
+    if (side.isClosed() and !editor.explorer.closed) editor.explorer.close(editor);
 }
 
 fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {

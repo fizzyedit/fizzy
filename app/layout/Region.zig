@@ -557,6 +557,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .default_extent = default_extent,
         .by_name = init_opts.by_name,
         .kind_slot = init_opts.kind_slot,
+        .resize = init_opts.resize,
         .forget_when_empty = init_opts.forget_when_empty,
         .dir = init_opts.dir,
         .on_drop = init_opts.on_drop,
