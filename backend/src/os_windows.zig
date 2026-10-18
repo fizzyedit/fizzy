@@ -229,18 +229,23 @@ pub fn beforeFrame() void {
         // go, as a floating window of its own again (`torn`). Wholly, so a window only overlapping
         // the main one stays a window.
         if (viewports.osMoveEnded(o.viewport)) |end| if (!end.resized and torn(o.id) and viewports.mainHolds(o.viewport)) {
+            // Its content where it was and at its size, dvui's header above it where the title bar
+            // was: the floating window's rect holds its header, and given only the content's, the
+            // content came back a header shorter (the user).
             const content = viewports.inMain(o.viewport);
-            dvui.dataSet(null, o.id, "_rect", natural(content, s));
+            const header = headerHeight();
+            const c: dvui.Rect.Physical = .{ .x = content.x, .y = content.y, .w = content.w, .h = content.h };
+            const to: dvui.Rect.Physical = .{ .x = c.x, .y = c.y - header, .w = c.w, .h = c.h + header };
+            dvui.dataSet(null, o.id, "_rect", natural(viewRect(to), s));
             for (&torn_list) |*ts| if (ts.*) |tt| if (tt.id == o.id) {
                 ts.* = null;
             };
             // Shrinking into its place from its window, its last picture in a card over it
             // (`Merge`); or there at once where no card can be made.
             const band = viewports.titleBand();
-            const c: dvui.Rect.Physical = .{ .x = content.x, .y = content.y, .w = content.w, .h = content.h };
             const from: dvui.Rect.Physical = .{ .x = c.x, .y = c.y - band, .w = c.w, .h = c.h + band };
             if (merge == null and o.target != null and viewports.tears()) if (viewports.openCarry(viewRect(from))) |card| {
-                merge = .{ .id = o.id, .card = card, .snap = o.target.?, .from = from, .band = band, .to = c, .header = headerHeight(), .start_ns = dvui.currentWindow().frame_time_ns };
+                merge = .{ .id = o.id, .card = card, .snap = o.target.?, .from = from, .band = band, .to = to, .header = header, .start_ns = dvui.currentWindow().frame_time_ns };
                 o.target = null;
             };
             viewports.close(o.viewport);
