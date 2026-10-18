@@ -199,6 +199,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // Left: it goes soon, rather than lingering its whole time.
     if (self.was_on and !on_bar and self.drag == null and self.window == null) self.shown.soon(now, dome_rules.leave_ns);
     self.was_on = on_bar and !self.held_off;
+    // Every frame, so it sees the pointer leave the grip whichever way it goes.
+    const grows = self.dwell.hold(on_grip, self.drag == null and self.shown.openness(now) <= 0, now);
     if (self.drag != null) {
         self.shown.stir(now);
         if (opts.frames != null) self.strip.stir(now);
@@ -206,7 +208,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         self.shown.stir(now);
         // On the bar, a strip grown stays.
         if (self.strip.openness(now) > 0) self.strip.stir(now);
-    } else if (self.dwell.hold(on_grip and self.shown.openness(now) <= 0, now)) self.stir(now);
+    } else if (grows) self.stir(now);
     // An open window keeps the bar and its strip.
     if (self.window != null) {
         self.shown.stir(now);

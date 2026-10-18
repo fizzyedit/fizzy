@@ -32,15 +32,19 @@ pub const Dwell = struct {
     /// bar once, not again each time the bar goes back in.
     spent: bool = false,
 
-    /// The pointer is on the dome (`on`) or not at `now_ns`. True once it has stayed `dwell_ns`:
-    /// the bar grows. It fires again only after the pointer has left the dome.
-    pub fn hold(self: *Dwell, on: bool, now_ns: i128) bool {
+    /// The pointer is on the dome (`on`) or not at `now_ns`, and the bar is in it to grow out
+    /// (`ready`). True once it has stayed `dwell_ns`: the bar grows. It fires again only after the
+    /// pointer has left the dome; the bar showing and going under a resting pointer is not leaving.
+    pub fn hold(self: *Dwell, on: bool, ready: bool, now_ns: i128) bool {
         if (!on) {
             self.since = null;
             self.spent = false;
             return false;
         }
-        if (self.spent) return false;
+        if (self.spent or !ready) {
+            self.since = null;
+            return false;
+        }
         const since = self.since orelse now_ns;
         self.since = since;
         if (now_ns - since < dwell_ns) return false;
@@ -216,23 +220,25 @@ const ms = std.time.ns_per_ms;
 
 test "a dome grows only for a pointer held on it" {
     var d: Dwell = .{};
-    try testing.expect(!d.hold(true, 0));
+    try testing.expect(!d.hold(true, true, 0));
     try testing.expectApproxEqAbs(@as(f32, 0.5), d.held(dwell_ns / 2), 0.001);
     // Passing over: off it before the dwell, and it starts over.
-    try testing.expect(!d.hold(false, dwell_ns / 2));
+    try testing.expect(!d.hold(false, true, dwell_ns / 2));
     try testing.expectEqual(@as(f32, 0), d.held(dwell_ns));
-    try testing.expect(!d.hold(true, 1000 * ms));
-    try testing.expect(!d.hold(true, 1000 * ms + dwell_ns - 1));
-    try testing.expect(d.hold(true, 1000 * ms + dwell_ns));
+    try testing.expect(!d.hold(true, true, 1000 * ms));
+    try testing.expect(!d.hold(true, true, 1000 * ms + dwell_ns - 1));
+    try testing.expect(d.hold(true, true, 1000 * ms + dwell_ns));
     // Fired, a pointer resting there does not fire it again, however long it rests (the bar it
     // grew went back in under it), and asks for nothing meanwhile.
-    try testing.expect(!d.hold(true, 1000 * ms + dwell_ns + 16 * ms));
-    try testing.expect(!d.hold(true, 60_000 * ms));
+    // The bar out over it (not ready), then back in: still the same resting pointer.
+    try testing.expect(!d.hold(true, false, 1000 * ms + dwell_ns + 16 * ms));
+    try testing.expect(!d.hold(true, false, 4000 * ms));
+    try testing.expect(!d.hold(true, true, 60_000 * ms));
     try testing.expect(d.since == null);
     // Left and come back, it can again.
-    try testing.expect(!d.hold(false, 61_000 * ms));
-    try testing.expect(!d.hold(true, 62_000 * ms));
-    try testing.expect(d.hold(true, 62_000 * ms + dwell_ns));
+    try testing.expect(!d.hold(false, true, 61_000 * ms));
+    try testing.expect(!d.hold(true, true, 62_000 * ms));
+    try testing.expect(d.hold(true, true, 62_000 * ms + dwell_ns));
 }
 
 test "a dome is quiet at rest and comes up in use" {

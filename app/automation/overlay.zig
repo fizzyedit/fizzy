@@ -638,7 +638,7 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     }.f;
     // Held on the dome while the bar is in it: out it comes.
     const dome_hit = wrs.rectToPhysical(dome.rect(center.x, edge, dome.radius).outsetAll(dome.reach));
-    if (st.dwell.hold(!tr.closing and tr.openness <= 0 and on(dome_hit, pointer), wall_ns)) {
+    if (st.dwell.hold(on(dome_hit, pointer), !tr.closing and tr.openness <= 0, wall_ns)) {
         tr.tucked = false;
         tr.stirred_ns = wall_ns;
     }
