@@ -454,6 +454,8 @@ pub fn joinable(self: *const State, a: []const u8, b: []const u8) ?SplitTree.For
 pub fn registerRegion(self: *State, gpa: std.mem.Allocator, entry: Region) void {
     var r = entry;
     r.layer = self.layer_building;
+    const kept = self.extent(r.name, 0);
+    r.reopen_extent = if (kept > 0) kept else r.default_extent;
     if (r.name.len > 0) r.shows = self.showsOf(r.name, r.shows);
     self.regions_building.append(gpa, r) catch {};
 }

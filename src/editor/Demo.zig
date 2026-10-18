@@ -774,7 +774,7 @@ fn capture(ctx: *anyopaque) ?*anyopaque {
         .nodes = &.{},
         .docs = &.{},
         .active = null,
-        .explorer_closed = editor.explorer.closed,
+        .explorer_closed = Editor.Explorer.isShut(editor),
         .branches = &.{},
         .root_opened = editor.workbench.file_tree_root_opened,
         .settings = &.{},
@@ -871,7 +871,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
         if (openIndex(editor, snap.docs[a].path)) |index| editor.workbench.setActiveDocIndex(index);
     }
 
-    if (snap.explorer_closed != editor.explorer.closed) {
+    if (snap.explorer_closed != Editor.Explorer.isShut(editor)) {
         if (snap.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
     }
     editor.workbench.open_branches.clearRetainingCapacity();
@@ -910,7 +910,7 @@ fn fingerprint(ctx: *anyopaque) u64 {
         h.update(std.mem.asBytes(&print));
     }
     if (editor.activeDoc()) |d| h.update(d.owner.documentPath(d));
-    h.update(std.mem.asBytes(&editor.explorer.closed));
+    h.update(&.{@intFromBool(Editor.Explorer.isShut(editor))});
     if (self.mem) |mem| {
         for (mem.nodes.keys(), mem.nodes.values()) |path, node| {
             h.update(path);

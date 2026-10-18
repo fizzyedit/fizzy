@@ -841,7 +841,7 @@ fn removeRegion(f: *Layout, region: *const Layout.Region) void {
         _ = ViewDrag.closeEmptied(f, region.name);
     } else if (forget) {
         if (region.id != .zero and (dvui.dataGet(null, region.id, "_size", f32) orelse 0) > 0) {
-            Split.close(region.id);
+            Split.close(region.id, region.reopen_extent);
             f.extents_changed = true;
         } else if (f.state.splits.collapse(gpa, region.name)) {
             if (f.state.clearExtent(gpa, region.name)) f.extents_changed = true;

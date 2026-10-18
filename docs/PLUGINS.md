@@ -563,6 +563,38 @@ Pixi's project preview (`keywords = sdk.keywords.ide.main, takeover_when = "pixi
 the main area while "Project" is the sidebar tab; the store's README fills it while a plugin card is selected. One
 rule in the layout, declared on the surface, instead of a hook per place it can happen.
 
+**Showing and putting away.** A plugin names its view, never a place, so its "Show X" works
+wherever the user moved the view and in any app's shape. `host.revealSurface(id)` selects the
+view in the place showing it and opens that place if it was shut or folded away;
+`host.hideSurface(id)` is the inverse, the user's own close, and this is its contract. It
+returns true when the view was in sight and is not now. "In sight" means its place shows it and
+neither the place nor the tray round it is shut, or folded away by a narrow window.
+
+- In a tray (a sidebar, the bottom panel), or a place the user split off one, the tray shuts,
+  with whatever else it holds; `revealSurface` opens it again at the size the user left it.
+- Anywhere else (the main area or a place split off it, a document pane, a dockspace cell)
+  nothing happens, and it returns false.
+- In a float, the view alone goes back to the place it floated out of, as closing the float
+  would send it; the float's other views stay, and the float closes only if this was its last.
+  If the view lands as a tray's selection, the tray shuts, folded or not, so it doesn't come back
+  as the window widens; in sight anywhere else, it returns false. If nowhere in the main window
+  would show it (its home is gone and no place takes it), it stays in the float and the answer
+  is false.
+- A view not in sight (another view is its place's selection, its tray is shut or folded) is
+  left alone, and it returns false.
+- Called while a frame draws (a button in your surface), it happens at the frame's end, once
+  nothing is drawing the places it changes; the answer is then whether it will happen.
+
+So a toggle is
+
+```zig
+if (!host.hideSurface(id)) _ = host.revealSurface(id);
+```
+
+Both act on the layout's own state, so the rail, the picker and the saved session agree with
+them; there is no separate shown flag to keep in step. (`Surface.hidden`, set with
+`host.setSurfaceHidden`, is different: it takes a surface out of every place until it is unset.)
+
 **Documents are surfaces.** When a load lands the app registers one surface per open document —
 id `sdk.document.surfaceId(owner_id, path)` (`"<owner>.doc:<path>"`), keywords `{"document"}`,
 `draw` = a canvas box plus `owner.drawDocument(doc)` — and unregisters it on close

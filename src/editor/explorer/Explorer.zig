@@ -28,16 +28,30 @@ scroll_info: dvui.ScrollInfo = .{
 rect: dvui.Rect = .{},
 rect_screen: dvui.Rect.Physical = .{},
 animations_ratio: f32 = 0.5,
-closed: bool = false,
 collapse_btn_anim_started: bool = false,
 
-pub fn close(explorer: *Explorer, editor: *fizzy.Editor) void {
-    explorer.closed = true;
+/// Whether the user (or a plugin, `Host.hideSurface`) shut the explorer: its sidebar region's own
+/// state, which the rail, Toggle Explorer and `hideSurface` all write. Not folded away by a narrow
+/// window, which is the window's doing, not anyone's choice: what the menu title, the keybind
+/// context and a demo's snapshot read, none of which may change with the window's width. No
+/// sidebar declared (before the first frame, a shape without one): not shut.
+pub fn isShut(editor: *fizzy.Editor) bool {
+    const r = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return false;
+    return r.isClosed();
+}
+
+/// Whether the explorer is on screen: its sidebar region neither shut nor folded away. What
+/// Toggle Explorer decides by, so a folded explorer opens in one press.
+pub fn inSight(editor: *fizzy.Editor) bool {
+    const r = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return false;
+    return !r.isClosed() and !r.isFolded();
+}
+
+pub fn close(_: *Explorer, editor: *fizzy.Editor) void {
     if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.close();
 }
 
-pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
-    explorer.closed = false;
+pub fn open(_: *Explorer, editor: *fizzy.Editor) void {
     if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.open();
 }
 
@@ -45,7 +59,6 @@ pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
 /// worth seeing. `Region.close` withdraws the peek, so the narrow layout goes back to collapsing
 /// it by itself.
 pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
-    explorer.closed = true;
     explorer.collapse_btn_anim_started = false;
     if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.close();
 }

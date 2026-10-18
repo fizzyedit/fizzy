@@ -2340,6 +2340,13 @@ const ManyPanelFrame = struct {
     fn frame() anyerror!dvui.App.Result {
         const e = editor.?;
         var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        // As fizzy's frame does: the layout published while it draws, and what was put away
+        // mid-frame applied at its end.
+        e.app.frame_layout = &layout;
+        defer {
+            e.app.frame_layout = null;
+            layout.applyLater();
+        }
         {
             var content = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
             defer content.deinit();
@@ -3167,7 +3174,7 @@ test "split: a column shut by its sash goes only once every place in it is empty
 
     // Shut with a view still in its bottom half: the column stays, and so does every place in it.
     try state.assign(editor.app.gpa, "Main/r1", &.{});
-    fizzy.core.widgets.Split.close(column);
+    fizzy.core.widgets.Split.close(column, 0);
     try dvui.testing.settle(ColumnCardFrame.frame);
     try dvui.testing.settle(ColumnCardFrame.frame);
     try std.testing.expectEqual(@as(usize, 3), state.splits.leavesUnder(dvui.currentWindow().arena(), "Main").len);
@@ -5702,6 +5709,233 @@ test "float: closing it loses no view its keywords would show nowhere" {
     try std.testing.expect(holds(panel, "test.tools"));
 }
 
+/// `Layout.hide` / `Layout.reveal` between frames, on last frame's places, as a command calls them.
+fn hideView(editor: *fizzy.Editor, id: []const u8) bool {
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    return layout.hide(id);
+}
+fn revealView(editor: *fizzy.Editor, id: []const u8) bool {
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    return layout.reveal(id);
+}
+
+/// Whether last frame's place `name` is shut, as a command between frames reads it.
+fn isShut(editor: *fizzy.Editor, name: []const u8) !bool {
+    const r = fizzy.Editor.Layout.ViewDrag.regionNamed(&editor.app.layout, name) orelse return error.TestUnexpectedResult;
+    return r.isClosed();
+}
+
+test "hide: a view in sight shuts its place, and reveal opens it again" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try std.testing.expect(!try isShut(editor, "Panel"));
+
+    try std.testing.expect(hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(try isShut(editor, "Panel"));
+    // Out of sight already: nothing to put away.
+    try std.testing.expect(!hideView(editor, "test.output"));
+
+    try std.testing.expect(revealView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(!try isShut(editor, "Panel"));
+
+    // Nothing shows an unknown id, and Main is not a place that shuts.
+    try std.testing.expect(!hideView(editor, "nothing.here"));
+    try std.testing.expect(!hideView(editor, "test.main"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(holds(case.shows("Main"), "test.main"));
+}
+
+test "hide: a view behind another in its place is not in sight, and its place stays open" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.problems", .title = "Problems", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(revealView(editor, "test.problems"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+
+    try std.testing.expect(!hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(!try isShut(editor, "Panel"));
+    // The one showing goes, and takes the place with it.
+    try std.testing.expect(hideView(editor, "test.problems"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(try isShut(editor, "Panel"));
+}
+
+test "hide: a floating view goes home and its tray shuts, and the toggle goes round" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+
+    try std.testing.expect(hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+    // Home again, as the float's own close sends it, and its place shut over it.
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+    try std.testing.expect(try isShut(editor, "Panel"));
+
+    // Round the toggle: reveal opens it at home, hide shuts it, reveal opens it again.
+    try std.testing.expect(revealView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(!try isShut(editor, "Panel"));
+    try std.testing.expect(hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(try isShut(editor, "Panel"));
+    try std.testing.expect(revealView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(!try isShut(editor, "Panel"));
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+}
+
+/// A view that puts itself away from inside its own draw, once asked, as a button in it would.
+const HidesItself = struct {
+    var asked: bool = false;
+    var answer: ?bool = null;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        if (!asked) return .ok;
+        asked = false;
+        const layout = ManyPanelFrame.editor.?.app.frame_layout orelse return error.TestUnexpectedResult;
+        answer = layout.hideLater("test.hider");
+        return .ok;
+    }
+};
+
+test "hide: asked from inside a floating view's draw, it waits for the frame's end" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.hider", .title = "Hider", .keywords = fizzy.sdk.keywords.ide.panel, .draw = HidesItself.draw });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(revealView(editor, "test.hider"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try case.place("Panel", "Panel", .swap);
+    try std.testing.expect(holds(case.shows("Float 1"), "test.hider"));
+
+    HidesItself.asked = true;
+    HidesItself.answer = null;
+    _ = try dvui.testing.step(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(?bool, true), HidesItself.answer);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), openFloats(editor));
+    try std.testing.expect(holds(case.shows("Panel"), "test.hider"));
+    try std.testing.expect(try isShut(editor, "Panel"));
+}
+
+test "hide: one view of several in a float goes home alone, and the float keeps the rest" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.problems", .title = "Problems", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try case.place("Panel", "Panel", .swap);
+    try editor.app.layout.assign(editor.app.gpa, "Float 1", &.{ "test.output", "test.problems" });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(revealView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+
+    try std.testing.expect(hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    const floated = case.shows("Float 1");
+    try std.testing.expectEqual(@as(usize, 1), floated.len);
+    try std.testing.expectEqualStrings("test.problems", floated[0]);
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+    try std.testing.expect(try isShut(editor, "Panel"));
+}
+
+test "hide: a place split off Main does not shut, and nothing changes" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Main", .{ .split = .right });
+    const half = case.placeNamed(&.{ "Main", "Panel" }) orelse return error.TestExpectedEqual;
+    try std.testing.expect(holds(case.shows(half), "test.output"));
+
+    try std.testing.expect(!hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(holds(case.shows(half), "test.output"));
+    try std.testing.expect(!try isShut(editor, half));
+}
+
+test "hide: a place in a dockspace cell (`regionIn`) does not shut, and nothing changes" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try std.testing.expectEqualStrings("test.other", visibleIn(editor, case.half) orelse return error.TestExpectedEqual);
+
+    try std.testing.expect(!hideView(editor, "test.other"));
+    try dvui.testing.settle(EndlessFrame.frame);
+    try std.testing.expectEqualStrings("test.other", visibleIn(editor, case.half) orelse return error.TestExpectedEqual);
+}
+
+test "hide: a floating view nowhere in the main window would show stays in its float" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    // Floated out of the half the user split off, which closes behind it: its home is gone, and
+    // Center, a place of one view already holding one, takes nothing else.
+    try case.place(case.half, case.half, .swap);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    try std.testing.expectEqualStrings("test.other", visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual);
+
+    try std.testing.expect(!hideView(editor, "test.other"));
+    try dvui.testing.settle(EndlessFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    try std.testing.expectEqualStrings("test.other", visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual);
+    try std.testing.expect(revealView(editor, "test.other"));
+}
+
+test "hide: a view in a place split off a tray shuts the tray, and reveal opens it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.problems", .title = "Problems", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    const lifted = visibleIn(editor, "Panel") orelse return error.TestExpectedEqual;
+    try case.place("Panel", "Panel", .{ .split = .right });
+    const half = case.placeNamed(&.{ "Main", "Panel" }) orelse return error.TestExpectedEqual;
+    try std.testing.expect(holds(case.shows(half), lifted));
+
+    try std.testing.expect(hideView(editor, lifted));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(try isShut(editor, "Panel"));
+    // Shut round it, it is out of sight: nothing more to put away.
+    try std.testing.expect(!hideView(editor, lifted));
+    try std.testing.expect(revealView(editor, lifted));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(!try isShut(editor, "Panel"));
+}
+
+test "hide: a tray its view floated out of opens again at the size the user left it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const panel_id = (fizzy.Editor.Layout.ViewDrag.regionNamed(&editor.app.layout, "Panel") orelse return error.TestUnexpectedResult).id;
+    dvui.dataSet(null, panel_id, "_size", @as(f32, 300));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(f32, 300), editor.app.layout.extent("Panel", 0));
+
+    // Its only view floats out, so it draws nothing for a while; then the view is put away.
+    try case.place("Panel", "Panel", .swap);
+    for (0..4) |_| try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(try isShut(editor, "Panel"));
+
+    try std.testing.expect(revealView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(?f32, 300), dvui.dataGet(null, panel_id, "_size", f32));
+}
+
 test "float: the saved layout brings it back, and Reset Layout takes it away" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
@@ -6696,7 +6930,6 @@ test "a key bound with arguments runs its command with them, and is not its shor
     // `tick` reads which context the keys land in; the shim's editor has no explorer of its own.
     var explorer: fizzy.Editor.Explorer = undefined;
     @memset(std.mem.asBytes(&explorer), 0);
-    explorer.closed = true;
     editor.explorer = &explorer;
 
     const vtable = sdk.Plugin.VTable{};
@@ -8453,6 +8686,25 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(!panel.isClosed());
         try std.testing.expectEqualStrings("fizzy.output", editor.app.host.selectionFor(sdk.keywords.ide.panel) orelse "");
         try std.testing.expect(!editor.app.host.revealSurface("nothing.here"));
+        try dvui.testing.settle(headlessFrame);
+        // And put away again (`Host.hideSurface`): the panel shuts, and a second ask has nothing
+        // in sight to put away.
+        try std.testing.expect(editor.app.host.hideSurface("fizzy.output"));
+        try std.testing.expect(panel.isClosed());
+        try std.testing.expect(!editor.app.host.hideSurface("fizzy.output"));
+        try std.testing.expect(editor.app.host.revealSurface("fizzy.output"));
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // The sidebar's view put away shuts the explorer, and Toggle Explorer, reading the same
+    // region, opens it again in one press.
+    {
+        const host = &editor.app.host;
+        const files = host.selectionFor(sdk.keywords.ide.sidebar) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(host.hideSurface(files));
+        try std.testing.expect(fizzy.Editor.Explorer.isShut(editor));
+        try std.testing.expect(host.callCommand("fizzy.toggleExplorer", "", host.arena()) == .ok);
+        try std.testing.expect(fizzy.Editor.Explorer.inSight(editor));
         try dvui.testing.settle(headlessFrame);
     }
 

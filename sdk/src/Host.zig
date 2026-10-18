@@ -647,6 +647,15 @@ pub fn revealSurface(self: *Host, id: []const u8) bool {
     return a.revealSurface(id);
 }
 
+/// Put the surface `id` out of sight, as the user would: `revealSurface` undone. True when it
+/// was in sight and is not now (mid-frame: when it will be, at the frame's end). A toggle is
+/// `if (!host.hideSurface(id)) _ = host.revealSurface(id);`. What it does in a tray, a float and
+/// elsewhere: `docs/PLUGINS.md` §3.1.2, "Showing and putting away".
+pub fn hideSurface(self: *Host, id: []const u8) bool {
+    const a = self.fizzy_api orelse return false;
+    return a.hideSurface(id);
+}
+
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
 }

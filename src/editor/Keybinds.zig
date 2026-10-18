@@ -582,8 +582,9 @@ fn cmdCommandPalette(state: *anyopaque) anyerror!void {
 
 fn cmdToggleExplorer(state: *anyopaque) anyerror!void {
     const editor = editorFromState(state);
-    // `.closed`, not `paned.split_ratio` — the latter is only valid during draw.
-    if (editor.explorer.closed) editor.explorer.open(editor) else editor.explorer.close(editor);
+    // Whether the sidebar region is on screen (`Explorer.inSight`), not `paned.split_ratio`, which is only
+    // valid during draw.
+    if (Editor.Explorer.inSight(editor)) editor.explorer.close(editor) else editor.explorer.open(editor);
     // A native menu click doesn't arrive as an SDL event, so without this nothing requests the
     // frame the paned needs to animate.
     dvui.refresh(null, @src(), dvui.currentWindow().data().id);
@@ -1347,7 +1348,7 @@ fn projectUserOverrides(editor: *Editor) void {
 fn currentContext(editor: *Editor) Keymap.When {
     return .{
         .editor_focused = editor.activeDoc() != null,
-        .explorer_focused = !editor.explorer.closed,
+        .explorer_focused = !Editor.Explorer.isShut(editor),
         .modal_open = editor.command_palette.open,
         // Declared by `Keymap.When` since it was written but never filled in, so any `when`
         // clause mentioning text input could not match. `dvui.wantTextInput` is the signal.

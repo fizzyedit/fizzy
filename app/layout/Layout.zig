@@ -158,6 +158,9 @@ extents_changed: bool = false,
 /// Every surface `draw` ran this frame, so `captureUnplaced` knows which ones genuinely drew
 /// nowhere — as opposed to drew before the picker asked. Arena-backed, per frame.
 drawn: std.ArrayListUnmanaged(*Surface) = .empty,
+/// Views put away mid-frame (`hideLater`), for `applyLater` once nothing walks the places.
+/// Arena-backed, per frame.
+later_hides: std.ArrayListUnmanaged([]const u8) = .empty,
 
 /// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
 /// `split` know which axis it divides and which neighbour it resizes, without a shape having to
@@ -578,23 +581,114 @@ pub fn surface(self: *Layout, id: []const u8) ?*Surface {
 
 /// Bring `id` into sight wherever it lives: select it in the one region that shows it (the rule
 /// `claimedElsewhere` states: its assignment, else the place that accepts it best), and open that
-/// region if the user shut it or a narrow window folded it away. False when no region shows it:
-/// the shape has no place for it, or it is hidden.
+/// region, and the tray it was split out of, if the user shut it or a narrow window folded it
+/// away. False when no region shows it: the shape has no place for it, or it is hidden.
 ///
 /// What a plugin's "Show X" command asks for (`Host.revealSurface`): it names the view, never the
 /// place, so it lands wherever the user moved the view, in any shape.
 pub fn reveal(self: *Layout, id: []const u8) bool {
     const s = self.surface(id) orelse return false;
     if (s.hidden) return false;
-    var it = self.declaredRegions();
-    while (it.next()) |r| {
-        for (self.matchingIn(r)) |m| if (m == s) {
-            self.selectIn(r, id);
-            if (r.isClosed() or r.isFolded()) r.open();
-            return true;
-        };
+    const at = self.locate(s, .any) orelse return false;
+    self.selectIn(at.place, id);
+    if (at.place.isClosed() or at.place.isFolded()) at.place.open();
+    if (at.tray) |t| if (t.isClosed() or t.isFolded()) t.open();
+    return true;
+}
+
+/// Put `id` out of sight, as the user would: `reveal` undone (`Host.hideSurface`; the contract is
+/// `docs/PLUGINS.md` §3.1.2, "Showing and putting away"). In a tray, or a place split off one,
+/// the tray shuts; in a float, the view alone goes home (`ViewDrag.floatViewHome`) and the tray it
+/// lands selected in shuts, folded or not; anywhere else nothing changes. It changes the lists
+/// the shape and the floats walk while they draw, so mid-frame it is `hideLater`'s, never this.
+pub fn hide(self: *Layout, id: []const u8) bool {
+    const s = self.surface(id) orelse return false;
+    switch (self.away(s) orelse return false) {
+        .shut => |tray| tray.close(),
+        .float => |float| {
+            if (!ViewDrag.floatViewHome(self, float, s.id)) return false;
+            // Last frame's places still list the float's, whose keywords alone might show this
+            // view again: home is looked for in the main window only.
+            const home = self.locate(s, .main_window) orelse return true;
+            const shown = self.selectedIn(home.place) orelse return true;
+            if (shown != s) return true;
+            const tray = home.tray orelse return !self.inSight(home, s);
+            if (!tray.isClosed()) tray.close();
+        },
     }
-    return false;
+    return true;
+}
+
+/// `hide`, asked mid-frame (a button in a surface): kept for `applyLater`, which the application
+/// calls once the shape and the floats have drawn. True when it will put the view away: it is in
+/// sight in a tray, or in a float it will leave. Whether a view leaving a float lands in sight is
+/// known only once it lands, as `hide` says.
+pub fn hideLater(self: *Layout, id: []const u8) bool {
+    const s = self.surface(id) orelse return false;
+    _ = self.away(s) orelse return false;
+    const kept = self.arena.dupe(u8, id) catch return false;
+    self.later_hides.append(self.arena, kept) catch return false;
+    return true;
+}
+
+/// Apply what `hideLater` kept. The application calls it after the shape, the floats, the drag
+/// overlay and the picker have drawn, before it reads `extents_changed`.
+pub fn applyLater(self: *Layout) void {
+    for (self.later_hides.items) |id| _ = self.hide(id);
+    self.later_hides.clearRetainingCapacity();
+}
+
+/// What putting `s` away does, worked out before anything changes; null when it is not in sight
+/// or nothing round it shuts.
+const Away = union(enum) {
+    /// The tray to shut.
+    shut: *const Region,
+    /// The float to take it out of.
+    float: []const u8,
+};
+
+fn away(self: *Layout, s: *const Surface) ?Away {
+    if (s.hidden) return null;
+    const at = self.locate(s, .any) orelse return null;
+    if (!self.inSight(at, s)) return null;
+    if (self.state.floats.rootOf(at.place.name)) |float| {
+        if (!ViewDrag.canFloatViewHome(self, float, s.id)) return null;
+        return .{ .float = float };
+    }
+    return .{ .shut = at.tray orelse return null };
+}
+
+/// Where a view is: the place showing it, and the tray that place is or was split out of.
+const Located = struct { place: *const Region, tray: ?*const Region };
+
+/// The one place showing `s` (the rule `claimedElsewhere` states: its assignment, else the place
+/// that accepts it best), among this frame's places so far and last frame's rest, with its tray:
+/// the place itself, or the one a split of it grew from (`SplitTree.Forest.rootOf`).
+/// `main_window` leaves out the floats' places.
+fn locate(self: *Layout, s: *const Surface, among: enum { any, main_window }) ?Located {
+    var it = self.declaredRegions();
+    const place = find: while (it.next()) |r| {
+        if (self.state.floats.rootOf(r.name)) |float| {
+            if (among == .main_window) continue;
+            // Flying shut: what it held has gone home already.
+            const i = self.state.floats.find(float) orelse continue;
+            if (self.state.floats.items.items[i].closing) continue;
+        }
+        for (self.matchingIn(r)) |m| if (m == s) break :find r;
+    } else return null;
+    if (place.tray) return .{ .place = place, .tray = place };
+    const root = self.state.splits.rootOf(place.name) orelse return .{ .place = place, .tray = null };
+    const tray = ViewDrag.regionNamed(self.state, root) orelse return .{ .place = place, .tray = null };
+    return .{ .place = place, .tray = if (tray.tray) tray else null };
+}
+
+/// Whether `s` is what the place `at` shows now: its selection, with neither the place nor its
+/// tray shut or folded.
+fn inSight(self: *Layout, at: Located, s: *const Surface) bool {
+    if (at.place.isClosed() or at.place.isFolded()) return false;
+    if (at.tray) |t| if (t.isClosed() or t.isFolded()) return false;
+    const shown = self.selectedIn(at.place) orelse return false;
+    return shown == s;
 }
 
 /// Surfaces that appear in no region of the last completed shape — neither assigned to one nor

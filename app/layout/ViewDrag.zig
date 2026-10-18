@@ -2599,9 +2599,6 @@ pub fn holderOf(l: *Layout, id: []const u8) ?[]const u8 {
 /// the user had in front of them is in front of them again.
 pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
     const state = l.state;
-    // No home (a saved float whose home was lost). Not looked up — an unnamed place would answer
-    // to "".
-    const r = if (home.len > 0) regionNamed(state, home) else null;
     // Every view out of the float's places first, so what a place's keywords show is read with
     // them all free: a view written into a place its keywords fill takes the rest of what they
     // show there with it, and would leave behind one of the float's still held by it.
@@ -2612,29 +2609,76 @@ pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
         }
         state.unassign(l.gpa, leaf);
     }
-    for (ids.items) |id| {
-        const held = holding(l, home);
-        var landed: ?[]const u8 = if (r != null) home else null;
-        switch (float_rules.goHome(.{
-            .declared = r != null,
-            .assigned = state.assignment(home) != null,
-            .shows_many = if (r) |x| x.shows == .many else false,
-            .empty = held.len == 0,
-            .keywords_place = keywordsPlace(l, id),
-        })) {
-            .add => state.assign(l.gpa, home, idsWith(l.arena, held, id)) catch {},
-            .put => state.assign(l.gpa, home, &.{id}) catch {},
-            .keywords => {},
-            .elsewhere => {
-                landed = null;
-                if (mainPlaceFor(l, id)) |other| {
-                    state.assign(l.gpa, other.name, idsWith(l.arena, holding(l, other.name), id)) catch {};
-                    landed = other.name;
-                }
-            },
-        }
-        if (landed) |name| selectNamed(l, name, id);
+    for (ids.items) |id| goHome(l, id, homeLanding(l, id, home) orelse continue);
+}
+
+/// Where view `id` goes back into the main window, as `float_rules.goHome` says: the place and
+/// how it takes the view. Null when nowhere would show it (no home, no place of the main window
+/// takes it): asked before the view leaves anywhere, so it is not let go to be lost.
+const Landing = struct {
+    /// The place it lands in; null when its keywords bring it back of their own accord.
+    place: ?[]const u8,
+    how: float_rules.GoHome,
+};
+
+fn homeLanding(l: *Layout, id: []const u8, home: []const u8) ?Landing {
+    const state = l.state;
+    // No home (a saved float whose home was lost). Not looked up — an unnamed place would answer
+    // to "".
+    const r = if (home.len > 0) regionNamed(state, home) else null;
+    const how = float_rules.goHome(.{
+        .declared = r != null,
+        .assigned = state.assignment(home) != null,
+        .shows_many = if (r) |x| x.shows == .many else false,
+        .empty = holding(l, home).len == 0,
+        .keywords_place = keywordsPlace(l, id),
+    });
+    return switch (how) {
+        .add, .put => .{ .place = home, .how = how },
+        .keywords => .{ .place = if (r != null) home else null, .how = how },
+        .elsewhere => .{ .place = (mainPlaceFor(l, id) orelse return null).name, .how = how },
+    };
+}
+
+/// View `id`, held by no place's list now, into the main window where `to` says, selected there.
+fn goHome(l: *Layout, id: []const u8, to: Landing) void {
+    const state = l.state;
+    const dest = to.place orelse return;
+    switch (to.how) {
+        .add, .elsewhere => state.assign(l.gpa, dest, idsWith(l.arena, holding(l, dest), id)) catch {},
+        .put => state.assign(l.gpa, dest, &.{id}) catch {},
+        .keywords => {},
     }
+    selectNamed(l, dest, id);
+}
+
+/// Whether `floatViewHome` would take view `id` out of float `float`: the float is there and not
+/// already closing, holds the view, can let it go (`withdraw`'s rule, `closable`), and somewhere
+/// in the main window will show it (`homeLanding`). The one test for a hide asked now and done at
+/// the frame's end (`Layout.hideLater`), and for doing it.
+pub fn canFloatViewHome(l: *Layout, float: []const u8, id: []const u8) bool {
+    const i = l.state.floats.find(float) orelse return false;
+    const f = l.state.floats.items.items[i];
+    if (f.closing) return false;
+    const holder = holderOf(l, id) orelse return false;
+    if (!float_rules.isUnder(holder, float)) return false;
+    if (idsWithout(l.arena, holding(l, holder), id).len == 0 and !closable(l, holder)) return false;
+    return homeLanding(l, id, f.home) != null;
+}
+
+/// One view out of float `float` and home, as closing the float would send it (`sendHome`): the
+/// float's other views stay where the user arranged them, and a place of it left empty closes as
+/// any emptied place does (`withdraw`), the float itself when it was its last view. False, with
+/// nothing changed, when `canFloatViewHome` says no: the view stays in the float rather than be
+/// let go to nowhere.
+pub fn floatViewHome(l: *Layout, float: []const u8, id: []const u8) bool {
+    if (!canFloatViewHome(l, float, id)) return false;
+    const f = l.state.floats.items.items[l.state.floats.find(float).?];
+    // Worked out before the view leaves: `withdraw` may close the float.
+    const to = homeLanding(l, id, f.home).?;
+    if (!withdraw(l, id)) return false;
+    goHome(l, id, to);
+    return true;
 }
 
 /// Whether a place's keywords would show `id`, held by no place's list, of their own accord: a
@@ -2962,7 +3006,7 @@ fn closeMinted(l: *Layout, name: []const u8) void {
         }
     }
     if (regionNamed(l.state, name)) |r| if (r.id != .zero and Split.sizeOf(r.id) > 0) {
-        Split.close(r.id);
+        Split.close(r.id, r.reopen_extent);
         l.extents_changed = true;
         return;
     };

@@ -45,6 +45,10 @@ id: dvui.Id = .zero,
 /// width under a horizontal parent, the height under a vertical one, in points. One number,
 /// because a region only ever divides its parent one way; the other axis is the parent's.
 default_extent: f32 = 0,
+/// What it opens back to: the extent the user last left it at, persisted by name, else
+/// `default_extent`. Filled in as it registers (`State.registerRegion`), so a command between
+/// frames shuts and opens it at the user's size.
+reopen_extent: f32 = 0,
 /// Clip set while the region is open, restored on `deinit`.
 prev_clip: ?dvui.Rect.Physical = null,
 /// The box this region is. A region **is** a `dvui.box`: same layout mechanics, same
@@ -64,6 +68,11 @@ kind_slot: bool = false,
 pane_cards: bool = false,
 /// A tray the next split should keep targeting. Center and grouping boxes are not.
 resize: bool = false,
+/// A tray: a place the shape declared `resize`, which shuts and opens again — the one kind of place
+/// `Layout.hide` shuts. Not a place a split made (`State.isMinted`), which is `resize` too but goes
+/// only by being emptied or joined. Registered with the region, so a command between frames reads
+/// it.
+tray: bool = false,
 /// An empty closed tray can disappear — a runtime split, an endless edge.
 forget_when_empty: bool = false,
 /// How this place lays its children.
@@ -127,7 +136,7 @@ pub fn deinit(self: *Region) void {
 
 // Opening and shutting from outside the layout — a rail button, a command, a keybind. These
 // work on the copy `Editor.regionFor` hands back as well as on a live one, which is why they
-// touch only `id` and `default_extent`: everything they need is a persisted extent under an id,
+// touch only `id` and `reopen_extent`: everything they need is a persisted extent under an id,
 // never a widget pointer.
 
 pub fn isClosed(self: Region) bool {
@@ -141,13 +150,19 @@ pub fn close(self: Region) void {
     // Deliberately before `Split.close`: shutting a region is also the user withdrawing the peek
     // that kept it open on a narrow window (see `collapseTarget`).
     dvui.dataSet(null, self.id, "_peek", false);
-    Split.close(self.id);
+    Split.close(self.id, self.openTo());
+}
+
+/// `reopen_extent`, or `default_extent` for a region that has not registered (the shape's own
+/// copy, mid-draw).
+fn openTo(self: Region) f32 {
+    return if (self.reopen_extent > 0) self.reopen_extent else self.default_extent;
 }
 
 pub fn open(self: Region) void {
     // Opening is an explicit answer to the auto-collapse, and outlives it.
     dvui.dataSet(null, self.id, "_peek", true);
-    Split.open(self.id, self.default_extent);
+    Split.open(self.id, self.openTo());
 }
 
 /// Auto-collapse is a *default*, not a lock: a `collapsible` region folds itself away when the
@@ -379,6 +394,13 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         break :blk regionKeywords(self, if (parent) |p| p.prefix else "", init_opts.keywords);
     };
 
+    // What a tray opens to when the user has never dragged it: the content the shape's
+    // `min_size_content` asks for along its parent's axis, with the padding and border round it.
+    const default_extent: f32 = if (init_opts.resize) switch (axis) {
+        .horizontal => (opts.min_size_content orelse dvui.Size{}).w,
+        .vertical => (opts.min_size_content orelse dvui.Size{}).h,
+    } + alongAxis(opts.paddingGet(), axis) + alongAxis(opts.borderGet(), axis) else 0;
+
     const probe: Region = .{
         .name = init_opts.name,
         .keywords = keywords,
@@ -403,11 +425,13 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // Still a place, even with nothing in it: it stays in the registry so the picker and
         // the settings table can put something back. Emptied through the picker and then
         // gone from the picker was a region the user could not get back.
-        self.state.registerRegion(self.gpa, .{
+        register(self, init_opts, .{
             .name = init_opts.name,
             .keywords = keywords,
             .shows = init_opts.shows,
             .id = id,
+            // Folded away empty, it still opens to the shape's size, not to nothing.
+            .default_extent = default_extent,
             .by_name = init_opts.by_name,
             .kind_slot = init_opts.kind_slot,
             .forget_when_empty = init_opts.forget_when_empty,
@@ -436,16 +460,9 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // frame (mid-animation it is between the two), `default_extent` what it opens to when the
     // user has never dragged it.
     var extent: f32 = 0;
-    var default_extent: f32 = 0;
     if (init_opts.resize) {
         const given = opts.min_size_content orelse dvui.Size{};
-        // The shape's `min_size_content` is the content it wants to open to; the extent is the
-        // whole region round it.
-        const default: f32 = switch (axis) {
-            .horizontal => given.w,
-            .vertical => given.h,
-        } + alongAxis(opts.paddingGet(), axis) + alongAxis(opts.borderGet(), axis);
-        default_extent = default;
+        const default = default_extent;
         // Seeded from what the user last left this region at, by name — so a layout persists
         // across restarts without the framework knowing which regions an app has.
         if (dvui.dataGet(null, id, "_size", f32) == null) {
@@ -549,7 +566,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // A leftover leaf that kept a minted name must not overwrite the pinned
     // subtree registered under that name — the parent sash still targets it.
     const leftover_leaf = init_opts.omit_edge != null and !init_opts.resize;
-    if (keywords.len > 0 and !tree_origin and !leftover_leaf) self.state.registerRegion(self.gpa, .{
+    if (keywords.len > 0 and !tree_origin and !leftover_leaf) register(self, init_opts, .{
         .name = init_opts.name,
         .keywords = keywords,
         .shows = init_opts.shows,
@@ -1070,7 +1087,7 @@ fn initTree(
     const box = dvui.box(src, .{ .dir = branch.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
 
-    if (keywords.len > 0) self.state.registerRegion(self.gpa, .{
+    if (keywords.len > 0) register(self, init_opts, .{
         .name = init_opts.name,
         .keywords = keywords,
         .shows = init_opts.shows,
@@ -1354,6 +1371,15 @@ fn placePrefix(keywords: []const []const u8, parent_prefix: []const u8) []const 
     return keywords[0];
 }
 
+/// Register `entry`, a region `init_opts` declared, as a tray when it is one (`Region.tray`): the
+/// one place that decides it.
+fn register(self: *Layout, init_opts: InitOptions, entry: Region) void {
+    var r = entry;
+    // A place a split made is `resize` too, but goes by being emptied or joined, never shut.
+    r.tray = init_opts.resize and !self.state.isMinted(init_opts.name);
+    self.state.registerRegion(self.gpa, r);
+}
+
 /// Draw a region into an already-open box — `init` minus geometry. Keyword qualification,
 /// registry, corner button, contents. The box is the caller's (a dockspace leaf cell).
 pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !void {
@@ -1367,6 +1393,9 @@ pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !v
         .id = box.data().id,
         .by_name = init_opts.by_name,
         .kind_slot = init_opts.kind_slot,
+        // Never a tray, whatever `resize` says: the box and its size are the caller's (a
+        // dockspace cell), so there is no extent here to shut and open again.
+        .tray = false,
         .forget_when_empty = init_opts.forget_when_empty,
         .dir = init_opts.dir,
     });

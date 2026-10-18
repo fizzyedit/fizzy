@@ -2404,6 +2404,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .assignedRegionNames = fizzyAssignedRegionNames,
     .selectInRegion = fizzySelectInRegion,
     .revealSurface = fizzyRevealSurface,
+    .hideSurface = fizzyHideSurface,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
@@ -4493,9 +4494,6 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
             editor.app.layout.publishRegions();
-            // A drag or a collapse moved a region: fizzy's answer to "remember that" is a
-            // debounced write to `layout.zon`.
-            if (layout.extents_changed) editor.markWindowRatiosDirty();
             // Over every place: a drag's join spans two of them.
             layout.drawDragOverlay();
             // The picker photographs surfaces that drew nowhere this frame, and floats above
@@ -4503,6 +4501,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             layout.captureUnplaced();
             editor.app.layout.picker.draw(&layout);
             editor.app.frame_layout = null;
+            // What was put away mid-frame, now that nothing walks the places (`Layout.hideLater`).
+            layout.applyLater();
+            // A drag, a collapse, the picker or a hide moved a region: fizzy's answer to
+            // "remember that" is a debounced write to `layout.zon`. Read last, so nothing this
+            // frame did is missed.
+            if (layout.extents_changed) editor.markWindowRatiosDirty();
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
             // open and dvui reports the mismatch two widgets later ("not at the top of the widget
@@ -5056,12 +5060,25 @@ fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void
 }
 
 fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {
+    return onLayout(fizzyCtx(ctx), Layout.reveal, id);
+}
+
+fn fizzyHideSurface(ctx: *anyopaque, id: []const u8) bool {
     const editor = fizzyCtx(ctx);
-    if (editor.app.frame_layout) |layout| return layout.reveal(id);
-    // A command between shapes (a keybind, the palette, an agent): the regions are last frame's,
-    // published for exactly this (`Layout.State.regions`).
+    // Mid-frame (a button in a surface), the shape and the floats are walking the lists a hide
+    // changes: it waits for the frame's end (`Layout.applyLater`).
+    if (editor.app.frame_layout) |layout| return layout.hideLater(id);
+    return onLayout(editor, Layout.hide, id);
+}
+
+/// `act` on the shape drawing now, or, for a command between shapes (a keybind, the palette, an
+/// agent), on last frame's regions, published for exactly this (`Layout.State.regions`), with
+/// what it changed of the extents saved as the frame's own would be.
+fn onLayout(editor: *Editor, comptime act: fn (*Layout, []const u8) bool, id: []const u8) bool {
+    if (editor.app.frame_layout) |layout| return act(layout, id);
     var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
-    return layout.reveal(id);
+    defer if (layout.extents_changed) editor.markWindowRatiosDirty();
+    return act(&layout, id);
 }
 
 fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {
