@@ -650,10 +650,11 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 }
 
 const corner_button_size: f32 = core.widgets.glass_button.size;
-/// The corner at rest, in points: a piece of glass this wide filling the card's top-right corner,
-/// cut to the card's own curve outside and rounded inside, so it lies mostly in the padding the
-/// rounding keeps clear. Wider where the card is rounder, so its outer curve is always the card's.
-const corner_piece: f32 = 22;
+/// The corner at rest, in points: a small round bubble of glass this wide, tucked under the card's
+/// top-right corner (`cornerPiece`).
+const corner_piece: f32 = 16;
+/// How far round the bubble the pointer is on it, in points: a bubble this small needs a margin.
+const corner_reach_pt: f32 = 8;
 /// A finger's target for the corner, in points: a square centred on the card's outer corner, so
 /// half of it lies past the card, in the gutter, and only a quarter reaches into the place.
 const corner_touch: f32 = 44;
@@ -731,7 +732,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // The pointer on the corner, or on the button it brought up. Not under a modal dialog, which
     // takes the press: the button lit and the click did nothing. The rect tests first, so the
     // subwindow walk runs only with the pointer at the corner.
-    const hovered = !touch and (piece.r.contains(mouse) or (shown_before and button_r.contains(mouse))) and
+    const hovered = !touch and (piece.hit.contains(mouse) or (shown_before and button_r.contains(mouse))) and
         !core.dialogs.modalOverCurrent();
     const pressing = dvui.dataGet(null, id, "_chooser_press", bool) orelse false;
     if (self.state.view_drag.active()) ViewDrag.tick(self);
@@ -784,6 +785,11 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // The corner at rest. Its frost is the card's padding, which does not change: read once. While
     // the button is up, or on its way, the same piece of glass is drawn as it (below).
     if (resting and alpha < 0.01) {
+        // Not under the content clip this runs in: the corner is in the card's padding, and that
+        // clip cut its top and right off. The bubble may peek a little past the card's edges.
+        const prev_clip = dvui.clipGet();
+        dvui.clipSet(rs.r.outsetAll(corner_piece * rs.s / 2));
+        defer dvui.clipSet(prev_clip);
         core.dialogs.glassBubbles(id.update("corner"), &.{.{ .rect = piece.r, .radii = piece.radii }}, rs.s, .{ .shadow = 0, .witness = core.widgets.glass_button.witness(piece.r, 0) });
         drawCornerGlyph(piece.r, rs.s, theme.color(.content, .text));
     }
@@ -865,6 +871,9 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
             // corners carried from the corner's to the button's. Its frost is the view's own
             // content, read while it moves and shows.
             const m = cornerMorph(piece, br.r, alpha);
+            const prev_clip = dvui.clipGet();
+            dvui.clipSet(rs.r.outsetAll(corner_piece * rs.s / 2));
+            defer dvui.clipSet(prev_clip);
             core.dialogs.glassBubbles(id.update("corner"), &.{.{ .rect = m.rect, .radii = m.radii, .light = light }}, br.s, .{ .shadow = alpha });
             drawCornerGlyph(m.rect, rs.s, theme.color(.content, .text).opacity(std.math.clamp(1 - 2 * alpha, 0, 1)));
         } else {
@@ -896,19 +905,32 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
 const CornerPiece = struct {
     r: dvui.Rect.Physical,
     radii: [4]f32,
+    /// Where the pointer is on it: the bubble and a margin round it.
+    hit: dvui.Rect.Physical,
     touch: dvui.Rect.Physical,
 };
 
-/// The piece fills the card's top-right corner: its top and right edges are the card's, its outer
-/// corner the card's own curve (so it is at least twice the card's radius wide: a shape's corner
-/// is held to half its side), and its inner corner as round as it can be.
+/// The piece is a small round bubble tucked under the card's top-right corner: its centre on
+/// the corner's curve, halfway round it, so half of it lies over the card and half peeks out past
+/// the curve, as if from behind it.
 fn cornerPiece(rs: dvui.RectScale, corners: dvui.CornerRect.Physical) CornerPiece {
     const card = corners.tr.radius();
-    const side = @max(corner_piece * rs.s, 2 * card);
+    const d = corner_piece * rs.s;
+    // The curve's centre, and the point on it halfway round, toward the card's corner. A square
+    // card (no curve) has its bubble on the corner itself.
+    const cx = rs.r.x + rs.r.w - card + card * std.math.sqrt1_2;
+    const cy = rs.r.y + card - card * std.math.sqrt1_2;
+    var r: dvui.Rect.Physical = .{ .x = cx - d / 2, .y = cy - d / 2, .w = d, .h = d };
+    // Whole inside the window: a card running to the window's edge (square, or maximized) would
+    // have the half that peeks out cut off by it.
+    const win = dvui.windowRectPixels();
+    r.x = std.math.clamp(r.x, win.x, win.x + win.w - d);
+    r.y = std.math.clamp(r.y, win.y, win.y + win.h - d);
     const half = corner_touch / 2 * rs.s;
     return .{
-        .r = .{ .x = rs.r.x + rs.r.w - side, .y = rs.r.y, .w = side, .h = side },
-        .radii = .{ 0, card, 0, side / 2 },
+        .r = r,
+        .radii = @splat(d / 2),
+        .hit = r.outsetAll(corner_reach_pt * rs.s),
         .touch = .{ .x = rs.r.x + rs.r.w - half, .y = rs.r.y - half, .w = 2 * half, .h = 2 * half },
     };
 }
@@ -931,16 +953,14 @@ fn cornerMorph(piece: CornerPiece, button: dvui.Rect.Physical, t: f32) struct { 
 }
 
 /// The corner's glyph: the button's grid, small, as four filled squares (an icon at this size is a
-/// few pixels of texture, and redrawn each step of the turn). Set toward the card's corner, inside
-/// the piece's rounded inner edge.
+/// few pixels of texture, and redrawn each step of the turn), in the middle of the bubble.
 fn drawCornerGlyph(piece: dvui.Rect.Physical, scale: f32, color: dvui.Color) void {
-    const cell = 2.5 * scale;
-    const gap = 1.5 * scale;
+    const cell = 2 * scale;
+    const gap = 1.25 * scale;
     const side = 2 * cell + gap;
-    if (piece.w < side + 4 * scale or color.a == 0) return;
-    // Centred on the piece's top-right quarter, where its glass is whole.
-    const x0 = piece.x + piece.w * 0.62 - side / 2;
-    const y0 = piece.y + piece.h * 0.38 - side / 2;
+    if (piece.w < side + 3 * scale or color.a == 0) return;
+    const x0 = piece.x + piece.w / 2 - side / 2;
+    const y0 = piece.y + piece.h / 2 - side / 2;
     for ([_][2]f32{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 }, .{ 1, 1 } }) |at| {
         const sq: dvui.Rect.Physical = .{ .x = x0 + at[0] * (cell + gap), .y = y0 + at[1] * (cell + gap), .w = cell, .h = cell };
         sq.fill(.all(0.6 * scale), .{ .color = .{ .color = color }, .fade = 1 });
