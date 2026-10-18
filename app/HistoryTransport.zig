@@ -238,7 +238,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (glow == 0) self.stepped_at = null;
         const fill: f32 = @min(1, @log2(1 + @as(f32, @floatFromInt(opts.steps))) / @log2(1 + full_steps));
         if (gripRect(area, grip_r * (1 + 0.5 * core.motion.fade(held)), opts.edge)) |g| if (drawGrip(g, id_extra, .{
-            .alpha = 1 - @min(1, p * 4),
+            // While the bar grows out of it, the grip is the bar's glass.
+            .alpha = if (p > 0) 0 else 1,
             .lit = on_grip,
             .fill = fill,
             .glow = glow,
@@ -379,12 +380,15 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     self.slosh_at = at;
     const tilt = self.slosh.tilt(now);
 
-    // Coming in and going, a pane with a grip grows the bar out of it and takes it back in: each
-    // bubble from the grip's place to its own, the glass running together while they are close,
-    // and what is on them shows once they are most of the way out. Without a grip, it fades.
+    // Coming in and going, a pane with a grip grows the bar out of it and takes it back in. The
+    // bubbles bud out of the grip one after another (`bud_delays`) and pull away to their places,
+    // the grip in the same glass and shrinking as they leave it, the glass between them reaching
+    // further while they are near: they run together and part as drops do. What is on them shows
+    // once they are most of the way out. Without a grip, it fades.
     const from: ?dvui.Rect.Physical = if (opts.history and p < 1) if (gripRect(area, grip_r, opts.edge)) |g| wrs.rectToPhysical(g) else null else null;
     const out = core.motion.enterFull(p);
-    const prev_alpha = dvui.alpha(if (from != null) @min(1, p * 4) else p);
+    const bud: ?dvui.Rect.Physical = if (from) |f| .{ .x = f.x + f.w / 2 - f.h * 0.6, .y = f.y + f.h * 0.15, .w = f.h * 1.2, .h = f.h * 1.2 } else null;
+    const prev_alpha = dvui.alpha(if (from != null) 1 else p);
     defer dvui.alphaSet(prev_alpha);
     const pt = dvui.currentWindow().mouse_pt;
     var bubbles: [5]core.dialogs.Bubble = undefined;
@@ -393,7 +397,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // strip grows, so the pictures sit inside them.
     const line_radius = std.math.lerp(phys[1].h / 2, core.corners.scaled(core.corners.card) * s, @min(1, grown * 1.5));
     for (phys, bubbles[0..4], 0..) |r, *b, i| b.* = .{
-        .rect = if (from) |f| lerpRect(f, r, out) else r,
+        .rect = if (bud) |f| lerpRect(f, r, emerge(p, bud_delays[i])) else r,
         .radius = if (i == 1 and grown > 0) line_radius else null,
         .light = if (r.contains(pt) and switch (i) {
             0 => trimming or at > 0,
@@ -406,12 +410,26 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     var count: usize = if (export_g > 0) 4 else 3;
     if (self.tab) {
         bubbles[count] = .{
-            .rect = if (from) |f| lerpRect(f, tab_p, out) else tab_p,
+            .rect = if (bud) |f| lerpRect(f, tab_p, emerge(p, bud_delays[4])) else tab_p,
             .light = if (tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
         };
         count += 1;
     }
-    core.dialogs.glassBubbles(fid, bubbles[0..count], s, .{ .merge = 14, .shadow = 1 });
+    // The grip itself, in the same glass, shrinking into the pane's edge as the bar leaves it.
+    var shapes: [6]core.dialogs.Bubble = undefined;
+    @memcpy(shapes[0..count], bubbles[0..count]);
+    if (from) |f| {
+        const k = 1 - out;
+        const d = f.w * k;
+        shapes[count] = .{ .rect = .{ .x = f.x + f.w / 2 - d / 2, .y = f.y + f.h - d / 2, .w = d, .h = d } };
+        count += 1;
+    }
+    {
+        // Not past the pane's edge, which the grip stands on.
+        const prev_clip = if (from) |f| dvui.clip(.{ .x = 0, .y = 0, .w = std.math.floatMax(f32) / 4, .h = f.y + f.h }) else dvui.clipGet();
+        defer dvui.clipSet(prev_clip);
+        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = std.math.lerp(40, 14, out), .shadow = 1 });
+    }
     // What is on the bubbles comes once they are most of the way out; the liquid comes with them.
     const shape_alpha = dvui.alpha(1);
     if (from != null) {
@@ -471,6 +489,15 @@ const GripLook = struct {
     /// How tipped its liquid is, -1 to 1 (`history_transport.Slosh`).
     tilt: f32,
 };
+
+/// When each bubble buds out of the grip, as a share of the growing: the line first, undo and
+/// redo after it, then export, then the tab.
+const bud_delays = [5]f32{ 0.12, 0, 0.12, 0.22, 0.3 };
+
+/// How far a bubble that buds at `delay` has come at `p`, on the arriving curve.
+fn emerge(p: f32, delay: f32) f32 {
+    return core.motion.enterFull(std.math.clamp((p - delay) / (1 - delay), 0, 1));
+}
 
 fn lerpRect(a: dvui.Rect.Physical, b: dvui.Rect.Physical, t: f32) dvui.Rect.Physical {
     return .{ .x = std.math.lerp(a.x, b.x, t), .y = std.math.lerp(a.y, b.y, t), .w = std.math.lerp(a.w, b.w, t), .h = std.math.lerp(a.h, b.h, t) };
