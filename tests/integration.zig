@@ -5407,6 +5407,54 @@ test "demo: closed from its bar, the bar runs back together before the demo goes
     try std.testing.expect(frames > 1);
 }
 
+test "demo: the bar goes into its dome and grows back out of it" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    for (0..20) |_| _ = try dvui.testing.step(demoFrame);
+    const tr = &demo_player.transport;
+    try std.testing.expect(tr.openness > 0.99);
+
+    // Its tab sends it into the dome, ended as it is, and the dome full: the tape has played out.
+    try std.testing.expect(tr.tab.w > 0);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.tab.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    try std.testing.expect(tr.tucked);
+    var frames: usize = 0;
+    while (tr.openness > 0 and frames < 60) : (frames += 1) _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(@as(f32, 0), tr.openness);
+    const dome = tr.dome orelse return error.TestUnexpectedResult;
+    try std.testing.expect(dvui.tagGet("demo.dome") != null);
+
+    // Passing over the dome brings nothing; held on it, the bar grows back out.
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = dome.center() });
+    for (0..3) |_| _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(@as(f32, 0), tr.openness);
+    frames = 0;
+    while (tr.openness < 0.99 and frames < 200) : (frames += 1) _ = try dvui.testing.step(demoFrame);
+    try std.testing.expect(tr.openness > 0.99);
+    try std.testing.expect(!tr.tucked);
+
+    // In again, and a press on the dome brings it at once.
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.tab.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    frames = 0;
+    while (tr.openness > 0 and frames < 60) : (frames += 1) _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.dome.?.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    try std.testing.expect(!tr.tucked);
+    // Not the app's: the demo was not diverged by it.
+    try std.testing.expect(!demo_player.diverged);
+}
+
 test "demo: a replay that does not reach what playing did is caught" {
     var t = try demoCtx();
     defer deinitDemo(&t);
@@ -7789,6 +7837,104 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
     try std.testing.expectEqualStrings(root, editor.app.config_folder);
+    // A plugin's data folder (`Host.pluginDataFolder`): under the profile, made on the first ask,
+    // the same borrowed path after, one per plugin.
+    {
+        const host = &editor.app.host;
+        const text_plugin = host.pluginById("text") orelse return error.TestUnexpectedResult;
+        const markdown_plugin = host.pluginById("markdown") orelse return error.TestUnexpectedResult;
+        const data = host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult;
+        const want = try std.fs.path.join(gpa, &.{ root, "plugin-data", "text" });
+        defer gpa.free(want);
+        try std.testing.expectEqualStrings(want, data);
+        var dir = try std.Io.Dir.cwd().openDir(dvui.io, data, .{});
+        dir.close(dvui.io);
+        try std.testing.expectEqual(data.ptr, (host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult).ptr);
+        const other = host.pluginDataFolder(markdown_plugin) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!std.mem.eql(u8, data, other));
+        // An id no registered plugin has gets no folder, and no entry; ids are one ignoring case.
+        try std.testing.expect(editor.app.pluginDataFolder("../escape") == null);
+        try std.testing.expect(editor.app.plugin_data_folders.get("../escape") == null);
+        try std.testing.expectEqual(data.ptr, (editor.app.pluginDataFolder("Text") orelse return error.TestUnexpectedResult).ptr);
+        const level = std.testing.log_level;
+        std.testing.log_level = .err; // the warnings the cases below ask for
+        defer std.testing.log_level = level;
+        const vt = sdk.Plugin.VTable{};
+        // A plugin whose id has capitals gets it in lowercase, the same folder on every
+        // filesystem; another in a different case of it is not registered at all.
+        {
+            var cased = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "CaseTest", .display_name = "Case Test" };
+            try host.registerPlugin(&cased);
+            const want_cased = try std.fs.path.join(gpa, &.{ root, "plugin-data", "casetest" });
+            defer gpa.free(want_cased);
+            try std.testing.expectEqualStrings(want_cased, host.pluginDataFolder(&cased) orelse return error.TestUnexpectedResult);
+            var lower = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "casetest", .display_name = "Case Test" };
+            try std.testing.expectError(error.DuplicatePluginId, host.registerPlugin(&lower));
+            // Unregistered, its path is still handed out for its `deinit`, which runs after; from
+            // the next frame's top it is not.
+            host.unregisterPlugin(&cased);
+            try std.testing.expect(host.pluginDataFolder(&cased) != null);
+            editor.app.releaseRetiredFolders();
+            try std.testing.expect(host.pluginDataFolder(&cased) == null);
+        }
+        // An id that is not a plain identifier names no folder.
+        {
+            var dotted = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "dotted.id", .display_name = "Dotted" };
+            try host.registerPlugin(&dotted);
+            defer host.unregisterPlugin(&dotted);
+            try std.testing.expect(host.pluginDataFolder(&dotted) == null);
+        }
+        // Deleted since, it is made again by an ask once the second it is trusted for is over.
+        try std.Io.Dir.cwd().deleteTree(dvui.io, data);
+        const text_entry = editor.app.plugin_data_folders.getPtr("text") orelse return error.TestUnexpectedResult;
+        text_entry.made_at.? -= app.App.plugin_data_recheck_ns;
+        _ = host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult;
+        var again = try std.Io.Dir.cwd().openDir(dvui.io, data, .{});
+        again.close(dvui.io);
+        // One that cannot be made (a file in its way) is null, and not tried again for a few
+        // seconds; once they have passed, with the way clear, it is made.
+        {
+            var blocked = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "blocked", .display_name = "Blocked" };
+            try host.registerPlugin(&blocked);
+            defer host.unregisterPlugin(&blocked);
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugin-data/blocked", .data = "" });
+            try std.testing.expect(host.pluginDataFolder(&blocked) == null);
+            try tmp.dir.deleteFile(dvui.io, "plugin-data/blocked");
+            try std.testing.expect(host.pluginDataFolder(&blocked) == null);
+            const cached = editor.app.plugin_data_folders.getPtr("blocked") orelse return error.TestUnexpectedResult;
+            cached.failed_at.? -= app.App.plugin_data_retry_ns;
+            const made = host.pluginDataFolder(&blocked) orelse return error.TestUnexpectedResult;
+            var dir2 = try std.Io.Dir.cwd().openDir(dvui.io, made, .{});
+            dir2.close(dvui.io);
+            try std.testing.expect(cached.failed_at == null);
+        }
+        // A build declaring a loaded plugin's id in another case is refused before it is opened,
+        // its card shows it failed (not loaded) and says why, and uninstalling it goes through.
+        if (app.App.loads_plugins) {
+            try std.testing.expectError(error.DuplicatePluginId, editor.loadUserPluginById("Text"));
+            const status = editor.app.pluginStatus("Text");
+            try std.testing.expectEqual(sdk.services.plugins.Api.State.failed, status.state);
+            try std.testing.expect(std.mem.indexOf(u8, status.why, "differs only in case") != null);
+            // Uninstalling from that card never deletes the loaded plugin's folder, which on macOS
+            // and Windows is the same folder by another name.
+            try tmp.dir.createDirPath(dvui.io, "plugins/text");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/text/keep", .data = "" });
+            try editor.uninstallPlugin("Text", true);
+            try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, editor.app.pluginStatus("Text").state);
+            try std.testing.expect(host.pluginById("text") != null);
+            _ = try tmp.dir.statFile(dvui.io, "plugins/text/keep", .{});
+            try tmp.dir.deleteTree(dvui.io, "plugins/text");
+        }
+        // A folder already in `plugins/` in another case clashes too, before a store install
+        // writes anything.
+        {
+            try tmp.dir.createDirPath(dvui.io, "plugins/Graphl");
+            defer tmp.dir.deleteTree(dvui.io, "plugins/Graphl") catch {};
+            var clash_buf: [64]u8 = undefined;
+            try std.testing.expectEqualStrings("Graphl", editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult);
+            try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "Graphl") == null);
+        }
+    }
     // The app offers its plugins the `automation` service, and nothing is in flight.
     const automation_api = editor.app.host.getServiceTyped(sdk.services.automation.Api) orelse return error.TestUnexpectedResult;
     try std.testing.expect(automation_api.settled());
@@ -8660,6 +8806,41 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expect(dvui.frameTimeNS() - held_from >= 800 * std.time.ns_per_ms);
             try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
             try std.testing.expectEqual(@as(usize, 40), (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult).at);
+
+            // Its tab sends it back into the grip, and the pointer resting on it after does not
+            // bring it back.
+            const tab_tag = try std.fmt.allocPrint(gpa, "history.collapse:{s}", .{path});
+            defer gpa.free(tab_tag);
+            var fold: automation.Script = .init(gpa, "transport-collapse", "");
+            fold.check = s.check;
+            try fold.click(.{ .tag = tab_tag }, .{});
+            try ed_play(editor, &fold);
+            const folded_at = dvui.frameTimeNS();
+            while (ds.transport.shown.openness(dvui.frameTimeNS()) > 0 and dvui.frameTimeNS() - folded_at < 2 * std.time.ns_per_s)
+                _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+            for (0..20) |_| _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+            try std.testing.expectEqual(@as(usize, 40), (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult).at);
+
+            // Held on the grip, the bar comes once; resting there after it goes, it stays gone.
+            var rest: automation.Script = .init(gpa, "transport-grip-rest", "");
+            rest.check = s.check;
+            try rest.moveTo(.{ .tag = grip_tag }, .{});
+            try ed_play(editor, &rest);
+            const rest_from = dvui.frameTimeNS();
+            while (ds.transport.shown.openness(dvui.frameTimeNS()) <= 0 and dvui.frameTimeNS() - rest_from < 3 * std.time.ns_per_s)
+                _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
+            const up_at = dvui.frameTimeNS();
+            while (ds.transport.shown.openness(dvui.frameTimeNS()) > 0 and dvui.frameTimeNS() - up_at < 8 * std.time.ns_per_s)
+                _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+            const gone_at = dvui.frameTimeNS();
+            while (dvui.frameTimeNS() - gone_at < 2 * std.time.ns_per_s) {
+                _ = try dvui.testing.step(headlessFrame);
+                try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+            }
         }
 
         try editor.undo();

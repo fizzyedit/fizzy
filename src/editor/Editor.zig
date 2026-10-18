@@ -741,6 +741,22 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         // Skip `.load-tmp` and any other dotfile/directory — not a plugin id.
         if (plugin_id.len == 0 or plugin_id[0] == '.') continue;
 
+        // Two folders whose names differ only in case (a case-sensitive filesystem lets both
+        // exist) are one id twice: neither loads. Which one was meant cannot be told from the
+        // folders, and loading whichever sorts first would let byte order choose. One card, on
+        // the first by that order, names them both.
+        const twin: ?[]const u8 = for (ids.items) |other| {
+            if (other.ptr != plugin_id.ptr and std.ascii.eqlIgnoreCase(other, plugin_id)) break other;
+        } else null;
+        if (twin) |other| {
+            if (std.mem.lessThan(u8, plugin_id, other)) {
+                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders '{s}' and '{s}' differ only in case, so neither is loaded: remove one", .{ plugin_id, other }) catch "two plugin folders differ only in case, so neither is loaded";
+                dvui.log.warn("user plugin '{s}': {s}", .{ plugin_id, why });
+                editor.app.recordPluginFailure(plugin_id, why, null, null, .{});
+            }
+            continue;
+        }
+
         // User-disabled plugins (store "disable") stay on disk but are not loaded.
         if (editor.app.isPluginDisabled(plugin_id)) {
             dvui.log.info("user plugin '{s}' is disabled; skipped", .{plugin_id});
@@ -751,7 +767,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         defer editor.app.gpa.free(file_name);
         const path = std.fs.path.join(editor.app.gpa, &.{ plugins_dir, plugin_id, file_name }) catch continue;
 
-        if (editor.app.host.pluginById(plugin_id) != null) {
+        if (editor.app.host.pluginByIdIgnoringCase(plugin_id)) |loaded| {
             // A fizzy built-in (`text`/`workbench`/`image`/`markdown`) is loaded via its own
             // static/dylib path (see `postInit` above) and may *also* have its dylib sitting in
             // this same shared plugins directory — built-ins compile "the same third-party
@@ -762,7 +778,9 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             // plugin), which collides on the shared heading widget id. Only a genuine third-party
             // id clash (some other plugin trying to claim an id a built-in already owns) is
             // worth surfacing.
-            if (isBundledPluginId(plugin_id)) {
+            if (!std.mem.eql(u8, loaded.id, plugin_id)) {
+                editor.app.recordCaseClash(plugin_id, loaded.id, path);
+            } else if (isBundledPluginId(plugin_id)) {
                 dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
@@ -837,14 +855,7 @@ fn unloadPluginLibs(editor: *Editor) void {
     editor.app.failed_user_plugins.deinit(editor.app.gpa);
     editor.app.deinitPluginLoads();
 
-    for (editor.app.disabled_plugin_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.disabled_plugin_ids.deinit(editor.app.gpa);
-
-    for (editor.app.undecided_plugin_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.undecided_plugin_ids.deinit(editor.app.gpa);
-
-    for (editor.app.auto_update_off_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.auto_update_off_ids.deinit(editor.app.gpa);
+    // The id lists (disabled, undecided, auto-update off) are the App's: `App.deinit`.
 
     {
         var it = editor.app.plugin_flags_pending.iterator();
@@ -1450,6 +1461,13 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
+    // Asked before the build is opened: a case variant of a loaded or installed id fails saying so.
+    var clash_buf: [64]u8 = undefined;
+    if (editor.app.pluginCaseClash(&clash_buf, id)) |other| {
+        editor.app.recordCaseClash(id, other, path);
+        editor.app.gpa.free(path);
+        return error.DuplicatePluginId;
+    }
     const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
         editor.userPluginLoadFailed(id, path, err);
         editor.app.gpa.free(path);
@@ -2053,7 +2071,16 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
 
     const plugin_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", id });
     defer editor.app.gpa.free(plugin_dir);
-    std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
+    // A build refused for its case (`App.recordCaseClash`) names a folder that, on macOS and
+    // Windows, is the loaded plugin's own: its card drops, and that folder stays. Told apart by
+    // what the folder is on disk, not by its name.
+    const keep = if (editor.app.host.pluginByIdIgnoringCase(id)) |loaded| keep: {
+        if (std.mem.eql(u8, loaded.id, id)) break :keep false;
+        const loaded_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", loaded.id });
+        defer editor.app.gpa.free(loaded_dir);
+        break :keep App.sameFolder(plugin_dir, loaded_dir);
+    } else false;
+    if (!keep) std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
         dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) });
     // A broken (failed-to-load) build can be uninstalled too; clear its failure record so the
     // card disappears instead of lingering as "Failed".
@@ -2373,6 +2400,9 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .extensionOwnerOverride = fizzyExtensionOwnerOverride,
     .folder = fizzyFolder,
     .paletteFolder = fizzyPaletteFolder,
+    .pluginDataFolder = fizzyPluginDataFolder,
+    .pluginRegistered = fizzyPluginRegistered,
+    .pluginUnregistered = fizzyPluginUnregistered,
     .getSecret = fizzyGetSecret,
     .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
@@ -2539,6 +2569,15 @@ fn fizzyFolder(ctx: *anyopaque) ?[]const u8 {
 }
 fn fizzyPaletteFolder(ctx: *anyopaque) ?[]const u8 {
     return fizzyCtx(ctx).app.palette_folder;
+}
+fn fizzyPluginDataFolder(ctx: *anyopaque, id: []const u8) ?[]const u8 {
+    return fizzyCtx(ctx).app.pluginDataFolder(id);
+}
+fn fizzyPluginRegistered(ctx: *anyopaque, id: []const u8) void {
+    fizzyCtx(ctx).app.pluginRegistered(id);
+}
+fn fizzyPluginUnregistered(ctx: *anyopaque, id: []const u8) void {
+    fizzyCtx(ctx).app.pluginUnregistered(id);
 }
 fn fizzyGetSecret(ctx: *anyopaque, key: []const u8) ?[]const u8 {
     return fizzyCtx(ctx).app.secrets.get(key);
@@ -2971,6 +3010,19 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // No fill: the place card the region draws is the document's background. A second coat of
     // the same translucent fill here doubled it — darker, and more opaque than the chrome
     // around it.
+    // The card the document is drawn on, the first box round it reaching lower (its padding): its
+    // bottom edge is where the history's grip stands.
+    const card_edge = edge: {
+        var wd = dvui.parentGet().data();
+        const own = wd.borderRectScale().r;
+        for (0..8) |_| {
+            const r = wd.borderRectScale().r;
+            if (r.y + r.h > own.y + own.h + 0.5) break :edge r.y + r.h;
+            if (wd.parent.data() == wd) break;
+            wd = wd.parent.data();
+        }
+        break :edge own.y + own.h;
+    };
     var canvas = sdk.pane_layout.mainCanvasVbox(dvui.themeGet().color(.window, .fill), false, @truncate(ds.doc_id));
     defer {
         dvui.toastsShow(canvas.data().id, canvas.data().contentRectScale().r.toNatural());
@@ -3059,9 +3111,11 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
             .history = ds.has_history,
             .steps = if (recorded) |tr| tr.steps.items.len else 0,
+            .edge = card_edge,
             .frames = if (recorded != null) &ds.frames else null,
             .export_from = if (track) |tr| tr.base_top else null,
             .window_summary = summary,
+            .progress = editor.tape_tabs.progress(doc.owner.documentPath(doc)),
         });
         if (pressed.exported) |win| {
             editor.share_pending = .{ .doc_id = doc.id, .from = win.from, .to = win.to };
@@ -6687,6 +6741,8 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 }
 
 pub fn deinit(editor: *Editor) !void {
+    // Freed however this ends: the fallible steps below may return early.
+    defer editor.app.deinit();
     // A demo playing at quit leaves the user's layout and settings as `Demo.begin` flushed them:
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
@@ -7053,6 +7109,15 @@ const plugin_manager_vtable: PluginManager.VTable = .{
     .revealMain = struct {
         fn f(ctx: *anyopaque) void {
             pmSelf(ctx).revealCenter();
+        }
+    }.f,
+    .refuseCaseClash = struct {
+        fn f(ctx: *anyopaque, id: []const u8) bool {
+            const app = &pmSelf(ctx).app;
+            var buf: [64]u8 = undefined;
+            const other = app.pluginCaseClash(&buf, id) orelse return false;
+            app.recordCaseClash(id, other, null);
+            return true;
         }
     }.f,
 };

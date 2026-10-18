@@ -309,6 +309,17 @@ pub fn isPlaying(self: *const TapeTabs, path: []const u8) bool {
     return false;
 }
 
+/// How far the tape in the document at `path` has played, 0 to 1, by its ops applied: its
+/// transport's grip fills as it plays (`HistoryTransport.DrawOptions.progress`). Null when the
+/// document is no tape's.
+pub fn progress(self: *const TapeTabs, path: []const u8) ?f32 {
+    for (self.playing.items) |p| if (std.mem.eql(u8, p.path, path)) {
+        const n = p.owned.tape.ops.len;
+        return if (n == 0) 1 else @as(f32, @floatFromInt(p.op)) / @as(f32, @floatFromInt(n));
+    };
+    return null;
+}
+
 fn free(editor: *Editor, p: *Playback) void {
     const gpa = editor.app.gpa;
     editor.app.host.unmount(p.root);
