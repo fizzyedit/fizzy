@@ -24,6 +24,9 @@ const viewports = @import("viewports.zig");
 pub const os_windows = @import("os_windows.zig");
 /// What this backend keeps count of as it runs (`health`).
 pub const Health = @import("Health.zig");
+/// Fizzy's in-app glass (`src/glass/`): here for `FrameTarget`, a plain dvui app's frame drawn
+/// into a texture (`plainFrameBegin`).
+pub const glass = @import("glass");
 
 /// What an app gets from its window beyond drawing into it: native dialogs, files the OS hands
 /// over, trackpad gestures, the window's chrome and state (`platform/`).
@@ -97,11 +100,17 @@ sdl_quit: bool = true,
 clear_window_on_begin: bool = false,
 /// See `mainPicture`.
 main_picture: ?viewport_map.Rect = null,
-/// The backend lays the main window's frame down where its picture is (`mainPicture`), the app
-/// drawing straight to the window: a plain dvui app's, whose picture is also below the title bar
-/// (`platform.macos_monitor.titlebarStrip`). Fizzy draws to a target and lays it down itself
-/// (`core.gfx.FrameTarget`), and keeps its content clear of the traffic lights itself.
+/// The main window's frame goes down where its picture is (`mainPicture`): a plain dvui app's,
+/// whose picture is also below the title bar (`platform.macos_monitor.titlebarStrip`). Its frame
+/// target lays it there (`plain_frame`, `pictureInWindow`); the backend moves what is drawn
+/// straight to the window there itself only on a frame the target did not bind. Fizzy draws to a
+/// target of its own, lays it down itself, and keeps its content clear of the traffic lights.
 places_main_picture: bool = false,
+/// A plain dvui app's frame, drawn into a texture and laid down on the window at its end
+/// (`plainFrameBegin`), as fizzy draws its own (`src/Entry.zig`).
+plain_frame: glass.FrameTarget = .{},
+/// Whether `glass.FrameTarget.init` has run for `plain_frame`.
+plain_frame_ready: bool = false,
 /// A plain dvui app's main window's size its shadow was last taken at, and the frames it is taken
 /// again for: clear over its backdrop (`platform.window.nativeTitleBar`), AppKit shapes the shadow
 /// — and the outline that comes with it — from what is drawn, as a float's window has it
@@ -1144,6 +1153,40 @@ fn dressPlainWindows(self: *SDLBackend) void {
     if (material.kind != .liquid) return;
     plainGlass(self.window, material.opacity, colors[0]);
     for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) plainGlass(v.window, material.opacity, colors[0]);
+}
+
+/// A plain dvui app's frame from here to `plainFrameEnd` draws into a texture the window's size
+/// (`glass.FrameTarget`), laid down on the window at the end, as fizzy's own frame is
+/// (`src/Entry.zig`). So that what is drawn over the frame — a floating window in the window's
+/// material, a frost under it — can read back what is under it from a texture the GPU holds
+/// (`glass.BlurBackdrop`), rather than read the window back through the CPU. Costs a full-window
+/// textured quad a frame; on Metal it also defers acquiring the drawable to the end of the frame.
+/// Not for fizzy, which wraps its frame itself (`platform.window.app_dresses_windows`); and
+/// nothing on a backend without render targets.
+///
+/// Around the app's frame function, inside `os_windows`' `beforeFrame` and `afterFrame`: the
+/// floating windows in OS windows of their own are taken out of the frame into their windows'
+/// pictures there (`viewports.Picture` binds its own target and gives this one back), so they
+/// never reach this one; what stays in the main window is drawn into it by `plainFrameEnd`.
+fn plainFrameBegin(self: *SDLBackend) void {
+    if (platform.window.app_dresses_windows) return;
+    if (!self.plain_frame_ready) {
+        glass.FrameTarget.init();
+        self.plain_frame_ready = true;
+    }
+    self.plain_frame.begin();
+    // The target lays the frame down at the main window's picture itself (`pictureInWindow`):
+    // not moved there a second time on its way into the window (`begin`, `places_main_picture`).
+    if (self.plain_frame.bound) self.gpu.window_offset = .{ 0, 0 };
+}
+
+/// The end of a plain dvui app's frame (`plainFrameBegin`): before `Window.end`, after everything
+/// the frame draws into the main window. dvui's deferred subwindows — floating windows, dialogs,
+/// toasts — render into the target here (`FrameTarget.end` runs `Window.endRendering`, which
+/// `Window.end` then skips), and the target is drawn on the window.
+fn plainFrameEnd(self: *SDLBackend) void {
+    if (platform.window.app_dresses_windows) return;
+    self.plain_frame.end();
 }
 
 /// `window`'s Liquid Glass this frame, as fizzy's own windows have it (`Editor.windowGlassLook`):
@@ -3796,11 +3839,13 @@ pub fn main(main_init: std.process.Init) !u8 {
         try back.addAllEvents(&win);
 
         // As `appIterate`: the floating windows in OS windows of their own, and a plain dvui app's
-        // main window dressed.
+        // main window dressed, its frame drawn into a texture (`plainFrameBegin`).
         os_windows.beforeFrame();
+        back.plainFrameBegin();
         const res = try app.frameFn();
         os_windows.afterFrame();
         if (!platform.window.app_dresses_windows) back.dressPlainWindows();
+        back.plainFrameEnd();
 
         var end_micros = try win.end(.{});
         Health.current.frameEnd(c.SDL_GetTicksNS());
@@ -4051,6 +4096,9 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
 
     const app = dvui.App.get() orelse unreachable;
     os_windows.beforeFrame();
+    // A plain dvui app's frame into a texture, laid down on the window before `Window.end`
+    // (`plainFrameBegin`).
+    appState.back.plainFrameBegin();
     var res = app.frameFn() catch |err| {
         log.err("dvui.App.frameFn failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
@@ -4061,6 +4109,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     if (!platform.window.app_dresses_windows) appState.back.dressPlainWindows();
 
     live_resize_trace.overlay();
+    appState.back.plainFrameEnd();
 
     var end_micros = appState.win.end(.{ .manage_backend = false }) catch |err| {
         log.err("dvui.Window.end failed: {any}", .{err});

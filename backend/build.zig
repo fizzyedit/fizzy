@@ -167,6 +167,10 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
         m.addCSourceFile(.{ .file = b.path("src/macos_monitor.m") });
     }
     m.addImport("glass_look", glassLookModule(dep));
+    // A plain dvui app's frame is drawn through the glass's frame target (`plainFrameBegin`). The
+    // same module as the app's `core` takes (`glassModule`, one per dvui); it imports dvui, never
+    // the backend.
+    m.addImport("glass", glassModule(dep, dvui_mod));
     dvui_mod.addImport("backend", m);
     backend_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
     return m;
