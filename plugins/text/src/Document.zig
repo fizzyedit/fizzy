@@ -168,6 +168,9 @@ preview_split_ratio_user: f32 = 0.5,
 
 /// Undo/redo history — see `textcore.History` for the capture + grouping strategy.
 history: tc.History = .{},
+/// Who last went back in the history (`undo`): the steps an edit after it adds for the jump are
+/// theirs (`recordGoneBack`).
+went_back_by: sdk.Host.Acting = .{},
 /// `history.topOpId()` as of the last successful save; the document is dirty exactly when
 /// the two differ. Deliberately an id, not `undo.items.len` — a length can return to its
 /// saved value via undo-then-new-edit while content differs from disk, but an id can't:
@@ -550,7 +553,9 @@ pub fn replaceRange(self: *Document, start: usize, end: usize, new: []const u8) 
 pub fn undo(self: *Document) void {
     const gpa = sdk.allocator();
     const sel = self.history.applyUndo(gpa, &self.text) orelse return;
-    if (self.history.lastUndone()) |s| self.recordEdits(.undone, s.step, s.edits, s.sel_before, true);
+    // Whoever goes back owns the jump, when an edit later makes it steps (`recordGoneBack`).
+    self.went_back_by = sdk.host().acted();
+    if (self.history.lastUndone()) |s| self.recordEdits(.undone, s.step, s.edits, s.sel_before, true, null);
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
@@ -562,7 +567,7 @@ pub fn undo(self: *Document) void {
 pub fn redo(self: *Document) void {
     const gpa = sdk.allocator();
     const sel = self.history.applyRedo(gpa, &self.text) orelse return;
-    if (self.history.lastApplied()) |s| self.recordEdits(.redone, s.step, s.edits, s.sel_after, false);
+    if (self.history.lastApplied()) |s| self.recordEdits(.redone, s.step, s.edits, s.sel_after, false, null);
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
@@ -579,16 +584,33 @@ fn recordStep(self: *const Document, step: sdk.Step) void {
     sdk.host().recordStep(self.id, step);
 }
 
-/// What `history.end` or `pushComplete` did, reported as a step.
+/// What `history.end` or `pushComplete` did, reported as a step: after the steps an edit after
+/// going back put on the line (`recordGoneBack`).
 pub fn recordCommitted(self: *const Document, c: tc.History.Committed) void {
-    self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false);
+    if (c.back > 0) self.recordGoneBack(c.back);
+    self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false, null);
+}
+
+/// The steps an edit after going back put on the line below it (`tc.History.keepGoneBack`): the
+/// `n` gone back over, applied again, then their reverses. Reported as whoever went back, so an
+/// agent's next edit never makes it the author of taking back the person's work.
+fn recordGoneBack(self: *const Document, n: usize) void {
+    const host = sdk.host();
+    const outer = host.actAgain(self.went_back_by);
+    defer host.endAct(outer);
+    // Below the commit: the reverses (1..n), then the steps gone back over (n+1..2n). Oldest first.
+    var i: usize = 2 * n;
+    while (i > 0) : (i -= 1) {
+        const s = self.history.appliedBelowTop(i) orelse continue;
+        if (i > n) self.recordEdits(.redone, s.step, s.edits, s.sel_after, false, s.step) else self.recordEdits(.added, s.step, s.edits, s.sel_after, false, s.step);
+    }
 }
 
 /// `edits` of history step `id` reported as a step, forward or (`reverse`) as their undo, `sel`
 /// the selection they leave.
-fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool) void {
+fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool, on_top: ?u64) void {
     // Every step reaches the host, which keeps who made it; its bytes only while it is recorded.
-    const top: u64 = if (self.history.lastApplied()) |r| r.step else 0;
+    const top: u64 = on_top orelse if (self.history.lastApplied()) |r| r.step else 0;
     if (!sdk.host().recording(self.id)) return self.recordStep(.{ .kind = kind, .id = id, .top = top });
     const gpa = sdk.allocator();
     var out: std.Io.Writer.Allocating = .init(gpa);

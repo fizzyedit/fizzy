@@ -28,6 +28,18 @@ paths, fuzzy matching, the LSP client, the profiler.
   selects instead of expanding, until you type. Fizzy's backends set `win.modifiers` from the OS
   before each mouse event (`backend/src/SDLBackend.zig`, `src/backend/WebBackend.zig`); a new
   backend must too.
+- **Touch or mouse: ask dvui, never infer it.** `dvui.pointerKind()` is the window's answer,
+  set as the backend adds events, the same in the app, a plugin dylib and a wasm side module.
+  State kept by scanning events (a global, a per-frame key) differs per module and per frame.
+  A lifted finger hovers nothing: dvui puts the frame's `.position` event off every window, so a
+  hover look needs no touch check of its own. The native backend gives only fingers on the screen
+  touch buttons (`backend/src/touch_slots.zig`); a trackpad's fingers move the mouse.
+- **A cursor that must win asks with a priority.** `dvui.cursorSet` keeps the first asked in a
+  frame; `dvui.cursorSetPriority` the highest. Splits and a float's corner ask at `.resize`, a
+  carried view at `.drag`, so a hover cursor (a tab's hand) never takes their arrow. The cursor
+  only: which widget takes a press is still drawing order, so ask at `.resize` only where the
+  handle takes the press before what is under it. A float's edges, handled after its children,
+  stay at `.normal`.
 - **Very long lists:** dvui clamps every min size at `max_float_safe` (2e6, about 93k rows at
   21.5 pt), so the scroll range silently ends early. A widget not drawn on a frame loses its
   min size, so a row scrolled back into view is zero-height for a frame. A virtualized list must

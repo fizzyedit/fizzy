@@ -113,6 +113,9 @@ const Entry = struct {
     /// The step's own id, given when it is pushed and kept through merges (unlike `id`): what a
     /// timeline names it by (`line`, `stepsTo`).
     step: u64,
+    /// A step that takes another back, appended when an edit landed after going back
+    /// (`keepGoneBack`): the step the jump went back to, 0 before the first.
+    back_to: ?u64 = null,
 
     fn deinit(self: *Entry, gpa: Allocator) void {
         self.txn.deinit(gpa);
@@ -196,6 +199,9 @@ pub const Committed = struct {
     /// Valid until the history next changes.
     edits: []const Transaction.Edit,
     sel_after: Range,
+    /// How many steps had been gone back over (undone) when it landed: they are on the line
+    /// again, followed by their reverses, just below it (`keepGoneBack`, `goneBack`).
+    back: usize = 0,
 };
 
 /// A step as the history holds it: its id, its edits, and the selection either side. Valid until
@@ -261,9 +267,9 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range, may_join: bool) ?Co
         .other;
     const kind = classify(removed_total, inserted_total, pos, p.cursor_before, prev_kind);
 
-    self.clearRedo(gpa);
+    const back = self.keepGoneBack(gpa);
 
-    const can_merge = may_join and self.group_open and
+    const can_merge = back == 0 and may_join and self.group_open and
         self.undo_stack.items.len > 0 and
         !shouldBreakGroup(prev_kind, kind);
 
@@ -301,7 +307,7 @@ pub fn end(self: *History, gpa: Allocator, sel_after: Range, may_join: bool) ?Co
         };
         self.next_id += 1;
         const top = &self.undo_stack.items[self.undo_stack.items.len - 1];
-        committed = .{ .step = top.step, .joined = false, .edits = top.txn.edits.items, .sel_after = sel_after };
+        committed = .{ .step = top.step, .joined = false, .edits = top.txn.edits.items, .sel_after = sel_after, .back = back };
     }
     self.group_open = true;
     self.version += 1;
@@ -332,18 +338,60 @@ pub fn pushComplete(
 /// Take `txn`, already applied, as a step of its own: a recorded step played into the document
 /// (`Transaction.applyStepTo`).
 pub fn push(self: *History, gpa: Allocator, txn: Transaction) !Committed {
-    self.clearRedo(gpa);
+    const back = self.keepGoneBack(gpa);
     try self.undo_stack.append(gpa, .{ .txn = txn, .kind = .other, .id = self.next_id, .step = self.next_id });
     self.next_id += 1;
     self.group_open = false;
     self.version += 1;
     const top = &self.undo_stack.items[self.undo_stack.items.len - 1];
-    return .{ .step = top.step, .joined = false, .edits = top.txn.edits.items, .sel_after = top.txn.sel_after };
+    return .{ .step = top.step, .joined = false, .edits = top.txn.edits.items, .sel_after = top.txn.sel_after, .back = back };
 }
 
-fn clearRedo(self: *History, gpa: Allocator) void {
+/// Going back is a step (`plans/HISTORY_TIMELINE_PLAN.md`): before an edit lands after going
+/// back, the steps gone back over (the redo stack) go back on the line as they were, then each
+/// one's reverse, newest first. The text is where it was gone back to, as before, but nothing on
+/// the line is lost: dragging to a step gone back over brings it back like any other. Answers how
+/// many steps were gone back over; the line grew by twice that. Out of memory, they are dropped,
+/// as redo always was.
+fn keepGoneBack(self: *History, gpa: Allocator) usize {
+    const gone = self.redo_stack.items;
+    if (gone.len == 0) return 0;
+    const back_to: u64 = if (self.lastApplied()) |s| s.step else 0;
+    kept: {
+        const reverses = gpa.alloc(Transaction, gone.len) catch break :kept;
+        defer gpa.free(reverses);
+        // The redo stack holds the furthest step gone back over first: its reverse comes first.
+        var made: usize = 0;
+        for (gone, reverses) |e, *r| {
+            r.* = e.txn.inverted(gpa) catch break;
+            made += 1;
+        }
+        const room = if (made < gone.len) false else if (self.undo_stack.ensureUnusedCapacity(gpa, gone.len * 2)) true else |_| false;
+        if (!room) {
+            for (reverses[0..made]) |*r| r.deinit(gpa);
+            break :kept;
+        }
+        const n = gone.len;
+        // As they were, the nearest first.
+        while (self.redo_stack.pop()) |e| self.undo_stack.appendAssumeCapacity(e);
+        for (reverses) |r| {
+            self.undo_stack.appendAssumeCapacity(.{ .txn = r, .kind = .other, .id = self.next_id, .step = self.next_id, .back_to = back_to });
+            self.next_id += 1;
+        }
+        self.version += 1;
+        return n;
+    }
+    std.log.err("History: the steps gone back over were dropped: out of memory", .{});
     for (self.redo_stack.items) |*e| e.deinit(gpa);
     self.redo_stack.clearRetainingCapacity();
+    return 0;
+}
+
+/// The `i`th step below the top of the line (0 is the top), as `lastApplied` gives the top: how
+/// a caller reads the steps `keepGoneBack` added below a commit.
+pub fn appliedBelowTop(self: *const History, i: usize) ?StepRef {
+    const items = self.undo_stack.items;
+    return if (i >= items.len) null else .of(&items[items.len - 1 - i]);
 }
 
 // -- replay ---------------------------------------------------------------------------------------
@@ -393,15 +441,15 @@ pub fn applyRedo(self: *History, gpa: Allocator, text: *std.ArrayList(u8)) ?Rang
 // -- the line -------------------------------------------------------------------------------------
 
 /// One step of `line`.
-pub const Step = struct { step: u64, kind: EditKind };
+pub const Step = struct { step: u64, kind: EditKind, back_to: ?u64 = null };
 
 /// Every step, oldest first: the undo stack, then the redo stack from the next redo on. The
 /// first `undo_stack.items.len` are applied.
 pub fn line(self: History, arena: Allocator) ![]Step {
     const out = try arena.alloc(Step, self.undo_stack.items.len + self.redo_stack.items.len);
-    for (self.undo_stack.items, 0..) |e, i| out[i] = .{ .step = e.step, .kind = e.kind };
+    for (self.undo_stack.items, 0..) |e, i| out[i] = .{ .step = e.step, .kind = e.kind, .back_to = e.back_to };
     const redo = self.redo_stack.items;
-    for (redo, 0..) |e, i| out[out.len - 1 - i] = .{ .step = e.step, .kind = e.kind };
+    for (redo, 0..) |e, i| out[out.len - 1 - i] = .{ .step = e.step, .kind = e.kind, .back_to = e.back_to };
     return out;
 }
 
@@ -634,15 +682,68 @@ test "merging still bumps the id so dirty tracking stays correct" {
     try t.expect(h.hist.topOpId() != id_after_save);
 }
 
-test "a new edit after undo clears the redo stack" {
+test "an edit after going back keeps what was gone back over, then its reverse" {
     var h: Harness = .{ .gpa = t.allocator };
     defer h.deinit();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
 
-    try h.type_("abc");
+    try h.type_("abc"); // "abc"
+    try h.backspace(1); // "ab"
+    try h.type_("\n"); // "ab\n"
+    const before = try h.hist.line(arena.allocator());
+    try t.expectEqual(@as(usize, 3), before.len);
+
     _ = h.undo();
-    try t.expect(h.hist.canRedo());
-    try h.type_("z");
+    _ = h.undo();
+    try t.expectEqualStrings("abc", h.text.items);
+    h.hist.begin(.collapsed(h.cursor));
+    try h.text.insertSlice(h.gpa, h.cursor, "z");
+    h.hist.note(h.gpa, h.cursor, "", "z");
+    h.cursor += 1;
+    const c = h.hist.end(h.gpa, .collapsed(h.cursor), true).?;
+    try t.expectEqualStrings("abcz", h.text.items);
+    // Nothing to redo, and nothing lost: the two steps gone back over, their reverses, the edit.
     try t.expect(!h.hist.canRedo());
+    try t.expectEqual(@as(usize, 2), c.back);
+    try t.expect(!c.joined);
+    const after = try h.hist.line(arena.allocator());
+    try t.expectEqual(@as(usize, 6), after.len);
+    for (before, after[0..3]) |a, b| try t.expectEqual(a.step, b.step);
+    for (after[3..5]) |r| try t.expectEqual(@as(?u64, before[0].step), r.back_to);
+    try t.expectEqual(@as(?u64, null), after[5].back_to);
+    // The commit's reverses sit just below it, the step gone back to's reverse nearest.
+    try t.expectEqual(after[4].step, h.hist.appliedBelowTop(1).?.step);
+
+    // Every point on the line is still there to go to.
+    const goTo = struct {
+        fn f(hh: *Harness, step: u64) void {
+            const n = hh.hist.stepsTo(step).?;
+            for (0..@abs(n)) |_| _ = if (n < 0) hh.undo() else hh.redo();
+        }
+    }.f;
+    goTo(&h, before[2].step);
+    try t.expectEqualStrings("ab\n", h.text.items);
+    goTo(&h, after[3].step);
+    try t.expectEqualStrings("ab", h.text.items);
+    goTo(&h, before[0].step);
+    try t.expectEqualStrings("abc", h.text.items);
+    goTo(&h, after[5].step);
+    try t.expectEqualStrings("abcz", h.text.items);
+}
+
+test "an edit with nothing gone back over adds only itself" {
+    var h: Harness = .{ .gpa = t.allocator };
+    defer h.deinit();
+    try h.type_("ab");
+    h.hist.closeGroup();
+    h.hist.begin(.collapsed(h.cursor));
+    try h.text.insertSlice(h.gpa, h.cursor, "\n");
+    h.hist.note(h.gpa, h.cursor, "", "\n");
+    h.cursor += 1;
+    const c = h.hist.end(h.gpa, .collapsed(h.cursor), true).?;
+    try t.expectEqual(@as(usize, 0), c.back);
+    try t.expectEqual(@as(usize, 2), h.steps());
 }
 
 test "undo/redo round-trips a long mixed session" {
