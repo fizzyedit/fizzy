@@ -1109,6 +1109,28 @@ pub fn floatingWindowTitle(_: *SDLBackend, id: dvui.Id, header: []const u8) bool
     return os_windows.titled(id, header);
 }
 
+/// The kinds of window material this backend can show (fizzy's `core.material`, field for field):
+/// only a kind every surface it puts glass on can show. A clear window everywhere (`transparent`);
+/// on macOS vibrancy (`frost`) and a plain blur, and Liquid Glass from macOS 26; on Windows
+/// Acrylic (`frost`); on Linux the compositor's blur behind a window, where it has one
+/// (`wayland_blur`).
+pub const MaterialKinds = struct {
+    none: bool = true,
+    transparent: bool = false,
+    blur: bool = false,
+    frost: bool = false,
+    liquid: bool = false,
+};
+
+pub fn materialKinds(self: *SDLBackend) MaterialKinds {
+    return switch (comptime builtin.target.os.tag) {
+        .macos => .{ .transparent = true, .blur = true, .frost = true, .liquid = liquidGlassAvailable() },
+        .windows => .{ .transparent = true, .frost = true },
+        .linux => .{ .transparent = true, .blur = platform.linux_titlebar.blurOffered(self.window) },
+        else => .{},
+    };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Viewports (fizzy's own; see `Viewport`)
 

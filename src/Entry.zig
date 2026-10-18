@@ -511,6 +511,17 @@ fn gpuTotals() ?fizzy.core.profile.Gpu {
     return out;
 }
 
+/// The kinds of window material the backend can show (`core.material.Kinds`), from its own answer,
+/// field for field; `none` alone from a backend that does not say.
+fn materialOffered() fizzy.core.material.Kinds {
+    var k: fizzy.core.material.Kinds = .{};
+    if (comptime @hasDecl(dvui.backend, "materialKinds")) {
+        const b = dvui.currentWindow().backend.impl.materialKinds();
+        inline for (@typeInfo(fizzy.core.material.Kinds).@"struct".field_names) |f| @field(k, f) = @field(b, f);
+    }
+    return k;
+}
+
 /// One run of the app's frame.
 fn frameOnce() !dvui.App.Result {
     // First, before anything reads `dvui.events()` or the frame target binds: a playing demo adds
@@ -527,6 +538,9 @@ fn frameOnce() !dvui.App.Result {
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);
+    // What the app's windows are made of, as the backend can show it, for every glass drawn this
+    // frame (`core.material`). `.none` until the app has a setting for it.
+    fizzy.core.material.publish((fizzy.core.material.Material{}).effective(materialOffered()));
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");

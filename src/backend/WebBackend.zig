@@ -749,6 +749,15 @@ pub fn sleep(_: *WebBackend, ns: u64) void {
     wasm.wasm_sleep(@intCast(@divTrunc(ns, 1_000_000)));
 }
 
+/// The kinds of window material the web can show (fizzy's `core.material`, field for field):
+/// every one. Its glass is all drawn in the canvas, the one surface it puts glass on (Liquid Glass
+/// by its own shader), and the page behind a clear canvas shows through.
+pub const MaterialKinds = struct { none: bool = true, transparent: bool = true, blur: bool = true, frost: bool = true, liquid: bool = true };
+
+pub fn materialKinds(_: *WebBackend) MaterialKinds {
+    return .{};
+}
+
 pub fn begin(_: *WebBackend, arena_in: std.mem.Allocator) !void {
     arena = arena_in;
     batch = .{};

@@ -76,6 +76,9 @@ pub const anchor = @import("replay").anchor;
 pub const screens = @import("screens.zig");
 /// Glass the OS draws in place of the app's: a view drag's, as Liquid Glass on macOS 26.
 pub const native_glass = @import("native_glass.zig");
+/// What the app's windows are made of, as the backend can show it: the one material every glass
+/// in the app and every OS window follows.
+pub const material = @import("material.zig");
 
 /// Generic momentum/fling helper (pan, scrub, cover-flow).
 pub const Fling = @import("Fling.zig");
