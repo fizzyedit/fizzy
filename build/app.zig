@@ -353,7 +353,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // package's, so its VERSION file is out of reach here), else 0.0.0.
     const app_version: []const u8 = if (app_version_opt) |v| v else if (opts.own) |own| blk: {
         b.dependOnFileContents(b.path(own.version_file));
-        const raw = b.root.root_dir.handle.readFileAlloc(b.graph.io, own.version_file, b.allocator, std.Io.Limit.limited(256)) catch |e| std.debug.panic("read VERSION: {}", .{e});
+        const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, own.version_file) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256)) catch |e| std.debug.panic("read VERSION: {}", .{e});
         version_owned = raw;
         break :blk std.mem.trimEnd(u8, raw, "\r\n");
     } else "0.0.0";
@@ -850,6 +850,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
         .{ "fizzy-glass-look-tests", "core/gfx/glass_look.zig" },
+        // What the app's windows are made of, and the fallback to what the backend can show.
+        // std-only but for `publish`/`get`, which reach dvui and are not under test here.
+        .{ "fizzy-material-tests", "core/material.zig" },
         // The in-app menu bar's order: fizzy's menus, then plugins', then Help. std-only (see
         // menu_order.zig); `Menu.draw` walks it.
         .{ "fizzy-menu-order-tests", "src/editor/menu_order.zig" },

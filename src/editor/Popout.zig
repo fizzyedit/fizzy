@@ -196,7 +196,7 @@ pub fn beginFrame(state: *State) void {
     menus_left_behind = false;
     // Whatever happened, the screens floating things are placed on this frame: each window's,
     // besides the main window's (`dvui.screensSet`).
-    defer viewports.publishScreens();
+    defer viewports.publishScreens(null);
     // And where a held pointer is read: pinned while a float's window is being moved or resized.
     defer pinPointer(state);
     for (&outs) |*slot| {
