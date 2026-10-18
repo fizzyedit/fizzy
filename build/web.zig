@@ -11,6 +11,8 @@ pub fn addSteps(
     build_opts: *std.Build.Step.Options,
     workbench_opts: *std.Build.Step.Options,
     assets_module: *std.Build.Module,
+    /// The window's icon (`app.Branding.png`); `src/Entry.zig` imports it.
+    app_icon_module: *std.Build.Module,
     app_plugins: []const sdk.BundledPlugin,
     web_plugin_deps: []const []const u8,
     web_plugin_dirs: []const @import("app.zig").WebPluginDir,
@@ -106,6 +108,8 @@ pub fn addSteps(
         "FizzyWebShowInRoot",
         // `?demo=`: a bundled demo by name, or a fetched tape (`Editor.Demo`).
         "FizzyWebPlayDemo",
+        // `?tape=`: a shared tape, played once the plugins it needs are loaded (`TapeTabs`).
+        "FizzyWebPlayTape",
         "__stack_pointer",
         "dvui_c_alloc",
         "dvui_c_free",
@@ -142,6 +146,7 @@ pub fn addSteps(
     // `assets` is generated at build time by assetpack (pure `@embedFile`s,
     // target-independent). Same instance as native — no extra build cost.
     web_exe.root_module.addImport("assets", assets_module);
+    web_exe.root_module.addImport("app_icon", app_icon_module);
 
     // `build_opts` (app_version, app_repo_url, velopack_enabled) — shared
     // with native. velopack_enabled is whatever was passed via `-Dvelopack`;
