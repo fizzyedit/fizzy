@@ -254,6 +254,28 @@ pub fn install(b: *std.Build, lib: *std.Build.Step.Compile, opts: InstallOptions
     // convenience). Not for a wasm build: the browser has no plugins directory, and the desktop
     // editor would only find a file it cannot open.
     if (lib.rootModuleTarget().cpu.arch == .wasm32) return;
+    addDevInstall(b, lib, name, dest, b.fmt("install plugin '{s}' into fizzy plugins dir", .{name}));
+}
+
+pub const InstallBesideOptions = struct {
+    /// The plugin's manifest `id`: the directory the artifact joins.
+    plugin: []const u8,
+};
+
+/// Wire `zig build install` to drop a second artifact (a helper program the plugin starts, say)
+/// into the plugin's own `{plugins}/{plugin}/` directory, beside the library `install` puts there,
+/// under the artifact's own file name and with its permissions. Like `install`'s copy, a dev
+/// convenience: a release ships what the plugin's `release.yml` uploads.
+///
+///     fizzy.plugin.installBeside(b, helper_exe, .{ .plugin = "agent" });
+pub fn installBeside(b: *std.Build, artifact: *std.Build.Step.Compile, opts: InstallBesideOptions) void {
+    if (artifact.rootModuleTarget().cpu.arch == .wasm32) return;
+    addDevInstall(b, artifact, opts.plugin, artifact.out_filename, b.fmt("install '{s}' beside plugin '{s}'", .{ artifact.out_filename, opts.plugin }));
+}
+
+/// Copy `artifact` to `{plugins}/{dir_name}/{file_name}` on every `zig build install`, through
+/// `plugin_sdk_install.zig`: Zig 0.17's build has no custom steps.
+fn addDevInstall(b: *std.Build, artifact: *std.Build.Step.Compile, dir_name: []const u8, file_name: []const u8, step_name: []const u8) void {
     const fizzy_dep = fizzyDep(b, .{ .target = b.graph.host, .optimize = .fast });
     const dev_exe = b.addExecutable(.{
         .name = "fizzy-plugin-dev-install",
@@ -264,13 +286,13 @@ pub fn install(b: *std.Build, lib: *std.Build.Step.Compile, opts: InstallOptions
         }),
     });
     const dev = b.addRunArtifact(dev_exe);
-    dev.setName(b.fmt("install plugin '{s}' into fizzy plugins dir", .{name}));
-    dev.addArtifactArg(lib);
-    dev.addArgs(&.{ name, dest });
+    dev.setName(step_name);
+    dev.addArtifactArg(artifact);
+    dev.addArgs(&.{ dir_name, file_name });
     // A relative `FIZZY_PROFILE` is taken from the plugin's own directory.
     dev.setCwd(b.path("."));
-    // Every install, not only when the dylib changed: the copy in the plugins dir may have been
-    // replaced or removed since.
+    // Every install, not only when the artifact changed: the copy in the plugins dir may have
+    // been replaced or removed since.
     dev.has_side_effects = true;
     b.getInstallStep().dependOn(&dev.step);
 }
