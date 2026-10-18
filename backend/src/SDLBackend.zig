@@ -1096,7 +1096,8 @@ fn dressPlainWindows(self: *SDLBackend) void {
 /// `initWindowSecondary`).
 pub fn floatingWindowOs(_: *SDLBackend, id: dvui.Id, asked: bool, open_flag: ?*bool, min: dvui.Size, max: dvui.Size) bool {
     const shown = switch (floating_os_windows) {
-        .asked => asked,
+        // And one torn off the main window by a drop over no window (`os_windows.torn`).
+        .asked => asked or os_windows.torn(id) or os_windows.heldFrameless(id),
         .all => true,
         .none => false,
     };
@@ -1121,6 +1122,38 @@ pub const MaterialKinds = struct {
     frost: bool = false,
     liquid: bool = false,
 };
+
+/// Whether the pointer is over no window of the app's: the bare desktop, or another app's window.
+/// macOS (`os_windows`' tear-off); false elsewhere, where it is not asked.
+pub fn pointerOverNoWindow(self: *SDLBackend) bool {
+    if (comptime builtin.target.os.tag != .macos) return false;
+    return self.windowAtPointer() == null;
+}
+
+/// The app's window the pointer is over, as an opaque handle (macOS: its `NSWindow`), or null.
+pub fn windowAtPointer(_: *SDLBackend) ?*anyopaque {
+    if (comptime builtin.target.os.tag != .macos) return null;
+    return fizzy_macos_app_window_at_pointer();
+}
+
+/// `window` (`windowAtPointer`'s) in front of the app's other windows, not made key.
+pub fn bringForward(_: *SDLBackend, window: *anyopaque) void {
+    if (comptime builtin.target.os.tag != .macos) return;
+    fizzy_macos_window_bring_forward(window);
+}
+
+/// The OS's title bar over a window of its own frame (`ViewportFrame.native`), physical pixels: as
+/// the main window's, a plain dvui app's being one too, or macOS's own height where it shows none
+/// (full screen).
+pub fn titleBand(self: *SDLBackend) f32 {
+    const points = platform.macos_monitor.titlebarStrip(self.window, 0, 0);
+    return (if (points > 0) points else 28) * self.density();
+}
+
+/// Whether a pointer button is held, wherever the pointer is.
+pub fn pointerHeld(_: *SDLBackend) bool {
+    return c.SDL_GetGlobalMouseState(null, null) != 0;
+}
 
 pub fn materialKinds(self: *SDLBackend) MaterialKinds {
     return switch (comptime builtin.target.os.tag) {
@@ -1746,14 +1779,19 @@ pub fn viewportHasKeyboard(vp: *const Viewport) bool {
 
 /// dvui's screens besides the main window (`dvui.screensSet`): each window's part of the frame that
 /// shows a floating window — not a menu's, a carried view's or an overlay's.
-pub fn viewportScreens(self: *SDLBackend) void {
-    var rects: [max_viewports]dvui.Rect.Natural = undefined;
+pub fn viewportScreens(self: *SDLBackend, extra: ?dvui.Rect.Natural) void {
+    var rects: [max_viewports + 1]dvui.Rect.Natural = undefined;
     var n: usize = 0;
     const s = dvui.windowNaturalScale();
     for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.passive or vp.menu or vp.overlay) continue;
         rects[n] = .{ .x = vp.frame.x / s, .y = vp.frame.y / s, .w = vp.frame.w / s, .h = vp.frame.h / s };
+        n += 1;
+    }
+    // Last, so a window's band holding a floating window wins over it (`dvui.screenFor`).
+    if (extra) |r| {
+        rects[n] = r;
         n += 1;
     }
     dvui.screensSet(rects[0..n]);
@@ -1776,6 +1814,8 @@ extern fn fizzy_macos_viewport_plain(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_reshadow(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_window_off_active_space(nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_at_pointer() ?*anyopaque;
+extern fn fizzy_macos_app_window_at_pointer() ?*anyopaque;
+extern fn fizzy_macos_window_bring_forward(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_still(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
@@ -1845,6 +1885,25 @@ pub fn viewportLiquidGlass(_: *SDLBackend, vp: *Viewport, look: platform.window.
 
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
 /// main window's top left, wherever either window has been moved since it opened.
+/// Whether `vp`'s window — its title bar's band too — lies wholly inside the main window, with the
+/// main window on the Space being shown (`viewports.mainHolds`).
+pub fn viewportMainHolds(self: *SDLBackend, vp: *const Viewport) bool {
+    if (comptime builtin.target.os.tag == .macos) if (fizzy_macos_window_off_active_space(cocoaWindow(self.window)) != 0) return false;
+    var x: c_int = 0;
+    var y: c_int = 0;
+    var w: c_int = 0;
+    var h: c_int = 0;
+    _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
+    _ = c.SDL_GetWindowSize(vp.window, &w, &h);
+    var mx: c_int = 0;
+    var my: c_int = 0;
+    var mw: c_int = 0;
+    var mh: c_int = 0;
+    _ = c.SDL_GetWindowPosition(self.window, &mx, &my);
+    _ = c.SDL_GetWindowSize(self.window, &mw, &mh);
+    return x >= mx and y >= my and x + w <= mx + mw and y + h <= my + mh;
+}
+
 pub fn viewportInMain(self: *SDLBackend, vp: *const Viewport) viewport_map.Rect {
     // Where it was last put, not SDL's idea of it: on Windows it may have been moved in one step
     // behind SDL's back (`viewportPlace`), and only the app moves it.

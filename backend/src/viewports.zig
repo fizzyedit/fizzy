@@ -43,6 +43,49 @@ pub fn openCarry(at: Rect) ?*Viewport {
     return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
 }
 
+/// Whether a floating window dragged past the app's windows can tear off into one of its own
+/// (`os_windows`): macOS, where the window under the pointer can be asked, and only in an app that
+/// leaves its floating windows to the backend (`SDLBackend.floating_os_windows`): fizzy carries
+/// its own out (`Popout`). Windows and Linux need the same question of the window under the pointer
+/// (`pointerOverNoWindow`).
+pub fn tears() bool {
+    return builtin.target.os.tag == .macos and SDLBackend.floating_os_windows != .none;
+}
+
+/// Whether `vp`'s window lies wholly inside the main window, on the Space being shown
+/// (`os_windows`: a torn-off window let go there goes back in).
+pub fn mainHolds(vp: *const Viewport) bool {
+    return dvui.currentWindow().backend.impl.viewportMainHolds(vp);
+}
+
+/// Physical pixels from the frame's origin to the first viewport's band, and between bands.
+pub const band_stride = @import("viewport_map.zig").band_stride;
+
+/// The OS's title bar over a window of its own frame, physical (`SDLBackend.titleBand`).
+pub fn titleBand() f32 {
+    return dvui.currentWindow().backend.impl.titleBand();
+}
+
+/// Whether the pointer is over no window of the app's (`SDLBackend.pointerOverNoWindow`).
+pub fn pointerOverNoWindow() bool {
+    return dvui.currentWindow().backend.impl.pointerOverNoWindow();
+}
+
+/// The app's window the pointer is over (`SDLBackend.windowAtPointer`), or null.
+pub fn windowAtPointer() ?*anyopaque {
+    return dvui.currentWindow().backend.impl.windowAtPointer();
+}
+
+/// `window` (`windowAtPointer`'s) in front of the app's other windows, not made key.
+pub fn bringForward(window: *anyopaque) void {
+    dvui.currentWindow().backend.impl.bringForward(window);
+}
+
+/// Whether a pointer button is held, wherever the pointer is.
+pub fn pointerHeld() bool {
+    return dvui.currentWindow().backend.impl.pointerHeld();
+}
+
 /// Whether one of the app's windows has the keyboard: the app is the active one.
 pub fn appActive() bool {
     return SDLBackend.appActive();
@@ -337,6 +380,13 @@ pub const Picture = struct {
         cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
     }
 
+    /// Subwindow `sw`'s drawing this frame out of the frame, drawn nowhere: a floating window shown
+    /// only as a picture taken of it before (`os_windows`' tear-off card).
+    pub fn drop(sw: *dvui.Subwindows.Subwindow) void {
+        sw.render_cmds = .empty;
+        sw.render_cmds_after = .empty;
+    }
+
     /// Done: drawing goes to the frame's own target again.
     pub fn end(self: Picture) void {
         _ = dvui.renderTarget(self.prev);
@@ -383,8 +433,8 @@ pub fn keptTarget(vp: *const Viewport, slot: *?dvui.Texture.Target, w: u32, h: u
 
 /// dvui's screens besides the main window's (`dvui.screensSet`): each window's part of the frame
 /// that shows a floating window, so what opens in it — a menu, a dialog — stays in that window.
-pub fn publishScreens() void {
-    dvui.currentWindow().backend.impl.viewportScreens();
+pub fn publishScreens(extra: ?dvui.Rect.Natural) void {
+    dvui.currentWindow().backend.impl.viewportScreens(extra);
 }
 
 /// The most the OS may resize `vp`'s window to, physical pixels: 0 each way for no most.
