@@ -542,7 +542,7 @@ fn frameOnce() !dvui.App.Result {
         fizzy.editor().demo.frameEnd(if (frame_target.picture()) |p| .{ .target = p.target, .w = p.w, .h = p.h } else null);
         // A snapshot just written answers the `fizzy.screen` waiting on it now, not at the next
         // frame's start: a frame sooner.
-        fizzy.editor().answerLaterCommands();
+        fizzy.editor().answerLaterCommands(true);
         // And to whoever streams it (`fizzy.screen` on `/events`), the moment it is written.
         fizzy.editor().streamScreen();
     }

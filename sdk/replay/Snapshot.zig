@@ -57,6 +57,9 @@ text: std.ArrayListUnmanaged(u8) = .empty,
 continuous: bool = false,
 /// The last frame drawn was taken: `text` is what is on screen until the next is drawn.
 current: bool = false,
+/// A snapshot was asked for (`request`) while a frame's capture was under way, which began
+/// before it: the next frame is taken too, whatever the mode.
+again: bool = false,
 
 pub fn init(gpa: std.mem.Allocator) Snapshot {
     return .{ .gpa = gpa };
@@ -69,11 +72,17 @@ pub fn deinit(self: *Snapshot) void {
 /// Take a snapshot of the next frame. Returns the number it will have (`get`); asking again
 /// before it is taken returns the same number.
 pub fn request(self: *Snapshot) u32 {
+    // A frame being taken now began before this asking: what was asked about is in the next.
+    if (self.frame != null) {
+        self.again = true;
+        return self.taken + 2;
+    }
     if (!self.pending) {
         self.pending = true;
         dvui.debug.captureFrame();
-        dvui.refresh(null, @src(), null);
     }
+    // A frame to take it in, whether or not one was armed already: an armed capture asks for none.
+    dvui.refresh(null, @src(), null);
     return self.taken + 1;
 }
 
@@ -92,6 +101,16 @@ pub fn keepTaking(self: *Snapshot, on: bool) void {
         self.pending = true;
         dvui.debug.captureFrame();
     }
+}
+
+/// Forget a snapshot asked for and never taken (its capture lost: dvui could not start it), so the
+/// next asking arms a capture afresh instead of waiting on one that never comes. For a caller that
+/// gave up waiting.
+pub fn reset(self: *Snapshot) void {
+    self.pending = false;
+    self.again = false;
+    self.current = false;
+    self.frame = null;
 }
 
 /// What is on screen, at once: the frame last drawn, while every frame is taken (`keepTaking`) and
@@ -120,10 +139,13 @@ pub fn endFrame(self: *Snapshot) void {
     self.pending = false;
     defer {
         dvui.debug.clearCaptures(dvui.currentWindow().gpa);
-        // The next frame's capture, armed without asking for it: taken whenever it is drawn.
-        if (self.continuous) {
+        // The next frame's capture, armed without asking for it: taken whenever it is drawn. Or,
+        // for a snapshot asked for during this one, armed and asked for.
+        if (self.continuous or self.again) {
             self.pending = true;
             dvui.debug.captureFrame();
+            if (self.again) dvui.refresh(null, @src(), null);
+            self.again = false;
         }
     }
     // Until written below, the frame on screen is not the one in `text`.

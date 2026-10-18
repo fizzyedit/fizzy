@@ -146,9 +146,9 @@ later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.servic
 /// Until when someone is watching the screen (`fizzy.screen`): every frame is taken until then
 /// (`Snapshot.keepTaking`), so the next asking is answered at once.
 screen_watched_until_ns: i96 = 0,
-/// `host.command_runs` as this frame's requests began to be answered: a command run since has not
-/// been drawn yet, so the frame last drawn no longer shows what is on screen (`fizzy.screen`).
-command_runs_at_requests: u64 = 0,
+/// `host.command_runs` as the last snapshot was written, at its frame's end: a command run since
+/// has not been drawn in it (`fizzy.screen`), whatever ran it.
+command_runs_at_snapshot: u64 = 0,
 /// How many event streams named `fizzy.screen` at the last frame's end (`streamScreen`): one more
 /// is sent the screen as it is now, changed or not.
 screen_streams: usize = 0,
@@ -4234,12 +4234,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // What was announced since last frame first, so a plugin's frame sees what it heard.
         editor.app.host.deliverEvents();
         // Requests from the control server, so the frame that follows sees what they ran.
-        editor.command_runs_at_requests = editor.app.host.command_runs;
         if (comptime builtin.target.cpu.arch != .wasm32) {
             if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_state, &editor.app.host);
         }
         // What fizzy's own commands answer a frame or more later (`fizzy.screen`, `fizzy.settled`).
-        editor.answerLaterCommands();
+        editor.answerLaterCommands(false);
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         editor.showClaimed();
@@ -5397,8 +5396,9 @@ pub const Placement = struct {
 
 /// Answer fizzy's own commands that answer a frame or more later (`fizzy.screen`, `fizzy.settled`),
 /// once what they wait for has come; drop those nobody waits for any more. At a frame's start, and
-/// again at its end, once its snapshot is written (`Entry`).
-pub fn answerLaterCommands(editor: *Editor) void {
+/// at its end once its snapshot is written (`Entry`), where only screens are answered: whether the
+/// app is settled is known only once the frame has ended, and a screen's frames are counted once.
+pub fn answerLaterCommands(editor: *Editor, at_frame_end: bool) void {
     const host = &editor.app.host;
     const api = editor.demo.service.api;
     // Nobody has asked what is on screen for a while: stop taking every frame.
@@ -5417,21 +5417,27 @@ pub fn answerLaterCommands(editor: *Editor) void {
             host.finishCall(ticket, .{ .ok = text });
             continue;
         }
-        // Not taken yet. Asked again, should the last asking have come to nothing; a snapshot that never comes is given up on, not waited
-        // for frame after frame.
+        if (at_frame_end) {
+            i += 1;
+            continue;
+        }
+        // Not taken yet: a frame to take it in. Asked again only if it was missed, a later one taken
+        // in its place (asking each frame would chase a capture always under way to the next
+        // frame for good); one that never comes is given up on.
         w.frames += 1;
         if (w.frames > 120) {
             const ticket = w.ticket;
             _ = editor.later_screens.swapRemove(i);
+            // Whatever was armed came to nothing: the next asking starts afresh.
+            editor.demo.snapshot.reset();
             host.finishCall(ticket, .{ .failed = "no snapshot came in 120 frames" });
             continue;
         }
-        w.snapshot = api.snapshot();
-        // And a frame to take it in: asking again does not wake a sleeping app by itself.
+        if (editor.demo.snapshot.taken >= @intFromEnum(w.snapshot)) w.snapshot = api.snapshot();
         host.refresh();
         i += 1;
     }
-    if (editor.later_settles.items.len == 0) return;
+    if (at_frame_end or editor.later_settles.items.len == 0) return;
     const settled = api.settled();
     const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
     i = 0;
