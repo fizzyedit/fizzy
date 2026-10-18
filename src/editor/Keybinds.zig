@@ -213,7 +213,7 @@ fn playTapeCallback(paths: ?[][:0]const u8) void {
 /// sets the person's session aside and gives it back when it ends.
 fn cmdPlayTapePath(state: *anyopaque, args: TapePath.Args, call: *sdk.Command.Call) anyerror!void {
     if (args.path.len == 0) return cmdPlayTape(state);
-    if (comptime is_web) return call.fail("a page plays a tape from its address (?demo=<url>)", .{});
+    if (comptime is_web) return call.fail("a page plays a tape from its address (?tape=<url>)", .{});
     if (!std.fs.path.isAbsolute(args.path)) return call.fail("give an absolute path: {s}", .{args.path});
     playTapeFile(editorFromState(state), args.path) catch |err| return call.fail("could not play {s}: {t}", .{ args.path, err });
 }
@@ -225,8 +225,8 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
     defer gpa.free(bytes);
     // One document's track (a shared tape) plays in a tab of its own, beside the person's work;
     // anything else on the demo stage.
-    editor.tape_tabs.open(editor, bytes, .{}) catch |err| switch (err) {
-        error.NotOneDocument, error.BadTape => editor.demo.playTapeSoon(bytes),
+    editor.tape_tabs.openWhenReady(editor, bytes, false) catch |err| switch (err) {
+        error.BadTape => editor.demo.playTapeSoon(bytes),
         else => return err,
     };
 }

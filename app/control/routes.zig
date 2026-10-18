@@ -6,6 +6,7 @@
 //!   GET  /commands         every command: id, title, owner, whether it is enabled, its params
 //!   GET  /commands/{id}    one of them
 //!   POST /commands/{id}    run it: the body is its arguments, the response its result
+//!   GET  /openapi.json     all of this as OpenAPI 3.1, generated from what is registered now
 //!   GET  /events           the app's events as Server-Sent Events, `?topics=a,b` to choose
 //!                          (a name, or a prefix ending in `*`); every event when absent
 //!
@@ -17,6 +18,7 @@ const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const AppInfo = @import("../AppInfo.zig");
 const json = @import("json.zig");
+const openapi = @import("openapi.zig");
 const Server = @import("Server.zig");
 
 pub const Answer = struct {
@@ -125,6 +127,14 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
         var list: std.ArrayListUnmanaged(CommandInfo) = .empty;
         for (host.commands.items) |*c| try list.append(arena, try describe(c, arena));
         return ok(arena, list.items);
+    }
+    if (std.mem.eql(u8, trimmed, "/openapi.json")) {
+        return switch (method) {
+            .GET => .{ .status = .ok, .body = try openapi.generate(host, arena) },
+            // Not generated only to be thrown away.
+            .HEAD => .{ .status = .ok, .body = "" },
+            else => notAllowed(arena, "GET"),
+        };
     }
     if (std.mem.eql(u8, trimmed, "/events")) {
         return switch (method) {
