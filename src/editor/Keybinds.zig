@@ -442,40 +442,31 @@ fn cmdRedoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Cal
 /// `historyGoTo`), so it reaches a document that is not active. With `expect`, only when that
 /// step is the one it would take, so a caller never takes back a step made since it looked
 /// (`plans/SHARED_HISTORY_PLAN.md`, step 5). Answers the step and whose it was.
-fn historyStepWith(editor: *Editor, args: HistoryStep.Args, call: *sdk.Command.Call, action: enum { undo, redo }) !void {
+fn historyStepWith(editor: *Editor, args: HistoryStep.Args, call: *sdk.Command.Call, action: Editor.HistoryAction) !void {
     const doc = if (args.path.len == 0)
         editor.activeDoc() orelse return call.fail("no document is active", .{})
     else
         editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
-    const line = doc.owner.historyLine(doc, call.arena) orelse {
+    const t = editor.stepToTake(doc, action, call.arena) catch |err| switch (err) {
+        error.Nothing => return call.fail("nothing to {s}", .{@tagName(action)}),
         // An owner with no line undoes the active document only, through its own command.
-        const active = editor.activeDoc();
-        if (args.expect != 0 or active == null or active.?.id != doc.id)
-            return call.fail("{s} keeps no history line, so it can only undo the active document, with no expect", .{doc.owner.id});
-        return switch (action) {
-            .undo => editor.undo(),
-            .redo => editor.redo(),
-        };
-    };
-    const host = &editor.app.host;
-    const step: sdk.Plugin.HistoryLine.Entry, const to: u64 = switch (action) {
-        .undo => blk: {
-            if (line.at == 0) return call.fail("nothing to undo", .{});
-            break :blk .{ line.entries[line.at - 1], if (line.at >= 2) line.entries[line.at - 2].id else 0 };
-        },
-        .redo => blk: {
-            if (line.at >= line.entries.len) return call.fail("nothing to redo", .{});
-            break :blk .{ line.entries[line.at], line.entries[line.at].id };
+        error.NoLine => {
+            const active = editor.activeDoc();
+            if (args.expect != 0 or active == null or active.?.id != doc.id)
+                return call.fail("{s} keeps no history line, so it can only {s} the active document, with no expect", .{ doc.owner.id, @tagName(action) });
+            return switch (action) {
+                .undo => editor.undo(),
+                .redo => editor.redo(),
+            };
         },
     };
-    const whose = host.stepAuthor(doc.id, step.id);
-    const by = if (whose.kind == .person) "the person" else if (whose.label.len > 0) whose.label else @tagName(whose.kind);
-    if (args.expect != 0 and args.expect != step.id) return call.fail(
+    const by = Editor.authorName(t.by);
+    if (args.expect != 0 and args.expect != t.step.id) return call.fail(
         "step {d} is not the one to {s}: that is step {d}, {s}, by {s}. The document changed since; fix it forward",
-        .{ args.expect, @tagName(action), step.id, step.title, by },
+        .{ args.expect, @tagName(action), t.step.id, t.step.title, by },
     );
-    if (!doc.owner.historyGoTo(doc, to)) return call.fail("{s} could not {s} step {d}", .{ doc.owner.id, @tagName(action), step.id });
-    try call.returns(.{ .step = step.id, .title = step.title, .by = by });
+    if (!doc.owner.historyGoTo(doc, t.to)) return call.fail("{s} could not {s} step {d}", .{ doc.owner.id, @tagName(action), t.step.id });
+    try call.returns(.{ .step = t.step.id, .title = t.step.title, .by = by });
 }
 /// Set while `tick` is running a command because of a live key event. That event is never
 /// marked handled, so it goes on to reach the focused widget under its own steam — a clipboard

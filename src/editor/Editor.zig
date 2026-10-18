@@ -2269,6 +2269,23 @@ pub fn postInit(editor: *Editor) !void {
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
 
+    // The control server: the app's commands over HTTP on `<config>/control.sock`, while
+    // `FIZZY_CONTROL=1` asks for it (plans/CONTROL_SERVER_PLAN.md: dark until step 4).
+    if (comptime builtin.target.cpu.arch != .wasm32) control: {
+        const v = std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_CONTROL") catch break :control;
+        defer editor.app.gpa.free(v);
+        if (!std.mem.eql(u8, v, "1")) break :control;
+        const path = std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, @import("app").control.socket_name }) catch break :control;
+        editor.app.control = .{ .gpa = editor.app.gpa, .io = dvui.io, .socket_path = path, .wake = wakeEventLoop };
+        editor.app.control.?.start() catch |err| {
+            dvui.log.warn("control: could not listen on {s}: {s}", .{ path, @errorName(err) });
+            editor.app.gpa.free(path);
+            editor.app.control = null;
+            break :control;
+        };
+        dvui.log.info("control: listening on {s}", .{path});
+    }
+
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
     // nightwatch retains `&editor.app.settings_watcher.handler`, so `editor` has to already be at
@@ -2984,7 +3001,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
             area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
         };
-        ds.feed.draw(area, @truncate(ds.doc_id), now);
+        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |step| editor.redoFromFeed(doc, step);
     }
 
     // A menu inside the document only when its owner names one. The context is created *after*
@@ -4236,6 +4253,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         defer t.end();
         // What was announced since last frame first, so a plugin's frame sees what it heard.
         editor.app.host.deliverEvents();
+        // Requests from the control server, so the frame that follows sees what they ran.
+        if (comptime builtin.target.cpu.arch != .wasm32) {
+            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.host);
+        }
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         editor.showClaimed();
@@ -6191,17 +6212,72 @@ pub fn redo(editor: *Editor) !void {
 
 /// An undo or a redo of the active document, through its owner's command: its transport shows,
 /// and a key held down goes further each press (`HistoryTransport.press`), the command run that
-/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar.
-fn historyStep(editor: *Editor, action: enum { undo, redo }) !void {
+/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar. An undo of
+/// a step someone else made says so on the document, with a Redo (`ActivityFeed.pushAction`), in
+/// place of the plain "Undo" its run would show.
+fn historyStep(editor: *Editor, action: HistoryAction) !void {
     const doc = editor.activeDoc() orelse return;
     const name = @tagName(action);
-    const shows = editor.app.host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
+    const host = &editor.app.host;
+    const shows = host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
     const ds = if (shows) editor.doc_surfaces.get(doc.id) else null;
     const by = if (ds) |d| d.transport.press(dvui.frameTimeNS(), action == .redo) else 1;
     for (0..by) |_| {
         if (!editor.activeDocCommandEnabled(name)) break;
+        // Who made a step is kept only once someone besides the person has acted on it.
+        const others: ?StepToTake = if (action == .undo and host.step_authors.contains(doc.id)) blk: {
+            const t = editor.stepToTake(doc, .undo, host.arena()) catch break :blk null;
+            break :blk if (t.by.kind == .person) null else t;
+        } else null;
+        const t = others orelse {
+            try editor.runActiveDocCommand(name);
+            continue;
+        };
+        // The run's own "Undo" goes unrecorded (as while a demo seeks), so the bubble below is
+        // the one it shows. The flag is put back before the feed draws.
+        const muted = host.activity_muted;
+        host.activity_muted = true;
+        defer host.activity_muted = muted;
         try editor.runActiveDocCommand(name);
+        var buf: [96]u8 = undefined;
+        const said = std.fmt.bufPrint(&buf, "Undid {s}'s {s}", .{ authorName(t.by), t.step.title }) catch "Undid a change";
+        if (editor.doc_surfaces.get(doc.id)) |d| d.feed.pushAction(said, "Redo", t.step.id, dvui.frameTimeNS());
     }
+}
+
+/// Redo `doc`'s step `id` from its bubble's Redo: only while it is still the next one to redo.
+pub fn redoFromFeed(editor: *Editor, doc: sdk.DocHandle, id: u64) void {
+    const t = editor.stepToTake(doc, .redo, editor.app.host.arena()) catch return;
+    if (t.step.id == id) _ = doc.owner.historyGoTo(doc, t.to);
+}
+
+pub const HistoryAction = enum { undo, redo };
+
+/// The step an undo or a redo of a document would take, the step it leaves on top (`to`, for
+/// `historyGoTo`; 0 before the first), and who made it.
+pub const StepToTake = struct { step: sdk.Plugin.HistoryLine.Entry, to: u64, by: sdk.Author };
+
+/// What an undo or a redo of `doc` would take, from its owner's line (`historyLine`):
+/// `error.NoLine` when the owner keeps none, `error.Nothing` when there is nothing to take.
+pub fn stepToTake(editor: *Editor, doc: sdk.DocHandle, action: HistoryAction, arena: std.mem.Allocator) error{ NoLine, Nothing }!StepToTake {
+    const line = doc.owner.historyLine(doc, arena) orelse return error.NoLine;
+    const step: sdk.Plugin.HistoryLine.Entry, const to: u64 = switch (action) {
+        .undo => blk: {
+            if (line.at == 0) return error.Nothing;
+            break :blk .{ line.entries[line.at - 1], if (line.at >= 2) line.entries[line.at - 2].id else 0 };
+        },
+        .redo => blk: {
+            if (line.at >= line.entries.len) return error.Nothing;
+            break :blk .{ line.entries[line.at], line.entries[line.at].id };
+        },
+    };
+    return .{ .step = step, .to = to, .by = editor.app.host.stepAuthor(doc.id, step.id) };
+}
+
+/// Who made a step, as a person reads it: "the person", else the author's label ("Claude").
+pub fn authorName(a: sdk.Author) []const u8 {
+    if (a.kind == .person) return "the person";
+    return if (a.label.len > 0) a.label else @tagName(a.kind);
 }
 
 pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
@@ -6362,6 +6438,15 @@ pub fn deinit(editor: *Editor) !void {
     // this function still runs code that would otherwise query it — `saveSettingsRaw` below
     // reaches `writeMergedSettings`' `notifyPathChanged` (only on a real write, which is why
     // this crashed rarely rather than always).
+    // The control server first: what it still holds is answered "closing", before anything a
+    // command would reach goes.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (editor.app.control) |*c| {
+            c.stop();
+            editor.app.gpa.free(c.socket_path);
+            editor.app.control = null;
+        }
+    }
     if (editor.document_watcher) |*w| {
         w.stop();
         editor.document_watcher = null;

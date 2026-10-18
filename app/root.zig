@@ -106,6 +106,17 @@ pub const update = struct {
     pub const update_notify = @import("update/update_notify.zig");
 };
 
+/// The control server: HTTP on a Unix socket in the config folder, the app's commands as its API,
+/// so `curl --unix-socket` drives the app with no agent (plans/CONTROL_SERVER_PLAN.md). Native
+/// only. The app starts a `Server`, calls `routes.answerPending` each frame and stops it at quit.
+pub const control = struct {
+    pub const Server = @import("control/Server.zig");
+    pub const routes = @import("control/routes.zig");
+    pub const json = @import("control/json.zig");
+    /// The socket's name in the config folder.
+    pub const socket_name = "control.sock";
+};
+
 /// Quitting the way the app always quits — unsaved documents asked about first — then starting
 /// again: for a setting the app takes only at launch, and for installing a downloaded `update`.
 /// The app asks with `request`, runs `tick` each frame and `relaunch` at the end of teardown.
@@ -174,6 +185,7 @@ test {
     _ = store.Loader;
     _ = Tracks;
     _ = HistoryTransport;
+    _ = control.routes;
     _ = TrimBar;
     _ = HistoryFrames;
 }

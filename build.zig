@@ -19,7 +19,18 @@ pub fn build(b: *std.Build) !void {
     const macos_notary_profile = b.option([]const u8, "macos-notary-profile", "notarytool keychain profile name (run `xcrun notarytool store-credentials <name>` first)") orelse
         b.graph.environ_map.get("FIZZY_MACOS_NOTARY_PROFILE");
 
-    const target = b.standardTargetOptions(.{});
+    // Windows 10 1803 at least: AF_UNIX arrived there, and std offers it only to a target whose
+    // minimum is that (`std.Io.net.has_unix_sockets`) — the control server's socket
+    // (`app/control/Server.zig`). Every Windows still supported by Microsoft is newer.
+    const target = target: {
+        const asked = b.standardTargetOptions(.{});
+        if (asked.result.os.tag != .windows or asked.result.os.isAtLeast(.windows, .win10_rs4) == true) break :target asked;
+        if (asked.result.os.version_range.windows.max.isAtLeast(.win10_rs4) != true)
+            std.debug.panic("fizzy needs Windows 10 1803 (win10_rs4) or newer; -Dtarget asks for an older range", .{});
+        var query = asked.query;
+        query.os_version_min = .{ .windows = .win10_rs4 };
+        break :target b.resolveTargetQuery(query);
+    };
     const optimize = b.standardOptimizeOption(.{});
 
     const base: @import("build/app.zig").Options = .{
