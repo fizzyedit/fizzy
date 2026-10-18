@@ -8378,6 +8378,38 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const ds = editor.doc_surfaces.get(doc.id) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
 
+        const ed_play = struct {
+            fn play(ed: *fizzy.Editor, script: *automation.Script) !void {
+                try ed.demo.live.play(try script.finish());
+                for (0..300) |_| {
+                    if (!ed.demo.live.playing()) break;
+                    _ = try dvui.testing.step(headlessFrame);
+                }
+                try std.testing.expect(ed.demo.live.outcome.? == .finished);
+            }
+        }.play;
+        // The pointer held on the grip (the bottom edge of the pane, in its middle) brings the bar
+        // up; nothing else is pressed or moved.
+        {
+            const grip_tag = try std.fmt.allocPrint(gpa, "history.grip:{s}", .{path});
+            defer gpa.free(grip_tag);
+            var s: automation.Script = .init(gpa, "transport-grip", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.moveTo(.{ .tag = grip_tag }, .{});
+            s.pause(200);
+            try ed_play(editor, &s);
+            // Passing over it is not enough: it waits for the pointer to stay.
+            try std.testing.expectEqual(@as(f32, 0), ds.transport.shown.openness(dvui.frameTimeNS()));
+            // Held there, it does. (A headless frame's time is its own: frames, not the tape's pause.)
+            const held_from = dvui.frameTimeNS();
+            while (ds.transport.shown.openness(dvui.frameTimeNS()) <= 0 and dvui.frameTimeNS() - held_from < 2 * std.time.ns_per_s)
+                _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expect(dvui.frameTimeNS() - held_from >= 800 * std.time.ns_per_ms);
+            try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
+            try std.testing.expectEqual(@as(usize, 40), (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult).at);
+        }
+
         try editor.undo();
         for (0..4) |_| _ = try dvui.testing.step(headlessFrame);
         try std.testing.expect(ds.transport.shown.openness(dvui.frameTimeNS()) > 0);
