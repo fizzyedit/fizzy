@@ -29,7 +29,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const programs = @import("programs.zig");
 const liquid_glass = @import("liquid_glass.zig");
-const glass_look = @import("glass_look.zig");
+const glass_look = @import("glass_look");
 
 const LiquidField = @This();
 

@@ -55,7 +55,7 @@ pub const corners = @import("corners.zig");
 pub const liquid_glass = @import("gfx/liquid_glass.zig");
 pub const liquid_blob = @import("gfx/liquid_blob.zig");
 /// One material on one value: every glass at the window's opacity, the OS's form and the app's.
-pub const glass_look = @import("gfx/glass_look.zig");
+pub const glass_look = @import("glass_look");
 pub const LiquidField = @import("gfx/LiquidField.zig");
 pub const programs = @import("gfx/programs.zig");
 pub const Spring = @import("Spring.zig");

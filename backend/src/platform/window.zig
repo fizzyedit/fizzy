@@ -452,9 +452,9 @@ pub fn nativeTitleBar(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color
 pub fn plainMaterial(window: *c.SDL_Window, kind: u8, opacity: f32) void {
     if (comptime builtin.target.os.tag != .macos) return;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
-    fizzy_macos_window_plain_material(raw_ptr, kind, opacity);
+    fizzy_macos_window_plain_material(raw_ptr, kind, opacity, ns_visual_effect_material);
 }
-extern fn fizzy_macos_window_plain_material(nswindow: ?*anyopaque, kind: c_int, opacity: f64) void;
+extern fn fizzy_macos_window_plain_material(nswindow: ?*anyopaque, kind: c_int, opacity: f64, blur_material: c_long) void;
 
 /// A window of fizzy's skinned as the app is: its background — what AppKit draws its title bar
 /// with, the one a fullscreen window reveals at the top among them — `color`, and its appearance

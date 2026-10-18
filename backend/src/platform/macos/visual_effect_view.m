@@ -1306,6 +1306,12 @@ static int windowGlassInstall(NSWindow *window, long blur_material) {
     return 1;
 }
 
+/* `window`'s glass parts gone (`windowGlassInstall`): a plain dvui app's window made of another
+ * material (`fizzy_macos_window_plain_material`). */
+static void windowGlassRemove(NSWindow *window) {
+    for (int k = 0; k < window_glass_parts; k++) [windowGlassPart(window, k) removeFromSuperview];
+}
+
 int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -1579,7 +1585,8 @@ void fizzy_macos_window_plain_backdrop(void *nswindow, double r, double g, doubl
         backdrop.r = r;
         backdrop.g = g;
         backdrop.b = b;
-        if (backdrop.fill <= 0) backdrop.fill = 1;
+        /* Opaque until it has a material (`fizzy_macos_window_plain_material`); clear on glass. */
+        if (backdrop.fill <= 0 && windowGlassPart(window, window_glass_under) == nil) backdrop.fill = 1;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         CGColorRef color = CGColorCreateSRGB(r, g, b, backdrop.fill);
@@ -1595,9 +1602,12 @@ void fizzy_macos_window_plain_backdrop(void *nswindow, double r, double g, doubl
 
 /* A plain dvui app's window made of `kind` (`core.material`'s order: 0 none, 1 transparent, 2 blur,
  * 3 frost, 4 liquid): its backdrop's colour `opacity` opaque over what is behind (opaque for none),
- * and under it the OS's material — a plain blur or frost (vibrancy), or Liquid Glass (macOS 26) —
- * or nothing. After `fizzy_macos_window_plain_backdrop`; again as the material changes. */
-void fizzy_macos_window_plain_material(void *nswindow, int kind, double opacity) {
+ * and under it the OS's material — a plain blur or frost (vibrancy) — or nothing. Liquid Glass
+ * (macOS 26) is fizzy's own window glass instead (`windowGlassInstall`, `blur_material` its plain
+ * blur), over a clear backdrop: its colour is the glass's, set each frame
+ * (`fizzy_macos_window_liquid_glass_look`). After `fizzy_macos_window_plain_backdrop`; again as the
+ * material changes. */
+void fizzy_macos_window_plain_material(void *nswindow, int kind, double opacity, long blur_material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         NSView *frame = [[window contentView] superview];
@@ -1611,12 +1621,14 @@ void fizzy_macos_window_plain_material(void *nswindow, int kind, double opacity)
         if (backdrop == nil) return;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
-        backdrop.fill = kind == 0 ? 1 : fmin(fmax(opacity, 0), 1);
+        const BOOL liquid = kind == 4 && windowGlassInstall(window, blur_material);
+        if (!liquid) windowGlassRemove(window);
+        backdrop.fill = liquid ? 0 : kind == 0 ? 1 : fmin(fmax(opacity, 0), 1);
         CGColorRef color = CGColorCreateSRGB(backdrop.r, backdrop.g, backdrop.b, backdrop.fill);
         backdrop.layer.backgroundColor = color;
         CGColorRelease(color);
         /* The OS's material under it, made again only as its kind changes. */
-        const BOOL wants = kind >= 2;
+        const BOOL wants = kind >= 2 && !liquid;
         if (mat != nil && (!wants || mat.kind != kind)) {
             [mat removeFromSuperview];
             mat = nil;
@@ -1630,22 +1642,11 @@ void fizzy_macos_window_plain_material(void *nswindow, int kind, double opacity)
             [mat setWantsLayer:YES];
             mat.layer.masksToBounds = YES;
             mat.layer.cornerRadius = backdrop.layer.cornerRadius;
-            NSView *inner = nil;
-            if (kind == 4) {
-                Class glass = NSClassFromString(@"NSGlassEffectView");
-                if (glass != nil) {
-                    inner = [[glass alloc] initWithFrame:[mat bounds]];
-                    if ([inner respondsToSelector:@selector(setCornerRadius:)]) [inner setValue:@(backdrop.radius) forKey:@"cornerRadius"];
-                }
-            }
-            if (inner == nil) {
-                NSVisualEffectView *v = [[NSVisualEffectView alloc] initWithFrame:[mat bounds]];
-                v.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-                v.state = NSVisualEffectStateActive;
-                /* Frost the window's own frosted material; blur the plainer one of full screen UI. */
-                v.material = kind == 3 ? NSVisualEffectMaterialUnderWindowBackground : NSVisualEffectMaterialFullScreenUI;
-                inner = v;
-            }
+            NSVisualEffectView *inner = [[NSVisualEffectView alloc] initWithFrame:[mat bounds]];
+            inner.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            inner.state = NSVisualEffectStateActive;
+            /* Frost the window's own frosted material; blur the plainer one of full screen UI. */
+            inner.material = kind == 3 ? NSVisualEffectMaterialUnderWindowBackground : NSVisualEffectMaterialFullScreenUI;
             [inner setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
             [mat addSubview:inner];
             [frame addSubview:mat positioned:NSWindowBelow relativeTo:backdrop];

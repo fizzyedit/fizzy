@@ -17,7 +17,8 @@ const dvui = @import("dvui");
 const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
 /// The OS windows besides the main one an app draws with (`Viewport`).
-pub const viewports = @import("viewports.zig");
+pub const glass_look = @import("glass_look");
+const viewports = @import("viewports.zig");
 /// dvui's floating windows as OS windows of their own from the one frame (`floatingWindowOs`).
 pub const os_windows = @import("os_windows.zig");
 /// What this backend keeps count of as it runs (`health`).
@@ -1115,21 +1116,55 @@ fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
 }
 
 /// The OS's own title bar on a plain dvui app's windows — the main one and each of the OS's own
-/// frame (`Viewport.native`) — in the theme's colour: set again only when the theme's colours
-/// change. A window opening is dressed as it opens (`viewportOpen`).
+/// frame (`Viewport.native`) — in the theme's colour, made of the window material: set again only
+/// when the theme's colours or the material change. A window opening is dressed as it opens
+/// (`viewportOpen`). Liquid Glass is fizzy's own window glass, its look set each frame
+/// (`plainGlass`).
 fn dressPlainWindows(self: *SDLBackend) void {
     const theme = dvui.themeGet();
     const colors: [2]dvui.Color = .{ theme.color(.window, .fill), theme.color(.window, .text) };
     const material = self.effectiveMaterial();
-    if (plain_dressed) |d| if (std.meta.eql(d, colors)) if (plain_material) |m| if (std.meta.eql(m, material)) return;
-    plain_dressed = colors;
-    plain_material = material;
-    platform.window.nativeTitleBar(self.window, colors[0], colors[1], theme.dark);
-    platform.window.plainMaterial(self.window, @backingInt(material.kind), material.opacity);
-    for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) {
-        platform.window.nativeTitleBar(v.window, colors[0], colors[1], theme.dark);
-        platform.window.plainMaterial(v.window, @backingInt(material.kind), material.opacity);
-    };
+    const same = if (plain_dressed) |d| if (plain_material) |m| std.meta.eql(d, colors) and std.meta.eql(m, material) else false else false;
+    if (!same) {
+        plain_dressed = colors;
+        plain_material = material;
+        platform.window.nativeTitleBar(self.window, colors[0], colors[1], theme.dark);
+        platform.window.plainMaterial(self.window, @backingInt(material.kind), material.opacity);
+        for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) {
+            platform.window.nativeTitleBar(v.window, colors[0], colors[1], theme.dark);
+            platform.window.plainMaterial(v.window, @backingInt(material.kind), material.opacity);
+        };
+    }
+    if (material.kind != .liquid) return;
+    plainGlass(self.window, material.opacity, colors[0]);
+    for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) plainGlass(v.window, material.opacity, colors[0]);
+}
+
+/// `window`'s Liquid Glass this frame, as fizzy's own windows have it (`Editor.windowGlassLook`):
+/// what `glass_look` says at `opacity`, in the window's colour, its clearing bevel by its size.
+/// Nothing where the window stands on no glass.
+fn plainGlass(window: *c.SDL_Window, opacity: f32, fill: dvui.Color) void {
+    if (comptime builtin.target.os.tag != .macos) return;
+    var w: c_int = 0;
+    var h: c_int = 0;
+    _ = c.SDL_GetWindowSize(window, &w, &h);
+    const look = glass_look.window(opacity);
+    const band = glass_look.band(@as(f32, @floatFromInt(@min(w, h))) / 2);
+    _ = platform.window.liquidGlassLook(window, (platform.window.WindowGlassLook{
+        .under_variant = look.under.variant,
+        .under_style = look.under.style,
+        .over_variant = look.over.variant,
+        .over_style = look.over.style,
+        .frost = look.frost,
+        .blur = look.blur,
+        .glass = look.glass,
+        .fill = fill,
+        .fill_opacity = look.fill,
+        .top_fill = look.top_fill,
+        .radius = @floatCast(fizzy_macos_window_corner_radius()),
+        .clear = band.clear,
+        .feather = band.feather,
+    }).native());
 }
 
 /// A floating window of dvui's (not modal) shown in an OS window of its own, its frame the OS's
