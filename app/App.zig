@@ -75,15 +75,16 @@ config_folder: []const u8,
 
 palette_folder: []const u8,
 
-/// Each registered plugin's data folder (`pluginDataFolder`), by lowercased id, filled on the
-/// main thread as plugins register (`pluginRegistered`). Key and path owned, and kept after the
-/// plugin goes, so a path handed out stays good for the app's life. Guarded by
-/// `plugin_data_lock`: a plugin may ask from a worker thread (an indexer, an LSP client).
+/// Each registered plugin's data folder (`pluginDataFolder`), by id, filled on the main thread as
+/// plugins register (`pluginRegistered`). Key and path owned, and kept after the plugin is
+/// retired, so a path handed out stays good for the app's life. Guarded by `plugin_data_lock`: a
+/// plugin may ask from a worker thread (an indexer, an LSP client).
 plugin_data_folders: std.StringHashMapUnmanaged(PluginDataFolder) = .empty,
 plugin_data_lock: std.Io.Mutex = .init,
-/// Registered plugins whose entry could not be made when they registered (out of memory), by the
-/// plugin's own id (its memory, good while it is registered): made on their next ask instead.
-plugin_data_missed: [8]?[]const u8 = @splat(null),
+/// A registration ran out of memory making its plugin's entry (`pluginRegistered`): until one is
+/// made, an ask for an id with no entry makes it then. Without this an ask for an unknown id is
+/// null and makes nothing.
+plugin_data_short: bool = false,
 
 /// Plugin registry + service locator exposed to plugins
 host: Host,
@@ -768,26 +769,14 @@ pub fn retireFolder(app: *App) void {
 pub fn releaseRetiredFolders(app: *App) void {
     for (app.folder_retired.items) |folder| app.gpa.free(folder);
     app.folder_retired.clearRetainingCapacity();
-    // Plugins unregistered last frame have run their `deinit` by now: their data folders stop
-    // being handed out (`pluginUnregistered`).
-    app.lockPluginData();
-    defer app.unlockPluginData();
-    var it = app.plugin_data_folders.valueIterator();
-    while (it.next()) |f| if (f.leaving) {
-        f.leaving = false;
-        f.registered = false;
-    };
 }
 
 pub const PluginDataFolder = struct {
     /// Null for an id that names no folder (`isValidPluginId`: `fizzy.store` has a dot in it).
     path: ?[]const u8,
-    /// Its plugin is registered now. A path stays in the table after its plugin goes, since a
-    /// caller may hold it, but is not handed out again until the plugin is back.
+    /// Its plugin is registered now. A path stays in the table after its plugin is retired, since
+    /// a caller may hold it, but is not handed out again until the plugin is back.
     registered: bool = true,
-    /// Its plugin was unregistered this frame. Still handed out, since its `deinit` (which runs
-    /// after) may write there; `releaseRetiredFolders`, at the next frame's top, makes it gone.
-    leaving: bool = false,
     /// When the folder was last found or made, on `std.Io.Clock.awake`: an ask within
     /// `plugin_data_recheck_ns` of it trusts it is there.
     made_at: ?i96 = null,
@@ -804,13 +793,6 @@ pub const plugin_data_recheck_ns: i96 = std.time.ns_per_s;
 /// How long a plugin data folder that could not be made is left before it is tried again.
 pub const plugin_data_retry_ns: i96 = 5 * std.time.ns_per_s;
 
-/// The key a plugin's data folder is kept under: its id in lowercase, in `buf`. Null for an id
-/// longer than any valid one, which then has no folder and no entry.
-fn pluginDataKey(buf: *[64]u8, id: []const u8) ?[]const u8 {
-    if (id.len > buf.len) return null;
-    return std.ascii.lowerString(buf, id);
-}
-
 /// `plugin_data_lock`, which the web, single-threaded and with `std.Io`'s mutex unavailable to
 /// it, goes without.
 fn lockPluginData(app: *App) void {
@@ -825,51 +807,40 @@ fn unlockPluginData(app: *App) void {
 
 /// A plugin registered (`Host.registerPlugin`, through `EditorAPI.pluginRegistered`), on the main
 /// thread: its data folder's entry is made ready here, so `pluginDataFolder`, asked from any
-/// thread, never walks the host's plugin list. Out of memory, it is remembered and made on the
-/// plugin's next ask.
+/// thread, never walks the host's plugin list. Out of memory, the entry is made on its first ask.
 pub fn pluginRegistered(app: *App, id: []const u8) void {
-    var buf: [64]u8 = undefined;
-    const name = pluginDataKey(&buf, id) orelse return;
     app.lockPluginData();
     defer app.unlockPluginData();
-    if (app.plugin_data_folders.getPtr(name)) |f| {
+    if (app.plugin_data_folders.getPtr(id)) |f| {
         f.registered = true;
-        f.leaving = false;
         return;
     }
-    if (app.addPluginDataEntry(name, id) != null) return;
-    std.log.warn("plugin '{s}' data folder: out of memory; tried again on its first ask", .{id});
-    for (&app.plugin_data_missed) |*slot| if (slot.* == null) {
-        slot.* = id;
-        return;
-    };
+    if (app.addPluginDataEntry(id) == null) {
+        std.log.warn("plugin '{s}' data folder: out of memory; tried again on its first ask", .{id});
+        app.plugin_data_short = true;
+    }
 }
 
-/// A plugin was unregistered (`Host.unregisterPlugin`, through `EditorAPI.pluginUnregistered`),
-/// before its `deinit` runs: its folder is still handed out for that, and stops being at the next
-/// frame's top (`releaseRetiredFolders`). The entry stays, since a worker may still hold the path.
-pub fn pluginUnregistered(app: *App, id: []const u8) void {
-    var buf: [64]u8 = undefined;
-    const name = pluginDataKey(&buf, id) orelse return;
+/// A plugin was retired (`Host.retirePlugin`, through `EditorAPI.pluginRetired`): its `deinit`
+/// has run, so its folder is not handed out until it is back. The entry stays, since a worker
+/// may still hold the path.
+pub fn pluginRetired(app: *App, id: []const u8) void {
     app.lockPluginData();
     defer app.unlockPluginData();
-    for (&app.plugin_data_missed) |*slot| if (slot.*) |missed| {
-        if (std.mem.eql(u8, missed, id)) slot.* = null;
-    };
-    if (app.plugin_data_folders.getPtr(name)) |f| f.leaving = true;
+    if (app.plugin_data_folders.getPtr(id)) |f| f.registered = false;
 }
 
-/// The entry for plugin `id` under `name` (`pluginDataKey`), made now. Null out of memory. Under
-/// `plugin_data_lock`.
-fn addPluginDataEntry(app: *App, name: []const u8, id: []const u8) ?*PluginDataFolder {
-    const key = app.gpa.dupe(u8, name) catch return null;
-    const path: ?[]const u8 = if (isValidPluginId(id))
-        std.fs.path.join(app.gpa, &.{ app.config_folder, "plugin-data", name }) catch {
+/// The entry for plugin `id`, made now: its folder `<config>/plugin-data/<id in lowercase>`, or no
+/// path for an id that names no folder. Null out of memory. Under `plugin_data_lock`.
+fn addPluginDataEntry(app: *App, id: []const u8) ?*PluginDataFolder {
+    const key = app.gpa.dupe(u8, id) catch return null;
+    const path: ?[]const u8 = if (isValidPluginId(id)) path: {
+        var buf: [64]u8 = undefined; // `isValidPluginId`: at most 64 bytes
+        break :path std.fs.path.join(app.gpa, &.{ app.config_folder, "plugin-data", std.ascii.lowerString(&buf, id) }) catch {
             app.gpa.free(key);
             return null;
-        }
-    else
-        null;
+        };
+    } else null;
     const entry = app.plugin_data_folders.getOrPut(app.gpa, key) catch {
         app.gpa.free(key);
         if (path) |p| app.gpa.free(p);
@@ -879,9 +850,10 @@ fn addPluginDataEntry(app: *App, name: []const u8, id: []const u8) ?*PluginDataF
     return entry.value_ptr;
 }
 
-/// `<config>/plugin-data/<id>` for the registered plugin `id` (`Host.pluginDataFolder`), the id
-/// in lowercase, which ids are unique in (`Host.registerPlugin`), so the folder is the same on a
-/// case-sensitive filesystem as on macOS and Windows. The path is borrowed for the app's life.
+/// `<config>/plugin-data/<id>` for plugin `id` (`Host.pluginDataFolder`, which passes the
+/// caller's own plugin's id, exactly). The folder name is the id in lowercase: `Host.registerPlugin`
+/// refuses an id that differs only in case from a registered one, so the folder is this plugin's
+/// alone on every filesystem. The path is borrowed for the app's life.
 ///
 /// Made on the first ask, and made sure of again on an ask a second or more after the last: a
 /// folder deleted while the app runs comes back then, and a caller whose write into a kept path
@@ -890,25 +862,20 @@ fn addPluginDataEntry(app: *App, name: []const u8, id: []const u8) ?*PluginDataF
 ///
 /// Separate from `plugins/<id>`, which an update replaces and an uninstall deletes. On the web
 /// nothing is made, as there are no directories: the path is the prefix `core.fs` files under in
-/// the page's storage, as `palette_folder` is. Null for an id no registered plugin has, for one
-/// that is not a plain identifier (said once), or when the folder can't be made: said once for
-/// each run of failures, and tried again on an ask `plugin_data_retry_ns` after the last.
+/// the page's storage, as `palette_folder` is. Null for a retired plugin, for an id that is not a
+/// plain identifier (said once), or when the folder can't be made: said once for each run of
+/// failures, and tried again on an ask `plugin_data_retry_ns` after the last.
 pub fn pluginDataFolder(app: *App, id: []const u8) ?[]const u8 {
-    var buf: [64]u8 = undefined;
-    const name = pluginDataKey(&buf, id) orelse return null;
+    if (!isValidPluginId(id)) return null;
     const is_wasm = comptime builtin.target.cpu.arch == .wasm32;
     const path = path: {
         app.lockPluginData();
         defer app.unlockPluginData();
-        const f = app.plugin_data_folders.getPtr(name) orelse missed: {
-            // Registered while memory ran out (`pluginRegistered`): made now.
-            for (&app.plugin_data_missed) |*slot| if (slot.*) |missed| {
-                if (!std.ascii.eqlIgnoreCase(missed, id)) continue;
-                const made = app.addPluginDataEntry(name, missed) orelse return null;
-                slot.* = null;
-                break :missed made;
-            };
-            return null;
+        const f = app.plugin_data_folders.getPtr(id) orelse made: {
+            // No entry: unknown, unless a registration ran out of memory making it
+            // (`pluginRegistered`), in which case it is made now.
+            if (!app.plugin_data_short) return null;
+            break :made app.addPluginDataEntry(id) orelse return null;
         };
         if (!f.registered) return null;
         const path = f.path orelse {
@@ -927,12 +894,12 @@ pub fn pluginDataFolder(app: *App, id: []const u8) ?[]const u8 {
     const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
     app.lockPluginData();
     defer app.unlockPluginData();
-    const f = app.plugin_data_folders.getPtr(name) orelse return null;
+    const f = app.plugin_data_folders.getPtr(id) orelse return null;
     if (made) |_| {
         f.made_at = now;
         f.failed_at = null;
         f.said = false;
-        // Its plugin may have gone while the folder was made.
+        // Its plugin may have been retired while the folder was made.
         return if (f.registered) path else null;
     } else |err| {
         // Said once for a run of failures: an ask every frame would say it every frame.

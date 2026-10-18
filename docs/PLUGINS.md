@@ -884,16 +884,19 @@ during `register` and read back via `@ptrCast` in your vtable functions. There i
 What a plugin keeps **between runs** that is not a setting — its recents, an index, a cache —
 goes in **`host.pluginDataFolder(&plugin)`**: `<config>/plugin-data/<id>`, the id in lowercase.
 Plugin ids are unique ignoring case (`host.registerPlugin` refuses `Graphl` beside `graphl`, and
-a loader asks `host.pluginByIdIgnoringCase` before it opens a build), so the folder is the same
-on every filesystem. It follows the
-app's config folder, so a `FIZZY_PROFILE` sandbox gets its own, and it is not `plugins/<id>`, the
-folder the plugin is installed in, which an update replaces and an uninstall deletes. It is
-always local, whether or not the open folder is on a mount (§3.12).
+a loader asks `host.pluginByIdIgnoringCase` before it opens a build), so the folder is the
+plugin's alone on every filesystem. It follows the app's config folder, so a `FIZZY_PROFILE`
+sandbox gets its own, and it is not `plugins/<id>`, the folder the plugin is installed in, which
+an update replaces and an uninstall deletes. It is always local, whether or not the open folder
+is on a mount (§3.12).
 
 - The path is borrowed for the life of the app. The folder is made on the first call and made
   sure of again on a call a second or more after the last, so a plugin whose write into a kept
   path fails with `FileNotFound` calls again (a second later, if it called just now). Safe from
   any thread (an indexer, an LSP client): the app sets each plugin's entry up as it registers.
+- It is yours from `register` through your `deinit`: an app unloads a plugin with
+  `host.retirePlugin` (unregister, your `deinit`, then the app is told), so writing your state
+  out in `deinit` works, and from then on the path is not handed out until you are back.
 - Null when no app is installed (a unit test's bare `Host`), when the plugin is not registered,
   when its id is not a plain identifier (letters, digits, `-`, `_`), or when the folder could not
   be made: logged once, and tried again on a call a few seconds later.
