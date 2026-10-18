@@ -264,7 +264,7 @@ pub const Prepared = struct {
         if (pre) |inject| {
             self.set_globals(if (inject.gpa) |gpa| @ptrCast(gpa) else null, inject.arg_b, inject.arg_c);
         }
-        const status: dylib_api.RegisterStatus = @enumFromInt(self.reg_fn(host));
+        const status: dylib_api.RegisterStatus = @fromBackingInt(@intCast(self.reg_fn(host)));
         switch (status) {
             .ok => {},
             .err_abi_mismatch => return error.AbiMismatch,

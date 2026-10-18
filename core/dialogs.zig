@@ -242,10 +242,27 @@ pub const Bubble = struct {
     /// that grows to hold more than a line (the transport's strip) eases to a surface's radius,
     /// so what it holds fits inside its corners.
     radius: ?f32 = null,
+    /// Each corner's radius, physical (top-left, top-right, bottom-right, bottom-left), over
+    /// `radius`: glass cut to fit a corner of something else, as a place's corner is to its card's
+    /// curve. Each is held to half the shorter side.
+    radii: ?[4]f32 = null,
 
     fn cornerRadius(self: Bubble) f32 {
         const half = @min(self.rect.w, self.rect.h) / 2;
         return if (self.radius) |r| @min(r, half) else half;
+    }
+
+    /// Its four corners, physical, in `radii`' order.
+    fn cornerRadii(self: Bubble) [4]f32 {
+        const half = @min(self.rect.w, self.rect.h) / 2;
+        const r = self.radii orelse return @splat(self.cornerRadius());
+        return .{ @min(r[0], half), @min(r[1], half), @min(r[2], half), @min(r[3], half) };
+    }
+
+    /// `cornerRadii` as a corner rect, in points at `scale`.
+    fn corners(self: Bubble, scale: f32) dvui.CornerRect {
+        const r = self.cornerRadii();
+        return .{ .tl = .round(r[0] / scale), .tr = .round(r[1] / scale), .br = .round(r[2] / scale), .bl = .round(r[3] / scale) };
     }
 };
 pub const bubble_hover: f32 = 0.14;
@@ -274,7 +291,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     // The ring after the glass, so the glass never blurs it in.
     defer if (opts.shadow > 0) for (bubbles) |b| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
-        glassShadow(b.rect, .round(b.cornerRadius() / scale), scale, bs, opts.shadow);
+        glassShadow(b.rect, b.corners(scale), scale, bs, opts.shadow);
     };
     if (widgets.LiquidField.ready()) {
         if (widgets.liquidFrost()) |frost| {
@@ -282,8 +299,9 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
                 // A capsule's edge bends round as a drop's does; a rounded box's keeps to its sides.
-                const r = if (b.radius == null) @min(b.rect.w, b.rect.h) else b.cornerRadius();
-                field.add(.{ .rect = b.rect, .radii = @splat(r), .round = b.radius == null, .light = b.light });
+                const capsule = b.radius == null and b.radii == null;
+                const radii: [4]f32 = if (capsule) @splat(@min(b.rect.w, b.rect.h)) else b.cornerRadii();
+                field.add(.{ .rect = b.rect, .radii = radii, .round = capsule, .light = b.light });
             }
             var pane = frost;
             pane.form = 1;
@@ -294,7 +312,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     }
     for (bubbles, 0..) |b, i| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
-        const round: dvui.CornerRect = .round(b.cornerRadius() / scale);
+        const round = b.corners(scale);
         const physical = round.scale(scale, dvui.CornerRect.Physical);
         const piece = id.update(std.mem.asBytes(&i));
         const frosted = if (opts.witness) |w| frostPaneKept(piece, b.rect, round, scale, w) else frostPane(piece, b.rect, round, scale);
@@ -782,7 +800,7 @@ pub fn dialog(src: std.builtin.SourceLocation, opts: DialogOptions) dvui.IdMutex
         dvui.dataSet(opts.window, id, "_max_size", ms);
     }
     dvui.dataSet(opts.window, id, "_open", true);
-    dvui.dataSet(opts.window, id, "_header_kind", @intFromEnum(opts.header_kind));
+    dvui.dataSet(opts.window, id, "_header_kind", @backingInt(opts.header_kind));
 
     return id_mutex;
 }
@@ -890,10 +908,10 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         defer vbox.deinit();
 
         const header_kind: DialogHeaderKind = switch (dvui.dataGet(null, id, "_header_kind", u8) orelse 0) {
-            @intFromEnum(DialogHeaderKind.none) => .none,
-            @intFromEnum(DialogHeaderKind.info) => .info,
-            @intFromEnum(DialogHeaderKind.warning) => .warning,
-            @intFromEnum(DialogHeaderKind.err) => .err,
+            @backingInt(DialogHeaderKind.none) => .none,
+            @backingInt(DialogHeaderKind.info) => .info,
+            @backingInt(DialogHeaderKind.warning) => .warning,
+            @backingInt(DialogHeaderKind.err) => .err,
             else => .none,
         };
 
@@ -1688,7 +1706,7 @@ fn bubbleSpinnerPaintCheck(rs: dvui.RectScale, grow: f32, alpha: f32) void {
 /// Subwindow id used for save-complete toasts. Distinct from the canvas subwindow so
 /// `Workspace.drawCanvas`'s `toastsShow` won't render them — instead `Editor.drawSaveToasts`
 /// iterates this id and renders centered cards matching the loading-overlay style.
-pub const save_toast_subwindow_id: dvui.Id = @enumFromInt(0xF12_5A4E_71D0_5A4E);
+pub const save_toast_subwindow_id: dvui.Id = @fromBackingInt(@intCast(0xF12_5A4E_71D0_5A4E));
 
 /// Custom toast display for save-complete events. Visually matches `Editor.drawLoadingOverlay`:
 /// content-fill @ 0.85 background, drop shadow, checkmark icon + "Saved <basename>" label.

@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_common = @import("common.zig");
 // Vendored Velopack glue — see build/velopack.zig header (never `@import("velopack_zig")`).
 const velopack = @import("velopack.zig");
 const exe = @import("exe.zig");
@@ -80,7 +81,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
         // release builds. Use `cmd /c exit 0` as the no-op and keep the
         // dependency on exe_for_package via the step graph.
         const host_is_windows = b.graph.host.result.os.tag == .windows;
-        const skip_strip = host_is_windows or optimize == .Debug or cross_for_strip;
+        const skip_strip = host_is_windows or optimize == .debug or cross_for_strip;
         const strip_release_sh = if (host_is_windows) blk: {
             const sh = b.addSystemCommand(&.{ "cmd", "/c", "exit", "0" });
             sh.step.dependOn(&exe_for_package.step);
@@ -91,12 +92,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             break :blk sh;
         };
 
-        //const dotnet_tool_restore = velopack.addDotnetToolRestoreStep(b);
-        //const vpk_vendor_repair = velopack.addVpkVendorRepairStep(b);
-        //vpk_vendor_repair.step.dependOn(&dotnet_tool_restore.step);
-
-        const vpk_pkg_sh = b.addSystemCommand(&.{"dotnet"});
-        vpk_pkg_sh.addArg("vpk");
+        const vpk_pkg_sh = try velopack.addVpkRun(b, vz, target);
         // When packaging a foreign-OS bundle, vpk needs an OS directive (e.g. `vpk [win] pack ...`)
         // because by default it auto-detects from the host OS.
         if (cross_os) {
@@ -146,7 +142,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             &strip_release_sh.step,
         );
         vpk_pkg_sh.addArg("--packDir");
-        vpk_pkg_sh.addArg(b.getInstallPath(.{ .custom = pack_input_subdir }, ""));
+        vpk_pkg_sh.addDirectoryArg(build_common.installDirPath(.{ .custom = pack_input_subdir }));
         switch (target.result.os.tag) {
             .windows => {
                 // Sets the installer's icon and the Start Menu shortcut icon. The
@@ -181,7 +177,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                     // Without this, Apple's notary service rejects with "signature does not
                     // include a secure timestamp" / "hardened runtime not enabled".
                     vpk_pkg_sh.addArg("--signEntitlements");
-                    const entitlements_path = b.path("assets/macos/Fizzy.entitlements").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("entitlements path: {}", .{e});
+                    const entitlements_path = b.root.joinString(b.allocator, "assets/macos/Fizzy.entitlements") catch |e| std.debug.panic("entitlements path: {}", .{e});
                     vpk_pkg_sh.addArg(entitlements_path);
                 }
                 if (macos_sign_install_identity) |id| {
@@ -200,15 +196,11 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             },
             else => unreachable,
         }
-        vpk_pkg_sh.setEnvironmentVariable("DOTNET_ROLL_FORWARD", "Major");
         // Stream vpk's stdout/stderr live so failures surface their actual
         // diagnostic instead of just an exit-code-N message from the build
         // runner. With `addOutputDirectoryArg` in play, `infer_from_args`
         // can otherwise capture+drop stdio on certain runner configs.
         vpk_pkg_sh.stdio = .inherit;
-        try velopack.attachMksquashfsToVpkRun(b, vz, vpk_pkg_sh, target);
-
-        //vpk_pkg_sh.step.dependOn(&vpk_vendor_repair.step);
         vpk_pkg_sh.step.dependOn(pack_stage_tail);
 
         break :vpk vpk_pkg_out_dir;
@@ -246,7 +238,7 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
     const msvc_options = [_][]const u8{ "windows-msvc-libc", "fetch-msvc" };
     var common: std.ArrayList([]const u8) = .empty;
     var msvc_only: std.ArrayList([]const u8) = .empty;
-    switch (b.release_mode) {
+    switch (b.graph.release_mode) {
         .off => {},
         .any => common.append(b.allocator, "--release") catch @panic("OOM"),
         else => |mode| common.append(b.allocator, b.fmt("--release={s}", .{@tagName(mode)})) catch @panic("OOM"),
@@ -256,7 +248,7 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
         const name = entry.key_ptr.*;
         if (isOneOf(name, &target_options)) continue;
         const list = if (isOneOf(name, &msvc_options)) &msvc_only else &common;
-        switch (entry.value_ptr.value) {
+        switch (entry.value_ptr.*) {
             .flag => list.append(b.allocator, b.fmt("-D{s}", .{name})) catch @panic("OOM"),
             .scalar => |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
             .list => |l| for (l.items) |v| list.append(b.allocator, b.fmt("-D{s}={s}", .{ name, v })) catch @panic("OOM"),
@@ -292,7 +284,7 @@ pub fn addPackageAllStep(b: *std.Build, no_emit: bool) void {
         if (std.mem.endsWith(u8, triple, "-windows-msvc")) zig_pkg_run.addArgs(msvc_only.items);
         // This build's own build file, from the cwd this build was run in (inherited): a
         // relative path option (`-Dapp-icon=…`) is relative to that cwd, as it was here.
-        zig_pkg_run.addArgs(&.{ "--build-file", b.pathFromRoot("build.zig") });
+        zig_pkg_run.addArgs(&.{ "--build-file", b.root.joinString(b.allocator, "build.zig") catch @panic("OOM") });
         if (prev_step) |p| zig_pkg_run.step.dependOn(p);
         prev_step = &zig_pkg_run.step;
     }

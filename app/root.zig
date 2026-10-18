@@ -117,7 +117,7 @@ pub const control = struct {
     /// (`Server.socketPath`), with this user's runtime folder for a config folder too deep.
     pub fn socketPath(gpa: @import("std").mem.Allocator, config_folder: []const u8) ![]u8 {
         const std = @import("std");
-        const runtime: ?[]const u8 = if (@import("builtin").os.tag == .windows) null else for ([_][*:0]const u8{ "TMPDIR", "XDG_RUNTIME_DIR" }) |name| {
+        const runtime: ?[]const u8 = if (@import("builtin").target.os.tag == .windows) null else for ([_][*:0]const u8{ "TMPDIR", "XDG_RUNTIME_DIR" }) |name| {
             if (std.c.getenv(name)) |v| if (std.mem.len(v) > 0) break std.mem.span(v);
         } else null;
         return Server.socketPath(gpa, config_folder, runtime);

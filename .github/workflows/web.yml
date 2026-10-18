@@ -45,6 +45,9 @@ on:
       - "build.zig"
       - "build.zig.zon"
       - "web/**"
+      # The tapes served beside the app (`zig-out/web/demos/`).
+      - "docs/demos/**"
+      - "scripts/demos.zig"
       - ".github/workflows/web.yml"
   release:
     types: [published]
@@ -56,7 +59,7 @@ on:
         default: ""
 
 env:
-  ZIG_VERSION: "0.16.0"
+  ZIG_VERSION: "0.17.0"
   WEBSITE: fizzyedit/website
 
 jobs:

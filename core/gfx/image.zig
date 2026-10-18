@@ -187,7 +187,7 @@ pub fn checkerboardTile(width: u32, height: u32, even: [4]u8, odd: [4]u8) ?dvui.
     const size_f: dvui.Size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) };
     for (buf, 0..) |*p, i| {
         const rgba = if (math.checker(size_f, i)) even else odd;
-        p.* = @bitCast(rgba);
+        p.* = .{ .r = rgba[0], .g = rgba[1], .b = rgba[2], .a = rgba[3] };
     }
 
     return dvui.textureCreate(buf, .{
@@ -209,7 +209,7 @@ pub fn cachedTexture(source: dvui.ImageSource) dvui.ImageSource {
         .imageFile => |f| f,
         else => return source,
     };
-    const id: dvui.Id = @enumFromInt(@as(u64, @intFromPtr(file.bytes.ptr)) ^ file.bytes.len);
+    const id: dvui.Id = @fromBackingInt(@intCast(@as(u64, @intFromPtr(file.bytes.ptr)) ^ file.bytes.len));
     if (dvui.dataGet(null, id, "_image_texture_key", u64)) |key| {
         if (dvui.textureGetCached(key)) |tex| return .{ .texture = tex };
     }
@@ -426,8 +426,8 @@ pub fn blitData(src_pixels: [][4]u8, src_width: usize, src_height: usize, dst_pi
                 const bot_c = dvui.Color{ .r = bot_px[0], .g = bot_px[1], .b = bot_px[2], .a = bot_px[3] };
                 const tpm = dvui.Color.PMA.fromColor(top_c);
                 const bpm = dvui.Color.PMA.fromColor(bot_c);
-                const out_pma = math.blendPmaSrcOver(@bitCast(tpm), @bitCast(bpm));
-                top_px.* = @as(dvui.Color.PMA, @bitCast(out_pma)).toColor().toRGBA();
+                const out_pma = math.blendPmaSrcOver(std.mem.toBytes(tpm), std.mem.toBytes(bpm));
+                top_px.* = std.mem.bytesToValue(dvui.Color.PMA, &out_pma).toColor().toRGBA();
             }
         }
 
@@ -550,4 +550,12 @@ pub fn writeToJpgPpi(source: dvui.ImageSource, path: []const u8, ppi: u16) !void
     var enc = dvui.JPGEncoder.initDensity(&writer.interface, ppi);
     try enc.writeWithQuality(flat.data, flat.w, flat.h, 90);
     try writer.end();
+}
+
+test "blitData blends a transparent blit over what it covers" {
+    // Nothing in fizzy calls `blitData`, so this test is what compiles it (pixi does call it).
+    var into = [_][4]u8{.{ 0, 0, 0, 0 }};
+    var from = [_][4]u8{.{ 255, 0, 0, 255 }};
+    blitData(&into, 1, 1, &from, .{ .x = 0, .y = 0, .w = 1, .h = 1 }, true);
+    try std.testing.expectEqual([4]u8{ 255, 0, 0, 255 }, into[0]);
 }

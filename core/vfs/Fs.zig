@@ -65,18 +65,18 @@ pub fn Result(comptime T: type) type {
     };
 }
 
-const errors = @typeInfo(Error).error_set.?;
+const errors = @typeInfo(Error).error_set.error_names.?;
 
 fn codeOf(err: Error) u8 {
     inline for (errors, 1..) |e, i| {
-        if (err == @field(Error, e.name)) return i;
+        if (err == @field(Error, e)) return i;
     }
     unreachable;
 }
 
 fn errorOf(code: u8) Error {
     inline for (errors, 1..) |e, i| {
-        if (code == i) return @field(Error, e.name);
+        if (code == i) return @field(Error, e);
     }
     return error.Io;
 }

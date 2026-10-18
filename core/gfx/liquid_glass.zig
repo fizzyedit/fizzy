@@ -441,7 +441,7 @@ fn paneKey(r: dvui.Rect.Physical, radii: Radii, scale: f32, mod: dvui.Color, loo
 }
 
 fn meshId(key: u64) dvui.Id {
-    return @enumFromInt(key);
+    return @fromBackingInt(@intCast(key));
 }
 
 fn cachedMesh(key: u64) ?dvui.Triangles {

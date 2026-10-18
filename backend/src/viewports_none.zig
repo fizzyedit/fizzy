@@ -60,6 +60,13 @@ pub const Picture = struct {
 pub fn sizedTarget(_: *?dvui.Texture.Target, _: u32, _: u32) ?dvui.Texture.Target {
     return null;
 }
+pub fn keptTarget(_: *const Viewport, _: *?dvui.Texture.Target, _: u32, _: u32) ?dvui.Texture.Target {
+    return null;
+}
+/// No windows besides the main one: dvui's own screen only.
+pub fn publishScreens(_: ?dvui.Rect.Natural) void {
+    dvui.screensSet(&.{});
+}
 pub fn inMain(_: *const Viewport) Rect {
     return .{};
 }
@@ -156,6 +163,7 @@ pub fn dragMove(_: *Viewport) bool {
     return false;
 }
 pub fn minSize(_: *Viewport, _: f32, _: f32) void {}
+pub fn maxSize(_: *Viewport, _: f32, _: f32) void {}
 pub fn setTitle(_: *Viewport, _: []const u8) void {}
 pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
     return false;

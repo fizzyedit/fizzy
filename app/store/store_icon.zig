@@ -17,7 +17,7 @@ const icon_filename = "ICON.png";
 const Status = enum(u8) { idle, fetching, ready, not_found, failed };
 
 const IconEntry = struct {
-    status: std.atomic.Value(u8) = .init(@intFromEnum(Status.idle)),
+    status: std.atomic.Value(u8) = .init(@backingInt(Status.idle)),
     /// Fetched PNG bytes (app-allocator owned). Written by the worker; decoded on the UI thread.
     bytes: ?[]u8 = null,
     /// Decoded once on the UI thread after `bytes` is ready.
@@ -28,7 +28,7 @@ const IconEntry = struct {
     wasm_url_i: usize = 0,
 
     fn statusValue(self: *IconEntry) Status {
-        return @enumFromInt(self.status.load(.acquire));
+        return @fromBackingInt(@intCast(self.status.load(.acquire)));
     }
 
     fn deinit(self: *IconEntry) void {
@@ -92,7 +92,7 @@ pub fn request(id: []const u8, repo: []const u8, subpath: []const u8) void {
         return;
     };
 
-    entry.status.store(@intFromEnum(Status.fetching), .release);
+    entry.status.store(@backingInt(Status.fetching), .release);
     if (comptime is_wasm) {
         fillWasmCandidates(entry, repo_owned, subpath_owned);
         gpa.free(repo_owned);
@@ -102,7 +102,7 @@ pub fn request(id: []const u8, repo: []const u8, subpath: []const u8) void {
     entry.thread = std.Thread.spawn(.{}, worker, .{ repo_owned, subpath_owned, entry }) catch {
         gpa.free(repo_owned);
         gpa.free(subpath_owned);
-        entry.status.store(@intFromEnum(Status.failed), .release);
+        entry.status.store(@backingInt(Status.failed), .release);
         return;
     };
 }
@@ -117,7 +117,7 @@ pub fn pump() void {
 fn pumpEntry(entry: *IconEntry) void {
     if (entry.statusValue() != .fetching) return;
     if (entry.wasm_url_i >= entry.wasm_url_len) {
-        entry.status.store(@intFromEnum(Status.not_found), .release);
+        entry.status.store(@backingInt(Status.not_found), .release);
         return;
     }
     switch (web_fetch.request(repo_asset.gpa(), entry.wasm_urls[entry.wasm_url_i])) {
@@ -125,14 +125,14 @@ fn pumpEntry(entry: *IconEntry) void {
         .failed => {
             entry.wasm_url_i += 1;
             if (entry.wasm_url_i >= entry.wasm_url_len)
-                entry.status.store(@intFromEnum(Status.not_found), .release);
+                entry.status.store(@backingInt(Status.not_found), .release);
         },
         .ready => |body| {
             entry.bytes = repo_asset.gpa().dupe(u8, body) catch {
-                entry.status.store(@intFromEnum(Status.failed), .release);
+                entry.status.store(@backingInt(Status.failed), .release);
                 return;
             };
-            entry.status.store(@intFromEnum(Status.ready), .release);
+            entry.status.store(@backingInt(Status.ready), .release);
         },
     }
 }
@@ -140,7 +140,7 @@ fn pumpEntry(entry: *IconEntry) void {
 fn fillWasmCandidates(entry: *IconEntry, repo: []const u8, subpath: []const u8) void {
     var url_buf: [3][256]u8 = undefined;
     const candidates = repo_asset.rawGithubUrls(&url_buf, repo, subpath, icon_filename) orelse {
-        entry.status.store(@intFromEnum(Status.not_found), .release);
+        entry.status.store(@backingInt(Status.not_found), .release);
         return;
     };
     const gpa = repo_asset.gpa();
@@ -150,7 +150,7 @@ fn fillWasmCandidates(entry: *IconEntry, repo: []const u8, subpath: []const u8) 
         n += 1;
     }
     entry.wasm_url_len = n;
-    if (n == 0) entry.status.store(@intFromEnum(Status.not_found), .release);
+    if (n == 0) entry.status.store(@backingInt(Status.not_found), .release);
 }
 
 /// Draw the cached icon for `id` into the current dvui parent, at `size` square. Returns true
@@ -200,23 +200,23 @@ fn worker(repo_owned: []u8, subpath_owned: []u8, entry: *IconEntry) void {
         if (repo_asset.readLocalAsset(io, subpath_owned, icon_filename, limit)) |asset| {
             repo_asset.gpa().free(asset.dir); // an icon has nothing relative to resolve
             entry.bytes = asset.bytes;
-            entry.status.store(@intFromEnum(Status.ready), .release);
+            entry.status.store(@backingInt(Status.ready), .release);
             return;
         }
     }
 
     var url_buf: [3][256]u8 = undefined;
     const candidates = repo_asset.rawGithubUrls(&url_buf, repo_owned, subpath_owned, icon_filename) orelse {
-        entry.status.store(@intFromEnum(Status.not_found), .release);
+        entry.status.store(@backingInt(Status.not_found), .release);
         return;
     };
 
     for (candidates.slice()) |url| {
         if (repo_asset.fetchOk(io, url, limit)) |body| {
             entry.bytes = body;
-            entry.status.store(@intFromEnum(Status.ready), .release);
+            entry.status.store(@backingInt(Status.ready), .release);
             return;
         }
     }
-    entry.status.store(@intFromEnum(Status.not_found), .release);
+    entry.status.store(@backingInt(Status.not_found), .release);
 }

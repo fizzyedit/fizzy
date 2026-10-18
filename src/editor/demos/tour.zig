@@ -1,6 +1,6 @@
 //! A tour of fizzy: the explorer, editing, the command palette and a live markdown preview — a
 //! minute and a half, in chapters a viewer can jump between.
-const Script = @import("app").automation.Script;
+const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
 
 const readme =

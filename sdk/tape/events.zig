@@ -60,7 +60,7 @@ pub const Event = extern struct {
     _pad1: u32 = 0,
 
     pub fn valid(self: Event) bool {
-        return @intFromEnum(self.kind) <= @intFromEnum(Kind.app_quit);
+        return @backingInt(self.kind) <= @backingInt(Kind.app_quit);
     }
 };
 

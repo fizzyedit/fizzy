@@ -13,31 +13,52 @@ pub const fade_ns: i128 = 160 * std.time.ns_per_ms;
 /// When the bar was last asked for: an undo, a redo, the pointer on it.
 pub const Shown = struct {
     at_ns: ?i128 = null,
+    /// How long it takes to come in and to go: `fade_ns`, or longer for a bar that grows.
+    fade: i128 = fade_ns,
 
     /// Asked for at `now_ns`. Still coming in, it carries on; showing, it stays in and its linger
     /// starts over; gone, it comes in from nothing.
     pub fn stir(self: *Shown, now_ns: i128) void {
-        if (self.at_ns) |at| if (now_ns - at < fade_ns) return;
-        self.at_ns = if (self.openness(now_ns) > 0) now_ns - fade_ns else now_ns;
+        if (self.at_ns) |at| if (now_ns - at < self.fade) return;
+        self.at_ns = if (self.openness(now_ns) > 0) now_ns - self.fade else now_ns;
     }
 
-    /// How much of the bar shows at `now_ns`, 0 gone to 1 in: in over `fade_ns`, held, and out over
-    /// `fade_ns` once it has lingered.
+    /// How much of the bar shows at `now_ns`, 0 gone to 1 in: in over `fade`, held, and out over
+    /// `fade` once it has lingered.
     pub fn openness(self: Shown, now_ns: i128) f32 {
         const at = self.at_ns orelse return 0;
         const since = now_ns - at;
         if (since < 0) return 1;
-        if (since < fade_ns) return frac(since, fade_ns);
-        const left = linger_ns + fade_ns - since;
+        if (since < self.fade) return frac(since, self.fade);
+        const left = linger_ns + self.fade - since;
         if (left <= 0) return 0;
-        return if (left < fade_ns) frac(left, fade_ns) else 1;
+        return if (left < self.fade) frac(left, self.fade) else 1;
+    }
+
+    /// Going at `now_ns`: from as much of it as shows, out over `fade`, as if it had lingered.
+    pub fn hide(self: *Shown, now_ns: i128) void {
+        const o = self.openness(now_ns);
+        if (o <= 0) return;
+        // Where its linger would have put it: `left` of its fade still to go.
+        const left: i128 = @intFromFloat(@as(f64, o) * @as(f64, @floatFromInt(self.fade)));
+        self.at_ns = now_ns - (linger_ns + self.fade - left);
+    }
+
+    /// Going by `ns` from `now_ns` at the latest: the pointer left it, and it need not linger its
+    /// full time. Sooner already, it keeps its time.
+    pub fn soon(self: *Shown, now_ns: i128, ns: i128) void {
+        const at = self.at_ns orelse return;
+        // Still coming in: it finishes, and lingers its time. (Moving its start then would put it
+        // fully in at once: the growing snapped open.)
+        if (now_ns - at < self.fade) return;
+        self.at_ns = @min(at, now_ns + ns - linger_ns);
     }
 
     /// When the bar next changes on its own (comes fully in, starts to go, is gone): what its timer
     /// waits for. Null when it is gone, so a bar not showing wakes nothing.
     pub fn nextChange(self: Shown, now_ns: i128) ?i128 {
         const at = self.at_ns orelse return null;
-        for ([_]i128{ at + fade_ns, at + linger_ns, at + linger_ns + fade_ns }) |t| if (t > now_ns) return t;
+        for ([_]i128{ at + self.fade, at + linger_ns, at + linger_ns + self.fade }) |t| if (t > now_ns) return t;
         return null;
     }
 
@@ -158,6 +179,114 @@ pub fn stopX(i: usize, x0: f32, x1: f32, n: usize) f32 {
 
 // ---- tests ---------------------------------------------------------------------------------
 
+/// A liquid's surface, swinging: a damped spring, its tilt and its speed. A knock (a step made, a
+/// scrub) adds to how fast it moves, on top of what it is doing, so knocks close together build on
+/// each other or cancel as their timing falls, and no two are the same strength: rapid edits make a
+/// living, uneven swing rather than one swing played again. Worked out from the last knock, so it
+/// holds nothing but that and asks for frames only until it is still.
+pub const Slosh = struct {
+    at_ns: ?i128 = null,
+    /// Its tilt and speed (tilts a second) at `at_ns`.
+    x0: f32 = 0,
+    v0: f32 = 0,
+    /// Knocks so far: each one's strength varies by it.
+    knocks: u32 = 0,
+
+    const hz: f32 = 1.5;
+    /// How quickly a swing dies: a share of critical damping.
+    const damping: f32 = 0.28;
+    /// Below this much swing it is still.
+    const still: f32 = 0.01;
+    const omega: f32 = 2 * std.math.pi * hz;
+    const decay: f32 = damping * omega;
+    const omega_d: f32 = omega * @sqrt(1 - damping * damping);
+
+    /// Knocked at `now_ns` by `by` (its sign the way it goes; 1 swings it about all the way on
+    /// its own), as strong as 70% to 130% of that.
+    pub fn knock(self: *Slosh, now_ns: i128, by: f32) void {
+        const st = self.state(now_ns);
+        self.knocks +%= 1;
+        const h: f32 = @as(f32, @floatFromInt((self.knocks *% 2654435761) >> 16 & 0xffff)) / 65536.0;
+        self.x0 = st[0];
+        self.v0 = st[1] + by * (0.7 + 0.6 * h) * omega_d;
+        self.at_ns = now_ns;
+    }
+
+    /// How tipped it is at `now_ns`, -1 to 1.
+    pub fn tilt(self: Slosh, now_ns: i128) f32 {
+        if (self.settled(now_ns)) return 0;
+        return std.math.clamp(self.state(now_ns)[0], -1, 1);
+    }
+
+    pub fn settled(self: Slosh, now_ns: i128) bool {
+        const at = self.at_ns orelse return true;
+        const t = seconds(now_ns - at);
+        const b = (self.v0 + decay * self.x0) / omega_d;
+        return @exp(-decay * @max(0, t)) * @sqrt(self.x0 * self.x0 + b * b) < still;
+    }
+
+    /// Tilt and speed at `now_ns`: the spring's free swing from its last knock.
+    fn state(self: Slosh, now_ns: i128) [2]f32 {
+        const at = self.at_ns orelse return .{ 0, 0 };
+        const t = @max(0, seconds(now_ns - at));
+        const b = (self.v0 + decay * self.x0) / omega_d;
+        const e = @exp(-decay * t);
+        const c = @cos(omega_d * t);
+        const sn = @sin(omega_d * t);
+        return .{ e * (self.x0 * c + b * sn), e * ((b * omega_d - decay * self.x0) * c - (decay * b + self.x0 * omega_d) * sn) };
+    }
+
+    fn seconds(ns: i128) f32 {
+        return @floatCast(@as(f64, @floatFromInt(ns)) / std.time.ns_per_s);
+    }
+};
+
+/// A point of an outline, for the liquid's shapes: x, y.
+pub const Pt = [2]f32;
+
+/// The outline of a box at `x`, `y`, `w` by `h`, its corners rounded `r`, into `out` (at least
+/// `4 * (corner_points + 1)` long), clockwise with y down. A circle is a square box rounded by half.
+pub fn roundedOutline(x: f32, y: f32, w: f32, h: f32, r_in: f32, out: []Pt) []Pt {
+    const r = @min(r_in, @min(w, h) / 2);
+    const centres = [4]Pt{ .{ x + w - r, y + r }, .{ x + w - r, y + h - r }, .{ x + r, y + h - r }, .{ x + r, y + r } };
+    var n: usize = 0;
+    for (centres, 0..) |c, corner| {
+        const from = (@as(f32, @floatFromInt(corner)) - 1) * std.math.pi / 2;
+        for (0..corner_points + 1) |i| {
+            const a = from + @as(f32, @floatFromInt(i)) / corner_points * std.math.pi / 2;
+            out[n] = .{ c[0] + r * @cos(a), c[1] + r * @sin(a) };
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+pub const corner_points = 10;
+
+/// The part of convex `poly` on the near side of the line through `at` whose far side `away`
+/// points to (`(p - at) · away <= 0` is kept), into `out` (`poly.len + 1` long is enough for a
+/// convex outline; past `out`'s end, points are dropped rather than written). Still convex: a
+/// liquid is its vessel cut by its surface.
+pub fn cut(poly: []const Pt, at: Pt, away: Pt, out: []Pt) []Pt {
+    var n: usize = 0;
+    for (poly, 0..) |p, i| {
+        const q = poly[(i + 1) % poly.len];
+        const dp = (p[0] - at[0]) * away[0] + (p[1] - at[1]) * away[1];
+        const dq = (q[0] - at[0]) * away[0] + (q[1] - at[1]) * away[1];
+        // An outline with a point twice over (a capsule's ends, where the corners meet) and a
+        // surface touching it there crosses more often than a convex one can: never past `out`.
+        if (dp <= 0 and n < out.len) {
+            out[n] = p;
+            n += 1;
+        }
+        if ((dp <= 0) != (dq <= 0) and n < out.len) {
+            const t = dp / (dp - dq);
+            out[n] = .{ p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t };
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+
 const testing = std.testing;
 const ms = std.time.ns_per_ms;
 
@@ -208,4 +337,96 @@ test "a point on the line is the nearest step" {
     try testing.expectEqual(@as(usize, 10), stopAt(140, 0, 100, 10));
     try testing.expectEqual(@as(usize, 0), stopAt(50, 0, 100, 0));
     for (0..11) |i| try testing.expectEqual(i, stopAt(stopX(i, 20, 220, 10), 20, 220, 10));
+}
+
+test "a knocked liquid swings back level and settles" {
+    var sl: Slosh = .{};
+    try testing.expectEqual(@as(f32, 0), sl.tilt(0));
+    try testing.expect(sl.settled(0));
+    sl.knock(1000 * ms, 1);
+    try testing.expectEqual(@as(f32, 0), sl.tilt(1000 * ms));
+    try testing.expect(sl.tilt(1150 * ms) > 0.3);
+    try testing.expect(sl.tilt(1450 * ms) < 0);
+    try testing.expect(!sl.settled(1500 * ms));
+    try testing.expect(sl.settled(4000 * ms));
+    try testing.expectEqual(@as(f32, 0), sl.tilt(4000 * ms));
+    for (0..300) |i| try testing.expect(@abs(sl.tilt(1000 * ms + @as(i128, @intCast(i)) * 10 * ms)) <= 1);
+}
+
+test "knocks build on the swing they land in" {
+    // Knocked again as it swings the same way, it swings further than one knock does; knocked
+    // against its swing, less.
+    var one: Slosh = .{};
+    one.knock(0, 0.4);
+    var with: Slosh = .{};
+    with.knock(0, 0.4);
+    with.knock(20 * ms, 0.4);
+    var against: Slosh = .{};
+    against.knock(0, 0.4);
+    against.knock(20 * ms, -0.4);
+    const t = 170 * ms;
+    try testing.expect(with.tilt(t) > one.tilt(t));
+    try testing.expect(@abs(against.tilt(t)) < one.tilt(t));
+    // No two knocks the same strength.
+    var a: Slosh = .{};
+    a.knock(0, 0.5);
+    var b: Slosh = .{ .knocks = 1 };
+    b.knock(0, 0.5);
+    try testing.expect(a.tilt(t) != b.tilt(t));
+}
+
+test "a vessel cut by a surface keeps the part below it" {
+    var buf: [4 * (corner_points + 1)]Pt = undefined;
+    const square = [_]Pt{ .{ 0, 0 }, .{ 10, 0 }, .{ 10, 10 }, .{ 0, 10 } };
+    const below = cut(&square, .{ 0, 4 }, .{ 0, -1 }, &buf);
+    try testing.expectEqual(@as(usize, 4), below.len);
+    for (below) |p| try testing.expect(p[1] >= 4);
+    // Wholly kept, wholly gone.
+    try testing.expectEqual(@as(usize, 4), cut(&square, .{ 0, -5 }, .{ 0, -1 }, &buf).len);
+    try testing.expectEqual(@as(usize, 0), cut(&square, .{ 0, 20 }, .{ 0, -1 }, &buf).len);
+    // A circle's outline is round: every point on it is its radius from the centre.
+    for (roundedOutline(0, 0, 20, 20, 10, &buf)) |p| try testing.expectApproxEqAbs(@as(f32, 10), @sqrt((p[0] - 10) * (p[0] - 10) + (p[1] - 10) * (p[1] - 10)), 0.001);
+}
+
+test "a bar told to go goes from where it is, and one left goes soon" {
+    var sh: Shown = .{};
+    sh.stir(0);
+    try testing.expectEqual(@as(f32, 1), sh.openness(fade_ns));
+    sh.hide(500 * ms);
+    try testing.expectApproxEqAbs(@as(f32, 1), sh.openness(500 * ms), 0.001);
+    try testing.expect(sh.openness(500 * ms + fade_ns / 2) < 0.6);
+    try testing.expectEqual(@as(f32, 0), sh.openness(500 * ms + fade_ns));
+    // Half in, it goes from half.
+    var half: Shown = .{};
+    half.stir(0);
+    half.hide(fade_ns / 2);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), half.openness(fade_ns / 2), 0.01);
+    // Left: it goes after `ns`, not its whole linger.
+    var left: Shown = .{};
+    left.stir(0);
+    left.soon(1000 * ms, 600 * ms);
+    try testing.expectEqual(@as(f32, 1), left.openness(1500 * ms));
+    try testing.expectEqual(@as(f32, 0), left.openness(1600 * ms + fade_ns));
+    // Still coming in: it keeps coming in, rather than snapping fully in.
+    var coming: Shown = .{};
+    coming.stir(0);
+    coming.soon(fade_ns / 4, 600 * ms);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), coming.openness(fade_ns / 4), 0.01);
+    // Gone sooner anyway: unchanged.
+    var near: Shown = .{};
+    near.stir(0);
+    near.soon(linger_ns - 100 * ms, 600 * ms);
+    try testing.expectEqual(@as(f32, 0), near.openness(linger_ns + fade_ns));
+}
+
+test "a surface touching a doubled point never writes past the outline" {
+    var outline: [4 * (corner_points + 1)]Pt = undefined;
+    // A capsule: its rounded ends meet with a point twice over at top and bottom of each end.
+    const capsule = roundedOutline(0, 0, 40, 10, 5, &outline);
+    var kept: [outline.len + 1]Pt = undefined;
+    // Lines through each doubled point, every way: the cut stays inside its buffer.
+    for (capsule) |q| for (0..16) |k| {
+        const a = @as(f32, @floatFromInt(k)) * std.math.pi / 8;
+        _ = cut(capsule, q, .{ @cos(a), @sin(a) }, &kept);
+    };
 }

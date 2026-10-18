@@ -23,7 +23,7 @@ while :; do
   status="${PIPESTATUS[0]}"
   [ "$status" -eq 0 ] && exit 0
 
-  if ! grep -qE 'HttpConnectionClosing|invalid HTTP response|ConnectionResetByPeer|ConnectionTimedOut|TemporaryNameServerFailure|unable to fetch|TlsInitializationFailed|UnexpectedEndOfStream' "$log"; then
+  if ! grep -qE 'HttpConnectionClosing|invalid HTTP response|ConnectionResetByPeer|ConnectionTimedOut|NameServerFailure|unable to discover remote git server capabilities|unable to fetch|bad HTTP response code: .5|TlsInitializationFailed|UnexpectedEndOfStream' "$log"; then
     echo "::notice::not a fetch failure — not retrying"
     exit "$status"
   fi

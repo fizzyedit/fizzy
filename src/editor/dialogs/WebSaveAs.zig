@@ -185,10 +185,10 @@ fn exportFileName(gpa: std.mem.Allocator, name: []const u8, patterns: []const u8
     var first: []const u8 = "";
     var it = std.mem.tokenizeScalar(u8, patterns, ';');
     while (it.next()) |pattern| {
-        if (std.mem.eql(u8, pattern, "*")) return gpa.dupeZ(u8, name);
-        if (typed.len > 0 and std.ascii.eqlIgnoreCase(pattern, typed)) return gpa.dupeZ(u8, name);
+        if (std.mem.eql(u8, pattern, "*")) return gpa.dupeSentinel(u8, name, 0);
+        if (typed.len > 0 and std.ascii.eqlIgnoreCase(pattern, typed)) return gpa.dupeSentinel(u8, name, 0);
         if (first.len == 0) first = pattern;
     }
-    if (first.len == 0) return gpa.dupeZ(u8, name);
+    if (first.len == 0) return gpa.dupeSentinel(u8, name, 0);
     return std.fmt.allocPrintSentinel(gpa, "{s}.{s}", .{ name, first }, 0);
 }

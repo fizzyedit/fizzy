@@ -311,6 +311,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
 
         // Not under a carried tab: what is under it is where it would go in, not a tab to close.
         const tab_hovered = carried == null and core.widgets.hovered(hbox.data());
+        core.widgets.Tabs.handCursor(hbox.data());
 
         // A tab not on show lifts to the window's hover fill under the pointer.
         hbox.data().borderAndBackground(.{ .fill_color = if (tab_hovered and !is_selected)
@@ -536,7 +537,8 @@ fn lift(id: []const u8, from: dvui.Rect.Physical, event_num: u16) void {
     wb.carried_tab_key = std.hash.Wyhash.hash(0, id);
     runtime.host().beginViewDrag(id, from);
     if (runtime.host().viewDragSurface() == null) return;
-    if (dvui.currentWindow().capture) |cm| dvui.captureMouseCustom(cm, event_num);
+    if (dvui.captureMouseGet()) |cm|
+        dvui.captureMouseCustom(cm, event_num);
 }
 
 /// Write this pane's tab list and make `focus` its active tab.

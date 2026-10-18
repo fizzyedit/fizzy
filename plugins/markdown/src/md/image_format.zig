@@ -27,7 +27,7 @@ pub fn isSvg(bytes: []const u8) bool {
     if (std.ascii.startsWithIgnoreCase(window, "<svg")) return true;
     if (!std.ascii.startsWithIgnoreCase(window, "<?xml") and
         !std.ascii.startsWithIgnoreCase(window, "<!doctype")) return false;
-    return std.ascii.indexOfIgnoreCase(window, "<svg") != null;
+    return std.ascii.findIgnoreCase(window, "<svg") != null;
 }
 
 test "isSvg: bare root element" {

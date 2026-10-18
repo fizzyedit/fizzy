@@ -308,7 +308,11 @@ static void pump_tick_inner(void) {
         if (m->exit_origin_until > CACurrentMediaTime()) {
             restore_pre_fullscreen_origin_if_nudged((__bridge NSWindow *)m->window);
         }
-        if (m->anim_active) step_space_animation(m);
+        /* Not a still window's: its picture moves only in the app's frames
+         * (`fizzy_macos_window_space_step`), and stepped here between them too, its backdrop ran
+         * ahead of a picture drawn late — a frame of its own round the float, a band (the user,
+         * while recording the screen slowed the frames). */
+        if (m->anim_active && !m->still) step_space_animation(m);
         hold_landing(m);
         fizzy_macos_window_sync_content_views(m->window);
         fizzy_macos_window_pump_sync(m->window);
@@ -876,6 +880,9 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             break;
         case 1: // didEnter
             finish_space_animation(m);
+            /* Its backdrop square, its corners the screen's: however it got here — AppKit's own way
+             * in, Split View — and not only the monitor's own animation. */
+            fizzy_macos_window_glass_follow(win);
             /* Full screen in AppKit's eyes from here: its frame view square now, not at whatever
              * next asks for a layout (`still_frame_square`). */
             if (m->still) relayout_frame((__bridge NSWindow *)win);
@@ -896,6 +903,8 @@ void fizzy_macos_window_space_stage(int stage, void *nswindow) {
             break;
         case 3: // didExit
             finish_space_animation(m);
+            /* Its corners back, however it came out: AppKit's own way out of Split View too. */
+            fizzy_macos_window_glass_follow(win);
             m->space_transition = NO;
             m->space_entering = NO;
             m->unzoom_animating = NO;

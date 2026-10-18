@@ -77,11 +77,11 @@ pub const Counts = struct {
     destroyed: u32 = 0,
 
     fn add(a: *Counts, b: Counts) void {
-        inline for (std.meta.fields(Counts)) |f| @field(a, f.name) +|= @field(b, f.name);
+        inline for (@typeInfo(Counts).@"struct".field_names, @typeInfo(Counts).@"struct".field_types, @typeInfo(Counts).@"struct".field_attrs) |f_name, _, _| @field(a, f_name) +|= @field(b, f_name);
     }
 
     fn max(a: *Counts, b: Counts) void {
-        inline for (std.meta.fields(Counts)) |f| @field(a, f.name) = @max(@field(a, f.name), @field(b, f.name));
+        inline for (@typeInfo(Counts).@"struct".field_names, @typeInfo(Counts).@"struct".field_types, @typeInfo(Counts).@"struct".field_attrs) |f_name, _, _| @field(a, f_name) = @max(@field(a, f_name), @field(b, f_name));
     }
 };
 
@@ -284,7 +284,7 @@ test "SDL's log is counted from any thread, and the first error kept" {
     for (&pool) |*th| th.* = try std.Thread.spawn(.{}, struct {
         fn run(hp: *Health) void {
             for (0..each) |_| {
-                hp.noteLog(.@"error", "x" ** (first_error_cap + 10));
+                hp.noteLog(.@"error", &@as([first_error_cap + 10]u8, @splat('x')));
                 hp.noteLog(.warning, "w");
             }
         }
@@ -295,7 +295,7 @@ test "SDL's log is counted from any thread, and the first error kept" {
     try std.testing.expectEqual(@as(u32, threads * each), s.sdl_errors);
     try std.testing.expectEqual(@as(u32, threads * each + 1), s.sdl_warnings);
     // Cut to the cap, written once.
-    try std.testing.expectEqualStrings("x" ** first_error_cap, s.first_sdl_error);
+    try std.testing.expectEqualStrings(&@as([first_error_cap]u8, @splat('x')), s.first_sdl_error);
 }
 
 test "a snapshot round-trips through ZON" {
@@ -312,10 +312,12 @@ test "a snapshot round-trips through ZON" {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
     try std.zon.stringify.serialize(s, .{}, &out.writer);
-    const text = try std.testing.allocator.dupeZ(u8, out.written());
+    const text = try std.testing.allocator.dupeSentinel(u8, out.written(), 0);
     defer std.testing.allocator.free(text);
-    const back = try std.zon.parse.fromSliceAlloc(Snapshot, std.testing.allocator, text, null, .{});
-    defer std.zon.parse.free(std.testing.allocator, back);
+    var back_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer back_arena.deinit();
+    var back_diag: std.zon.parse.Diagnostics = undefined;
+    const back = try std.zon.parse.fromSlice(Snapshot, .{ .gpa = std.testing.allocator, .arena = back_arena.allocator(), .source = text, .diagnostics = &back_diag });
     try std.testing.expectEqual(s.presents, back.presents);
     try std.testing.expectEqual(s.os_windows, back.os_windows);
     try std.testing.expectEqual(s.ns_windows, back.ns_windows);
