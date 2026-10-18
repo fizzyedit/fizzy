@@ -200,18 +200,22 @@ float4 main(PSInput input) : SV_Target0
     // over the translucent picture as it was, the rim — where the clear glass lies over the
     // frost — came out more opaque than the face, and the material lit the face and not the rim.
     // Opaque where the window is (`LiquidField.publishOpaqueWindow`): its alpha is only its shape.
-    float under = uData[6].x > 0.5 ? 1.0 : frost.a;
+    // Glass that is the window's own material (`LiquidField.window`, its mix 2): the window's colour,
+    // the tint, in place of what is behind it, as see-through as that colour is, so the desktop's
+    // material shows through it as it does through the window round a card.
+    bool window = g4.x > 1.5;
+    float under = window ? g3.a : (uData[6].x > 0.5 ? 1.0 : frost.a);
     frost = float4(frost.rgb / max(frost.a, 1e-4), 1.0);
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
 // The frost at its share of a frost / tint mix, the blur coming in from sharp. The window's
 // colour comes in whatever the blur: the opacity is the colour, under clear glass too.
-    float mixv = g4.z > 0.5 ? g4.x : 0.0;
+    float mixv = window ? 1.0 : (g4.z > 0.5 ? g4.x : 0.0);
     // Apple's lens: the window's colour fades out across the band, as an OS window's does
     // (`glass_look.window`, its feather: strong most of the way, gone at the edge), so the edge stays
     // the lens bending what is behind it — unless the colour is near whole, when it covers the edge
     // too (`glass_look.shine_start`, 0.8 to 1).
-    if (inward) mixv *= 1.0 - t * t * (1.0 - smoothstep(0.8, 1.0, mixv));
+    if (inward && !window) mixv *= 1.0 - t * t * (1.0 - smoothstep(0.8, 1.0, mixv));
     float4 c = lerp(sharp, frost, b) * (1.0 - mixv);
 // The rim's clearer glass over it (`drawClear`): for Apple's lens, the band, so the rim stays
 // clear glass while the middle frosts.
@@ -221,7 +225,11 @@ float4 main(PSInput input) : SV_Target0
     c += g3 * mixv;
     // A translucent tint lies over the frost, not over what is behind the window: the glass is
     // opaque here, and `under` alone says how much of the desktop's material shows through it.
-    c += frost * (1.0 - c.a);
+    if (window) {
+        c = float4(g3.rgb / max(g3.a, 1e-4), 1.0);
+    } else {
+        c += frost * (1.0 - c.a);
+    }
     // The way the edge faces, against a light from the top left.
     float facing = dot(outv, float2(-0.70710678, -0.70710678));
     float toward = max(facing, 0.0);

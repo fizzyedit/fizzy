@@ -4478,6 +4478,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // (`core.glass_look.window`), and the frame draws none of its own.
         const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size()));
         const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
+        // For glass that is the window's own material (`core.dialogs.windowBase`).
+        fizzy.core.dialogs.publishWindowBase(window_color);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
         // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline

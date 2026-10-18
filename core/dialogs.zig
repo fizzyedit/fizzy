@@ -117,6 +117,23 @@ pub fn dialogFrost() ?widgets.FloatingWindowWidget.Frost {
     };
 }
 
+const window_base_key = "fizzy_window_base";
+
+/// Host only, each frame: the colour the main window is drawn on — its base at its opacity over the
+/// OS's material, clear on a window of OS glass — for glass that is the window's own material
+/// (`BubblesOptions.window`).
+pub fn publishWindowBase(c: dvui.Color) void {
+    const cw = dvui.currentWindow();
+    dvui.dataSet(null, cw.data().id, window_base_key, c);
+}
+
+/// The colour the main window is drawn on (`publishWindowBase`), or the chrome's before the host
+/// has said.
+pub fn windowBase() dvui.Color {
+    const cw = dvui.currentWindow();
+    return dvui.dataGet(null, cw.data().id, window_base_key, dvui.Color) orelse style().chromeColor();
+}
+
 /// Where the host records the dialog refraction setting — its own key beside the style, so a
 /// plugin built before it existed reads the style it knows and simply never asks for this.
 const refraction_key = "fizzy_dialog_refraction";
@@ -295,6 +312,10 @@ pub const BubblesOptions = struct {
     /// Glass even where the window behind it is see-through (`LiquidField.solid`): a control that
     /// must look the same over a bare stretch of the window's material as over a card.
     solid: bool = false,
+    /// The window's own material (`LiquidField.window`): the window's base colour (`windowBase`) in
+    /// place of what is behind the glass, as see-through as the window is, so over a card the glass
+    /// reads as the window's edge reaching into it. Over `tint`.
+    window: bool = false,
 };
 
 /// Controls of glass over content, one look wherever they float: the demo player's transport, a
@@ -328,6 +349,11 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
                 pane.tint = t;
                 pane.mix = opts.mix;
                 field.surface = true;
+            }
+            if (opts.window) {
+                pane.tint = windowBase();
+                pane.mix = 1;
+                field.window = true;
             }
             pane.witness = opts.witness;
             widgets.BlurBackdrop.fieldPane(id, field, scale, pane);

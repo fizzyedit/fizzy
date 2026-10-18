@@ -83,6 +83,11 @@ refraction: f32 = 1,
 /// It carries text — a dialog, a menu — and takes the window's colour as the opacity has it
 /// (`glass_look.forText`).
 text: bool = false,
+/// The window's own material (`tint`, the window's base colour, translucent): its colour in place
+/// of what is behind it, as see-through as that colour is, so the desktop shows through it as it
+/// does through the window round a card. Glass that reads as the window's edge reaching into a
+/// card. Its tint is kept over the published look, as `surface`'s is.
+window: bool = false,
 /// Drawn as over an opaque window wherever it is (`publishOpaqueWindow`): glass that must be glass
 /// even where the window is see-through behind it, as a place's corner button over the explorer,
 /// which is the window's own material. Off, it is as see-through there as the window is.
@@ -241,7 +246,7 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
         .depths = .{ self.merge_px, liquid_glass.softness * rim, liquid_glass.depthPx(self.look(), rim), liquid_glass.falloff * glow },
         .rim = .{ liquid_glass.refraction * rim * self.refraction, liquid_glass.clarity * @min(1, self.refraction), rim_line_width * s, @min(1, self.refraction) },
         .tint = tint,
-        .face = .{ std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
+        .face = .{ if (self.window) 2 else std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
         .dither = .{ 1.0 / 255.0, 0, 0, 0 },
         .shapes = undefined,
     };
@@ -346,7 +351,7 @@ fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
     u.backdrop[3] = l.bevel_cap * self.scale;
     u.rim[1] = l.clarity * bend_scale;
     u.rim[3] = l.rim;
-    if (!self.surface) {
+    if (!self.surface and !self.window) {
         u.face[0] = std.math.clamp(l.mix, 0, 1);
         u.face[1] = std.math.clamp(l.lift, 0, 1);
     }
