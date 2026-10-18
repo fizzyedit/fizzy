@@ -237,7 +237,9 @@ pub const VTable = struct {
     /// Undo or redo `doc` until step `id` (`HistoryLine.Entry.id`) is the last one applied; 0
     /// goes back before the first. An id not on the line is an error, and nothing moves.
     /// `fizzy.undo`/`fizzy.redo` with a `path` or an `expect` go through it too, so a document
-    /// can be undone without being the active one.
+    /// can be undone without being the active one. `error.PersonBusy` refuses while the person has
+    /// a gesture open (a stroke under their hand) and someone else is acting: the caller is told
+    /// to try again once it ends.
     historyGoTo: ?*const fn (state: *anyopaque, doc: DocHandle, id: u64) anyerror!void = null,
     /// Apply a step this owner recorded (`Step`, `Host.recordStep`) to `doc`, forward, as a new
     /// entry on its history: `effect` and `motion` in the owner's `step_format`. `ms` asks for it
@@ -635,12 +637,17 @@ pub fn applyStep(self: Plugin, doc: DocHandle, effect: []const u8, motion: []con
 
 /// Go to step `id` of `doc`'s history (`historyGoTo`). Returns whether it went.
 pub fn historyGoTo(self: Plugin, doc: DocHandle, id: u64) bool {
-    const f = self.vtable.historyGoTo orelse return false;
-    f(self.state, doc, id) catch |err| {
-        std.log.err("{s}: historyGoTo failed: {s}", .{ self.id, self.errorName(err) });
-        return false;
-    };
-    return true;
+    const why = self.historyGoToWhy(doc, id) orelse return true;
+    std.log.err("{s}: historyGoTo failed: {s}", .{ self.id, why });
+    return false;
+}
+
+/// `historyGoTo`, answering why it did not go (the owner's error, by name: `PersonBusy`), or null
+/// when it went. Logs nothing: the caller says it.
+pub fn historyGoToWhy(self: Plugin, doc: DocHandle, id: u64) ?[:0]const u8 {
+    const f = self.vtable.historyGoTo orelse return "NoHistory";
+    f(self.state, doc, id) catch |err| return self.errorName(err);
+    return null;
 }
 
 /// `doc`'s state for a demo's snapshot (`captureDocumentState`). Null when the owner has no

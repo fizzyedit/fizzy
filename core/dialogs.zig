@@ -242,10 +242,27 @@ pub const Bubble = struct {
     /// that grows to hold more than a line (the transport's strip) eases to a surface's radius,
     /// so what it holds fits inside its corners.
     radius: ?f32 = null,
+    /// Each corner's radius, physical (top-left, top-right, bottom-right, bottom-left), over
+    /// `radius`: glass cut to fit a corner of something else, as a place's corner is to its card's
+    /// curve. Each is held to half the shorter side.
+    radii: ?[4]f32 = null,
 
     fn cornerRadius(self: Bubble) f32 {
         const half = @min(self.rect.w, self.rect.h) / 2;
         return if (self.radius) |r| @min(r, half) else half;
+    }
+
+    /// Its four corners, physical, in `radii`' order.
+    fn cornerRadii(self: Bubble) [4]f32 {
+        const half = @min(self.rect.w, self.rect.h) / 2;
+        const r = self.radii orelse return @splat(self.cornerRadius());
+        return .{ @min(r[0], half), @min(r[1], half), @min(r[2], half), @min(r[3], half) };
+    }
+
+    /// `cornerRadii` as a corner rect, in points at `scale`.
+    fn corners(self: Bubble, scale: f32) dvui.CornerRect {
+        const r = self.cornerRadii();
+        return .{ .tl = .round(r[0] / scale), .tr = .round(r[1] / scale), .br = .round(r[2] / scale), .bl = .round(r[3] / scale) };
     }
 };
 pub const bubble_hover: f32 = 0.14;
@@ -274,7 +291,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     // The ring after the glass, so the glass never blurs it in.
     defer if (opts.shadow > 0) for (bubbles) |b| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
-        glassShadow(b.rect, .round(b.cornerRadius() / scale), scale, bs, opts.shadow);
+        glassShadow(b.rect, b.corners(scale), scale, bs, opts.shadow);
     };
     if (widgets.LiquidField.ready()) {
         if (widgets.liquidFrost()) |frost| {
@@ -282,8 +299,9 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
                 // A capsule's edge bends round as a drop's does; a rounded box's keeps to its sides.
-                const r = if (b.radius == null) @min(b.rect.w, b.rect.h) else b.cornerRadius();
-                field.add(.{ .rect = b.rect, .radii = @splat(r), .round = b.radius == null, .light = b.light });
+                const capsule = b.radius == null and b.radii == null;
+                const radii: [4]f32 = if (capsule) @splat(@min(b.rect.w, b.rect.h)) else b.cornerRadii();
+                field.add(.{ .rect = b.rect, .radii = radii, .round = capsule, .light = b.light });
             }
             var pane = frost;
             pane.form = 1;
@@ -294,7 +312,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     }
     for (bubbles, 0..) |b, i| {
         if (b.rect.w < 1 or b.rect.h < 1) continue;
-        const round: dvui.CornerRect = .round(b.cornerRadius() / scale);
+        const round = b.corners(scale);
         const physical = round.scale(scale, dvui.CornerRect.Physical);
         const piece = id.update(std.mem.asBytes(&i));
         const frosted = if (opts.witness) |w| frostPaneKept(piece, b.rect, round, scale, w) else frostPane(piece, b.rect, round, scale);

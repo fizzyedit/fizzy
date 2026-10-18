@@ -649,11 +649,16 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     };
 }
 
-/// How close the pointer must be to a region's top-right corner, in points, before the button
-/// shows. Far enough that a glance toward the corner finds it; near enough that it never
-/// appears while the user is working in the middle of the region: the button and a margin round it.
-const corner_reach: f32 = core.widgets.glass_button.size + 28;
 const corner_button_size: f32 = core.widgets.glass_button.size;
+/// The corner at rest, in points: a piece of glass this wide filling the card's top-right corner,
+/// cut to the card's own curve outside and rounded inside, so it lies mostly in the padding the
+/// rounding keeps clear. Wider where the card is rounder, so its outer curve is always the card's.
+const corner_piece: f32 = 22;
+/// A finger's target for the corner, in points: a square centred on the card's outer corner, so
+/// half of it lies past the card, in the gutter, and only a quarter reaches into the place.
+const corner_touch: f32 = 44;
+/// How long a tap on the corner keeps the button up for a second tap, in milliseconds.
+const corner_touch_ms: i32 = 3000;
 /// The button's distance in from the place's corner: room for the glass's shadow ring.
 const corner_inset: f32 = 8;
 
@@ -667,9 +672,15 @@ const corner_inset: f32 = 8;
 /// under a scroll area needs both to be it.
 ///
 /// An empty region shows the button always — there is nothing else to find it behind. A filled
-/// one fades it in when the pointer is near the corner, and out when it leaves, so the control
-/// does not sit on the surface. Empty is a hatch, not a ring: a ring on every vacant slot
-/// read as focus. A filled card still gets a rounded highlight when the pointer is near.
+/// one always shows its corner: a piece of glass filling the card's top-right corner, cut to its
+/// curve, so a person can see the place can be arranged without the button lying on what the
+/// place shows. Only the corner brings the button up — the piece itself turns into it, and back:
+/// the pointer on it, or a tap on it, never a pointer or a touch merely near the corner (a control
+/// there was covered by the button the press meant for it brought up). A tap keeps it up for a
+/// second tap, which opens the picker, until `corner_touch_ms` pass or the next touch lands
+/// anywhere else. Empty is a hatch, not a
+/// ring: a ring on every vacant slot read as focus. A filled card still gets a rounded highlight
+/// while its button is up.
 ///
 /// Drag the button to lift the view: a card of it follows the pointer (grab offset preserved)
 /// and every place it could land, this one included, shows its drop zones.
@@ -679,29 +690,68 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     const picker_here = self.state.picker.is_open and std.mem.eql(u8, self.state.picker.region, opts.name);
     const filled = regionHasContent(self, opts, keywords);
     const dragging_this = self.state.view_drag.active() and std.mem.eql(u8, self.state.view_drag.name, opts.name);
-    // Not under a modal dialog, which takes the press: the button lit and the click did nothing.
-    // The rect test first, so the subwindow walk runs only with the pointer at the corner.
-    const near = mouse.x >= rs.r.x + rs.r.w - corner_reach * rs.s and mouse.x <= rs.r.x + rs.r.w and
-        mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s and
+    const id = box.data().id;
+    const now = dvui.currentWindow().frame_time_ns;
+    const corners = box.data().options.cornersGet().scale(rs.s, dvui.CornerRect.Physical);
+    const piece = cornerPiece(rs, corners);
+    // Where the button stands while it is up, physical: the pointer anywhere on it keeps it up.
+    const crs = box.data().contentRectScale();
+    const button_r: dvui.Rect.Physical = .{
+        .x = crs.r.x + crs.r.w - (corner_button_size + corner_inset) * crs.s,
+        .y = crs.r.y + corner_inset * crs.s,
+        .w = corner_button_size * crs.s,
+        .h = corner_button_size * crs.s,
+    };
+    // Whether the last press was a finger's: then where the pointer rests says nothing (it is
+    // wherever the last touch was), and only a tap on the corner brings the button up.
+    var touch = dvui.dataGet(null, id, "_chooser_touch", bool) orelse false;
+    var tapped_until = dvui.dataGet(null, id, "_chooser_until", i128) orelse 0;
+    const shown_before = (dvui.dataGet(null, id, "_chooser_shown", f32) orelse 0) > 0.01;
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse or e.handled) continue;
+        const me = e.evt.mouse;
+        if (me.action == .motion and !me.button.touch()) touch = false;
+        if (me.action != .press or !me.button.pointer()) continue;
+        touch = me.button.touch();
+        if (!touch or !filled) continue;
+        if (now < tapped_until) {
+            // Up from a tap: a touch on the button is the button's; anywhere else puts it away.
+            if (!button_r.contains(me.p)) tapped_until = 0;
+        } else if (piece.touch.contains(me.p) and !core.dialogs.modalOverCurrent()) {
+            // The first tap only brings the button up; the place under the corner never sees it.
+            e.handle(@src(), box.data());
+            tapped_until = now + @as(i128, corner_touch_ms) * std.time.ns_per_ms;
+            dvui.timer(id, corner_touch_ms * 1000);
+        }
+    }
+    if (tapped_until != 0 and now >= tapped_until) tapped_until = 0;
+    dvui.dataSet(null, id, "_chooser_touch", touch);
+    dvui.dataSet(null, id, "_chooser_until", tapped_until);
+    const tapped = tapped_until != 0;
+    // The pointer on the corner, or on the button it brought up. Not under a modal dialog, which
+    // takes the press: the button lit and the click did nothing. The rect tests first, so the
+    // subwindow walk runs only with the pointer at the corner.
+    const hovered = !touch and (piece.r.contains(mouse) or (shown_before and button_r.contains(mouse))) and
         !core.dialogs.modalOverCurrent();
-    const pressing = dvui.dataGet(null, box.data().id, "_chooser_press", bool) orelse false;
+    const pressing = dvui.dataGet(null, id, "_chooser_press", bool) orelse false;
     if (self.state.view_drag.active()) ViewDrag.tick(self);
     // Not while a view is carried: the button is the way to pick or lift a view, and over a drag
     // it came and went with every place the pointer crossed. (It still runs below — it is the
     // handle the drag of this place is held by.)
-    const available = !self.state.view_drag.active() and (!filled or picker_here or near or pressing);
-    const alpha = chooserFade(box.data().id, if (available) 1 else 0);
+    const available = !self.state.view_drag.active() and (!filled or picker_here or hovered or tapped or pressing);
+    const alpha = chooserFade(id, if (available) 1 else 0);
+    // A filled place's corner, there whenever its button is not, but not over a drag (as the button).
+    const resting = filled and !self.state.view_drag.active();
 
-    if (alpha < 0.01 and !available and !dragging_this and !ViewDrag.zonesShowing(self, opts.name, box.data().id)) return;
+    if (alpha < 0.01 and !available and !resting and !dragging_this and !ViewDrag.zonesShowing(self, opts.name, id)) return;
 
     var ftb: dvui.RenderFrontToBack = undefined;
     ftb.init();
     defer ftb.deinit();
 
-    // Same corners the box fill uses — `finalize(theme)` turns `.all(r)` into
-    // the theme's kind, and fizzy's theme is square, so the ring was a second
-    // square outline sitting on the rounded card.
-    const corners = box.data().options.cornersGet().scale(rs.s, dvui.CornerRect.Physical);
+    // `corners` (above) are the box fill's — `finalize(theme)` turns `.all(r)` into the theme's
+    // kind, and fizzy's theme is square, so the ring was a second square outline sitting on the
+    // rounded card.
     const theme = dvui.themeGet();
     if (!filled) drawEmptyHatch(rs.r, rs.s);
     // In the same front-to-back pass as the contents' chrome: the glass lies on them.
@@ -717,7 +767,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // float shows, and the ring is drawn past the clip that hides the rest. Firm again, under the
     // view aimed back at it, it is marked as any place carried from is.
     const aside = if (self.state.floatRoot(opts.name)) |root| ViewDrag.ghosted(self, root) else false;
-    const ring_wanted = filled and !aside and (dragging_this or (!self.state.view_drag.active() and (picker_here or near or pressing)));
+    const ring_wanted = filled and !aside and (dragging_this or (!self.state.view_drag.active() and (picker_here or hovered or tapped or pressing)));
     const ring_alpha = chooserFade(box.data().id.update("ring"), if (ring_wanted) 1 else 0);
     if (ring_alpha > 0.01) {
         // Under the region's own border rect, not the content clip `cornerButton` runs inside:
@@ -729,6 +779,13 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         defer dvui.clipSet(prev_clip);
         const half: f32 = 1.0;
         rs.r.insetAll(half).stroke(corners, .{ .color = .{ .color = theme.focus.opacity(ring_alpha) }, .thickness = 2 * half });
+    }
+
+    // The corner at rest. Its frost is the card's padding, which does not change: read once. While
+    // the button is up, or on its way, the same piece of glass is drawn as it (below).
+    if (resting and alpha < 0.01) {
+        core.dialogs.glassBubbles(id.update("corner"), &.{.{ .rect = piece.r, .radii = piece.radii }}, rs.s, .{ .shadow = 0, .witness = core.widgets.glass_button.witness(piece.r, 0) });
+        drawCornerGlyph(piece.r, rs.s, theme.color(.content, .text));
     }
 
     if (alpha < 0.01 and !pressing and !dragging_this) return;
@@ -802,11 +859,20 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         // A glass bubble, as the controls over a document are (`core.widgets.glass_button`). Glass
         // has no opacity, so it fades by growing in from its centre, its shadow with it.
         const br = bw.data().borderRectScale();
-        const grown = br.r.insetAll(br.r.w * (1 - alpha) / 2);
-        // An empty place's corner is its hatch, which does not change: read the frost once. A
-        // filled one's is the view's own content, read while the button shows.
-        const witness: ?u64 = if (filled) null else core.widgets.glass_button.witness(grown, 0);
-        core.dialogs.glassBubbles(bw.data().id, &.{.{ .rect = grown, .light = core.widgets.glass_button.light(&bw) }}, br.s, .{ .shadow = alpha, .witness = witness });
+        const light = core.widgets.glass_button.light(&bw);
+        if (resting) {
+            // A filled place's corner turns into the button: the one piece of glass, its rect and
+            // corners carried from the corner's to the button's. Its frost is the view's own
+            // content, read while it moves and shows.
+            const m = cornerMorph(piece, br.r, alpha);
+            core.dialogs.glassBubbles(id.update("corner"), &.{.{ .rect = m.rect, .radii = m.radii, .light = light }}, br.s, .{ .shadow = alpha });
+            drawCornerGlyph(m.rect, rs.s, theme.color(.content, .text).opacity(std.math.clamp(1 - 2 * alpha, 0, 1)));
+        } else {
+            // An empty place's button grows in from its centre (glass has no opacity) over its
+            // hatch, which does not change: read the frost once.
+            const grown = br.r.insetAll(br.r.w * (1 - alpha) / 2);
+            core.dialogs.glassBubbles(bw.data().id, &.{.{ .rect = grown, .light = light }}, br.s, .{ .shadow = alpha, .witness = core.widgets.glass_button.witness(grown, 0) });
+        }
         // White, tinted by the text colour: the icon cache tints a flat colour rather than baking
         // it, and every step of the fade (it comes and goes as a drag crosses a place) would
         // otherwise rasterize a new texture, two render-target switches a frame.
@@ -820,7 +886,64 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         });
     }
     if (bw.clicked() and !dragged) {
+        dvui.dataSet(null, id, "_chooser_until", @as(i128, 0));
         self.state.openPicker(self.gpa, opts.name, bw.data().rectScale().r.toNatural().bottomLeft());
+    }
+}
+
+/// A filled place's corner at rest (`cornerButton`), physical: the piece of glass, its corners
+/// (top-left, top-right, bottom-right, bottom-left) and a finger's target for it.
+const CornerPiece = struct {
+    r: dvui.Rect.Physical,
+    radii: [4]f32,
+    touch: dvui.Rect.Physical,
+};
+
+/// The piece fills the card's top-right corner: its top and right edges are the card's, its outer
+/// corner the card's own curve (so it is at least twice the card's radius wide: a shape's corner
+/// is held to half its side), and its inner corner as round as it can be.
+fn cornerPiece(rs: dvui.RectScale, corners: dvui.CornerRect.Physical) CornerPiece {
+    const card = corners.tr.radius();
+    const side = @max(corner_piece * rs.s, 2 * card);
+    const half = corner_touch / 2 * rs.s;
+    return .{
+        .r = .{ .x = rs.r.x + rs.r.w - side, .y = rs.r.y, .w = side, .h = side },
+        .radii = .{ 0, card, 0, side / 2 },
+        .touch = .{ .x = rs.r.x + rs.r.w - half, .y = rs.r.y - half, .w = 2 * half, .h = 2 * half },
+    };
+}
+
+/// The piece on its way to being the button at `button` (physical), `t` of the way (0 the corner,
+/// 1 the button): rect and corners carried across together, round at the end.
+fn cornerMorph(piece: CornerPiece, button: dvui.Rect.Physical, t: f32) struct { rect: dvui.Rect.Physical, radii: ?[4]f32 } {
+    const k = std.math.clamp(t, 0, 1);
+    const rect: dvui.Rect.Physical = .{
+        .x = std.math.lerp(piece.r.x, button.x, k),
+        .y = std.math.lerp(piece.r.y, button.y, k),
+        .w = std.math.lerp(piece.r.w, button.w, k),
+        .h = std.math.lerp(piece.r.h, button.h, k),
+    };
+    if (k > 0.99) return .{ .rect = rect, .radii = null };
+    const round = @min(button.w, button.h) / 2;
+    var radii: [4]f32 = undefined;
+    for (&radii, piece.radii) |*r, from| r.* = std.math.lerp(from, round, k);
+    return .{ .rect = rect, .radii = radii };
+}
+
+/// The corner's glyph: the button's grid, small, as four filled squares (an icon at this size is a
+/// few pixels of texture, and redrawn each step of the turn). Set toward the card's corner, inside
+/// the piece's rounded inner edge.
+fn drawCornerGlyph(piece: dvui.Rect.Physical, scale: f32, color: dvui.Color) void {
+    const cell = 2.5 * scale;
+    const gap = 1.5 * scale;
+    const side = 2 * cell + gap;
+    if (piece.w < side + 4 * scale or color.a == 0) return;
+    // Centred on the piece's top-right quarter, where its glass is whole.
+    const x0 = piece.x + piece.w * 0.62 - side / 2;
+    const y0 = piece.y + piece.h * 0.38 - side / 2;
+    for ([_][2]f32{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 }, .{ 1, 1 } }) |at| {
+        const sq: dvui.Rect.Physical = .{ .x = x0 + at[0] * (cell + gap), .y = y0 + at[1] * (cell + gap), .w = cell, .h = cell };
+        sq.fill(.all(0.6 * scale), .{ .color = .{ .color = color }, .fade = 1 });
     }
 }
 
