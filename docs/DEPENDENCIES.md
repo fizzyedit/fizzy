@@ -93,16 +93,22 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    test calling it failed to compile (#526). It takes `SnapshotOptions` now, and logs through
    `std.log`. Upstream: already there; comes out empty at the next rebase.
 10. **RenderFrontToBack: closed blocks are drawn after draw-last commands** (`f07c334`, reworked
-   in `fdc03d4`). A closed block went in at the start of `render_cmds_after` and draw-last strokes
-   (`focusBorder`, a text entry's error ring) were appended after it, so a focus ring drawn later
-   lay on top of a block meant to cover it: the pane corner button's glass under the explorer
-   filter's ring (#519). Closed blocks now go in a list of their own,
-   `Subwindow.render_cmds_front`, drawn after `render_cmds_after` (and, while drawing is deferred,
-   `Window.defer_render_cmds_front`, which `RenderFrontToBack` and `Picture` set). Code that takes
-   a subwindow's lists to draw elsewhere takes this one too, last, as `backend/src/viewports.zig`
-   does. `Debug`'s widget outline, a draw-last stroke, now draws under such a block. Upstream:
-   worth proposing. Test: dvui's `zig build test -Dbackend=testing`, "closed RenderFrontToBack
-   blocks are drawn after draw-last strokes, before or after they closed".
+   in `fdc03d4`, `cc60612` and `44010a3`). A closed block went in at the start of
+   `render_cmds_after` and draw-last strokes (`focusBorder`, a text entry's error ring) were
+   appended after it, so a focus ring drawn later lay on top of a block meant to cover it: the
+   pane corner button's glass under the explorer filter's ring (#519). Closed blocks now go in a
+   list of their own, `Subwindow.render_cmds_front` (a `RenderFrontToBack.Blocks`), drawn after
+   `render_cmds_after`. Closing a block appends its commands (amortized constant time a command;
+   a nested block's commands are copied again at each enclosing level), and they are drawn the
+   other way round, so the first closed is drawn last. A `Picture` or a block records into a
+   `RenderQueues` (commands, draw-last commands, blocks) installed as one unit,
+   `Window.defer_render`, which replaces `defer_render_cmds` and `defer_render_cmds_after`.
+   `RenderQueues.render` is the one place that says the order queued drawing is drawn in;
+   `Picture.stop` and `Window.renderSubwindow` use it, and fizzy draws a subwindow into a viewport
+   with `renderSubwindow` (`.take` empties the subwindow's queues before drawing them).
+   `Debug`'s widget outline, a draw-last stroke, now draws under such a block. Upstream: worth
+   proposing. Test: dvui's `zig build test -Dbackend=testing`, "closed RenderFrontToBack blocks
+   are drawn after draw-last strokes, before or after they closed".
 
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
@@ -112,8 +118,10 @@ builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2
 `f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70` (0.2.19 was not released yet, and a tag never
 moves, so the second pin of one version takes a suffix, as the SDL fork's tags do; SDK 0.2.19 to
 0.2.22); `fizzy-sdk-0.2.23` → `f646ec0` (SDK 0.2.23 to 0.2.29); `fizzy-sdk-0.2.30` → `f07c334`
-(never pinned on `main`: its counter was reworked before merge); `fizzy-sdk-0.2.30-2` →
-`fdc03d4`, what `sdk/build.zig.zon` pins now.
+(never pinned on `main`: its counter was reworked before merge); `fizzy-sdk-0.2.30-1` →
+`e2c9a85` (item 9 alone, never pinned); `fizzy-sdk-0.2.30-2` → `fdc03d4` (pinned by #540);
+`fizzy-sdk-0.2.30-3` → `cc60612` (never
+pinned); `fizzy-sdk-0.2.30-4` → `44010a3`, what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`

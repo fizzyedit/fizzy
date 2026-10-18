@@ -290,7 +290,8 @@ pub fn present(vp: *Viewport, target: ?dvui.TextureTarget) void {
 }
 
 /// A viewport's picture this frame, drawn as dvui draws the frame: into a target, from the top left
-/// of the part of the frame the viewport shows, until `end`. In it go the subwindows the viewport shows (`subwindow`) — a float and
+/// of the part of the frame the viewport shows, until `end`. In it go the subwindows the viewport
+/// shows (`dvui.Window.renderSubwindow`, `.take` when they are out of the frame too) — a float and
 /// what opened in it, a menu, a carried view — and whatever the app draws under them. Begun after
 /// `Window.drawRetained`, so the dialogs and toasts are subwindows by then; then `present`.
 pub const Picture = struct {
@@ -321,24 +322,6 @@ pub const Picture = struct {
     pub fn moveTo(self: *Picture, at: dvui.Point.Physical) void {
         self.rt.offset = at;
         _ = dvui.renderTarget(self.rt);
-    }
-
-    /// Subwindow `sw`'s drawing this frame, in the picture. `take`: out of the frame too, so dvui's
-    /// replay into the main window — and any picture after this one — draws none of it.
-    pub fn subwindow(_: Picture, sw: *dvui.Subwindows.Subwindow, take: bool) void {
-        const cw = dvui.currentWindow();
-        const cmds = sw.render_cmds;
-        const after = sw.render_cmds_after;
-        const front = sw.render_cmds_front;
-        if (take) {
-            sw.render_cmds = .empty;
-            sw.render_cmds_after = .empty;
-            sw.render_cmds_front = .empty;
-        }
-        // In dvui's order (`Window.endRendering`): front-to-back blocks over the draw-last strokes.
-        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
-        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
-        cw.renderCommands(front.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
     }
 
     /// Done: drawing goes to the frame's own target again.
