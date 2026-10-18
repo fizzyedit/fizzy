@@ -5401,8 +5401,7 @@ fn answerLaterCommands(editor: *Editor) void {
             host.finishCall(ticket, .{ .ok = text });
             continue;
         }
-        // Not taken yet. Asked again, which wakes the app for it and asks anew should the last
-        // asking have come to nothing; a snapshot that never comes is given up on, not waited
+        // Not taken yet. Asked again, should the last asking have come to nothing; a snapshot that never comes is given up on, not waited
         // for frame after frame.
         w.frames += 1;
         if (w.frames > 120) {
@@ -5412,6 +5411,8 @@ fn answerLaterCommands(editor: *Editor) void {
             continue;
         }
         w.snapshot = api.snapshot();
+        // And a frame to take it in: asking again does not wake a sleeping app by itself.
+        host.refresh();
         i += 1;
     }
     if (editor.later_settles.items.len == 0) return;
