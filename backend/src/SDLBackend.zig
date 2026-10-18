@@ -2027,6 +2027,19 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
             return self.viewportPoint(vp);
         }
     };
+    // macOS: the app's window in front under the pointer, as the OS stacks them. Read from the
+    // slots and `Viewport.under_main`, where the main window and a float's window overlapped, a
+    // float dragged in the main window over the overlap went into the main window rather than the
+    // window in front of it (the user). A window the pointer passes through (a carry window, one
+    // moved under a drag) is not found; one gone to its ghost (`see_through`) falls to what is under.
+    if (comptime builtin.target.os.tag == .macos) if (fizzy_macos_app_window_at_pointer()) |front| {
+        if (front == cocoaWindow(self.window)) {
+            const at = self.mainOnScreen();
+            const d = self.density();
+            return .{ .x = (gx - at.x) * d, .y = (gy - at.y) * d };
+        }
+        for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (cocoaWindow(vp.window) == front and !vp.passive and !vp.see_through) return self.viewportPoint(vp);
+    };
     // Over the main window, a window under it in the stacking (`Viewport.under_main`) is not
     // what the pointer is over: the main window is.
     const origin = self.mainOnScreen();
