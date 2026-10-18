@@ -665,7 +665,7 @@ fn cmdScreen(state: *anyopaque, _: ScreenArgs.Args, call: *sdk.Command.Call) any
     snapshot.keepTaking(true);
     // The frame last drawn, unless a command ran this frame before this one (this one is counted):
     // what that did is not drawn yet, so the next frame is taken instead.
-    const undrawn = editor.app.host.command_runs > editor.command_runs_at_requests + 1;
+    const undrawn = editor.app.host.command_runs - 1 > editor.command_runs_at_snapshot;
     if (!undrawn) if (snapshot.latest()) |text| {
         call.result = try call.arena.dupe(u8, text);
         return;

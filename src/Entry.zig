@@ -542,7 +542,7 @@ fn frameOnce() !dvui.App.Result {
         fizzy.editor().demo.frameEnd(if (frame_target.picture()) |p| .{ .target = p.target, .w = p.w, .h = p.h } else null);
         // A snapshot just written answers the `fizzy.screen` waiting on it now, not at the next
         // frame's start: a frame sooner.
-        fizzy.editor().answerLaterCommands();
+        fizzy.editor().answerLaterCommands(true);
     }
     // Before that replays the subwindows into the frame: a float out of the main window is
     // replayed into its own window instead.
