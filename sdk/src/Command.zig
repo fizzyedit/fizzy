@@ -107,6 +107,21 @@ pub const Call = struct {
     /// stroke by stroke): for how long, in ms as written (`core.motion`). A recorded session
     /// gives its step that long, so a replay goes from one to the next without a pause.
     showing_ms: u32 = 0,
+    /// This call's ticket, set by the host: what `later` hands back.
+    ticket: u32 = 0,
+    /// Set by `later`: the answer comes in a later frame, through `Host.finishCall`.
+    deferred: bool = false,
+
+    /// Answer in a later frame instead of now: for a command whose work outlives the frame (a
+    /// language server's reply, a build, a picture taken at the end of the next frame). Keep the
+    /// ticket, return from `runWith` without a result, and call `Host.finishCall(ticket, …)` once
+    /// it is done, on the UI thread. A caller that can wait (`Host.callCommandAwaiting`, the control
+    /// server) hears the answer then; one that cannot (a menu, a keybind) has started it, and the
+    /// answer is dropped. `Host.callWanted(ticket)` says whether anyone still waits.
+    pub fn later(self: *Call) u32 {
+        self.deferred = true;
+        return self.ticket;
+    }
 
     /// Return `value` (anything `std.zon.stringify` can write) as the command's result.
     pub fn returns(self: *Call, value: anytype) error{OutOfMemory}!void {

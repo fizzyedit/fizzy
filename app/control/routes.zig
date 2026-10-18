@@ -24,6 +24,8 @@ const Server = @import("Server.zig");
 pub const Answer = struct {
     /// Stream the app's events to this connection instead (`GET /events`).
     stream: bool = false,
+    /// The command answers in a later frame (`Command.Call.later`): its waiter answers then.
+    later: bool = false,
     status: std.http.Status,
     /// Static: a string literal.
     content_type: []const u8 = "application/json",
@@ -34,35 +36,89 @@ const zon_type = "application/zon";
 
 /// Answer what waits on `server`. On the UI thread, once a frame, before plugins' `beginFrame`, so
 /// a command run here is seen by the frame that follows.
-pub fn answerPending(server: *Server, relay: *Relay, host: *sdk.Host) void {
+pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
     var taken: std.ArrayListUnmanaged(*Server.Request) = .empty;
     defer taken.deinit(server.gpa);
     var streaming = server.take(&taken) > 0;
     for (taken.items) |req| {
         var arena: std.heap.ArenaAllocator = .init(server.gpa);
         defer arena.deinit();
-        const a = handle(host, req.method, req.path(), req.content_type, req.body, arena.allocator());
+        // Ready for a command that answers later; let go of when it answers now.
+        const waiter = server.gpa.create(Waiter) catch {
+            req.answer(server, .internal_server_error, "text/plain", "out of memory\n");
+            continue;
+        };
+        waiter.* = .{ .server = server, .state = state, .host = host, .req = req, .zon = isZon(req.content_type) };
+        const a = route(host, req.method, req.path(), req.content_type, req.body, arena.allocator(), waiter) catch Answer{
+            .status = .internal_server_error,
+            .content_type = "text/plain",
+            .body = "out of memory\n",
+        };
+        if (a.later) {
+            state.waiters.append(server.gpa, waiter) catch {
+                host.abandonCall(waiter.ticket);
+                req.answer(server, .internal_server_error, "text/plain", "out of memory\n");
+                server.gpa.destroy(waiter);
+            };
+            continue;
+        }
+        server.gpa.destroy(waiter);
         if (a.stream) {
             req.answerStream(server);
             streaming = true;
         } else req.answer(server, a.status, a.content_type, a.body);
     }
-    relay.follow(host, server, streaming);
+    state.follow(host, server, streaming);
 }
 
-/// Stop relaying and stop `server`. On the UI thread, at quit: after it, no event reaches the
-/// stopped server.
-pub fn stop(server: *Server, relay: *Relay, host: *sdk.Host) void {
-    relay.follow(host, server, false);
+/// Stop relaying and stop `server`. On the UI thread, at quit or when the setting goes off: the
+/// commands still to answer are let go of, their requests answered by `server.stop`, and no event
+/// reaches the stopped server.
+pub fn stop(server: *Server, state: *State, host: *sdk.Host) void {
+    for (state.waiters.items) |w| {
+        host.abandonCall(w.ticket);
+        server.gpa.destroy(w);
+    }
+    state.waiters.clearAndFree(server.gpa);
+    state.follow(host, server, false);
     server.stop();
 }
 
-/// The subscription that relays the app's events to the server's streams, owned beside the server
-/// (`App.control_relay`). Its plugin is a pseudo-plugin, as fizzy's own commands have
+/// A request whose command answers in a later frame: answered by the host's call to `done`
+/// (`Host.finishCall`), or by `server.stop` if that comes first (`stop`).
+const Waiter = struct {
+    server: *Server,
+    state: *State,
+    host: *sdk.Host,
+    req: *Server.Request,
+    zon: bool,
+    ticket: u32 = 0,
+
+    fn done(ctx: *anyopaque, outcome: sdk.Host.CommandOutcome) void {
+        const self: *Waiter = @ptrCast(@alignCast(ctx));
+        var arena: std.heap.ArenaAllocator = .init(self.server.gpa);
+        defer arena.deinit();
+        const a = outcomeAnswer(arena.allocator(), self.zon, "", outcome) catch Answer{
+            .status = .internal_server_error,
+            .content_type = "text/plain",
+            .body = "out of memory\n",
+        };
+        self.req.answer(self.server, a.status, a.content_type, a.body);
+        for (self.state.waiters.items, 0..) |w, i| if (w == self) {
+            _ = self.state.waiters.swapRemove(i);
+            break;
+        };
+        self.server.gpa.destroy(self);
+    }
+};
+
+/// What the routes keep between frames, owned beside the server (`App.control_state`): the requests
+/// whose commands answer later, and the subscription that relays the app's events to the server's
+/// streams. Its plugin is a pseudo-plugin, as fizzy's own commands have
 /// (`fizzy_plugin` in fizzy's `Keybinds.zig`): never in `host.plugins`, so no hook fires on it. It
 /// listens only while a stream is open, so with none an emitted event costs the bus its one atomic
 /// load, as before.
-pub const Relay = struct {
+pub const State = struct {
     plugin: sdk.Plugin = .{
         .state = undefined, // the server, set when it starts listening
         .vtable = &relay_vtable,
@@ -70,10 +126,12 @@ pub const Relay = struct {
         .display_name = "Control server",
     },
     on: bool = false,
+    /// Requests whose commands answer in a later frame (`Waiter`). UI thread.
+    waiters: std.ArrayListUnmanaged(*Waiter) = .empty,
 
     const relay_vtable: sdk.Plugin.VTable = .{};
 
-    fn follow(self: *Relay, host: *sdk.Host, server: *Server, on: bool) void {
+    fn follow(self: *State, host: *sdk.Host, server: *Server, on: bool) void {
         if (on == self.on) return;
         if (on) {
             self.plugin.state = server;
@@ -105,14 +163,14 @@ fn relayEvent(state: *anyopaque, event: sdk.events.Event) void {
 
 /// Answer one request. Everything returned lives in `arena`.
 pub fn handle(host: *sdk.Host, method: std.http.Method, path: []const u8, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator) Answer {
-    return route(host, method, path, content_type, body, arena) catch .{
+    return route(host, method, path, content_type, body, arena, null) catch .{
         .status = .internal_server_error,
         .content_type = "text/plain",
         .body = "out of memory\n",
     };
 }
 
-fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator) error{OutOfMemory}!Answer {
+fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator, waiter: ?*Waiter) error{OutOfMemory}!Answer {
     const trimmed = std.mem.trimEnd(u8, path, "/");
     if (trimmed.len == 0) {
         if (method != .GET and method != .HEAD) return notAllowed(arena, "GET");
@@ -151,14 +209,14 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
             return failure(arena, .not_found, try std.fmt.allocPrint(arena, "no command {s}", .{id}));
         return switch (method) {
             .GET, .HEAD => ok(arena, try describe(c, arena)),
-            .POST => call(host, c, content_type, body, arena),
+            .POST => call(host, c, content_type, body, arena, waiter),
             else => notAllowed(arena, "GET, POST"),
         };
     }
     return failure(arena, .not_found, try std.fmt.allocPrint(arena, "nothing at {s}", .{path}));
 }
 
-fn call(host: *sdk.Host, c: *const sdk.Command, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator) error{OutOfMemory}!Answer {
+fn call(host: *sdk.Host, c: *const sdk.Command, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator, waiter: ?*Waiter) error{OutOfMemory}!Answer {
     const as_zon = isZon(content_type);
     const args = if (as_zon) body else args: {
         var enum_keys: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -169,7 +227,20 @@ fn call(host: *sdk.Host, c: *const sdk.Command, content_type: ?[]const u8, body:
             else => failure(arena, .bad_request, "the body is not JSON (send ZON as application/zon)"),
         };
     };
-    switch (host.callCommand(c.id, args, arena)) {
+    const sink: ?sdk.Host.CallSink = if (waiter) |w| .{ .ctx = w, .done = Waiter.done } else null;
+    switch (host.callCommandAwaiting(c.id, args, arena, sink)) {
+        .now => |outcome| return outcomeAnswer(arena, as_zon, c.id, outcome),
+        .later => |ticket| {
+            // With nobody to wait (`handle`), it has started: say so rather than hold an answer.
+            const w = waiter orelse return .{ .status = .accepted, .body = "null" };
+            w.ticket = ticket;
+            return .{ .status = .ok, .later = true, .body = "" };
+        },
+    }
+}
+
+fn outcomeAnswer(arena: std.mem.Allocator, as_zon: bool, id: []const u8, outcome: sdk.Host.CommandOutcome) error{OutOfMemory}!Answer {
+    switch (outcome) {
         .ok => |result| {
             if (as_zon) return .{ .status = .ok, .content_type = zon_type, .body = result orelse "null" };
             const out = json.jsonFromZon(arena, result) catch |err| return switch (err) {
@@ -179,7 +250,7 @@ fn call(host: *sdk.Host, c: *const sdk.Command, content_type: ?[]const u8, body:
             };
             return .{ .status = .ok, .body = out };
         },
-        .unknown => return failure(arena, .not_found, try std.fmt.allocPrint(arena, "no command {s}", .{c.id})),
+        .unknown => return failure(arena, .not_found, try std.fmt.allocPrint(arena, "no command {s}", .{id})),
         .disabled => return failure(arena, .conflict, "the command is not enabled now"),
         .bad_args => |msg| return failure(arena, .bad_request, msg),
         .failed => |msg| return failure(arena, .internal_server_error, msg),

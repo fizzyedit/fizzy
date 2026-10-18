@@ -74,7 +74,14 @@ Those about the request itself, refused before the app sees it, are plain text:
 | 503 | the control server is stopping (fizzy is quitting, or the setting went off) |
 
 A command runs on the UI thread at the start of the next frame, as a menu item or a keybind would,
-so the frame after it shows what it did. A call costs one wake and returns within a frame.
+so the frame after it shows what it did. A call costs one wake and returns within a frame, unless
+the command answers later (`Command.Call.later`: a build, a reply from a language server): then the
+request stays open until it does. Two of fizzy's own are like that, for scripts and tests:
+
+```sh
+curl --unix-socket "$SOCK" localhost/commands/fizzy.settled -d '{"timeout_ms":5000}'  # true once nothing is in flight
+curl --unix-socket "$SOCK" localhost/commands/fizzy.screen                           # what is on screen: windows, widgets, rects
+```
 
 ## Events
 

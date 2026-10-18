@@ -141,6 +141,10 @@ share_pending: ?u64 = null,
 plugin_reloads: @import("PluginReloads.zig") = .{},
 /// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
 black_box: @import("app").automation.BlackBox = .{},
+/// `fizzy.screen` calls waiting for their snapshot (`answerLaterCommands`).
+later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket }) = .empty,
+/// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
+later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
 /// The control server would not start (`syncControlServer`): not retried until the setting goes
 /// off and on again.
 control_failed: bool = false,
@@ -4220,8 +4224,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.app.host.deliverEvents();
         // Requests from the control server, so the frame that follows sees what they ran.
         if (comptime builtin.target.cpu.arch != .wasm32) {
-            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_relay, &editor.app.host);
+            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_state, &editor.app.host);
         }
+        // What fizzy's own commands answer a frame or more later (`fizzy.screen`, `fizzy.settled`).
+        editor.answerLaterCommands();
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         editor.showClaimed();
@@ -5377,6 +5383,46 @@ pub const Placement = struct {
     beside: bool = false,
 };
 
+/// Answer fizzy's own commands that answer a frame or more later (`fizzy.screen`, `fizzy.settled`),
+/// once what they wait for has come; drop those nobody waits for any more. Once a frame.
+fn answerLaterCommands(editor: *Editor) void {
+    const host = &editor.app.host;
+    const api = editor.demo.service.api;
+    var i: usize = 0;
+    while (i < editor.later_screens.items.len) {
+        const w = editor.later_screens.items[i];
+        if (!host.callWanted(w.ticket)) {
+            _ = editor.later_screens.swapRemove(i);
+            continue;
+        }
+        const text = api.snapshotText(w.snapshot) orelse {
+            // Taken over the next frame: ask for it.
+            host.refresh();
+            i += 1;
+            continue;
+        };
+        _ = editor.later_screens.swapRemove(i);
+        host.finishCall(w.ticket, .{ .ok = text });
+    }
+    if (editor.later_settles.items.len == 0) return;
+    const settled = api.settled();
+    const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
+    i = 0;
+    while (i < editor.later_settles.items.len) {
+        const w = editor.later_settles.items[i];
+        if (!host.callWanted(w.ticket)) {
+            _ = editor.later_settles.swapRemove(i);
+            continue;
+        }
+        if (!settled and now < w.deadline_ns) {
+            i += 1;
+            continue;
+        }
+        _ = editor.later_settles.swapRemove(i);
+        host.finishCall(w.ticket, .{ .ok = if (settled) "true" else "false" });
+    }
+}
+
 /// Run the control server while `control_server` is on, and stop it when it goes off. Once a frame;
 /// a no-op unless the setting changed. Not in tests, whose editors share no config folder worth a
 /// socket.
@@ -5389,7 +5435,7 @@ fn syncControlServer(editor: *Editor) void {
     if (want == (editor.app.control != null)) return;
     if (!want) {
         if (editor.app.control) |*c| {
-            control.routes.stop(c, &editor.app.control_relay, &editor.app.host);
+            control.routes.stop(c, &editor.app.control_state, &editor.app.host);
             editor.app.gpa.free(c.socket_path);
         }
         editor.app.control = null;
@@ -6383,11 +6429,13 @@ pub fn deinit(editor: *Editor) !void {
     // command would reach goes.
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (editor.app.control) |*c| {
-            @import("app").control.routes.stop(c, &editor.app.control_relay, &editor.app.host);
+            @import("app").control.routes.stop(c, &editor.app.control_state, &editor.app.host);
             editor.app.gpa.free(c.socket_path);
             editor.app.control = null;
         }
     }
+    editor.later_screens.deinit(editor.app.gpa);
+    editor.later_settles.deinit(editor.app.gpa);
     if (editor.document_watcher) |*w| {
         w.stop();
         editor.document_watcher = null;

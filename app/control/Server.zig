@@ -68,6 +68,9 @@ socket_inode: ?Io.File.INode = null,
 /// Requests waiting for the UI thread, under `lock`.
 lock: Io.Mutex = .init,
 pending: std.ArrayListUnmanaged(*Request) = .empty,
+/// Requests the UI thread took and has not answered yet (a command answering in a later frame),
+/// under `lock`: `stop` answers them too.
+outstanding: std.ArrayListUnmanaged(*Request) = .empty,
 /// Connections streaming events (`publish`), under `lock`.
 streams: std.ArrayListUnmanaged(*Stream) = .empty,
 
@@ -143,6 +146,7 @@ pub const Request = struct {
             self.conn.streaming = true;
         }
         self.response = .{ .stream = true, .status = .ok };
+        server.settle(self);
         self.done.set(server.io);
     }
 
@@ -154,6 +158,7 @@ pub const Request = struct {
             .body = server.gpa.dupe(u8, body) catch null,
         };
         if (self.response.body == null) self.response.status = .internal_server_error;
+        server.settle(self);
         self.done.set(server.io);
     }
 };
@@ -212,9 +217,21 @@ pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) usize {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     // Out of memory: left queued for the next frame, never dropped unanswered.
+    self.outstanding.ensureUnusedCapacity(self.gpa, self.pending.items.len) catch return self.streams.items.len;
     out.appendSlice(self.gpa, self.pending.items) catch return self.streams.items.len;
+    self.outstanding.appendSliceAssumeCapacity(self.pending.items);
     self.pending.clearRetainingCapacity();
     return self.streams.items.len;
+}
+
+/// `req` is answered: no longer `outstanding`.
+fn settle(self: *Server, req: *Request) void {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    for (self.outstanding.items, 0..) |r, i| if (r == req) {
+        _ = self.outstanding.swapRemove(i);
+        return;
+    };
 }
 
 /// Whether any stream wants the event `name`: the caller skips building a message nobody reads.
@@ -252,16 +269,22 @@ pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
 pub fn stop(self: *Server) void {
     self.stopping.store(true, .release);
     // The connections whose requests this answers ("fizzy is closing"): each writes it and ends.
+    // Queued, or taken and still to be answered (a command answering later).
     var answered: std.ArrayListUnmanaged(*Conn) = .empty;
     defer answered.deinit(self.gpa);
+    var owed: std.ArrayListUnmanaged(*Request) = .empty;
+    defer owed.deinit(self.gpa);
     {
         self.lock.lockUncancelable(self.io);
         defer self.lock.unlock(self.io);
-        for (self.pending.items) |r| {
-            answered.append(self.gpa, r.conn) catch {};
-            r.answer(self, .service_unavailable, "text/plain", "the control server is stopping\n");
-        }
+        owed.appendSlice(self.gpa, self.pending.items) catch {};
+        owed.appendSlice(self.gpa, self.outstanding.items) catch {};
         self.pending.clearRetainingCapacity();
+        self.outstanding.clearRetainingCapacity();
+    }
+    for (owed.items) |r| {
+        answered.append(self.gpa, r.conn) catch {};
+        r.answer(self, .service_unavailable, "text/plain", "the control server is stopping\n");
     }
     if (self.accept_task) |*t| t.cancel(self.io);
     self.accept_task = null;
@@ -282,6 +305,7 @@ pub fn stop(self: *Server) void {
         } else |_| {}
     }
     self.pending.deinit(self.gpa);
+    self.outstanding.deinit(self.gpa);
     self.streams.deinit(self.gpa);
 }
 
