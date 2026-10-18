@@ -92,6 +92,22 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
 
+**On fizzy's `zig/0.17` branch** the pin is `foxnne/dvui-dev` branch `zig-0.17`, by commit and
+as `git+https` (Zig 0.17 hashes this repo's GitHub archive wrongly; `docs/PITFALLS.md`): the eight
+above rebased onto upstream `main` (`41f6703`), then:
+
+9. **floatingWindow: a backend may show one in an OS window of its own** (`bd7736d`). Patch 8's
+   `osWindowFloating` became `Backend.floatingWindowOs(id, open_flag, min, max)`, asked as
+   any floating window (not modal) begins, and `floatingWindowTitle(id, header)`, asked by
+   `windowHeader`: true, and the backend shows it in an OS window with the OS's title bar, and
+   dvui draws it with no frame of its own. `screenFor` takes the nearest screen.
+10. **floatingWindow: an OS window only for a floating window that asks** (`98a0e07`):
+   `FloatingWindowWidget.InitOptions.os_window`, set by `dvui.osWindow`'s floating window, passed
+   to `floatingWindowOs` as `asked`. The backend's `floating_os_windows` (`.asked`, `.all`,
+   `.none`) says which it shows.
+
+Tagged `fizzy-sdk-*` when `zig/0.17` merges to `main`, as rule 2 says.
+
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
 `f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70` (0.2.19 was not released yet, and a tag never
