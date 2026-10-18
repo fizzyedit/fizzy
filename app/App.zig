@@ -208,7 +208,10 @@ open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
 /// and only then the host's recorder.
 tracks: ?Tracks = null,
 
-file_id_counter: u64 = 0,
+/// Atomic: plugins allocate ids through `Host.allocDocId` from `loadDocument`, on the load
+/// worker thread, while the UI thread may be creating a document of its own. `usize`, since
+/// wasm32 has no 64-bit atomics (and no room for 2^32 documents).
+file_id_counter: std.atomic.Value(usize) = .init(0),
 
 /// Filled from the async SDL save dialog callback, then applied inside `tick` (when `currentWindow` is valid).
 pending_save_as_path: ?[]u8 = null,
@@ -704,8 +707,7 @@ pub fn docById(app: *App, id: u64) ?sdk.DocHandle {
 }
 
 pub fn newFileID(app: *App) u64 {
-    app.file_id_counter += 1;
-    return app.file_id_counter;
+    return app.file_id_counter.fetchAdd(1, .monotonic) + 1;
 }
 
 /// Heap-owned path like `untitled-1`, unique among open-document basenames.
