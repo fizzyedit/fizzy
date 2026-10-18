@@ -12,6 +12,8 @@
 test {
     _ = @import("widgets/Split.zig");
     _ = @import("widgets/ContextWidget.zig");
+    // A tab's hand beside a split's arrow, and a tapped tab's hover look.
+    _ = @import("widgets/Tabs.zig");
     // The local copies of upstream's docking + blur (see `widgets.zig`): referenced here so they
     // are analysed — and their own tests run — even before anything in the app draws them.
     _ = @import("widgets/DockingWidget.zig");

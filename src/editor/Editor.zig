@@ -133,6 +133,8 @@ command_palette: @import("CommandPalette.zig") = .{},
 demo: Demo = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
 tape_tabs: TapeTabs = .{},
+/// The recording setting as last applied (`tick`); null before the first frame.
+record_history_applied: ?bool = null,
 /// A part of a document's history to export (the strip's export window): at the top of the next
 /// frame, before anything draws, since the export walks the document's history back and forth.
 share_pending: ?struct { doc_id: u64, from: usize, to: usize } = null,
@@ -141,6 +143,10 @@ share_pending: ?struct { doc_id: u64, from: usize, to: usize } = null,
 plugin_reloads: @import("PluginReloads.zig") = .{},
 /// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
 black_box: @import("app").automation.BlackBox = .{},
+/// `fizzy.screen` calls waiting for their snapshot (`answerLaterCommands`).
+later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, frames: u32 = 0 }) = .empty,
+/// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
+later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
 /// The control server would not start (`syncControlServer`): not retried until the setting goes
 /// off and on again.
 control_failed: bool = false,
@@ -236,6 +242,11 @@ pending_native_menu_item_indices_len: u8 = 0,
 
 /// When set, next `tick` runs `warmupDrawingComposites` on the active file (after open or drawing-tool select).
 pending_composite_warmup: bool = false,
+
+/// Set whenever who opens which extension may have changed (`rebuildExtensionOwnerCache`): the
+/// next `tick` moves documents the fallback editor holds only as the fallback to the plugin that
+/// owns them now (`rehomeFallbackDocuments`).
+rehome_pending: bool = false,
 
 /// When set, the next frame closes the explorer and the bottom panel, as their own close buttons
 /// would. Set by the page's `?show=`: an embed that opens on one file is about that file, and the
@@ -1087,6 +1098,7 @@ pub fn rebuildExtensionOwnerCache(editor: *Editor) void {
             };
         }
     }
+    editor.rehome_pending = true;
 }
 
 /// **The only function that writes `.extensions` to disk**, and it runs only in direct response
@@ -2057,9 +2069,9 @@ fn storeUninstalled(arena: std.mem.Allocator) []const @import("app").layout.Stat
 }
 
 pub fn postInit(editor: *Editor) !void {
-    // Documents' tracks, while they are behind a switch (plans/RECORDING_PLAN.md, step 3).
+    // Documents' tracks (plans/RECORDING_PLAN.md): on as the setting says (`record_history`),
+    // applied each time it changes (`tick`).
     editor.app.tracks = .init(editor.app.gpa);
-    if (Popout.envSwitch("FIZZY_TRACKS") orelse false) editor.setTracking(true);
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});
     } else {
@@ -3116,8 +3128,10 @@ pub fn keepTape(editor: *Editor, arena: std.mem.Allocator, doc: sdk.DocHandle, b
 }
 
 /// Record documents' tracks, or stop. Documents open now get one; those opened after too.
+/// Off, what was recorded is forgotten: documents keep only their undo history.
 pub fn setTracking(editor: *Editor, on: bool) void {
     const t = &(editor.app.tracks orelse return);
+    if (!on and t.on) t.deinit();
     t.on = on;
     editor.app.host.recorder = if (on) t.recorder() else null;
     if (on) for (editor.app.open_files.values()) |doc| t.opened(doc);
@@ -3623,6 +3637,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.black_box = parsed.black_box;
+    editor.app.settings.record_history = parsed.record_history;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
@@ -4109,6 +4124,15 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.app.file_table.pump();
     // Saves whose encode finished on their worker: on to their write, or done.
     editor.doc_io.tick();
+    // Recording as the setting says, when it changed (`FIZZY_TRACKS` over it): a command that
+    // turned it on or off (`fizzy.tracks.record`) holds until the setting next changes.
+    {
+        const want = Popout.envSwitch("FIZZY_TRACKS") orelse editor.app.settings.record_history;
+        if (editor.record_history_applied != want) {
+            editor.record_history_applied = want;
+            editor.setTracking(want);
+        }
+    }
     // The document states tracks asked for since last frame, before anything draws.
     if (editor.app.tracks) |*t| t.tick();
     if (editor.share_pending) |p| {
@@ -4117,6 +4141,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
     editor.tape_tabs.tick(editor);
     editor.promoteEditedPreviews();
+    // Once the file-type question, if one is up, has its answer: that answer is who they go to.
+    if (editor.rehome_pending and !Dialogs.FileTypeDefaults.active(dvui.currentWindow())) {
+        editor.rehome_pending = false;
+        editor.rehomeFallbackDocuments();
+    }
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
@@ -4263,8 +4292,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.app.host.deliverEvents();
         // Requests from the control server, so the frame that follows sees what they ran.
         if (comptime builtin.target.cpu.arch != .wasm32) {
-            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_relay, &editor.app.host);
+            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_state, &editor.app.host);
         }
+        // What fizzy's own commands answer a frame or more later (`fizzy.screen`, `fizzy.settled`).
+        editor.answerLaterCommands();
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         editor.showClaimed();
@@ -5474,7 +5505,61 @@ pub const Placement = struct {
     take_slot_of: ?[]const u8 = null,
     /// `OpenOptions.beside`.
     beside: bool = false,
+    /// Take `take_slot_of`'s place without bringing it forward: it shows only if that tab was
+    /// showing (`rehomeFallbackDocuments`).
+    in_place: bool = false,
 };
+
+/// Answer fizzy's own commands that answer a frame or more later (`fizzy.screen`, `fizzy.settled`),
+/// once what they wait for has come; drop those nobody waits for any more. Once a frame.
+fn answerLaterCommands(editor: *Editor) void {
+    const host = &editor.app.host;
+    const api = editor.demo.service.api;
+    var i: usize = 0;
+    while (i < editor.later_screens.items.len) {
+        const w = &editor.later_screens.items[i];
+        if (!host.callWanted(w.ticket)) {
+            _ = editor.later_screens.swapRemove(i);
+            continue;
+        }
+        if (api.snapshotText(w.snapshot)) |text| {
+            const ticket = w.ticket;
+            _ = editor.later_screens.swapRemove(i);
+            host.finishCall(ticket, .{ .ok = text });
+            continue;
+        }
+        // Not taken yet. Asked again, should the last asking have come to nothing; a snapshot that never comes is given up on, not waited
+        // for frame after frame.
+        w.frames += 1;
+        if (w.frames > 120) {
+            const ticket = w.ticket;
+            _ = editor.later_screens.swapRemove(i);
+            host.finishCall(ticket, .{ .failed = "no snapshot came in 120 frames" });
+            continue;
+        }
+        w.snapshot = api.snapshot();
+        // And a frame to take it in: asking again does not wake a sleeping app by itself.
+        host.refresh();
+        i += 1;
+    }
+    if (editor.later_settles.items.len == 0) return;
+    const settled = api.settled();
+    const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
+    i = 0;
+    while (i < editor.later_settles.items.len) {
+        const w = editor.later_settles.items[i];
+        if (!host.callWanted(w.ticket)) {
+            _ = editor.later_settles.swapRemove(i);
+            continue;
+        }
+        if (!settled and now < w.deadline_ns) {
+            i += 1;
+            continue;
+        }
+        _ = editor.later_settles.swapRemove(i);
+        host.finishCall(w.ticket, .{ .ok = if (settled) "true" else "false" });
+    }
+}
 
 /// Run the control server while `control_server` is on, and stop it when it goes off. Once a frame;
 /// a no-op unless the setting changed. Not in tests, whose editors share no config folder worth a
@@ -5488,7 +5573,7 @@ fn syncControlServer(editor: *Editor) void {
     if (want == (editor.app.control != null)) return;
     if (!want) {
         if (editor.app.control) |*c| {
-            control.routes.stop(c, &editor.app.control_relay, &editor.app.host);
+            control.routes.stop(c, &editor.app.control_state, &editor.app.host);
             editor.app.gpa.free(c.socket_path);
         }
         editor.app.control = null;
@@ -5688,6 +5773,64 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement_in: P
     editor.openings.begin(editor, path, grouping, placement, owner);
 
     return true;
+}
+
+/// Hand each document the fallback editor holds only as the fallback (its extension is none of
+/// the fallback's own) to the plugin that opens that extension now, in the same tab. A file
+/// opened before its plugin was there — launched with it while the plugin was refused, before a
+/// dropped-in build was loaded, before a store install — is otherwise stuck as text until it is
+/// closed and opened again. One with unsaved changes, one someone is working on (`sdk.Claim`), and
+/// one with nothing on disk to read again stay as they are; so does one whose extension the
+/// fallback offers in its own `fileTypes` (bundled text offers none).
+pub fn rehomeFallbackDocuments(editor: *Editor) void {
+    const fallback = editor.app.host.fallback_editor orelse return;
+    const gpa = editor.app.gpa;
+    // Collected first: each move takes a document out of `open_files`.
+    var ids: std.ArrayListUnmanaged(u64) = .empty;
+    defer ids.deinit(gpa);
+    for (editor.app.open_files.values()) |doc| {
+        if (doc.owner != fallback) continue;
+        const ext = std.fs.path.extension(doc.owner.documentPath(doc));
+        const owner = editor.app.host.pluginForExtension(ext) orelse continue;
+        if (owner == fallback) continue;
+        const own = for (fallback.fileTypes()) |e| {
+            if (std.ascii.eqlIgnoreCase(e, ext)) break true;
+        } else false;
+        if (own) continue;
+        if (doc.owner.isDirty(doc) or editor.app.host.documentClaim(doc.id) != null) continue;
+        ids.append(gpa, doc.id) catch return;
+    }
+    for (ids.items) |id| editor.rehomeDocument(id) catch |err|
+        dvui.log.warn("could not move a document to the plugin that opens it now: {t}", .{err});
+}
+
+fn rehomeDocument(editor: *Editor, id: u64) !void {
+    const doc = editor.app.open_files.get(id) orelse return;
+    const gpa = editor.app.gpa;
+    const path = try gpa.dupe(u8, doc.owner.documentPath(doc));
+    defer gpa.free(path);
+    // Read again from where it came from: a mount, or the disk (which the web has none of).
+    if (!editor.doc_io.owns(path)) {
+        if (comptime builtin.target.cpu.arch == .wasm32) return;
+        std.Io.Dir.cwd().access(dvui.io, path, .{}) catch return;
+    }
+    const ds = editor.doc_surfaces.get(id) orelse return;
+    const slot = try gpa.dupe(u8, ds.id);
+    defer gpa.free(slot);
+    const grouping = doc.owner.documentGrouping(doc);
+    const preview = editor.documentIsPreview(id);
+    dvui.log.info("{s}: moving from {s} to {s}, which opens it now", .{
+        std.fs.path.basename(path),
+        doc.owner.display_name,
+        (editor.app.host.pluginForExtension(std.fs.path.extension(path)) orelse doc.owner).display_name,
+    });
+    // Out of fizzy with its tab left where it is, for the new owner's placeholder to take.
+    editor.app.host.emitZon("fizzy.document.closed", .{ .path = path });
+    editor.detachFileID(id);
+    // Whichever open the user asked for last is still the one focused when it lands.
+    const focus = editor.last_load_request_path;
+    defer editor.last_load_request_path = focus;
+    _ = try editor.openPath(path, grouping, .{ .preview = preview, .take_slot_of = slot, .in_place = true });
 }
 
 /// Stop loading `path`, wherever it is loading from. Its document never arrives.
@@ -6537,11 +6680,13 @@ pub fn deinit(editor: *Editor) !void {
     // command would reach goes.
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (editor.app.control) |*c| {
-            @import("app").control.routes.stop(c, &editor.app.control_relay, &editor.app.host);
+            @import("app").control.routes.stop(c, &editor.app.control_state, &editor.app.host);
             editor.app.gpa.free(c.socket_path);
             editor.app.control = null;
         }
     }
+    editor.later_screens.deinit(editor.app.gpa);
+    editor.later_settles.deinit(editor.app.gpa);
     if (editor.document_watcher) |*w| {
         w.stop();
         editor.document_watcher = null;
@@ -6637,6 +6782,8 @@ pub fn deinit(editor: *Editor) !void {
         // The registry itself goes with `host.deinit` below; these are the app's own strings.
         var it = editor.doc_surfaces.valueIterator();
         while (it.next()) |ds| {
+            // Its history's pictures, taken while it recorded.
+            ds.*.frames.deinit(editor.app.gpa);
             editor.app.gpa.free(ds.*.id);
             editor.app.gpa.destroy(ds.*);
         }
