@@ -95,7 +95,7 @@ float4 main(PSInput input) : SV_Target0
     float4 g3 = uData[3];
     float4 g4 = uData[4];
     float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
-    float4 g6 = uData[6]; // opaque window; the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
+    float4 g6 = uData[6]; // opaque window (+1) and the light turned to the top right (+2); the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
     // Apple's lens (`glass_look.inApp`): the picture pulled inward from a band near the rim,
     // magnified and, past a bend of 1, folded there. Off, the earlier glass: pulled from outside.
     bool inward = g5.y > 0.0;
@@ -125,13 +125,21 @@ float4 main(PSInput input) : SV_Target0
     // is one more shape: a shape near the outline runs into it, a neck that joins it to the edge.
     // Its outline cuts the glass's coverage, so none of it crosses; the rim and the bend come from
     // the joined shape, so there is no rim along the cut, as if the glass carried on past it.
+    // Flagged 3, cut (`LiquidField.Edge.cut`): not joined, and the cut is an edge of the glass's
+    // own, its rim and bend along it.
     float inPlace = -1e9;
+    float2 placeOut = float2(0.0, 0.0);
     float4 e2 = uData[G + 3 * (MAX_SHAPES - 1) + 2];
+    bool cutEdge = e2.w > 2.5;
     if (e2.w > 1.5) {
         float4 e0 = uData[G + 3 * (MAX_SHAPES - 1)];
         float4 e1 = uData[G + 3 * (MAX_SHAPES - 1) + 1];
         float2 ge;
         inPlace = sdRoundBox(p - e0.xy, e0.zw, min(e1, (float4)min(e0.z, e0.w)), ge);
+        placeOut = ge;
+    }
+    if (e2.w > 1.5 && !cutEdge) {
+        float2 ge = placeOut;
         float d = EDGE_GAP - inPlace;
         float hs = h1;
         if (d < d1) { d2 = d1; m2 = m1; h2 = h1; d1 = d; m1 = e2; h1 = hs; } else if (d < d2) { d2 = d; m2 = e2; h2 = hs; }
@@ -142,12 +150,16 @@ float4 main(PSInput input) : SV_Target0
     float wm; float wf;
     float D = smin(d1, d2, k, wm);
     float F = smin(f1, f2, k, wf);
+    // Cut: the glass's outline, and so its rim line, runs along the place's where that is nearer.
+    if (cutEdge) D = max(D, inPlace);
     float cov = clamp(0.5 - max(D, inPlace), 0.0, 1.0);
     if (cov <= 0.0) discard;
     if (input.color.r < 0.5) return float4(0.0, 0.0, 0.0, cov);
 
     float4 mat = lerp(m1, m2, wm);
     float2 outv = lerp(o1, o2, wf);
+    // Cut: where the place's outline is nearer than the shapes' own, the glass's edge is the cut.
+    if (cutEdge && inPlace > F) { F = inPlace; outv = placeOut; }
     float soft = max(0.0, -F);
     float steepR = exp(-soft / g1.z);
     float steepL = exp(-soft / g1.w);
@@ -204,7 +216,7 @@ float4 main(PSInput input) : SV_Target0
     // the tint, in place of what is behind it, as see-through as that colour is, so the desktop's
     // material shows through it as it does through the window round a card.
     bool window = g4.x > 1.5;
-    float under = window ? g3.a : (uData[6].x > 0.5 ? 1.0 : frost.a);
+    float under = window ? g3.a : (fmod(uData[6].x, 2.0) > 0.5 ? 1.0 : frost.a);
     frost = float4(frost.rgb / max(frost.a, 1e-4), 1.0);
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
@@ -231,7 +243,11 @@ float4 main(PSInput input) : SV_Target0
         c += frost * (1.0 - c.a);
     }
     // The way the edge faces, against a light from the top left.
-    float facing = dot(outv, float2(-0.70710678, -0.70710678));
+    // From the top left, or turned a quarter to the top right (`LiquidField.light_across`, +2 on the
+    // opaque window's flag): on every look, a window's hairline as much as a drop's diagonal.
+    float2 lightDir = g6.x > 1.5 ? float2(0.70710678, -0.70710678) : float2(-0.70710678, -0.70710678);
+    float dg = g6.z;
+    float facing = dot(outv, lightDir);
     float toward = max(facing, 0.0);
     float away = max(-facing, 0.0);
     // Apple's lens has two edges, measured beside the OS's (`g6.z`, `glass_look.InApp.diagonal`):
@@ -245,15 +261,15 @@ float4 main(PSInput input) : SV_Target0
     // pixels (the rim line's width is 0.8 of one, `LiquidField.rim_line_width`).
     float px = g2.z * 1.25;
     float af = abs(facing);
-    bool diagonal = inward && g6.z > 0.0;
-    float edge_dark = diagonal ? g6.z * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
+    bool diagonal = inward && dg > 0.0;
+    float edge_dark = diagonal ? dg * (1.0 - smoothstep(0.2, 0.7, af)) * exp(-max(0.0, -D) / (2.0 * px))
                                : 0.85 * (1.0 - smoothstep(0.0, 0.5 * px, -D));
     // As much as the edge has formed (`lens`), as its bend, clearing and light are: glass that is
     // barely a lens yet — a drop sunk into its place's edge — draws no dark line round itself.
     float shade = inward ? max(g5.w * t * t, edge_dark) * min(lens, 1.0) : 0.0;
     float4 o = float4(c.rgb * (under * (1.0 - shade)), under * (1.0 - shade) + shade);
 // The lift and the rim's light (`drawLift`), brightest facing the top left.
-    float spec = inward ? (diagonal ? g6.z * smoothstep(0.75, 1.0, af) : 0.25)
+    float spec = inward ? (diagonal ? dg * smoothstep(0.75, 1.0, af) : 0.25)
                         : 0.45 * (toward * sqrt(toward) + 0.75 * away * sqrt(away)) + 0.06;
     float line_ = diagonal ? exp(-max(0.0, -D) / px)
              : inward ? smoothstep(0.25 * px, 0.5 * px, -D) * (1.0 - smoothstep(1.2 * px, 1.6 * px, -D))
