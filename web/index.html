@@ -572,6 +572,26 @@
         // `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`, the binary form) fetches a
         // tape and plays that.
         for (const demo of new URLSearchParams(location.search).getAll("demo")) playDemo(demo);
+        // `?tape=<url>` plays a shared tape: the plugins it needs come from the store, and the page
+        // shows only the tape.
+        const tape = new URLSearchParams(location.search).get("tape");
+        if (tape) playTape(tape);
+      }
+
+      function playTape(url) {
+        fetch(url, { cache: "no-store" })
+          .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+          .then((buf) => {
+            const exports = wasmInstance.exports;
+            if (!exports.FizzyWebPlayTape) return;
+            const bytes = new Uint8Array(buf);
+            const ptr = exports.FizzyWebPluginAlloc(bytes.length, 1);
+            if (!ptr) return;
+            new Uint8Array(exports.memory.buffer, ptr, bytes.length).set(bytes);
+            exports.FizzyWebPlayTape(ptr, bytes.length);
+            if (dvuiApp) dvuiApp.requestRender();
+          })
+          .catch((err) => console.error("fizzy: could not fetch the tape", url, err));
       }
 
       function playDemo(demo) {

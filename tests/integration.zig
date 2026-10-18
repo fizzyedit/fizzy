@@ -8113,7 +8113,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("", kf.files[0].text);
         // Played in a tab of its own (`TapeTabs`, the transport's share), each step at its moment:
         // the same text, under the tape's own mount, with the person's documents untouched.
-        try editor.tape_tabs.open(editor, bytes, .{});
+        // A tape naming a plugin that is not loaded is not played: natively nothing is fetched,
+        // and it says which plugin it needs rather than open a document no owner can step.
+        {
+            var tape_check = app.automation.Input.check;
+            tape_check.steps = fizzy.Editor.Demo.stepsCheck;
+            var loaded = try app.automation.Tape.load(gpa, bytes, tape_check);
+            defer loaded.deinit();
+            const files = try host.arena().dupe(app.automation.Tape.File, loaded.tape.keyframes[0].files);
+            files[0].owner = "no-such-plugin";
+            const keyframes = try host.arena().dupe(app.automation.Tape.Keyframe, loaded.tape.keyframes);
+            keyframes[0].files = files;
+            var orphan_tape = loaded.tape;
+            orphan_tape.keyframes = keyframes;
+            const orphan = try app.automation.binary.encode(gpa, orphan_tape, .{});
+            defer gpa.free(orphan);
+            const docs_before = editor.app.open_files.count();
+            try editor.tape_tabs.openWhenReady(editor, orphan, false);
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expect(editor.tape_tabs.waiting == null);
+            try std.testing.expectEqual(docs_before, editor.app.open_files.count());
+        }
+        // Its plugin loaded, a tape plays at the next frame's top (`openWhenReady`), as
+        // `Demo: Play a Tape…` and a page's `?tape=` both open one.
+        try editor.tape_tabs.openWhenReady(editor, bytes, false);
         const played_path = try std.fmt.allocPrint(gpa, "tape://1/{s}", .{std.fs.path.basename(path)});
         defer gpa.free(played_path);
         for (0..2000) |_| {
