@@ -108,10 +108,21 @@ native_dialogs: bool = true,
 /// for. A copy of each frame's events: nanoseconds.
 black_box: bool = true,
 
+/// Whether each open document's history is recorded as it is made (`app.Tracks`): what lets the
+/// transport's strip show it and its export share it as a tape. Kept in memory with the
+/// document; nothing is written unless the person exports. Off, documents keep only their undo
+/// history, and what was recorded is forgotten.
+record_history: bool = true,
+
 /// Whether a rebuild of the app's own executable restarts the app into it, keeping every open
 /// document (`ExecutableWatcher`). On in a source build, which is what rebuilds; off in a release
 /// built to update itself (Velopack), whose binary only changes through its own updater.
 restart_on_rebuild: bool = !build_opts.velopack_enabled,
+
+/// Whether the app answers HTTP on a Unix socket in its config folder (`control/control.sock`), its
+/// commands as the API, so a script or an agent can drive it with `curl` (`app.control`). Only this
+/// user can open the socket. Native only.
+control_server: bool = true,
 
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.

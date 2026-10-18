@@ -435,7 +435,10 @@ pub fn grab(self: *Split, container: *dvui.WidgetData) Grab {
                     };
                 }
             },
-            .position => dvui.cursorSet(cursor),
+            // Over the edge of a neighbour asking for a cursor of its own (a tab's hand), the
+            // split's arrow says what a press beside the sash does: it outranks a hover cursor
+            // whichever was drawn first. The cursor only: which widget takes a press is unchanged.
+            .position => dvui.cursorSetPriority(cursor, .resize),
             else => {},
         }
     }

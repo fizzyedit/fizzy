@@ -235,6 +235,23 @@ pub const groups = [_]Group{
         },
     },
     .{
+        .title = "History",
+        .icon = icons.tvg.lucide.history,
+        .items = &.{
+            .{
+                .label = "Record document history",
+                .key = "record_history",
+                .description = "Keep how each open document is made, step by step, in memory: " ++
+                    "what lets undo scrub through pictures of it and export share it as a tape. " ++
+                    "Nothing is written unless you export. Off, documents keep only their undo " ++
+                    "history, and what was recorded is forgotten.",
+                .keywords = "history record recording track tape undo scrub export share privacy",
+                .draw = drawRecordHistory,
+                .inline_control = true,
+            },
+        },
+    },
+    .{
         .title = "Debugging",
         .icon = icons.tvg.lucide.bug,
         .items = &.{
@@ -303,6 +320,16 @@ const window_items = [_]Item{
             "Takes effect after a restart.",
         .keywords = "float popout pop out window detach tear off native restart",
         .draw = drawFloatWindows,
+        .inline_control = true,
+    },
+    .{
+        .label = "Control server",
+        .key = "control_server",
+        .description = "Answer HTTP on a socket in the config folder, the commands as its API, so a " ++
+            "script or an agent can drive fizzy with curl. Only you can open the socket; " ++
+            "`fizzy --control-path` prints where it is.",
+        .keywords = "control server http api curl socket automation script agent openapi events",
+        .draw = drawControlServer,
         .inline_control = true,
     },
     .{
@@ -658,6 +685,10 @@ fn drawFloatWindows() void {
     }
 }
 
+fn drawRecordHistory() void {
+    drawToggle(&fizzy.editor().app.settings.record_history, "Record document history");
+}
+
 fn drawNativeGlass() void {
     drawToggle(&fizzy.editor().app.settings.native_glass, "Native glass");
 }
@@ -674,6 +705,10 @@ fn drawNativeDialogs() void {
 /// so `name` (the same words) is what a screen reader or a script calls the box.
 fn drawRestartOnRebuild() void {
     drawToggle(&fizzy.editor().app.settings.restart_on_rebuild, "Restart when rebuilt");
+}
+
+fn drawControlServer() void {
+    drawToggle(&fizzy.editor().app.settings.control_server, "Control server");
 }
 
 fn drawToggle(value: *bool, name: []const u8) void {

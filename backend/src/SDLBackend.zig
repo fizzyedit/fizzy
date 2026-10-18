@@ -16,6 +16,7 @@ const dvui = @import("dvui");
 
 const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
+const TouchSlots = @import("touch_slots.zig");
 /// The OS windows besides the main one an app draws with (`Viewport`).
 pub const viewports = @import("viewports.zig");
 /// `dvui.osWindow` as a window of its own from the one frame (`osWindowFloating`).
@@ -68,6 +69,8 @@ begin_hook: ?*const fn (*SDLBackend) void = null,
 present_hook: ?*const fn (*SDLBackend) void = null,
 
 touch_mouse_events: bool = false,
+/// The touch button each finger on the screen presses.
+touch_slots: TouchSlots = .{},
 log_events: bool = false,
 last_pixel_size: dvui.Size.Physical = .{ .w = 800, .h = 600 },
 last_window_size: dvui.Size.Natural = .{ .w = 800, .h = 600 },
@@ -2650,6 +2653,24 @@ fn trackGeometry(self: *SDLBackend) void {
     self.window_geometry = .{ .x = x, .y = y, .w = w, .h = h };
 }
 
+comptime {
+    std.debug.assert(TouchSlots.mouse_touch_id == c.SDL_MOUSE_TOUCHID);
+    std.debug.assert(TouchSlots.pen_touch_id == c.SDL_PEN_TOUCHID);
+}
+
+fn touchButton(slot: u4) dvui.enums.Button {
+    return @enumFromInt(@intFromEnum(dvui.enums.Button.touch0) + @as(u8, slot));
+}
+
+/// Lift every finger the window will not hear lift: it lost focus, is going to the background or
+/// is closing. A held slot would stay held for good, and dvui would keep a finger down.
+fn releaseTouches(self: *SDLBackend, win: *dvui.Window) !void {
+    const freed = self.touch_slots.releaseAll();
+    for (0..10) |i| if (freed & (@as(u10, 1) << @intCast(i)) != 0) {
+        _ = try win.addEventPointer(.{ .button = touchButton(@intCast(i)), .action = .release });
+    };
+}
+
 /// Send an SDL_Event to a dvui.Window
 ///
 /// Return true if the event is to be handled by a subwindow.
@@ -2829,26 +2850,30 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             }
             return ret;
         },
-        if (sdl3) c.SDL_EVENT_FINGER_DOWN else c.SDL_FINGERDOWN => {
-            if (self.log_events) {
-                log.debug("event FINGERDOWN {d} {d} {d}\n", .{ if (sdl3) event.tfinger.fingerID else event.tfinger.fingerId, event.tfinger.x, event.tfinger.y });
-            }
-
-            return try win.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = .{ .x = event.tfinger.x, .y = event.tfinger.y } });
+        // A finger on the screen presses the touch button of its slot; a trackpad's, a pen's and
+        // SDL's mouse touches have none (`touch_slots.zig`).
+        c.SDL_EVENT_FINGER_DOWN => {
+            const f = event.tfinger;
+            if (self.log_events) log.debug("event FINGERDOWN {d} {d} {d} {d}\n", .{ f.touchID, f.fingerID, f.x, f.y });
+            const device = TouchSlots.deviceOf(f.touchID, c.SDL_GetTouchDeviceType(f.touchID) == c.SDL_TOUCH_DEVICE_DIRECT);
+            const slot = self.touch_slots.down(device, f.touchID, f.fingerID) orelse return false;
+            return try win.addEventPointer(.{ .button = touchButton(slot), .action = .press, .xynorm = .{ .x = f.x, .y = f.y } });
         },
-        if (sdl3) c.SDL_EVENT_FINGER_UP else c.SDL_FINGERUP => {
-            if (self.log_events) {
-                log.debug("event FINGERUP {d} {d} {d}\n", .{ if (sdl3) event.tfinger.fingerID else event.tfinger.fingerId, event.tfinger.x, event.tfinger.y });
-            }
-
-            return try win.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = .{ .x = event.tfinger.x, .y = event.tfinger.y } });
+        c.SDL_EVENT_FINGER_MOTION => {
+            const f = event.tfinger;
+            if (self.log_events) log.debug("event FINGERMOTION {d} {d} {d} {d} {d} {d}\n", .{ f.touchID, f.fingerID, f.x, f.y, f.dx, f.dy });
+            const slot = self.touch_slots.find(f.touchID, f.fingerID) orelse return false;
+            return try win.addEventTouchMotion(touchButton(slot), f.x, f.y, f.dx, f.dy);
         },
-        if (sdl3) c.SDL_EVENT_FINGER_MOTION else c.SDL_FINGERMOTION => {
-            if (self.log_events) {
-                log.debug("event FINGERMOTION {d} {d} {d} {d} {d}\n", .{ if (sdl3) event.tfinger.fingerID else event.tfinger.fingerId, event.tfinger.x, event.tfinger.y, event.tfinger.dx, event.tfinger.dy });
-            }
-
-            return try win.addEventTouchMotion(.touch0, event.tfinger.x, event.tfinger.y, event.tfinger.dx, event.tfinger.dy);
+        c.SDL_EVENT_FINGER_UP, c.SDL_EVENT_FINGER_CANCELED => {
+            const f = event.tfinger;
+            if (self.log_events) log.debug("event FINGERUP {d} {d} {d} {d}\n", .{ f.touchID, f.fingerID, f.x, f.y });
+            const slot = self.touch_slots.up(f.touchID, f.fingerID) orelse return false;
+            return try win.addEventPointer(.{ .button = touchButton(slot), .action = .release, .xynorm = .{ .x = f.x, .y = f.y } });
+        },
+        c.SDL_EVENT_WILL_ENTER_BACKGROUND => {
+            try self.releaseTouches(win);
+            return false;
         },
         if (sdl3) c.SDL_EVENT_WINDOW_FOCUS_GAINED else c.SDL_WINDOWEVENT_FOCUS_GAINED => {
             if (self.log_events) {
@@ -2868,6 +2893,7 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (self.log_events) {
                 log.debug("event FOCUS_LOST\n", .{});
             }
+            try self.releaseTouches(win);
             if (dvui.accesskit_enabled and builtin.target.os.tag == .linux) {
                 dvui.AccessKit.c.accesskit_unix_adapter_update_window_focus_state(win.accesskit.adapter, false);
             } else if (dvui.accesskit_enabled and builtin.target.os.tag == .macos) {
@@ -2908,6 +2934,7 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (self.log_events) {
                 log.debug("SDL event window close\n", .{});
             }
+            try self.releaseTouches(win);
             try win.addEventWindow(.{ .action = .close });
             return false;
         },

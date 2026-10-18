@@ -310,7 +310,7 @@ would play a document that never changes. The app applies them through its stage
 Fizzy applies them: a tape's steps are checked against the plugins loaded (`Demo.stepsCheck`: the
 owner loaded, writing that step format) and played on the demo stage into the documents its
 keyframe opened. A document's own history becomes such a tape with `fizzy.tracks.export` (while
-tracks record, `FIZZY_TRACKS=1` or `fizzy.tracks.record`): its file as the track began, then its
+tracks record: by default, the History setting's "Record document history"): its file as the track began, then its
 steps, pauses past 2 s played as 0.6 s unless `real_time`. `fizzy.demo.playTape` plays it.
 
 A link plays one on the web: `fizzyed.it/app?tape=<url>` fetches the tape, loads each plugin its
