@@ -1378,6 +1378,26 @@ pub fn viewportOverlayPhoto(_: *SDLBackend, vp: *Viewport, photo: ?OverlayPhoto)
 /// (`viewportOverlayGlass`).
 const glass_still: f64 = 0.5;
 
+/// The usable part of the display under the pointer — less the menu bar and the Dock — in the main
+/// window's frame (physical pixels from its top left): where a window opened there must fit.
+pub fn viewportUsableAtPointer(self: *SDLBackend) viewport_map.Rect {
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    const p: c.SDL_Point = .{ .x = @intFromFloat(@floor(gx)), .y = @intFromFloat(@floor(gy)) };
+    const display = c.SDL_GetDisplayForPoint(&p);
+    var r: c.SDL_Rect = .{};
+    if (display == 0 or !c.SDL_GetDisplayUsableBounds(display, &r)) return .{};
+    const at = self.mainOnScreen();
+    const d = self.density();
+    return .{
+        .x = (@as(f32, @floatFromInt(r.x)) - at.x) * d,
+        .y = (@as(f32, @floatFromInt(r.y)) - at.y) * d,
+        .w = @as(f32, @floatFromInt(r.w)) * d,
+        .h = @as(f32, @floatFromInt(r.h)) * d,
+    };
+}
+
 /// The display the main window is on, in the main window's frame (physical pixels from its top
 /// left): what an overlay covers.
 pub fn viewportDisplayInMain(self: *SDLBackend) viewport_map.Rect {

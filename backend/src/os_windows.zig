@@ -308,19 +308,18 @@ fn tearFrame() void {
     const sw = dragged orelse {
         if (tear) |*t| {
             if (!held and t.place != null and t.live != null and t.card != null and grow == null) {
-                // Let go over the desktop: the card grows into the window, its content where the
-                // floating window's would be under the pointer, its title bar's band over it.
-                const r = t.last;
-                const mouse = viewports.pointerInMain();
+                // Let go over the desktop: the card grows into the window, down from its title bar,
+                // which is where the floating window's header was under the pointer. Its content
+                // under it, where the header was, it grew upward and moved under the pointer as it
+                // grew (the user).
                 const band = viewports.titleBand();
-                const content: dvui.Rect.Physical = .{ .x = mouse.x - t.grab.x, .y = mouse.y - t.grab.y, .w = r.w, .h = r.h };
                 grow = .{
                     .id = t.id,
                     .card = t.card.?,
                     .card_target = t.card_target,
                     .live = t.live.?,
                     .from = t.place.?,
-                    .to = .{ .x = content.x, .y = content.y - band, .w = content.w, .h = content.h + band },
+                    .to = dropFrame(t.last, t.grab, band),
                     .band = band,
                     .start_ns = cw.frame_time_ns,
                 };
@@ -394,6 +393,29 @@ fn tearFrame() void {
     if (t.card == null) t.card = viewports.openCarry(viewRect(card)) orelse return;
     drawCard(t.card.?, &t.card_target, t.live.?, card, headerHeight() * (1 - k) * scale, scale);
     t.place = card;
+}
+
+/// The frame (physical, the main window's) of the window a floating window of `size` let go over
+/// the desktop opens in: its title bar `band` high where the floating window's header was under the
+/// pointer (taken `grab` from its top left), the pointer on the title bar, its content below. On
+/// the usable part of the screen under the pointer, as much of it as fits: the OS moved a window
+/// let go partly off the screen back onto it as it opened, a jump at the end of its growing, so it
+/// grows to where it can be (the user).
+fn dropFrame(size: dvui.Rect.Physical, grab: dvui.Point.Physical, band: f32) dvui.Rect.Physical {
+    const mouse = viewports.pointerInMain();
+    var to: dvui.Rect.Physical = .{
+        .x = mouse.x - grab.x,
+        .y = mouse.y - std.math.clamp(grab.y, 0, @max(0, band - 1)),
+        .w = size.w,
+        .h = size.h + band,
+    };
+    const u = viewports.usableAtPointer();
+    if (u.w <= 0 or u.h <= 0) return whole(to);
+    to.w = @min(to.w, u.w);
+    to.h = @min(to.h, u.h);
+    to.x = std.math.clamp(to.x, u.x, u.x + u.w - to.w);
+    to.y = std.math.clamp(to.y, u.y, u.y + u.h - to.h);
+    return whole(to);
 }
 
 /// `sw`'s drawing this frame into `slot`'s target at its size, taken out of the frame: smoothly

@@ -226,6 +226,12 @@ pub fn overlayPhoto(vp: *Viewport, photo: ?OverlayPhoto) void {
     });
 }
 
+/// The usable part of the display under the pointer, in the main window's frame (physical;
+/// `SDLBackend.viewportUsableAtPointer`). Empty where there is none.
+pub fn usableAtPointer() Rect {
+    return dvui.currentWindow().backend.impl.viewportUsableAtPointer();
+}
+
 /// The display the main window is on, in its frame (physical pixels from its top left).
 pub fn displayInMain() Rect {
     return dvui.currentWindow().backend.impl.viewportDisplayInMain();
