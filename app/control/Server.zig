@@ -29,6 +29,23 @@ pub const max_backlog = 8 * 1024 * 1024;
 /// How long a stream may stay quiet before a keep-alive comment: how a client that went away
 /// without closing is noticed.
 pub const keep_alive_ms = 15_000;
+/// The longest socket path the OS takes, without its terminating zero. std's
+/// `UnixAddress.max_len` says 108 everywhere but Windows, where Darwin's `sockaddr_un` holds 104:
+/// a path between them passes `UnixAddress.init` and then overruns the copy in `listen`.
+pub const max_path = if (builtin.os.tag == .windows) 107 else @sizeOf(std.posix.sockaddr.un) - @offsetOf(std.posix.sockaddr.un, "path") - 1;
+
+/// Where an app whose config folder is `config_folder` listens: `control/control.sock` in it, a folder
+/// of its own only this user can open (`start` makes it). When that is longer than the OS takes
+/// (`max_path`, a deep profile), a folder in `runtime_dir` (`$TMPDIR`, `$XDG_RUNTIME_DIR`, else
+/// `/tmp`) named by a hash of the config folder: per config folder still, and just as private.
+pub fn socketPath(gpa: std.mem.Allocator, config_folder: []const u8, runtime_dir: ?[]const u8) ![]u8 {
+    const preferred = try std.fs.path.join(gpa, &.{ config_folder, "control", "control.sock" });
+    if (preferred.len <= max_path) return preferred;
+    gpa.free(preferred);
+    var name: [32]u8 = undefined;
+    const folder = try std.fmt.bufPrint(&name, "fizzy-control-{x:0>16}", .{std.hash.Wyhash.hash(0, config_folder)});
+    return std.fs.path.join(gpa, &.{ runtime_dir orelse "/tmp", folder, "control.sock" });
+}
 
 gpa: std.mem.Allocator,
 io: Io,
@@ -157,12 +174,18 @@ pub fn start(self: *Server) !void {
     // Windows has AF_UNIX from 10 1803, and std offers it only to a target whose minimum is that
     // (`std.Io.net.has_unix_sockets`); fizzy's build sets it.
     if (!Io.net.has_unix_sockets) return error.UnixSocketsUnsupported;
+    if (self.socket_path.len > max_path) return error.NameTooLong;
     const addr = try Io.net.UnixAddress.init(self.socket_path);
     // Its folder, this user's only: the socket is unreachable to others from the moment it exists,
-    // before its own permissions are set below.
+    // before its own permissions are set below. A link in its place is refused, not followed: its
+    // target may be a folder shared with others, which the mode would then be set on.
     if (std.fs.path.dirname(self.socket_path)) |dir| {
         try Io.Dir.cwd().createDirPath(self.io, dir);
-        if (comptime builtin.os.tag != .windows) try Io.Dir.cwd().setFilePermissions(self.io, dir, .fromMode(0o700), .{});
+        if (comptime builtin.os.tag != .windows) {
+            const st = try Io.Dir.cwd().statFile(self.io, dir, .{ .follow_symlinks = false });
+            if (st.kind != .directory) return error.NotAFolder;
+            try Io.Dir.cwd().setFilePermissions(self.io, dir, .fromMode(0o700), .{ .follow_symlinks = false });
+        }
     }
     // A socket left by a fizzy that did not quit cleanly, or one a fizzy this one takes over from
     // still holds: this run's now. The other leaves it alone at its stop (`socket_inode`).
@@ -171,6 +194,7 @@ pub fn start(self: *Server) !void {
     errdefer {
         self.listener.?.deinit(self.io);
         self.listener = null;
+        Io.Dir.deleteFileAbsolute(self.io, self.socket_path) catch {};
     }
     if (comptime builtin.os.tag != .windows) {
         // This user only. The umask usually says so already; a shared machine's may not.
@@ -235,7 +259,7 @@ pub fn stop(self: *Server) void {
         defer self.lock.unlock(self.io);
         for (self.pending.items) |r| {
             answered.append(self.gpa, r.conn) catch {};
-            r.answer(self, .service_unavailable, "text/plain", "fizzy is closing\n");
+            r.answer(self, .service_unavailable, "text/plain", "the control server is stopping\n");
         }
         self.pending.clearRetainingCapacity();
     }
@@ -566,7 +590,7 @@ fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     return std.fs.path.join(gpa, &.{ dir, "c.sock" });
 }
 
-test "a request still queued at quit is answered: fizzy is closing" {
+test "a request still queued at quit is answered: the server is stopping" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -592,7 +616,7 @@ test "a request still queued at quit is answered: fizzy is closing" {
     thread.join();
     const reply = client.reply[0..client.reply_len];
     try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 503 Service Unavailable\r\n"));
-    try std.testing.expect(std.mem.endsWith(u8, reply, "fizzy is closing\n"));
+    try std.testing.expect(std.mem.endsWith(u8, reply, "the control server is stopping\n"));
 }
 
 test "what cannot be served is refused before its body, and never reaches the app" {
@@ -627,9 +651,27 @@ test "what cannot be served is refused before its body, and never reaches the ap
     try std.testing.expectEqual(@as(usize, 0), taken.items.len);
 }
 
+test "a config folder too deep for a socket path listens in a runtime folder instead" {
+    const gpa = std.testing.allocator;
+    const short = try socketPath(gpa, "/home/me/.config/fizzy", "/run/user/1000");
+    defer gpa.free(short);
+    try std.testing.expectEqualStrings("/home/me/.config/fizzy/control/control.sock", short);
+    // Between Darwin's 104 and std's 108, the length that crashed `listen`: not used as it is.
+    const deep = "/" ++ "d" ** (max_path - "/control/control.sock".len + 2);
+    const fallback = try socketPath(gpa, deep, "/tmp/me");
+    defer gpa.free(fallback);
+    try std.testing.expect(fallback.len <= max_path);
+    try std.testing.expect(std.mem.startsWith(u8, fallback, "/tmp/me/fizzy-control-"));
+    // Per config folder: another deep one gets another folder.
+    const other = try socketPath(gpa, deep ++ "x", "/tmp/me");
+    defer gpa.free(other);
+    try std.testing.expect(!std.mem.eql(u8, fallback, other));
+}
+
 test "a socket path the OS cannot hold fails at start, not later" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
-    const long = "/" ++ "d" ** (Io.net.UnixAddress.max_len + 8);
+    // Longer than the OS takes but within std's limit: refused here, not overrun in `listen`.
+    const long = "/" ++ "d" ** max_path;
     var server: Server = .{ .gpa = std.testing.allocator, .io = std.testing.io, .socket_path = long, .wake = noWake };
     try std.testing.expectError(error.NameTooLong, server.start());
 }

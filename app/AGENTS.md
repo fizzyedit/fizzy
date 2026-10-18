@@ -42,6 +42,9 @@ each directory is.
   Windows `accept` treats the cancelled wait that closing causes as `unreachable` (a panic), and
   connecting to the socket's path to wake it reaches whoever listens there now. `Future.cancel`
   interrupts it on every OS (`control/Server.zig`).
+- **std's `UnixAddress.max_len` is 108 on macOS, whose `sockaddr_un` holds 104.** A socket path of
+  105 to 108 bytes passes `UnixAddress.init` and panics in `listen` (a stack overflow in
+  ReleaseFast). Check against `control.Server.max_path`, the real size, before `init`.
 - **On Windows, a socket test must not read to EOF when it need not.** Its AF_UNIX sometimes never
   tells a reader that the other side closed, so a test client reading "until the end" hangs about
   one run in twenty. Read `Content-Length` bytes, as HTTP clients do (`control/Server.zig`'s

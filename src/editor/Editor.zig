@@ -5384,6 +5384,8 @@ fn syncControlServer(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32 or builtin.is_test) return;
     const control = @import("app").control;
     const want = editor.app.settings.control_server;
+    // Off clears a failed start, so turning it on again tries again.
+    if (!want) editor.control_failed = false;
     if (want == (editor.app.control != null)) return;
     if (!want) {
         if (editor.app.control) |*c| {
@@ -5391,7 +5393,6 @@ fn syncControlServer(editor: *Editor) void {
             editor.app.gpa.free(c.socket_path);
         }
         editor.app.control = null;
-        editor.control_failed = false;
         return;
     }
     if (editor.control_failed) return;

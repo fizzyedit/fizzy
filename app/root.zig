@@ -113,11 +113,14 @@ pub const control = struct {
     pub const routes = @import("control/routes.zig");
     pub const json = @import("control/json.zig");
     pub const openapi = @import("control/openapi.zig");
-    /// Where the server listens for an app whose config folder is `config_folder`: a folder of its
-    /// own only this user can open (`Server.start` makes it), so nobody else can reach the socket
-    /// even in the moment before its own permissions are set.
+    /// Where the server listens for an app whose config folder is `config_folder`
+    /// (`Server.socketPath`), with this user's runtime folder for a config folder too deep.
     pub fn socketPath(gpa: @import("std").mem.Allocator, config_folder: []const u8) ![]u8 {
-        return @import("std").fs.path.join(gpa, &.{ config_folder, "control", "control.sock" });
+        const std = @import("std");
+        const runtime: ?[]const u8 = if (@import("builtin").os.tag == .windows) null else for ([_][*:0]const u8{ "TMPDIR", "XDG_RUNTIME_DIR" }) |name| {
+            if (std.c.getenv(name)) |v| if (std.mem.len(v) > 0) break std.mem.span(v);
+        } else null;
+        return Server.socketPath(gpa, config_folder, runtime);
     }
 };
 

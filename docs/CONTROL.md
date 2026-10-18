@@ -20,12 +20,18 @@ are in `plans/CONTROL_SERVER_PLAN.md`.
 
 `<config>/control/control.sock`, the config folder being the platform's (`~/Library/Application
 Support/fizzy` on macOS, `$XDG_CONFIG_HOME/fizzy` (else `~/.config/fizzy`) on Linux, `%LOCALAPPDATA%\fizzy` on Windows) or the
-profile's (`--profile <dir>`, `FIZZY_PROFILE`). `fizzy --control-path`, with the same `--profile`
-or `FIZZY_PROFILE` as the fizzy it means, prints it and exits, whether a fizzy runs or not.
+profile's (`--profile <dir>`, `FIZZY_PROFILE`). A config folder so deep that the path would pass the
+OS's limit for a socket (104 bytes on macOS, 108 on Linux) listens in a private folder of its own
+under `$TMPDIR` (else `$XDG_RUNTIME_DIR`, else `/tmp`) instead, named by a hash of the config folder.
+`fizzy --control-path`, with the same `--profile` or `FIZZY_PROFILE` as the fizzy it means, prints
+the path either way and exits (1, saying why, when it cannot), whether a fizzy runs or not. A
+Windows release has no console to print to: capture it, `$sock = fizzy --control-path`.
 
 **Who can use it:** only you. The socket's folder is `0700` and the socket `0600`, so nobody else
-on the machine can connect; there is no token. On Windows the folder sits in your profile, which
-only you can open. Nothing listens on the network.
+on the machine can connect; there is no token. A link in the folder's place is refused rather than
+followed. On Windows the default config folder is under `%LOCALAPPDATA%`, which only you can open; a
+`--profile` folder elsewhere gets no tighter access than it already has. Nothing listens on the
+network.
 
 Windows has AF_UNIX from Windows 10 1803, and its bundled `curl` takes `--unix-socket`. fizzy's
 build sets 1803 as its minimum: std offers Unix sockets only to such a target. An app built on
@@ -48,15 +54,24 @@ being its tag (`{"side": "right"}`). Results come back as JSON, `null` when a co
 nothing. Send `Content-Type: application/zon` to send ZON and get ZON back, for an enum deeper than
 a top-level argument.
 
-**Errors are HTTP's**, each with `{"error": "…"}` saying why:
+**Errors are HTTP's.** Those about a command or a route carry `{"error": "…"}` saying why:
 
 | Status | When |
 |---|---|
 | 400 | the arguments do not fit the parameters, or the body is not JSON |
-| 404 | no such command |
+| 404 | no such command, or nothing at that path |
+| 405 | that method is not answered there |
 | 409 | the command is not enabled now (no document open, say) |
 | 500 | it ran and failed |
-| 503 | fizzy is closing |
+
+Those about the request itself, refused before the app sees it, are plain text:
+
+| Status | When |
+|---|---|
+| 400 | a GET or HEAD sent a body |
+| 413 | the body is over 64 MB |
+| 417 | an `Expect` other than `100-continue` |
+| 503 | the control server is stopping (fizzy is quitting, or the setting went off) |
 
 A command runs on the UI thread at the start of the next frame, as a menu item or a keybind would,
 so the frame after it shows what it did. A call costs one wake and returns within a frame.
