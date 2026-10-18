@@ -591,7 +591,7 @@ pub fn exportModules(
         .root_source_file = repoPath(b, "core/core.zig"),
         .link_libc = !is_wasm,
     });
-    _ = core_module.addImports(b, core_mod, dvui_proxy_mod, b, target, optimize, null);
+    _ = core_module.addImports(b, core_mod, dvui_proxy_mod, b, target, optimize, null, null);
 
     const sdk_mod = b.addModule("fizzy_sdk", .{
         .target = target,

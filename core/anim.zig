@@ -10,14 +10,14 @@
 //! the same code — see `core.widgets` for the divide.
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("motion.zig");
+const motion = @import("glass").motion;
 const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
 const reveal_phase = @import("reveal.zig");
-const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
+const BlurBackdrop = @import("glass").BlurBackdrop;
 const dialogs = @import("dialogs.zig");
-const FrameTarget = @import("gfx/FrameTarget.zig");
+const FrameTarget = @import("glass").FrameTarget;
 pub const crossfade = @import("crossfade.zig");
 pub const Kind = crossfade.Kind;
 

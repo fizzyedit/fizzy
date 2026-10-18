@@ -23,9 +23,10 @@ const std = @import("std");
 /// `tape/` and `replay/` in both layouts: `b` from the SDK's own build, the `fizzy_sdk`
 /// dependency's builder from the repo root.
 ///
-/// `glass_look` is the backend's (`backend/build.zig`'s `glassLookModule`) where the build links
-/// `core` beside fizzy's backend, which applies the same looks to OS windows; null makes one from
-/// the file, beside this package in-repo and vendored into it in the release tarball.
+/// `glass_look` and `glass` are the backend's (`backend/build.zig`'s `glassLookModule` and
+/// `glassModule`) where the build links `core` beside fizzy's backend, which draws the same glass;
+/// null makes them from the files, beside this package in-repo and vendored into it in the release
+/// tarball. `glass` is built over `dvui_mod`, as `core` is.
 pub fn addImports(
     b: *std.Build,
     mod: *std.Build.Module,
@@ -34,11 +35,19 @@ pub fn addImports(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     glass_look: ?*std.Build.Module,
+    glass: ?*std.Build.Module,
 ) ?*std.Build.Module {
     mod.addImport("dvui", dvui_mod);
-    mod.addImport("glass_look", glass_look orelse sdk_pkg.createModule(.{
+    const look = glass_look orelse sdk_pkg.createModule(.{
         .root_source_file = repoPath(sdk_pkg, "backend/src/glass_look.zig"),
-    }));
+    });
+    mod.addImport("glass_look", look);
+    mod.addImport("glass", glass orelse blk: {
+        const g = sdk_pkg.createModule(.{ .root_source_file = repoPath(sdk_pkg, "backend/src/glass/root.zig") });
+        g.addImport("dvui", dvui_mod);
+        g.addImport("glass_look", look);
+        break :blk g;
+    });
     mod.addImport("zf", zfModule(b, target, optimize));
 
     // Demos and recordings: `tape` is the format and its engine (std-only), `replay` drives a

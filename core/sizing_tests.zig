@@ -14,18 +14,14 @@ test {
     _ = @import("widgets/ContextWidget.zig");
     // A tab's hand beside a split's arrow, and a tapped tab's hover look.
     _ = @import("widgets/Tabs.zig");
-    // The local copies of upstream's docking + blur (see `widgets.zig`): referenced here so they
+    // The local copies of upstream's docking (see `widgets.zig`): referenced here so they
     // are analysed — and their own tests run — even before anything in the app draws them.
     _ = @import("widgets/DockingWidget.zig");
     _ = @import("widgets/DockingWidget/Layout.zig");
     _ = @import("widgets/DockingWidget/Row.zig");
-    _ = @import("widgets/BlurBackdrop.zig");
     // Not a sizing file, but it needs what this root has — dvui and the icon sets — and no other
     // test root carries both. Its tests are the key table and the modifier order per platform.
     _ = @import("keycaps.zig");
-    // The smooth union the dialogs' and floats' bubbles run together with: its tests are
-    // arithmetic, but the file speaks in dvui's points.
-    _ = @import("gfx/liquid_blob.zig");
     // `blitData` is pixi's, not fizzy's: nothing else here compiles it, and it speaks in dvui
     // colours.
     _ = @import("gfx/image.zig");

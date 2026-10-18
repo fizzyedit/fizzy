@@ -42,8 +42,8 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 
 1. **render: a custom draw command (`deferRender`)** (`c703519`). A callback queued among a
    subwindow's render commands, run when they replay. The frost and liquid glass read back what
-   the windows under them drew, which only exists at that point (`core/widgets/BlurBackdrop.zig`,
-   `DropZones.zig`, `core/gfx/programs.zig`). Upstream: david-vanderson/dvui#988, open.
+   the windows under them drew, which only exists at that point (`backend/src/glass/BlurBackdrop.zig`,
+   `core/widgets/DropZones.zig`, `backend/src/glass/programs.zig`). Upstream: david-vanderson/dvui#988, open.
 2. **Texture: precision option for render targets** (`f091da0`). `CreateOptions.precision =
    .high` and `Backend.support_precise_targets`: float targets for the blur pyramid, which 8 bits
    a channel steps into contour blobs. Upstream: david-vanderson/dvui#989, open.

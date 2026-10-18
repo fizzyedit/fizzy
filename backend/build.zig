@@ -108,6 +108,23 @@ pub fn glassLookModule(dep: *std.Build.Dependency) *std.Build.Module {
     return m;
 }
 
+/// The glass module for each dvui (`glassModule`), for the same reason.
+var glass_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+
+/// Fizzy's in-app glass (`src/glass/root.zig`: the frame target, the frosted backdrops, the liquid
+/// glass and its program, motion) over `dvui_mod`: one per dvui, as the backend is, so the backend
+/// and the app's `core` that a build links together share it. Pass it to `core_module.addImports`
+/// for a `core` linked beside this backend.
+pub fn glassModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module) *std.Build.Module {
+    if (glass_modules.get(dvui_mod)) |m| return m;
+    const b = dep.builder;
+    const m = b.createModule(.{ .root_source_file = b.path("src/glass/root.zig") });
+    m.addImport("dvui", dvui_mod);
+    m.addImport("glass_look", glassLookModule(dep));
+    glass_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
+    return m;
+}
+
 /// The `platform` module for each backend module, for the same reason.
 var platform_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
 

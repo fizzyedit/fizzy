@@ -1,9 +1,9 @@
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../motion.zig");
+const motion = @import("glass").motion;
 
 const Event = dvui.Event;
-const BlurBackdrop = @import("BlurBackdrop.zig");
+const BlurBackdrop = @import("glass").BlurBackdrop;
 const screens = @import("../screens.zig");
 const Options = dvui.Options;
 const Point = dvui.Point;

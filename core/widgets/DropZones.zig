@@ -41,12 +41,12 @@ const dvui = @import("dvui");
 const native_glass = @import("../native_glass.zig");
 const dialogs = @import("../dialogs.zig");
 const widgets = @import("../widgets.zig");
-const BlurBackdrop = @import("BlurBackdrop.zig");
+const BlurBackdrop = @import("glass").BlurBackdrop;
 const icons = @import("icons");
 const icon_tex = @import("../gfx/icon.zig");
-const motion = @import("../motion.zig");
-const liquid_glass = @import("../gfx/liquid_glass.zig");
-const LiquidField = @import("../gfx/LiquidField.zig");
+const motion = @import("glass").motion;
+const liquid_glass = @import("glass").liquid_glass;
+const LiquidField = @import("glass").LiquidField;
 
 pub const Side = enum { left, right, top, bottom };
 

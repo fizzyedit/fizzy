@@ -4,8 +4,8 @@
 # Zig has no "depend on a subdirectory of this archive" — plugins must fetch a
 # package whose root build.zig.zon has no Velopack. This script stages `sdk/` as
 # the package root. The SDK's own source already lives inside it (`sdk/src/`), so only
-# `core/` and the glass look `core` imports (`backend/src/glass_look.zig`) are vendored in
-# beside it — `core_module.repoPath` resolves them (see that function).
+# `core/` and the backend's glass `core` imports (`backend/src/glass_look.zig`,
+# `backend/src/glass/`) are vendored in beside it — `core_module.repoPath` resolves them (see that function).
 #
 # Usage:
 #   ./scripts/pack-sdk.sh                 # writes zig-out/sdk/fizzy-sdk-vX.Y.Z.tar.gz
@@ -44,6 +44,7 @@ cp -R sdk/. "$pkg/"
 cp -R core "$pkg/core"
 mkdir -p "$pkg/backend/src"
 cp backend/src/glass_look.zig "$pkg/backend/src/glass_look.zig"
+cp -R backend/src/glass "$pkg/backend/src/glass"
 cp LICENSE "$pkg/LICENSE"
 
 # Drop build/editor-only noise if any leaked into the copy (none expected).

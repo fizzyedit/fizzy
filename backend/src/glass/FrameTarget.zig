@@ -22,7 +22,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const profile = @import("../profile.zig");
+const profile = @import("prof.zig");
 
 const FrameTarget = @This();
 

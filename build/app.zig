@@ -1071,7 +1071,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), b.dependency("fizzy_sdk", .{}).builder, target, optimize, null);
+    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), b.dependency("fizzy_sdk", .{}).builder, target, optimize, null, null);
     fizzy_test_module.addImport("core", core_module_test);
     if (icons_test) |icons| fizzy_test_module.addImport("icons", icons);
 
@@ -1528,10 +1528,22 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
         split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
         split_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
+        split_tests_module.addImport("glass", core_module_test.import_table.get("glass").?);
+
+        // The in-app glass (`backend/src/glass/root.zig`): the frost's capture sizes and the
+        // blobs' smooth union, over dvui's testing backend.
+        const glass_tests_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("backend/src/glass/root.zig"),
+        });
+        glass_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        glass_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
 
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },
             .{ "fizzy-sizing-tests", split_tests_module },
+            .{ "fizzy-glass-tests", glass_tests_module },
             .{ "fizzy-plugin-loader-tests", plugin_loader_module },
         }) |entry| {
             const t = b.addTest(.{

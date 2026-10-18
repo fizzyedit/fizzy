@@ -23,7 +23,7 @@ fn defaultTrackpadPinchRatio() f32 {
 pub const image = @import("gfx/image.zig");
 pub const icon = @import("gfx/icon.zig");
 pub const perf = @import("gfx/perf.zig");
-pub const FrameTarget = @import("gfx/FrameTarget.zig");
+pub const FrameTarget = @import("glass").FrameTarget;
 /// TEMPORARY frame-hitch profiler (`FIZZY_HITCH_MS`).
 pub const hitch = @import("hitch.zig");
 /// The frame profiler behind the profiler window: fizzy's phases, plugin hooks and surfaces,
@@ -46,18 +46,18 @@ pub const widgets = @import("widgets.zig");
 /// Reveals, cross-fades and transitions — the animation any region or pane swap runs through.
 pub const anim = @import("anim.zig");
 /// How things move: the one motion setting every animation reads (off, minimal, playful).
-pub const motion = @import("motion.zig");
+pub const motion = @import("glass").motion;
 /// A motion's clock stepped by its frames, so a long frame holds it rather than skipping it on.
 pub const FrameClock = @import("FrameClock.zig");
 /// How round the app's corners are: the one Corner roundness setting every radius scales by.
 pub const corners = @import("corners.zig");
 /// Frosted glass that bends what it shows — lens at the rim, ripples through it.
-pub const liquid_glass = @import("gfx/liquid_glass.zig");
-pub const liquid_blob = @import("gfx/liquid_blob.zig");
+pub const liquid_glass = @import("glass").liquid_glass;
+pub const liquid_blob = @import("glass").liquid_blob;
 /// One material on one value: every glass at the window's opacity, the OS's form and the app's.
 pub const glass_look = @import("glass_look");
-pub const LiquidField = @import("gfx/LiquidField.zig");
-pub const programs = @import("gfx/programs.zig");
+pub const LiquidField = @import("glass").LiquidField;
+pub const programs = @import("glass").programs;
 pub const Spring = @import("Spring.zig");
 /// The dialog framework, its window chrome, and the toasts and spinners that share it.
 pub const dialogs = @import("dialogs.zig");

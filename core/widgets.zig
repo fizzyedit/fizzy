@@ -37,8 +37,8 @@ pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// widgets/DockingWidget/Layout.zig,BlurBackdrop.zig}` readable.
 pub const DockingWidget = @import("widgets/DockingWidget.zig");
 pub const DockLayout = DockingWidget.Layout;
-pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
-pub const LiquidField = @import("gfx/LiquidField.zig");
+pub const BlurBackdrop = @import("glass").BlurBackdrop;
+pub const LiquidField = @import("glass").LiquidField;
 pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
 
