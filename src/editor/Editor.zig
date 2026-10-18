@@ -4195,14 +4195,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             dvui.log.err("about command failed: {s}", .{@errorName(err)});
         };
     }
-    if (fizzy.backend.pollPendingRecentFolder()) |i| {
-        if (i < editor.app.recents.folders.items.len) {
-            const folder = editor.app.recents.folders.items[i];
-            editor.setProjectFolder(folder) catch |err| {
-                dvui.log.err("open recent folder failed: {s}", .{@errorName(err)});
-            };
-        }
-    }
+    if (fizzy.backend.pollPendingRecentFolder()) |i| editor.openRecentFolder(i);
     if (fizzy.backend.pollPendingNativeMenuAction()) |action| {
         editor.queueNativeMenuAction(action);
     }
@@ -5210,7 +5203,16 @@ pub fn close(app: *Entry, editor: *Editor) void {
 /// anything deriving a key from `editor.app.folder` (a language server's `rootUri`, notably) then
 /// can't disagree about how the same directory is spelled. See `fizzy.core.paths.normalize`.
 pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
-    const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
+    // A relative path (a plugin's `host.setProjectFolder("proj")`) is the cwd's: everything
+    // downstream — the watcher, recents, a language server's `rootUri` — wants it absolute.
+    const relative = builtin.target.cpu.arch != .wasm32 and
+        !fizzy.core.paths.isMountPath(path_in) and !std.fs.path.isAbsolute(path_in);
+    const path = if (relative) cwd: {
+        // No path limit on the web, so the buffer's size can't be named there.
+        if (comptime builtin.target.cpu.arch == .wasm32) unreachable;
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        break :cwd try fizzy.core.paths.normalizeJoin(editor.app.gpa, cwd_buf[0..try std.Io.Dir.cwd().realPath(dvui.io, &cwd_buf)], path_in);
+    } else try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
 
     // A root on a mount — a drive, a zip — is only openable while that mount exists. From
@@ -5224,6 +5226,23 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
         ) catch "That location is not connected." });
         return error.NotMounted;
     }
+
+    // Only a folder on disk is a project folder: a file, or one removed since it was recent,
+    // would be watched, listed and remembered as if it were one.
+    if (comptime builtin.target.cpu.arch != .wasm32) if (!on_mount) {
+        const arena = editor.app.arena.allocator();
+        const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch |err| {
+            dvui.toast(@src(), .{ .message = if (err == error.FileNotFound)
+                std.fmt.allocPrint(arena, "{s} can't be found.", .{path}) catch "That folder can't be found."
+            else
+                std.fmt.allocPrint(arena, "{s} can't be opened ({t}).", .{ path, err }) catch "That folder can't be opened." });
+            return err;
+        };
+        if (st.kind != .directory) {
+            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(arena, "{s} is not a folder.", .{path}) catch "That is not a folder." });
+            return error.NotADirectory;
+        }
+    };
 
     // Opening a folder makes a close queued during this frame's draw moot.
     editor.app.pending_folder_close = false;
@@ -5240,14 +5259,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     // A demo's folder is not one the user opened, and is gone when the demo is.
     if (!editor.demo.active()) {
         try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
-        // Written now, not only at quit: a browser tab is closed, never quit, so the web keeps
-        // recents only if they are stored as they change. Cheap enough to do everywhere.
-        if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
-            defer editor.app.gpa.free(recents_path);
-            editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});
-        } else |_| {}
-        // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
-        fizzy.backend.rebuildNativeRecentFolders();
+        editor.recentFoldersChanged();
     }
     if (editor.app.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
         editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, s.id);
@@ -5260,6 +5272,35 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     // burst arrive while the rules still belong to the previous folder.
     if (editor.app.folder_watcher) |*w| w.setFolder(if (on_mount) null else editor.app.folder);
     editor.app.host.emitZon("fizzy.folder.opened", .{ .path = path });
+}
+
+/// Store recents and rebuild the native menu after the recent folders change.
+fn recentFoldersChanged(editor: *Editor) void {
+    // Written now, not only at quit: a browser tab is closed, never quit, so the web keeps
+    // recents only if they are stored as they change. Cheap enough to do everywhere.
+    if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
+        defer editor.app.gpa.free(recents_path);
+        editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});
+    } else |_| {}
+    // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
+    fizzy.backend.rebuildNativeRecentFolders();
+}
+
+/// Open the recent folder at `index`. One that is there but no longer a folder leaves Recents
+/// instead of staying to fail again; one that can't be found stays, since a drive or a share
+/// can come back. `setProjectFolder` has said which in a toast. Never fails: it runs from menu
+/// draws, which an error would cut short.
+pub fn openRecentFolder(editor: *Editor, index: usize) void {
+    const recents = &editor.app.recents;
+    if (index >= recents.folders.items.len) return;
+    editor.setProjectFolder(recents.folders.items[index]) catch |err| {
+        // As `anyerror`: on the web there is no disk to check, so neither is in the set.
+        const e: anyerror = err;
+        if (e == error.NotADirectory or e == error.NotDir) {
+            recents.folders.allocator.free(recents.folders.orderedRemove(index));
+            editor.recentFoldersChanged();
+        } else if (e != error.FileNotFound) dvui.log.err("open recent folder failed: {t}", .{err});
+    };
 }
 
 /// Perform a close queued by `closeProjectFolder` during an earlier frame.

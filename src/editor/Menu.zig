@@ -230,7 +230,8 @@ fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
                 .margin = dvui.Rect.all(1),
                 .padding = dvui.Rect.all(2),
             })) |_| {
-                try editor.setProjectFolder(folder);
+                // `folder` may be freed here (a gone folder leaves Recents); not used after.
+                editor.openRecentFolder(i - 1);
             }
         }
     }
