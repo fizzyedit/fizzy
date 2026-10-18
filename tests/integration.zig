@@ -12,6 +12,7 @@
 //! See `tests/README.md` for the overall layering.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("fizzy");
 const Tracks = @import("app").Tracks;
@@ -2505,6 +2506,80 @@ test "a split before a region that hides itself is not drawn, and nothing draws 
     editor.app.host.setSurfaceHidden("test.output", false);
     try dvui.testing.settle(EmptyPanelFrame.frame);
     try std.testing.expectEqual(@as(usize, 2), editor.app.layout.regions.items.len);
+}
+
+// A view whose content is its own scroll area, without `Surface.scrolls_itself`, grows wider
+// without limit in a place that scrolls what it shows, and nothing on screen says why. A Debug
+// build names it, once; one that says it scrolls itself, or whose scroll area does not fill its
+// place, is not named.
+const ScrollerFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn fills(_: ?*anyopaque) anyerror!dvui.App.Result {
+        var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+        defer scroll.deinit();
+        dvui.label(@src(), "rows", .{}, .{});
+        return .ok;
+    }
+
+    fn small(_: ?*anyopaque) anyerror!dvui.App.Result {
+        var scroll = dvui.scrollArea(@src(), .{}, .{ .min_size_content = .{ .w = 40, .h = 40 } });
+        defer scroll.deinit();
+        dvui.label(@src(), "rows", .{}, .{});
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        {
+            var content = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer content.deinit();
+            {
+                var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
+                defer main.deinit();
+            }
+            {
+                var panel = try layout.region(@src(), .{ .name = "Panel", .keywords = fizzy.sdk.keywords.ide.panel }, .{ .expand = .both });
+                defer panel.deinit();
+            }
+            {
+                var sidebar = try layout.region(@src(), .{ .name = "Sidebar", .keywords = fizzy.sdk.keywords.ide.sidebar }, .{ .expand = .both });
+                defer sidebar.deinit();
+            }
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+};
+
+test "a view filling its place with an unmarked scroll area is named once in Debug" {
+    if (builtin.mode != .debug) return error.SkipZigTest;
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+
+    const host = &editor.app.host;
+    try host.registerSurface(.{ .id = "test.unmarked", .title = "Unmarked", .keywords = fizzy.sdk.keywords.ide.main, .draw = ScrollerFrame.fills });
+    try host.registerSurface(.{ .id = "test.marked", .title = "Marked", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ScrollerFrame.fills, .scrolls_itself = true });
+    try host.registerSurface(.{ .id = "test.small", .title = "Small", .keywords = fizzy.sdk.keywords.ide.sidebar, .draw = ScrollerFrame.small });
+
+    ScrollerFrame.editor = editor;
+    defer ScrollerFrame.editor = null;
+    try dvui.testing.settle(ScrollerFrame.frame);
+    try dvui.testing.settle(ScrollerFrame.frame);
+
+    const named = &editor.app.layout.unmarked_scrollers;
+    try std.testing.expectEqual(@as(u8, 1), named.len);
+    try std.testing.expect(named.contains("test.unmarked"));
+    try std.testing.expect(!named.contains("test.marked"));
+    try std.testing.expect(!named.contains("test.small"));
 }
 
 /// Sidebar beside Main over Panel, with the picker drawn over them as fizzy's frame does.
