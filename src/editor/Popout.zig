@@ -478,7 +478,7 @@ fn carryFrame(state: *State) void {
     // The carried view's own layer (`core.screens.markCarried`), taken from it: dvui's replay into the main
     // window, and the float windows' (`windowFrame`), draw nothing of it.
     for (cw.subwindows.stack.items) |*sw| {
-        if (fizzy.core.screens.isCarried(sw.id)) drawing.picture.subwindow(sw, true);
+        if (fizzy.core.screens.isCarried(sw.id)) dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
     }
 }
 
@@ -610,7 +610,7 @@ fn overlayFrame(state: *State) void {
         if (!fizzy.core.screens.isCarried(sw.id)) continue;
         for (offsets[0..n_off], 0..) |off, i| {
             picture.moveTo(off);
-            picture.subwindow(sw, i == n_off - 1);
+            dvui.currentWindow().renderSubwindow(sw, .{ .take = i == n_off - 1 });
         }
     }
     picture.end();
@@ -1166,7 +1166,7 @@ fn windowFrame(state: *State, o: *Out) void {
         // What takes no input goes over everything, last (`overlaysFrame`).
         if (!sw.mouse_events and !fizzy.core.screens.isEverywhere(sw.id)) continue;
         const mine = area.contains(sw.rect_pixels.center());
-        if (mine or fizzy.core.screens.isEverywhere(sw.id)) picture.subwindow(sw, mine);
+        if (mine or fizzy.core.screens.isEverywhere(sw.id)) dvui.currentWindow().renderSubwindow(sw, .{ .take = mine });
     }
     viewports.present(o.viewport, target);
 }
@@ -1348,7 +1348,7 @@ fn menuFrame() void {
             defer dvui.alphaSet(prev_alpha);
             frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) } });
         }
-        picture.subwindow(sw, true);
+        dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
         picture.end();
         viewports.present(m.viewport, target);
     }
@@ -1410,7 +1410,7 @@ fn overlaysFrame() void {
         };
         const w = into orelse continue;
         const picture: viewports.Picture = .again(w.target, w.part);
-        picture.subwindow(sw, true);
+        dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
         picture.end();
     }
 }

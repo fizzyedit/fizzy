@@ -76,8 +76,9 @@ pub const Repeat = struct {
     }
 };
 
-/// A trim of a history of `n` steps (`TrimBar`): the steps from after `from` through `to` are
-/// kept, at least one, as macOS's trim keeps the part of a recording between its two handles.
+/// A window over a history of `n` steps (`HistoryTransport`'s export window): the steps from after
+/// `from` through `to`, at least one, as macOS's trim keeps the part of a recording between its two
+/// handles.
 pub const Trim = struct {
     from: usize,
     to: usize,

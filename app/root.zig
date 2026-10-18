@@ -44,7 +44,7 @@ pub const ActivityFeed = @import("ActivityFeed.zig");
 pub const Tracks = @import("Tracks.zig");
 /// A document's transport: its history as a line at the bottom of its pane, undo and redo as seeks.
 pub const HistoryTransport = @import("HistoryTransport.zig");
-pub const TrimBar = @import("TrimBar.zig");
+pub const HistoryFrames = @import("HistoryFrames.zig");
 pub const history_transport = @import("history_transport.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
@@ -112,6 +112,7 @@ pub const control = struct {
     pub const Server = @import("control/Server.zig");
     pub const routes = @import("control/routes.zig");
     pub const json = @import("control/json.zig");
+    pub const openapi = @import("control/openapi.zig");
     /// The socket's name in the config folder.
     pub const socket_name = "control.sock";
 };
@@ -185,5 +186,5 @@ test {
     _ = Tracks;
     _ = HistoryTransport;
     _ = control.routes;
-    _ = TrimBar;
+    _ = HistoryFrames;
 }

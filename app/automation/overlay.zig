@@ -149,17 +149,8 @@ const Reveal = struct {
 /// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) — a frost
 /// replaces what it covers, and at partial alpha would punch a hole.
 fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
-    const brs = wd.borderRectScale();
-    const full = brs.r;
-    const s = brs.s;
-    const k = @max(0, r.grow);
-    const o: dvui.Point.Physical = .{ .x = full.x + full.w * origin.x, .y = full.y + full.h * origin.y };
-    const rect: dvui.Rect.Physical = .{
-        .x = o.x + (full.x - o.x) * k,
-        .y = o.y + (full.y - o.y) * k,
-        .w = full.w * k,
-        .h = full.h * k,
-    };
+    const s = wd.borderRectScale().s;
+    const rect = grown(wd, origin, r);
     const c = corners();
     const bs = core.dialogs.surfaceShadow();
     if (core.dialogs.dialogFrost()) |f| {
@@ -183,6 +174,29 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
         rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) } });
     }
     dvui.clipSet(dvui.clipGet().intersect(rect));
+}
+
+/// The glass under a pill — a key just pressed, the seek's progress — `r` of the way open, grown
+/// out of `origin` as `glass` grows a card: a capsule of the same glass as the transport bar's
+/// bubbles (`core.dialogs.glassBubbles`), so the player's controls and what it shows are one
+/// material. What the pill draws after this is cut to the glass as it grows.
+fn pillGlass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
+    const rect = grown(wd, origin, r);
+    core.dialogs.glassBubbles(wd.id, &.{.{ .rect = rect }}, wd.borderRectScale().s, .{ .shadow = r.alpha });
+    dvui.clipSet(dvui.clipGet().intersect(rect));
+}
+
+/// `wd`'s border rect `r.grow` of the way grown out of `origin` (a point in it, as fractions).
+fn grown(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) dvui.Rect.Physical {
+    const full = wd.borderRectScale().r;
+    const k = @max(0, r.grow);
+    const o: dvui.Point.Physical = .{ .x = full.x + full.w * origin.x, .y = full.y + full.h * origin.y };
+    return .{
+        .x = o.x + (full.x - o.x) * k,
+        .y = o.y + (full.y - o.y) * k,
+        .w = full.w * k,
+        .h = full.h * k,
+    };
 }
 
 // ---- captions and keys ---------------------------------------------------------------------
@@ -538,12 +552,14 @@ fn keysCard(player: *Player, op: Tape.Op, shown: Reveal) void {
     const label = keysLabel(player, op) orelse return;
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(.{ .x = 14, .y = 7, .w = 14, .h = 7 }));
     defer pill.deinit();
-    glass(pill.data(), .{ .x = 0.5, .y = 1 }, shown);
+    pillGlass(pill.data(), .{ .x = 0.5, .y = 1 }, shown);
     const prev_alpha = dvui.alpha(shown.alpha);
     defer dvui.alphaSet(prev_alpha);
     if (label.stroke) |s| {
         core.keycaps.draw(@src(), keycapsStroke(s), .{
             .style = .caps,
+            // Faint caps, so the glass reads through them as it does through the bar's icons.
+            .cap_fill = theme().color(.content, .text).opacity(0.1),
             .color = theme().color(.content, .text),
             .mac = core.platform.isMacOS(),
             .gravity_x = 0,
@@ -831,7 +847,7 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
     var pill = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(.{ .x = 14, .y = 7, .w = 14, .h = 9 }));
     defer pill.deinit();
     // A seek runs with motion off, so there is no opening to play.
-    glass(pill.data(), .{ .x = 0.5, .y = 0 }, .{});
+    pillGlass(pill.data(), .{ .x = 0.5, .y = 0 }, .{});
     dvui.labelNoFmt(@src(), "Catching up\u{2026}", .{}, .{ .color_text = .{ .color = theme().color(.content, .text) } });
     const wd = dvui.spacer(@src(), .{ .expand = .horizontal, .min_size_content = .{ .w = 120, .h = 3 } });
     const r = wd.rectScale().r;

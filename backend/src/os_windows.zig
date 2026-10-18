@@ -167,7 +167,7 @@ pub fn afterFrame() void {
         const area: dvui.Rect.Physical = .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h };
         const picture: viewports.Picture = .begin(target, shown);
         for (cw.subwindows.stack.items) |*sw| {
-            if (area.contains(sw.rect_pixels.center())) picture.subwindow(sw, true);
+            if (area.contains(sw.rect_pixels.center())) dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
         }
         picture.end();
         viewports.present(o.viewport, target);

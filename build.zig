@@ -49,6 +49,18 @@ pub fn build(b: *std.Build) !void {
         // `.{ .dir = "../fizzyedit/atlas", .modules = &.{ .{ .name = "batch2d", .root =
         // "src/batch2d/root.zig" }, … } }`.
         .web_plugin_dirs = &.{},
+        // Fizzy's own identity, for fizzy alone: the root package. Reached as a dependency
+        // (`buildApp`), it is an app's build, which gets none of it.
+        .own = if (b.pkg_hash.len == 0) .{
+            .bundle_id = "com.foxnne.fizzy",
+            .repo_url = "https://github.com/fizzyedit/fizzy",
+            .version_file = "VERSION",
+            .png = "assets/icon.png",
+            .ico = "assets/windows/fizzy.ico",
+            .rc = "assets/windows/fizzy.rc",
+            .icns = "assets/macos/fizzy.icns",
+            .plist = "assets/macos/info.plist",
+        } else null,
     };
 
     // A consumer that bundles plugins of its own cannot say so through `b.dependency`
@@ -61,6 +73,8 @@ pub fn build(b: *std.Build) !void {
         return;
     }
     try app.construct(b, target, optimize, base, cfg);
+    // On the configure pass that fetches Velopack there is no `package` step to run.
+    if (cfg.vz != null) @import("build/package.zig").addPackageAllStep(b, cfg.no_emit);
 }
 
 /// What `build` parsed for a `defer-app` consumer, so `buildApp` need not re-declare the
@@ -70,6 +84,8 @@ var deferred: ?struct {
     optimize: std.builtin.OptimizeMode,
     base: @import("build/app.zig").Options,
     cfg: @import("build/app.zig").Config,
+    /// `buildApp` has run (`addPackageSteps` needs its steps).
+    built: bool = false,
 } = null;
 
 pub const BundledPlugin = @import("build/sdk.zig").BundledPlugin;
@@ -114,6 +130,55 @@ pub fn buildApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin)
     } else false;
     opts.app_plugins = if (names_fizzys) linked else try std.mem.concat(fizzy_dep.builder.allocator, BundledPlugin, &.{ &plugins.all, linked });
     try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg);
+    deferred.?.built = true;
+}
+
+/// `zig build package` (and its alias `desktop`) and `zig build packageall` for an app built with
+/// `buildApp`, as steps of the app's own build `b`: a dependency's steps are not the command
+/// line's. `package` packages the app for the target the app gave fizzy, into the app's
+/// `zig-out/<channel>`; `packageall` runs `zig build package` for each of the six release
+/// targets from the app's build root, with the options the app's build was given. An app that
+/// already has a step by one of these names gets `error.PackageStepTaken`: `packageall`'s runs
+/// call `package` by name.
+///
+/// ```zig
+/// try fizzy.buildApp(fizzy_dep, &.{ … });
+/// try fizzy.addPackageSteps(b, fizzy_dep);
+/// ```
+///
+/// What the installers call the app and what they carry come from fizzy's options, passed in
+/// `b.dependency`: `app-name` (`--packId`, the executable), `app-bundle-id`, `app_version`,
+/// `repo-url` (the update feed; none by default), `app-package-title`, `app-icon` (PNG: the
+/// window, the infobar, Linux), `app-icon-ico`, `app-windows-rc`, `app-icon-icns`,
+/// `app-macos-plist`. The icons default to fizzy's art; the resource script is generated and
+/// vpk writes the plist.
+///
+/// `packageall` passes each run the options the app's own command line was given, so the
+/// Windows MSVC ones reach fizzy only if the app declares `windows-msvc-libc` / `fetch-msvc` and
+/// passes them on in `b.dependency`. Without them, a `*-windows-msvc` run fetches MSVC itself.
+pub fn addPackageSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
+    const d = deferred orelse @panic("fizzy.addPackageSteps: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) and call fizzy.buildApp first");
+    const names = [_][]const u8{ "package", "desktop", "packageall" };
+    for (names) |name| if (b.top_level_steps.contains(name)) {
+        std.log.err("fizzy.addPackageSteps: this build already has a `{s}` step; `package`, `desktop` and `packageall` are the names it adds", .{name});
+        return error.PackageStepTaken;
+    };
+    if (!d.built) @panic("fizzy.addPackageSteps: call fizzy.buildApp first");
+    // The configure pass that fetches Velopack builds no package steps.
+    if (d.cfg.vz == null) return;
+    const package = fizzy_dep.builder.top_level_steps.get("package").?;
+    // Into the app's prefix (`zig-out/<channel>`), once. Fizzy's own `package` step would
+    // install them into its prefix as a dependency, a directory in the cache
+    // (`std.Build.createChild` gives it `.zig-cache/i/<hash>`), so it is not run: the installers'
+    // directory carries the vpk run, or the failure saying why this target can't be packaged.
+    const step = b.step("package", package.description);
+    step.dependOn(&b.addInstallDirectory(.{
+        .source_dir = fizzy_dep.namedLazyPath("package"),
+        .install_dir = .{ .custom = d.cfg.zig_out_subdir },
+        .install_subdir = "",
+    }).step);
+    b.step("desktop", "Alias for `zig build package`").dependOn(step);
+    @import("build/package.zig").addPackageAllStep(b, d.cfg.no_emit);
 }
 
 /// What a dvui app of its own builds on (`addDvui`): fizzy's backend, with OS windows besides the
