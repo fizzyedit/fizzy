@@ -211,6 +211,13 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build check-web
 
+      # The tapes fizzyed.it serves beside the app: a script or `docs/demos/` tape that no longer
+      # builds or reads back fails here, not on the deploy after merge.
+      - name: Build the hosted demo tapes
+        if: matrix.name != 'Windows'
+        shell: bash
+        run: bash scripts/ci-retry.sh zig build demos
+
       # Fizzy on dvui's own SDL3 backend (`-Dnative-backend=sdl3`), where any dvui app on the stock
       # backend stands: the platform pieces compile without fizzy's backend and lose what needs it
       # (floats' windows, the window skin). It rotted unnoticed while nothing built it. macOS

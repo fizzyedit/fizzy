@@ -558,7 +558,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // web.js, index.html, NotoSansKR-Regular.ttf}`, deployable as-is to a static host.
     // ---------------------------------------------------------------
 
-    web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs);
+    web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
 
     const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
     const exe = main_fizzy.exe;

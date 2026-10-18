@@ -45,6 +45,9 @@ on:
       - "build.zig"
       - "build.zig.zon"
       - "web/**"
+      # The tapes served beside the app (`zig-out/web/demos/`).
+      - "docs/demos/**"
+      - "scripts/demos.zig"
       - ".github/workflows/web.yml"
   release:
     types: [published]

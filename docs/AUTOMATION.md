@@ -30,6 +30,16 @@ a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app
 | Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made); `FIZZY_DEMO=<file>.zon` (or `.tape`) plays a tape file, a live one through the live driver |
 | Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`) fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |
 
+**Hosted tapes.** `zig build demos` (part of `zig build web`) writes every tape fizzy hosts into
+`zig-out/web/demos/`: the bundled demos built from their scripts, and each hand-written tape in
+`docs/demos/`, all in the deflated binary form, with an `index.json` naming each one's title,
+length and whether it is live (`scripts/demos.zig`). Each copy of the app on the site serves the
+tapes built from its own commit, so a page embeds `fizzyed.it/app/?demo=demos/hello.tape` and
+the tape always matches the app that plays it. A new tape for the site is a `.zon` in
+`docs/demos/`, and nothing else. A bundled demo plays without fetching anything (`?demo=tour`);
+its tape is for a player that is not that build of fizzy. The scripts in `src/editor/demos/` need
+only `tape`, so the tool builds them on the host; one that needs more breaks `zig build demos`.
+
 While a demo plays:
 
 - **A click, tap, scroll or key pauses it.** A pointer event goes on to do what the person meant;
@@ -490,4 +500,3 @@ to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
   so the recording is size-independent, and writes the tape in its binary form.
 - **Quick open over mounts** — the palette's index should come from `core.FileTable`, which
   already lists mounts; then a demo can show it.
-- **A `demos` build step** that writes every bundled demo as a tape, for a site to host.
