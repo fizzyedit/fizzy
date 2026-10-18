@@ -6881,7 +6881,8 @@ test "control: /openapi.json describes each command's body and the declared even
     try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off", .run = ControlFixture.nothing });
     // A `runWith` written by hand, declaring no parameters (as the chat plugin's are).
     try host.registerCommand(.{ .id = "t.by hand{x}", .owner = &plugin, .title = "By hand", .runWith = OpenApiFixture.byHand });
-    // A second of an id: the server runs the first, and the description has one path.
+    // The same plugin registering an id again, as a reload of its registrations does, puts the new
+    // one in the first's place (`Host.registerCommand`): the description has one path, the new one's.
     try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off again", .run = ControlFixture.nothing });
     try host.declareEvent(.{ .name = "t.placed", .owner = &plugin, .description = "Something was placed.", .payload = ".{ .line = 4, .side = .left }" });
 
@@ -6900,7 +6901,7 @@ test "control: /openapi.json describes each command's body and the declared even
             return error.TestUnexpectedResult;
         }
     }
-    try std.testing.expectEqualStrings("Off", paths.get("/commands/t.off").?.object.get("post").?.object.get("summary").?.string);
+    try std.testing.expectEqualStrings("Off again", paths.get("/commands/t.off").?.object.get("post").?.object.get("summary").?.string);
 
     // The body: each parameter's type, the required ones listed, nothing else accepted.
     const place = paths.get("/commands/t.place").?.object.get("post").?.object;
