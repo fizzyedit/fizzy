@@ -3059,6 +3059,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             .frames = if (recorded != null) &ds.frames else null,
             .export_from = if (track) |tr| tr.base_top else null,
             .window_summary = summary,
+            .progress = editor.tape_tabs.progress(doc.owner.documentPath(doc)),
         });
         if (pressed.exported) |win| {
             editor.share_pending = .{ .doc_id = doc.id, .from = win.from, .to = win.to };

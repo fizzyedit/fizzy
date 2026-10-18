@@ -5400,6 +5400,54 @@ test "demo: closed from its bar, the bar runs back together before the demo goes
     try std.testing.expect(frames > 1);
 }
 
+test "demo: the bar goes into its dome and grows back out of it" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    for (0..20) |_| _ = try dvui.testing.step(demoFrame);
+    const tr = &demo_player.transport;
+    try std.testing.expect(tr.openness > 0.99);
+
+    // Its tab sends it into the dome, ended as it is, and the dome full: the tape has played out.
+    try std.testing.expect(tr.tab.w > 0);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.tab.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    try std.testing.expect(tr.tucked);
+    var frames: usize = 0;
+    while (tr.openness > 0 and frames < 60) : (frames += 1) _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(@as(f32, 0), tr.openness);
+    const dome = tr.dome orelse return error.TestUnexpectedResult;
+    try std.testing.expect(dvui.tagGet("demo.dome") != null);
+
+    // Passing over the dome brings nothing; held on it, the bar grows back out.
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = dome.center() });
+    for (0..3) |_| _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(@as(f32, 0), tr.openness);
+    frames = 0;
+    while (tr.openness < 0.99 and frames < 200) : (frames += 1) _ = try dvui.testing.step(demoFrame);
+    try std.testing.expect(tr.openness > 0.99);
+    try std.testing.expect(!tr.tucked);
+
+    // In again, and a press on the dome brings it at once.
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.tab.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    frames = 0;
+    while (tr.openness > 0 and frames < 60) : (frames += 1) _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.dome.?.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    try std.testing.expect(!tr.tucked);
+    // Not the app's: the demo was not diverged by it.
+    try std.testing.expect(!demo_player.diverged);
+}
+
 test "demo: a replay that does not reach what playing did is caught" {
     var t = try demoCtx();
     defer deinitDemo(&t);
