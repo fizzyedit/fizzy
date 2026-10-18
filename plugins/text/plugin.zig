@@ -403,12 +403,23 @@ fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyer
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     const steps = try doc.history.line(arena);
     const entries = try arena.alloc(sdk.Plugin.HistoryLine.Entry, steps.len);
-    for (steps, entries) |st, *e| e.* = .{ .id = st.step, .title = switch (st.kind) {
+    for (steps, entries) |st, *e| e.* = .{ .id = st.step, .title = kindTitle(st.kind) };
+    // A step of a jump back reads as the move it is part of: "Back to Typing".
+    for (steps, entries) |st, *e| {
+        const to = st.back_to orelse continue;
+        const what = for (steps) |o| {
+            if (o.step == to) break kindTitle(o.kind);
+        } else "the Start";
+        e.title = try std.fmt.allocPrint(arena, "Back to {s}", .{what});
+    }
+    return .{ .version = doc.history.version, .entries = entries, .at = doc.history.undo_stack.items.len };
+}
+fn kindTitle(kind: @import("src/textcore/textcore.zig").History.EditKind) []const u8 {
+    return switch (kind) {
         .typing_other, .typing_first_space, .typing_consecutive_space => "Typing",
         .deleting_left, .deleting_right => "Delete",
         .other => "Edit",
-    } };
-    return .{ .version = doc.history.version, .entries = entries, .at = doc.history.undo_stack.items.len };
+    };
 }
 fn historyGoTo(_: *anyopaque, handle: DocHandle, id: u64) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;

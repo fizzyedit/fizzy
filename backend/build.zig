@@ -72,6 +72,8 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     // The backend's health counters: frame-time percentiles, per-frame counts, SDL's log counted
     // from any thread, a snapshot as ZON.
     .{ .name = "backend-health-tests", .root = "src/Health.zig" },
+    // Which touch button each finger on the screen presses; a trackpad's fingers, none.
+    .{ .name = "backend-touch-slots-tests", .root = "src/touch_slots.zig" },
 };
 
 /// Where the macOS SDK is, for a macOS target that is not the host's own (`-Dtarget=aarch64-macos`

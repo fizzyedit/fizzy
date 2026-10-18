@@ -115,7 +115,12 @@ pub fn wireAppModule(
     app_module.addImport("tape", core_module.import_table.get("tape").?);
     app_module.addImport("replay", core_module.import_table.get("replay").?);
     app_module.addImport("crash", crashModule(b, target, optimize));
-    if (consumer) |c| c.addImport("app", app_module);
+    if (consumer) |c| {
+        c.addImport("app", app_module);
+        // The bundled demos' scripts (`src/editor/demos/`) need only `tape`, so they build on the
+        // host too (`zig build demos`).
+        c.addImport("tape", core_module.import_table.get("tape").?);
+    }
     return app_module;
 }
 
