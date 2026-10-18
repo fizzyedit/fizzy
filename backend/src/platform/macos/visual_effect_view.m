@@ -227,6 +227,19 @@ void fizzy_macos_window_bring_forward(void *nswindow) {
     if (w != nil) [w orderFront:nil];
 }
 
+/* `nswindow` moved by the app under a drag another window holds (`SDLBackend.viewportHeld`): the
+ * pointer through it, so asking which of the app's windows is under the pointer finds the one
+ * below; and above the app's windows, the key one among them, which it is not made — shown not
+ * key, it opened behind the window it was dragged out of (the user). Let go, an ordinary window
+ * again, in front and key. */
+void fizzy_macos_window_held(void *nswindow, int on) {
+    NSWindow *w = (__bridge NSWindow *)nswindow;
+    if (w == nil) return;
+    [w setIgnoresMouseEvents:on != 0];
+    [w setLevel:on != 0 ? NSFloatingWindowLevel : NSNormalWindowLevel];
+    if (on == 0 && [w isVisible]) [w makeKeyAndOrderFront:nil];
+}
+
 /* The app's window in front under the pointer, or nil where another app's is
  * (`SDLBackend.heldAcrossWindows`). */
 void *fizzy_macos_window_at_pointer(void) {

@@ -317,6 +317,12 @@ pub fn spaceFullness(vp: *const Viewport) ?f32 {
     return dvui.currentWindow().backend.impl.viewportSpaceFullness(vp);
 }
 
+/// `vp`'s window moved by the app under a drag another window holds (`SDLBackend.viewportHeld`): the
+/// pointer passes through it, and it shows without the keyboard; let go, an ordinary window.
+pub fn held(vp: *Viewport, on: bool) void {
+    dvui.currentWindow().backend.impl.viewportHeld(vp, on);
+}
+
 /// `vp`'s window `alpha` opaque, all of it — its material too.
 pub fn fade(vp: *Viewport, alpha: f32) void {
     dvui.currentWindow().backend.impl.viewportFade(vp, alpha);
