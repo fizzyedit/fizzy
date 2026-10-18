@@ -1614,7 +1614,7 @@ const WebPluginRequest = struct {
         // whether this host will accept the build (fingerprint, SDK version, declared id), and a
         // remembered build that is refused would greet the user with the same failure every
         // visit. What is remembered is what ran.
-        PluginLoader.remember(req.id, req.url);
+        if (!web_visit_only.contains(req.id)) PluginLoader.remember(req.id, req.url);
         PluginStore.webLoadSucceeded(req.id);
         dvui.log.info("web plugin '{s}' loaded from {s}", .{ req.id, req.url });
         editor.app.host.refresh();
@@ -1730,8 +1730,26 @@ export fn FizzyWebPlayDemo(ptr: [*]u8, len: usize, is_tape: bool) void {
     editor.app.host.refresh();
 }
 
+/// The page plays a tape it fetched from a link (`?tape=<url>`): once the plugins its documents
+/// belong to are loaded, asked of the store as needed (`TapeTabs.openWhenReady`), in a tab of its
+/// own with nothing else in view: the page is the tape.
+export fn FizzyWebPlayTape(ptr: [*]u8, len: usize) void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    const editor = web_editor orelse return;
+    const bytes = ptr[0..len];
+    defer editor.app.gpa.free(bytes);
+    editor.tape_tabs.openWhenReady(editor, bytes, true) catch |err| {
+        dvui.log.err("web: could not play the tape: {t}", .{err});
+        editor.demo.playTapeSoon(bytes);
+    };
+    editor.app.host.refresh();
+}
+
 /// The one editor, for the page's calls. Set by `postInit` on the web.
 var web_editor: ?*Editor = null;
+/// Plugin ids loaded for this visit only (`PluginManager.loadFromUrl`: a shared tape's owners),
+/// which the page does not bring back on the next.
+var web_visit_only: std.StringHashMapUnmanaged(void) = .empty;
 /// Plugin ids the page is fetching for us right now.
 var web_loads_in_flight: std.StringHashMapUnmanaged(void) = .empty;
 /// Plugin ids whose file-type prompt (`maybeShowFileTypeDialog`) waits for their web load to
@@ -6781,6 +6799,14 @@ const plugin_manager_vtable: PluginManager.VTable = .{
             editor.app.untrackDisabledPlugin(id);
             try editor.setPluginEnabledPersisted(id, true);
             queueWebFileTypePrompt(editor.app.gpa, id);
+            return editor.loadWebPlugin(id, url, sha256);
+        }
+    }.f,
+    .loadFromUrl = struct {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+            const editor = pmSelf(ctx);
+            // For the visit: the arrival neither remembers it nor asks about its file types.
+            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, try editor.app.gpa.dupe(u8, id), {}) catch {};
             return editor.loadWebPlugin(id, url, sha256);
         }
     }.f,

@@ -107,6 +107,8 @@ pub fn addSteps(
         "FizzyWebShowInRoot",
         // `?demo=`: a bundled demo by name, or a fetched tape (`Editor.Demo`).
         "FizzyWebPlayDemo",
+        // `?tape=`: a shared tape, played once the plugins it needs are loaded (`TapeTabs`).
+        "FizzyWebPlayTape",
         "__stack_pointer",
         "dvui_c_alloc",
         "dvui_c_free",

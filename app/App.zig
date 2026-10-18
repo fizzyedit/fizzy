@@ -544,6 +544,15 @@ pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.
     const Api = sdk.services.plugins.Api;
     var out: std.ArrayList(Api.Info) = .empty;
     const host = &app.host;
+    // Every command registration each plugin holds, base, reserve and override, in one pass.
+    var command_counts: std.AutoHashMapUnmanaged(*sdk.Plugin, u32) = .empty;
+    var slots = host.command_slots.valueIterator();
+    while (slots.next()) |slot| for ([_][]const sdk.Command{ slot.bases.items, slot.overrides.items }) |list| {
+        for (list) |c| if (c.owner) |o| {
+            const gop = try command_counts.getOrPut(arena, o);
+            gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+        };
+    };
     for (host.plugins.items) |plugin| {
         if (plugin.internal) continue;
         var info: Api.Info = .{
@@ -560,7 +569,7 @@ pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.
         };
         const r = &info.registered;
         r.surfaces = countOwned(host.surfaces.items, plugin);
-        r.commands = countOwned(host.commands.items, plugin);
+        r.commands = command_counts.get(plugin) orelse 0;
         r.services = countOwned(host.services.items, plugin);
         r.menus = countOwned(host.menus.items, plugin) + countOwned(host.menu_sections.items, plugin) +
             countOwned(host.native_menu_items.items, plugin) + countOwned(host.rail_items.items, plugin) +

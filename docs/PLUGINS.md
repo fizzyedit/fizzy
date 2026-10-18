@@ -957,6 +957,30 @@ fn goToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) any
 - **`run` and `runWith`.** A command needs at least one; `registerCommand` refuses one with
   neither. Keep `run` alongside `runWith` only if invoking with no arguments should do something
   of its own (open your own dialog, say) rather than ask.
+- **One registration per id, unless you override.** An id has one registration of its own,
+  its *base*. **A second registration of an id without `replaces` is ignored** while the first
+  stands: `registerCommand` logs a warning naming both plugins and returns without an error, so
+  check the log if your command never runs. It is kept in reserve, and takes the first's place
+  if that one's plugin is unloaded. Registering your *own* command again (same id, same plugin)
+  updates it in place, with no warning.
+- **Overriding one.** To take a command over on purpose (an app's plugin replacing `fizzy.about`
+  or `fizzy.reportBug`), register it with `.replaces = true`, an *override*. The newest override
+  is the command everyone runs (menus, keys, the palette); registering your override again
+  replaces your earlier one and makes it the newest. An override may come before its base, and
+  a base that registers later, or again after its plugin reloads, waits beneath it. When your
+  plugin is unloaded, the next override down, or the base, is the command again.
+  - To add to a command rather than replace it, call through to what you replaced with
+    `host.callReplaced(&plugin, id, args, arena)`: the next older override, else the base.
+    While your override is running (or what it reached through `callReplaced`), running `id` by
+    id from inside would run your override again: `callCommand` refuses it (`.failed`) and
+    `runCommand` returns `error.CommandRanItself`. A command with no override running its own id
+    is not stopped.
+  - A claim on a document holds the commands its owner registered, and any command named for
+    it: the plugin whose id is the longest prefix of the command id before a `.` (`pixi.undo`,
+    `acme.paint.undo` for a plugin `acme.paint`). So another plugin's override of `pixi.undo` is
+    held on a claimed pixi document, even registered before pixi's own.
+  - New File commands (`<id>.new`, `<id>.new.<kind>`) cannot be overridden yet: such an
+    override is ignored with a warning.
 - **Who can call it.** Any plugin can run any command with arguments, as it already could without
   them. Treat arguments as input from outside: check them as you would a user's.
 - **Listing.** `host.commandCount()` / `host.commandAt(i)` walk the registry, `params` included,
