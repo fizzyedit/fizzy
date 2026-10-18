@@ -205,6 +205,28 @@ int fizzy_macos_window_off_active_space(void *nswindow) {
     return window != nil && [window isVisible] && ![window isOnActiveSpace] ? 1 : 0;
 }
 
+/* The app's window the pointer is over, the front one where several are, of those that take the
+ * pointer: shown, on the Space being shown, not click-through (`SDLBackend.windowAtPointer`); null
+ * over none. Not the window in front under the pointer (`fizzy_macos_window_at_pointer`): a
+ * tear-off's card follows the pointer, and asked that, the card — or the glass the OS puts with it —
+ * answered, none of the app's ordinary windows, and the pointer read as over the desktop over a
+ * window of the app's (the user, traced). */
+void *fizzy_macos_app_window_at_pointer(void) {
+    const NSPoint p = [NSEvent mouseLocation];
+    for (NSWindow *w in [NSApp orderedWindows]) {
+        if (![w isVisible] || ![w isOnActiveSpace] || [w ignoresMouseEvents]) continue;
+        if (NSPointInRect(p, [w frame])) return (__bridge void *)w;
+    }
+    return NULL;
+}
+
+/* `nswindow` in front of the app's other windows, not made key: a window a drag is over
+ * (`os_windows`' tear-off), brought forward to show where it would land. */
+void fizzy_macos_window_bring_forward(void *nswindow) {
+    NSWindow *w = (__bridge NSWindow *)nswindow;
+    if (w != nil) [w orderFront:nil];
+}
+
 /* The app's window in front under the pointer, or nil where another app's is
  * (`SDLBackend.heldAcrossWindows`). */
 void *fizzy_macos_window_at_pointer(void) {
