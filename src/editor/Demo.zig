@@ -13,8 +13,9 @@
 //! A demo plays inside the user's own copy of fizzy, so it must not cost them anything: `begin`
 //! sets their session aside (project folder, open documents) and flushes any pending layout and
 //! settings writes, nothing is persisted while the demo is loaded (`active`), and `end` closes the
-//! demo's documents, reloads the layout from `layout.zon` and reopens what the user had. A demo
-//! will not start over unsaved changes.
+//! demo's documents, reloads the layout from `layout.zon` and reopens what the user had: from its
+//! path, or from the bytes `begin` kept of one its path cannot open again (a file the web page
+//! fetched, a zip whose folder is the project). A demo will not start over unsaved changes.
 //!
 //! **Snapshots** (`automation.Stage.capture`) hold what a scene changes as it plays: the mounted
 //! files as saved, each open document's state from its owner (`captureDocumentState` — contents,
@@ -98,8 +99,16 @@ const Pending = union(enum) {
 
 const Saved = struct {
     folder: ?[]u8,
-    /// Open documents' paths, the active one last so it is focused again.
-    docs: [][]u8,
+    /// Open documents, the active one last so it is focused again.
+    docs: []Doc,
+
+    const Doc = struct {
+        path: []u8,
+        /// What it was opened from, when its path cannot open it again (`reopenable`): a file the
+        /// web page fetched or the person uploaded, a zip whose folder is the project. Null: it
+        /// reopens from its path.
+        bytes: ?[]u8 = null,
+    };
 };
 
 /// Inert until `attach`: nothing loaded, so nothing in `tick` acts on it.
@@ -441,16 +450,23 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     self.saveSettings();
 
     const gpa = editor.app.gpa;
-    var docs: std.ArrayList([]u8) = .empty;
+    var docs: std.ArrayList(Saved.Doc) = .empty;
     const active_id = if (editor.activeDoc()) |d| d.id else null;
-    var active_path: ?[]u8 = null;
+    var active_doc: ?Saved.Doc = null;
     for (editor.app.open_files.values()) |doc| {
         const path = doc.owner.documentPath(doc);
         if (path.len == 0 or std.mem.startsWith(u8, path, "demo://")) continue;
-        const copy = gpa.dupe(u8, path) catch continue;
-        if (active_id == doc.id) active_path = copy else docs.append(gpa, copy) catch gpa.free(copy);
+        // Never saved (`untitled-1`): no file, and clean, since `mayStart` refused unsaved work, so
+        // nothing to give back. Opened from its bytes it would come back as a file of that name.
+        if (!reopenable(editor, path) and !doc.owner.documentHasRecognizedSaveExtension(doc)) continue;
+        var saved: Saved.Doc = .{ .path = gpa.dupe(u8, path) catch continue };
+        if (!reopenable(editor, path)) {
+            saved.bytes = doc.owner.documentBytes(doc, path, gpa) catch null;
+            if (saved.bytes == null) dvui.log.warn("demo: {s} cannot be opened again after the demo: its owner gives no bytes for it", .{path});
+        }
+        if (active_id == doc.id) active_doc = saved else docs.append(gpa, saved) catch freeSavedDoc(gpa, saved);
     }
-    if (active_path) |p| docs.append(gpa, p) catch gpa.free(p);
+    if (active_doc) |d| docs.append(gpa, d) catch freeSavedDoc(gpa, d);
     // Nor is a demo's folder: one demo straight after another finds the last one's folder still
     // open — giving the user theirs back by closing it is deferred to the next frame
     // (`App.closeProjectFolder`) — and must not give it to them at its end.
@@ -482,14 +498,27 @@ fn end(ctx: *anyopaque) void {
     editor.command_palette.finishClose();
 
     const saved = self.saved orelse return;
+    // What was opened from bytes first: a zip among them mounts again, so the folder and the
+    // files opened from inside it can be opened after it.
+    for (saved.docs) |d| {
+        const bytes = d.bytes orelse continue;
+        const path = gpa.dupe(u8, d.path) catch continue;
+        _ = editor.openFileFromBytes(path, bytes, editor.workbench.currentGroupingID()) catch |err|
+            dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
+    }
     if (saved.folder) |f| {
         editor.setProjectFolder(f) catch |err| dvui.log.warn("demo: could not reopen {s}: {t}", .{ f, err });
     } else {
         editor.app.host.closeProjectFolder();
     }
-    for (saved.docs) |path| {
-        _ = editor.openFilePath(path, editor.workbench.currentGroupingID()) catch |err|
-            dvui.log.warn("demo: could not reopen {s}: {t}", .{ path, err });
+    for (saved.docs) |d| {
+        if (d.bytes != null) continue;
+        _ = editor.openFilePath(d.path, editor.workbench.currentGroupingID()) catch |err|
+            dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
+    }
+    // The active one last, whichever way it came back.
+    if (saved.docs.len > 0) {
+        if (openIndex(editor, saved.docs[saved.docs.len - 1].path)) |index| editor.workbench.setActiveDocIndex(index);
     }
     self.freeSaved();
     dvui.refresh(null, @src(), null);
@@ -499,9 +528,24 @@ fn freeSaved(self: *Demo) void {
     const gpa = self.editor.app.gpa;
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    for (saved.docs) |d| gpa.free(d);
+    for (saved.docs) |d| freeSavedDoc(gpa, d);
     gpa.free(saved.docs);
     self.saved = null;
+}
+
+fn freeSavedDoc(gpa: std.mem.Allocator, d: Saved.Doc) void {
+    gpa.free(d.path);
+    if (d.bytes) |b| gpa.free(b);
+}
+
+/// Whether `path` opens again from where it is: a file on a mount (one the demo closes comes back
+/// when what mounted it does), or on disk. The web has no disk: what is not on a mount there was
+/// fetched or uploaded.
+fn reopenable(editor: *Editor, path: []const u8) bool {
+    if (editor.app.file_table.isMounted(path)) return true;
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    std.Io.Dir.cwd().access(dvui.io, path, .{}) catch return false;
+    return true;
 }
 
 /// Put fizzy into `kf` outright: nothing the demo did before survives.

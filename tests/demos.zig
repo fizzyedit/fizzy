@@ -68,12 +68,21 @@ test "demo: the rail's Files anchor the scripts spell out is the one fizzy publi
     try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
 }
 
-test "demo: every bundled demo plays to the end through fizzy's stage, and a seek lands on what playing reached" {
+test "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after" {
     var app: BundledApp = undefined;
     try app.up();
     defer app.down();
     const p = &app.editor.demo.player;
     const gpa = std.testing.allocator;
+
+    // What the person had before the demos: a folder opened from a zip's bytes, as the web's
+    // `?open=/site.zip` opens the site. There is no file to open it from again.
+    const site = try openZipFromBytes(app.editor, "site.zip", &.{.{ "README.md", "# The site\n" }});
+    defer gpa.free(site);
+    const docs_before = app.editor.app.open_files.count();
+    const active_before = try gpa.dupe(u8, activePath(app.editor));
+    defer gpa.free(active_before);
+    try std.testing.expectEqualStrings("site.zip", active_before);
     var moments: std.ArrayList(DemoMoment) = .empty;
     defer moments.deinit(gpa);
     var prng: std.Random.DefaultPrng = .init(bundled_seek_seed);
@@ -131,4 +140,30 @@ test "demo: every bundled demo plays to the end through fizzy's stage, and a see
     }
     p.unload();
     try dvui.testing.settle(headlessFrame);
+
+    try std.testing.expectEqualStrings(site, app.editor.app.folder orelse "");
+    try std.testing.expectEqual(docs_before, app.editor.app.open_files.count());
+    try std.testing.expect(app.editor.app.host.files.?.isMounted(site));
+    try std.testing.expectEqualStrings(active_before, activePath(app.editor));
+}
+
+fn activePath(editor: *fizzy.Editor) []const u8 {
+    const doc = editor.activeDoc() orelse return "";
+    return doc.owner.documentPath(doc);
+}
+
+/// Open a zip of `files` from its bytes, as the web page opens one it fetched
+/// (`FizzyWebOpenBytes`), and return the folder it mounted as, in `std.testing.allocator`.
+fn openZipFromBytes(editor: *fizzy.Editor, name: []const u8, files: []const struct { []const u8, []const u8 }) ![]u8 {
+    const gpa = std.testing.allocator;
+    var mem = try fizzy.core.vfs.Mem.init(gpa);
+    defer mem.deinit();
+    for (files) |f| try mem.put(f[0], f[1]);
+    const bytes = try fizzy.core.vfs.zip.pack(gpa, &mem);
+    defer gpa.free(bytes);
+    _ = try editor.openFileFromBytes(try editor.app.gpa.dupe(u8, name), bytes, 0);
+    try dvui.testing.settle(headlessFrame);
+    const folder = editor.app.folder orelse return error.NotMounted;
+    try std.testing.expect(std.mem.startsWith(u8, folder, "zip://"));
+    return gpa.dupe(u8, folder);
 }
