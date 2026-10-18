@@ -325,7 +325,9 @@ pub fn frameEnd(self: *Demo, main: ?Picture) void {
     const taken = self.snapshot.taken;
     self.snapshot.endFrame();
     // What the snapshot just written shows: every command run up to now (`fizzy.screen`).
-    if (self.snapshot.taken != taken) self.editor.command_runs_at_snapshot = self.editor.app.host.command_runs;
+    if (self.snapshot.taken != taken) {
+        self.editor.command_runs_at_snapshot = self.editor.app.host.command_runs;
+    }
     if (main != null) self.picture.endFrame(sources);
 }
 

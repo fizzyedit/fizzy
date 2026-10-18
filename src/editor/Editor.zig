@@ -142,7 +142,14 @@ plugin_reloads: @import("PluginReloads.zig") = .{},
 /// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
 black_box: @import("app").automation.BlackBox = .{},
 /// `fizzy.screen` calls waiting for their snapshot (`answerLaterCommands`).
-later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, frames: u32 = 0 }) = .empty,
+later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, since: u32 = 0, frames: u32 = 0 }) = .empty,
+/// The last screens `fizzy.screen` answered, by number, oldest first (`gpa`): what a `since` is
+/// answered against (`screenAnswer`). Only those, not every frame taken nor a stream's sends: a
+/// `since` names a screen someone asked for, and an animation streamed must not push it out.
+screen_history: std.ArrayListUnmanaged(struct { seq: u32, text: []u8 }) = .empty,
+/// The screen last streamed, by number (`screen_streamed_seq`), `gpa`: what a change-taking
+/// stream's next change is on.
+screen_streamed_text: []u8 = &.{},
 /// Until when someone is watching the screen (`fizzy.screen`): every frame is taken until then
 /// (`Snapshot.keepTaking`), so the next asking is answered at once.
 screen_watched_until_ns: i96 = 0,
@@ -156,6 +163,8 @@ screen_streams: usize = 0,
 screen_streamed_hash: u64 = 0,
 /// The last screen could not be streamed (said once, in the log).
 screen_stream_failed: bool = false,
+/// The snapshot last streamed, by number: what a change-taking stream's next change is on.
+screen_streamed_seq: u32 = 0,
 /// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
 later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
 /// The control server would not start (`syncControlServer`): not retried until the setting goes
@@ -5396,6 +5405,43 @@ pub const Placement = struct {
     beside: bool = false,
 };
 
+/// How many answers `screen_history` keeps: a few agents, or one looking back a few steps.
+const screen_history_len = 8;
+
+/// `fizzy.screen` answered snapshot `seq`: kept to answer changes since it.
+fn noteScreen(editor: *Editor, seq: u32, text: []const u8) void {
+    for (editor.screen_history.items) |h| if (h.seq == seq) return;
+    const kept = editor.app.gpa.dupe(u8, text) catch return;
+    if (editor.screen_history.items.len == screen_history_len) editor.app.gpa.free(editor.screen_history.orderedRemove(0).text);
+    editor.screen_history.append(editor.app.gpa, .{ .seq = seq, .text = kept }) catch editor.app.gpa.free(kept);
+}
+
+/// What `fizzy.screen` answers, as ZON, in `arena`: snapshot `seq` (`text`) as keyed nodes,
+/// `.{ .seq, .nodes }`, or, with `since` a snapshot still kept, what changed since it,
+/// `.{ .seq, .since, .added, .removed, .changed }` (`control.screen_diff`). A `since` no longer
+/// kept (or none) is answered in full: the caller takes it as its new base.
+pub fn screenAnswer(editor: *Editor, arena: std.mem.Allocator, seq: u32, text: []const u8, since: u32, kind: enum { answer, stream }) ![]const u8 {
+    const screen_diff = @import("app").control.screen_diff;
+    const nodes = try screen_diff.parse(arena, text);
+    // Kept once answered, after `since` is looked up: kept first, it could push that one out.
+    defer if (kind == .answer) editor.noteScreen(seq, text);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const opts: std.zon.stringify.SerializeOptions = .{ .whitespace = false, .emit_default_optional_fields = false };
+    if (since != 0) {
+        const streamed = since == editor.screen_streamed_seq and editor.screen_streamed_text.len > 0;
+        const base: ?[]const u8 = if (since == seq) text else if (streamed) editor.screen_streamed_text else for (editor.screen_history.items) |h| {
+            if (h.seq == since) break h.text;
+        } else null;
+        if (base) |b| {
+            const d = try screen_diff.diff(arena, try screen_diff.parse(arena, b), nodes);
+            try std.zon.stringify.serialize(.{ .seq = seq, .since = since, .added = d.added, .removed = d.removed, .changed = d.changed }, opts, &out.writer);
+            return out.written();
+        }
+    }
+    try std.zon.stringify.serialize(.{ .seq = seq, .nodes = nodes }, opts, &out.writer);
+    return out.written();
+}
+
 /// Answer fizzy's own commands that answer a frame or more later (`fizzy.screen`, `fizzy.settled`),
 /// once what they wait for has come; drop those nobody waits for any more. At a frame's start, and
 /// at its end once its snapshot is written (`Entry`), where only screens are answered: whether the
@@ -5415,8 +5461,9 @@ pub fn answerLaterCommands(editor: *Editor, at_frame_end: bool) void {
         }
         if (api.snapshotText(w.snapshot)) |text| {
             const ticket = w.ticket;
+            const answer = editor.screenAnswer(dvui.currentWindow().arena(), @intFromEnum(w.snapshot), text, w.since, .answer);
             _ = editor.later_screens.swapRemove(i);
-            host.finishCall(ticket, .{ .ok = text });
+            host.finishCall(ticket, if (answer) |a| .{ .ok = a } else |err| .{ .failed = @errorName(err) });
             continue;
         }
         if (at_frame_end) {
@@ -5486,15 +5533,30 @@ pub fn streamScreen(editor: *Editor) void {
     const changed = hash != editor.screen_streamed_hash;
     if (!changed and streams.new == 0) return;
     const arena = dvui.currentWindow().arena();
-    const json = @import("app").control.json.jsonFromZon(arena, text) catch |err| {
-        // Kept unsent, so it is tried again next frame; said once.
-        if (!editor.screen_stream_failed) dvui.log.warn("control: the screen could not be streamed: {t}", .{err});
-        editor.screen_stream_failed = true;
-        return;
-    };
+    const json = @import("app").control.json;
+    const seq = snapshot.taken;
+    // In full, keyed (`screenAnswer`); and, for the streams taking changes, what changed since the
+    // screen last streamed, while it is still kept.
+    const whole = json.jsonFromZon(arena, editor.screenAnswer(arena, seq, text, 0, .stream) catch |err| return editor.streamFailed(err)) catch |err| return editor.streamFailed(err);
+    const delta: ?@import("app").control.Server.Delta = if (streams.diffing > 0 and editor.screen_streamed_seq != 0) delta: {
+        const zon = editor.screenAnswer(arena, seq, text, editor.screen_streamed_seq, .stream) catch break :delta null;
+        break :delta .{ .since = editor.screen_streamed_seq, .json = json.jsonFromZon(arena, zon) catch break :delta null };
+    } else null;
     editor.screen_stream_failed = false;
-    server.publishNamed("fizzy.screen", json, changed);
+    // A change bigger than the screen is no change worth sending: the whole goes instead.
+    const worth = if (delta) |d| if (d.json.len < whole.len) d else null else null;
+    server.publishNamed("fizzy.screen", whole, seq, worth, changed);
     editor.screen_streamed_hash = hash;
+    editor.screen_streamed_seq = seq;
+    const kept = editor.app.gpa.dupe(u8, text) catch return;
+    editor.app.gpa.free(editor.screen_streamed_text);
+    editor.screen_streamed_text = kept;
+}
+
+/// Kept unsent, so it is tried again next frame; said once.
+fn streamFailed(editor: *Editor, err: anyerror) void {
+    if (!editor.screen_stream_failed) dvui.log.warn("control: the screen could not be streamed: {t}", .{err});
+    editor.screen_stream_failed = true;
 }
 
 /// Run the control server while `control_server` is on, and stop it when it goes off. Once a frame;
@@ -6509,6 +6571,9 @@ pub fn deinit(editor: *Editor) !void {
         }
     }
     editor.later_screens.deinit(editor.app.gpa);
+    for (editor.screen_history.items) |h| editor.app.gpa.free(h.text);
+    editor.screen_history.deinit(editor.app.gpa);
+    editor.app.gpa.free(editor.screen_streamed_text);
     editor.later_settles.deinit(editor.app.gpa);
     if (editor.document_watcher) |*w| {
         w.stop();

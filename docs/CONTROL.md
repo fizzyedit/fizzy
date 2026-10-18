@@ -108,6 +108,17 @@ to one asking for everything, since it can be large and frequent. A stream joini
 it is at once. While any stream names it, every frame is taken (as asking for `fizzy.screen` often
 does); with none, nothing is.
 
+**As changes on a base.** A screen comes as `{"seq": n, "nodes": [...]}`, each node with a `key`
+that stays the same from frame to frame: its tag where it has one, else the path to it from the
+nearest node with a tag (`fizzy.window:main/tab:notes.md`), and its parent and window named by key.
+Ask `fizzy.screen` with `{"since": n}`, the `seq` of a screen you read, and the answer is what
+changed since: `{"seq", "since", "added": [nodes], "removed": [keys], "changed": [{key, and only
+what changed: name, rect, focused, parent}]}`. The last 8 screens `fizzy.screen` answered are kept
+for this; an older `since` gets the whole screen, your new base. A stream with `&diff=1` is sent
+the whole screen first, then each frame's changes on the one before, each change's `since` the
+`seq` of the event before it, and the whole screen again whenever it would miss a step, or when
+the change would be larger than the screen (about 7× less data through a tab opening).
+
 `/openapi.json` lists the events plugins declared, with an example payload each. A stream gets a
 keep-alive comment every 15 seconds; one that falls more than 8 MB behind gets nothing more. With
 no stream open, events cost the bus nothing extra.

@@ -652,13 +652,17 @@ fn cmdCaptureWith(state: *anyopaque, args: CaptureArgs.Args, call: *sdk.Command.
     try call.returns(written);
 }
 
-const ScreenArgs = sdk.Command.Params(struct {});
+const ScreenArgs = sdk.Command.Params(struct {
+    since: sdk.Command.Arg(u32, .{ .description = "The `seq` of a screen already read: answered with what changed since it (added, removed, changed nodes) while it is one of the last few, else in full.", .min = 0, .max = std.math.maxInt(u32) }) = .init(0),
+});
 
-/// What is on screen, as ZON (`automation` service `snapshot`): each window, then each widget's
-/// role, name, tag, rect and parent. Asked for often, every frame is taken (`Snapshot.keepTaking`)
+/// What is on screen, as ZON (`automation` service `snapshot`): `.{ .seq, .nodes }`, each window
+/// then each widget with a key that stays the same from frame to frame (`control.screen_diff`),
+/// its role, name, tag, rect and parent's key; with `since`, what changed since that screen
+/// (`Editor.screenAnswer`). Asked for often, every frame is taken (`Snapshot.keepTaking`)
 /// until two seconds pass without asking, and the answer is the frame last drawn, at once.
 /// Otherwise it is taken over the next frame, and answered then (`Editor.answerLaterCommands`).
-fn cmdScreen(state: *anyopaque, _: ScreenArgs.Args, call: *sdk.Command.Call) anyerror!void {
+fn cmdScreen(state: *anyopaque, args: ScreenArgs.Args, call: *sdk.Command.Call) anyerror!void {
     const editor = editorFromState(state);
     const snapshot = &editor.demo.snapshot;
     editor.screen_watched_until_ns = std.Io.Clock.awake.now(dvui.io).nanoseconds + 2 * std.time.ns_per_s;
@@ -667,10 +671,10 @@ fn cmdScreen(state: *anyopaque, _: ScreenArgs.Args, call: *sdk.Command.Call) any
     // what that did is not drawn yet, so the next frame is taken instead.
     const undrawn = editor.app.host.command_runs - 1 > editor.command_runs_at_snapshot;
     if (!undrawn) if (snapshot.latest()) |text| {
-        call.result = try call.arena.dupe(u8, text);
+        call.result = try editor.screenAnswer(call.arena, snapshot.taken, text, args.since, .answer);
         return;
     };
-    try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot() });
+    try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot(), .since = args.since });
 }
 
 const SettledArgs = sdk.Command.Params(struct {
