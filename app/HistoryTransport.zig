@@ -51,6 +51,7 @@ const sdk = @import("fizzy_sdk");
 const icons = @import("icons");
 const rules = @import("history_transport.zig");
 const dome = @import("dome.zig");
+const Liquid = @import("Liquid.zig");
 const dome_rules = @import("dome_rules.zig");
 
 shown: rules.Shown = .{},
@@ -72,6 +73,10 @@ presence: dome_rules.Presence = .{},
 /// The liquid's swing, and the step the document stood at when it was last drawn: a scrub knocks it.
 slosh: dome_rules.Slosh = .{},
 slosh_at: ?usize = null,
+/// The liquid in a corner vial (`DrawOptions.corner`): sloshing as the vial moves, splashing and
+/// its level easing up as steps come. It asks for frames only while it moves.
+liquid: Liquid = .{},
+
 /// The bar has its collapse tab (it grew from a grip): its place reaches up over it.
 tab: bool = false,
 /// The pointer was on the bar last frame: leaving it, the bar goes soon.
@@ -169,6 +174,9 @@ pub const DrawOptions = struct {
     /// A tape playing into the document (fizzy: in a tape's tab), how far it has played, 0 to 1:
     /// the grip fills as it plays rather than by `steps`. Null: none.
     progress: ?f32 = null,
+    /// The card the document is on, its bottom-right corner (`dome.Corner`): the grip is a vial
+    /// there rather than a dome on the middle of `edge`, where a split's bar runs.
+    corner: ?dome.Corner = null,
 };
 
 const HistoryFrames = @import("HistoryFrames.zig");
@@ -191,8 +199,10 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     self.shown.fade = if (opts.history) dome.growNs() else rules.fade_ns;
     var reach = area;
     if (opts.edge) |y| reach.h = @max(reach.h, y - reach.y);
-    const on_grip = opts.history and reach.contains(mouse) and !core.dialogs.modalOverCurrent() and
-        if (gripRect(area, dome.radius, opts.edge)) |g| dvui.windowRectScale().rectToPhysical(g.outsetAll(dome.reach)).contains(mouse) else false;
+    const on_grip = opts.history and !core.dialogs.modalOverCurrent() and if (opts.corner) |c|
+        c.box(dvui.windowRectScale().s).contains(mouse)
+    else
+        reach.contains(mouse) and if (gripRect(area, dome.radius, opts.edge)) |g| dvui.windowRectScale().rectToPhysical(g.outsetAll(dome.reach)).contains(mouse) else false;
     self.tab = opts.history;
     const on_bar = if (self.place(area, now)) |b| b.contains(mouse) else false;
     if (!on_bar) self.held_off = false;
@@ -223,22 +233,34 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (self.grip_steps) |was| if (opts.steps > was) {
             self.stepped_at = now;
             self.slosh.knock(now, 0.35);
+            // Into a vial, the new step splashes the surface, as a drop landing would.
+            self.liquid.splashIn();
         };
         self.grip_steps = opts.steps;
+        self.liquid.setLevel(fill);
+        if (opts.corner) |c| {
+            const s = dvui.windowRectScale().s;
+            self.liquid.step(now, c.point(), c.radiusPx(s), c.liquidDepth(s, self.liquid.shownLevel()));
+        }
         const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
         if (glow == 0) self.stepped_at = null;
         const in_use = on_grip or self.stepped_at != null or !self.slosh.settled(now);
         const alpha = self.presence.ease(in_use, now);
         // While the bar grows out of it, the grip is the bar's glass: not drawn here.
-        if (p <= 0) if (gripRect(area, dome.radius, opts.edge)) |g| if (dome.draw(g, id_extra, .{
+        const grip_look: dome.Look = .{
             .alpha = alpha,
             .lit = on_grip,
             .held = self.dwell.held(now),
             .fill = fill,
             .glow = glow,
             .tilt = self.slosh.tilt(now),
-        }, "history.grip:{s}", .{doc.owner.documentPath(doc)})) self.stir(now);
-        if (self.dwell.since != null or self.stepped_at != null or !self.slosh.settled(now) or self.presence.moving(in_use)) dvui.refresh(null, @src(), null);
+            .liquid = if (opts.corner != null) &self.liquid else null,
+        };
+        if (p <= 0) if (opts.corner) |c| {
+            if (dome.drawCorner(c, id_extra, grip_look, "history.grip:{s}", .{doc.owner.documentPath(doc)})) self.stir(now);
+        } else if (gripRect(area, dome.radius, opts.edge)) |g| if (dome.draw(g, id_extra, grip_look, "history.grip:{s}", .{doc.owner.documentPath(doc)})) self.stir(now);
+        if (self.dwell.since != null or self.stepped_at != null or !self.slosh.settled(now) or self.presence.moving(in_use) or
+            (opts.corner != null and !self.liquid.settled())) dvui.refresh(null, @src(), null);
     }
     if (p <= 0) return pressed;
     const arena = dvui.currentWindow().arena();
@@ -381,10 +403,12 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // the grip in the same glass and shrinking as they leave it, the glass between them reaching
     // further while they are near: they run together and part as drops do. What is on them shows
     // once they are most of the way out. Without a grip, it fades.
-    const from: ?dvui.Rect.Physical = if (opts.history and p < 1) if (gripRect(area, dome.radius, opts.edge)) |g| wrs.rectToPhysical(g) else null else null;
-    const out = core.motion.enterFull(p);
-    const bud: ?dvui.Rect.Physical = if (from) |f| dome.bud(f) else null;
-    const prev_alpha = dvui.alpha(if (from != null) dome.glassAlpha(self.presence.value, p) else p);
+    const from: ?dvui.Rect.Physical = if (!opts.history or p >= 1) null else if (opts.corner) |c| c.box(s) else if (gripRect(area, dome.radius, opts.edge)) |g| wrs.rectToPhysical(g) else null;
+    const out = dome.smooth(p);
+    // Out of a corner vial, which is whole at rest, the glass is whole throughout: eased toward a
+    // dome's quiet presence, it was glass at partial alpha — a hole — and the vial at full alpha
+    // the frame it went back in, a flash.
+    const prev_alpha = dvui.alpha(if (opts.corner != null and from != null) 1 else if (from != null) dome.glassAlpha(self.presence.value, p) else p);
     defer dvui.alphaSet(prev_alpha);
     const pt = dvui.currentWindow().mouse_pt;
     var bubbles: [5]core.dialogs.Bubble = undefined;
@@ -393,9 +417,11 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // strip grows, so the pictures sit inside them.
     const line_radius = std.math.lerp(phys[1].h / 2, core.corners.scaled(core.corners.card) * s, @min(1, grown * 1.5));
     for (phys, bubbles[0..4], 0..) |r, *b, i| b.* = .{
-        .rect = if (bud) |f| dome.lerpRect(f, r, dome.emerge(p, bud_delays[i])) else r,
+        .rect = if (from) |f| dome.pull(f, r, p, bud_delays[i], bud_arcs[i]) else r,
         .radius = if (i == 1 and grown > 0) line_radius else null,
-        .light = if (r.contains(pt) and switch (i) {
+        // Lit under the pointer only once the bar is out: moving, a lit bubble was a lighter drop
+        // among the rest, its light running across the necks as they joined.
+        .light = if (p >= 1 and r.contains(pt) and switch (i) {
             0 => trimming or at > 0,
             2 => !trimming and at < n,
             3 => true,
@@ -404,10 +430,12 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     };
     // The tab, a small drop on the bar's top that its glass runs into.
     var count: usize = if (export_g > 0) 4 else 3;
+    var tab_index: ?usize = null;
     if (self.tab) {
+        tab_index = count;
         bubbles[count] = .{
-            .rect = if (bud) |f| dome.lerpRect(f, tab_p, dome.emerge(p, bud_delays[4])) else tab_p,
-            .light = if (tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
+            .rect = if (from) |f| dome.pull(f, tab_p, p, bud_delays[4], bud_arcs[4]) else tab_p,
+            .light = if (p >= 1 and tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
         };
         count += 1;
     }
@@ -415,17 +443,19 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     var shapes: [6]core.dialogs.Bubble = undefined;
     @memcpy(shapes[0..count], bubbles[0..count]);
     if (from) |f| {
-        shapes[count] = dome.shrinking(f, p);
+        // A corner vial shrinks into its corner; a dome into its edge.
+        shapes[count] = if (opts.corner) |c| .{ .rect = core.widgets.orb.rectOf(c.shape(s, 1 - dome.smooth(p))) } else dome.shrinking(f, p);
         count += 1;
     }
     {
-        // Not past the pane's edge, which the grip stands on.
-        const prev_clip = if (from) |f| dvui.clip(dome.aboveEdge(f)) else dvui.clipGet();
+        // Not past the pane's edge, which the grip stands on: the card, for a corner vial.
+        const prev_clip = if (opts.corner) |c| dvui.clip(c.card) else if (from) |f| dvui.clip(dome.aboveEdge(f)) else dvui.clipGet();
         defer dvui.clipSet(prev_clip);
         // No shadow ring: each bubble's own ring lay dark across the necks where they run together
         // (the tab into the bar). The one soft shadow of the merged shape is the orb's
         // (`plans/LIQUID_EDGE_PLAN.md`); the rim and lens are what set the glass off meanwhile.
-        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = dome.merge(p, 14), .shadow = 0 });
+        // Out of a corner vial, cut by the card's outline, curve and all, as the vial is at rest.
+        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = dome.merge(p, 14), .shadow = 0, .edge = if (opts.corner) |c| c.place() else null });
     }
     // What is on the bubbles comes once they are most of the way out; the liquid comes with them.
     const shape_alpha = dvui.alpha(1);
@@ -435,15 +465,20 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     }
 
     const ink = dvui.themeGet().color(.window, .text);
+    // Each icon on its bubble where the bubble is now, so it rides out of the grip with it and
+    // grows with it, rather than waiting at the place the bubble is going to.
+    const back_now = wrs.rectFromPhysical(bubbles[0].rect);
+    const fwd_now = wrs.rectFromPhysical(bubbles[2].rect);
+    const share_now = wrs.rectFromPhysical(bubbles[3].rect);
     if (trimming) {
-        button(bounds, back, "history_cancel", icons.tvg.lucide.x, ink.opacity(0.85));
-    } else button(bounds, back, "history_back", icons.tvg.lucide.undo, ink.opacity(if (at > 0) 0.85 else 0.3));
-    button(bounds, fwd, "history_forward", icons.tvg.lucide.redo, ink.opacity(if (!trimming and at < n) 0.85 else 0.3));
-    if (self.tab) dome.chevron(bounds, tab, ink.opacity(0.85));
+        button(bounds, back_now, "history_cancel", icons.tvg.lucide.x, ink.opacity(0.85));
+    } else button(bounds, back_now, "history_back", icons.tvg.lucide.undo, ink.opacity(if (at > 0) 0.85 else 0.3));
+    button(bounds, fwd_now, "history_forward", icons.tvg.lucide.redo, ink.opacity(if (!trimming and at < n) 0.85 else 0.3));
+    if (tab_index) |ti| dome.chevron(bounds, wrs.rectFromPhysical(bubbles[ti].rect), ink.opacity(0.85));
     if (export_g > 0.3) {
         if (trimming) {
-            button(bounds, share, "history_export_done", icons.tvg.lucide.check, yellow);
-        } else button(bounds, share, "history_export", icons.tvg.lucide.@"share-2", ink.opacity(0.85 * export_g));
+            button(bounds, share_now, "history_export_done", icons.tvg.lucide.check, yellow);
+        } else button(bounds, share_now, "history_export", icons.tvg.lucide.@"share-2", ink.opacity(0.85 * export_g));
     }
 
     // What the document is at, over the line: the step's title, and how far along.
@@ -474,9 +509,11 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     return pressed;
 }
 
-/// When each bubble buds out of the grip, as a share of the growing: the line first, undo and
-/// redo after it, then export, then the tab.
-const bud_delays = [5]f32{ 0.12, 0, 0.12, 0.22, 0.3 };
+/// When each bubble buds out of the grip, as a share of the growing — the line first, then the
+/// nearest the grip outward: export, redo, undo, the tab — each on its own moment so none travels
+/// stacked on another; and how high each arcs, so their paths fan out.
+const bud_delays = [5]f32{ 0.27, 0, 0.18, 0.09, 0.34 };
+const bud_arcs = [5]f32{ 1.25, 0.6, 1.0, 0.8, 1.6 };
 
 /// macOS's trim yellow.
 const yellow: dvui.Color = .{ .r = 0xF5, .g = 0xC0, .b = 0x2E };

@@ -862,6 +862,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // An orb's geometry: shapes, how one becomes another, the polygons the no-glass path fills
         // (plans/LIQUID_EDGE_PLAN.md, "The orb system"). std-only.
         .{ "fizzy-orb-geometry-tests", "core/orb_geometry.zig" },
+        // The liquid in a history vial: its waves, its drops, and when it is still. std-only.
+        .{ "fizzy-liquid-tests", "app/Liquid.zig" },
         // The in-app menu bar's order: fizzy's menus, then plugins', then Help. std-only (see
         // menu_order.zig); `Menu.draw` walks it.
         .{ "fizzy-menu-order-tests", "src/editor/menu_order.zig" },
