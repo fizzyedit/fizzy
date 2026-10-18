@@ -1179,6 +1179,7 @@ fn plainGlass(window: *c.SDL_Window, opacity: f32, fill: dvui.Color) void {
 /// backend draws as a floating window: it makes no `dvui.Window` of its own for one (no
 /// `initWindowSecondary`).
 pub fn floatingWindowOs(_: *SDLBackend, id: dvui.Id, asked: bool, open_flag: ?*bool, min: dvui.Size, max: dvui.Size) bool {
+    os_windows.closable(id, open_flag != null);
     const shown = switch (floating_os_windows) {
         // And one torn off the main window by a drop over no window (`os_windows.torn`).
         .asked => asked or os_windows.torn(id) or os_windows.heldFrameless(id),
