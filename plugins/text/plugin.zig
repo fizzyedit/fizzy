@@ -409,7 +409,7 @@ fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyer
         const to = st.back_to orelse continue;
         const what = for (steps) |o| {
             if (o.step == to) break kindTitle(o.kind);
-        } else "the Start";
+        } else if (to == 0) "the Start" else "an Earlier Step";
         e.title = try std.fmt.allocPrint(arena, "Back to {s}", .{what});
     }
     return .{ .version = doc.history.version, .entries = entries, .at = doc.history.undo_stack.items.len };
