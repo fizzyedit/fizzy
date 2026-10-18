@@ -378,7 +378,12 @@ export fn fizzy_macos_origin_nudged(cap_x: f64, cap_y: f64, cur_x: f64, cur_y: f
 /// here answers from AppKit's own state, and the window only keeps its content under the title bar
 /// through SDL's styles, for fizzy's chrome (`styleTitled`): without that it came back from each
 /// round trip a title bar shorter.
-pub fn install(win: *dvui.Window) void {
+///
+/// `still`: the window stands still at its full-screen size on its way into or out of full screen,
+/// its picture growing or shrinking in it (as a float's window, `watch`) — for an app whose frame
+/// the backend lays down where the picture is (`SDLBackend.places_main_picture`). Otherwise only a
+/// window of Liquid Glass does.
+pub fn install(win: *dvui.Window, still: bool) void {
     if (comptime builtin.target.os.tag != .macos) return;
     const back = win.backend.impl;
     const cocoa = cocoaWindowOf(back.window) orelse return;
@@ -388,6 +393,7 @@ pub fn install(win: *dvui.Window) void {
     back.present_hook = macosAppPresented;
     addWatched(.{ .window = back.window, .cocoa = cocoa, .follow_position = false });
     fizzy_macos_window_install_resize_observer(cocoa);
+    if (still) fizzy_macos_window_space_still(cocoa);
     // Draw each step of a live resize from inside it, presented with the Core Animation
     // transaction that resizes the window, so the new size and the frame drawn for it reach the
     // screen together (fizzy's SDL patches 0003-0004, `docs/MACOS_LIVE_RESIZE.md`). By name,
@@ -429,6 +435,13 @@ pub fn unwatch(window: *c.SDL_Window) void {
     if (comptime builtin.target.os.tag != .macos) return;
     const cocoa = cocoaWindowOf(window) orelse return;
     fizzy_macos_window_uninstall_monitor(cocoa);
+    // The main window, as the app quits: the pump's tick reads it without asking for its monitor
+    // (`fizzy_macos_window_pump_render`), and one more tick while SDL quits would draw into a
+    // window it has destroyed.
+    if (macos_monitor_window == window) {
+        macos_monitor_window = null;
+        macos_pump_ready = false;
+    }
     for (&watched) |*slot| {
         if (slot.*) |w| if (w.cocoa == cocoa) {
             slot.* = null;
@@ -461,8 +474,33 @@ pub const TitlebarState = struct {
 };
 
 pub fn titlebarState(win: *dvui.Window) TitlebarState {
+    return titlebarStateOf(win.backend.impl.window);
+}
+
+/// The band at the top of `window` its content keeps clear of the traffic lights, points: no less
+/// than `top_buffer` and `titlebar_height` — an app's own header (fizzy's) — and AppKit's title
+/// bar; `top_buffer` alone in a fullscreen Space; closing up and opening again with the window's
+/// way into and out of one. 0 and 0 for a plain dvui app's window, the band under the OS's title
+/// bar (`SDLBackend.places_main_picture`). `titlebar_height` off macOS.
+pub fn titlebarStrip(window: *c.SDL_Window, titlebar_height: f32, top_buffer: f32) f32 {
+    if (comptime builtin.target.os.tag != .macos) return titlebar_height;
+    const t = titlebarStateOf(window);
+    const in: window_layout.StripInputs = .{
+        .collapsed = t.collapsed,
+        .restoring_chrome = t.restoring_chrome,
+        .live_inset = t.live_inset,
+        .saved_inset = t.saved_inset,
+        .titlebar_height = titlebar_height,
+        .titlebar_top_buffer = top_buffer,
+    };
+    if (@import("window.zig").windowSpaceFullness(window)) |f| return window_layout.titlebarStripAtFullness(in, f);
+    return window_layout.chooseTitlebarStrip(in);
+}
+
+/// `titlebarState` of any watched window: the main one, or one of the OS's own frame.
+pub fn titlebarStateOf(window: *c.SDL_Window) TitlebarState {
     if (comptime builtin.target.os.tag != .macos) return .{};
-    const raw_ptr = cocoaWindowOf(win.backend.impl.window);
+    const raw_ptr = cocoaWindowOf(window);
     const inset = if (raw_ptr != null) fizzy_macos_window_titlebar_inset(raw_ptr) else 0;
     const saved = fizzy_macos_window_saved_titlebar_inset(raw_ptr);
     return .{

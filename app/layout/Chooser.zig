@@ -303,7 +303,8 @@ fn carryLifted(self: *Chooser) void {
     } else {
         f.beginViewDrag(lift.id, lift.rect);
         // From the motion that lifted it on: a release in the same frame is the drag's too.
-        if (dvui.currentWindow().capture) |cm| dvui.captureMouseCustom(cm, lift.event);
+        if (dvui.captureMouseGet()) |cm|
+            dvui.captureMouseCustom(cm, lift.event);
     }
     self.carried = lift.id;
     dvui.refresh(null, @src(), null);

@@ -417,7 +417,7 @@ fn sectionOf(places: []const Place, id: []const u8, keywords: []const []const u8
     var best_fit: sdk.keywords.Fit = .none;
     for (places, 0..) |p, i| {
         const fit = sdk.keywords.strength(p.keywords, keywords);
-        if (@intFromEnum(fit) > @intFromEnum(best_fit)) {
+        if (@backingInt(fit) > @backingInt(best_fit)) {
             best = i;
             best_fit = fit;
         }

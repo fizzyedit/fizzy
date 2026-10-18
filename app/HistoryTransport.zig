@@ -1,8 +1,17 @@
 //! A document's transport: a bar of glass at the bottom of its pane, its history as a line with a
 //! knob where the document is, and undo and redo either side (`plans/RECORDING_PLAN.md`, "Undo is
-//! a seek"). Undo and redo show it (`stir`); it stays while the pointer is on it and goes a few
-//! seconds after (`history_transport.Shown`). A press or a drag on the line goes to the step under
-//! it, one `historyGoTo` a frame at most, so a drag across a thousand steps costs a jump a frame.
+//! a seek"). Undo and redo show it (`stir`), and so does its grip; it stays while the pointer is
+//! on it and goes a few seconds after (`history_transport.Shown`). A press or a drag on the line
+//! goes to the step under it, one `historyGoTo` a frame at most, so a drag across a thousand steps
+//! costs a jump a frame.
+//!
+//! **The grip.** Every pane whose document has history (`DrawOptions.history`) has a grip: a small
+//! semicircle on the middle of its bottom edge, standing on the edge, so it covers next to
+//! nothing. The pointer held on it a moment (`dwell_ns`) grows the bar out of it, the grip swelling
+//! as the moment runs, so passing over it on the way somewhere never does; a press brings the bar
+//! at once. The grip gives way to the bar while it shows. It fills with the document's history
+//! (`DrawOptions.steps`), its colour rising in it as steps are made, and brightens a moment at each
+//! new one: it is recording, and there is more to scrub.
 //!
 //! Over any owner's history (`Plugin.historyLine`, `historyGoTo`); an owner without them has no
 //! transport. Nothing runs for a bar that is not showing: no history is asked for, no timer is
@@ -35,6 +44,12 @@ window: ?rules.Trim = null,
 /// What the pointer holds of the window while it drags.
 grip: ?rules.Trim.Grip = null,
 repeat: rules.Repeat = .{},
+/// When the pointer came onto the grip, while it stays there; null off it.
+dwelling: ?i128 = null,
+/// The steps the grip last showed (null before it first drew), and when a new one came: it
+/// brightens a moment.
+grip_steps: ?usize = null,
+stepped_at: ?i128 = null,
 /// The stop the pointer holds the knob at while it drags the line, until the drag ends. Only
 /// while the bar holds the mouse: a drag whose capture went (the bar stopped drawing) is over.
 drag: ?usize = null,
@@ -45,6 +60,16 @@ const strip_h: f32 = 66;
 const button_d: f32 = 34;
 const gap: f32 = 10;
 const max_w: f32 = 460;
+/// The grip's radius: a semicircle twice as wide as it is tall.
+const grip_r: f32 = 9;
+/// How far round the grip the pointer is on it.
+const grip_reach: f32 = 8;
+/// How long the pointer stays on the grip before the bar grows out of it.
+const dwell_ns: i128 = 900 * std.time.ns_per_ms;
+/// How long the grip brightens at a new step.
+const step_glow_ns: i128 = 450 * std.time.ns_per_ms;
+/// The steps that fill the grip to its top; it fills by their logarithm, quickly at first.
+const full_steps: f32 = 200;
 
 /// Undo or redo was pressed at `now_ns`, or something else asked for the bar: it shows.
 pub fn stir(self: *HistoryTransport, now_ns: i128) void {
@@ -71,6 +96,14 @@ pub fn place(self: *const HistoryTransport, area: dvui.Rect.Physical, now_ns: i1
     return dvui.windowRectScale().rectToPhysical(whole.outsetAll(4));
 }
 
+/// The grip over `area` (physical), standing on the middle of its bottom edge, `r` its radius, in
+/// natural units as `geometry`'s; null when the pane is too narrow for the bar.
+fn gripRect(area: dvui.Rect.Physical, r: f32) ?dvui.Rect {
+    const nat = area.toNatural();
+    _ = geometry(nat, 0) orelse return null;
+    return .{ .x = nat.x + nat.w / 2 - r, .y = nat.y + nat.h - r, .w = 2 * r, .h = r };
+}
+
 /// The bar's rect over a pane's natural rect, its strip `grown` (0 to 1) of the way up, or null
 /// when the pane is too narrow for it.
 fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
@@ -87,6 +120,12 @@ fn stopId(line: sdk.Plugin.HistoryLine, i: usize) u64 {
 }
 
 pub const DrawOptions = struct {
+    /// The document has history to show: its pane has a grip. The app says, as it knows cheaply,
+    /// so a pane asks its owner for nothing while the bar is hidden.
+    history: bool = false,
+    /// How many steps of it the app has kept (fizzy: its track's), for the grip's fill; 0: none
+    /// shows, the grip is plain.
+    steps: usize = 0,
     /// The document's pictures, for the strip scrubbing grows; null: no strip.
     frames: ?*const HistoryFrames = null,
     /// An export button with the strip: the app can export a part of the history (fizzy: as a
@@ -109,21 +148,51 @@ pub const Pressed = struct {
 pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physical, id_extra: usize, opts: DrawOptions) Pressed {
     var pressed: Pressed = .{};
     const now = dvui.frameTimeNS();
-    // The pointer on it, or a drag in it, keeps it.
+    // The pointer on it, or a drag in it, keeps it; the pointer held on the grip brings it up.
+    const mouse = dvui.currentWindow().mouse_pt;
+    const on_grip = opts.history and area.contains(mouse) and !core.dialogs.modalOverCurrent() and
+        if (gripRect(area, grip_r)) |g| dvui.windowRectScale().rectToPhysical(g.outsetAll(grip_reach)).contains(mouse) else false;
+    if (!on_grip) self.dwelling = null;
     if (self.drag != null) {
         self.shown.stir(now);
         if (opts.frames != null) self.strip.stir(now);
-    } else if (self.place(area, now)) |b| if (b.contains(dvui.currentWindow().mouse_pt)) {
+    } else if (if (self.place(area, now)) |b| b.contains(mouse) else false) {
         self.shown.stir(now);
         // On the bar, a strip grown stays.
         if (self.strip.openness(now) > 0) self.strip.stir(now);
-    };
+    } else if (on_grip and self.shown.openness(now) <= 0) {
+        const since = self.dwelling orelse now;
+        self.dwelling = since;
+        if (now - since >= dwell_ns) {
+            self.dwelling = null;
+            self.stir(now);
+        }
+    }
     // An open window keeps the bar and its strip.
     if (self.window != null) {
         self.shown.stir(now);
         self.strip.stir(now);
     }
     const p = self.shown.openness(now);
+    // The grip, giving way to the bar as it comes in, swelling while the pointer is held on it: a
+    // frame each while it does, and none while it only sits there.
+    if (opts.history and p < 1) {
+        const held: f32 = if (self.dwelling) |t| @floatCast(@min(1, @as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(dwell_ns)))) else 0;
+        if (self.grip_steps) |was| if (opts.steps > was) {
+            self.stepped_at = now;
+        };
+        self.grip_steps = opts.steps;
+        const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
+        if (glow == 0) self.stepped_at = null;
+        const fill: f32 = @min(1, @log2(1 + @as(f32, @floatFromInt(opts.steps))) / @log2(1 + full_steps));
+        if (gripRect(area, grip_r * (1 + 0.5 * core.motion.fade(held)))) |g| if (drawGrip(g, id_extra, .{
+            .alpha = 1 - p,
+            .lit = on_grip,
+            .fill = fill,
+            .glow = glow,
+        }, doc.owner.documentPath(doc))) self.stir(now);
+        if (self.dwelling != null or self.stepped_at != null) dvui.refresh(null, @src(), null);
+    }
     if (p <= 0) return pressed;
     const arena = dvui.currentWindow().arena();
     const line = doc.owner.historyLine(doc, arena) orelse return pressed;
@@ -294,6 +363,50 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (p < 1 or (grown > 0 and grown < 1)) dvui.refresh(null, @src(), fid);
     const next = if (self.strip.nextChange(now)) |t| @min(t, self.shown.nextChange(now) orelse t) else self.shown.nextChange(now);
     if (next) |t| dvui.timer(fid, @intCast(@min(@divTrunc(t - now, 1000) + 1, std.math.maxInt(i32))));
+    return pressed;
+}
+
+const GripLook = struct {
+    alpha: f32,
+    /// The pointer is on it.
+    lit: bool,
+    /// How full of history it is, 0 to 1.
+    fill: f32,
+    /// A new step's brightening, 1 as it lands to 0.
+    glow: f32,
+};
+
+/// The grip at `r` (natural, the semicircle's box), as `look` says. Returns whether it was
+/// pressed: a press is the grip's, not the document's under it. Named for a tape or a test to aim
+/// at, `history.grip:<path>`.
+fn drawGrip(r: dvui.Rect, id_extra: usize, look: GripLook, path: []const u8) bool {
+    var float: dvui.FloatingWidget = undefined;
+    float.init(@src(), .{}, .{ .rect = r.outset(.{ .x = grip_reach, .y = grip_reach, .w = grip_reach }), .id_extra = id_extra });
+    defer float.deinit();
+    const wrs = dvui.windowRectScale();
+    const pr = wrs.rectToPhysical(r);
+    core.anchor.markRect(float.data().id, pr, true, "history.grip:{s}", .{path});
+    var pressed = false;
+    for (dvui.events()) |*e| {
+        if (!dvui.eventMatch(e, .{ .id = float.data().id, .r = float.data().borderRectScale().r })) continue;
+        if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.pointer()) {
+            e.handle(@src(), float.data());
+            pressed = true;
+        }
+    }
+    const theme = dvui.themeGet();
+    // A circle on the edge, its lower half past the pane: `r` is its upper half. (Corners round to
+    // at most half the shorter side, so a box `r`'s size would be a tab, not a dome.)
+    const disc: dvui.Rect.Physical = .{ .x = pr.x, .y = pr.y, .w = pr.w, .h = pr.w };
+    const prev = dvui.clip(pr);
+    defer dvui.clipSet(prev);
+    disc.fill(.round(pr.h), .{ .color = .{ .color = theme.color(.window, .text).opacity(look.alpha * @as(f32, if (look.lit) 0.45 else 0.22)) }, .fade = 1 });
+    // The history in it: the highlight's colour, up to its level, from the edge it stands on.
+    if (look.fill > 0) {
+        const level = pr.h * look.fill;
+        _ = dvui.clip(.{ .x = pr.x, .y = pr.y + pr.h - level, .w = pr.w, .h = level });
+        disc.fill(.round(pr.h), .{ .color = .{ .color = theme.color(.highlight, .fill).opacity(look.alpha * (0.6 + 0.4 * look.glow)) }, .fade = 1 });
+    }
     return pressed;
 }
 

@@ -54,7 +54,7 @@ fn drawWindows(frame: dvui.Rect, corner_radius: ?f32) void {
         var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .role = .button,
             .label = .{ .text = nameOf(button, maximized) },
-            .id_extra = @intFromEnum(button),
+            .id_extra = @backingInt(button),
             .min_size_content = .{ .w = cell_w, .h = cell_h },
             .expand = .vertical,
             .background = hover,
@@ -94,7 +94,7 @@ fn drawGnome(frame: dvui.Rect) void {
         var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .role = .button,
             .label = .{ .text = nameOf(button, maximized) },
-            .id_extra = @intFromEnum(button),
+            .id_extra = @backingInt(button),
             .min_size_content = .{ .w = d, .h = d },
             .margin = .{ .x = if (i == 0) 0 else gap },
         });

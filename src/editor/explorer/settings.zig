@@ -235,6 +235,23 @@ pub const groups = [_]Group{
         },
     },
     .{
+        .title = "History",
+        .icon = icons.tvg.lucide.history,
+        .items = &.{
+            .{
+                .label = "Record document history",
+                .key = "record_history",
+                .description = "Keep how each open document is made, step by step, in memory: " ++
+                    "what lets undo scrub through pictures of it and export share it as a tape. " ++
+                    "Nothing is written unless you export. Off, documents keep only their undo " ++
+                    "history, and what was recorded is forgotten.",
+                .keywords = "history record recording track tape undo scrub export share privacy",
+                .draw = drawRecordHistory,
+                .inline_control = true,
+            },
+        },
+    },
+    .{
         .title = "Debugging",
         .icon = icons.tvg.lucide.bug,
         .items = &.{
@@ -666,6 +683,10 @@ fn drawFloatWindows() void {
             restart.request();
         }
     }
+}
+
+fn drawRecordHistory() void {
+    drawToggle(&fizzy.editor().app.settings.record_history, "Record document history");
 }
 
 fn drawNativeGlass() void {

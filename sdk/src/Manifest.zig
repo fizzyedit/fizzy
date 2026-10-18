@@ -52,7 +52,7 @@ author_url: []const u8 = "",
 /// `dupeZ`/`readFileAllocOptions` with a sentinel) into a `Manifest`. Validates `version` (and
 /// `min_sdk_version`, when non-empty) are well-formed semver post-parse — zon itself has no
 /// semver type, so this is the manifest's own integrity check on top of the structural parse.
-/// Free the result with `free`.
+/// The result, its strings included, lives in `arena`; `gpa` is the parse's scratch.
 ///
 /// **Unknown fields are ignored on purpose**, which is what makes this format forward-compatible:
 /// `Manifest` is explicitly a growing set of optional fields (R16 added `description`, R17 added
@@ -63,21 +63,20 @@ author_url: []const u8 = "",
 /// (`probeName`/`probeDescription`/`probeTags`/`probeVersionInfo`) would silently lose data it
 /// could otherwise still read. The tradeoff accepted here is that a misspelled field name is
 /// ignored rather than diagnosed; the visible symptom is a store listing missing that value.
-pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Manifest {
-    const m = try std.zon.parse.fromSliceAlloc(Manifest, gpa, source, null, .{
+pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8) !Manifest {
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const m = try std.zon.parse.fromSlice(Manifest, .{
+        .gpa = gpa,
+        .arena = arena,
+        .source = source,
+        .diagnostics = &diag,
         .ignore_unknown_fields = true,
     });
-    errdefer free(gpa, m);
     _ = std.SemanticVersion.parse(m.version) catch return error.InvalidVersion;
     if (m.min_sdk_version.len > 0) {
         _ = std.SemanticVersion.parse(m.min_sdk_version) catch return error.InvalidMinSdkVersion;
     }
     return m;
-}
-
-/// Free a `Manifest` returned by `parse`.
-pub fn free(gpa: std.mem.Allocator, m: Manifest) void {
-    std.zon.parse.free(gpa, m);
 }
 
 test "Manifest parse round-trips identity" {
@@ -91,8 +90,11 @@ test "Manifest parse round-trips identity" {
         \\}
     ;
 
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+
+    defer arena.deinit();
+
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("example", m.id);
     try std.testing.expectEqualStrings("Example", m.name);
@@ -109,8 +111,9 @@ test "parse defaults min_sdk_version when omitted" {
         \\    .version = "0.1.0",
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("", m.min_sdk_version);
 }
@@ -124,8 +127,9 @@ test "parse defaults tags to empty when omitted" {
         \\    .version = "0.1.0",
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqual(@as(usize, 0), m.tags.len);
 }
@@ -140,8 +144,9 @@ test "parse round-trips tags" {
         \\    .tags = .{ "editor", "pixel-art" },
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqual(@as(usize, 2), m.tags.len);
     try std.testing.expectEqualStrings("editor", m.tags[0]);
@@ -159,8 +164,9 @@ test "parse round-trips author and author_url" {
         \\    .author_url = "https://example.test/~somebody",
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("somebody", m.author);
     try std.testing.expectEqualStrings("https://example.test/~somebody", m.author_url);
@@ -171,8 +177,9 @@ test "parse defaults author and author_url to empty" {
     const source: [:0]const u8 =
         \\.{ .id = "example", .name = "Example", .version = "0.1.0" }
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("", m.author);
     try std.testing.expectEqualStrings("", m.author_url);
@@ -191,8 +198,9 @@ test "parse ignores fields a newer SDK added" {
         \\    .another = .{ "a", "b" },
         \\}
     ;
-    const m = try parse(gpa, source);
-    defer free(gpa, m);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const m = try parse(gpa, arena.allocator(), source);
 
     try std.testing.expectEqualStrings("example", m.id);
     try std.testing.expectEqualStrings("0.1.0", m.version);
@@ -207,5 +215,7 @@ test "parse rejects a non-semver version" {
         \\    .version = "not-a-version",
         \\}
     ;
-    try std.testing.expectError(error.InvalidVersion, parse(gpa, source));
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    try std.testing.expectError(error.InvalidVersion, parse(gpa, arena.allocator(), source));
 }

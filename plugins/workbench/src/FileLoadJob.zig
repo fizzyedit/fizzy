@@ -43,7 +43,7 @@ target_grouping: u64,
 window: *dvui.Window,
 started_at_ns: i128,
 
-phase: std.atomic.Value(u8) = .init(@intFromEnum(Phase.queued)),
+phase: std.atomic.Value(u8) = .init(@backingInt(Phase.queued)),
 progress_num: std.atomic.Value(u32) = .init(0),
 progress_den: std.atomic.Value(u32) = .init(0),
 cancelled: std.atomic.Value(bool) = .init(false),
@@ -103,30 +103,30 @@ pub fn workerMain(job: *FileLoadJob) void {
     }
 
     if (job.cancelled.load(.monotonic)) {
-        job.phase.store(@intFromEnum(Phase.cancelled), .release);
+        job.phase.store(@backingInt(Phase.cancelled), .release);
         return;
     }
 
-    job.phase.store(@intFromEnum(Phase.reading), .release);
+    job.phase.store(@backingInt(Phase.reading), .release);
 
     const handled = job.owner.loadDocument(job.path, job.doc_buf.ptr) catch |e| {
         job.err = e;
-        job.phase.store(@intFromEnum(Phase.failed), .release);
+        job.phase.store(@backingInt(Phase.failed), .release);
         return;
     };
     if (!handled) {
         job.err = error.InvalidFile;
-        job.phase.store(@intFromEnum(Phase.failed), .release);
+        job.phase.store(@backingInt(Phase.failed), .release);
         return;
     }
 
     if (job.cancelled.load(.monotonic)) {
         job.owner.deinitDocumentBuffer(job.doc_buf.ptr);
-        job.phase.store(@intFromEnum(Phase.cancelled), .release);
+        job.phase.store(@backingInt(Phase.cancelled), .release);
         return;
     }
 
-    job.phase.store(@intFromEnum(Phase.ready), .release);
+    job.phase.store(@backingInt(Phase.ready), .release);
 }
 
 pub fn elapsedExceeds(job: *const FileLoadJob, threshold_ms: i64) bool {

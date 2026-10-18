@@ -51,7 +51,7 @@ pub const mouse_drag_threshold: f32 = 3;
 
 /// Where the host records whether input is touch, in the shared window's data — every dylib's
 /// copy of dvui has its own `Dragging.threshold`, and this is how they agree on it.
-const input_id: dvui.Id = @enumFromInt(0x6669_7a7a_795f_7463); // "fizzy_tc"
+const input_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_795f_7463)); // "fizzy_tc"
 const input_key = "_touch_input";
 
 /// Host only, once a frame before anything handles input: note whether the pointer is a finger

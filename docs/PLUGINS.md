@@ -163,7 +163,7 @@ which produces:
 .{
     .name = .my_plugin,
     .version = "0.1.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{ "build.zig", "build.zig.zon", "plugin.zig", "plugin.zig.zon", "src" },
     .fingerprint = 0x0000000000000000, // zig fills this in on first `zig build`
     .dependencies = .{
@@ -222,6 +222,11 @@ straight from `plugin.zig.zon` (§2.2), so there is exactly one source of truth.
 libraries (vendored C, packed assets). See `fizzy.plugin.addCModule` and
 [pixi's `build.zig`](https://github.com/fizzyedit/pixi/blob/main/build.zig) for a worked example
 with vendored C deps.
+
+A plugin that ships a program of its own (a helper it starts, as the agent plugin starts
+`fizzy-mcp`) builds it as usual and passes it to `fizzy.plugin.installBeside(b, exe, .{ .plugin =
+"<id>" })`: `zig build install` then copies it into the plugin's own directory, beside the
+library and still executable, where the plugin finds it at run time.
 
 Under `create`, the dylib's C-ABI entry point (the five symbols the host looks up at `dlopen`
 time — ABI fingerprint check, the `register` entry, and injection hooks for the
@@ -986,6 +991,15 @@ fn goToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) any
   (a list for an enum or bool, checked text otherwise — `sdk.Command.answer`).
 - **Failing.** Return `call.fail("…", .{})`. Your error's *name* cannot be read on fizzy's side
   (errors are numbered per compilation), so the message is how the reason gets there.
+- **Answering later.** A command whose work outlives the frame (a language server's reply, a
+  build, a picture taken at the end of the next frame) calls `const ticket = call.later();`, keeps
+  the ticket, and returns from `runWith` with no result. Once it is done, on the UI thread, it calls
+  `host.finishCall(ticket, .{ .ok = result_zon })` (or `.failed = "why"`). A caller that can wait
+  (`host.callCommandAwaiting`, the control server, which holds its HTTP request open) hears the
+  answer then. One that cannot (a menu, a keybind, a tape, plain `callCommand`) has only started it:
+  it sees `.ok` with no result and goes on at once, and the answer is dropped. You may answer before
+  `runWith` returns (a cache hit); the caller then gets it at once. `host.callWanted(ticket)` says whether anyone still waits, so work nobody wants
+  can stop. If your plugin goes away owing answers, its waiters hear that it failed.
 - **`run` and `runWith`.** A command needs at least one; `registerCommand` refuses one with
   neither. Keep `run` alongside `runWith` only if invoking with no arguments should do something
   of its own (open your own dialog, say) rather than ask.
@@ -1675,7 +1689,7 @@ jobs:
     permissions:
       contents: write
     with:
-      zig-version: "0.16.0"
+      zig-version: "0.17.0"
 ```
 
 Bump the `sdk-v*` tag your `build.zig.zon` pins when you want a new SDK; the next tag's manifest picks up

@@ -132,7 +132,7 @@ fn historyTitle(editor: *Editor, action: Editor.HistoryAction, plain: [:0]const 
     if (!editor.app.host.step_authors.contains(doc.id)) return plain;
     const t = editor.stepToTake(doc, action, editor.app.host.arena()) catch return plain;
     if (t.by.kind == .person) return plain;
-    return std.fmt.bufPrintZ(buf, "{s} {s}'s {s}", .{ plain, Editor.authorName(t.by), t.step.title }) catch plain;
+    return std.fmt.bufPrintSentinel(buf, "{s} {s}'s {s}", .{ plain, Editor.authorName(t.by), t.step.title }, 0) catch plain;
 }
 
 fn canUndo(editor: *Editor) bool {

@@ -204,9 +204,17 @@ pub const Tab = struct {
 
     pub fn deinit(self: *Tab) void {
         _ = self.clicked();
+        handCursor(self.box.data());
         self.box.deinit();
     }
 };
+
+/// A tab's cursor, for every tab strip (this one's, and one that draws its own tabs, as the
+/// workbench's document tabs): the hand under the pointer, and while the tab is held. A split
+/// beside the strip outranks it where their reaches overlap (`Split.grab`).
+pub fn handCursor(wd: *dvui.WidgetData) void {
+    if (dvui.captured(wd.id) or @import("../widgets.zig").hovered(wd)) dvui.cursorSet(.hand);
+}
 
 /// One tab, keyed by `key`. `name` is what it is called — the view's title — for a screen reader
 /// or a script, which a rail of icons does not otherwise show; it must outlive the frame.
@@ -259,4 +267,129 @@ pub fn deinit(self: *Tabs) void {
         sa.deinit();
     }
     self.outer.deinit();
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────────────────────
+//
+// Against dvui's testing backend: the cursor and the hover look are decided by dvui's event
+// routing (`cursorSetPriority`, the `.position` event a lifted finger leaves off every window).
+
+const Split = @import("Split.zig");
+
+var t_cursor: dvui.enums.Cursor = .arrow;
+var t_hovered = false;
+var t_tab_captured = false;
+var t_split_captured = false;
+var t_tab_rect: dvui.Rect.Physical = .{};
+var t_sep_x: f32 = 0;
+var t_scale: f32 = 1;
+
+/// A rail beside a split: the sidebar's icons next to the explorer's edge, where a cell runs the
+/// rail's full width up to the split.
+fn railFrame() !dvui.App.Result {
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+    defer row.deinit();
+    {
+        var left = dvui.box(@src(), .{ .dir = .vertical }, .{ .min_size_content = .{ .w = 100 }, .expand = .vertical });
+        defer left.deinit();
+        var strip: Tabs = .init(@src(), .{ .dir = .vertical, .scroll = false, .outer = .{ .expand = .both } });
+        defer strip.deinit();
+        var t = strip.tab(@src(), 1, false, "one");
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 20, .h = 40 } });
+        _ = t.clicked();
+        t_tab_rect = t.box.data().borderRectScale().r;
+        t_tab_captured = dvui.captured(t.box.data().id);
+        t_hovered = @import("../widgets.zig").hovered(t.box.data());
+        t.deinit();
+    }
+    var divider = Split.init(@src(), .horizontal, 0, null);
+    {
+        const srs = divider.box.data().borderRectScale();
+        t_sep_x = srs.r.x + srs.r.w / 2;
+        t_scale = srs.s;
+        _ = divider.grab(row.data());
+        t_split_captured = dvui.captured(divider.box.data().id);
+    }
+    divider.deinit();
+    {
+        var right = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        defer right.deinit();
+    }
+    t_cursor = dvui.currentWindow().cursorRequested();
+    return .ok;
+}
+
+test "a tab shows the hand" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    try dvui.testing.settle(railFrame);
+
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = t_tab_rect.x + 10 * t_scale, .y = t_tab_rect.center().y } });
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expectEqual(.hand, t_cursor);
+    try std.testing.expect(t_hovered);
+
+    // Held, it keeps the hand (its hover look gives way to the press).
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expect(t_tab_captured);
+    try std.testing.expectEqual(.hand, t_cursor);
+}
+
+test "beside a split, the split's arrow wins over the hand, and a press goes where it did" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    try dvui.testing.settle(railFrame);
+
+    // Over the tab's last few points, inside the split's reach (`Split.handle_size` from its
+    // centre line).
+    const p: dvui.Point.Physical = .{ .x = t_sep_x - (Split.handle_size - 2) * t_scale, .y = t_tab_rect.center().y };
+    try std.testing.expect(t_tab_rect.contains(p));
+
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = p });
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expectEqual(.arrow_w_e, t_cursor);
+
+    // The cursor only: the tab, drawn first, still takes the press there, as it did before it
+    // asked for a cursor at all.
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expect(t_tab_captured);
+    try std.testing.expect(!t_split_captured);
+    _ = try cw.addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(railFrame);
+
+    // On the sash itself, past the tab, the split takes it.
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = t_sep_x, .y = p.y } });
+    _ = try dvui.testing.step(railFrame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expect(t_split_captured);
+    try std.testing.expect(!t_tab_captured);
+}
+
+test "a tapped tab is left without a hover look" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    try dvui.testing.settle(railFrame);
+
+    const cw = dvui.currentWindow();
+    const p: dvui.Point.Physical = .{ .x = t_tab_rect.x + 10 * t_scale, .y = t_tab_rect.center().y };
+    const xynorm: dvui.Point = .{ .x = p.x / cw.rect_pixels.w, .y = p.y / cw.rect_pixels.h };
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .press, .xynorm = xynorm });
+    _ = try dvui.testing.step(railFrame);
+    _ = try cw.addEventPointer(.{ .button = .touch0, .action = .release, .xynorm = xynorm });
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expectEqual(.touch, dvui.pointerKind());
+    try std.testing.expect(!t_hovered);
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expect(!t_hovered);
+
+    // A mouse over the same tab lights it.
+    _ = try cw.addEventMouseMotion(.{ .pt = p });
+    _ = try dvui.testing.step(railFrame);
+    try std.testing.expectEqual(.mouse, dvui.pointerKind());
+    try std.testing.expect(t_hovered);
 }

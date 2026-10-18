@@ -372,7 +372,7 @@ pub const Watches = struct {
     /// for, wherever it was left out before.
     fn done(self: *Watches, path: []const u8, owed: Owed) void {
         inline for (.{ &self.frontier, &self.todo }) |map| {
-            if (map.getIndex(path)) |i| if (@intFromEnum(map.values()[i]) <= @intFromEnum(owed)) {
+            if (map.getIndex(path)) |i| if (@backingInt(map.values()[i]) <= @backingInt(owed)) {
                 const k = map.keys()[i];
                 map.swapRemoveAt(i);
                 self.gpa.free(k);
@@ -480,7 +480,7 @@ pub const Watches = struct {
     fn leftOut(self: *Watches, path: []const u8, owed: Owed, ctx: anytype) void {
         const gop = self.frontier.getOrPut(self.gpa, path) catch return self.degrade(ctx);
         if (gop.found_existing) {
-            if (@intFromEnum(owed) > @intFromEnum(gop.value_ptr.*)) gop.value_ptr.* = owed;
+            if (@backingInt(owed) > @backingInt(gop.value_ptr.*)) gop.value_ptr.* = owed;
             return;
         }
         gop.key_ptr.* = self.gpa.dupe(u8, path) catch {
@@ -632,7 +632,7 @@ pub const Watches = struct {
 
 /// Where `Doorbell` builds: POSIX only. The walker that uses it exists only for a backend that
 /// watches folder by folder (inotify, kqueue), and none of those is on Windows.
-pub const has_doorbell = builtin.os.tag != .windows and !builtin.cpu.arch.isWasm();
+pub const has_doorbell = builtin.target.os.tag != .windows and !builtin.target.cpu.arch.isWasm();
 
 /// Wakes a thread from another that may not wait, allocate or touch an `Io`: nightwatch's
 /// reader. A pipe with a flag in front of it, so a burst of rings is one byte.
@@ -1068,7 +1068,7 @@ test "a folder refused for its own reasons is left out, said once, and the walk 
 }
 
 test "a folder that can't be read is left out and said; the rest is watched" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var t: TestTree = .{ .tmp = undefined };
     try t.init();
     defer t.tmp.cleanup();

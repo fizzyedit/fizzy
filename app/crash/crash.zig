@@ -284,7 +284,7 @@ pub fn writeTo(io: std.Io, config_folder: []const u8) void {
     const pid = if (builtin.target.os.tag == .windows) win.GetCurrentProcessId() else std.c.getpid();
     const launched = std.Io.Timestamp.now(io, .real).toMilliseconds();
     const sep = std.fs.path.sep;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}{c}crashes{c}{d}-{d}.txt", .{ config_folder, sep, sep, launched, pid }) catch return;
+    const path = std.fmt.bufPrintSentinel(&path_buf, "{s}{c}crashes{c}{d}-{d}.txt", .{ config_folder, sep, sep, launched, pid }, 0) catch return;
     const dir = std.fs.path.dirname(path).?;
     std.Io.Dir.cwd().createDirPath(io, dir) catch |err| {
         std.log.warn("crash reports: can't create {s}: {t}", .{ dir, err });

@@ -60,8 +60,8 @@ pub const When = packed struct {
     /// context-specific binding always wins over a global one on the same chord.
     pub fn weight(self: When) u8 {
         var n: u8 = 0;
-        inline for (@typeInfo(When).@"struct".fields) |f| {
-            if (@field(self, f.name)) n += 1;
+        inline for (@typeInfo(When).@"struct".field_names, @typeInfo(When).@"struct".field_types, @typeInfo(When).@"struct".field_attrs) |f_name, _, _| {
+            if (@field(self, f_name)) n += 1;
         }
         return n;
     }
@@ -79,9 +79,9 @@ pub const When = packed struct {
             const tok = std.mem.trim(u8, raw, " \t");
             if (tok.len == 0) continue;
             var matched = false;
-            inline for (@typeInfo(When).@"struct".fields) |f| {
-                if (eqlCamelOrSnake(tok, f.name)) {
-                    @field(out, f.name) = true;
+            inline for (@typeInfo(When).@"struct".field_names, @typeInfo(When).@"struct".field_types, @typeInfo(When).@"struct".field_attrs) |f_name, _, _| {
+                if (eqlCamelOrSnake(tok, f_name)) {
+                    @field(out, f_name) = true;
                     matched = true;
                 }
             }
@@ -205,8 +205,8 @@ fn best(self: Keymap, stroke: Stroke, ctx: When, active_owner: ?[]const u8) ?Bin
             winner = b;
             continue;
         };
-        const b_rank = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
-        const w_rank = (@as(u16, @intFromEnum(w.source)) << 8) | w.when.weight();
+        const b_rank = (@as(u16, @backingInt(b.source)) << 8) | b.when.weight();
+        const w_rank = (@as(u16, @backingInt(w.source)) << 8) | w.when.weight();
         // Owner-scoped bindings beat otherwise equal-rank global ones — that's the whole
         // point of active-owner conflict resolution (pixi Export vs fizzy Quick Open).
         const b_owner_boost: u16 = if (b.owner_id != null) 1 else 0;
@@ -322,7 +322,7 @@ pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
 
     for (self.bindings.items, 0..) |b, i| {
         const cmd = b.command orelse continue;
-        const rank: u16 = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
+        const rank: u16 = (@as(u16, @backingInt(b.source)) << 8) | b.when.weight();
         for (claims.items) |*c| {
             if (!c.stroke.eql(b.stroke) or !c.when.eql(b.when)) continue;
             if (!std.mem.eql(u8, c.command, cmd) or !std.mem.eql(u8, c.args, b.args)) continue;

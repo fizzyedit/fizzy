@@ -1131,7 +1131,7 @@ fn changedUnder(r: Rect.Physical) bool {
     return marks.now.hits(r) or marks.last.hits(r);
 }
 
-const marks_id: dvui.Id = @enumFromInt(0x6669_7a7a_756e_6472); // "fizzundr"
+const marks_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_756e_6472)); // "fizzundr"
 const marks_key = "_frost_under";
 
 /// The rects `underChanged` marked, this frame and the last. In the data store, so it lasts only

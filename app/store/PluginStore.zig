@@ -262,7 +262,7 @@ pub fn queueInstall(id: []const u8) void {
 pub fn isInstalling(id: []const u8) bool {
     if (web_in_flight.contains(id)) return true;
     const job = jobs.get(id) orelse return false;
-    const status: JobStatus = @enumFromInt(job.status.load(.acquire));
+    const status: JobStatus = @fromBackingInt(@intCast(job.status.load(.acquire)));
     return status == .downloading or status == .downloaded;
 }
 
@@ -1062,7 +1062,7 @@ pub fn applyPendingUpdate(id: []const u8) void {
 /// here too.
 pub fn updateStatus(id: []const u8) ?[]const u8 {
     if (web_in_flight.contains(id)) return "Updating\u{2026}";
-    if (jobs.get(id)) |job| return switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
+    if (jobs.get(id)) |job| return switch (@as(JobStatus, @fromBackingInt(@intCast(job.status.load(.acquire))))) {
         .downloading => "Updating\u{2026}",
         .downloaded => "Installing\u{2026}",
         .failed => "Failed",
@@ -1388,7 +1388,7 @@ pub fn tick() void {
     var i: usize = 0;
     while (i < jobs.count()) {
         const job = jobs.values()[i];
-        switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
+        switch (@as(JobStatus, @fromBackingInt(@intCast(job.status.load(.acquire))))) {
             .downloading => i += 1,
             .failed => {
                 // Nobody asked for a quiet job, so it leaves no failed card to retry from. Log it,
@@ -1437,7 +1437,7 @@ pub fn tick() void {
                     const n = @min(@errorName(err).len, job.err_buf.len);
                     @memcpy(job.err_buf[0..n], @errorName(err)[0..n]);
                     job.err_len = n;
-                    job.status.store(@intFromEnum(JobStatus.failed), .release);
+                    job.status.store(@backingInt(JobStatus.failed), .release);
                     i += 1;
                     continue;
                 };
@@ -1670,10 +1670,10 @@ fn worker(job: *Job, io: std.Io) void {
         const n = @min(@errorName(err).len, job.err_buf.len);
         @memcpy(job.err_buf[0..n], @errorName(err)[0..n]);
         job.err_len = n;
-        job.status.store(@intFromEnum(JobStatus.failed), .release);
+        job.status.store(@backingInt(JobStatus.failed), .release);
         return;
     };
-    job.status.store(@intFromEnum(JobStatus.downloaded), .release);
+    job.status.store(@backingInt(JobStatus.downloaded), .release);
 }
 
 fn removeJob(id: []const u8) void {
@@ -1750,7 +1750,7 @@ fn buildJob(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadO
     errdefer a.free(dest);
 
     job.* = .{
-        .status = .init(@intFromEnum(JobStatus.downloading)),
+        .status = .init(@backingInt(JobStatus.downloading)),
         .id = id_dup,
         .url = url_dup,
         .sha256 = sha_dup,
@@ -3105,7 +3105,7 @@ fn drawCardControls(entry: StoreEntry) void {
     defer ctl.deinit();
 
     // An in-flight / failed install job preempts the normal controls.
-    if (jobs.get(entry.id)) |job| switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
+    if (jobs.get(entry.id)) |job| switch (@as(JobStatus, @fromBackingInt(@intCast(job.status.load(.acquire))))) {
         .downloading => {
             drawInstalling(if (job.is_update) "Updating…" else "Installing…", muted);
             return;
@@ -3250,7 +3250,7 @@ fn drawStoreCardControls(entry: StoreEntry) void {
     defer ctl.deinit();
 
     // An in-flight / failed install job preempts the normal controls.
-    if (jobs.get(entry.id)) |job| switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
+    if (jobs.get(entry.id)) |job| switch (@as(JobStatus, @fromBackingInt(@intCast(job.status.load(.acquire))))) {
         .downloading => {
             drawInstalling(if (job.is_update) "Updating…" else "Installing…", muted);
             return;

@@ -176,7 +176,7 @@ test "a GNU build-id note is found among others" {
             return std.mem.toBytes(v);
         }
     }.u;
-    const other = w(4) ++ w(8) ++ w(1) ++ "GNU\x00".* ++ [_]u8{0} ** 8;
+    const other = w(4) ++ w(8) ++ w(1) ++ "GNU\x00".* ++ @as([8]u8, @splat(0));
     const build_id = w(4) ++ w(5) ++ w(std.elf.NT_GNU_BUILD_ID) ++ "GNU\x00".* ++ "\xde\xad\xbe\xef\x01\x00\x00\x00".*;
     try std.testing.expectEqualSlices(u8, "\xde\xad\xbe\xef\x01", gnuBuildId(&(other ++ build_id)).?);
     try std.testing.expectEqual(null, gnuBuildId(&other));
