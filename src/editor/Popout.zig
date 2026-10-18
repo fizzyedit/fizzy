@@ -480,6 +480,9 @@ const carried_backing: f32 = 0.2;
 fn nativeGlass() bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.carries) return false;
     if (!(envSwitch("FIZZY_NATIVE_GLASS") orelse fizzy.editor().app.settings.native_glass)) return false;
+    // The OS's Liquid Glass only while the app's material is liquid: frost and the plainer kinds
+    // are the app's own glass (`core.material`).
+    if (fizzy.core.material.get().kind != .liquid) return false;
     if (liquid_glass == null) liquid_glass = viewports.liquidGlass();
     return liquid_glass.?;
 }

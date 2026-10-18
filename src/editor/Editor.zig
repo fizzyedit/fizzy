@@ -4032,20 +4032,36 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // the glass program, Apple's lens (`inApp`), as the OS's Liquid Glass beside it is: its
         // frost over a blur at the full frost, and its own colour and bend. Elsewhere — the web,
         // Linux, Windows, where there is no OS glass to match — the app's frosted pane (`frosted`).
+        //
+        // The app's material (`core.material`, published by `Entry`) says how much of that there
+        // is, the same for every glass here and in every plugin, which reads these values:
+        // - `liquid`: all of it.
+        // - `frost`: the frosted pane, no bend and no glass program (`LiquidField`).
+        // - `blur`: the same at half the blur.
+        // - `transparent`: no blur, so no frost. Surfaces fall back to `dialogFill`, the window's
+        //   colour at its opacity over what is behind.
+        // - `none`: that fill, opaque.
+        const kind = fizzy.core.material.get().kind;
+        const liquid = kind == .liquid;
         const opacity = @max(if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light, glass_look.min_opacity);
-        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader;
+        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader and liquid;
         const pane = glass_look.frosted(opacity);
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
-            .opacity = pane.mix,
-            .blur = if (lens) glass_look.text_blur else pane.blur,
+            .opacity = if (kind == .none) 1 else pane.mix,
+            .blur = switch (kind) {
+                .liquid => if (lens) glass_look.text_blur else pane.blur,
+                .frost => pane.blur,
+                .blur => pane.blur / 2,
+                .transparent, .none => 0,
+            },
             .lift = 0,
             .detail = 0,
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
             .has_chrome = true,
         });
         // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
-        fizzy.core.dialogs.publishRefraction(if (lens) 1 else pane.refraction);
+        fizzy.core.dialogs.publishRefraction(if (lens) 1 else if (liquid) pane.refraction else 0);
         fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
@@ -4057,7 +4073,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).
     fizzy.core.screens.publishMainTop(if (builtin.target.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
-    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
+    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.get().kind == .liquid);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();
