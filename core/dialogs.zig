@@ -321,6 +321,9 @@ pub const BubblesOptions = struct {
     /// place of what is behind the glass, as see-through as the window is, so over a card the glass
     /// reads as the window's edge reaching into it. Over `tint`.
     window: bool = false,
+    /// A drop's rim lit from the top right (`LiquidField.light_across`): for glass whose edges that
+    /// show face across the usual light.
+    light_across: bool = false,
 };
 
 /// A rounded box's smallest corner, in points, for its glass to bend along its own outline as a
@@ -344,7 +347,7 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
     };
     if (widgets.LiquidField.ready()) {
         if (widgets.liquidFrost()) |frost| {
-            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale, .edge = opts.edge, .solid = opts.solid };
+            var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale, .edge = opts.edge, .solid = opts.solid, .light_across = opts.light_across };
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
                 // Its edge bends along its own outline, as a drop's does, with a drop's rim of light:
