@@ -113,6 +113,11 @@ black_box: bool = true,
 /// built to update itself (Velopack), whose binary only changes through its own updater.
 restart_on_rebuild: bool = !build_opts.velopack_enabled,
 
+/// Whether the app answers HTTP on a Unix socket in its config folder (`control/control.sock`), its
+/// commands as the API, so a script or an agent can drive it with `curl` (`app.control`). Only this
+/// user can open the socket. Native only.
+control_server: bool = true,
+
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.
 input_scheme: InputScheme = .auto,

@@ -229,6 +229,8 @@ pub fn main(main_init: std.process.Init) !u8 {
                 }
             }.f,
         });
+        // Before the lock, which would hand this launch to a running fizzy.
+        if (printControlPath(appAllocator(), main_init)) return 0;
         try singleton.earlyStartup(appAllocator(), main_init);
         fizzy.core.profile.phase(main_init.io, if (restart.startedByHandover()) "lock deferred (handover)" else "lock");
 
@@ -548,3 +550,38 @@ fn frameOnce() !dvui.App.Result {
 }
 
 var frame_target: fizzy.core.FrameTarget = .{};
+
+/// `fizzy --control-path` (with `--profile` or `FIZZY_PROFILE` as any launch takes them): print where
+/// the control server listens, for a script to hand `curl --unix-socket`, and say so. The profile
+/// is resolved as a launch resolves it (`singleton.resolveArgs`), so the path is the one a fizzy
+/// started the same way listens on, whether one runs or not.
+fn printControlPath(allocator: std.mem.Allocator, main_init: std.process.Init) bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    var it = std.process.Args.Iterator.initAllocator(main_init.minimal.args, allocator) catch return false;
+    defer it.deinit();
+    var raw: std.ArrayList([]const u8) = .empty;
+    defer raw.deinit(allocator);
+    var asked = false;
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--control-path")) asked = true else raw.append(allocator, arg) catch return false;
+    }
+    if (!asked) return false;
+
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = std.process.currentPath(main_init.io, &cwd_buf) catch 0;
+    const cwd = cwd_buf[0..cwd_len];
+    const env_profile: ?[]const u8 = if (std.c.getenv(@import("app").profile.env_var)) |v| std.mem.span(v) else null;
+    const resolved = singleton.resolveArgs(allocator, cwd, raw.items, env_profile) catch return false;
+    defer singleton.freeResolvedArgv(allocator, resolved.argv);
+    defer if (resolved.profile) |p| allocator.free(p);
+
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const config = resolved.profile orelse fizzy.core.paths.configFolder(arena.allocator(), main_init.io, arena.allocator(), fizzy.core.platform.processEnviron(), cwd, AppInfo.current.config_dir) catch return false;
+    const path = @import("app").control.socketPath(arena.allocator(), config) catch return false;
+    var buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+    var out = std.Io.File.stdout().writer(main_init.io, &buf);
+    out.interface.print("{s}\n", .{path}) catch return false;
+    out.interface.flush() catch return false;
+    return true;
+}

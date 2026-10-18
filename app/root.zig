@@ -113,8 +113,12 @@ pub const control = struct {
     pub const routes = @import("control/routes.zig");
     pub const json = @import("control/json.zig");
     pub const openapi = @import("control/openapi.zig");
-    /// The socket's name in the config folder.
-    pub const socket_name = "control.sock";
+    /// Where the server listens for an app whose config folder is `config_folder`: a folder of its
+    /// own only this user can open (`Server.start` makes it), so nobody else can reach the socket
+    /// even in the moment before its own permissions are set.
+    pub fn socketPath(gpa: @import("std").mem.Allocator, config_folder: []const u8) ![]u8 {
+        return @import("std").fs.path.join(gpa, &.{ config_folder, "control", "control.sock" });
+    }
 };
 
 /// Quitting the way the app always quits — unsaved documents asked about first — then starting

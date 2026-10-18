@@ -141,6 +141,9 @@ share_pending: ?u64 = null,
 plugin_reloads: @import("PluginReloads.zig") = .{},
 /// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
 black_box: @import("app").automation.BlackBox = .{},
+/// The control server would not start (`syncControlServer`): not retried until the setting goes
+/// off and on again.
+control_failed: bool = false,
 /// The documents a restart kept (`KeptDocuments.loadSession`), until the workbench has reopened
 /// last session's tabs: each one it asks for opens from here (`openPath`).
 session: ?KeptDocuments = null,
@@ -2269,23 +2272,6 @@ pub fn postInit(editor: *Editor) !void {
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
 
-    // The control server: the app's commands over HTTP on `<config>/control.sock`, while
-    // `FIZZY_CONTROL=1` asks for it (plans/CONTROL_SERVER_PLAN.md: dark until step 4).
-    if (comptime builtin.target.cpu.arch != .wasm32) control: {
-        const v = std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_CONTROL") catch break :control;
-        defer editor.app.gpa.free(v);
-        if (!std.mem.eql(u8, v, "1")) break :control;
-        const path = std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, @import("app").control.socket_name }) catch break :control;
-        editor.app.control = .{ .gpa = editor.app.gpa, .io = dvui.io, .socket_path = path, .wake = wakeEventLoop };
-        editor.app.control.?.start() catch |err| {
-            dvui.log.warn("control: could not listen on {s}: {s}", .{ path, @errorName(err) });
-            editor.app.gpa.free(path);
-            editor.app.control = null;
-            break :control;
-        };
-        dvui.log.info("control: listening on {s}", .{path});
-    }
-
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
     // nightwatch retains `&editor.app.settings_watcher.handler`, so `editor` has to already be at
@@ -3587,6 +3573,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.black_box = parsed.black_box;
+    editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
@@ -4127,6 +4114,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.settings_watcher) |*w| w.tick(editor.configWatchSink());
     // fizzy itself rebuilt: start again as the new build, every document kept.
     editor.syncExecutableWatcher();
+    editor.syncControlServer();
     // Unsaved work kept against a crash.
     editor.checkpoint.tick(editor);
     if (editor.app.executable_watcher) |*w| if (w.tick() and !restart.requested()) {
@@ -5388,6 +5376,36 @@ pub const Placement = struct {
     /// `OpenOptions.beside`.
     beside: bool = false,
 };
+
+/// Run the control server while `control_server` is on, and stop it when it goes off. Once a frame;
+/// a no-op unless the setting changed. Not in tests, whose editors share no config folder worth a
+/// socket.
+fn syncControlServer(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32 or builtin.is_test) return;
+    const control = @import("app").control;
+    const want = editor.app.settings.control_server;
+    if (want == (editor.app.control != null)) return;
+    if (!want) {
+        if (editor.app.control) |*c| {
+            control.routes.stop(c, &editor.app.control_relay, &editor.app.host);
+            editor.app.gpa.free(c.socket_path);
+        }
+        editor.app.control = null;
+        editor.control_failed = false;
+        return;
+    }
+    if (editor.control_failed) return;
+    const path = control.socketPath(editor.app.gpa, editor.app.config_folder) catch return;
+    editor.app.control = .{ .gpa = editor.app.gpa, .io = dvui.io, .socket_path = path, .wake = wakeEventLoop };
+    editor.app.control.?.start() catch |err| {
+        dvui.log.warn("control: could not listen on {s}: {s}", .{ path, @errorName(err) });
+        editor.app.gpa.free(path);
+        editor.app.control = null;
+        editor.control_failed = true;
+        return;
+    };
+    dvui.log.info("control: listening on {s}", .{path});
+}
 
 /// Watch this executable while `restart_on_rebuild` is on, and stop when it goes off. Once a frame;
 /// a no-op unless the setting changed. The watcher has to be at its final address to start

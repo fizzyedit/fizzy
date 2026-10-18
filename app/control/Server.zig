@@ -158,6 +158,12 @@ pub fn start(self: *Server) !void {
     // (`std.Io.net.has_unix_sockets`); fizzy's build sets it.
     if (!Io.net.has_unix_sockets) return error.UnixSocketsUnsupported;
     const addr = try Io.net.UnixAddress.init(self.socket_path);
+    // Its folder, this user's only: the socket is unreachable to others from the moment it exists,
+    // before its own permissions are set below.
+    if (std.fs.path.dirname(self.socket_path)) |dir| {
+        try Io.Dir.cwd().createDirPath(self.io, dir);
+        if (comptime builtin.os.tag != .windows) try Io.Dir.cwd().setFilePermissions(self.io, dir, .fromMode(0o700), .{});
+    }
     // A socket left by a fizzy that did not quit cleanly, or one a fizzy this one takes over from
     // still holds: this run's now. The other leaves it alone at its stop (`socket_inode`).
     Io.Dir.deleteFileAbsolute(self.io, self.socket_path) catch {};
@@ -507,7 +513,8 @@ test "a request reaches the UI thread and its answer goes back" {
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
     defer gpa.free(dir);
-    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    // In a folder of its own that `start` makes, as the app's is (`control/control.sock`).
+    const path = try std.fs.path.join(gpa, &.{ dir, "control", "c.sock" });
     defer gpa.free(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
@@ -548,6 +555,9 @@ test "a request reaches the UI thread and its answer goes back" {
     if (builtin.os.tag == .windows) return;
     const st = try Io.Dir.cwd().statFile(io, path, .{});
     try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), st.permissions.toMode() & 0o777);
+    // And its folder: nobody else reaches it, even before the socket's own mode is set.
+    const folder = try Io.Dir.cwd().statFile(io, std.fs.path.dirname(path).?, .{});
+    try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), folder.permissions.toMode() & 0o777);
 }
 
 fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {

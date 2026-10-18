@@ -262,9 +262,8 @@ settings_save_deadline_ns: i128 = 0,
 /// `SettingsWatcher.start`'s doc comment), torn down first in `deinit`.
 settings_watcher: ?SettingsWatcher = null,
 
-/// The control server (`app.control`), while it runs: started in `postInit` when `FIZZY_CONTROL=1`
-/// (plans/CONTROL_SERVER_PLAN.md, steps 1–3 land dark), answered each frame, stopped at quit.
-/// Always void on wasm, which has no socket.
+/// The control server (`app.control`), while the `control_server` setting has it run: followed
+/// once a frame, answered each frame, stopped at quit. Always void on wasm, which has no socket.
 control: if (builtin.target.cpu.arch == .wasm32) void else ?ControlServer = if (builtin.target.cpu.arch == .wasm32) {} else null,
 /// What relays the app's events to the control server's streams (`control.routes.Relay`).
 control_relay: if (builtin.target.cpu.arch == .wasm32) void else ControlRelay = if (builtin.target.cpu.arch == .wasm32) {} else .{},
