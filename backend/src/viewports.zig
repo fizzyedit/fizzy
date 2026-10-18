@@ -329,12 +329,16 @@ pub const Picture = struct {
         const cw = dvui.currentWindow();
         const cmds = sw.render_cmds;
         const after = sw.render_cmds_after;
+        const front = sw.render_cmds_front;
         if (take) {
             sw.render_cmds = .empty;
             sw.render_cmds_after = .empty;
+            sw.render_cmds_front = .empty;
         }
+        // In dvui's order (`Window.endRendering`): front-to-back blocks over the draw-last strokes.
         cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
         cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
+        cw.renderCommands(front.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
     }
 
     /// Done: drawing goes to the frame's own target again.

@@ -88,6 +88,21 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    `dvui.osWindow` takes this path, and `backend/src/os_windows.zig` shows the floating window in
    an OS window of its own. Upstream: to propose with `run-dvui` (fizzyedit/example-app) as the
    demonstration.
+9. **testing.snapshot: port to std.Io** (`e2c9a85`). Upstream's own port (`30adbcaa` to
+   `2fc3f883`), taken whole: `dvui.testing.snapshot` was still on the pre-0.16 file API, so a
+   test calling it failed to compile (#526). It takes `SnapshotOptions` now, and logs through
+   `std.log`. Upstream: already there; comes out empty at the next rebase.
+10. **RenderFrontToBack: closed blocks are drawn after draw-last commands** (`f07c334`, reworked
+   in `fdc03d4`). A closed block went in at the start of `render_cmds_after` and draw-last strokes
+   (`focusBorder`, a text entry's error ring) were appended after it, so a focus ring drawn later
+   lay on top of a block meant to cover it: the pane corner button's glass under the explorer
+   filter's ring (#519). Closed blocks now go in a list of their own,
+   `Subwindow.render_cmds_front`, drawn after `render_cmds_after` (and, while drawing is deferred,
+   `Window.defer_render_cmds_front`, which `RenderFrontToBack` and `Picture` set). Code that takes
+   a subwindow's lists to draw elsewhere takes this one too, last, as `backend/src/viewports.zig`
+   does. `Debug`'s widget outline, a draw-last stroke, now draws under such a block. Upstream:
+   worth proposing. Test: dvui's `zig build test -Dbackend=testing`, "closed RenderFrontToBack
+   blocks are drawn after draw-last strokes, before or after they closed".
 
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
@@ -96,7 +111,9 @@ Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
 `f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70` (0.2.19 was not released yet, and a tag never
 moves, so the second pin of one version takes a suffix, as the SDL fork's tags do; SDK 0.2.19 to
-0.2.22); `fizzy-sdk-0.2.23` → `f646ec0`, what `sdk/build.zig.zon` pins now.
+0.2.22); `fizzy-sdk-0.2.23` → `f646ec0` (SDK 0.2.23 to 0.2.29); `fizzy-sdk-0.2.30` → `f07c334`
+(never pinned on `main`: its counter was reworked before merge); `fizzy-sdk-0.2.30-2` →
+`fdc03d4`, what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
