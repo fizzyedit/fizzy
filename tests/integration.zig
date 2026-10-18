@@ -8580,6 +8580,52 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.workbench.pending_new_file_path == null);
     }
 
+    // A file opened before its plugin is there (launched with it while the plugin was refused,
+    // before a dropped-in build was loaded) is the fallback's, as text, until the plugin arrives;
+    // then it moves to it, in the same tab (`Editor.rehomeFallbackDocuments`).
+    {
+        const host = &editor.app.host;
+        const image = host.pluginById("image") orelse return error.TestUnexpectedResult;
+        host.unregisterPlugin(image);
+        editor.rebuildExtensionOwnerCache();
+        // One white pixel, uncompressed true-colour TGA.
+        const tga = [_]u8{ 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 32, 8, 255, 255, 255, 255 };
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/late.tga", .data = &tga });
+        const late = try std.fs.path.join(gpa, &.{ project, "late.tga" });
+        defer gpa.free(late);
+        const ownerOf = struct {
+            fn ownerOf(e: *fizzy.Editor, path: []const u8) ?*sdk.Plugin {
+                const d = e.docFromPath(path) orelse return null;
+                return d.owner;
+            }
+        }.ownerOf;
+        _ = try editor.openFilePath(late, editor.workbench.currentGroupingID());
+        for (0..200) |_| {
+            if (ownerOf(editor, late) != null) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(host.fallback_editor, ownerOf(editor, late));
+        const docs_before = editor.app.open_files.count();
+
+        try host.registerPlugin(image);
+        editor.rebuildExtensionOwnerCache();
+        for (0..200) |_| {
+            if (ownerOf(editor, late) == image) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(image, ownerOf(editor, late).?);
+        try std.testing.expectEqual(docs_before, editor.app.open_files.count());
+        // Its tab was taken over, not added beside it: one tab for the file, the image's.
+        const surface = try sdk.document.surfaceId(host.arena(), image.id, late);
+        try std.testing.expect(editor.workbench.hasTabAnywhere(surface));
+        const text_surface = try sdk.document.surfaceId(host.arena(), host.fallback_editor.?.id, late);
+        try std.testing.expect(!editor.workbench.hasTabAnywhere(text_surface));
+        try editor.closeFileID(editor.docFromPath(late).?.id);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // A quit straight after a pane slid shut (`snapshotClosingPane`): the pane still holds its
     // picture, and the quit comes after the last frame, when nothing can be freed at a frame's end.
     {

@@ -224,7 +224,8 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         var tl = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false });
         defer tl.deinit();
         tl.addText(
-            "Whatever you choose is remembered, and files already open stay where they are. " ++
+            "Whatever you choose is remembered. Files open as plain text only because nothing " ++
+                "else could open them move to your choice; any other open file stays where it is. " ++
                 "You can change any of this later in Settings › File Types.",
             .{ .font = body.larger(-1.0) },
         );

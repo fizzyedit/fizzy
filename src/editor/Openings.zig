@@ -124,7 +124,7 @@ pub fn begin(self: *Openings, editor: *Editor, path: []const u8, grouping: u64, 
         if (wb.swapTabId(old, o.surface_id)) |ws| {
             // A replaced preview is replaced by what was just clicked, so it shows; a restored
             // slot shows only if it was showing.
-            if (take_slot_of != null or was_selected) self.show(editor, o, ws);
+            if ((take_slot_of != null and !placement.in_place) or was_selected) self.show(editor, o, ws);
             host.refresh();
             return;
         }

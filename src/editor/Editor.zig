@@ -234,6 +234,11 @@ pending_native_menu_item_indices_len: u8 = 0,
 /// When set, next `tick` runs `warmupDrawingComposites` on the active file (after open or drawing-tool select).
 pending_composite_warmup: bool = false,
 
+/// Set whenever who opens which extension may have changed (`rebuildExtensionOwnerCache`): the
+/// next `tick` moves documents the fallback editor holds only as the fallback to the plugin that
+/// owns them now (`rehomeFallbackDocuments`).
+rehome_pending: bool = false,
+
 /// When set, the next frame closes the explorer and the bottom panel, as their own close buttons
 /// would. Set by the page's `?show=`: an embed that opens on one file is about that file, and the
 /// tree and the panel only take room from it. Done in the frame (`layout.zig`), not from the
@@ -1084,6 +1089,7 @@ pub fn rebuildExtensionOwnerCache(editor: *Editor) void {
             };
         }
     }
+    editor.rehome_pending = true;
 }
 
 /// **The only function that writes `.extensions` to disk**, and it runs only in direct response
@@ -4080,6 +4086,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
     editor.tape_tabs.tick(editor);
     editor.promoteEditedPreviews();
+    // Once the file-type question, if one is up, has its answer: that answer is who they go to.
+    if (editor.rehome_pending and !Dialogs.FileTypeDefaults.active(dvui.currentWindow())) {
+        editor.rehome_pending = false;
+        editor.rehomeFallbackDocuments();
+    }
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
@@ -5387,6 +5398,9 @@ pub const Placement = struct {
     take_slot_of: ?[]const u8 = null,
     /// `OpenOptions.beside`.
     beside: bool = false,
+    /// Take `take_slot_of`'s place without bringing it forward: it shows only if that tab was
+    /// showing (`rehomeFallbackDocuments`).
+    in_place: bool = false,
 };
 
 /// Watch this executable while `restart_on_rebuild` is on, and stop when it goes off. Once a frame;
@@ -5570,6 +5584,64 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement_in: P
     editor.openings.begin(editor, path, grouping, placement, owner);
 
     return true;
+}
+
+/// Hand each document the fallback editor holds only as the fallback (its extension is none of
+/// the fallback's own) to the plugin that opens that extension now, in the same tab. A file
+/// opened before its plugin was there — launched with it while the plugin was refused, before a
+/// dropped-in build was loaded, before a store install — is otherwise stuck as text until it is
+/// closed and opened again. One with unsaved changes, one someone is working on (`sdk.Claim`), and
+/// one with nothing on disk to read again stay as they are; so does one whose extension the
+/// fallback offers in its own `fileTypes` (bundled text offers none).
+pub fn rehomeFallbackDocuments(editor: *Editor) void {
+    const fallback = editor.app.host.fallback_editor orelse return;
+    const gpa = editor.app.gpa;
+    // Collected first: each move takes a document out of `open_files`.
+    var ids: std.ArrayListUnmanaged(u64) = .empty;
+    defer ids.deinit(gpa);
+    for (editor.app.open_files.values()) |doc| {
+        if (doc.owner != fallback) continue;
+        const ext = std.fs.path.extension(doc.owner.documentPath(doc));
+        const owner = editor.app.host.pluginForExtension(ext) orelse continue;
+        if (owner == fallback) continue;
+        const own = for (fallback.fileTypes()) |e| {
+            if (std.ascii.eqlIgnoreCase(e, ext)) break true;
+        } else false;
+        if (own) continue;
+        if (doc.owner.isDirty(doc) or editor.app.host.documentClaim(doc.id) != null) continue;
+        ids.append(gpa, doc.id) catch return;
+    }
+    for (ids.items) |id| editor.rehomeDocument(id) catch |err|
+        dvui.log.warn("could not move a document to the plugin that opens it now: {t}", .{err});
+}
+
+fn rehomeDocument(editor: *Editor, id: u64) !void {
+    const doc = editor.app.open_files.get(id) orelse return;
+    const gpa = editor.app.gpa;
+    const path = try gpa.dupe(u8, doc.owner.documentPath(doc));
+    defer gpa.free(path);
+    // Read again from where it came from: a mount, or the disk (which the web has none of).
+    if (!editor.doc_io.owns(path)) {
+        if (comptime builtin.target.cpu.arch == .wasm32) return;
+        std.Io.Dir.cwd().access(dvui.io, path, .{}) catch return;
+    }
+    const ds = editor.doc_surfaces.get(id) orelse return;
+    const slot = try gpa.dupe(u8, ds.id);
+    defer gpa.free(slot);
+    const grouping = doc.owner.documentGrouping(doc);
+    const preview = editor.documentIsPreview(id);
+    dvui.log.info("{s}: moving from {s} to {s}, which opens it now", .{
+        std.fs.path.basename(path),
+        doc.owner.display_name,
+        (editor.app.host.pluginForExtension(std.fs.path.extension(path)) orelse doc.owner).display_name,
+    });
+    // Out of fizzy with its tab left where it is, for the new owner's placeholder to take.
+    editor.app.host.emitZon("fizzy.document.closed", .{ .path = path });
+    editor.detachFileID(id);
+    // Whichever open the user asked for last is still the one focused when it lands.
+    const focus = editor.last_load_request_path;
+    defer editor.last_load_request_path = focus;
+    _ = try editor.openPath(path, grouping, .{ .preview = preview, .take_slot_of = slot, .in_place = true });
 }
 
 /// Stop loading `path`, wherever it is loading from. Its document never arrives.
