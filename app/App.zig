@@ -75,6 +75,13 @@ config_folder: []const u8,
 
 palette_folder: []const u8,
 
+/// Each registered plugin's data folder (`pluginDataFolder`), by lowercased id, filled on the
+/// main thread as plugins register (`pluginRegistered`). Key and path owned, and kept after the
+/// plugin goes, so a path handed out stays good for the app's life. Guarded by
+/// `plugin_data_lock`: a plugin may ask from a worker thread (an indexer, an LSP client).
+plugin_data_folders: std.StringHashMapUnmanaged(PluginDataFolder) = .empty,
+plugin_data_lock: std.Io.Mutex = .init,
+
 /// Plugin registry + service locator exposed to plugins
 host: Host,
 
@@ -757,6 +764,159 @@ pub fn retireFolder(app: *App) void {
 pub fn releaseRetiredFolders(app: *App) void {
     for (app.folder_retired.items) |folder| app.gpa.free(folder);
     app.folder_retired.clearRetainingCapacity();
+}
+
+pub const PluginDataFolder = struct {
+    /// Null for an id that names no folder (`isValidPluginId`: `fizzy.store` has a dot in it).
+    path: ?[]const u8,
+    /// Its plugin is registered now. A path stays in the table after its plugin goes, since a
+    /// caller may hold it, but is not handed out again until the plugin is back.
+    registered: bool = true,
+    /// When the folder was last found or made, on `std.Io.Clock.awake`: an ask within
+    /// `plugin_data_recheck_ns` of it trusts it is there.
+    made_at: ?i96 = null,
+    /// When making it last failed (a read-only or full disk): asks within `plugin_data_retry_ns`
+    /// of it get null without trying.
+    failed_at: ?i96 = null,
+    /// Something was said about this folder (an id that names none, a run of failures), so it
+    /// is not said again until things change.
+    said: bool = false,
+};
+
+/// How long a found or made plugin data folder is trusted to be there before an ask makes sure.
+pub const plugin_data_recheck_ns: i96 = std.time.ns_per_s;
+/// How long a plugin data folder that could not be made is left before it is tried again.
+pub const plugin_data_retry_ns: i96 = 5 * std.time.ns_per_s;
+
+/// The key a plugin's data folder is kept under: its id in lowercase, in `buf`. Null for an id
+/// longer than any valid one, which then has no folder and no entry.
+fn pluginDataKey(buf: *[64]u8, id: []const u8) ?[]const u8 {
+    if (id.len > buf.len) return null;
+    return std.ascii.lowerString(buf, id);
+}
+
+/// `plugin_data_lock`, which the web, single-threaded and with `std.Io`'s mutex unavailable to
+/// it, goes without.
+fn lockPluginData(app: *App) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    app.plugin_data_lock.lockUncancelable(dvui.io);
+}
+
+fn unlockPluginData(app: *App) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    app.plugin_data_lock.unlock(dvui.io);
+}
+
+/// A plugin registered (`Host.registerPlugin`, through `EditorAPI.pluginRegistered`), on the main
+/// thread: its data folder's entry is made ready here, so `pluginDataFolder`, asked from any
+/// thread, never walks the host's plugin list.
+pub fn pluginRegistered(app: *App, id: []const u8) void {
+    var buf: [64]u8 = undefined;
+    const name = pluginDataKey(&buf, id) orelse return;
+    app.lockPluginData();
+    defer app.unlockPluginData();
+    if (app.plugin_data_folders.getPtr(name)) |f| {
+        f.registered = true;
+        return;
+    }
+    const key = app.gpa.dupe(u8, name) catch return std.log.warn("plugin '{s}' data folder: out of memory", .{id});
+    const path: ?[]const u8 = if (isValidPluginId(id))
+        std.fs.path.join(app.gpa, &.{ app.config_folder, "plugin-data", name }) catch {
+            app.gpa.free(key);
+            return std.log.warn("plugin '{s}' data folder: out of memory", .{id});
+        }
+    else
+        null;
+    app.plugin_data_folders.put(app.gpa, key, .{ .path = path }) catch {
+        app.gpa.free(key);
+        if (path) |p| app.gpa.free(p);
+        std.log.warn("plugin '{s}' data folder: out of memory", .{id});
+    };
+}
+
+/// A plugin went (unloaded, disabled, uninstalled, replaced by a reload), after its `deinit`,
+/// which may still have written into its folder: the folder is not handed out until it is back.
+/// Its entry stays, since a worker may still hold the path.
+pub fn pluginGone(app: *App, id: []const u8) void {
+    var buf: [64]u8 = undefined;
+    const name = pluginDataKey(&buf, id) orelse return;
+    app.lockPluginData();
+    defer app.unlockPluginData();
+    if (app.plugin_data_folders.getPtr(name)) |f| f.registered = false;
+}
+
+/// `<config>/plugin-data/<id>` for the registered plugin `id` (`Host.pluginDataFolder`), the id
+/// in lowercase, which ids are unique in (`Host.registerPlugin`), so the folder is the same on a
+/// case-sensitive filesystem as on macOS and Windows. The path is borrowed for the app's life.
+///
+/// Made on the first ask, and made sure of again on an ask a second or more after the last: a
+/// folder deleted while the app runs comes back then, and a caller whose write into a kept path
+/// fails with `FileNotFound` asks again (a second later, if it asked just now). Safe from any
+/// thread: the table is read under `plugin_data_lock`, the folder made outside it.
+///
+/// Separate from `plugins/<id>`, which an update replaces and an uninstall deletes. On the web
+/// nothing is made, as there are no directories: the path is the prefix `core.fs` files under in
+/// the page's storage, as `palette_folder` is. Null for an id no registered plugin has, for one
+/// that is not a plain identifier (said once), or when the folder can't be made: said once for
+/// each run of failures, and tried again on an ask `plugin_data_retry_ns` after the last.
+pub fn pluginDataFolder(app: *App, id: []const u8) ?[]const u8 {
+    var buf: [64]u8 = undefined;
+    const name = pluginDataKey(&buf, id) orelse return null;
+    const is_wasm = comptime builtin.target.cpu.arch == .wasm32;
+    const path = path: {
+        app.lockPluginData();
+        defer app.unlockPluginData();
+        const f = app.plugin_data_folders.getPtr(name) orelse return null;
+        if (!f.registered) return null;
+        const path = f.path orelse {
+            if (!f.said) std.log.warn("plugin '{s}' has no data folder: its id is not a plain identifier (letters, digits, '-', '_')", .{id});
+            f.said = true;
+            return null;
+        };
+        if (is_wasm) return path;
+        const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
+        if (f.failed_at) |at| if (now - at < plugin_data_retry_ns) return null;
+        if (f.made_at) |at| if (now - at < plugin_data_recheck_ns) return path;
+        break :path path;
+    };
+
+    const made = std.Io.Dir.cwd().createDirPath(dvui.io, path);
+    const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
+    app.lockPluginData();
+    defer app.unlockPluginData();
+    const f = app.plugin_data_folders.getPtr(name) orelse return null;
+    if (made) |_| {
+        f.made_at = now;
+        f.failed_at = null;
+        f.said = false;
+        // Its plugin may have gone while the folder was made.
+        return if (f.registered) path else null;
+    } else |err| {
+        // Said once for a run of failures: an ask every frame would say it every frame.
+        if (!f.said) std.log.warn("plugin data folder {s}: {s}", .{ path, @errorName(err) });
+        f.said = true;
+        f.made_at = null;
+        f.failed_at = now;
+        return null;
+    }
+}
+
+/// What the app itself owns and frees: the plugin data folders and the per-plugin id lists.
+/// Fizzy's `Editor.deinit` calls it; an app running `App` without the editor calls it at its own
+/// teardown.
+pub fn deinit(app: *App) void {
+    var it = app.plugin_data_folders.iterator();
+    while (it.next()) |e| {
+        app.gpa.free(e.key_ptr.*);
+        if (e.value_ptr.path) |p| app.gpa.free(p);
+    }
+    app.plugin_data_folders.deinit(app.gpa);
+    for (app.disabled_plugin_ids.items) |id| app.gpa.free(id);
+    app.disabled_plugin_ids.deinit(app.gpa);
+    for (app.undecided_plugin_ids.items) |id| app.gpa.free(id);
+    app.undecided_plugin_ids.deinit(app.gpa);
+    for (app.auto_update_off_ids.items) |id| app.gpa.free(id);
+    app.auto_update_off_ids.deinit(app.gpa);
 }
 
 /// `<config>/plugins/<id>/<id>.<ext>` — where a user plugin's build lives. Caller frees.

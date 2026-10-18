@@ -7348,6 +7348,87 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.postInit();
     try dvui.testing.settle(headlessFrame);
     try std.testing.expectEqualStrings(root, editor.app.config_folder);
+    // A plugin's data folder (`Host.pluginDataFolder`): under the profile, made on the first ask,
+    // the same borrowed path after, one per plugin.
+    {
+        const host = &editor.app.host;
+        const text_plugin = host.pluginById("text") orelse return error.TestUnexpectedResult;
+        const markdown_plugin = host.pluginById("markdown") orelse return error.TestUnexpectedResult;
+        const data = host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult;
+        const want = try std.fs.path.join(gpa, &.{ root, "plugin-data", "text" });
+        defer gpa.free(want);
+        try std.testing.expectEqualStrings(want, data);
+        var dir = try std.Io.Dir.cwd().openDir(dvui.io, data, .{});
+        dir.close(dvui.io);
+        try std.testing.expectEqual(data.ptr, (host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult).ptr);
+        const other = host.pluginDataFolder(markdown_plugin) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!std.mem.eql(u8, data, other));
+        // An id no registered plugin has gets no folder, and no entry; ids are one ignoring case.
+        try std.testing.expect(editor.app.pluginDataFolder("../escape") == null);
+        try std.testing.expect(editor.app.plugin_data_folders.get("../escape") == null);
+        try std.testing.expectEqual(data.ptr, (editor.app.pluginDataFolder("Text") orelse return error.TestUnexpectedResult).ptr);
+        const level = std.testing.log_level;
+        std.testing.log_level = .err; // the warnings the cases below ask for
+        defer std.testing.log_level = level;
+        const vt = sdk.Plugin.VTable{};
+        // A plugin whose id has capitals gets it in lowercase, the same folder on every
+        // filesystem; another in a different case of it is not registered at all.
+        {
+            var cased = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "CaseTest", .display_name = "Case Test" };
+            try host.registerPlugin(&cased);
+            const want_cased = try std.fs.path.join(gpa, &.{ root, "plugin-data", "casetest" });
+            defer gpa.free(want_cased);
+            try std.testing.expectEqualStrings(want_cased, host.pluginDataFolder(&cased) orelse return error.TestUnexpectedResult);
+            var lower = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "casetest", .display_name = "Case Test" };
+            try std.testing.expectError(error.DuplicatePluginId, host.registerPlugin(&lower));
+            // Gone, as `unloadPlugin` says once its `deinit` has run, its path is not handed out.
+            host.unregisterPlugin(&cased);
+            editor.app.pluginGone(cased.id);
+            try std.testing.expect(host.pluginDataFolder(&cased) == null);
+        }
+        // An id that is not a plain identifier names no folder.
+        {
+            var dotted = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "dotted.id", .display_name = "Dotted" };
+            try host.registerPlugin(&dotted);
+            defer host.unregisterPlugin(&dotted);
+            try std.testing.expect(host.pluginDataFolder(&dotted) == null);
+        }
+        // Deleted since, it is made again by an ask once the second it is trusted for is over.
+        try std.Io.Dir.cwd().deleteTree(dvui.io, data);
+        const text_entry = editor.app.plugin_data_folders.getPtr("text") orelse return error.TestUnexpectedResult;
+        text_entry.made_at.? -= app.App.plugin_data_recheck_ns;
+        _ = host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult;
+        var again = try std.Io.Dir.cwd().openDir(dvui.io, data, .{});
+        again.close(dvui.io);
+        // One that cannot be made (a file in its way) is null, and not tried again for a few
+        // seconds; once they have passed, with the way clear, it is made.
+        {
+            var blocked = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "blocked", .display_name = "Blocked" };
+            try host.registerPlugin(&blocked);
+            defer host.unregisterPlugin(&blocked);
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugin-data/blocked", .data = "" });
+            try std.testing.expect(host.pluginDataFolder(&blocked) == null);
+            try tmp.dir.deleteFile(dvui.io, "plugin-data/blocked");
+            try std.testing.expect(host.pluginDataFolder(&blocked) == null);
+            const cached = editor.app.plugin_data_folders.getPtr("blocked") orelse return error.TestUnexpectedResult;
+            cached.failed_at.? -= app.App.plugin_data_retry_ns;
+            const made = host.pluginDataFolder(&blocked) orelse return error.TestUnexpectedResult;
+            var dir2 = try std.Io.Dir.cwd().openDir(dvui.io, made, .{});
+            dir2.close(dvui.io);
+            try std.testing.expect(cached.failed_at == null);
+        }
+        // A build declaring a loaded plugin's id in another case is refused before it is opened,
+        // its card shows it failed (not loaded) and says why, and uninstalling it goes through.
+        if (app.App.loads_plugins) {
+            try std.testing.expectError(error.DuplicatePluginId, editor.loadUserPluginById("Text"));
+            const status = editor.app.pluginStatus("Text");
+            try std.testing.expectEqual(sdk.services.plugins.Api.State.failed, status.state);
+            try std.testing.expect(std.mem.indexOf(u8, status.why, "differs only in case") != null);
+            try editor.uninstallPlugin("Text", true);
+            try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, editor.app.pluginStatus("Text").state);
+            try std.testing.expect(host.pluginById("text") != null);
+        }
+    }
     // The app offers its plugins the `automation` service, and nothing is in flight.
     const automation_api = editor.app.host.getServiceTyped(sdk.services.automation.Api) orelse return error.TestUnexpectedResult;
     try std.testing.expect(automation_api.settled());

@@ -740,7 +740,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         defer editor.app.gpa.free(file_name);
         const path = std.fs.path.join(editor.app.gpa, &.{ plugins_dir, plugin_id, file_name }) catch continue;
 
-        if (editor.app.host.pluginById(plugin_id) != null) {
+        if (editor.app.host.pluginByIdIgnoringCase(plugin_id)) |loaded| {
             // A fizzy built-in (`text`/`workbench`/`image`/`markdown`) is loaded via its own
             // static/dylib path (see `postInit` above) and may *also* have its dylib sitting in
             // this same shared plugins directory — built-ins compile "the same third-party
@@ -751,7 +751,9 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             // plugin), which collides on the shared heading widget id. Only a genuine third-party
             // id clash (some other plugin trying to claim an id a built-in already owns) is
             // worth surfacing.
-            if (isBundledPluginId(plugin_id)) {
+            if (!std.mem.eql(u8, loaded.id, plugin_id)) {
+                editor.caseClash(plugin_id, loaded.id, path);
+            } else if (isBundledPluginId(plugin_id)) {
                 dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
@@ -826,14 +828,7 @@ fn unloadPluginLibs(editor: *Editor) void {
     editor.app.failed_user_plugins.deinit(editor.app.gpa);
     editor.app.deinitPluginLoads();
 
-    for (editor.app.disabled_plugin_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.disabled_plugin_ids.deinit(editor.app.gpa);
-
-    for (editor.app.undecided_plugin_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.undecided_plugin_ids.deinit(editor.app.gpa);
-
-    for (editor.app.auto_update_off_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.auto_update_off_ids.deinit(editor.app.gpa);
+    // The id lists (disabled, undecided, auto-update off) are the App's: `App.deinit`.
 
     {
         var it = editor.app.plugin_flags_pending.iterator();
@@ -1438,6 +1433,12 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
+    // Asked before the build is opened: a case variant of a loaded id fails saying so.
+    if (editor.app.host.pluginByIdIgnoringCase(id)) |loaded| if (!std.mem.eql(u8, loaded.id, id)) {
+        editor.caseClash(id, loaded.id, path);
+        editor.app.gpa.free(path);
+        return error.DuplicatePluginId;
+    };
     const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
         editor.userPluginLoadFailed(id, path, err);
         editor.app.gpa.free(path);
@@ -1479,6 +1480,17 @@ pub fn finishUserPluginLoad(editor: *Editor, id: []const u8, opened: PluginLoade
 /// Leave the same actionable record the startup scan leaves (see `recordLoadFailure`), so a build
 /// that fails a live load stays visible in the store's installed pane with its Reinstall/Uninstall
 /// controls instead of disappearing until the next restart.
+/// The build at `path` declares `id`, the id of the loaded plugin `loaded_id` in another case:
+/// one folder on macOS and Windows, so one plugin (`Host.registerPlugin`). Not loaded, and the
+/// store's failure card says why.
+fn caseClash(editor: *Editor, id: []const u8, loaded_id: []const u8, path: []const u8) void {
+    const why = std.fmt.allocPrint(editor.app.arena.allocator(), "id '{s}' differs only in case from the loaded plugin '{s}'", .{ id, loaded_id }) catch "id differs only in case from a loaded plugin";
+    dvui.log.warn("user plugin '{s}': {s}; skipped", .{ id, why });
+    const probe = PluginLoader.probeVersionInfo(path);
+    editor.app.clearFailedUserPlugin(id);
+    editor.app.recordPluginFailure(id, why, null, if (probe) |info| info.plugin_version else null, .of(path));
+}
+
 fn userPluginLoadFailed(editor: *Editor, id: []const u8, path: []const u8, err: PluginLoader.LoadError) void {
     dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ id, path, @errorName(err), App.pluginLoadFailureReason(err) });
     editor.app.recordLoadFailure(id, path, err);
@@ -1896,6 +1908,8 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) Unload
     editor.app.host.unregisterPlugin(plugin);
     fizzy.backend.rebuildDynamicNativeMenus();
     plugin.deinit();
+    // After `deinit`, which may still write into its data folder.
+    editor.app.pluginGone(id);
 
     // Drop the unloaded plugin's keybinds by rebuilding from the survivors.
     rebuildKeybinds(editor);
@@ -2361,6 +2375,8 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .extensionOwnerOverride = fizzyExtensionOwnerOverride,
     .folder = fizzyFolder,
     .paletteFolder = fizzyPaletteFolder,
+    .pluginDataFolder = fizzyPluginDataFolder,
+    .pluginRegistered = fizzyPluginRegistered,
     .getSecret = fizzyGetSecret,
     .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
@@ -2526,6 +2542,12 @@ fn fizzyFolder(ctx: *anyopaque) ?[]const u8 {
 }
 fn fizzyPaletteFolder(ctx: *anyopaque) ?[]const u8 {
     return fizzyCtx(ctx).app.palette_folder;
+}
+fn fizzyPluginDataFolder(ctx: *anyopaque, id: []const u8) ?[]const u8 {
+    return fizzyCtx(ctx).app.pluginDataFolder(id);
+}
+fn fizzyPluginRegistered(ctx: *anyopaque, id: []const u8) void {
+    fizzyCtx(ctx).app.pluginRegistered(id);
 }
 fn fizzyGetSecret(ctx: *anyopaque, key: []const u8) ?[]const u8 {
     return fizzyCtx(ctx).app.secrets.get(key);
@@ -6509,6 +6531,8 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 }
 
 pub fn deinit(editor: *Editor) !void {
+    // Freed however this ends: the fallible steps below may return early.
+    defer editor.app.deinit();
     // A demo playing at quit leaves the user's layout and settings as `Demo.begin` flushed them:
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();

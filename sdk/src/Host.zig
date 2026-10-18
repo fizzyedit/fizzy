@@ -430,6 +430,33 @@ pub fn paletteFolder(self: *Host) ?[]const u8 {
     return if (self.fizzy_api) |a| a.paletteFolder() else null;
 }
 
+/// A folder of `plugin`'s own for what it keeps between runs that is not a setting: its
+/// recents, an index, a cache. It is `<config>/plugin-data/<id>`, the id in lowercase (ids are
+/// unique ignoring case: `registerPlugin`). It follows the app's config folder, so a profile has
+/// its own, and it is not `plugins/<id>`, the folder the plugin is installed in, which an update
+/// replaces and an uninstall deletes.
+///
+/// The path is borrowed for the life of the app. The folder is made on the first call and made
+/// sure of again on a call a second or more after the last, so one deleted while the app runs
+/// comes back then: a plugin whose write into a kept path fails with `FileNotFound` calls again
+/// (a second later, if it called just now). Safe to call from any thread.
+///
+/// Null when no app is installed, when `plugin` is not registered, when its id is not a plain
+/// identifier (letters, digits, `-`, `_`; logged once), or when the folder could not be made
+/// (logged once, and tried again on a call a few seconds later).
+///
+/// On the web, as with `paletteFolder`, the path names no directory: it is the prefix under
+/// which `core.fs.read`, `readZ`, `write` and `remove` keep files in the page's storage. Those
+/// four calls work on both, so a plugin that writes `<folder>/recents.zon` through them needs
+/// no web case; `std.Io.Dir` calls on the path fail on the web.
+///
+/// Uninstalling a plugin leaves this folder, as it leaves the plugin's settings, so a reinstall
+/// picks up where it was. Removing it too would be an option of the app's uninstall (fizzy's
+/// `Editor.uninstallPlugin`), not built yet.
+pub fn pluginDataFolder(self: *Host, plugin: *const Plugin) ?[]const u8 {
+    return if (self.fizzy_api) |a| a.pluginDataFolder(plugin.id) else null;
+}
+
 /// A credential the plugin keeps on the user's behalf — a refresh token, an API key — stored
 /// by the app outside `settings.zon` (which is exported, diffed, watched and drawn in a pane):
 /// a `0600` file today, the OS keychain behind the same call later. Keys are plugin-namespaced
@@ -928,9 +955,18 @@ pub fn pluginInstallDir(self: *Host, id: []const u8) ?[]u8 {
 /// Rejects a second plugin claiming an already-registered `id` so routing can never become
 /// ambiguous — the dylib loader turns this into a failed load the user is told about
 /// (built-in ids always win, since they register first).
+///
+/// The same id in another case (`Graphl` beside `graphl`) is a duplicate too: ids name folders
+/// (`pluginDataFolder`, the install folder), and macOS and Windows keep one folder for both.
 pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
-    if (self.pluginById(plugin.id) != null) return error.DuplicatePluginId;
+    if (self.pluginByIdIgnoringCase(plugin.id)) |p| {
+        // The loader reports a duplicate by its id; this one it could not explain.
+        if (!std.mem.eql(u8, p.id, plugin.id))
+            std.log.warn("plugin '{s}' not registered: '{s}' is registered already, and ids differing only in case are one id", .{ plugin.id, p.id });
+        return error.DuplicatePluginId;
+    }
     try self.plugins.append(self.allocator, plugin);
+    if (self.fizzy_api) |a| if (a.vtable.pluginRegistered) |registered| registered(a.ctx, plugin.id);
 }
 
 /// Remove every contribution, service, and registry entry owned by `plugin`, then drop
@@ -1063,10 +1099,21 @@ fn removeOwnedSettingsSchemas(list: *std.ArrayListUnmanaged(SettingsSchema), plu
     list.items.len = w;
 }
 
-/// Lookup a registered plugin by stable id (`"pixi"`, `"workbench"`, …).
+/// Lookup a registered plugin by stable id (`"pixi"`, `"workbench"`, …), exactly as written.
 pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
     for (self.plugins.items) |plugin| {
         if (std.mem.eql(u8, plugin.id, id)) return plugin;
+    }
+    return null;
+}
+
+/// The registered plugin whose id is `id` in some case — `Graphl` finds `graphl` — which
+/// `registerPlugin` would refuse `id` beside. For a loader to ask before it opens a build, so a
+/// case variant fails with that said, not as a load that fails later. Everything keyed by an id
+/// once loaded (the loaded builds, settings, the store's lists) uses `pluginById`.
+pub fn pluginByIdIgnoringCase(self: *Host, id: []const u8) ?*Plugin {
+    for (self.plugins.items) |plugin| {
+        if (std.ascii.eqlIgnoreCase(plugin.id, id)) return plugin;
     }
     return null;
 }
@@ -2676,6 +2723,23 @@ test "pluginForExtension resolves by assignment, unique claimant, then fallback"
     try testing.expectEqual(@as(?*Plugin, null), host.pluginForExtension(".zig"));
 }
 
+test "registerPlugin refuses an id already registered, in any case" {
+    const log_level = testing.log_level;
+    testing.log_level = .err;
+    defer testing.log_level = log_level;
+
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vt = Plugin.VTable{};
+    var first = Plugin{ .state = undefined, .vtable = &vt, .id = "graphl", .display_name = "Graphl" };
+    var same = Plugin{ .state = undefined, .vtable = &vt, .id = "graphl", .display_name = "Graphl" };
+    var cased = Plugin{ .state = undefined, .vtable = &vt, .id = "GraphL", .display_name = "GraphL" };
+    try host.registerPlugin(&first);
+    try testing.expectError(error.DuplicatePluginId, host.registerPlugin(&same));
+    try testing.expectError(error.DuplicatePluginId, host.registerPlugin(&cased));
+    try testing.expectEqual(@as(usize, 1), host.plugins.items.len);
+}
+
 test "pluginForExtension honors a user assignment and ignores a stale one" {
     const Fake = struct {
         var override: ?[]const u8 = null;
@@ -2708,6 +2772,7 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
 
     // Only the one vtable member `pluginForExtension` reaches; the rest stay unreachable here.
     var api_vt: EditorAPI.VTable = undefined;
+    api_vt.pluginRegistered = null;
     api_vt.extensionOwnerOverride = Fake.extensionOwnerOverride;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
@@ -3098,6 +3163,7 @@ test "a claim on a document holds an override of its owner's command too" {
     };
     S.owner = &pixi;
     var api_vt: EditorAPI.VTable = undefined;
+    api_vt.pluginRegistered = null;
     api_vt.activeDoc = S.active;
     api_vt.refresh = S.refresh;
     var ctx: u8 = 0;
@@ -3405,6 +3471,7 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
 
     // ...and something required has the app ask for it.
     var api_vt: EditorAPI.VTable = undefined;
+    api_vt.pluginRegistered = null;
     api_vt.askCommandArguments = S.ask;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });

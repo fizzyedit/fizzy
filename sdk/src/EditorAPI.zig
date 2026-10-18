@@ -151,6 +151,15 @@ pub const VTable = struct {
     folder: *const fn (ctx: *anyopaque) ?[]const u8,
     /// The user palettes folder (config), or null on platforms without one (web).
     paletteFolder: *const fn (ctx: *anyopaque) ?[]const u8,
+    /// The folder kept for the registered plugin `id`'s own files — see `Host.pluginDataFolder`.
+    /// Called from any thread; reads only what `pluginRegistered` made ready. Null for an id no
+    /// registered plugin has, or when it can't be made.
+    pluginDataFolder: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
+    /// A plugin registered, on the main thread (`Host.registerPlugin`): what the app keeps per
+    /// plugin is made ready here, so asks from other threads never walk the host's plugin list.
+    /// Its going is the app's own to note, after the plugin's `deinit` (which may still use what
+    /// it kept). Null where the app keeps nothing per plugin.
+    pluginRegistered: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
     /// Mark fizzy's settings dirty so the debounced autosave persists them.
     markSettingsDirty: *const fn (ctx: *anyopaque) void,
     /// A credential kept for a plugin, by key (`<plugin>.<what>`), outside `settings.zon` —
@@ -460,6 +469,10 @@ pub fn folder(self: EditorAPI) ?[]const u8 {
 
 pub fn paletteFolder(self: EditorAPI) ?[]const u8 {
     return self.vtable.paletteFolder(self.ctx);
+}
+
+pub fn pluginDataFolder(self: EditorAPI, id: []const u8) ?[]const u8 {
+    return self.vtable.pluginDataFolder(self.ctx, id);
 }
 
 pub fn markSettingsDirty(self: EditorAPI) void {
