@@ -163,7 +163,7 @@ which produces:
 .{
     .name = .my_plugin,
     .version = "0.1.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{ "build.zig", "build.zig.zon", "plugin.zig", "plugin.zig.zon", "src" },
     .fingerprint = 0x0000000000000000, // zig fills this in on first `zig build`
     .dependencies = .{
@@ -1624,7 +1624,7 @@ jobs:
     permissions:
       contents: write
     with:
-      zig-version: "0.16.0"
+      zig-version: "0.17.0"
 ```
 
 Bump the `sdk-v*` tag your `build.zig.zon` pins when you want a new SDK; the next tag's manifest picks up
