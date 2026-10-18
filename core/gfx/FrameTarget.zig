@@ -250,10 +250,12 @@ pub fn deinit(self: *FrameTarget) void {
 }
 
 /// `rect` (window pixels) as the last frame drew it, copied into a texture the caller owns
-/// (`dvui.textureDestroyLater` it). What a pane showed a moment ago, after what it showed has
-/// gone: a document closing can unload at once and its pane still slide shut over the picture
-/// of it. Null before a frame has been drawn, off the window, or on a backend without targets.
-pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
+/// (`dvui.textureDestroyLater` it): at its own size, or scaled to `size` (pixels; a picture of a
+/// document's pane small enough to line up in a strip, `HistoryFrames`). What a pane showed a
+/// moment ago, after what it showed has gone: a document closing can unload at once and its pane
+/// still slide shut over the picture of it. Null before a frame has been drawn, off the window, or
+/// on a backend without targets.
+pub fn snapshot(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.Texture {
     const self = current orelse return null;
     // The last frame shown: the other target while one is bound; in a frame nobody will see, the
     // one bound last (`begin` leaves the targets as they were).
@@ -262,8 +264,8 @@ pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
     const prev = self.targets[last] orelse return null;
     const r = rect.intersect(dvui.windowRectPixels());
     if (r.w < 1 or r.h < 1) return null;
-    const w: u32 = @intFromFloat(@round(r.w));
-    const h: u32 = @intFromFloat(@round(r.h));
+    const w: u32, const h: u32 = size orelse .{ @intFromFloat(@round(r.w)), @intFromFloat(@round(r.h)) };
+    if (w == 0 or h == 0) return null;
     const src = dvui.Texture.fromTargetTemp(prev) catch return null;
     const out = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .linear }) catch return null;
 

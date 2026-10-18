@@ -71,7 +71,11 @@ fizzy's own are entries with no module, built for each executable (`build/plugin
 `link`), and only those listed register or get a dylib. `.@"dynamic-plugins" = false` (or
 `-Ddynamic-plugins=false`) makes an app link-only: no plugin dylib is built, and nothing loads
 at runtime (fizzy's dylibs, the user plugins directory, the store, a web page's `?plugin=`),
-all decided at comptime (`App.loads_plugins`). See
+all decided at comptime (`App.loads_plugins`). What is fizzy's own (bundle id, update feed,
+`VERSION`, its plist and resource script) only fizzy's root `build.zig` passes (`Options.own`);
+an app sets its identity through fizzy's options (`app-name`, `app-bundle-id`, `app_version`,
+`repo-url`, `app-package-title`, `app-icon`, `app-icon-ico`, `app-icon-icns`, …), and
+`try fizzy.addPackageSteps(b, fizzy_dep)` gives its own build `package` and `packageall`. See
 [`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
 `fizzyedit/example-plugin`.
 

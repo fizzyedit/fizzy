@@ -57,6 +57,10 @@ params: []const Param = &.{},
 /// `Params(…).bind`, which parses the arguments into the plugin's own struct and reports a
 /// mismatch as `call.bad_args`. Absent = the command takes no arguments.
 runWith: ?*const fn (state: *anyopaque, call: *Call) anyerror!void = null,
+/// Take over a command already registered with this id (fizzy's `fizzy.about`, say) rather
+/// than be dropped as a duplicate. The replaced command comes back when this one's plugin is
+/// unregistered (`Host.registerCommand`).
+replaces: bool = false,
 
 /// Who sees a command.
 pub const Visibility = enum(u8) {
