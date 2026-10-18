@@ -7701,6 +7701,32 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(before, (try read(host, notes_args)).text);
         }
 
+        // The person's Cmd-Z taking a step someone else made: the menu names it, and the pane says
+        // so with a Redo that puts it back.
+        {
+            const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            const before = (try read(host, "")).text;
+            const front_write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// by Claude\\n\" }}", .{main_zig});
+            defer gpa.free(front_write);
+            const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
+            try std.testing.expect(host.callCommand("text.write", front_write, host.arena()) == .ok);
+            host.endAct(outer);
+            const taken = try editor.stepToTake(front, .undo, host.arena());
+            try std.testing.expectEqualStrings("Claude", fizzy.Editor.authorName(taken.by));
+
+            try editor.undo();
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+            const ds = editor.doc_surfaces.get(front.id) orelse return error.TestUnexpectedResult;
+            const said = ds.feed.items[ds.feed.len - 1];
+            try std.testing.expect(std.mem.startsWith(u8, said.title[0..said.len], "Undid Claude's "));
+            const redo = said.action orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(taken.step.id, redo.tag);
+            editor.redoFromFeed(front, redo.tag);
+            try std.testing.expectEqualStrings("// by Claude\n", (try read(host, "")).text);
+            try editor.undo();
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+        }
+
         // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));

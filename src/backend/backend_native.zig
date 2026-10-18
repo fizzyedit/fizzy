@@ -293,7 +293,7 @@ fn menuEnabled(_: ?*anyopaque, ref: platform.menu.Ref) bool {
             // A `visible` item that isn't is shown greyed rather than removed: rebuilding the
             // retained NSMenu on every state change isn't worth it for the same information.
             if (item.visible) |f| if (!f(fizzy.editor())) return false;
-            const enabled = item.enabled orelse return true;
+            const enabled = item.enabled orelse return fizzy.editor().app.host.commandEnabled(item.id);
             return enabled(fizzy.editor());
         },
         // A plugin's item is its command's, on both bars; no command is always enabled.

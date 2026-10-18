@@ -79,6 +79,9 @@ pub const Config = struct {
     app_registry_url: []const u8,
     app_repo_url: []const u8,
     app_repo_url_fallback: []const u8,
+    app_is_fizzy: bool,
+    app_repo_url_set: bool,
+    app_issues_url: []const u8,
     app_layout_path: ?std.Build.LazyPath,
     static_workbench: bool,
     static_text: bool,
@@ -193,7 +196,8 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     // the latest release via the GitHub Releases API. Override at build time
     // with `-Drepo-url=...` (e.g. when shipping a fork). At runtime, the env
     // var `FIZZY_AUTOUPDATE_URL` still overrides this for local feed testing.
-    const app_repo_url = b.option([]const u8, "repo-url", "GitHub repo URL used by Velopack auto-update (e.g. https://github.com/fizzyedit/fizzy)") orelse "https://github.com/fizzyedit/fizzy";
+    const repo_url_opt = b.option([]const u8, "repo-url", "GitHub repo URL used by Velopack auto-update (e.g. https://github.com/fizzyedit/fizzy)");
+    const app_repo_url = repo_url_opt orelse "https://github.com/fizzyedit/fizzy";
 
     // Comma-separated fallback repo URLs checked (in order) after `app_repo_url`
     // yields no update. Lets a build survive a repo move/rename: ship a binary
@@ -227,6 +231,18 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     build_opts.addOption([]const u8, "app_registry_url", app_registry_url);
     build_opts.addOption([]const u8, "app_repo_url", app_repo_url);
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
+    // Fizzy itself rather than an app built on it: fizzy is the root package, an app reaches it
+    // as a dependency (`buildApp`). Structural, so a fork or a fizzy build that renames itself
+    // is still told apart from an app.
+    const app_is_fizzy = b.pkg_hash.len == 0;
+    // Where Report a Bug goes. Not `repo-url` as such, which is the update feed and defaults to
+    // fizzy's: an app reports to its own repo only when it named one (`issues_url.zig`).
+    const app_issues_url = b.option([]const u8, "app-issues-url", "Where Report a Bug goes; empty disables it (default: an explicit repo-url's issues, fizzy's for fizzy)") orelse
+        try @import("issues_url.zig").derive(b.allocator, repo_url_opt, app_is_fizzy);
+    const app_repo_url_set = repo_url_opt != null and repo_url_opt.?.len > 0;
+    build_opts.addOption(bool, "app_is_fizzy", app_is_fizzy);
+    build_opts.addOption(bool, "app_repo_url_set", app_repo_url_set);
+    build_opts.addOption([]const u8, "app_issues_url", app_issues_url);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
     // Off, the app runs only the plugins it links (`buildApp`'s list): no plugin dylib is built,
     // and nothing loads at runtime — not fizzy's own dylibs, not the user plugins directory, not
@@ -305,6 +321,9 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .app_registry_url = app_registry_url,
         .app_repo_url = app_repo_url,
         .app_repo_url_fallback = app_repo_url_fallback,
+        .app_is_fizzy = app_is_fizzy,
+        .app_repo_url_set = app_repo_url_set,
+        .app_issues_url = app_issues_url,
         .app_layout_path = app_layout_path,
         .static_workbench = static_workbench,
         .static_text = static_text,
@@ -403,6 +422,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         pack_opts.addOption([]const u8, "app_registry_url", app_registry_url);
         pack_opts.addOption([]const u8, "app_repo_url", app_repo_url);
         pack_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
+        pack_opts.addOption(bool, "app_is_fizzy", cfg.app_is_fizzy);
+        pack_opts.addOption(bool, "app_repo_url_set", cfg.app_repo_url_set);
+        pack_opts.addOption([]const u8, "app_issues_url", cfg.app_issues_url);
         pack_opts.addOption(bool, "velopack_enabled", true);
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
@@ -666,6 +688,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // dvui half (`sdk/replay/`) compiles on its own below, and is covered by
         // `tests/integration.zig`.
         .{ "fizzy-tape-tests", "sdk/tape/root.zig" },
+        // Where Report a Bug goes when the build isn't told. std-only (see issues_url.zig); the
+        // build is its only user.
+        .{ "fizzy-issues-url-tests", "build/issues_url.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],
