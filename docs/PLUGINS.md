@@ -895,8 +895,9 @@ is on a mount (§3.12).
   path fails with `FileNotFound` calls again (a second later, if it called just now). Safe from
   any thread (an indexer, an LSP client): the app sets each plugin's entry up as it registers.
 - It is yours from `register` through your `deinit`: an app unloads a plugin with
-  `host.retirePlugin` (unregister, your `deinit`, then the app is told), so writing your state
-  out in `deinit` works, and from then on the path is not handed out until you are back.
+  `host.retirePlugin` (your registrations go, then your `deinit`, then the app is told), so
+  writing your state out in `deinit` works, and from then on the path is not handed out until
+  you are back. `host.unregisterPlugin` alone releases it at once.
 - Null when no app is installed (a unit test's bare `Host`), when the plugin is not registered,
   when its id is not a plain identifier (letters, digits, `-`, `_`), or when the folder could not
   be made: logged once, and tried again on a call a few seconds later.

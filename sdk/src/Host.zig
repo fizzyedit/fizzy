@@ -977,15 +977,28 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
     if (self.fizzy_api) |a| if (a.vtable.pluginRegistered) |registered| registered(a.ctx, plugin.id);
 }
 
-/// Take `plugin` out for good: `unregisterPlugin`, then its own `deinit`, then the app is told
+/// Take `plugin` out for good: its registrations go (`unregisterPlugin`'s work), then
+/// `before_deinit` runs if given (fizzy rebuilds its native menus, which may still name the
+/// plugin's strings), then the plugin's own `deinit`, then the app is told
 /// (`EditorAPI.pluginRetired`) so what it kept for the plugin (its data folder's entry) goes now,
-/// after a `deinit` that may still have used it. The runtime unload path's one call: unload,
-/// disable, reload and uninstall all come through it, in any app. Before `dlclose`, as
-/// `unregisterPlugin`.
-pub fn retirePlugin(self: *Host, plugin: *Plugin) void {
-    self.unregisterPlugin(plugin);
+/// after a `deinit` that may still have used it. The unload path's one call: unload, disable,
+/// reload and uninstall all come through it, in any app. Before `dlclose`, as `unregisterPlugin`.
+pub fn retirePlugin(self: *Host, plugin: *Plugin, before_deinit: ?*const fn () void) void {
+    // The id is the plugin's own memory: copied before its `deinit`, which may free it. One longer
+    // than any valid id has nothing kept for it to tell about.
+    var buf: [64]u8 = undefined;
+    const told = plugin.id.len <= buf.len;
+    const n = if (told) plugin.id.len else 0;
+    @memcpy(buf[0..n], plugin.id[0..n]);
+    self.dropRegistrations(plugin);
+    if (before_deinit) |f| f();
     plugin.deinit();
-    if (self.fizzy_api) |a| if (a.vtable.pluginRetired) |retired| retired(a.ctx, plugin.id);
+    if (told) self.tellRetired(buf[0..n]);
+}
+
+/// The app is told `id` is gone (`EditorAPI.pluginRetired`).
+fn tellRetired(self: *Host, id: []const u8) void {
+    if (self.fizzy_api) |a| if (a.vtable.pluginRetired) |retired| retired(a.ctx, id);
 }
 
 /// Remove every contribution, service, and registry entry owned by `plugin`, then drop
@@ -997,7 +1010,18 @@ pub fn retirePlugin(self: *Host, plugin: *Plugin) void {
 /// `*Plugin` itself live in the plugin image's static memory. The caller must invoke
 /// this *before* `dlclose`, so that the active-selection ids (which may point into that
 /// image) are compared and reset while the memory is still mapped.
+///
+/// What the app kept for `plugin` goes too (`EditorAPI.pluginRetired`), so no caller leaves a
+/// live data folder behind. To unload a plugin that still writes out its state in `deinit`, call
+/// `retirePlugin`, which tells the app only after that `deinit`.
 pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
+    self.dropRegistrations(plugin);
+    self.tellRetired(plugin.id);
+}
+
+/// `unregisterPlugin`'s work without telling the app: `retirePlugin` tells it after the plugin's
+/// `deinit`.
+fn dropRegistrations(self: *Host, plugin: *Plugin) void {
     for (self.surfaces.items) |s| if (s.owner == plugin) self.dropSurfaceTitle(s.id);
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);

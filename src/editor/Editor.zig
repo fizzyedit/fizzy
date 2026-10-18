@@ -1923,8 +1923,8 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) Unload
 
     // Remove all contributions + services + active-id references (before dlclose), then
     // run the plugin's own teardown.
-    editor.app.host.retirePlugin(plugin);
-    fizzy.backend.rebuildDynamicNativeMenus();
+    // Native menus rebuilt before the plugin's `deinit`, as they may still name its strings.
+    editor.app.host.retirePlugin(plugin, fizzy.backend.rebuildDynamicNativeMenus);
 
     // Drop the unloaded plugin's keybinds by rebuilding from the survivors.
     rebuildKeybinds(editor);
