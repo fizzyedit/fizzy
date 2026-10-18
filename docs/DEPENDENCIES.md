@@ -154,6 +154,12 @@ above rebased onto upstream `main` (`41f6703`), then:
 13. **The pointer and its cursor** (`48496b7`, `186a87f`, `1b29a16`): `Window` knows the pointer's
    kind and a lifted finger hovers nothing; `cursorSet` takes a priority, so a resize handle's
    cursor wins, and a floating window's edges ask at normal priority.
+14. **floatingWindow: the backend may draw a floating window's background** (`3d90fdd`):
+   `Backend.floatingWindowBackground(id, rect, corners)`, asked where `FloatingWindowWidget` would
+   fill its background (after its shadow and border, its subwindow current, before its content).
+   True: the backend drew it, and dvui draws no fill. Fizzy's backend draws a plain app's floating
+   windows in the window's material there: a frosted backdrop of what is under them needs the
+   backend's render targets at that point of the replay, which a theme fill cannot express.
 
 Tagged `fizzy-sdk-*` when `zig/0.17` merges to `main`, as rule 2 says.
 
