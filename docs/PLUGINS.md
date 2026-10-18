@@ -954,6 +954,15 @@ fn goToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) any
   (a list for an enum or bool, checked text otherwise — `sdk.Command.answer`).
 - **Failing.** Return `call.fail("…", .{})`. Your error's *name* cannot be read on fizzy's side
   (errors are numbered per compilation), so the message is how the reason gets there.
+- **Answering later.** A command whose work outlives the frame (a language server's reply, a
+  build, a picture taken at the end of the next frame) calls `const ticket = call.later();`, keeps
+  the ticket, and returns from `runWith` with no result. Once it is done, on the UI thread, it calls
+  `host.finishCall(ticket, .{ .ok = result_zon })` (or `.failed = "why"`). A caller that can wait
+  (`host.callCommandAwaiting`, the control server, which holds its HTTP request open) hears the
+  answer then. One that cannot (a menu, a keybind, a tape, plain `callCommand`) has only started it:
+  it sees `.ok` with no result and goes on at once, and the answer is dropped. You may answer before
+  `runWith` returns (a cache hit); the caller then gets it at once. `host.callWanted(ticket)` says whether anyone still waits, so work nobody wants
+  can stop. If your plugin goes away owing answers, its waiters hear that it failed.
 - **`run` and `runWith`.** A command needs at least one; `registerCommand` refuses one with
   neither. Keep `run` alongside `runWith` only if invoking with no arguments should do something
   of its own (open your own dialog, say) rather than ask.

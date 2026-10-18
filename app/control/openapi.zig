@@ -35,7 +35,7 @@ fn write(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!void {
     try s.write(.{
         .title = AppInfo.current.display_name ++ " control server",
         .version = AppInfo.current.version,
-        .description = "The app's commands over HTTP on a Unix socket in its config folder (`control.sock`), " ++
+        .description = "The app's commands over HTTP on a Unix socket in its config folder (`control/control.sock`; `fizzy --control-path` prints it), " ++
             "readable by this user only: `curl --unix-socket <path> http://localhost/commands`. Bodies are JSON; " ++
             "send `Content-Type: application/zon` to send and receive ZON instead.",
     });

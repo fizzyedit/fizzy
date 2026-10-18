@@ -113,8 +113,15 @@ pub const control = struct {
     pub const routes = @import("control/routes.zig");
     pub const json = @import("control/json.zig");
     pub const openapi = @import("control/openapi.zig");
-    /// The socket's name in the config folder.
-    pub const socket_name = "control.sock";
+    /// Where the server listens for an app whose config folder is `config_folder`
+    /// (`Server.socketPath`), with this user's runtime folder for a config folder too deep.
+    pub fn socketPath(gpa: @import("std").mem.Allocator, config_folder: []const u8) ![]u8 {
+        const std = @import("std");
+        const runtime: ?[]const u8 = if (@import("builtin").os.tag == .windows) null else for ([_][*:0]const u8{ "TMPDIR", "XDG_RUNTIME_DIR" }) |name| {
+            if (std.c.getenv(name)) |v| if (std.mem.len(v) > 0) break std.mem.span(v);
+        } else null;
+        return Server.socketPath(gpa, config_folder, runtime);
+    }
 };
 
 /// Quitting the way the app always quits — unsaved documents asked about first — then starting

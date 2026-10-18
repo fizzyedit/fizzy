@@ -228,6 +228,8 @@ pub fn main(main_init: std.process.Init) !u8 {
                 }
             }.f,
         });
+        // Before the lock, which would hand this launch to a running fizzy.
+        if (printControlPath(appAllocator(), main_init)) |code| return code;
         try singleton.earlyStartup(appAllocator(), main_init);
         fizzy.core.profile.phase(main_init.io, if (restart.startedByHandover()) "lock deferred (handover)" else "lock");
 
@@ -547,3 +549,50 @@ fn frameOnce() !dvui.App.Result {
 }
 
 var frame_target: fizzy.core.FrameTarget = .{};
+
+/// `fizzy --control-path` (with `--profile` or `FIZZY_PROFILE` as any launch takes them): print where
+/// the control server listens, for a script to hand `curl --unix-socket`, and exit: 0 with the path,
+/// 1 with why not, never on into a launch. Null when not asked. The profile and config folder are
+/// resolved as a launch resolves them (`singleton.resolveArgs`, `configFolder` falling back to the
+/// executable's folder), so it is the path a fizzy started the same way listens on, running or not.
+/// A Windows release is a GUI program with no console: there, capture it (`$p = fizzy --control-path`).
+fn printControlPath(allocator: std.mem.Allocator, main_init: std.process.Init) ?u8 {
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    var it = std.process.Args.Iterator.initAllocator(main_init.minimal.args, allocator) catch return null;
+    defer it.deinit();
+    var raw: std.ArrayList([]const u8) = .empty;
+    defer raw.deinit(allocator);
+    var asked = false;
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--control-path")) asked = true else raw.append(allocator, arg) catch return 1;
+    }
+    if (!asked) return null;
+    const path = controlPath(allocator, main_init, raw.items) catch |err| {
+        std.log.err("--control-path: {t}", .{err});
+        return 1;
+    };
+    defer allocator.free(path);
+    var buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+    var out = std.Io.File.stdout().writer(main_init.io, &buf);
+    out.interface.print("{s}\n", .{path}) catch return 1;
+    out.interface.flush() catch return 1;
+    return 0;
+}
+
+fn controlPath(allocator: std.mem.Allocator, main_init: std.process.Init, raw: []const []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = std.process.currentPath(main_init.io, &cwd_buf) catch 0;
+    const env_profile: ?[]const u8 = if (std.c.getenv(@import("app").profile.env_var)) |v| std.mem.span(v) else null;
+    const resolved = try singleton.resolveArgs(allocator, cwd_buf[0..cwd_len], raw, env_profile);
+    defer singleton.freeResolvedArgv(allocator, resolved.argv);
+    defer if (resolved.profile) |p| allocator.free(p);
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const config = resolved.profile orelse config: {
+        // The editor's fallback (`Editor.init`): the executable's folder, where it runs from.
+        const exe_dir = try std.process.executableDirPathAlloc(main_init.io, a);
+        break :config try fizzy.core.paths.configFolder(a, main_init.io, a, fizzy.core.platform.processEnviron(), exe_dir, AppInfo.current.config_dir);
+    };
+    return @import("app").control.socketPath(allocator, config);
+}

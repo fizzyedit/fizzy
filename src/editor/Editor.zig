@@ -143,6 +143,13 @@ share_pending: ?struct { doc_id: u64, from: usize, to: usize } = null,
 plugin_reloads: @import("PluginReloads.zig") = .{},
 /// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
 black_box: @import("app").automation.BlackBox = .{},
+/// `fizzy.screen` calls waiting for their snapshot (`answerLaterCommands`).
+later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, frames: u32 = 0 }) = .empty,
+/// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
+later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
+/// The control server would not start (`syncControlServer`): not retried until the setting goes
+/// off and on again.
+control_failed: bool = false,
 /// The documents a restart kept (`KeptDocuments.loadSession`), until the workbench has reopened
 /// last session's tabs: each one it asks for opens from here (`openPath`).
 session: ?KeptDocuments = null,
@@ -2288,23 +2295,6 @@ pub fn postInit(editor: *Editor) !void {
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
 
-    // The control server: the app's commands over HTTP on `<config>/control.sock`, while
-    // `FIZZY_CONTROL=1` asks for it (plans/CONTROL_SERVER_PLAN.md: dark until step 4).
-    if (comptime builtin.target.cpu.arch != .wasm32) control: {
-        const v = std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_CONTROL") catch break :control;
-        defer editor.app.gpa.free(v);
-        if (!std.mem.eql(u8, v, "1")) break :control;
-        const path = std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, @import("app").control.socket_name }) catch break :control;
-        editor.app.control = .{ .gpa = editor.app.gpa, .io = dvui.io, .socket_path = path, .wake = wakeEventLoop };
-        editor.app.control.?.start() catch |err| {
-            dvui.log.warn("control: could not listen on {s}: {s}", .{ path, @errorName(err) });
-            editor.app.gpa.free(path);
-            editor.app.control = null;
-            break :control;
-        };
-        dvui.log.info("control: listening on {s}", .{path});
-    }
-
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
     // nightwatch retains `&editor.app.settings_watcher.handler`, so `editor` has to already be at
@@ -3641,6 +3631,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
+    editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
@@ -4190,6 +4181,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.settings_watcher) |*w| w.tick(editor.configWatchSink());
     // fizzy itself rebuilt: start again as the new build, every document kept.
     editor.syncExecutableWatcher();
+    editor.syncControlServer();
     // Unsaved work kept against a crash.
     editor.checkpoint.tick(editor);
     if (editor.app.executable_watcher) |*w| if (w.tick() and !restart.requested()) {
@@ -4288,8 +4280,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.app.host.deliverEvents();
         // Requests from the control server, so the frame that follows sees what they ran.
         if (comptime builtin.target.cpu.arch != .wasm32) {
-            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_relay, &editor.app.host);
+            if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_state, &editor.app.host);
         }
+        // What fizzy's own commands answer a frame or more later (`fizzy.screen`, `fizzy.settled`).
+        editor.answerLaterCommands();
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         editor.showClaimed();
@@ -5501,6 +5495,88 @@ pub const Placement = struct {
     beside: bool = false,
 };
 
+/// Answer fizzy's own commands that answer a frame or more later (`fizzy.screen`, `fizzy.settled`),
+/// once what they wait for has come; drop those nobody waits for any more. Once a frame.
+fn answerLaterCommands(editor: *Editor) void {
+    const host = &editor.app.host;
+    const api = editor.demo.service.api;
+    var i: usize = 0;
+    while (i < editor.later_screens.items.len) {
+        const w = &editor.later_screens.items[i];
+        if (!host.callWanted(w.ticket)) {
+            _ = editor.later_screens.swapRemove(i);
+            continue;
+        }
+        if (api.snapshotText(w.snapshot)) |text| {
+            const ticket = w.ticket;
+            _ = editor.later_screens.swapRemove(i);
+            host.finishCall(ticket, .{ .ok = text });
+            continue;
+        }
+        // Not taken yet. Asked again, should the last asking have come to nothing; a snapshot that never comes is given up on, not waited
+        // for frame after frame.
+        w.frames += 1;
+        if (w.frames > 120) {
+            const ticket = w.ticket;
+            _ = editor.later_screens.swapRemove(i);
+            host.finishCall(ticket, .{ .failed = "no snapshot came in 120 frames" });
+            continue;
+        }
+        w.snapshot = api.snapshot();
+        // And a frame to take it in: asking again does not wake a sleeping app by itself.
+        host.refresh();
+        i += 1;
+    }
+    if (editor.later_settles.items.len == 0) return;
+    const settled = api.settled();
+    const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
+    i = 0;
+    while (i < editor.later_settles.items.len) {
+        const w = editor.later_settles.items[i];
+        if (!host.callWanted(w.ticket)) {
+            _ = editor.later_settles.swapRemove(i);
+            continue;
+        }
+        if (!settled and now < w.deadline_ns) {
+            i += 1;
+            continue;
+        }
+        _ = editor.later_settles.swapRemove(i);
+        host.finishCall(w.ticket, .{ .ok = if (settled) "true" else "false" });
+    }
+}
+
+/// Run the control server while `control_server` is on, and stop it when it goes off. Once a frame;
+/// a no-op unless the setting changed. Not in tests, whose editors share no config folder worth a
+/// socket.
+fn syncControlServer(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32 or builtin.is_test) return;
+    const control = @import("app").control;
+    const want = editor.app.settings.control_server;
+    // Off clears a failed start, so turning it on again tries again.
+    if (!want) editor.control_failed = false;
+    if (want == (editor.app.control != null)) return;
+    if (!want) {
+        if (editor.app.control) |*c| {
+            control.routes.stop(c, &editor.app.control_state, &editor.app.host);
+            editor.app.gpa.free(c.socket_path);
+        }
+        editor.app.control = null;
+        return;
+    }
+    if (editor.control_failed) return;
+    const path = control.socketPath(editor.app.gpa, editor.app.config_folder) catch return;
+    editor.app.control = .{ .gpa = editor.app.gpa, .io = dvui.io, .socket_path = path, .wake = wakeEventLoop };
+    editor.app.control.?.start() catch |err| {
+        dvui.log.warn("control: could not listen on {s}: {s}", .{ path, @errorName(err) });
+        editor.app.gpa.free(path);
+        editor.app.control = null;
+        editor.control_failed = true;
+        return;
+    };
+    dvui.log.info("control: listening on {s}", .{path});
+}
+
 /// Watch this executable while `restart_on_rebuild` is on, and stop when it goes off. Once a frame;
 /// a no-op unless the setting changed. The watcher has to be at its final address to start
 /// (`ExecutableWatcher.start`), which `editor.app` is.
@@ -6531,11 +6607,13 @@ pub fn deinit(editor: *Editor) !void {
     // command would reach goes.
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (editor.app.control) |*c| {
-            @import("app").control.routes.stop(c, &editor.app.control_relay, &editor.app.host);
+            @import("app").control.routes.stop(c, &editor.app.control_state, &editor.app.host);
             editor.app.gpa.free(c.socket_path);
             editor.app.control = null;
         }
     }
+    editor.later_screens.deinit(editor.app.gpa);
+    editor.later_settles.deinit(editor.app.gpa);
     if (editor.document_watcher) |*w| {
         w.stop();
         editor.document_watcher = null;

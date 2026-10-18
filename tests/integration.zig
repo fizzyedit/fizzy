@@ -6881,8 +6881,9 @@ test "control: /openapi.json describes each command's body and the declared even
     try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off", .run = ControlFixture.nothing });
     // A `runWith` written by hand, declaring no parameters (as the chat plugin's are).
     try host.registerCommand(.{ .id = "t.by hand{x}", .owner = &plugin, .title = "By hand", .runWith = OpenApiFixture.byHand });
-    // A second of an id: the server runs the first, and the description has one path.
-    try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off again", .run = ControlFixture.nothing });
+    // Another plugin's command by the same id: held in reserve, the first kept and described once.
+    var other = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "u", .display_name = "U" };
+    try host.registerCommand(.{ .id = "t.off", .owner = &other, .title = "Off again", .run = ControlFixture.nothing });
     try host.declareEvent(.{ .name = "t.placed", .owner = &plugin, .description = "Something was placed.", .payload = ".{ .line = 4, .side = .left }" });
 
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
@@ -6960,6 +6961,110 @@ test "control: /openapi.json describes each command's body and the declared even
     try std.testing.expectEqualStrings("", routes.handle(&host, .HEAD, "/openapi.json", null, "", arena).body);
 }
 
+/// Sends one request and reads the answer by its `Content-Length`, as an HTTP client does.
+const ControlOneShot = struct {
+    path: []const u8,
+    request: []const u8,
+    reply: [2048]u8 = undefined,
+    len: usize = 0,
+    fn run(self: *ControlOneShot) void {
+        const io = std.testing.io;
+        const addr = std.Io.net.UnixAddress.init(self.path) catch return;
+        const stream = addr.connect(io) catch return;
+        defer stream.close(io);
+        var wbuf: [256]u8 = undefined;
+        var w = stream.writer(io, &wbuf);
+        w.interface.writeAll(self.request) catch return;
+        w.interface.flush() catch return;
+        var rbuf: [256]u8 = undefined;
+        var r = stream.reader(io, &rbuf);
+        while (self.len < self.reply.len) {
+            const n = r.interface.readSliceShort(self.reply[self.len..][0..1]) catch return;
+            if (n == 0) return;
+            self.len += 1;
+            if (std.mem.endsWith(u8, self.reply[0..self.len], "\r\n\r\n")) break;
+        }
+        const key = "content-length: ";
+        const i = std.ascii.indexOfIgnoreCase(self.reply[0..self.len], key) orelse return;
+        const end = std.mem.indexOfPos(u8, self.reply[0..self.len], i, "\r\n") orelse return;
+        const want = std.fmt.parseInt(usize, self.reply[i + key.len .. end], 10) catch return;
+        r.interface.readSliceAll(self.reply[self.len..][0..want]) catch return;
+        self.len += want;
+    }
+};
+
+const SlowCommand = struct {
+    ticket: u32 = 0,
+    fn start(state: *anyopaque, call: *sdk.Command.Call) anyerror!void {
+        const self: *SlowCommand = @ptrCast(@alignCast(state));
+        self.ticket = call.later();
+    }
+};
+
+test "control: a command that answers in a later frame holds its request open until it does" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    const vtable = sdk.Plugin.VTable{};
+    var slow: SlowCommand = .{};
+    var plugin = sdk.Plugin{ .state = &slow, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.slow", .owner = &plugin, .title = "Slow", .runWith = SlowCommand.start });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var state: control.routes.State = .{};
+    errdefer control.routes.stop(&server, &state, &host);
+
+    const post = "POST /commands/t.slow HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    var client: ControlOneShot = .{ .path = path, .request = post };
+    const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&client});
+    // Frames, until the command has started and its request waits on it.
+    var frames: usize = 0;
+    while (state.waiters.items.len == 0 and frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), state.waiters.items.len);
+    // More frames: still nothing to answer.
+    for (0..5) |_| control.routes.answerPending(&server, &state, &host);
+    try std.testing.expectEqual(@as(usize, 0), client.len);
+    // Done, in a later frame: the request is answered with what it returned.
+    host.finishCall(slow.ticket, .{ .ok = ".{ .done = true }" });
+    thread.join();
+    try std.testing.expectEqual(@as(usize, 0), state.waiters.items.len);
+    const reply = client.reply[0..client.len];
+    try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\n{\"done\":true}"));
+
+    // One still waiting when the server stops: answered as stopping, its call let go of.
+    var late: ControlOneShot = .{ .path = path, .request = post };
+    const late_thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&late});
+    frames = 0;
+    while (state.waiters.items.len == 0 and frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), state.waiters.items.len);
+    const ticket = slow.ticket;
+    control.routes.stop(&server, &state, &host);
+    late_thread.join();
+    try std.testing.expect(std.mem.startsWith(u8, late.reply[0..late.len], "HTTP/1.1 503 "));
+    try std.testing.expect(!host.callWanted(ticket));
+    // Its answer, when it comes, goes nowhere.
+    host.finishCall(ticket, .{ .ok = null });
+}
+
 const ControlStreamClient = struct {
     path: []const u8,
     reply: [4096]u8 = undefined,
@@ -6998,7 +7103,7 @@ test "control: the app's events reach a stream, and the bus listens only while o
     };
     var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
     try server.start();
-    var relay: control.routes.Relay = .{};
+    var relay: control.routes.State = .{};
     try std.testing.expect(!host.listening.load(.acquire));
 
     var client: ControlStreamClient = .{ .path = path };

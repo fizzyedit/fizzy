@@ -129,8 +129,10 @@ const FizzyCommand = struct {
     title: []const u8,
     /// dvui keybind name this action's default key comes from, or null when it has no default.
     bind: ?[]const u8,
-    run: *const fn (state: *anyopaque) anyerror!void,
+    /// Null for a command only a program calls (`runWith`, `visibility = .internal`).
+    run: ?*const fn (state: *anyopaque) anyerror!void = null,
     isEnabled: ?*const fn (state: *anyopaque) bool = null,
+    visibility: sdk.Command.Visibility = .external,
     /// What `runWith` takes (`sdk.Command.Params`). `run` stays what a menu row or a key does —
     /// with no arguments, so Open Files still asks with its dialog — and `runWith` is the same
     /// action told exactly what to act on: by a keybind with arguments, a tape, an agent.
@@ -182,6 +184,10 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.tracks.export", .title = "Tracks: Export as a Tape…", .bind = null, .run = cmdTracks, .params = TracksExport.params, .runWith = TracksExport.bind(cmdTracksExport), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks", .title = "Tracks: Report", .bind = null, .run = cmdTracks, .params = TracksArgs.params, .runWith = TracksArgs.bind(cmdTracksWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
+    // For programs, answered a frame or more later (`Command.Call.later`): a test or a script on the
+    // control server reads the screen as text, and waits for a load to land before it looks.
+    .{ .id = "fizzy.screen", .title = "What Is on Screen", .bind = null, .params = ScreenArgs.params, .runWith = ScreenArgs.bind(cmdScreen), .visibility = .internal },
+    .{ .id = "fizzy.settled", .title = "Wait Until Settled", .bind = null, .params = SettledArgs.params, .runWith = SettledArgs.bind(cmdSettled), .visibility = .internal },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
 
 /// Demo automation (`Editor.Demo`): one command per bundled demo, and the transport for whichever
@@ -638,6 +644,30 @@ fn cmdCaptureWith(state: *anyopaque, args: CaptureArgs.Args, call: *sdk.Command.
     try call.returns(written);
 }
 
+const ScreenArgs = sdk.Command.Params(struct {});
+
+/// What is on screen, as ZON (`automation` service `snapshot`): each window, then each widget's
+/// role, name, tag, rect and parent. Taken over the next frame, so answered then
+/// (`Editor.answerLaterCommands`).
+fn cmdScreen(state: *anyopaque, _: ScreenArgs.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot() });
+}
+
+const SettledArgs = sdk.Command.Params(struct {
+    timeout_ms: sdk.Command.Arg(u32, .{ .description = "How long to wait for nothing to be in flight before answering false.", .min = 0, .max = 600_000 }) = .init(5000),
+});
+
+/// `true` once nothing is in flight (no tape playing, nothing loading, nothing animating, as the
+/// `automation` service sees it), at once when that is so now; `false` when `timeout_ms` passes
+/// first. It asks for no frames of its own, which would keep the app from ever going quiet.
+fn cmdSettled(state: *anyopaque, args: SettledArgs.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    if (editor.demo.service.api.settled()) return call.returns(true);
+    const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
+    try editor.later_settles.append(editor.app.gpa, .{ .ticket = call.later(), .deadline_ns = now + @as(i96, args.timeout_ms) * std.time.ns_per_ms });
+}
+
 const TracksArgs = sdk.Command.Params(struct {});
 const TracksRecord = sdk.Command.Params(struct {
     on: sdk.Command.Arg(bool, .{ .description = "Record documents' tracks, or stop. Open documents start a track now." }),
@@ -789,6 +819,7 @@ pub fn registerCommands(editor: *Editor) !void {
             .icon = c.icon,
             .params = c.params,
             .runWith = c.runWith,
+            .visibility = c.visibility,
         });
     }
 }
