@@ -523,6 +523,18 @@ fn materialOffered() fizzy.core.material.Kinds {
     return k;
 }
 
+/// The kind of window material asked for: `FIZZY_GLASS` where it names one, else `liquid`.
+fn materialAsked() fizzy.core.material.Kind {
+    const Cache = struct {
+        var kind: ?fizzy.core.material.Kind = null;
+    };
+    if (Cache.kind) |k| return k;
+    const env = if (comptime builtin.target.cpu.arch == .wasm32) null else std.c.getenv("FIZZY_GLASS");
+    const k = if (env) |v| std.meta.stringToEnum(fizzy.core.material.Kind, std.mem.span(v)) orelse .liquid else .liquid;
+    Cache.kind = k;
+    return k;
+}
+
 /// One run of the app's frame.
 fn frameOnce() !dvui.App.Result {
     // First, before anything reads `dvui.events()` or the frame target binds: a playing demo adds
@@ -536,12 +548,22 @@ fn frameOnce() !dvui.App.Result {
         editor.black_box.on = editor.app.settings.black_box;
         editor.black_box.record(editor.app.gpa);
     }
+    // What the app's windows are made of, as the backend can show it, for every glass drawn this
+    // frame (`core.material`): before `Popout`, whose OS glass is offered only for `liquid`. Liquid
+    // asked for until the app has a setting for it, so each platform shows the best it can;
+    // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`) asks for less, to see each.
+    fizzy.core.material.publish((fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered()));
+    // And the backend, which makes the windows it dresses itself of it: the one decision, one
+    // applier (`SDLBackend.window_material`).
+    if (comptime @hasDecl(dvui.backend, "setWindowMaterial")) {
+        const m = fizzy.core.material.get();
+        dvui.backend.setWindowMaterial(switch (m.kind) {
+            inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
+        }, m.opacity);
+    }
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);
-    // What the app's windows are made of, as the backend can show it, for every glass drawn this
-    // frame (`core.material`). `.none` until the app has a setting for it.
-    fizzy.core.material.publish((fizzy.core.material.Material{}).effective(materialOffered()));
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");

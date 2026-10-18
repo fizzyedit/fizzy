@@ -6,7 +6,7 @@
 //! event-routing rules rather than layout logic. It depends on nothing but dvui.
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../motion.zig");
+const motion = @import("glass").motion;
 const icon_tex = @import("../gfx/icon.zig");
 const icons = @import("icons");
 const anim = @import("../anim.zig");

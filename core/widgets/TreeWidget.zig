@@ -1,6 +1,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../motion.zig");
+const motion = @import("glass").motion;
 const corners = @import("../corners.zig");
 const dialogs = @import("../dialogs.zig");
 const screens = @import("../screens.zig");

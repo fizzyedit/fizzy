@@ -9,6 +9,10 @@ paths, fuzzy matching, the LSP client, the profiler.
   the plugin SDK so the two can't drift. A new dependency of `core` goes there.
 - **A change here reaches store plugins only at the next SDK release,** even when the fingerprint
   doesn't move, because they build `core` from the released SDK tarball.
+- **The in-app glass is the backend's** (`backend/src/glass/`: `FrameTarget`, `BlurBackdrop`,
+  `LiquidField`, `liquid_glass`, `liquid_blob`, `programs`, `motion`), re-exported here under the
+  names it always had. Import it as `@import("glass")`, never by path; it must not import `core`
+  (the profiler reaches it through `glass/prof.zig`).
 - **Use the shared pieces:** `core.fuzzy` for any filter box (lower scores are better);
   `core.icon.icon` rather than `dvui.icon` (cached as a texture).
 - **Tests:** std-only files (`math/*`, `reveal.zig`, `crossfade.zig`, `FrameClock.zig`, `fuzzy.zig`,

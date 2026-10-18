@@ -689,6 +689,18 @@ pub const view_settings = "fizzy.settings";
 /// Stable workbench sidebar view id (matches `workbench.view_files`).
 pub const workbench_files_view = workbench_mod.view_files;
 
+/// A hash-map context that takes two ids for one when they differ only in ASCII case.
+const CaseInsensitive = struct {
+    pub fn hash(_: CaseInsensitive, key: []const u8) u64 {
+        var h = std.hash.Wyhash.init(0);
+        for (key) |c| h.update(&.{std.ascii.toLower(c)});
+        return h.final();
+    }
+    pub fn eql(_: CaseInsensitive, a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
+
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return;
 
@@ -737,25 +749,33 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         }
     }.lt);
 
+    // The folders by their names ignoring case, in sorted order, made once: a group of more than
+    // one is the same id several times.
+    var case_groups: std.HashMapUnmanaged([]const u8, std.ArrayListUnmanaged([]const u8), CaseInsensitive, std.hash_map.default_max_load_percentage) = .empty;
+    for (ids.items) |id| {
+        const entry = case_groups.getOrPut(editor.app.arena.allocator(), id) catch continue;
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        entry.value_ptr.append(editor.app.arena.allocator(), id) catch {};
+    }
+
     for (ids.items) |plugin_id| {
         // Skip `.load-tmp` and any other dotfile/directory — not a plugin id.
         if (plugin_id.len == 0 or plugin_id[0] == '.') continue;
 
-        // Two folders whose names differ only in case (a case-sensitive filesystem lets both
-        // exist) are one id twice: neither loads. Which one was meant cannot be told from the
-        // folders, and loading whichever sorts first would let byte order choose. One card, on
-        // the first by that order, names them both.
-        const twin: ?[]const u8 = for (ids.items) |other| {
-            if (other.ptr != plugin_id.ptr and std.ascii.eqlIgnoreCase(other, plugin_id)) break other;
-        } else null;
-        if (twin) |other| {
-            if (std.mem.lessThan(u8, plugin_id, other)) {
-                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders '{s}' and '{s}' differ only in case, so neither is loaded: remove one", .{ plugin_id, other }) catch "two plugin folders differ only in case, so neither is loaded";
+        // Folders whose names differ only in case (a case-sensitive filesystem lets them all
+        // exist) are one id several times: none loads. Which one was meant cannot be told from
+        // the folders, and loading whichever sorts first would let byte order choose. One card,
+        // on the first by that order, names every one (`case_groups`, made in one pass above).
+        if (case_groups.get(plugin_id)) |group| if (group.items.len > 1) {
+            if (group.items[0].ptr == plugin_id.ptr) {
+                var names: std.Io.Writer.Allocating = .init(editor.app.arena.allocator());
+                for (group.items, 0..) |name, i| names.writer.print("{s}'{s}'", .{ @as([]const u8, if (i > 0) ", " else ""), name }) catch {};
+                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders {s} differ only in case, so none is loaded: keep one", .{names.written()}) catch "plugin folders differ only in case, so none is loaded";
                 dvui.log.warn("user plugin '{s}': {s}", .{ plugin_id, why });
                 editor.app.recordPluginFailure(plugin_id, why, null, null, .{});
             }
             continue;
-        }
+        };
 
         // User-disabled plugins (store "disable") stay on disk but are not loaded.
         if (editor.app.isPluginDisabled(plugin_id)) {
@@ -1462,9 +1482,13 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
     // Asked before the build is opened: a case variant of a loaded or installed id fails saying so.
-    var clash_buf: [64]u8 = undefined;
-    if (editor.app.pluginCaseClash(&clash_buf, id)) |other| {
-        editor.app.recordCaseClash(id, other, path);
+    var clash_buf: [std.fs.max_name_bytes]u8 = undefined;
+    if (editor.app.pluginCaseClash(&clash_buf, id)) |clash| {
+        switch (clash) {
+            .other => |other| editor.app.recordCaseClash(id, other, path),
+            // Refused as a possible clash: nothing says the folder is this plugin's alone.
+            .unreadable => editor.app.recordPluginFailure(id, "the plugins folder could not be read to check for a plugin whose id differs only in case", null, null, .of(path)),
+        }
         editor.app.gpa.free(path);
         return error.DuplicatePluginId;
     }
@@ -1923,9 +1947,8 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) Unload
 
     // Remove all contributions + services + active-id references (before dlclose), then
     // run the plugin's own teardown.
-    editor.app.host.unregisterPlugin(plugin);
-    fizzy.backend.rebuildDynamicNativeMenus();
-    plugin.deinit();
+    // Native menus rebuilt before the plugin's `deinit`, as they may still name its strings.
+    editor.app.host.retirePlugin(plugin, fizzy.backend.rebuildDynamicNativeMenus);
 
     // Drop the unloaded plugin's keybinds by rebuilding from the survivors.
     rebuildKeybinds(editor);
@@ -2072,16 +2095,18 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
     const plugin_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", id });
     defer editor.app.gpa.free(plugin_dir);
     // A build refused for its case (`App.recordCaseClash`) names a folder that, on macOS and
-    // Windows, is the loaded plugin's own: its card drops, and that folder stays. Told apart by
-    // what the folder is on disk, not by its name.
-    const keep = if (editor.app.host.pluginByIdIgnoringCase(id)) |loaded| keep: {
-        if (std.mem.eql(u8, loaded.id, id)) break :keep false;
-        const loaded_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", loaded.id });
-        defer editor.app.gpa.free(loaded_dir);
-        break :keep App.sameFolder(plugin_dir, loaded_dir);
-    } else false;
-    if (!keep) std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
-        dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) });
+    // Windows, is another installed plugin's own, loaded or not: its card drops, and that folder
+    // stays. Told apart by the names the filesystem lists now, never by the name asked for.
+    const plugins_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins" });
+    defer editor.app.gpa.free(plugins_dir);
+    switch (@import("app").store.folders.deletable(dvui.io, plugins_dir, id)) {
+        .folder => std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
+            dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) }),
+        // A dev setup's link: the link goes, never what it points at.
+        .link => std.Io.Dir.cwd().deleteFile(dvui.io, plugin_dir) catch |err|
+            dvui.log.warn("uninstallPlugin '{s}': could not remove the link {s}: {s}", .{ id, plugin_dir, @errorName(err) }),
+        .keep => dvui.log.info("uninstallPlugin '{s}': {s} is not this plugin's own folder alone; kept", .{ id, plugin_dir }),
+    }
     // A broken (failed-to-load) build can be uninstalled too; clear its failure record so the
     // card disappears instead of lingering as "Failed".
     editor.app.clearFailedUserPlugin(id);
@@ -2410,7 +2435,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .paletteFolder = fizzyPaletteFolder,
     .pluginDataFolder = fizzyPluginDataFolder,
     .pluginRegistered = fizzyPluginRegistered,
-    .pluginUnregistered = fizzyPluginUnregistered,
+    .pluginRetired = fizzyPluginRetired,
     .getSecret = fizzyGetSecret,
     .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
@@ -2584,8 +2609,8 @@ fn fizzyPluginDataFolder(ctx: *anyopaque, id: []const u8) ?[]const u8 {
 fn fizzyPluginRegistered(ctx: *anyopaque, id: []const u8) void {
     fizzyCtx(ctx).app.pluginRegistered(id);
 }
-fn fizzyPluginUnregistered(ctx: *anyopaque, id: []const u8) void {
-    fizzyCtx(ctx).app.pluginUnregistered(id);
+fn fizzyPluginRetired(ctx: *anyopaque, id: []const u8) void {
+    fizzyCtx(ctx).app.pluginRetired(id);
 }
 fn fizzyGetSecret(ctx: *anyopaque, key: []const u8) ?[]const u8 {
     return fizzyCtx(ctx).app.secrets.get(key);
@@ -4159,20 +4184,36 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // the glass program, Apple's lens (`inApp`), as the OS's Liquid Glass beside it is: its
         // frost over a blur at the full frost, and its own colour and bend. Elsewhere — the web,
         // Linux, Windows, where there is no OS glass to match — the app's frosted pane (`frosted`).
+        //
+        // The app's material (`core.material`, published by `Entry`) says how much of that there
+        // is, the same for every glass here and in every plugin, which reads these values:
+        // - `liquid`: all of it.
+        // - `frost`: the frosted pane, no bend and no glass program (`LiquidField`).
+        // - `blur`: the same at half the blur.
+        // - `transparent`: no blur, so no frost. Surfaces fall back to `dialogFill`, the window's
+        //   colour at its opacity over what is behind.
+        // - `none`: that fill, opaque.
+        const kind = fizzy.core.material.get().kind;
+        const liquid = kind == .liquid;
         const opacity = @max(if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light, glass_look.min_opacity);
-        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader;
+        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader and liquid;
         const pane = glass_look.frosted(opacity);
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
-            .opacity = pane.mix,
-            .blur = if (lens) glass_look.text_blur else pane.blur,
+            .opacity = if (kind == .none) 1 else pane.mix,
+            .blur = switch (kind) {
+                .liquid => if (lens) glass_look.text_blur else pane.blur,
+                .frost => pane.blur,
+                .blur => pane.blur / 2,
+                .transparent, .none => 0,
+            },
             .lift = 0,
             .detail = 0,
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
             .has_chrome = true,
         });
         // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
-        fizzy.core.dialogs.publishRefraction(if (lens) 1 else pane.refraction);
+        fizzy.core.dialogs.publishRefraction(if (lens) 1 else if (liquid) pane.refraction else 0);
         fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
@@ -4184,7 +4225,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).
     fizzy.core.screens.publishMainTop(if (builtin.target.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
-    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
+    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.get().kind == .liquid);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();
@@ -7118,15 +7159,6 @@ const plugin_manager_vtable: PluginManager.VTable = .{
     .revealMain = struct {
         fn f(ctx: *anyopaque) void {
             pmSelf(ctx).revealCenter();
-        }
-    }.f,
-    .refuseCaseClash = struct {
-        fn f(ctx: *anyopaque, id: []const u8) bool {
-            const app = &pmSelf(ctx).app;
-            var buf: [64]u8 = undefined;
-            const other = app.pluginCaseClash(&buf, id) orelse return false;
-            app.recordCaseClash(id, other, null);
-            return true;
         }
     }.f,
 };

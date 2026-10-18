@@ -30,10 +30,10 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../motion.zig");
-const liquid_glass = @import("../gfx/liquid_glass.zig");
-const LiquidField = @import("../gfx/LiquidField.zig");
-const FrameTarget = @import("../gfx/FrameTarget.zig");
+const motion = @import("motion.zig");
+const liquid_glass = @import("liquid_glass.zig");
+const LiquidField = @import("LiquidField.zig");
+const FrameTarget = @import("FrameTarget.zig");
 
 const Rect = dvui.Rect;
 const Size = dvui.Size;
@@ -1226,7 +1226,7 @@ const FrostJob = struct {
 
     fn draw(ctx: ?*anyopaque) void {
         const self: *FrostJob = @ptrCast(@alignCast(ctx orelse return));
-        const prof = @import("../profile.zig").begin("fizzy", "frost pane");
+        const prof = @import("prof.zig").begin("fizzy", "frost pane");
         defer prof.end();
         // At full alpha, whatever alpha the pane was queued under. The replay runs under the
         // alpha of the moment it was queued, and a pane drawn inside a fade — a tooltip fading in

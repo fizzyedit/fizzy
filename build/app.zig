@@ -829,6 +829,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
+        // Which plugin folders a case variant clashes with, and what an uninstall may delete
+        // there. std-only (see plugin_folders.zig); the store and the loader ask it.
+        .{ "fizzy-plugin-folders-tests", "app/store/plugin_folders.zig" },
         // Where a floating view's window opens, what keeps it reachable, its name, the floats'
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
@@ -852,7 +855,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
-        .{ "fizzy-glass-look-tests", "core/gfx/glass_look.zig" },
+        .{ "fizzy-glass-look-tests", "backend/src/glass_look.zig" },
         // What the app's windows are made of, and the fallback to what the backend can show.
         // std-only but for `publish`/`get`, which reach dvui and are not under test here.
         .{ "fizzy-material-tests", "core/material.zig" },
@@ -1074,7 +1077,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), b.dependency("fizzy_sdk", .{}).builder, target, optimize);
+    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), b.dependency("fizzy_sdk", .{}).builder, target, optimize, null, null);
     fizzy_test_module.addImport("core", core_module_test);
     if (icons_test) |icons| fizzy_test_module.addImport("icons", icons);
 
@@ -1530,10 +1533,23 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
         // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
         split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
+        split_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
+        split_tests_module.addImport("glass", core_module_test.import_table.get("glass").?);
+
+        // The in-app glass (`backend/src/glass/root.zig`): the frost's capture sizes and the
+        // blobs' smooth union, over dvui's testing backend.
+        const glass_tests_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("backend/src/glass/root.zig"),
+        });
+        glass_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        glass_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
 
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },
             .{ "fizzy-sizing-tests", split_tests_module },
+            .{ "fizzy-glass-tests", glass_tests_module },
             .{ "fizzy-plugin-loader-tests", plugin_loader_module },
         }) |entry| {
             const t = b.addTest(.{

@@ -336,8 +336,9 @@ pub const Shown = struct {
 /// stacks them: the floats, then the dialogs and menus. After `endFrame`.
 pub fn windowsShown(buf: []Shown) []Shown {
     var n: usize = 0;
-    for (outs) |slot| {
-        const o = slot orelse continue;
+    // By pointer: the title is a slice of the float's own buffer, which a copy would take with it.
+    for (&outs) |*slot| {
+        const o = if (slot.*) |*o| o else continue;
         const p = o.part orelse continue;
         const t = o.target orelse continue;
         if (n == buf.len) break;
@@ -480,6 +481,9 @@ const carried_backing: f32 = 0.2;
 fn nativeGlass() bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.carries) return false;
     if (!(envSwitch("FIZZY_NATIVE_GLASS") orelse fizzy.editor().app.settings.native_glass)) return false;
+    // The OS's Liquid Glass only while the app's material is liquid: frost and the plainer kinds
+    // are the app's own glass (`core.material`).
+    if (fizzy.core.material.get().kind != .liquid) return false;
     if (liquid_glass == null) liquid_glass = viewports.liquidGlass();
     return liquid_glass.?;
 }

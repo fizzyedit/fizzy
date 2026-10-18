@@ -7839,36 +7839,63 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqual(data.ptr, (host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult).ptr);
         const other = host.pluginDataFolder(markdown_plugin) orelse return error.TestUnexpectedResult;
         try std.testing.expect(!std.mem.eql(u8, data, other));
-        // An id no registered plugin has gets no folder, and no entry; ids are one ignoring case.
-        try std.testing.expect(editor.app.pluginDataFolder("../escape") == null);
-        try std.testing.expect(editor.app.plugin_data_folders.get("../escape") == null);
-        try std.testing.expectEqual(data.ptr, (editor.app.pluginDataFolder("Text") orelse return error.TestUnexpectedResult).ptr);
         const level = std.testing.log_level;
         std.testing.log_level = .err; // the warnings the cases below ask for
         defer std.testing.log_level = level;
+        // An id that is not a plain identifier gets no folder and no entry, and one no plugin
+        // registered gets none either; `Text` is `text`'s folder, one entry per folder.
+        try std.testing.expect(editor.app.pluginDataFolder("../escape") == null);
+        try std.testing.expect(editor.app.plugin_data_folders.get("../escape") == null);
+        try std.testing.expect(editor.app.pluginDataFolder("nobody") == null);
+        try std.testing.expect(editor.app.plugin_data_folders.get("nobody") == null);
+        try std.testing.expectEqual(data.ptr, (editor.app.pluginDataFolder("Text") orelse return error.TestUnexpectedResult).ptr);
         const vt = sdk.Plugin.VTable{};
-        // A plugin whose id has capitals gets it in lowercase, the same folder on every
-        // filesystem; another in a different case of it is not registered at all.
+        // A plugin whose id has capitals gets it in lowercase; another in a different case of it
+        // is not registered at all. Retired (`Host.retirePlugin`), its folder is still its own
+        // in its `deinit`, and not handed out after.
         {
-            var cased = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "CaseTest", .display_name = "Case Test" };
-            try host.registerPlugin(&cased);
+            const Retiring = struct {
+                var plugin: sdk.Plugin = undefined;
+                var host_seen: ?*sdk.Host = null;
+                var in_deinit: ?bool = null;
+                fn deinit(_: *anyopaque) void {
+                    in_deinit = host_seen.?.pluginDataFolder(&plugin) != null;
+                }
+            };
+            const retiring_vt = sdk.Plugin.VTable{ .deinit = Retiring.deinit };
+            var state: u8 = 0;
+            Retiring.plugin = .{ .state = &state, .vtable = &retiring_vt, .id = "CaseTest", .display_name = "Case Test" };
+            Retiring.host_seen = host;
+            try host.registerPlugin(&Retiring.plugin);
             const want_cased = try std.fs.path.join(gpa, &.{ root, "plugin-data", "casetest" });
             defer gpa.free(want_cased);
-            try std.testing.expectEqualStrings(want_cased, host.pluginDataFolder(&cased) orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualStrings(want_cased, host.pluginDataFolder(&Retiring.plugin) orelse return error.TestUnexpectedResult);
             var lower = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "casetest", .display_name = "Case Test" };
             try std.testing.expectError(error.DuplicatePluginId, host.registerPlugin(&lower));
-            // Unregistered, its path is still handed out for its `deinit`, which runs after; from
-            // the next frame's top it is not.
-            host.unregisterPlugin(&cased);
-            try std.testing.expect(host.pluginDataFolder(&cased) != null);
-            editor.app.releaseRetiredFolders();
-            try std.testing.expect(host.pluginDataFolder(&cased) == null);
+            const kept = host.pluginDataFolder(&Retiring.plugin) orelse return error.TestUnexpectedResult;
+            host.retirePlugin(&Retiring.plugin, null);
+            try std.testing.expectEqual(@as(?bool, true), Retiring.in_deinit);
+            try std.testing.expect(host.pluginDataFolder(&Retiring.plugin) == null);
+            // The same id in another case, registered once the first is gone, is the same folder
+            // and the same entry: one per folder.
+            try host.registerPlugin(&lower);
+            defer host.retirePlugin(&lower, null);
+            try std.testing.expectEqual(kept.ptr, (host.pluginDataFolder(&lower) orelse return error.TestUnexpectedResult).ptr);
+        }
+        // Unregistered without being retired (an app's own unload, a test's), its folder is
+        // released all the same: no caller leaves a live one behind.
+        {
+            var released = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "released", .display_name = "Released" };
+            try host.registerPlugin(&released);
+            _ = host.pluginDataFolder(&released) orelse return error.TestUnexpectedResult;
+            host.unregisterPlugin(&released);
+            try std.testing.expect(host.pluginDataFolder(&released) == null);
         }
         // An id that is not a plain identifier names no folder.
         {
             var dotted = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "dotted.id", .display_name = "Dotted" };
             try host.registerPlugin(&dotted);
-            defer host.unregisterPlugin(&dotted);
+            defer host.retirePlugin(&dotted, null);
             try std.testing.expect(host.pluginDataFolder(&dotted) == null);
         }
         // Deleted since, it is made again by an ask once the second it is trusted for is over.
@@ -7883,7 +7910,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             var blocked = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "blocked", .display_name = "Blocked" };
             try host.registerPlugin(&blocked);
-            defer host.unregisterPlugin(&blocked);
+            defer host.retirePlugin(&blocked, null);
             try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugin-data/blocked", .data = "" });
             try std.testing.expect(host.pluginDataFolder(&blocked) == null);
             try tmp.dir.deleteFile(dvui.io, "plugin-data/blocked");
@@ -7912,14 +7939,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             _ = try tmp.dir.statFile(dvui.io, "plugins/text/keep", .{});
             try tmp.dir.deleteTree(dvui.io, "plugins/text");
         }
-        // A folder already in `plugins/` in another case clashes too, before a store install
-        // writes anything.
+        // A folder already in `plugins/` in another case clashes too, read fresh at each ask: an
+        // installed plugin that is not loaded.
         {
+            var clash_buf: [std.fs.max_name_bytes]u8 = undefined;
+            try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "graphl") == null);
             try tmp.dir.createDirPath(dvui.io, "plugins/Graphl");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/Graphl/keep", .data = "" });
             defer tmp.dir.deleteTree(dvui.io, "plugins/Graphl") catch {};
-            var clash_buf: [64]u8 = undefined;
-            try std.testing.expectEqualStrings("Graphl", editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult);
+            const found = editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("Graphl", found.other);
             try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "Graphl") == null);
+            // Its refused variant's card, uninstalled, never takes the installed plugin's folder,
+            // though on macOS and Windows `plugins/graphl` is that folder.
+            editor.app.recordCaseClash("graphl", "Graphl", null);
+            try editor.uninstallPlugin("graphl", true);
+            _ = try tmp.dir.statFile(dvui.io, "plugins/Graphl/keep", .{});
+            try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, editor.app.pluginStatus("graphl").state);
+        }
+        // A plugin's own folder, alone under its name, is still what uninstalling deletes.
+        {
+            try tmp.dir.createDirPath(dvui.io, "plugins/solo");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/solo/build", .data = "" });
+            try editor.uninstallPlugin("solo", true);
+            try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(dvui.io, "plugins/solo", .{}));
         }
     }
     // The app offers its plugins the `automation` service, and nothing is in flight.

@@ -7,7 +7,7 @@ const dvui = @import("dvui");
 
 const Menu = @import("Menu.zig");
 const FloatingMenu = @import("FloatingMenu.zig");
-const BlurBackdrop = @import("../BlurBackdrop.zig");
+const BlurBackdrop = @import("glass").BlurBackdrop;
 
 const Popup = @This();
 
