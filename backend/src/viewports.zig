@@ -333,7 +333,8 @@ pub fn present(vp: *Viewport, target: ?dvui.TextureTarget) void {
 }
 
 /// A viewport's picture this frame, drawn as dvui draws the frame: into a target, from the top left
-/// of the part of the frame the viewport shows, until `end`. In it go the subwindows the viewport shows (`subwindow`) — a float and
+/// of the part of the frame the viewport shows, until `end`. In it go the subwindows the viewport
+/// shows (`dvui.Window.renderSubwindow`, `.take` when they are out of the frame too) — a float and
 /// what opened in it, a menu, a carried view — and whatever the app draws under them. Begun after
 /// `Window.drawRetained`, so the dialogs and toasts are subwindows by then; then `present`.
 pub const Picture = struct {
@@ -366,25 +367,13 @@ pub const Picture = struct {
         _ = dvui.renderTarget(self.rt);
     }
 
-    /// Subwindow `sw`'s drawing this frame, in the picture. `take`: out of the frame too, so dvui's
-    /// replay into the main window — and any picture after this one — draws none of it.
-    pub fn subwindow(_: Picture, sw: *dvui.Subwindows.Subwindow, take: bool) void {
-        const cw = dvui.currentWindow();
-        const cmds = sw.render_cmds;
-        const after = sw.render_cmds_after;
-        if (take) {
-            sw.render_cmds = .empty;
-            sw.render_cmds_after = .empty;
-        }
-        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
-        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "drawing a subwindow into a viewport", .{});
-    }
-
     /// Subwindow `sw`'s drawing this frame out of the frame, drawn nowhere: a floating window shown
-    /// only as a picture taken of it before (`os_windows`' tear-off card).
+    /// only as a picture taken of it before (`os_windows`' tear-off card). Its queues emptied as
+    /// `dvui.Window.renderSubwindow`'s `take` empties them.
     pub fn drop(sw: *dvui.Subwindows.Subwindow) void {
         sw.render_cmds = .empty;
         sw.render_cmds_after = .empty;
+        sw.render_cmds_front = .{};
     }
 
     /// Done: drawing goes to the frame's own target again.

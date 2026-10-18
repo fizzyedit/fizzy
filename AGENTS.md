@@ -71,7 +71,11 @@ fizzy's own are entries with no module, built for each executable (`build/plugin
 `link`), and only those listed register or get a dylib. `.@"dynamic-plugins" = false` (or
 `-Ddynamic-plugins=false`) makes an app link-only: no plugin dylib is built, and nothing loads
 at runtime (fizzy's dylibs, the user plugins directory, the store, a web page's `?plugin=`),
-all decided at comptime (`App.loads_plugins`). See
+all decided at comptime (`App.loads_plugins`). What is fizzy's own (bundle id, update feed,
+`VERSION`, its plist and resource script) only fizzy's root `build.zig` passes (`Options.own`);
+an app sets its identity through fizzy's options (`app-name`, `app-bundle-id`, `app_version`,
+`repo-url`, `app-package-title`, `app-icon`, `app-icon-ico`, `app-icon-icns`, …), and
+`try fizzy.addPackageSteps(b, fizzy_dep)` gives its own build `package` and `packageall`. See
 [`fizzyedit/example-app`](https://github.com/fizzyedit/example-app), which bundles
 `fizzyedit/example-plugin`.
 
@@ -212,6 +216,8 @@ access works from what the code and its public docs say.
   into OS windows (ImGui-style viewports, per-OS dressing, the dvui-dev replay hook) →
   [`plans/POPOUT_WINDOWS_PLAN.md`](https://github.com/fizzyedit/plans/blob/main/plans/POPOUT_WINDOWS_PLAN.md).
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
+- Driving a running fizzy from outside (`curl` on its socket, the commands as the API, events,
+  OpenAPI) → [`docs/CONTROL.md`](docs/CONTROL.md); code in `app/control/`.
 - The forks and patches fizzy builds on (dvui-dev, SDL's patches in `backend/patches/sdl`, sdl_zig): what each changes, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 - Native windows and glass: what Liquid Glass can do (measured), the drag's glass as one native
   overlay on macOS 26, and fizzy's backend owning its windows while taking SDL's releases →

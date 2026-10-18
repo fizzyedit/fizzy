@@ -404,7 +404,7 @@ fn livePicture(slot: *?dvui.Texture.Target, sw: *dvui.Subwindows.Subwindow) bool
     };
     if (slot.* == null) slot.* = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .linear }) catch return false;
     const picture: viewports.Picture = .begin(slot.*.?, viewRect(r));
-    picture.subwindow(sw, true);
+    dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
     picture.end();
     return true;
 }
@@ -642,7 +642,7 @@ pub fn afterFrame() void {
         // dragged into — dvui keeps it on that window's screen from its top left, the rest past the
         // edge — had its middle past the part, was in no window's picture, and vanished (the user).
         for (cw.subwindows.stack.items) |*sw| {
-            if (!area.intersect(sw.rect_pixels).empty()) picture.subwindow(sw, true);
+            if (!area.intersect(sw.rect_pixels).empty()) dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
         }
         picture.end();
         viewports.present(o.viewport, target);
