@@ -171,6 +171,7 @@ pub fn play(self: *Demo, name: []const u8) !void {
 pub fn playTape(self: *Demo, bytes: []const u8) !void {
     const gpa = self.editor.app.gpa;
     var check = automation.Input.check;
+    check.steps = stepsCheck;
     var owned = automation.Tape.load(gpa, bytes, check) catch |err| switch (err) {
         error.NoKeyframeAtStart => {
             check.live = true;
@@ -356,6 +357,7 @@ const stage_vtable: automation.Stage.VTable = .{
     .restore = restore,
     .release = release,
     .fingerprint = fingerprint,
+    .step = step,
 };
 
 /// A live tape played by nobody in particular, or a demo with no name.
@@ -398,6 +400,31 @@ pub fn setLiveAuthor(self: *Demo, who: ?sdk.Author) void {
         return;
     };
     self.live_author = .{ .kind = a.kind, .plugin = plugin, .session = a.session, .label = label };
+}
+
+/// What a tape's steps need of fizzy (`Tape.Check.steps`): the owner they name, loaded, writing
+/// steps in the format they were recorded in.
+pub fn stepsCheck(owner: []const u8, format: u32) bool {
+    const plugin = fizzy.editor().app.host.pluginById(owner) orelse return false;
+    return plugin.step_format != 0 and plugin.step_format == format and plugin.vtable.applyStep != null;
+}
+
+/// A step of a document the keyframe opened, applied by its owner (`Tape.Step`).
+fn step(ctx: *anyopaque, st: automation.Tape.Step, ms: u32) void {
+    const self = from(ctx);
+    const editor = self.editor;
+    const root = self.mount orelse return;
+    const path = core.paths.join(editor.app.gpa, root, st.file) catch return;
+    defer editor.app.gpa.free(path);
+    const doc = editor.docFromPath(path) orelse {
+        dvui.log.warn("demo: a step of {s}, which is not open", .{path});
+        return;
+    };
+    if (doc.owner.applyStep(doc, st.effect, st.motion, ms)) return;
+    // The document no longer is what the step was made on: every step after would miss too, so
+    // the tape stops where the viewer can see it went wrong.
+    self.player.pause();
+    dvui.toast(@src(), .{ .message = "This tape's steps no longer fit its document: it stopped here." });
 }
 
 fn from(ctx: *anyopaque) *Demo {

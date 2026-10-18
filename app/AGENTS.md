@@ -33,3 +33,12 @@ each directory is.
   springs, easing or trails driven by the pointer: merged Liquid Glass necks re-form visibly
   under tremor. A one-shot, time-driven curve started by a discrete event (the aimed bubble
   changing) is fine.
+- **std offers AF_UNIX on Windows only to a target whose minimum is 10 1803** (`win10_rs4`,
+  `std.Io.net.has_unix_sockets`); below it, listening fails with `AddressFamilyUnsupported`
+  whatever the machine runs. Fizzy's `build.zig` raises the minimum for the control server
+  (`control/`); an app built on fizzy with its own target must too, or its server does not start.
+  On Windows the socket is a reparse point `statFile` cannot open, so its inode is not checked.
+- **End a blocked `accept` by cancelling its `Io` task, never by closing the listener.** std's
+  Windows `accept` treats the cancelled wait that closing causes as `unreachable` (a panic), and
+  connecting to the socket's path to wake it reaches whoever listens there now. `Future.cancel`
+  interrupts it on every OS (`control/Server.zig`).

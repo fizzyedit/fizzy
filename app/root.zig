@@ -44,6 +44,8 @@ pub const ActivityFeed = @import("ActivityFeed.zig");
 pub const Tracks = @import("Tracks.zig");
 /// A document's transport: its history as a line at the bottom of its pane, undo and redo as seeks.
 pub const HistoryTransport = @import("HistoryTransport.zig");
+pub const TrimBar = @import("TrimBar.zig");
+pub const history_transport = @import("history_transport.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {
@@ -101,6 +103,17 @@ pub const update = struct {
     pub const auto_update = @import("update/auto_update.zig");
     pub const update_install = @import("update/update_install.zig");
     pub const update_notify = @import("update/update_notify.zig");
+};
+
+/// The control server: HTTP on a Unix socket in the config folder, the app's commands as its API,
+/// so `curl --unix-socket` drives the app with no agent (plans/CONTROL_SERVER_PLAN.md). Native
+/// only. The app starts a `Server`, calls `routes.answerPending` each frame and stops it at quit.
+pub const control = struct {
+    pub const Server = @import("control/Server.zig");
+    pub const routes = @import("control/routes.zig");
+    pub const json = @import("control/json.zig");
+    /// The socket's name in the config folder.
+    pub const socket_name = "control.sock";
 };
 
 /// Quitting the way the app always quits — unsaved documents asked about first — then starting
@@ -171,4 +184,6 @@ test {
     _ = store.Loader;
     _ = Tracks;
     _ = HistoryTransport;
+    _ = control.routes;
+    _ = TrimBar;
 }

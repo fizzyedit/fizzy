@@ -44,7 +44,9 @@ pub fn clear(self: *ActivityFeed) void {
     self.len = 0;
 }
 
-fn push(self: *ActivityFeed, title: []const u8, now: i128) void {
+/// Show `title` as though a command of that name had just run: how the app says something
+/// about the document itself (a share kept, a tape stopped) in the same glass as its commands.
+pub fn push(self: *ActivityFeed, title: []const u8, now: i128) void {
     if (self.len == max) {
         std.mem.copyForwards(Item, self.items[0 .. max - 1], self.items[1..max]);
         self.len -= 1;
