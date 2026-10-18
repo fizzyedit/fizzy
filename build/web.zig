@@ -355,7 +355,7 @@ fn stampStorage(b: *std.Build) std.Build.LazyPath {
     };
     const token = "__FIZZY_WEB_STORAGE__";
     b.dependOnFileContents(b.path("web/index.html"));
-    const html = b.root.root_dir.handle.readFileAlloc(b.graph.io, "web/index.html", b.allocator, .unlimited) catch |err|
+    const html = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, "web/index.html") catch @panic("OOM"), b.allocator, .unlimited) catch |err|
         std.debug.panic("web/index.html: {t}", .{err});
     if (std.mem.indexOf(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
     const stamped = std.mem.replaceOwned(u8, b.allocator, html, token, name) catch @panic("OOM");

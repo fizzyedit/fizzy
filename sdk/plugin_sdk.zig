@@ -31,8 +31,7 @@ const core_module = @import("core_module.zig");
 /// package — so the access check below picks whichever layout is present.
 fn repoPath(b: *std.Build, sub_path: []const u8) std.Build.LazyPath {
     b.root.access(b.graph.io, sub_path, .{}) catch {
-        const root = b.root.root_dir.path orelse @panic("fizzy sdk: missing build_root");
-        return .{ .cwd_relative = b.pathJoin(&.{ root, "..", sub_path }) };
+        return .{ .cwd_relative = b.root.joinString(b.allocator, b.pathJoin(&.{ "..", sub_path })) catch @panic("OOM") };
     };
     return b.path(sub_path);
 }
@@ -99,7 +98,7 @@ pub fn readManifest(b: *std.Build) IdentityManifest {
 
 fn readManifestAt(b: *std.Build, rel_path: []const u8) IdentityManifest {
     b.dependOnFileContents(b.path(rel_path));
-    const raw = b.root.root_dir.handle.readFileAlloc(b.graph.io, rel_path, b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
+    const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, rel_path) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
         std.debug.panic(
             "fizzy: could not read {s}: {}\nEvery plugin needs a `plugin.zig.zon` manifest at its root (id/name/version) — see docs/PLUGINS.md.",
             .{ rel_path, e },
