@@ -4,8 +4,12 @@
 //! and reload, so a client generated from it sees the app as it is (plans/CONTROL_SERVER_PLAN.md,
 //! step 3).
 //!
-//! A command's result has no declared type yet, so its 200 response is any JSON value. The seam
-//! for typing it is a result type beside `Command.Params(…)` that `commandPath` would read.
+//! It says what the server enforces, no more: a parameter's type, and the choices of an enumeration.
+//! The bounds and suggested choices a number declares are the palette's hints, never checked by
+//! `Command.Params`, so they go in its description, not its schema, where a generated client would
+//! refuse values the server takes. A command's result has no declared type yet, so its 200 response
+//! is any JSON value; the seam for typing it is a result type beside `Command.Params(…)` that
+//! `commandPath` would read.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const AppInfo = @import("../AppInfo.zig");
@@ -17,7 +21,8 @@ const Error = Stringify.Error || error{OutOfMemory};
 /// The whole description as JSON, in `arena`.
 pub fn generate(host: *sdk.Host, arena: std.mem.Allocator) error{OutOfMemory}![]u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
-    var s: Stringify = .{ .writer = &out.writer, .options = .{ .whitespace = .indent_2 } };
+    // Compact: generated on the UI thread per request, and half the bytes of an indented one.
+    var s: Stringify = .{ .writer = &out.writer, .options = .{} };
     write(&s, host, arena) catch return error.OutOfMemory;
     return out.written();
 }
@@ -41,18 +46,33 @@ fn write(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!void {
     try s.beginObject();
     try s.objectField("/");
     try s.write(.{ .get = .{
-        .operationId = "app",
+        .operationId = "control.app",
         .summary = "The app, its version and the SDK it was built against.",
         .responses = .{ .@"200" = jsonResponse("The app.", .{ .@"$ref" = "#/components/schemas/App" }) },
     } });
     try s.objectField("/commands");
     try s.write(.{ .get = .{
-        .operationId = "commands",
+        .operationId = "control.commands",
         .summary = "Every registered command, with its parameters and whether it is enabled now.",
         .responses = .{ .@"200" = jsonResponse("The commands.", .{ .type = "array", .items = .{ .@"$ref" = "#/components/schemas/Command" } }) },
     } });
+    try s.objectField("/openapi.json");
+    try s.write(.{ .get = .{
+        .operationId = "control.openapi",
+        .summary = "This description, generated from what is registered now.",
+        .responses = .{ .@"200" = jsonResponse("The description.", true) },
+    } });
     try eventsPath(s, host, arena);
-    for (host.commands.items) |*c| try commandPath(s, c, arena);
+    // The first of an id is the one the server runs (`Host.command`): a later one is not a path
+    // of its own, which would repeat a key and an `operationId`. A command no plugin owns cannot
+    // run (`callCommand` answers 404) and is left out.
+    for (host.commands.items, 0..) |*c, i| {
+        if (c.owner == null) continue;
+        const first = for (host.commands.items[0..i]) |*o| {
+            if (std.mem.eql(u8, o.id, c.id)) break false;
+        } else true;
+        if (first) try commandPath(s, c, arena);
+    }
     try s.endObject();
 
     try s.objectField("components");
@@ -69,7 +89,7 @@ fn write(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!void {
             .description = .{ .type = "string" },
             .kind = .{ .type = "string", .@"enum" = .{ "bool", "int", "float", "string", "enum", "color", "zon" } },
             .required = .{ .type = "boolean" },
-            .default = .{},
+            .default = true,
             .min = .{ .type = "number" },
             .max = .{ .type = "number" },
             .choices = .{ .type = "array", .items = .{ .type = "string" } },
@@ -110,7 +130,7 @@ fn eventsPath(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!vo
     try s.objectField("get");
     try s.beginObject();
     try s.objectField("operationId");
-    try s.write("events");
+    try s.write("control.events");
     try s.objectField("summary");
     try s.write("Stream the app's events.");
     try s.objectField("description");
@@ -139,7 +159,7 @@ fn eventsPath(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!vo
         try s.objectField("description");
         try s.write(d.description);
         try s.objectField("example");
-        try writeExample(s, arena, d.payload);
+        try s.write(try example(arena, d.payload));
         try s.endObject();
     }
     try s.endArray();
@@ -148,7 +168,8 @@ fn eventsPath(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!vo
 }
 
 fn commandPath(s: *Stringify, c: *const sdk.Command, arena: std.mem.Allocator) Error!void {
-    try s.objectField(try std.fmt.allocPrint(arena, "/commands/{s}", .{c.id}));
+    // Escaped as the server unescapes it (`routes`): an id with `{`, a space or `%` is still one path.
+    try s.objectField(try std.fmt.allocPrint(arena, "/commands/{f}", .{std.fmt.alt(std.Uri.Component{ .raw = c.id }, .formatEscaped)}));
     try s.beginObject();
     try s.objectField("post");
     try s.beginObject();
@@ -162,38 +183,45 @@ fn commandPath(s: *Stringify, c: *const sdk.Command, arena: std.mem.Allocator) E
     }
     try s.objectField("x-fizzy-visibility");
     try s.write(@tagName(c.visibility));
-    try s.objectField("requestBody");
-    try s.beginObject();
-    try s.objectField("required");
-    try s.write(sdk.Command.requiresArguments(c.params));
-    try s.objectField("content");
-    try s.beginObject();
-    try s.objectField("application/json");
-    try s.beginObject();
-    try s.objectField("schema");
-    try s.beginObject();
-    try s.objectField("type");
-    try s.write("object");
-    try s.objectField("additionalProperties");
-    try s.write(false);
-    try s.objectField("properties");
-    try s.beginObject();
-    for (c.params) |p| {
-        try s.objectField(p.key);
-        try paramSchema(s, arena, p);
+    // A command with only `run` takes no body (`callCommand` refuses arguments): none described.
+    if (c.runWith != null) {
+        try s.objectField("requestBody");
+        try s.beginObject();
+        try s.objectField("required");
+        try s.write(sdk.Command.requiresArguments(c.params));
+        try s.objectField("content");
+        try s.beginObject();
+        try s.objectField("application/json");
+        try s.beginObject();
+        try s.objectField("schema");
+        try s.beginObject();
+        try s.objectField("type");
+        try s.write("object");
+        // Parameters declared: exactly those (`Command.Params` refuses others). None declared, as a
+        // `runWith` written by hand: whatever it reads, which the description cannot know.
+        if (c.params.len > 0) {
+            try s.objectField("additionalProperties");
+            try s.write(false);
+            try s.objectField("properties");
+            try s.beginObject();
+            for (c.params) |p| {
+                try s.objectField(p.key);
+                try paramSchema(s, arena, p);
+            }
+            try s.endObject();
+            try s.objectField("required");
+            try s.beginArray();
+            for (c.params) |p| if (p.required) try s.write(p.key);
+            try s.endArray();
+        }
+        try s.endObject();
+        try s.endObject();
+        try s.endObject();
+        try s.endObject();
     }
-    try s.endObject();
-    try s.objectField("required");
-    try s.beginArray();
-    for (c.params) |p| if (p.required) try s.write(p.key);
-    try s.endArray();
-    try s.endObject();
-    try s.endObject();
-    try s.endObject();
-    try s.endObject();
     try s.objectField("responses");
     try s.write(.{
-        .@"200" = jsonResponse("Its result: any JSON value, `null` when it returns nothing.", .{}),
+        .@"200" = jsonResponse("Its result: any JSON value, `null` when it returns nothing.", true),
         .@"400" = error_response,
         .@"404" = error_response,
         .@"409" = error_response,
@@ -208,40 +236,33 @@ fn paramSchema(s: *Stringify, arena: std.mem.Allocator, p: sdk.Command.Param) Er
     try s.objectField("title");
     try s.write(p.label);
     try s.objectField("description");
-    switch (p.kind) {
+    try s.write(switch (p.kind) {
         // ZON of their own: JSON that converts to it (`json.zig`), described rather than typed.
-        .color, .other => try s.write(try std.fmt.allocPrint(arena, "{s} (any JSON that converts to the ZON it takes)", .{p.description})),
-        else => try s.write(p.description),
-    }
+        .color, .other => try std.fmt.allocPrint(arena, "{s} (any JSON that converts to the ZON it takes)", .{p.description}),
+        .int => |k| if (k.choices.len > 0)
+            try std.fmt.allocPrint(arena, "{s} (suggested: {any})", .{ p.description, k.choices })
+        else
+            try std.fmt.allocPrint(arena, "{s} (from {d} to {d})", .{ p.description, k.min, k.max }),
+        else => p.description,
+    });
     switch (p.kind) {
         .bool => {
             try s.objectField("type");
             try s.write("boolean");
         },
-        .int => |k| {
+        .int => {
             try s.objectField("type");
             try s.write("integer");
-            try s.objectField("minimum");
-            try s.write(k.min);
-            try s.objectField("maximum");
-            try s.write(k.max);
-            if (k.choices.len > 0) {
-                try s.objectField("enum");
-                try s.write(k.choices);
-            }
         },
-        .float => |k| {
+        .float => {
             try s.objectField("type");
             try s.write("number");
-            try s.objectField("minimum");
-            try s.write(k.min);
-            try s.objectField("maximum");
-            try s.write(k.max);
         },
         .string => {
             try s.objectField("type");
             try s.write("string");
         },
+        // The one constraint `Command.Params` checks: a tag it does not have is refused.
         .enumeration => |k| {
             try s.objectField("type");
             try s.write("string");
@@ -250,16 +271,20 @@ fn paramSchema(s: *Stringify, arena: std.mem.Allocator, p: sdk.Command.Param) Er
         },
         .color, .other => {},
     }
-    if (p.default) |d| {
+    // Left out when it does not convert, rather than a `null` the schema would refuse.
+    if (p.default) |d| if (try example(arena, d)) |value| {
         try s.objectField("default");
-        try writeExample(s, arena, d);
-    }
+        try s.write(value);
+    };
     try s.endObject();
 }
 
-/// `zon` as a JSON value, or null when it is not ZON JSON can say.
-fn writeExample(s: *Stringify, arena: std.mem.Allocator, zon: []const u8) Error!void {
-    const text = json.jsonFromZon(arena, zon) catch return s.write(null);
-    const value = std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch return s.write(null);
-    try s.write(value);
+/// `zon` as a JSON value, or null when it is not ZON that JSON can say.
+fn example(arena: std.mem.Allocator, zon: []const u8) error{OutOfMemory}!?std.json.Value {
+    const text = json.jsonFromZon(arena, zon) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    return std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch null;
 }
+

@@ -129,8 +129,12 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
         return ok(arena, list.items);
     }
     if (std.mem.eql(u8, trimmed, "/openapi.json")) {
-        if (method != .GET and method != .HEAD) return notAllowed(arena, "GET");
-        return .{ .status = .ok, .body = try openapi.generate(host, arena) };
+        return switch (method) {
+            .GET => .{ .status = .ok, .body = try openapi.generate(host, arena) },
+            // Not generated only to be thrown away.
+            .HEAD => .{ .status = .ok, .body = "" },
+            else => notAllowed(arena, "GET"),
+        };
     }
     if (std.mem.eql(u8, trimmed, "/events")) {
         return switch (method) {
