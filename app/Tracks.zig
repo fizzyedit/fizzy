@@ -18,9 +18,9 @@
 //! open track's newest checkpoint (`shed`); steps and bases stay, since undo will walk them.
 //! Taking and diffing a checkpoint happen on the frame that takes it, on every target (the web has
 //! no threads); were that ever too long, the diff would be spread over the frames after, a slice
-//! each, the copy being immutable once taken. Until tracks are on by default they are behind `on`
-//! (fizzy: `FIZZY_TRACKS=1`). `zig build bench-tracks` measures what a step, a checkpoint and a
-//! replay cost.
+//! each, the copy being immutable once taken. They record while `on`: in fizzy by default, as its
+//! setting says (`record_history`, `FIZZY_TRACKS` over it). `zig build bench-tracks` measures what
+//! a step, a checkpoint and a replay cost.
 const Tracks = @This();
 
 const std = @import("std");

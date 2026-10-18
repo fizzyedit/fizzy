@@ -8260,6 +8260,25 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // Recording follows its setting (`record_history`, on by default) each time it changes, a
+    // command's say (`setTracking`, as the tests above used) holding until then: turned off,
+    // nothing is recorded and what was is forgotten; turned on, every open document gets a track.
+    {
+        const tracks = &editor.app.tracks.?;
+        try std.testing.expect(editor.app.settings.record_history);
+        editor.setTracking(true);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(tracks.open.count() > 0);
+        editor.app.settings.record_history = false;
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!tracks.on and editor.app.host.recorder == null);
+        try std.testing.expectEqual(@as(usize, 0), tracks.open.count());
+        editor.app.settings.record_history = true;
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(tracks.on and editor.app.host.recorder != null);
+        try std.testing.expectEqual(editor.app.open_files.count(), tracks.open.count());
+    }
+
     // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens
     // the panel with Output selected, and a view no region shows is not revealed.
     {
