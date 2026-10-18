@@ -759,9 +759,13 @@ test "markdown preview: skipping off-screen blocks lays the document out identic
         // each table's grid — a scroll container in its own right — ask the scroll area for more
         // room than the block actually occupies, which is why that number comes out ~20% larger
         // than the document really is.
+        //
+        // Within f32's precision at the document's size: both totals are f32 sums of hundreds of
+        // heights, and at ~40000 pt one rounding step is already 0.004, so an absolute tolerance
+        // failed whenever docs/PLUGINS.md (this sample) grew.
         var sum: f32 = 0;
         for (virtualized.heights) |h| sum += h;
-        try std.testing.expectApproxEqAbs(sum + 16, virtualized.virtual_h, 0.01);
+        try std.testing.expectApproxEqRel(sum + 16, virtualized.virtual_h, 1e-6);
     };
 }
 
