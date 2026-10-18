@@ -413,6 +413,7 @@ fn styleTitled(raw_ptr: *anyopaque) void {
     }
 }
 
+extern fn fizzy_macos_window_has_plain_backdrop(nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_plain_backdrop(nswindow: ?*anyopaque, r: f64, g: f64, b: f64, radius: f64) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 
@@ -460,9 +461,17 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
         @as(f64, @floatFromInt(color.a)) / 255.0,
     });
     // This sets both the titlebar and the window background color — clear on a window of Liquid
-    // Glass (`liquidGlass`), whose colour is under its glass.
+    // Glass (`liquidGlass`), whose colour is under its glass, and on one with a backdrop in its
+    // colour (`nativeTitleBar`), whose colour is the backdrop's: on its way into or out of full
+    // screen the window stands at the screen's size while the backdrop follows its picture, and a
+    // background in the window's colour filled all of the screen round the picture (the user).
     const glass = fizzy_macos_window_has_liquid_glass(raw_ptr) != 0;
-    window.msgSend(void, "setBackgroundColor:", .{if (glass) NSColor.msgSend(objc.Object, "clearColor", .{}).value else new_color.value});
+    if (fizzy_macos_window_has_plain_backdrop(raw_ptr) != 0) {
+        const f = color.toRGBA();
+        fizzy_macos_window_plain_backdrop(raw_ptr, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, fizzy_macos_window_corner_radius());
+    } else {
+        window.msgSend(void, "setBackgroundColor:", .{if (glass) NSColor.msgSend(objc.Object, "clearColor", .{}).value else new_color.value});
+    }
 
     // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
     if (objc.getClass("NSAppearance")) |NSAppearance| {

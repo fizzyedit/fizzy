@@ -104,6 +104,8 @@ places_main_picture: bool = false,
 /// (`Viewport.shadow_size`).
 main_shadow_size: [2]i32 = .{ 0, 0 },
 main_shadow_frames: u8 = 0,
+/// Whether a viewport's window, itself seen, was presented into this frame (`unseen`).
+viewport_seen: bool = false,
 /// Added to the wall clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
@@ -1750,6 +1752,7 @@ extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, i
 extern fn fizzy_macos_viewport_dress(nswindow: ?*anyopaque, main: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_plain(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_reshadow(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_window_off_active_space(nswindow: ?*anyopaque) c_int;
 extern fn fizzy_macos_viewport_still(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_menu(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long, radius: f64, dialog: c_int) c_int;
 extern fn fizzy_macos_viewport_menu_attached(nswindow: ?*anyopaque) void;
@@ -2213,13 +2216,19 @@ pub fn deinit(self: *SDLBackend) void {
 
 /// The main window shows nothing: hidden, minimized, occluded (macOS: on another Space, or wholly
 /// covered; `platform.window.windowUnseen`), or its last frame reached no drawable.
+/// Whether nobody sees this frame: the main window hidden, occluded, minimized or held, and no
+/// window of a viewport's shown it either (`viewport_seen`). A float's window in a full screen
+/// Space of its own leaves the main one on another Space, unseen: counted by it alone, every frame
+/// of the float's way slept out to a sixtieth of a second, and it ran at 56 frames a second where
+/// the main window's ran at the display's 120 (the user, measured).
 pub fn unseen(self: *SDLBackend) bool {
-    return platform.window.windowUnseen(self.window) or !self.gpu.presented;
+    return (platform.window.windowUnseen(self.window) or !self.gpu.presented) and !self.viewport_seen;
 }
 
 pub fn renderPresent(self: *SDLBackend) void {
     // First, so it runs last: after the viewports' own transaction below is committed into it.
     defer if (self.present_hook) |hook| hook(self);
+    self.viewport_seen = false;
     // macOS: a window put somewhere new this frame goes there in the transaction its picture is
     // presented in, so the two change together (`placeWindow`). Before the pictures are copied
     // into the windows, so a resized window's drawable is already its new size. A window's first
@@ -2245,8 +2254,15 @@ pub fn renderPresent(self: *SDLBackend) void {
         for (&self.viewport_slots, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             if ((vp.app_frame or vp.native) and vp.shown) {
-                if (vp.shadow_size[0] != vp.screen.w or vp.shadow_size[1] != vp.screen.h) {
-                    vp.shadow_size = .{ vp.screen.w, vp.screen.h };
+                // By the window's size, as the main window's: on its way into or out of full screen
+                // it stands still at that size while its picture grows (`vp.screen`), and asked to
+                // each frame of it, the window server worked the shadow of a full-screen window out
+                // again from its pixels every frame.
+                var ww: c_int = 0;
+                var wh: c_int = 0;
+                _ = c.SDL_GetWindowSize(vp.window, &ww, &wh);
+                if (vp.shadow_size[0] != ww or vp.shadow_size[1] != wh) {
+                    vp.shadow_size = .{ ww, wh };
                     vp.shadow_frames = 2;
                 }
                 if (vp.shadow_frames > 0) {
@@ -2314,6 +2330,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
         if (vp.shown and (main_moving or moving_vp != null) and vp != moving_vp and !platform.window.windowMovingItself(vp.window)) continue;
         const presented = self.gpu.presentInto(vp.window, target, vp.picture_at);
+        if (presented and !platform.window.windowUnseen(vp.window)) self.viewport_seen = true;
         if (vp.shown) continue;
         if (presented) {
             first_frame[i] = true;
@@ -2521,6 +2538,11 @@ fn mainHeld(self: *SDLBackend) bool {
     // Its own way into or out of full screen is drawn whatever AppKit says of it on the way.
     if (platform.window.windowMovingItself(self.window)) return false;
     if (c.SDL_GetWindowFlags(self.window) & c.SDL_WINDOW_OCCLUDED != 0) return true;
+    // On a Space nobody is looking at, as while a float's window has a full screen Space of its
+    // own: waited on there, its drawable came a second late, Metal's timeout, and the frame with it
+    // (the user, traced). Only that, not every way of being unseen: a window shown undrawn for its
+    // first frame (`showUndrawn`) is unseen too, and held, it would never draw one.
+    if (fizzy_macos_window_off_active_space(cocoaWindow(self.window)) != 0) return true;
     for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         if (vp.shown and platform.window.windowMovingItself(vp.window)) return true;

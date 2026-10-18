@@ -308,7 +308,11 @@ static void pump_tick_inner(void) {
         if (m->exit_origin_until > CACurrentMediaTime()) {
             restore_pre_fullscreen_origin_if_nudged((__bridge NSWindow *)m->window);
         }
-        if (m->anim_active) step_space_animation(m);
+        /* Not a still window's: its picture moves only in the app's frames
+         * (`fizzy_macos_window_space_step`), and stepped here between them too, its backdrop ran
+         * ahead of a picture drawn late — a frame of its own round the float, a band (the user,
+         * while recording the screen slowed the frames). */
+        if (m->anim_active && !m->still) step_space_animation(m);
         hold_landing(m);
         fizzy_macos_window_sync_content_views(m->window);
         fizzy_macos_window_pump_sync(m->window);
