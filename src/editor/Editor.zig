@@ -2426,9 +2426,10 @@ fn drawSettingsPane(_: ?*anyopaque) anyerror!dvui.App.Result {
 }
 
 // ---- EditorAPI: fizzy-provided read/utility surface for plugins ----------
-// Installed on the Host in `postInit`; `ctx` is this `*Editor`.
+// Installed on the Host in `postInit`; `ctx` is this `*Editor`. Public for a test that drives a
+// plugin through `Host` (`tests/integration.zig`, the workbench's home page).
 
-const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
+pub const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .arena = fizzyArena,
     .extensionOwnerOverride = fizzyExtensionOwnerOverride,
     .folder = fizzyFolder,

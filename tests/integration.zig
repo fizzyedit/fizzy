@@ -6696,6 +6696,141 @@ test "workbench: where a tab carried over a strip goes in is read as if its open
     try std.testing.expectEqual(@as(usize, 3), pane.insertIndexAt(500, 3));
 }
 
+// An app's home page in place of the workbench's: a surface keyworded `home`, shown in the `Home`
+// place the sole document pane declares while it is empty (`Workspace.drawHome`). The pane here is
+// declared as `Workspace.draw` declares it, through the plugin's `Host`, so the place is the one
+// the workbench makes.
+const HomeFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+    /// Which home surface drew this frame (its `ctx`), and how many times one did.
+    var home: ?usize = null;
+    var home_draws: usize = 0;
+    var doc_draws: usize = 0;
+    /// The workbench would have drawn its own page this frame.
+    var builtin_home = false;
+
+    const pane_key: u64 = 1;
+    const doc = "test.doc:/notes.txt";
+
+    fn drawHome(ctx: ?*anyopaque) anyerror!dvui.App.Result {
+        home = @intFromPtr(ctx);
+        home_draws += 1;
+        return .ok;
+    }
+
+    fn drawDoc(_: ?*anyopaque) anyerror!dvui.App.Result {
+        doc_draws += 1;
+        return .ok;
+    }
+
+    fn registerHome(e: *fizzy.Editor, id: []const u8, n: usize) !void {
+        try e.app.host.registerSurface(.{
+            .id = id,
+            .title = "Start",
+            .keywords = fizzy.sdk.keywords.ide.home,
+            .ctx = @ptrFromInt(n),
+            .draw = drawHome,
+        });
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        home = null;
+        home_draws = 0;
+        doc_draws = 0;
+        builtin_home = false;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        e.app.frame_layout = &layout;
+        defer e.app.frame_layout = null;
+        {
+            var main = try layout.region(@src(), .{
+                .name = "Main",
+                .keywords = fizzy.sdk.keywords.ide.main,
+            }, .{ .expand = .both });
+            defer main.deinit();
+
+            var pane = e.app.host.region(.{
+                .name = "Pane 1",
+                .keywords = fizzy.sdk.document.keywords,
+                .shows = .many,
+                .key = pane_key,
+            }) orelse return error.TestUnexpectedResult;
+            defer pane.deinit();
+            if (pane.matching().len > 0) {
+                _ = try pane.drawContents();
+            } else {
+                builtin_home = !try workbench.Workspace.drawHome(&e.app.host, pane_key);
+            }
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+};
+
+test "workbench: a home surface shows while nothing is open, and a document puts it away" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.deinitSwaps(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    editor.app.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable });
+
+    HomeFrame.editor = editor;
+    defer HomeFrame.editor = null;
+
+    // No plugin offers a home page: the place declines, and the workbench draws its own.
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expect(HomeFrame.builtin_home);
+    try std.testing.expectEqual(@as(usize, 0), HomeFrame.home_draws);
+
+    // One does: it is the home page, drawn once, in the Home place and not in Main beside it.
+    try HomeFrame.registerHome(editor, "test.home", 1);
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expect(!HomeFrame.builtin_home);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+    try std.testing.expectEqual(@as(?usize, 1), HomeFrame.home);
+
+    // A restored session: the pane already lists a document that has not landed. Nothing is open
+    // yet, so the home stays...
+    try editor.app.host.assignSurfaces("Pane 1", &.{HomeFrame.doc});
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+
+    // ...until it lands, a few frames later, and the home is put away: drawn nowhere, Main
+    // included, with nothing on the plugin's side.
+    try editor.app.host.registerSurface(.{
+        .id = HomeFrame.doc,
+        .title = "notes.txt",
+        .keywords = fizzy.sdk.document.keywords,
+        .draw = HomeFrame.drawDoc,
+    });
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.doc_draws);
+    try std.testing.expectEqual(@as(usize, 0), HomeFrame.home_draws);
+    try std.testing.expect(!HomeFrame.builtin_home);
+
+    // The last document closing brings it back.
+    editor.app.host.unregisterSurface(HomeFrame.doc);
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+    try std.testing.expectEqual(@as(?usize, 1), HomeFrame.home);
+
+    // Two plugins offer one: the first registered shows, until the app chooses the other by
+    // assigning the place, as the picker would.
+    try HomeFrame.registerHome(editor, "test.home2", 2);
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(?usize, 1), HomeFrame.home);
+    try editor.app.host.assignSurfaces(workbench.Workspace.home_region, &.{"test.home2"});
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+    try std.testing.expectEqual(@as(?usize, 2), HomeFrame.home);
+}
+
 // -- rows carried out of a tree and back --------------------------------------------------------
 
 // A tree of two folders and two files, as the explorer draws one: `F` open with `c` inside it, `G`
