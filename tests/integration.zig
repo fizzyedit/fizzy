@@ -4508,6 +4508,113 @@ test "drag: a document not open yet goes only to a document's slot, whose drop g
     try std.testing.expect(state.assignment("Panel") == null);
 }
 
+/// An application's views holding documents (`State.documents`), for the layout to float: a new
+/// one is always `test.workspace.2`; the view a document carries alone is `lone`'s.
+const DocViews = struct {
+    var housed: [64]u8 = undefined;
+    var housed_len: usize = 0;
+    var lone: ?[]const u8 = null;
+    var folded: usize = 0;
+
+    fn house(_: *anyopaque, ids: []const []const u8) ?[]const u8 {
+        housed_len = @min(ids[0].len, housed.len);
+        @memcpy(housed[0..housed_len], ids[0][0..housed_len]);
+        return "test.workspace.2";
+    }
+
+    fn alone(_: *anyopaque, _: []const u8) ?[]const u8 {
+        return lone;
+    }
+
+    fn fold(_: *anyopaque, id: []const u8) bool {
+        if (!std.mem.startsWith(u8, id, "test.workspace.")) return false;
+        folded += 1;
+        return true;
+    }
+};
+
+test "float: a document tab dropped on its own pane's middle floats in a view holding it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+
+    const state = &editor.app.layout;
+    const gpa = editor.app.gpa;
+    const host = &editor.app.host;
+    const doc_kw: []const []const u8 = &.{"main.document"};
+    const regions = struct {
+        fn publish(st: *@TypeOf(editor.app.layout), g: std.mem.Allocator, float: bool) void {
+            st.registerRegion(g, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = .{ .x = 0, .y = 0, .w = 800, .h = 400 }, .size = .{ .w = 800, .h = 400 } });
+            st.registerRegion(g, .{ .name = "Pane 0", .keywords = &.{"main.document"}, .by_name = true, .kind_slot = true, .shows = .many, .bounds = .{ .x = 100, .y = 40, .w = 600, .h = 320 }, .on_drop = DropProbe.onDrop });
+            if (float) st.registerRegion(g, .{ .name = "Float 2", .keywords = fizzy.sdk.keywords.ide.main, .bounds = .{ .x = 200, .y = 100, .w = 400, .h = 240 } });
+            st.publishRegions();
+        }
+    };
+    regions.publish(state, gpa, false);
+    try host.registerSurface(.{ .id = "test.workspace.1", .title = "Workspace", .keywords = fizzy.sdk.keywords.ide.main, .draw = ManyPanelFrame.draw });
+    try host.registerSurface(.{ .id = "test.workspace.2", .title = "Workspace", .keywords = fizzy.sdk.keywords.ide.main, .draw = ManyPanelFrame.draw });
+    try host.registerSurface(.{ .id = "text.doc:/project/a.md", .title = "a.md", .keywords = doc_kw, .draw = ManyPanelFrame.draw });
+    try host.registerSurface(.{ .id = "text.doc:/project/b.md", .title = "b.md", .keywords = doc_kw, .draw = ManyPanelFrame.draw });
+    try state.assign(gpa, "Main", &.{"test.workspace.1"});
+    try state.assign(gpa, "Pane 0", &.{ "text.doc:/project/a.md", "text.doc:/project/b.md" });
+    var docs_ctx: u8 = 0;
+    state.documents = .{ .ctx = &docs_ctx, .house = DocViews.house, .alone = DocViews.alone, .fold = DocViews.fold };
+    defer state.documents = null;
+    DocViews.lone = null;
+    DocViews.folded = 0;
+
+    var layout = fizzy.Editor.Layout.init(host, state, gpa, dvui.currentWindow().arena());
+    const VD = fizzy.Editor.Layout.ViewDrag;
+
+    // One tab of two: it floats in a new view holding just it, and the pane is never asked.
+    DropProbe.last = null;
+    VD.beginLoose(&layout, "text.doc:/project/a.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    state.view_drag.discard();
+    try std.testing.expect(DropProbe.last == null);
+    try std.testing.expectEqualStrings("text.doc:/project/a.md", DocViews.housed[0..DocViews.housed_len]);
+    try std.testing.expectEqual(@as(usize, 1), state.floats.items.items.len);
+    const first = state.floats.items.items[0];
+    try std.testing.expectEqualStrings("Float 1", first.name);
+    const in_first = state.assignment("Float 1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), in_first.len);
+    try std.testing.expectEqualStrings("test.workspace.2", in_first[0]);
+    // The workspace it came out of stays where it was.
+    try std.testing.expectEqualStrings("test.workspace.1", (state.assignment("Main") orelse return error.TestExpectedEqual)[0]);
+
+    // A workspace's only tab carries the workspace: that floats, out of the place showing it.
+    try state.assign(gpa, "Pane 0", &.{"text.doc:/project/b.md"});
+    DocViews.lone = "test.workspace.1";
+    VD.beginLoose(&layout, "text.doc:/project/b.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    state.view_drag.discard();
+    try std.testing.expectEqual(@as(usize, 2), state.floats.items.items.len);
+    try std.testing.expectEqualStrings("Main", state.floats.items.items[1].home);
+    try std.testing.expectEqualStrings("test.workspace.1", (state.assignment("Float 2") orelse return error.TestExpectedEqual)[0]);
+    try std.testing.expectEqual(@as(usize, 0), (state.assignment("Main") orelse return error.TestExpectedEqual).len);
+
+    // Alone in a float nobody split, it does not float again: the pane takes the drop.
+    regions.publish(state, gpa, true);
+    VD.beginLoose(&layout, "text.doc:/project/b.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    state.view_drag.discard();
+    try std.testing.expectEqual(@as(usize, 2), state.floats.items.items.len);
+    try std.testing.expect(DropProbe.last != null);
+
+    // Closed, a float's workspace gives its documents to the main window's (`fold`), and is
+    // not sent home as itself.
+    layout.closeFloat("Float 2");
+    try std.testing.expectEqual(@as(usize, 1), DocViews.folded);
+    try std.testing.expectEqual(@as(usize, 0), (state.assignment("Main") orelse return error.TestExpectedEqual).len);
+}
+
 test "a region with no drop handler takes the middle by the app's default" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

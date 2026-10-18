@@ -48,6 +48,10 @@ pub const Documents = struct {
     /// The view holding document `id` and nothing else, if one does: carried alone, the
     /// document carries that view, which lands as itself rather than inside a new one.
     alone: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
+    /// View `id`, out of a float that is closing, going back into the main window: a view holding
+    /// documents gives them to the one the main window shows, and goes as an emptied one does.
+    /// True when it did; false for any other view, or with none in the main window to take them.
+    fold: *const fn (ctx: *anyopaque, id: []const u8) bool,
 };
 
 pub const StoreCatalog = struct {
