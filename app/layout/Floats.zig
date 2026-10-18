@@ -339,7 +339,7 @@ pub fn liftedFrom(l: *Layout, place: []const u8, view: []const u8) void {
     const r = f.bounds.intersect(dvui.windowRectPixels());
     // No picture where the frame cannot be read (no targets; the web before a frame is read): the
     // live float fades instead (`draw`).
-    if (core.FrameTarget.snapshot(r)) |tex| f.aside_photo = .{ .texture = tex, .rect = r };
+    if (core.FrameTarget.snapshot(r, null)) |tex| f.aside_photo = .{ .texture = tex, .rect = r };
 }
 
 /// The photograph of a float fading to its ghost, `blur` of the way to its frost and at `alpha`, in
