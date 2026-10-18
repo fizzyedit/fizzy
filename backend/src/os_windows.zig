@@ -624,6 +624,11 @@ fn endTear(t: *Tear) void {
 
 /// After the app's frame, before `dvui.Window.end`.
 pub fn afterFrame() void {
+    // What dvui draws late — its Debug window, dialogs, toasts — drawn before the tear-off looks for
+    // the floating window being dragged: drawn after, the Debug window was not yet drawn (`used`)
+    // nor asked about (`closable`) when it looked, and never tore off (the user). Once a frame
+    // (`drawRetained` keeps to that), and `Window.end` would draw them here anyway.
+    if (viewports.tears()) dvui.currentWindow().drawRetained(.{});
     tearFrame();
     if (named_n == 0 and for (outs) |slot| {
         if (slot != null) break false;
