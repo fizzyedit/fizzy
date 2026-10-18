@@ -19,6 +19,9 @@ The page and its JavaScript (`index.html`, `web.js`, workers). The Zig half is
   (`fizzy.web_plugins`), so clear that key to reset. The host and plugin must be the same
   optimize class, and an optimized plugin imports libm by name (`ldexpf`), which the host
   exports from `web_main.zig`.
+- **A new `export fn` the page calls goes in `build/web.zig`'s `export_symbol_names`.** The wasm
+  exports only what that list names. An unlisted one still compiles, and its name even shows in
+  the binary, but the page finds `exports.FizzyWebX` undefined and its guard returns silently.
 - **The heap never shrinks.** The wasm allocator rounds blocks over 64 KB up to a power-of-two
   class and reuses a freed block only within its class, so a large image can step memory from
   tens to hundreds of MB. Before blaming memory for a failed open, read the logged error.

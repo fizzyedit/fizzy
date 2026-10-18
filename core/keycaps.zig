@@ -181,6 +181,9 @@ pub const DrawOptions = struct {
     gravity_y: f32 = 0.5,
     /// Force a platform, for tests and for a keymap editor showing another platform's bindings.
     mac: ?bool = null,
+    /// What a `.caps` keycap is filled with; the control fill when null. Something translucent
+    /// for caps drawn on glass.
+    cap_fill: ?dvui.Color = null,
 };
 
 /// Draw `stroke`. A two-part chord draws both halves with a gap between them.
@@ -189,6 +192,7 @@ pub fn draw(src: std.builtin.SourceLocation, stroke: Stroke, opts: DrawOptions) 
     const base = opts.color orelse theme.color(.control, .text).opacity(0.55);
     const color = if (opts.enabled) base else base.opacity(0.5);
     const mac = opts.mac orelse platform.isMacOS();
+    const cap_fill = opts.cap_fill orelse theme.color(.control, .fill);
 
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = opts.id_extra,
@@ -197,14 +201,14 @@ pub fn draw(src: std.builtin.SourceLocation, stroke: Stroke, opts: DrawOptions) 
     });
     defer row.deinit();
 
-    drawChord(stroke.first, 0, color, mac, opts.style);
+    drawChord(stroke.first, 0, color, mac, opts.style, cap_fill);
     if (stroke.second) |second| {
         _ = dvui.spacer(@src(), .{ .min_size_content = .width(6) });
-        drawChord(second, 1, color, mac, opts.style);
+        drawChord(second, 1, color, mac, opts.style, cap_fill);
     }
 }
 
-fn drawChord(chord: Chord, which: usize, color: dvui.Color, mac: bool, style: Style) void {
+fn drawChord(chord: Chord, which: usize, color: dvui.Color, mac: bool, style: Style, cap_fill: dvui.Color) void {
     var mod_buf: [4]Face = undefined;
     const mods = modifierFaces(chord.mods, mac, &mod_buf);
     var faces: [5]Face = undefined;
@@ -226,7 +230,7 @@ fn drawChord(chord: Chord, which: usize, color: dvui.Color, mac: bool, style: St
                     .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
                     .corners = @import("corners.zig").all(4),
                     .background = true,
-                    .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) },
+                    .color_fill = .{ .color = cap_fill },
                     .min_size_content = .{ .w = 12 },
                 });
                 defer cap.deinit();

@@ -1,7 +1,9 @@
 //! The commands just run on one document (`Host.activity`), shown small at the bottom right of
 //! its pane as they run: each fades in, stays a moment and fades out, the older ones rising as
 //! newer ones come. Drawn on a layer that takes no input, so it never covers the work, and on wall
-//! time, so whatever runs the commands (a person, an agent, a tape) shows the same.
+//! time, so whatever runs the commands (a person, an agent, a tape) shows the same. One that
+//! offers an action ("Undid Claude's Draw" with its Redo) takes clicks on its button only, and
+//! stays longer to be reached.
 const ActivityFeed = @This();
 
 const std = @import("std");
@@ -16,6 +18,8 @@ seen: u64 = 0,
 
 const max = 5;
 const life_ns: i128 = 2400 * std.time.ns_per_ms;
+/// An item with an action stays this long.
+const action_life_ns: i128 = 6000 * std.time.ns_per_ms;
 const fade_ns: i128 = 250 * std.time.ns_per_ms;
 const pad: f32 = 8;
 const gap: f32 = 4;
@@ -24,6 +28,19 @@ const Item = struct {
     title: [48]u8,
     len: u8,
     born: i128,
+    action: ?Action = null,
+
+    fn life(self: Item) i128 {
+        return if (self.action != null) action_life_ns else life_ns;
+    }
+};
+
+/// A button on an item: its label, and the caller's own tag for it, which `draw` answers when
+/// it is pressed.
+const Action = struct {
+    label: [16]u8,
+    len: u8,
+    tag: u64,
 };
 
 /// A feed showing only what runs from now on.
@@ -57,14 +74,26 @@ pub fn push(self: *ActivityFeed, title: []const u8, now: i128) void {
     self.len += 1;
 }
 
-/// Draw the feed in the bottom right of `area` (physical), newest lowest.
-pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now: i128) void {
-    // The oldest go first.
-    while (self.len > 0 and now - self.items[0].born > life_ns) {
-        std.mem.copyForwards(Item, self.items[0 .. self.len - 1], self.items[1..self.len]);
-        self.len -= 1;
+/// `push`, with a button labelled `label` on it: `draw` answers `tag` when it is pressed.
+pub fn pushAction(self: *ActivityFeed, title: []const u8, label: []const u8, tag: u64, now: i128) void {
+    self.push(title, now);
+    var action: Action = .{ .label = undefined, .len = @intCast(@min(label.len, 16)), .tag = tag };
+    @memcpy(action.label[0..action.len], label[0..action.len]);
+    self.items[self.len - 1].action = action;
+}
+
+/// Draw the feed in the bottom right of `area` (physical), newest lowest. Answers the tag of the
+/// action pressed this frame, if one was.
+pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now: i128) ?u64 {
+    // Those whose time is up go.
+    var kept: usize = 0;
+    for (self.items[0..self.len]) |item| {
+        if (now - item.born > item.life()) continue;
+        self.items[kept] = item;
+        kept += 1;
     }
-    if (self.len == 0) return;
+    self.len = kept;
+    if (self.len == 0) return null;
     dvui.refresh(null, @src(), null);
 
     const r = area.toNatural();
@@ -89,9 +118,10 @@ pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now:
         const age = now - item.born;
         // In, then out, over `fade_ns` each; rising into place as it comes in.
         const in = @min(1, @as(f32, @floatFromInt(age)) / @as(f32, @floatFromInt(fade_ns)));
-        const out = @min(1, @as(f32, @floatFromInt(life_ns - age)) / @as(f32, @floatFromInt(fade_ns)));
+        const out = @min(1, @as(f32, @floatFromInt(item.life() - age)) / @as(f32, @floatFromInt(fade_ns)));
         const alpha = @max(0, @min(in, out));
-        const w = font.textSize(item.title[0..item.len]).w + pad * 2;
+        const action_w = if (item.action) |a| font.textSize(a.label[0..a.len]).w + pad * 2 else 0;
+        const w = font.textSize(item.title[0..item.len]).w + pad * 2 + action_w;
         const rect: dvui.Rect = .{ .x = r.w - 12 - w, .y = bottom - h + (1 - in) * h * 0.5, .w = w, .h = h };
         // Glass has no fade: it grows in from, and shrinks out to, a little smaller.
         const k = 0.6 + 0.4 * alpha;
@@ -102,6 +132,7 @@ pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now:
         bottom -= (h + gap) * in;
     }
     core.dialogs.glassBubbles(layer.data().id, bubbles[0..self.len], rs.s, .{});
+    var pressed: ?u64 = null;
     for (self.items[0..self.len], rects[0..self.len], alphas[0..self.len], 0..) |item, rect, alpha, n| {
         dvui.labelNoFmt(@src(), item.title[0..item.len], .{}, .{
             .rect = rect,
@@ -111,5 +142,21 @@ pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now:
             .margin = .{},
             .color_text = .{ .color = ink.opacity(0.85 * alpha) },
         });
+        const a = item.action orelse continue;
+        // The button alone takes input, on a layer of its own over the feed's.
+        const bw = font.textSize(a.label[0..a.len]).w + pad * 2;
+        var hit: dvui.FloatingWidget = undefined;
+        hit.init(@src(), .{}, .{ .rect = .{ .x = r.x + rect.x + rect.w - bw, .y = r.y + rect.y, .w = bw, .h = rect.h }, .id_extra = id_extra *% 8 +% n });
+        defer hit.deinit();
+        if (dvui.button(@src(), a.label[0..a.len], .{}, .{
+            .expand = .both,
+            .font = font,
+            .padding = .{ .x = pad, .y = pad / 2, .w = pad, .h = pad / 2 },
+            .margin = .{},
+            .background = false,
+            .border = .{},
+            .color_text = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(alpha) },
+        })) pressed = a.tag;
     }
+    return pressed;
 }
