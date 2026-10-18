@@ -48,9 +48,12 @@ While a demo plays:
 - **Play resumes it.** If the person did anything to the app while it was paused, the demo first
   replays to where it was, so it carries on from its own state rather than from whatever was left
   behind.
-- **The transport bar** (bottom; it fades while playing until the pointer comes near) has chapter
-  back / play-pause / chapter forward, the time, a scrubber with chapter ticks, and close.
-  Scrubbing backwards rewinds; forwards fast-forwards.
+- **The transport bar** (bottom) has chapter back / play-pause / chapter forward, the time, a
+  scrubber with chapter ticks, and close. Scrubbing backwards rewinds; forwards fast-forwards.
+  While the demo plays it hides into a dome on the window's bottom edge (`app/dome.zig`, the
+  same one a document's history transport hides into), filling with the demo's progress. The
+  pointer held on the dome (or a press on it) grows the bar back out; it goes back soon after
+  the pointer leaves it. Paused or ended it stays out, unless its chevron tab sent it in.
 - **Nothing is persisted.** The stage sets the user's session aside when a demo loads (project
   folder, open documents, layout as on disk, plugin settings) and gives it back when it is
   stopped. A demo refuses to start over unsaved changes. Its files live in memory

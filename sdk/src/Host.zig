@@ -437,6 +437,33 @@ pub fn paletteFolder(self: *Host) ?[]const u8 {
     return if (self.fizzy_api) |a| a.paletteFolder() else null;
 }
 
+/// A folder of `plugin`'s own for what it keeps between runs that is not a setting: its
+/// recents, an index, a cache. It is `<config>/plugin-data/<id>`, the id in lowercase (ids are
+/// unique ignoring case: `registerPlugin`). It follows the app's config folder, so a profile has
+/// its own, and it is not `plugins/<id>`, the folder the plugin is installed in, which an update
+/// replaces and an uninstall deletes.
+///
+/// The path is borrowed for the life of the app. The folder is made on the first call and made
+/// sure of again on a call a second or more after the last, so one deleted while the app runs
+/// comes back then: a plugin whose write into a kept path fails with `FileNotFound` calls again
+/// (a second later, if it called just now). Safe to call from any thread.
+///
+/// Null when no app is installed, when `plugin` is not registered, when its id is not a plain
+/// identifier (letters, digits, `-`, `_`; logged once), or when the folder could not be made
+/// (logged once, and tried again on a call a few seconds later).
+///
+/// On the web, as with `paletteFolder`, the path names no directory: it is the prefix under
+/// which `core.fs.read`, `readZ`, `write` and `remove` keep files in the page's storage. Those
+/// four calls work on both, so a plugin that writes `<folder>/recents.zon` through them needs
+/// no web case; `std.Io.Dir` calls on the path fail on the web.
+///
+/// Uninstalling a plugin leaves this folder, as it leaves the plugin's settings, so a reinstall
+/// picks up where it was. Removing it too would be an option of the app's uninstall (fizzy's
+/// `Editor.uninstallPlugin`), not built yet.
+pub fn pluginDataFolder(self: *Host, plugin: *const Plugin) ?[]const u8 {
+    return if (self.fizzy_api) |a| a.pluginDataFolder(plugin.id) else null;
+}
+
 /// A credential the plugin keeps on the user's behalf — a refresh token, an API key — stored
 /// by the app outside `settings.zon` (which is exported, diffed, watched and drawn in a pane):
 /// a `0600` file today, the OS keychain behind the same call later. Keys are plugin-namespaced
@@ -935,9 +962,18 @@ pub fn pluginInstallDir(self: *Host, id: []const u8) ?[]u8 {
 /// Rejects a second plugin claiming an already-registered `id` so routing can never become
 /// ambiguous — the dylib loader turns this into a failed load the user is told about
 /// (built-in ids always win, since they register first).
+///
+/// The same id in another case (`Graphl` beside `graphl`) is a duplicate too: ids name folders
+/// (`pluginDataFolder`, the install folder), and macOS and Windows keep one folder for both.
 pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
-    if (self.pluginById(plugin.id) != null) return error.DuplicatePluginId;
+    if (self.pluginByIdIgnoringCase(plugin.id)) |p| {
+        // The loader reports a duplicate by its id; this one it could not explain.
+        if (!std.mem.eql(u8, p.id, plugin.id))
+            std.log.warn("plugin '{s}' not registered: '{s}' is registered already, and ids differing only in case are one id", .{ plugin.id, p.id });
+        return error.DuplicatePluginId;
+    }
     try self.plugins.append(self.allocator, plugin);
+    if (self.fizzy_api) |a| if (a.vtable.pluginRegistered) |registered| registered(a.ctx, plugin.id);
 }
 
 /// Remove every contribution, service, and registry entry owned by `plugin`, then drop
@@ -950,6 +986,7 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
 /// this *before* `dlclose`, so that the active-selection ids (which may point into that
 /// image) are compared and reset while the memory is still mapped.
 pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
+    if (self.fizzy_api) |a| if (a.vtable.pluginUnregistered) |gone| gone(a.ctx, plugin.id);
     for (self.surfaces.items) |s| if (s.owner == plugin) self.dropSurfaceTitle(s.id);
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
@@ -1072,10 +1109,21 @@ fn removeOwnedSettingsSchemas(list: *std.ArrayListUnmanaged(SettingsSchema), plu
     list.items.len = w;
 }
 
-/// Lookup a registered plugin by stable id (`"pixi"`, `"workbench"`, …).
+/// Lookup a registered plugin by stable id (`"pixi"`, `"workbench"`, …), exactly as written.
 pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
     for (self.plugins.items) |plugin| {
         if (std.mem.eql(u8, plugin.id, id)) return plugin;
+    }
+    return null;
+}
+
+/// The registered plugin whose id is `id` in some case — `Graphl` finds `graphl` — which
+/// `registerPlugin` would refuse `id` beside. For a loader to ask before it opens a build, so a
+/// case variant fails with that said, not as a load that fails later. Everything keyed by an id
+/// once loaded (the loaded builds, settings, the store's lists) uses `pluginById`.
+pub fn pluginByIdIgnoringCase(self: *Host, id: []const u8) ?*Plugin {
+    for (self.plugins.items) |plugin| {
+        if (std.ascii.eqlIgnoreCase(plugin.id, id)) return plugin;
     }
     return null;
 }
@@ -1918,7 +1966,16 @@ fn noteAuthor(self: *Host, doc_id: u64, step: Step) void {
         },
         // A step joined keeps the author it began with (`mayMerge` decided it could join).
         .joined => doc.top = if (step.top != 0) step.top else step.id,
-        .undone, .redone => doc.top = step.top,
+        .undone, .redone => {
+            doc.top = step.top;
+            const made = self.stepAuthor(doc_id, step.id);
+            if (!made.same(who)) self.emitZon(if (step.kind == .undone) "fizzy.history.undone" else "fizzy.history.redone", events.StepTaken{
+                .path = if (self.docById(doc_id)) |d| d.owner.documentPath(d) else "",
+                .step = step.id,
+                .made_by = made,
+                .by = who,
+            });
+        },
     }
 }
 
@@ -2799,6 +2856,23 @@ test "pluginForExtension resolves by assignment, unique claimant, then fallback"
     try testing.expectEqual(@as(?*Plugin, null), host.pluginForExtension(".zig"));
 }
 
+test "registerPlugin refuses an id already registered, in any case" {
+    const log_level = testing.log_level;
+    testing.log_level = .err;
+    defer testing.log_level = log_level;
+
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vt = Plugin.VTable{};
+    var first = Plugin{ .state = undefined, .vtable = &vt, .id = "graphl", .display_name = "Graphl" };
+    var same = Plugin{ .state = undefined, .vtable = &vt, .id = "graphl", .display_name = "Graphl" };
+    var cased = Plugin{ .state = undefined, .vtable = &vt, .id = "GraphL", .display_name = "GraphL" };
+    try host.registerPlugin(&first);
+    try testing.expectError(error.DuplicatePluginId, host.registerPlugin(&same));
+    try testing.expectError(error.DuplicatePluginId, host.registerPlugin(&cased));
+    try testing.expectEqual(@as(usize, 1), host.plugins.items.len);
+}
+
 test "pluginForExtension honors a user assignment and ignores a stale one" {
     const Fake = struct {
         var override: ?[]const u8 = null;
@@ -2831,6 +2905,8 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
 
     // Only the one vtable member `pluginForExtension` reaches; the rest stay unreachable here.
     var api_vt: EditorAPI.VTable = undefined;
+    api_vt.pluginRegistered = null;
+    api_vt.pluginUnregistered = null;
     api_vt.extensionOwnerOverride = Fake.extensionOwnerOverride;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
@@ -3221,6 +3297,8 @@ test "a claim on a document holds an override of its owner's command too" {
     };
     S.owner = &pixi;
     var api_vt: EditorAPI.VTable = undefined;
+    api_vt.pluginRegistered = null;
+    api_vt.pluginUnregistered = null;
     api_vt.activeDoc = S.active;
     api_vt.refresh = S.refresh;
     var ctx: u8 = 0;
@@ -3528,6 +3606,8 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
 
     // ...and something required has the app ask for it.
     var api_vt: EditorAPI.VTable = undefined;
+    api_vt.pluginRegistered = null;
+    api_vt.pluginUnregistered = null;
     api_vt.askCommandArguments = S.ask;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
@@ -3841,4 +3921,41 @@ test "historyGoToWhy answers the owner's reason by name, and nothing when it wen
     const doc: DocHandle = .{ .ptr = &state, .owner = &plugin, .id = 1 };
     try testing.expectEqualStrings("PersonBusy", plugin.historyGoToWhy(doc, 7).?);
     try testing.expect(plugin.historyGoToWhy(doc, 3) == null);
+}
+
+test "undoing a step someone else made is announced, with whose it was; one's own is not" {
+    var host: Host = .init(std.testing.allocator);
+    defer host.deinit();
+    // Something listens (the control server's `/events`), so events are queued.
+    host.listening.store(true, .release);
+    const doc: u64 = 7;
+    const claude: Author = .{ .kind = .agent, .plugin = "agent", .session = 1, .label = "Claude" };
+
+    const outer = host.act(claude);
+    host.recordStep(doc, .{ .kind = .added, .id = 1, .top = 1 });
+    host.endAct(outer);
+    host.setInputAuthor(.person);
+    host.recordStep(doc, .{ .kind = .added, .id = 2, .top = 2 });
+
+    // The person undoes their own step: nothing to say.
+    host.recordStep(doc, .{ .kind = .undone, .id = 2, .top = 1 });
+    try std.testing.expectEqual(@as(usize, 0), host.event_queue.items.len);
+
+    // The person undoes Claude's: said, with whose it was and who took it back.
+    host.recordStep(doc, .{ .kind = .undone, .id = 1, .top = 0 });
+    try std.testing.expectEqual(@as(usize, 1), host.event_queue.items.len);
+    const e = host.event_queue.items[0];
+    try std.testing.expectEqualStrings("fizzy.history.undone", e.name);
+    var scratch: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer scratch.deinit();
+    const taken = try events.parse(events.StepTaken, scratch.allocator(), .{ .name = e.name, .payload = e.payload });
+    try std.testing.expectEqual(@as(u64, 1), taken.step);
+    try std.testing.expect(taken.made_by.same(claude));
+    try std.testing.expectEqual(Author.Kind.person, taken.by.kind);
+
+    // Claude puts it back itself: its own step, nothing to say.
+    const again = host.act(claude);
+    host.recordStep(doc, .{ .kind = .redone, .id = 1, .top = 1 });
+    host.endAct(again);
+    try std.testing.expectEqual(@as(usize, 1), host.event_queue.items.len);
 }

@@ -68,6 +68,9 @@ drawn_frame: i128 = 0,
 /// Hash of the last `init`'s `rect` + `witness`, for auto-dirty.
 last_hash: u64 = 0,
 
+/// The queue the bracketed draws go into (`init`): the subwindow's own, or a deferred one in its
+/// place (`dvui.Window.defer_render`: a front-to-back block, a `Picture`), and where in it they start.
+cmd_queue: *std.ArrayList(dvui.RenderCommand) = undefined,
 cmd_start: usize = undefined,
 prev_rendering: bool = undefined,
 /// Fizzy addition: how the backdrop gets the pixels under it. `.replay` is upstream's — defer
@@ -143,7 +146,10 @@ pub fn init(self: *BlurBackdrop, rect: Rect, witness: anytype) void {
 
     const cw = dvui.currentWindow();
     const sw = cw.subwindows.current() orelse &cw.subwindows.stack.items[0];
-    self.cmd_start = sw.render_cmds.items.len;
+    // Where the bracketed draws will be queued. Inside a front-to-back block or a `Picture` that is
+    // their deferred queue, not the subwindow's, which then never grows and the capture was empty.
+    self.cmd_queue = if (cw.defer_render) |q| &q.normal else &sw.render_cmds;
+    self.cmd_start = self.cmd_queue.items.len;
 
     // Rendering defaults to immediate (draws straight to the current
     // target as each widget call happens), so without this the bracketed
@@ -181,8 +187,7 @@ pub fn deinit(self: *BlurBackdrop) void {
     const cw = dvui.currentWindow();
     _ = dvui.renderingSet(self.prev_rendering);
 
-    const sw = cw.subwindows.current() orelse &cw.subwindows.stack.items[0];
-    // Left in the subwindow's normal queue (not stripped, not replayed here)
+    // Left in the queue they went into (not stripped, not replayed here)
     // so they draw exactly once, in their natural queue order, via the
     // normal `Window.endRendering` deferred replay - same as any other
     // widget's deferred draws. Replaying them immediately here (as an
@@ -193,7 +198,7 @@ pub fn deinit(self: *BlurBackdrop) void {
     // painted right over content already drawn early by an immediate
     // replay - the bracketed content (e.g. a checkerboard background)
     // vanishing behind the enclosing window every dirty frame.
-    const cmds = sw.render_cmds.items[self.cmd_start..];
+    const cmds = self.cmd_queue.items[self.cmd_start..];
 
     var r = self.rect;
     if (r.empty()) return;

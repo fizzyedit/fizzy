@@ -1698,6 +1698,9 @@ fn startDownload(id: []const u8, release: store.ShardRelease, opts: DownloadOpti
 /// wasm *compile* error rather than dead code.
 fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
+    // Before anything is written into `plugins/<id>`: on macOS and Windows a case variant's
+    // folder is that folder, and the download would overwrite the plugin installed there.
+    if (app.refuseCaseClash(id)) return;
     removeJob(id); // replace any prior failed job
 
     const job = buildJob(id, url, sha256, opts) catch {

@@ -239,6 +239,9 @@ pub const Viewport = struct {
     /// Framed by the OS as any app's window is (`ViewportFrame.native`): its title bar, frame and
     /// hit-testing are the OS's own, and nothing of fizzy's dresses it.
     native: bool = false,
+    /// Moved by the app under a drag that another window holds (`viewportHeld`): the pointer passes
+    /// through it, and it is not made key as it shows.
+    held: bool = false,
     /// macOS, framed by the app: the size its shadow was last taken at, and how many frames more
     /// to take it again. AppKit shapes a clear window's shadow from what is drawn in it, so it is
     /// taken again once the window shows and after it changes size, a frame late, once the
@@ -1456,6 +1459,26 @@ pub fn viewportOverlayPhoto(_: *SDLBackend, vp: *Viewport, photo: ?OverlayPhoto)
 /// (`viewportOverlayGlass`).
 const glass_still: f64 = 0.5;
 
+/// The usable part of the display under the pointer — less the menu bar and the Dock — in the main
+/// window's frame (physical pixels from its top left): where a window opened there must fit.
+pub fn viewportUsableAtPointer(self: *SDLBackend) viewport_map.Rect {
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    const p: c.SDL_Point = .{ .x = @intFromFloat(@floor(gx)), .y = @intFromFloat(@floor(gy)) };
+    const display = c.SDL_GetDisplayForPoint(&p);
+    var r: c.SDL_Rect = .{};
+    if (display == 0 or !c.SDL_GetDisplayUsableBounds(display, &r)) return .{};
+    const at = self.mainOnScreen();
+    const d = self.density();
+    return .{
+        .x = (@as(f32, @floatFromInt(r.x)) - at.x) * d,
+        .y = (@as(f32, @floatFromInt(r.y)) - at.y) * d,
+        .w = @as(f32, @floatFromInt(r.w)) * d,
+        .h = @as(f32, @floatFromInt(r.h)) * d,
+    };
+}
+
 /// The display the main window is on, in the main window's frame (physical pixels from its top
 /// left): what an overlay covers.
 pub fn viewportDisplayInMain(self: *SDLBackend) viewport_map.Rect {
@@ -1629,6 +1652,17 @@ pub fn viewportSeeThrough(_: *SDLBackend, vp: *Viewport, on: bool) void {
     vp.see_through = on;
 }
 
+/// `vp`'s window moved by the app under a drag another window holds, or not (`Viewport.held`): the
+/// pointer passes through it to what is under — the window it would land in, asked for by where
+/// the pointer is (`windowAtPointer`) — and it shows without taking the keyboard. Let go: an
+/// ordinary window, made key.
+pub fn viewportHeld(_: *SDLBackend, vp: *Viewport, on: bool) void {
+    if (vp.held == on) return;
+    vp.held = on;
+    if (comptime builtin.target.os.tag == .macos) fizzy_macos_window_held(cocoaWindow(vp.window), @intFromBool(on));
+}
+extern fn fizzy_macos_window_held(nswindow: ?*anyopaque, on: c_int) void;
+
 /// `vp`'s window `alpha` opaque, all of it — its material too.
 pub fn viewportFade(_: *SDLBackend, vp: *Viewport, alpha: f32) void {
     const a = std.math.clamp(alpha, 0, 1);
@@ -1746,6 +1780,9 @@ pub fn viewportPlaceMain(self: *SDLBackend, vp: *Viewport, frame: viewport_map.R
     const was = vp.screen;
     placeWindow(vp, placed.screen, was);
     vp.screen = placed.screen;
+    // A window of the OS's own frame keeps its part of the frame in its band where it now is, as
+    // the OS moving it does (`viewportFollowWindow`): it can go on as a window of its own.
+    if (vp.native) vp.frame = viewport_map.frameOfScreen(vp.band, vp.anchor, vp.density, placed.screen);
     return placed.frame;
 }
 
@@ -2107,6 +2144,19 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
             return self.viewportPoint(vp);
         }
     };
+    // macOS: the app's window in front under the pointer, as the OS stacks them. Read from the
+    // slots and `Viewport.under_main`, where the main window and a float's window overlapped, a
+    // float dragged in the main window over the overlap went into the main window rather than the
+    // window in front of it (the user). A window the pointer passes through (a carry window, one
+    // moved under a drag) is not found; one gone to its ghost (`see_through`) falls to what is under.
+    if (comptime builtin.target.os.tag == .macos) if (fizzy_macos_app_window_at_pointer()) |front| {
+        if (front == cocoaWindow(self.window)) {
+            const at = self.mainOnScreen();
+            const d = self.density();
+            return .{ .x = (gx - at.x) * d, .y = (gy - at.y) * d };
+        }
+        for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (cocoaWindow(vp.window) == front and !vp.passive and !vp.see_through) return self.viewportPoint(vp);
+    };
     // Over the main window, a window under it in the stacking (`Viewport.under_main`) is not
     // what the pointer is over: the main window is.
     const origin = self.mainOnScreen();
@@ -2116,7 +2166,9 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     const over_main = gx >= origin.x and gy >= origin.y and gx < origin.x + @as(f32, @floatFromInt(mw)) and gy < origin.y + @as(f32, @floatFromInt(mh));
     for (&self.viewport_slots) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
-        if (vp.passive or vp.see_through) continue;
+        // Nor one moved under a drag another window holds (`held`): it is under the pointer the
+        // whole way, and the drag would be read in its own band.
+        if (vp.passive or vp.see_through or vp.held) continue;
         // Nobody sees it, on another Space: the pointer is not over it, wherever it lies there.
         // Read as over it, a float dragged in the main window's full screen Space vanished into the
         // band of a window left on the desktop as it crossed where that window lies (the user).
@@ -2473,8 +2525,11 @@ pub fn renderPresent(self: *SDLBackend) void {
             const ns = cocoaWindow(vp.window);
             if (vp.frame_pending) {
                 vp.frame_pending = false;
+                // A window of the OS's own frame shows its part below its title bar's band
+                // (`viewportFollowWindow`): the window that much taller, and as far up.
+                const band: f64 = if (vp.native) @round(platform.macos_monitor.titlebarStrip(vp.window, 0, 0)) else 0;
                 const r = vp.screen;
-                fizzy_native_viewport_set_frame(ns, @floatFromInt(r.x), @floatFromInt(r.y), @floatFromInt(r.w), @floatFromInt(r.h));
+                fizzy_native_viewport_set_frame(ns, @floatFromInt(r.x), @as(f64, @floatFromInt(r.y)) - band, @floatFromInt(r.w), @as(f64, @floatFromInt(r.h)) + band);
             } else fizzy_native_viewport_transact(ns);
             if (reshaped) {
                 vp.carry_radius_shown = vp.carry_radius;
@@ -2545,7 +2600,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         const vp = if (slot.*) |*v| v else continue;
         if (!vp.mapped) {
             // Only while the app is active: one opened behind another app's window took its keyboard.
-            _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, if (vp.native and appActive()) "1" else "0");
+            _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, if (vp.native and !vp.held and appActive()) "1" else "0");
             _ = c.SDL_ShowWindow(vp.window);
             _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
             vp.mapped = true;

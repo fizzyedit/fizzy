@@ -881,6 +881,31 @@ Your own state is just a variable you own — a module-level `var`, adopted into
 during `register` and read back via `@ptrCast` in your vtable functions. There is no separate
 `Globals`/storage file to write.
 
+What a plugin keeps **between runs** that is not a setting — its recents, an index, a cache —
+goes in **`host.pluginDataFolder(&plugin)`**: `<config>/plugin-data/<id>`, the id in lowercase.
+Plugin ids are unique ignoring case (`host.registerPlugin` refuses `Graphl` beside `graphl`, and
+a loader asks `host.pluginByIdIgnoringCase` before it opens a build), so the folder is the same
+on every filesystem. It follows the
+app's config folder, so a `FIZZY_PROFILE` sandbox gets its own, and it is not `plugins/<id>`, the
+folder the plugin is installed in, which an update replaces and an uninstall deletes. It is
+always local, whether or not the open folder is on a mount (§3.12).
+
+- The path is borrowed for the life of the app. The folder is made on the first call and made
+  sure of again on a call a second or more after the last, so a plugin whose write into a kept
+  path fails with `FileNotFound` calls again (a second later, if it called just now). Safe from
+  any thread (an indexer, an LSP client): the app sets each plugin's entry up as it registers.
+- Null when no app is installed (a unit test's bare `Host`), when the plugin is not registered,
+  when its id is not a plain identifier (letters, digits, `-`, `_`), or when the folder could not
+  be made: logged once, and tried again on a call a few seconds later.
+- **On the web**, as with `paletteFolder`, the path names no directory: it is the prefix under
+  which `core.fs.read`, `readZ`, `write` and `remove` keep files in the page's storage. Those
+  four calls do the same on the desktop, so a plugin that uses them needs no web case;
+  `std.Io.Dir` calls on the path fail there.
+- **Uninstall leaves it**, as it leaves the plugin's settings, so a reinstall picks up where it
+  was. Removing it too would be an option of the app's uninstall (fizzy's
+  `Editor.uninstallPlugin`), not built yet.
+- A credential goes in `host.setSecret` instead, never in a file here.
+
 ### 3.4 Commands — how a plugin contributes its *own* features
 
 Anything a plugin **invokes** rather than implements as a Fizzy callback — plugin-specific

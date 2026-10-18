@@ -586,9 +586,11 @@ fn recordStep(self: *const Document, step: sdk.Step) void {
 
 /// What `history.end` or `pushComplete` did, reported as a step: after the steps an edit after
 /// going back put on the line (`recordGoneBack`).
-pub fn recordCommitted(self: *const Document, c: tc.History.Committed) void {
+pub fn recordCommitted(self: *Document, c: tc.History.Committed) void {
     if (c.back > 0) self.recordGoneBack(c.back);
     self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false, null);
+    // Last: the steps reported above are read from the history.
+    if (!c.joined) self.history.trim(sdk.allocator(), @import("../plugin.zig").statePtr().settings.history_limit.get());
 }
 
 /// The steps an edit after going back put on the line below it (`tc.History.keepGoneBack`): the
