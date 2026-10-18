@@ -70,6 +70,22 @@ pub fn append(
     });
 }
 
+/// This transaction's undo as a transaction of its own (owned): its edits newest first, each
+/// with `removed` and `inserted` swapped, and the selections swapped. Applying it forward is
+/// `applyInverse`.
+pub fn inverted(self: Transaction, gpa: Allocator) !Transaction {
+    var out: Transaction = .{ .sel_before = self.sel_after, .sel_after = self.sel_before };
+    errdefer out.deinit(gpa);
+    try out.edits.ensureTotalCapacity(gpa, self.edits.items.len);
+    var i = self.edits.items.len;
+    while (i > 0) {
+        i -= 1;
+        const e = self.edits.items[i];
+        try out.append(gpa, e.pos, e.inserted, e.removed);
+    }
+    return out;
+}
+
 /// Re-apply (redo): forward, in order. Either the whole transaction lands or the buffer is
 /// left unchanged — a mid-list failure used to leave a half-applied state that made every
 /// subsequent undo retry hit `EditOutOfRange`.

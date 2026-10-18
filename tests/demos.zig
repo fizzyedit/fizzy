@@ -64,6 +64,10 @@ const DemoMoment = struct { now: f64, cursor: usize, print: u64 };
 const bundled_seek_seed: u64 = 0xf122_de40;
 const bundled_random_seeks = 16;
 
+test "demo: the rail's Files anchor the scripts spell out is the one fizzy publishes" {
+    try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
+}
+
 test "demo: every bundled demo plays to the end through fizzy's stage, and a seek lands on what playing reached" {
     var app: BundledApp = undefined;
     try app.up();

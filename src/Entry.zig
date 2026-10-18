@@ -100,7 +100,7 @@ fn startOptions() dvui.App.StartOptions {
         }
         // A profile is the config folder itself (`app.profile`), for SDL's preferences too.
         const pref: ?[:0]const u8 = if (@import("app").profile.root) |root|
-            std.fmt.bufPrintZ(&pref_path_buf, "{s}", .{root}) catch null
+            std.fmt.bufPrintSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
         else
             paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
         if (pref) |pref_path| {
@@ -228,6 +228,8 @@ pub fn main(main_init: std.process.Init) !u8 {
                 }
             }.f,
         });
+        // Before the lock, which would hand this launch to a running fizzy.
+        if (printControlPath(appAllocator(), main_init)) |code| return code;
         try singleton.earlyStartup(appAllocator(), main_init);
         fizzy.core.profile.phase(main_init.io, if (restart.startedByHandover()) "lock deferred (handover)" else "lock");
 
@@ -274,7 +276,7 @@ const sdk_version = std.fmt.comptimePrint("{f} ({x})", .{
 fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
     // A refresh record, counted as a frame's cause; printed only for `FIZZY_LOG_REFRESH`.
     if (fizzy.core.profile.interceptLog(level, scope, format, args) and !refresh_log_active) return;
-    if (comptime scope == .dvui and level == .debug and @import("builtin").mode != .Debug) return;
+    if (comptime scope == .dvui and level == .debug and @import("builtin").mode != .debug) return;
     if (!refresh_log_active) fizzy.OutputLog.append(level, scope, format, args);
     dvui.App.logFn(level, scope, format, args);
 }
@@ -354,7 +356,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     app_ptr.* = .{
         .allocator = allocator,
         .window = win,
-        .root_path = try allocator.dupeZ(u8, path),
+        .root_path = try allocator.dupeSentinel(u8, path, 0),
     };
 
     const editor_ptr = try allocator.create(Editor);
@@ -373,6 +375,8 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     // Whether dvui went quiet at the end of each frame, for the `automation` service's `settled`.
     if (comptime @hasDecl(dvui.backend, "frame_ended_hook")) dvui.backend.frame_ended_hook = frameEnded;
+    // Fizzy takes its floats out into windows itself (`Popout`).
+    if (comptime @hasDecl(dvui.backend, "floating_os_windows")) dvui.backend.floating_os_windows = .none;
 
     // Hand the window to the listener thread and queue our own argv so the
     // first frame opens any files / project folder supplied on the command line.
@@ -504,8 +508,19 @@ fn gpuTotals() ?fizzy.core.profile.Gpu {
     if (comptime !@hasDecl(dvui.backend, "gpuTotals")) return null;
     const t = dvui.backend.gpuTotals();
     var out: fizzy.core.profile.Gpu = .{};
-    inline for (std.meta.fields(fizzy.core.profile.Gpu)) |f| @field(out, f.name) = @truncate(@field(t, f.name));
+    inline for (@typeInfo(fizzy.core.profile.Gpu).@"struct".field_names, @typeInfo(fizzy.core.profile.Gpu).@"struct".field_types, @typeInfo(fizzy.core.profile.Gpu).@"struct".field_attrs) |f_name, _, _| @field(out, f_name) = @truncate(@field(t, f_name));
     return out;
+}
+
+/// The kinds of window material the backend can show (`core.material.Kinds`), from its own answer,
+/// field for field; `none` alone from a backend that does not say.
+fn materialOffered() fizzy.core.material.Kinds {
+    var k: fizzy.core.material.Kinds = .{};
+    if (comptime @hasDecl(dvui.backend, "materialKinds")) {
+        const b = dvui.currentWindow().backend.impl.materialKinds();
+        inline for (@typeInfo(fizzy.core.material.Kinds).@"struct".field_names) |f| @field(k, f) = @field(b, f);
+    }
+    return k;
 }
 
 /// One run of the app's frame.
@@ -524,6 +539,9 @@ fn frameOnce() !dvui.App.Result {
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);
+    // What the app's windows are made of, as the backend can show it, for every glass drawn this
+    // frame (`core.material`). `.none` until the app has a setting for it.
+    fizzy.core.material.publish((fizzy.core.material.Material{}).effective(materialOffered()));
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");
@@ -547,3 +565,50 @@ fn frameOnce() !dvui.App.Result {
 }
 
 var frame_target: fizzy.core.FrameTarget = .{};
+
+/// `fizzy --control-path` (with `--profile` or `FIZZY_PROFILE` as any launch takes them): print where
+/// the control server listens, for a script to hand `curl --unix-socket`, and exit: 0 with the path,
+/// 1 with why not, never on into a launch. Null when not asked. The profile and config folder are
+/// resolved as a launch resolves them (`singleton.resolveArgs`, `configFolder` falling back to the
+/// executable's folder), so it is the path a fizzy started the same way listens on, running or not.
+/// A Windows release is a GUI program with no console: there, capture it (`$p = fizzy --control-path`).
+fn printControlPath(allocator: std.mem.Allocator, main_init: std.process.Init) ?u8 {
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    var it = std.process.Args.Iterator.initAllocator(main_init.minimal.args, allocator) catch return null;
+    defer it.deinit();
+    var raw: std.ArrayList([]const u8) = .empty;
+    defer raw.deinit(allocator);
+    var asked = false;
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--control-path")) asked = true else raw.append(allocator, arg) catch return 1;
+    }
+    if (!asked) return null;
+    const path = controlPath(allocator, main_init, raw.items) catch |err| {
+        std.log.err("--control-path: {t}", .{err});
+        return 1;
+    };
+    defer allocator.free(path);
+    var buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+    var out = std.Io.File.stdout().writer(main_init.io, &buf);
+    out.interface.print("{s}\n", .{path}) catch return 1;
+    out.interface.flush() catch return 1;
+    return 0;
+}
+
+fn controlPath(allocator: std.mem.Allocator, main_init: std.process.Init, raw: []const []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = std.process.currentPath(main_init.io, &cwd_buf) catch 0;
+    const env_profile: ?[]const u8 = if (std.c.getenv(@import("app").profile.env_var)) |v| std.mem.span(v) else null;
+    const resolved = try singleton.resolveArgs(allocator, cwd_buf[0..cwd_len], raw, env_profile);
+    defer singleton.freeResolvedArgv(allocator, resolved.argv);
+    defer if (resolved.profile) |p| allocator.free(p);
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const config = resolved.profile orelse config: {
+        // The editor's fallback (`Editor.init`): the executable's folder, where it runs from.
+        const exe_dir = try std.process.executableDirPathAlloc(main_init.io, a);
+        break :config try fizzy.core.paths.configFolder(a, main_init.io, a, fizzy.core.platform.processEnviron(), exe_dir, AppInfo.current.config_dir);
+    };
+    return @import("app").control.socketPath(allocator, config);
+}

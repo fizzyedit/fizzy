@@ -190,7 +190,7 @@ fn setCloaked(win: *dvui.Window, cloaked: bool) void {
     const win32 = @import("win32");
     const value: u32 = @intFromBool(cloaked);
     // DWMWA_CLOAK.
-    _ = win32.graphics.dwm.DwmSetWindowAttribute(@ptrCast(hwnd), @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(13)), &value, @sizeOf(u32));
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(@ptrCast(hwnd), @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @fromBackingInt(@intCast(13))), &value, @sizeOf(u32));
 }
 
 pub fn isMaximized(win: *dvui.Window) bool {
@@ -321,7 +321,12 @@ pub fn isFullscreenChromeHidden(win: *dvui.Window) bool {
 /// returns `WS_SYSMENU` and its caption buttons, and the backdrop's frame with it). Applying it all
 /// unconditionally every frame was a `SetWindowPos(SWP_FRAMECHANGED)` — a `WM_NCCALCSIZE` — a
 /// library load and a class-brush write each frame on Windows, and two style-mask writes on macOS.
+/// Whether the app dresses its windows itself (`setStyle`, `setBackground`), as fizzy does: then the
+/// backend leaves a plain dvui app's look (`nativeTitleBar`) off its main window.
+pub var app_dresses_windows = false;
+
 pub fn setStyle(win: *dvui.Window) void {
+    app_dresses_windows = true;
     if (builtin.target.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(win.backend.impl.window),
@@ -344,7 +349,7 @@ pub fn setStyle(win: *dvui.Window) void {
         // borderless, it was never titled.
         if (comptime own_backend) for (&win.backend.impl.viewport_slots) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
-            if (vp.passive or vp.menu or vp.app_frame) continue;
+            if (vp.passive or vp.menu or vp.app_frame or vp.native) continue;
             const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
             styleTitled(ns);
         };
@@ -408,6 +413,38 @@ fn styleTitled(raw_ptr: *anyopaque) void {
     }
 }
 
+extern fn fizzy_macos_window_has_plain_backdrop(nswindow: ?*anyopaque) c_int;
+extern fn fizzy_macos_window_plain_backdrop(nswindow: ?*anyopaque, r: f64, g: f64, b: f64, radius: f64) void;
+extern fn fizzy_macos_window_corner_radius() f64;
+
+/// The OS's own title bar on `window` — its title, its buttons — coloured as the window is
+/// (`color`, the theme's window fill), the app's content below it: how a plain dvui app's windows
+/// look on this backend (`SDLBackend.floatingWindowOs`, `SDLBackend.dressPlainWindows`). Fizzy's
+/// own windows draw their title bar themselves (`setStyle`). Cheap to call again: each setter
+/// is skipped when the window already has it.
+/// - macOS: fizzy's own shape (`styleTitled`), its content under a transparent title bar, but its
+///   title showing: the backend keeps that band clear and in the window's colour
+///   (`platform.macos_monitor.titlebarStrip`), and the window goes into and out of full screen as fizzy's does.
+/// - Windows: the caption in that colour (DWM, Windows 11), its text the theme's.
+/// - Linux: the window manager's own, as it draws it.
+pub fn nativeTitleBar(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color, dark: bool) void {
+    switch (builtin.target.os.tag) {
+        .macos => {
+            const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
+            styleTitled(raw_ptr);
+            const ns = objc.Object.fromId(raw_ptr);
+            if (ns.msgSend(c_long, "titleVisibility", .{}) != 0) ns.msgSend(void, "setTitleVisibility:", .{@as(c_long, 0)});
+            skin(raw_ptr, color, dark);
+            // Clear, over a backdrop in the window's colour that follows its picture on its way
+            // into or out of full screen, as fizzy's glass does.
+            const f = color.toRGBA();
+            fizzy_macos_window_plain_backdrop(raw_ptr, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, fizzy_macos_window_corner_radius());
+        },
+        .windows => win32_titlebar.nativeCaption(window, color, text, dark),
+        else => {},
+    }
+}
+
 /// A window of fizzy's skinned as the app is: its background — what AppKit draws its title bar
 /// with, the one a fullscreen window reveals at the top among them — `color`, and its appearance
 /// light or dark by the app's theme, not the system's, so its title bar, traffic lights and
@@ -424,9 +461,17 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
         @as(f64, @floatFromInt(color.a)) / 255.0,
     });
     // This sets both the titlebar and the window background color — clear on a window of Liquid
-    // Glass (`liquidGlass`), whose colour is under its glass.
+    // Glass (`liquidGlass`), whose colour is under its glass, and on one with a backdrop in its
+    // colour (`nativeTitleBar`), whose colour is the backdrop's: on its way into or out of full
+    // screen the window stands at the screen's size while the backdrop follows its picture, and a
+    // background in the window's colour filled all of the screen round the picture (the user).
     const glass = fizzy_macos_window_has_liquid_glass(raw_ptr) != 0;
-    window.msgSend(void, "setBackgroundColor:", .{if (glass) NSColor.msgSend(objc.Object, "clearColor", .{}).value else new_color.value});
+    if (fizzy_macos_window_has_plain_backdrop(raw_ptr) != 0) {
+        const f = color.toRGBA();
+        fizzy_macos_window_plain_backdrop(raw_ptr, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, fizzy_macos_window_corner_radius());
+    } else {
+        window.msgSend(void, "setBackgroundColor:", .{if (glass) NSColor.msgSend(objc.Object, "clearColor", .{}).value else new_color.value});
+    }
 
     // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
     if (objc.getClass("NSAppearance")) |NSAppearance| {
@@ -447,6 +492,7 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
 }
 
 pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
+    app_dresses_windows = true;
     if (builtin.target.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
             c.SDL_GetWindowProperties(win.backend.impl.window),

@@ -634,12 +634,12 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
 
     var phys: [5]dvui.Rect.Physical = undefined;
     for (pieces, &phys) |r, *out| out.* = wrs.rectToPhysical(r);
-    tr.prev = phys[@intFromEnum(Piece.prev)];
-    tr.play = phys[@intFromEnum(Piece.play)];
-    tr.next = phys[@intFromEnum(Piece.next)];
-    tr.close = phys[@intFromEnum(Piece.close)];
+    tr.prev = phys[@backingInt(Piece.prev)];
+    tr.play = phys[@backingInt(Piece.play)];
+    tr.next = phys[@backingInt(Piece.next)];
+    tr.close = phys[@backingInt(Piece.close)];
     const hovered: ?Piece = if (tr.pointer) |pt| for (phys, 0..) |r, i| {
-        if (i != @intFromEnum(Piece.track) and r.contains(pt)) break @enumFromInt(i);
+        if (i != @backingInt(Piece.track) and r.contains(pt)) break @fromBackingInt(@intCast(i));
     } else null else null;
 
     barGlass(fw.data().id, &phys, s, hovered, apart);
@@ -650,11 +650,11 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const ink = theme().color(.content, .text);
     const playing = player.state == .playing or (player.state == .seeking and player.after_seek == .play);
     const play_glyph: Glyph = if (playing) .pause else if (player.state == .ended) .replay else .play;
-    barIcon(bounds, pieces[@intFromEnum(Piece.prev)], .prev, ink.opacity(0.8));
-    barIcon(bounds, pieces[@intFromEnum(Piece.play)], play_glyph, ink);
-    barIcon(bounds, pieces[@intFromEnum(Piece.next)], .next, ink.opacity(0.8));
-    barIcon(bounds, pieces[@intFromEnum(Piece.close)], .close, ink.opacity(0.65));
-    tr.track = barTrack(player, tape, bounds, pieces[@intFromEnum(Piece.track)], ink);
+    barIcon(bounds, pieces[@backingInt(Piece.prev)], .prev, ink.opacity(0.8));
+    barIcon(bounds, pieces[@backingInt(Piece.play)], play_glyph, ink);
+    barIcon(bounds, pieces[@backingInt(Piece.next)], .next, ink.opacity(0.8));
+    barIcon(bounds, pieces[@backingInt(Piece.close)], .close, ink.opacity(0.65));
+    tr.track = barTrack(player, tape, bounds, pieces[@backingInt(Piece.track)], ink);
     return std.math.clamp(p * 1.6, 0, 1);
 }
 
@@ -671,9 +671,9 @@ fn barGeometry(center: dvui.Point, full_w: f32, p: f32, out: *[5]dvui.Rect) f32 
     var widths = piece_d;
     var round_w: f32 = 0;
     for (piece_d, 0..) |d, i| {
-        if (i != @intFromEnum(Piece.track)) round_w += d;
+        if (i != @backingInt(Piece.track)) round_w += d;
     }
-    widths[@intFromEnum(Piece.track)] = @max(80, full_w - round_w - 4 * bar_gap);
+    widths[@backingInt(Piece.track)] = @max(80, full_w - round_w - 4 * bar_gap);
     const gap = bar_gap * apart;
     var total: f32 = 4 * gap;
     for (widths) |w| total += w;
@@ -694,7 +694,7 @@ fn barGlass(id: dvui.Id, pieces: []const dvui.Rect.Physical, s: f32, hovered: ?P
     var bubbles: [5]core.dialogs.Bubble = undefined;
     for (pieces, bubbles[0..pieces.len], 0..) |r, *b, i| b.* = .{
         .rect = r,
-        .light = if (hovered != null and @intFromEnum(hovered.?) == i) core.dialogs.bubble_hover else 0,
+        .light = if (hovered != null and @backingInt(hovered.?) == i) core.dialogs.bubble_hover else 0,
     };
     core.dialogs.glassBubbles(id, bubbles[0..pieces.len], s, .{ .merge = bar_merge, .shadow = apart });
 }
@@ -715,7 +715,7 @@ fn barIcon(bounds: dvui.Rect, r: dvui.Rect, glyph: Glyph, color: dvui.Color) voi
         .stroke_color = .{ .color = color },
         .fill_color = .{ .color = color },
     }, .{
-        .id_extra = @intFromEnum(glyph),
+        .id_extra = @backingInt(glyph),
         .rect = .{ .x = r.x + (r.w - d) / 2 - bounds.x, .y = r.y + (r.h - d) / 2 - bounds.y, .w = d, .h = d },
     });
 }

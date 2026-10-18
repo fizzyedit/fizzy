@@ -265,8 +265,12 @@ account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
 /// `NativeMenuItem`.
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
-/// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
+/// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`. One
+/// per id, the active one (`CommandSlot`), in the order the ids were first registered.
 commands: std.ArrayListUnmanaged(Command) = .empty,
+/// Each registered id's registrations and where its active command sits in `commands`. Keys are
+/// the host's own copies, so an id outlives the plugin that registered it.
+command_slots: std.StringHashMapUnmanaged(CommandSlot) = .empty,
 /// The commands run on documents lately, oldest first and at most `activity_cap`, for each
 /// document's panes to show as they run: by whoever ran them (a person, a tape, an agent). Titles
 /// are copies, so an entry outlives the plugin that ran it.
@@ -278,7 +282,8 @@ activity_muted: bool = false,
 /// (`Command.Call.showing_ms`), for whoever called it.
 last_showing_ms: u32 = 0,
 /// The command whose body is running, if any: the edits made meanwhile are its (`documentEdited`).
-running_command: ?*const Command = null,
+/// A copy, so the registry can change under a running command (`registerCommand`'s `replaces`).
+running_command: ?Command = null,
 /// While above 0, documents opened or created land beside the pane the person is in
 /// (`EditorAPI.OpenOptions.beside`), not in it: an agent's work opens where it will be seen,
 /// rather than over the person's document and then moved. Nested scopes count; UI thread only.
@@ -309,6 +314,12 @@ step_authors: std.AutoHashMapUnmanaged(u64, DocAuthors) = .empty,
 /// tests assert it stays 0.
 unattributed_steps: u64 = 0,
 next_claim_id: u32 = 1,
+/// Commands answering in a later frame (`Command.Call.later`), until `finishCall`. UI thread.
+calls_pending: std.ArrayListUnmanaged(PendingCall) = .empty,
+next_call_ticket: u32 = 1,
+/// The `runWith` call running now, innermost (`callResolved`): `finishCall` on its ticket answers
+/// it before it returns.
+running_call: ?*Command.Call = null,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 /// Who listens for which events (`subscribe`), and what plugins say they announce
@@ -375,8 +386,16 @@ pub fn deinit(self: *Host) void {
     self.account_providers.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
+    var slots = self.command_slots.iterator();
+    while (slots.next()) |e| {
+        self.allocator.free(e.key_ptr.*);
+        e.value_ptr.bases.deinit(self.allocator);
+        e.value_ptr.overrides.deinit(self.allocator);
+    }
+    self.command_slots.deinit(self.allocator);
     self.language_support.deinit(self.allocator);
     self.subscriptions.deinit(self.allocator);
+    self.calls_pending.deinit(self.allocator);
     self.event_declarations.deinit(self.allocator);
     for (self.event_queue.items) |e| freeQueued(self.allocator, e);
     self.event_queue.deinit(self.allocator);
@@ -939,7 +958,8 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(RailItemContribution, &self.rail_items, plugin);
     removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
-    removeOwned(Command, &self.commands, plugin);
+    self.removeCommandsOf(plugin);
+    self.failCallsOf(plugin);
     {
         var i: usize = 0;
         while (i < self.claims.items.len) {
@@ -991,9 +1011,33 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
 /// this and more for a plugin that is going away while the app runs.
 pub fn withdrawPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(ServiceEntry, &self.services, plugin);
-    removeOwned(Command, &self.commands, plugin);
+    self.removeCommandsOf(plugin);
+    self.failCallsOf(plugin);
     removeOwned(LanguageSupport, &self.language_support, plugin);
     self.removeEventsOf(plugin);
+}
+
+/// Drop `plugin`'s commands, its base registrations and its overrides alike. An id with another
+/// registration left gets that one back as its active command (an app's plugin overriding
+/// `fizzy.about` gives fizzy's back); an id with none leaves `commands`.
+fn removeCommandsOf(self: *Host, plugin: *Plugin) void {
+    var w: usize = 0;
+    for (self.commands.items) |c| {
+        const slot = self.command_slots.getPtr(c.id).?;
+        removeOwned(Command, &slot.bases, plugin);
+        removeOwned(Command, &slot.overrides, plugin);
+        if (slot.active() == null) {
+            var kv = self.command_slots.fetchRemove(c.id).?;
+            self.allocator.free(kv.key);
+            kv.value.bases.deinit(self.allocator);
+            kv.value.overrides.deinit(self.allocator);
+            continue;
+        }
+        slot.index = w;
+        self.commands.items[w] = slot.active().?;
+        w += 1;
+    }
+    self.commands.items.len = w;
 }
 
 fn removeEventsOf(self: *Host, plugin: *Plugin) void {
@@ -1473,11 +1517,102 @@ pub fn registerNativeMenuItem(self: *Host, item: NativeMenuItem) !void {
 
 // ---- commands --------------------------------------------------------------
 
+/// Every registration of one id. The **base** is the registration without `Command.replaces`
+/// (at most one); the **overrides** are those with it, oldest first, at most one per owner. The
+/// active command, the one `commands` holds and `command(id)` returns, is the newest override, else
+/// the base.
+const CommandSlot = struct {
+    /// Where the active command sits in `commands`.
+    index: usize,
+    /// The base first; the later registrations without `replaces`, ignored while it stands, in
+    /// reserve after it, in order, so the next takes its place when its plugin goes.
+    bases: std.ArrayListUnmanaged(Command) = .empty,
+    overrides: std.ArrayListUnmanaged(Command) = .empty,
+    /// How many runs of an override of this id are in progress, or of what one reached through
+    /// `callReplaced`: while one is, running the id by id from inside would run the override
+    /// again, and is refused. A plain command running itself is not counted.
+    overriding: u32 = 0,
+
+    fn active(self: CommandSlot) ?Command {
+        return self.overrides.getLastOrNull() orelse if (self.bases.items.len > 0) self.bases.items[0] else null;
+    }
+
+    /// Where `owner`'s override sits in `overrides`, if it has one.
+    fn overrideOf(self: CommandSlot, owner: ?*Plugin) ?usize {
+        for (self.overrides.items, 0..) |o, i| {
+            if (o.owner == owner) return i;
+        }
+        return null;
+    }
+};
+
 /// Register a plugin command. Ids should be plugin-namespaced (`"pixi.packProject"`).
 /// Refused when the command has neither `run` nor `runWith`, so nothing could invoke it.
+///
+/// An id has one base registration: a second one without `replaces` is ignored while the first
+/// stands, with a warning naming both owners, and held in reserve to take its place when the
+/// first's plugin goes. One with `replaces` overrides the id (how an
+/// app's plugin takes over `fizzy.about`), whether or not the base is registered yet; the same
+/// owner overriding again replaces its own override and becomes the newest. Unregistering a
+/// plugin removes its registrations and the newest remaining one becomes active again. An
+/// override reaches what it replaced with `callReplaced`. New File commands (`<id>.new`,
+/// `<id>.new.<kind>`) cannot be overridden yet.
 pub fn registerCommand(self: *Host, cmd: Command) !void {
     if (cmd.run == null and cmd.runWith == null) return error.CommandCannotRun;
-    try self.commands.append(self.allocator, cmd);
+    if (cmd.replaces and isNewDocumentCommand(self.commandNamespace(cmd.id), cmd.id)) {
+        std.log.warn("command {s}: overriding a New File command is not supported yet; ignored", .{cmd.id});
+        return;
+    }
+    if (self.command_slots.getPtr(cmd.id)) |slot| {
+        if (!cmd.replaces) {
+            const own = for (slot.bases.items) |*b| {
+                if (b.owner == cmd.owner) break b;
+            } else null;
+            if (own) |b| {
+                // Its own base again (a reload of its registrations): the new one stands in place.
+                b.* = cmd;
+            } else {
+                if (slot.bases.items.len > 0) std.log.warn("command {s}: {s} registered it again; {s}'s is kept, this one held in reserve (set `replaces` to override it)", .{
+                    cmd.id,
+                    if (cmd.owner) |o| o.id else "the host",
+                    if (slot.bases.items[0].owner) |o| o.id else "the host",
+                });
+                try slot.bases.append(self.allocator, cmd);
+            }
+        } else if (slot.overrideOf(cmd.owner)) |i| {
+            // The same owner again: its override moves to the top, as the newest.
+            _ = slot.overrides.orderedRemove(i);
+            slot.overrides.appendAssumeCapacity(cmd);
+        } else {
+            try slot.overrides.append(self.allocator, cmd);
+            std.log.info("command {s}: {s} overrides it", .{ cmd.id, if (cmd.owner) |o| o.id else "the host" });
+        }
+        self.commands.items[slot.index] = slot.active().?;
+        return;
+    }
+    // A new id. Everything that can fail goes first, so a failure leaves nothing half-registered.
+    try self.commands.ensureUnusedCapacity(self.allocator, 1);
+    try self.command_slots.ensureUnusedCapacity(self.allocator, 1);
+    const key = try self.allocator.dupe(u8, cmd.id);
+    errdefer self.allocator.free(key);
+    var slot: CommandSlot = .{ .index = self.commands.items.len };
+    try (if (cmd.replaces) &slot.overrides else &slot.bases).append(self.allocator, cmd);
+    self.command_slots.putAssumeCapacityNoClobber(key, slot);
+    self.commands.appendAssumeCapacity(cmd);
+}
+
+/// The plugin a command id is named for: the longest registered plugin id that is a prefix of
+/// `id` followed by `.` (so a dotted id like `acme.paint` is one plugin), else the id's first
+/// dotted segment, for a plugin not loaded yet.
+fn commandNamespace(self: *const Host, id: []const u8) []const u8 {
+    var best: []const u8 = id[0 .. std.mem.indexOfScalar(u8, id, '.') orelse id.len];
+    var found = false;
+    for (self.plugins.items) |p| {
+        if (id.len <= p.id.len or id[p.id.len] != '.' or !std.mem.startsWith(u8, id, p.id)) continue;
+        if (!found or p.id.len > best.len) best = p.id;
+        found = true;
+    }
+    return best;
 }
 
 /// How many commands are registered — with `commandAt`, the way to list them without reaching
@@ -1492,12 +1627,10 @@ pub fn commandAt(self: *Host, index: usize) ?*const Command {
     return &self.commands.items[index];
 }
 
-/// The registered command with `id`, or null.
-pub fn command(self: *Host, id: []const u8) ?*Command {
-    for (self.commands.items) |*c| {
-        if (std.mem.eql(u8, c.id, id)) return c;
-    }
-    return null;
+/// The registered command with `id`, or null: its active one (`registerCommand`).
+pub fn command(self: *Host, id: []const u8) ?*const Command {
+    const slot = self.command_slots.getPtr(id) orelse return null;
+    return &self.commands.items[slot.index];
 }
 
 /// Whether `id` is registered at all, regardless of its current enabled state.
@@ -1578,13 +1711,14 @@ fn claimIndex(self: *const Host, id: u32) ?usize {
 }
 
 /// The claim that refuses the person command `c` on the active document: the document is claimed
-/// and `c` belongs to the plugin that draws it (Undo, Copy and Delete reach it as `<owner>.<verb>`).
+/// and `c` belongs to the plugin that draws it, as its own (Undo, Copy and Delete reach it as
+/// `<owner>.<verb>`) or by name (`commandNamespace`): another plugin's override of `pixi.undo` is
+/// held on a claimed pixi document too, even registered before pixi's own.
 fn claimRefusing(self: *Host, c: *const Command) ?Claim {
     // Nothing held, nothing to ask: a command costs no more than before.
     if (self.claims.items.len == 0) return null;
-    const owner = c.owner orelse return null;
     const doc = self.activeDoc() orelse return null;
-    if (doc.owner != owner) return null;
+    if (c.owner != doc.owner and !std.mem.eql(u8, self.commandNamespace(c.id), doc.owner.id)) return null;
     return self.documentClaim(doc.id);
 }
 
@@ -1669,9 +1803,10 @@ pub fn actAgain(self: *Host, stored: Acting) Acting {
     return outer;
 }
 
-/// Who is acting now, to store with work done later (`actAgain`).
+/// Who is acting now, to store with work done later (`actAgain`): the innermost `act`, else the
+/// frame's input author (the person at the keys), as `author` answers.
 pub fn acted(self: *const Host) Acting {
-    return self.acting;
+    return .{ .author = self.acting.author orelse self.input_author, .run = self.acting.run };
 }
 
 pub fn endAct(self: *Host, outer: Acting) void {
@@ -1831,11 +1966,24 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
 }
 
 /// Run a command's body as the running command, so the edits it makes are its own.
-fn running(self: *Host, c: *const Command) ?*const Command {
+/// `replaced`: reached through `callReplaced`. It and an override count as overriding (`inProgress`).
+fn running(self: *Host, c: Command, replaced: bool) ?Command {
     const outer = self.running_command;
     self.running_command = c;
     self.command_runs += 1;
+    if (c.replaces or replaced) if (self.command_slots.getPtr(c.id)) |slot| {
+        slot.overriding += 1;
+    };
     return outer;
+}
+
+/// `running`'s end: `outer` runs again. The slot is looked up anew, as the body may have changed
+/// the registry, and its id may be gone.
+fn ran(self: *Host, c: Command, outer: ?Command, replaced: bool) void {
+    self.running_command = outer;
+    if (c.replaces or replaced) if (self.command_slots.getPtr(c.id)) |slot| {
+        slot.overriding -|= 1;
+    };
 }
 /// Run the command `id` with no arguments (no-op when unknown), as a menu row or a keybind
 /// does. The owner's opaque `state` is passed to `run`. A command with only `runWith` runs it
@@ -1843,19 +1991,24 @@ fn running(self: *Host, c: *const Command) ?*const Command {
 /// (`EditorAPI.askCommandArguments` — fizzy opens the palette on the command), and without an
 /// app that can, the run fails with `error.MissingArguments`.
 pub fn runCommand(self: *Host, id: []const u8) !void {
-    const c = self.command(id) orelse return;
+    // A copy, not the registry's entry: the body may register, replace or unregister commands.
+    const c = (self.command(id) orelse return).*;
     const owner = c.owner orelse return;
+    if (self.inProgress(id)) {
+        std.log.warn("{s}: ran itself; an override reaches what it replaced with callReplaced", .{id});
+        return error.CommandRanItself;
+    }
     // A person's command on a document someone holds waits until they let go (`Claim`). The
     // holder reaches it through `callCommand`.
-    if (self.claimRefusing(c)) |claim| {
+    if (self.claimRefusing(&c)) |claim| {
         std.log.info("{s}: {s} is working on this document", .{ id, claim.label });
         return error.DocumentClaimed;
     }
     if (c.run) |run| {
         const prof = core.profile.begin(owner.id, c.id);
         defer prof.end();
-        const outer = self.running(c);
-        defer self.running_command = outer;
+        const outer = self.running(c, false);
+        defer self.ran(c, outer, false);
         run(owner.state) catch |err| return owner.failed(c.id, err);
         return;
     }
@@ -1877,6 +2030,31 @@ pub fn runCommand(self: *Host, id: []const u8) !void {
         },
     }
 }
+
+/// A command answering in a later frame, and who waits for it.
+pub const PendingCall = struct {
+    ticket: u32,
+    owner: *Plugin,
+    /// Who waits. Kept only while someone does (a call nobody waits for keeps nothing).
+    sink: CallSink,
+};
+
+/// Who hears a later answer (`callCommandAwaiting`): `done` is called once, on the UI thread, with
+/// what came of it. What `outcome` holds is borrowed for the call.
+pub const CallSink = struct {
+    ctx: *anyopaque,
+    done: *const fn (ctx: *anyopaque, outcome: CommandOutcome) void,
+    /// The plugin whose image holds `done` and `ctx`, when a plugin waits: its sinks are let go of
+    /// when it goes, never called into an image that is gone. Null for the app.
+    owner: ?*Plugin = null,
+};
+
+/// What `callCommandAwaiting` answers: what came of the command now, or the ticket of its answer
+/// to come, which the sink hears.
+pub const AwaitedOutcome = union(enum) {
+    now: CommandOutcome,
+    later: u32,
+};
 
 /// What came of `callCommand`. Results and messages live in the arena the caller passed.
 pub const CommandOutcome = union(enum) {
@@ -1985,31 +2163,144 @@ fn freeQueued(allocator: std.mem.Allocator, e: events.Queued) void {
 }
 
 pub fn callCommand(self: *Host, id: []const u8, args: []const u8, results: std.mem.Allocator) CommandOutcome {
-    const c = self.command(id) orelse return .unknown;
-    const owner = c.owner orelse return .unknown;
+    return switch (self.callCommandAwaiting(id, args, results, null)) {
+        .now => |out| out,
+        // Started; nobody here waits for the answer.
+        .later => .{ .ok = null },
+    };
+}
+
+/// `callCommand` for a caller that can wait: a command answering in a later frame
+/// (`Command.Call.later`) gives its ticket, and `sink` hears the answer once it comes
+/// (`finishCall`). A null sink drops it, as `callCommand` does.
+pub fn callCommandAwaiting(self: *Host, id: []const u8, args: []const u8, results: std.mem.Allocator, sink: ?CallSink) AwaitedOutcome {
+    // A copy, not the registry's entry: the body may register, replace or unregister commands.
+    const c = (self.command(id) orelse return .{ .now = .unknown }).*;
+    if (self.inProgress(id)) return .{ .now = .{ .failed = "it called itself; an override reaches what it replaced with callReplaced" } };
+    return self.callResolved(c, args, results, false, sink);
+}
+
+/// From inside `caller`'s override of `id` (`Command.replaces`): call what it replaced, the next
+/// older override, else the base, the way `callCommand` would. How an override adds to a command
+/// rather than taking it over: calling `id` itself would run the override again, and is refused.
+/// `.unknown` when `caller` has no override of `id`, or it replaced nothing.
+pub fn callReplaced(self: *Host, caller: *Plugin, id: []const u8, args: []const u8, results: std.mem.Allocator) CommandOutcome {
+    const slot = self.command_slots.get(id) orelse return .unknown;
+    const i = slot.overrideOf(caller) orelse return .unknown;
+    const below = if (i > 0) slot.overrides.items[i - 1] else if (slot.bases.items.len > 0) slot.bases.items[0] else return .unknown;
+    return switch (self.callResolved(below, args, results, true, null)) {
+        .now => |out| out,
+        .later => .{ .ok = null },
+    };
+}
+
+/// Whether an override of `id` is running, or what one reached through `callReplaced`: run by id
+/// from inside, it would run the override again.
+fn inProgress(self: *Host, id: []const u8) bool {
+    const slot = self.command_slots.getPtr(id) orelse return false;
+    return slot.overriding > 0;
+}
+
+/// `replaced`: reached through `callReplaced`, so running inside an override (`inProgress`).
+fn callResolved(self: *Host, c: Command, args: []const u8, results: std.mem.Allocator, replaced: bool, sink: ?CallSink) AwaitedOutcome {
+    const owner = c.owner orelse return .{ .now = .unknown };
     if (c.isEnabled) |enabled| {
-        if (!enabled(owner.state)) return .disabled;
+        if (!enabled(owner.state)) return .{ .now = .disabled };
     }
     const prof = core.profile.begin(owner.id, c.id);
     defer prof.end();
     const run_with = c.runWith orelse {
         const trimmed = std.mem.trim(u8, args, " \t\r\n");
-        if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .bad_args = "this command takes no arguments" };
-        const outer = self.running(c);
-        defer self.running_command = outer;
-        c.run.?(owner.state) catch |err| return .{ .failed = owner.errorName(err) };
-        return .{ .ok = null };
+        if (trimmed.len > 0 and !std.mem.eql(u8, trimmed, ".{}")) return .{ .now = .{ .bad_args = "this command takes no arguments" } };
+        const outer = self.running(c, replaced);
+        defer self.ran(c, outer, replaced);
+        c.run.?(owner.state) catch |err| return .{ .now = .{ .failed = owner.errorName(err) } };
+        return .{ .now = .{ .ok = null } };
     };
     self.last_showing_ms = 0;
-    var call: Command.Call = .{ .args = args, .arena = results };
-    const outer = self.running(c);
-    defer self.running_command = outer;
+    // Its own ticket, taken before it runs: a command it calls that defers takes the next.
+    const ticket = self.next_call_ticket;
+    self.next_call_ticket +%= 1;
+    if (self.next_call_ticket == 0) self.next_call_ticket = 1;
+    var call: Command.Call = .{ .args = args, .arena = results, .ticket = ticket };
+    const outer = self.running(c, replaced);
+    defer self.ran(c, outer, replaced);
+    const outer_call = self.running_call;
+    self.running_call = &call;
+    defer self.running_call = outer_call;
     run_with(owner.state, &call) catch |err| {
         const msg = call.message orelse owner.errorName(err);
-        return if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg };
+        return .{ .now = if (call.bad_args) .{ .bad_args = msg } else .{ .failed = msg } };
     };
     self.last_showing_ms = call.showing_ms;
-    return .{ .ok = call.result };
+    if (call.failed) return .{ .now = if (call.bad_args) .{ .bad_args = call.message orelse "bad arguments" } else .{ .failed = call.message orelse "failed" } };
+    if (!call.deferred) return .{ .now = .{ .ok = call.result } };
+    // Nobody waits: started, with nothing kept for an answer nobody hears (`callWanted` is false).
+    const s = sink orelse return .{ .later = ticket };
+    // Out of memory: answered now as failed, rather than owed to a waiter that never hears.
+    self.calls_pending.append(self.allocator, .{ .ticket = ticket, .owner = owner, .sink = s }) catch
+        return .{ .now = .{ .failed = "out of memory" } };
+    return .{ .later = ticket };
+}
+
+/// Answer the command whose ticket is `ticket` (`Command.Call.later`), on the UI thread: `.ok`
+/// with its result as ZON (or null), `.failed` or `.bad_args` with why. Whoever waits hears it
+/// now; nobody, and it is dropped. A ticket already answered or unknown is ignored.
+pub fn finishCall(self: *Host, ticket: u32, outcome: CommandOutcome) void {
+    // The call still running (`runWith` answering what it deferred, before returning): its caller
+    // gets it now, copied, since `outcome` is the command's to free.
+    if (self.running_call) |call| if (call.ticket == ticket and call.deferred) {
+        call.deferred = false;
+        switch (outcome) {
+            .ok => |r| call.result = if (r) |text| call.arena.dupe(u8, text) catch null else null,
+            .bad_args, .failed => |m| {
+                call.failed = true;
+                call.bad_args = outcome == .bad_args;
+                call.message = call.arena.dupe(u8, m) catch "failed";
+            },
+            .unknown, .disabled => {
+                call.failed = true;
+                call.message = @tagName(outcome);
+            },
+        }
+        return;
+    };
+    for (self.calls_pending.items, 0..) |p, i| {
+        if (p.ticket != ticket) continue;
+        _ = self.calls_pending.swapRemove(i);
+        p.sink.done(p.sink.ctx, outcome);
+        return;
+    }
+}
+
+/// Whether anyone still waits for `ticket`'s answer: a command can stop work nobody wants.
+pub fn callWanted(self: *const Host, ticket: u32) bool {
+    for (self.calls_pending.items) |p| if (p.ticket == ticket) return true;
+    return false;
+}
+
+/// Stop waiting for `ticket`'s answer (the caller went away): nothing is kept for it, and the
+/// command, asking `callWanted`, can stop.
+pub fn abandonCall(self: *Host, ticket: u32) void {
+    for (self.calls_pending.items, 0..) |p, i| if (p.ticket == ticket) {
+        _ = self.calls_pending.swapRemove(i);
+        return;
+    };
+}
+
+/// A plugin going away: the calls it still owes are answered as failed, so nobody waits for good,
+/// and the waits it holds are let go of, so nothing calls into its image once it is gone.
+fn failCallsOf(self: *Host, plugin: *Plugin) void {
+    var i: usize = 0;
+    while (i < self.calls_pending.items.len) {
+        const p = self.calls_pending.items[i];
+        if (p.owner != plugin and p.sink.owner != plugin) {
+            i += 1;
+            continue;
+        }
+        _ = self.calls_pending.swapRemove(i);
+        if (p.sink.owner != plugin) p.sink.done(p.sink.ctx, .{ .failed = "the plugin that was answering went away" });
+    }
 }
 
 // ---- language support ------------------------------------------------------
@@ -2746,6 +3037,235 @@ test "a withdrawn plugin is out of reach: its services, commands and highlightin
     try testing.expectEqual(@as(usize, 2), host.plugins.items.len);
 }
 
+test "command overrides: the newest is active, a base comes back beneath them" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    // Duplicates are warned about, on purpose; keep the warnings out of the test's output.
+    const log_level = testing.log_level;
+    testing.log_level = .err;
+    defer testing.log_level = log_level;
+    const vtable = Plugin.VTable{};
+    var pixi = Plugin{ .state = undefined, .vtable = &vtable, .id = "pixi", .display_name = "Pixi" };
+    var a = Plugin{ .state = undefined, .vtable = &vtable, .id = "a", .display_name = "A" };
+    var b = Plugin{ .state = undefined, .vtable = &vtable, .id = "b", .display_name = "B" };
+    var c = Plugin{ .state = undefined, .vtable = &vtable, .id = "c", .display_name = "C" };
+    const noopRun = struct {
+        fn f(_: *anyopaque) anyerror!void {}
+    }.f;
+
+    // An override before its base: active at once; the base registers beneath it.
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &a, .title = "A1", .run = noopRun, .replaces = true });
+    try host.registerCommand(.{ .id = "pixi.other", .owner = &pixi, .title = "Other", .run = noopRun });
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &pixi, .title = "Pack", .run = noopRun });
+    try testing.expectEqualStrings("A1", host.command("pixi.pack").?.title);
+    try testing.expectEqual(@as(usize, 2), host.commandCount());
+
+    // A second base is dropped, override or no.
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &b, .title = "Stray", .run = noopRun });
+    // The same owner overriding again replaces its own override.
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &a, .title = "A2", .run = noopRun, .replaces = true });
+    try testing.expectEqual(@as(usize, 1), host.command_slots.get("pixi.pack").?.overrides.items.len);
+    try testing.expectEqualStrings("A2", host.command("pixi.pack").?.title);
+
+    // Three deep: c on b on a. The middle one goes; the newest stays, in its place.
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &b, .title = "B", .run = noopRun, .replaces = true });
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &c, .title = "C", .run = noopRun, .replaces = true });
+    host.withdrawPlugin(&b);
+    try testing.expectEqualStrings("C", host.command("pixi.pack").?.title);
+    try testing.expectEqualStrings("C", host.commandAt(0).?.title);
+    // Overriding again puts an owner's override on top: a's is newer than c's now.
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &a, .title = "A3", .run = noopRun, .replaces = true });
+    try testing.expectEqualStrings("A3", host.command("pixi.pack").?.title);
+    host.withdrawPlugin(&a);
+    try testing.expectEqualStrings("C", host.command("pixi.pack").?.title);
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &a, .title = "A2", .run = noopRun, .replaces = true });
+    host.withdrawPlugin(&c);
+    try testing.expectEqualStrings("A2", host.command("pixi.pack").?.title);
+
+    // The base's plugin reloads under the override: it is the base again.
+    host.withdrawPlugin(&pixi);
+    try testing.expectEqual(@as(usize, 1), host.commandCount());
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &pixi, .title = "Pack", .run = noopRun });
+    try testing.expectEqualStrings("A2", host.command("pixi.pack").?.title);
+    host.withdrawPlugin(&a);
+    try testing.expectEqualStrings("Pack", host.command("pixi.pack").?.title);
+    try testing.expectEqual(@as(usize, 1), host.commandCount());
+
+    // A second base waits in reserve and takes the first's place when its plugin goes.
+    try host.registerCommand(.{ .id = "pixi.spare", .owner = &pixi, .title = "Spare", .run = noopRun });
+    try host.registerCommand(.{ .id = "pixi.spare", .owner = &b, .title = "B Spare", .run = noopRun });
+    try testing.expectEqualStrings("Spare", host.command("pixi.spare").?.title);
+    host.withdrawPlugin(&pixi);
+    try testing.expectEqualStrings("B Spare", host.command("pixi.spare").?.title);
+    host.withdrawPlugin(&b);
+
+    // Its last registration gone, the id goes too.
+    host.withdrawPlugin(&pixi);
+    try testing.expectEqual(@as(usize, 0), host.commandCount());
+    try testing.expect(host.command("pixi.pack") == null);
+}
+
+test "an override adds to what it replaced through callReplaced, and cannot call itself" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const S = struct {
+        var base_runs: u32 = 0;
+        var override_runs: u32 = 0;
+        var fell_through: ?CommandOutcome = null;
+        var itself: ?CommandOutcome = null;
+        var base_itself: ?CommandOutcome = null;
+        var app: *Plugin = undefined;
+        fn base(state: *anyopaque) anyerror!void {
+            const h: *Host = @ptrCast(@alignCast(state));
+            base_runs += 1;
+            // Reached through `callReplaced`, the id is still running: calling it would recurse.
+            base_itself = h.callCommand("pixi.pack", "", testing.allocator);
+        }
+        fn override(state: *anyopaque) anyerror!void {
+            const h: *Host = @ptrCast(@alignCast(state));
+            override_runs += 1;
+            itself = h.callCommand("pixi.pack", "", testing.allocator);
+            fell_through = h.callReplaced(app, "pixi.pack", "", testing.allocator);
+        }
+    };
+    const vtable = Plugin.VTable{};
+    var pixi = Plugin{ .state = &host, .vtable = &vtable, .id = "pixi", .display_name = "Pixi" };
+    var app = Plugin{ .state = &host, .vtable = &vtable, .id = "app", .display_name = "App" };
+    S.app = &app;
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &pixi, .title = "Pack", .run = S.base });
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &app, .title = "Pack More", .run = S.override, .replaces = true });
+
+    try testing.expect(host.callCommand("pixi.pack", "", testing.allocator) == .ok);
+    try testing.expectEqual(@as(u32, 1), S.override_runs);
+    try testing.expectEqual(@as(u32, 1), S.base_runs);
+    try testing.expect(S.fell_through.? == .ok);
+    try testing.expect(S.itself.? == .failed);
+    try testing.expect(S.base_itself.? == .failed);
+    // Done, it runs by id again.
+    try testing.expect(host.callCommand("pixi.pack", "", testing.allocator) == .ok);
+    try testing.expectEqual(@as(u32, 2), S.override_runs);
+    // The base replaced nothing; another plugin has no override to fall through from.
+    try testing.expect(host.callReplaced(&pixi, "pixi.pack", "", testing.allocator) == .unknown);
+}
+
+test "a plain command may run itself; an override running its id is refused" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const S = struct {
+        var depth: u32 = 0;
+        var ran_itself: ?anyerror = null;
+        fn countdown(state: *anyopaque) anyerror!void {
+            const h: *Host = @ptrCast(@alignCast(state));
+            depth += 1;
+            if (depth < 3) try h.runCommand("t.countdown");
+        }
+        fn override(state: *anyopaque) anyerror!void {
+            const h: *Host = @ptrCast(@alignCast(state));
+            h.runCommand("t.wrapped") catch |err| {
+                ran_itself = err;
+            };
+        }
+    };
+    const vtable = Plugin.VTable{};
+    var t = Plugin{ .state = &host, .vtable = &vtable, .id = "t", .display_name = "T" };
+    var app = Plugin{ .state = &host, .vtable = &vtable, .id = "app", .display_name = "App" };
+
+    // As on main: a command with no override is not stopped from running itself.
+    try host.registerCommand(.{ .id = "t.countdown", .owner = &t, .title = "Countdown", .run = S.countdown });
+    try host.runCommand("t.countdown");
+    try testing.expectEqual(@as(u32, 3), S.depth);
+
+    const log_level = testing.log_level;
+    testing.log_level = .err;
+    defer testing.log_level = log_level;
+    try host.registerCommand(.{ .id = "t.wrapped", .owner = &t, .title = "Wrapped", .run = S.countdown });
+    try host.registerCommand(.{ .id = "t.wrapped", .owner = &app, .title = "Wrapper", .run = S.override, .replaces = true });
+    try host.runCommand("t.wrapped");
+    try testing.expectEqual(error.CommandRanItself, S.ran_itself.?);
+}
+
+test "a New File command cannot be overridden yet" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const log_level = testing.log_level;
+    testing.log_level = .err;
+    defer testing.log_level = log_level;
+    const vtable = Plugin.VTable{};
+    var pixi = Plugin{ .state = undefined, .vtable = &vtable, .id = "pixi", .display_name = "Pixi" };
+    var app = Plugin{ .state = undefined, .vtable = &vtable, .id = "app", .display_name = "App" };
+    const noopRun = struct {
+        fn f(_: *anyopaque) anyerror!void {}
+    }.f;
+    try host.registerCommand(.{ .id = "pixi.new.sprite", .owner = &pixi, .title = "Sprite", .run = noopRun });
+    try host.registerCommand(.{ .id = "pixi.new.sprite", .owner = &app, .title = "App Sprite", .run = noopRun, .replaces = true });
+    try testing.expectEqualStrings("Sprite", host.command("pixi.new.sprite").?.title);
+}
+
+test "a claim on a document holds an override of its owner's command too" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var pixi = Plugin{ .state = undefined, .vtable = &vtable, .id = "pixi", .display_name = "Pixi" };
+    var app = Plugin{ .state = undefined, .vtable = &vtable, .id = "app", .display_name = "App" };
+    var holder = Plugin{ .state = undefined, .vtable = &vtable, .id = "holder", .display_name = "Holder" };
+    const S = struct {
+        var runs: u32 = 0;
+        var owner: *Plugin = undefined;
+        fn run(_: *anyopaque) anyerror!void {
+            runs += 1;
+        }
+        fn active(_: *anyopaque) ?DocHandle {
+            return .{ .ptr = undefined, .owner = owner, .id = 7 };
+        }
+        fn refresh(_: *anyopaque) void {}
+    };
+    S.owner = &pixi;
+    var api_vt: EditorAPI.VTable = undefined;
+    api_vt.activeDoc = S.active;
+    api_vt.refresh = S.refresh;
+    var ctx: u8 = 0;
+    host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
+
+    // An override registered before pixi's own command, and before pixi loads: held by name.
+    try host.registerCommand(.{ .id = "pixi.undo", .owner = &app, .title = "App Undo", .run = S.run, .replaces = true });
+    _ = try host.claimDocument(&holder, 7, "Holder");
+    try testing.expectError(error.DocumentClaimed, host.runCommand("pixi.undo"));
+    try host.registerPlugin(&pixi);
+    try host.registerCommand(.{ .id = "pixi.undo", .owner = &pixi, .title = "Undo", .run = S.run });
+    try testing.expectError(error.DocumentClaimed, host.runCommand("pixi.undo"));
+    try testing.expectEqual(@as(u32, 0), S.runs);
+    // Another plugin's command is not held.
+    try host.registerCommand(.{ .id = "app.other", .owner = &app, .title = "Other", .run = S.run });
+    try host.runCommand("app.other");
+    try testing.expectEqual(@as(u32, 1), S.runs);
+
+    // A dotted plugin id is one name: `acme.paint.undo` is acme.paint's, not acme's.
+    var acme = Plugin{ .state = undefined, .vtable = &vtable, .id = "acme", .display_name = "Acme" };
+    var paint = Plugin{ .state = undefined, .vtable = &vtable, .id = "acme.paint", .display_name = "Paint" };
+    try host.registerPlugin(&acme);
+    try host.registerPlugin(&paint);
+    S.owner = &paint;
+    try host.registerCommand(.{ .id = "acme.paint.undo", .owner = &app, .title = "App Paint Undo", .run = S.run, .replaces = true });
+    try testing.expectError(error.DocumentClaimed, host.runCommand("acme.paint.undo"));
+    S.owner = &acme;
+    try host.runCommand("acme.paint.undo");
+    try testing.expectEqual(@as(u32, 2), S.runs);
+}
+
+test "a plugin registering its own command again updates it in place" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var pixi = Plugin{ .state = undefined, .vtable = &vtable, .id = "pixi", .display_name = "Pixi" };
+    const noopRun = struct {
+        fn f(_: *anyopaque) anyerror!void {}
+    }.f;
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &pixi, .title = "Pack", .run = noopRun });
+    try host.registerCommand(.{ .id = "pixi.pack", .owner = &pixi, .title = "Pack Atlas", .run = noopRun });
+    try testing.expectEqualStrings("Pack Atlas", host.command("pixi.pack").?.title);
+    try testing.expectEqual(@as(usize, 1), host.command_slots.getPtr("pixi.pack").?.bases.items.len);
+}
+
 const EventLog = struct {
     seen: [16][48]u8 = undefined,
     lens: [16]usize = @splat(0),
@@ -3166,7 +3686,7 @@ test "an agent's edit says whose in the activity; the person's stays plain" {
     var host: Host = .init(std.testing.allocator);
     defer host.deinit();
     const draw: Command = .{ .id = "pixi.draw", .title = "Draw" };
-    host.running_command = &draw;
+    host.running_command = draw;
     host.setInputAuthor(.person);
     host.documentEdited(1);
     try std.testing.expectEqualStrings("Draw", host.activity.items[0].title);
@@ -3176,4 +3696,149 @@ test "an agent's edit says whose in the activity; the person's stays plain" {
     host.documentEdited(1);
     host.endAct(outer);
     try std.testing.expectEqualStrings("Claude · Draw", host.activity.items[1].title);
+}
+
+const LaterFixture = struct {
+    ticket: u32 = 0,
+    fn start(state: *anyopaque, call: *Command.Call) anyerror!void {
+        const self: *LaterFixture = @ptrCast(@alignCast(state));
+        self.ticket = call.later();
+    }
+    const Heard = struct {
+        count: u32 = 0,
+        result: ?[]const u8 = null,
+        failed: ?[]const u8 = null,
+        fn done(ctx: *anyopaque, outcome: CommandOutcome) void {
+            const self: *Heard = @ptrCast(@alignCast(ctx));
+            self.count += 1;
+            switch (outcome) {
+                .ok => |r| self.result = r,
+                .failed => |m| self.failed = m,
+                else => {},
+            }
+        }
+    };
+};
+
+test "a command answering later: its waiter hears it once, a caller that cannot wait drops it" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var fixture: LaterFixture = .{};
+    var plugin = Plugin{ .state = &fixture, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.slow", .owner = &plugin, .title = "Slow", .runWith = LaterFixture.start });
+    var results: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer results.deinit();
+
+    // A caller that waits gets the ticket, and hears the answer when it comes, once.
+    var heard: LaterFixture.Heard = .{};
+    const out = host.callCommandAwaiting("t.slow", "", results.allocator(), .{ .ctx = &heard, .done = LaterFixture.Heard.done });
+    try testing.expectEqual(fixture.ticket, out.later);
+    try testing.expect(host.callWanted(fixture.ticket));
+    host.finishCall(fixture.ticket, .{ .ok = ".{ .n = 1 }" });
+    try testing.expectEqual(@as(u32, 1), heard.count);
+    try testing.expectEqualStrings(".{ .n = 1 }", heard.result.?);
+    host.finishCall(fixture.ticket, .{ .ok = null });
+    try testing.expectEqual(@as(u32, 1), heard.count);
+    try testing.expect(!host.callWanted(fixture.ticket));
+
+    // A caller that cannot wait has started it; its answer is dropped.
+    try testing.expectEqual(@as(?[]const u8, null), host.callCommand("t.slow", "", results.allocator()).ok);
+    try testing.expect(!host.callWanted(fixture.ticket));
+    host.finishCall(fixture.ticket, .{ .ok = null });
+    try testing.expectEqual(@as(usize, 0), host.calls_pending.items.len);
+
+    // Abandoned: the answer goes nowhere.
+    var gone: LaterFixture.Heard = .{};
+    _ = host.callCommandAwaiting("t.slow", "", results.allocator(), .{ .ctx = &gone, .done = LaterFixture.Heard.done });
+    host.abandonCall(fixture.ticket);
+    try testing.expect(!host.callWanted(fixture.ticket));
+    host.finishCall(fixture.ticket, .{ .ok = null });
+    try testing.expectEqual(@as(u32, 0), gone.count);
+
+    // The plugin goes away owing an answer: its waiter hears that it failed.
+    var owed: LaterFixture.Heard = .{};
+    _ = host.callCommandAwaiting("t.slow", "", results.allocator(), .{ .ctx = &owed, .done = LaterFixture.Heard.done });
+    host.withdrawPlugin(&plugin);
+    try testing.expectEqual(@as(u32, 1), owed.count);
+    try testing.expect(owed.failed != null);
+    try testing.expectEqual(@as(usize, 0), host.calls_pending.items.len);
+}
+
+const NestedFixture = struct {
+    host: *Host,
+    inner_ticket: u32 = 0,
+    outer_ticket: u32 = 0,
+    fn inner(state: *anyopaque, call: *Command.Call) anyerror!void {
+        const self: *NestedFixture = @ptrCast(@alignCast(state));
+        self.inner_ticket = call.later();
+    }
+    fn outer(state: *anyopaque, call: *Command.Call) anyerror!void {
+        const self: *NestedFixture = @ptrCast(@alignCast(state));
+        // A command that, while it runs, calls another that defers, then defers itself.
+        _ = self.host.callCommand("t.inner", "", call.arena);
+        self.outer_ticket = call.later();
+    }
+    fn cached(state: *anyopaque, call: *Command.Call) anyerror!void {
+        const self: *NestedFixture = @ptrCast(@alignCast(state));
+        // Deferred, then answered before returning: a cache hit.
+        const t = call.later();
+        self.host.finishCall(t, .{ .ok = ".{ .cached = true }" });
+    }
+};
+
+test "later answers: nested calls keep their own tickets, an early answer is the caller's now, a gone waiter is never called" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var fixture: NestedFixture = .{ .host = &host };
+    var plugin = Plugin{ .state = &fixture, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.inner", .owner = &plugin, .title = "Inner", .runWith = NestedFixture.inner });
+    try host.registerCommand(.{ .id = "t.outer", .owner = &plugin, .title = "Outer", .runWith = NestedFixture.outer });
+    try host.registerCommand(.{ .id = "t.cached", .owner = &plugin, .title = "Cached", .runWith = NestedFixture.cached });
+    var results: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer results.deinit();
+
+    var heard: LaterFixture.Heard = .{};
+    const sink: CallSink = .{ .ctx = &heard, .done = LaterFixture.Heard.done };
+    const out = host.callCommandAwaiting("t.outer", "", results.allocator(), sink);
+    try testing.expectEqual(fixture.outer_ticket, out.later);
+    try testing.expect(fixture.inner_ticket != fixture.outer_ticket);
+    // The inner one, nobody waiting, keeps nothing; the outer one is the waiter's alone.
+    try testing.expect(!host.callWanted(fixture.inner_ticket));
+    host.finishCall(fixture.inner_ticket, .{ .ok = ".{ .inner = true }" });
+    try testing.expectEqual(@as(u32, 0), heard.count);
+    host.finishCall(fixture.outer_ticket, .{ .ok = ".{ .outer = true }" });
+    try testing.expectEqualStrings(".{ .outer = true }", heard.result.?);
+
+    // Answered before it returned: the caller has it now, and nothing is left pending.
+    const now = host.callCommandAwaiting("t.cached", "", results.allocator(), sink);
+    try testing.expectEqualStrings(".{ .cached = true }", now.now.ok.?);
+    try testing.expectEqual(@as(usize, 0), host.calls_pending.items.len);
+
+    // A plugin waiting on another's command goes away: its sink is let go of, never called.
+    var waiter_vtable = Plugin.VTable{};
+    _ = &waiter_vtable;
+    var waiter_state: u8 = 0;
+    var waiter = Plugin{ .state = &waiter_state, .vtable = &waiter_vtable, .id = "w", .display_name = "W" };
+    var unheard: LaterFixture.Heard = .{};
+    _ = host.callCommandAwaiting("t.inner", "", results.allocator(), .{ .ctx = &unheard, .done = LaterFixture.Heard.done, .owner = &waiter });
+    host.withdrawPlugin(&waiter);
+    try testing.expect(!host.callWanted(fixture.inner_ticket));
+    host.finishCall(fixture.inner_ticket, .{ .ok = null });
+    try testing.expectEqual(@as(u32, 0), unheard.count);
+}
+
+test "historyGoToWhy answers the owner's reason by name, and nothing when it went" {
+    const S = struct {
+        fn goTo(_: *anyopaque, _: DocHandle, id: u64) anyerror!void {
+            if (id == 7) return error.PersonBusy;
+        }
+    };
+    const vtable = Plugin.VTable{ .historyGoTo = S.goTo };
+    var state: u8 = 0;
+    var plugin = Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    const doc: DocHandle = .{ .ptr = &state, .owner = &plugin, .id = 1 };
+    try testing.expectEqualStrings("PersonBusy", plugin.historyGoToWhy(doc, 7).?);
+    try testing.expect(plugin.historyGoToWhy(doc, 3) == null);
 }

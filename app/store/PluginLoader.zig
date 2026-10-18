@@ -492,7 +492,7 @@ pub fn register(host: *Host, opened: Opened, pre: ?PreRegister) LoadError!Loaded
     crash.addModule(o.plugin_id, plugin_version, @intFromPtr(o.register_fn));
     errdefer crash.removeModule(@intFromPtr(o.register_fn));
 
-    const status: dylib_api.RegisterStatus = @enumFromInt(o.register_fn(host));
+    const status: dylib_api.RegisterStatus = @fromBackingInt(@intCast(o.register_fn(host)));
     switch (status) {
         .ok => {},
         .err_abi_mismatch => return error.AbiMismatch,
@@ -514,7 +514,7 @@ pub fn register(host: *Host, opened: Opened, pre: ?PreRegister) LoadError!Loaded
 }
 
 fn allowAbiWarn() bool {
-    if (builtin.mode != .Debug) return false;
+    if (builtin.mode != .debug) return false;
     if (std.c.getenv("FIZZY_PLUGIN_ABI_WARN")) |v| {
         return std.mem.eql(u8, std.mem.span(v), "1");
     }
@@ -533,8 +533,9 @@ pub fn probeName(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
     if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
         const zon = std.mem.span(get_zon());
         if (zon.len > 0) {
-            if (sdk.Manifest.parse(allocator, zon)) |parsed| {
-                defer sdk.Manifest.free(allocator, parsed);
+            var arena: std.heap.ArenaAllocator = .init(allocator);
+            defer arena.deinit();
+            if (sdk.Manifest.parse(allocator, arena.allocator(), zon)) |parsed| {
                 if (parsed.name.len > 0) return allocator.dupe(u8, parsed.name) catch null;
             } else |_| {}
         }
@@ -571,8 +572,9 @@ pub fn probeManifestInfo(allocator: std.mem.Allocator, path: []const u8) ?Probed
     const get_zon = lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon) orelse return null;
     const zon = std.mem.span(get_zon());
     if (zon.len == 0) return null;
-    const parsed = sdk.Manifest.parse(allocator, zon) catch return null;
-    defer sdk.Manifest.free(allocator, parsed);
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const parsed = sdk.Manifest.parse(allocator, arena.allocator(), zon) catch return null;
 
     var out: ProbedManifest = .{};
     errdefer freeProbedManifest(allocator, out);
@@ -615,10 +617,10 @@ pub fn probeVersionInfo(path: []const u8) ?PluginVersionInfo {
     if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
         const zon = std.mem.span(get_zon());
         if (zon.len > 0) {
-            // Stack/arena-free parse: use page allocator for a short-lived Manifest.
-            const gpa = std.heap.page_allocator;
-            if (sdk.Manifest.parse(gpa, zon)) |parsed| {
-                defer sdk.Manifest.free(gpa, parsed);
+            // A short-lived Manifest, in an arena over the page allocator.
+            var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+            defer arena.deinit();
+            if (sdk.Manifest.parse(std.heap.page_allocator, arena.allocator(), zon)) |parsed| {
                 if (std.SemanticVersion.parse(parsed.version)) |sv| {
                     plugin_version = .{ .major = @intCast(sv.major), .minor = @intCast(sv.minor), .patch = @intCast(sv.patch) };
                 } else |_| {}

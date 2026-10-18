@@ -689,8 +689,8 @@ fn markdownSettle() !void {
     // always the same shape: which blocks are still owed a measure, and in what state. Printing
     // the tally is what turned "the layout never settles" into "164 of 185 blocks were never
     // measured once, because the resettle budget was gated on being near the viewport".
-    var counts = [_]usize{0} ** 4;
-    for (md_preview.rs.blocks.heights.items) |e| counts[@intFromEnum(e.state)] += 1;
+    var counts = @as([4]usize, @splat(0));
+    for (md_preview.rs.blocks.heights.items) |e| counts[@backingInt(e.state)] += 1;
     std.debug.print(
         "\nnever settled: blocks={d} estimated={d} measured={d} settled={d} deferred={d} pending_measure={d}\n",
         .{ md_preview.rs.blocks.heights.items.len, counts[0], counts[1], counts[2], counts[3], md_render_ast.stats.pending_measure },
@@ -1620,8 +1620,8 @@ test "markdown preview: stops asking for frames so the app can sleep" {
 
         try markdownAwaitParse();
         if (!try markdownReachesIdle()) {
-            var counts = [_]usize{0} ** 4;
-            for (md_preview.rs.blocks.heights.items) |e| counts[@intFromEnum(e.state)] += 1;
+            var counts = @as([4]usize, @splat(0));
+            for (md_preview.rs.blocks.heights.items) |e| counts[@backingInt(e.state)] += 1;
             std.debug.print(
                 "\nnever idle: estimated={d} measured={d} settled={d} deferred={d} pending_measure={d}\n",
                 .{ counts[0], counts[1], counts[2], counts[3], md_render_ast.stats.pending_measure },
@@ -4148,7 +4148,7 @@ test "a place closing for good is not still holding its padding and its sash" {
 
 const DropFinishFrame = struct {
     var editor: ?*fizzy.Editor = null;
-    const key: dvui.Id = @enumFromInt(0xd7_0b_f1_4e);
+    const key: dvui.Id = @fromBackingInt(@intCast(0xd7_0b_f1_4e));
 
     fn frame() anyerror!dvui.App.Result {
         const e = editor.?;
@@ -4705,7 +4705,7 @@ test "drop: a place with room for the wheel keeps it" {
 
 const ShapeFrame = struct {
     var wheel: DZ.Wheel = undefined;
-    const key: dvui.Id = @enumFromInt(0x5a_a9_e0_01);
+    const key: dvui.Id = @fromBackingInt(@intCast(0x5a_a9_e0_01));
 
     fn frame() anyerror!dvui.App.Result {
         _ = DZ.draw(key, wheel, 1, .{});
@@ -5548,7 +5548,10 @@ test "verdict: the soak tape is a demo, and its expectations read" {
     // It ends on a wait, so what closed last has time to close before the windows are counted.
     try std.testing.expect(owned.tape.ops[owned.tape.ops.len - 1].do == .wait);
 
-    const expect = try std.zon.parse.fromSlice(fizzy.verdict.Expect, std.testing.allocator, @embedFile("soak_expect"), null, .{});
+    var expect_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer expect_arena.deinit();
+    var expect_diag: std.zon.parse.Diagnostics = undefined;
+    const expect = try std.zon.parse.fromSliceNoAlloc(fizzy.verdict.Expect, .{ .gpa = std.testing.allocator, .arena = expect_arena.allocator(), .source = @embedFile("soak_expect"), .diagnostics = &expect_diag });
     try std.testing.expect(!expect.allow_leaks);
     try std.testing.expectEqual(@as(u32, 0), expect.max_sdl_errors);
     try std.testing.expectEqual(@as(?u32, null), expect.os_windows);
@@ -5564,7 +5567,7 @@ test "demo: the hand-written sample tape parses and round-trips" {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
     try owned.tape.write(&out.writer);
-    const again = try std.testing.allocator.dupeZ(u8, out.written());
+    const again = try std.testing.allocator.dupeSentinel(u8, out.written(), 0);
     defer std.testing.allocator.free(again);
     var back = try automation.Tape.parse(std.testing.allocator, again, automation.Input.check);
     defer back.deinit();
@@ -5716,10 +5719,12 @@ test "float: the saved layout brings it back, and Reset Layout takes it away" {
     defer out.deinit();
     try std.zon.stringify.serializeMaxDepth(regions, .{}, &out.writer, 64);
     gpa.free(regions);
-    const text = try gpa.dupeZ(u8, out.written());
+    const text = try gpa.dupeSentinel(u8, out.written(), 0);
     defer gpa.free(text);
-    const saved = try std.zon.parse.fromSliceAlloc([]fizzy.backend.SavedRegion, gpa, text, null, .{ .ignore_unknown_fields = true });
-    defer std.zon.parse.free(gpa, saved);
+    var saved_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer saved_arena.deinit();
+    var saved_diag: std.zon.parse.Diagnostics = undefined;
+    const saved = try std.zon.parse.fromSlice([]fizzy.backend.SavedRegion, .{ .gpa = gpa, .arena = saved_arena.allocator(), .source = text, .diagnostics = &saved_diag, .ignore_unknown_fields = true });
 
     editor.app.layout.resetLayout(gpa);
     try dvui.testing.settle(ManyPanelFrame.frame);
@@ -5769,7 +5774,7 @@ test "float: a drag aims at a float's place over it, at nothing over its header,
         .rect = .{ .x = 100, .y = 50, .w = 150, .h = 130 },
         .home = "Panel",
         .fresh = false,
-        .win_id = @enumFromInt(0xf10a7),
+        .win_id = @fromBackingInt(@intCast(0xf10a7)),
         .bounds = window,
         .header = header,
     });
@@ -5823,7 +5828,7 @@ const FloatOverMain = struct {
             .rect = .{ .x = 100, .y = 50, .w = 150, .h = 130 },
             .home = "Panel",
             .fresh = false,
-            .win_id = @enumFromInt(0xf10a7),
+            .win_id = @fromBackingInt(@intCast(0xf10a7)),
             .bounds = win,
             .header = head,
         });
@@ -6859,6 +6864,288 @@ test "control: commands are listed, described and run over the routes" {
     try std.testing.expectEqualStrings("{\"error\":\"line 200 is past the end\"}", failed.body);
 }
 
+const OpenApiFixture = struct {
+    fn byHand(_: *anyopaque, _: *sdk.Command.Call) anyerror!void {}
+};
+
+test "control: /openapi.json describes each command's body and the declared events" {
+    const gpa = std.testing.allocator;
+    const routes = @import("app").control.routes;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    const vtable = sdk.Plugin.VTable{};
+    var state: u8 = 0;
+    var plugin = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(ControlFixture.place),
+    });
+    try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off", .run = ControlFixture.nothing });
+    // A `runWith` written by hand, declaring no parameters (as the chat plugin's are).
+    try host.registerCommand(.{ .id = "t.by hand{x}", .owner = &plugin, .title = "By hand", .runWith = OpenApiFixture.byHand });
+    // Another plugin's command by the same id: held in reserve, the first kept and described once.
+    var other = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "u", .display_name = "U" };
+    try host.registerCommand(.{ .id = "t.off", .owner = &other, .title = "Off again", .run = ControlFixture.nothing });
+    try host.declareEvent(.{ .name = "t.placed", .owner = &plugin, .description = "Something was placed.", .payload = ".{ .line = 4, .side = .left }" });
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const answer = routes.handle(&host, .GET, "/openapi.json", null, "", arena);
+    try std.testing.expectEqual(std.http.Status.ok, answer.status);
+    // Parsed as std parses: a repeated key is an error, so a duplicate path would fail here.
+    const spec = (try std.json.parseFromSliceLeaky(std.json.Value, arena, answer.body, .{})).object;
+    try std.testing.expectEqualStrings("3.1.0", spec.get("openapi").?.string);
+    const paths = spec.get("paths").?.object;
+    for ([_][]const u8{ "/", "/commands", "/events", "/openapi.json", "/commands/t.place", "/commands/t.off", "/commands/t.by%20hand%7Bx%7D" }) |p| {
+        if (paths.get(p) == null) {
+            std.debug.print("\nmissing path {s}\n", .{p});
+            return error.TestUnexpectedResult;
+        }
+    }
+    try std.testing.expectEqualStrings("Off", paths.get("/commands/t.off").?.object.get("post").?.object.get("summary").?.string);
+
+    // The body: each parameter's type, the required ones listed, nothing else accepted.
+    const place = paths.get("/commands/t.place").?.object.get("post").?.object;
+    try std.testing.expectEqualStrings("t.place", place.get("operationId").?.string);
+    const body = place.get("requestBody").?.object;
+    try std.testing.expect(body.get("required").?.bool);
+    const schema = body.get("content").?.object.get("application/json").?.object.get("schema").?.object;
+    try std.testing.expect(!schema.get("additionalProperties").?.bool);
+    const props = schema.get("properties").?.object;
+    const line = props.get("line").?.object;
+    try std.testing.expectEqualStrings("integer", line.get("type").?.string);
+    // Bounds the server does not check stay out of the schema, said in words instead.
+    try std.testing.expect(line.get("minimum") == null and line.get("maximum") == null);
+    try std.testing.expect(std.mem.indexOf(u8, line.get("description").?.string, "from 1 to") != null);
+    try std.testing.expectEqualStrings("right", props.get("side").?.object.get("enum").?.array.items[1].string);
+    try std.testing.expectEqual(@as(i64, 1), props.get("column").?.object.get("default").?.integer);
+    const required = schema.get("required").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), required.len);
+    try std.testing.expectEqualStrings("line", required[0].string);
+    const responses = place.get("responses").?.object;
+    for ([_][]const u8{ "200", "400", "404", "409", "500" }) |code| try std.testing.expect(responses.get(code) != null);
+    // Any JSON value: the schema `true`, never `[]`, which is not a schema at all.
+    try std.testing.expect(responses.get("200").?.object.get("content").?.object.get("application/json").?.object.get("schema").?.bool);
+
+    // A command with only `run` takes no body; one with a hand-written `runWith` takes any object.
+    try std.testing.expect(paths.get("/commands/t.off").?.object.get("post").?.object.get("requestBody") == null);
+    const by_hand = paths.get("/commands/t.by%20hand%7Bx%7D").?.object.get("post").?.object.get("requestBody").?.object;
+    const open_schema = by_hand.get("content").?.object.get("application/json").?.object.get("schema").?.object;
+    try std.testing.expect(open_schema.get("additionalProperties") == null and open_schema.get("properties") == null);
+
+    // The declared event, its example payload as JSON.
+    const events = paths.get("/events").?.object.get("get").?.object.get("x-fizzy-events").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), events.len);
+    try std.testing.expectEqualStrings("t.placed", events[0].object.get("name").?.string);
+    try std.testing.expectEqualStrings("left", events[0].object.get("example").?.object.get("side").?.string);
+
+    // Every operationId once; every `$ref` names a schema the description has.
+    var ids: std.StringHashMapUnmanaged(void) = .empty;
+    var it = paths.iterator();
+    while (it.next()) |path| {
+        var ops = path.value_ptr.object.iterator();
+        while (ops.next()) |op| {
+            const id = op.value_ptr.object.get("operationId").?.string;
+            try std.testing.expect(!ids.contains(id));
+            try ids.put(arena, id, {});
+        }
+    }
+    const schemas = spec.get("components").?.object.get("schemas").?.object;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, answer.body, at, "#/components/schemas/")) |i| {
+        const name_start = i + "#/components/schemas/".len;
+        const name_end = std.mem.indexOfScalarPos(u8, answer.body, name_start, '"').?;
+        try std.testing.expect(schemas.get(answer.body[name_start..name_end]) != null);
+        at = name_end;
+    }
+    // A HEAD is answered without generating it.
+    try std.testing.expectEqualStrings("", routes.handle(&host, .HEAD, "/openapi.json", null, "", arena).body);
+}
+
+/// Sends one request and reads the answer by its `Content-Length`, as an HTTP client does.
+const ControlOneShot = struct {
+    path: []const u8,
+    request: []const u8,
+    reply: [2048]u8 = undefined,
+    len: usize = 0,
+    fn run(self: *ControlOneShot) void {
+        const io = std.testing.io;
+        const addr = std.Io.net.UnixAddress.init(self.path) catch return;
+        const stream = addr.connect(io) catch return;
+        defer stream.close(io);
+        var wbuf: [256]u8 = undefined;
+        var w = stream.writer(io, &wbuf);
+        w.interface.writeAll(self.request) catch return;
+        w.interface.flush() catch return;
+        var rbuf: [256]u8 = undefined;
+        var r = stream.reader(io, &rbuf);
+        while (self.len < self.reply.len) {
+            const n = r.interface.readSliceShort(self.reply[self.len..][0..1]) catch return;
+            if (n == 0) return;
+            self.len += 1;
+            if (std.mem.endsWith(u8, self.reply[0..self.len], "\r\n\r\n")) break;
+        }
+        const key = "content-length: ";
+        const i = std.ascii.findIgnoreCase(self.reply[0..self.len], key) orelse return;
+        const end = std.mem.indexOfPos(u8, self.reply[0..self.len], i, "\r\n") orelse return;
+        const want = std.fmt.parseInt(usize, self.reply[i + key.len .. end], 10) catch return;
+        r.interface.readSliceAll(self.reply[self.len..][0..want]) catch return;
+        self.len += want;
+    }
+};
+
+const SlowCommand = struct {
+    ticket: u32 = 0,
+    fn start(state: *anyopaque, call: *sdk.Command.Call) anyerror!void {
+        const self: *SlowCommand = @ptrCast(@alignCast(state));
+        self.ticket = call.later();
+    }
+};
+
+test "control: a command that answers in a later frame holds its request open until it does" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    const vtable = sdk.Plugin.VTable{};
+    var slow: SlowCommand = .{};
+    var plugin = sdk.Plugin{ .state = &slow, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.slow", .owner = &plugin, .title = "Slow", .runWith = SlowCommand.start });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var state: control.routes.State = .{};
+    errdefer control.routes.stop(&server, &state, &host);
+
+    const post = "POST /commands/t.slow HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    var client: ControlOneShot = .{ .path = path, .request = post };
+    const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&client});
+    // Frames, until the command has started and its request waits on it.
+    var frames: usize = 0;
+    while (state.waiters.items.len == 0 and frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), state.waiters.items.len);
+    // More frames: still nothing to answer.
+    for (0..5) |_| control.routes.answerPending(&server, &state, &host);
+    try std.testing.expectEqual(@as(usize, 0), client.len);
+    // Done, in a later frame: the request is answered with what it returned.
+    host.finishCall(slow.ticket, .{ .ok = ".{ .done = true }" });
+    thread.join();
+    try std.testing.expectEqual(@as(usize, 0), state.waiters.items.len);
+    const reply = client.reply[0..client.len];
+    try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\n{\"done\":true}"));
+
+    // One still waiting when the server stops: answered as stopping, its call let go of.
+    var late: ControlOneShot = .{ .path = path, .request = post };
+    const late_thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&late});
+    frames = 0;
+    while (state.waiters.items.len == 0 and frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), state.waiters.items.len);
+    const ticket = slow.ticket;
+    control.routes.stop(&server, &state, &host);
+    late_thread.join();
+    try std.testing.expect(std.mem.startsWith(u8, late.reply[0..late.len], "HTTP/1.1 503 "));
+    try std.testing.expect(!host.callWanted(ticket));
+    // Its answer, when it comes, goes nowhere.
+    host.finishCall(ticket, .{ .ok = null });
+}
+
+test "control: MCP on the socket lists the commands as tools and calls them, now or later" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    const vtable = sdk.Plugin.VTable{};
+    var slow: SlowCommand = .{};
+    var plugin = sdk.Plugin{ .state = &slow, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.slow", .owner = &plugin, .title = "Slow", .runWith = SlowCommand.start });
+    try host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(ControlFixture.place),
+    });
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const routes = control.routes;
+    // Without a socket (`handle`): the replies a client reads.
+    const init = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\"}}", arena);
+    try std.testing.expect(std.mem.indexOf(u8, init.body, "\"protocolVersion\":\"2025-03-26\"") != null);
+    try std.testing.expectEqual(std.http.Status.accepted, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", arena).status);
+    const list = try std.json.parseFromSliceLeaky(std.json.Value, arena, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", arena).body, .{});
+    const tools = list.object.get("result").?.object.get("tools").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), tools.len);
+    const place = tools[1].object;
+    try std.testing.expectEqualStrings("t.place", place.get("name").?.string);
+    try std.testing.expectEqualStrings("integer", place.get("inputSchema").?.object.get("properties").?.object.get("line").?.object.get("type").?.string);
+    const called = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"line\":4,\"side\":\"right\"}}}", arena);
+    try std.testing.expect(std.mem.indexOf(u8, called.body, "\"isError\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, called.body, "\\\"note\\\":\\\"placed\\\"") != null);
+    const refused = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"side\":\"right\"}}}", arena);
+    try std.testing.expect(std.mem.indexOf(u8, refused.body, "\"isError\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"nope\"}", arena).body, "-32601") != null);
+    // A response from the client, as a notification is, is taken (202), not refused.
+    try std.testing.expectEqual(std.http.Status.accepted, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}", arena).status);
+    // An id comes back as it was sent; one that is neither a string nor a number is refused.
+    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":12345678901234567890,\"method\":\"ping\"}", arena).body, "\"id\":12345678901234567890,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":true,\"method\":\"ping\"}", arena).body, "-32600") != null);
+    // Told only of commands the app has: no fizzy.screen here.
+    try std.testing.expect(std.mem.indexOf(u8, init.body, "fizzy.screen") == null);
+
+    // Over the socket, a tool whose command answers later answers its call then.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var state: control.routes.State = .{};
+    defer control.routes.stop(&server, &state, &host);
+    const body = "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"method\":\"tools/call\",\"params\":{\"name\":\"t.slow\"}}";
+    const request = try std.fmt.allocPrint(arena, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
+    var client: ControlOneShot = .{ .path = path, .request = request };
+    const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&client});
+    var frames: usize = 0;
+    while (state.waiters.items.len == 0 and frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), state.waiters.items.len);
+    host.finishCall(slow.ticket, .{ .ok = ".{ .done = true }" });
+    thread.join();
+    try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.len], "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"done\\\":true}\"}],\"isError\":false}}"));
+}
+
 const ControlStreamClient = struct {
     path: []const u8,
     reply: [4096]u8 = undefined,
@@ -6897,7 +7184,7 @@ test "control: the app's events reach a stream, and the bus listens only while o
     };
     var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
     try server.start();
-    var relay: control.routes.Relay = .{};
+    var relay: control.routes.State = .{};
     try std.testing.expect(!host.listening.load(.acquire));
 
     var client: ControlStreamClient = .{ .path = path };
@@ -7188,17 +7475,21 @@ const HeardEvents = struct {
     fn handler(state: *anyopaque, e: sdk.events.Event) void {
         const self: *HeardEvents = @ptrCast(@alignCast(state));
         const gpa = std.heap.smp_allocator;
-        const src = gpa.dupeZ(u8, e.payload) catch return;
+        const src = gpa.dupeSentinel(u8, e.payload, 0) catch return;
         defer gpa.free(src);
         // A batch of disk changes is heard by its first path, everything else by its `.path`.
         const path = if (std.mem.eql(u8, e.name, "fizzy.files.changed")) files: {
-            const changed = std.zon.parse.fromSliceAlloc(sdk.events.FilesChanged, gpa, src, null, .{ .ignore_unknown_fields = true }) catch return;
-            defer std.zon.parse.free(gpa, changed);
+            var changed_arena: std.heap.ArenaAllocator = .init(gpa);
+            defer changed_arena.deinit();
+            var changed_diag: std.zon.parse.Diagnostics = undefined;
+            const changed = std.zon.parse.fromSlice(sdk.events.FilesChanged, .{ .gpa = gpa, .arena = changed_arena.allocator(), .source = src, .diagnostics = &changed_diag, .ignore_unknown_fields = true }) catch return;
             if (changed.events.len == 0) return;
             break :files gpa.dupe(u8, changed.events[0].path) catch return;
         } else plain: {
-            const payload = std.zon.parse.fromSliceAlloc(sdk.events.Path, gpa, src, null, .{ .ignore_unknown_fields = true }) catch return;
-            defer std.zon.parse.free(gpa, payload);
+            var payload_arena: std.heap.ArenaAllocator = .init(gpa);
+            defer payload_arena.deinit();
+            var payload_diag: std.zon.parse.Diagnostics = undefined;
+            const payload = std.zon.parse.fromSlice(sdk.events.Path, .{ .gpa = gpa, .arena = payload_arena.allocator(), .source = src, .diagnostics = &payload_diag, .ignore_unknown_fields = true }) catch return;
             break :plain gpa.dupe(u8, payload.path) catch return;
         };
         self.events.append(gpa, .{ .name = gpa.dupe(u8, e.name) catch return, .path = path }) catch gpa.free(path);
@@ -7507,7 +7798,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
                 };
-                return std.zon.parse.fromSliceAlloc(Read, h.arena(), try h.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+                var diag: std.zon.parse.Diagnostics = undefined;
+                return std.zon.parse.fromSlice(Read, .{ .gpa = h.arena(), .arena = h.arena(), .source = try h.arena().dupeSentinel(u8, zon, 0), .diagnostics = &diag, .ignore_unknown_fields = true });
             }
         }.read;
 
@@ -7545,7 +7837,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(notes, front.owner.documentPath(front));
             const Caret = struct { caret: struct { line: u32, column: u32 } };
             const out = host.callCommand("text.read", notes_args, host.arena()).ok.?;
-            const at = try std.zon.parse.fromSliceAlloc(Caret, host.arena(), try host.arena().dupeZ(u8, out), null, .{ .ignore_unknown_fields = true });
+            var at_diag: std.zon.parse.Diagnostics = undefined;
+            const at = try std.zon.parse.fromSlice(Caret, .{ .gpa = host.arena(), .arena = host.arena(), .source = try host.arena().dupeSentinel(u8, out, 0), .diagnostics = &at_diag, .ignore_unknown_fields = true });
             try std.testing.expectEqual(@as(u32, 3), at.caret.line);
             try std.testing.expectEqual(@as(u32, 4), at.caret.column);
         }
@@ -7623,6 +7916,46 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             editor.redoFromFeed(front, redo.tag);
             try std.testing.expectEqualStrings("// by Claude\n", (try read(host, "")).text);
             try editor.undo();
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+        }
+
+        // Going back is a step, and the jump is whoever went back's: Claude writes, the person
+        // takes it back, Claude writes again. Claude's first write is still on the line, its
+        // reverse is the person's, and Claude's new write is Claude's.
+        {
+            const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            const claude: sdk.Author = .{ .kind = .agent, .plugin = "test", .session = 2, .label = "Claude" };
+            const first = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// first\\n\" }}", .{main_zig});
+            defer gpa.free(first);
+            const second = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// second\\n\" }}", .{main_zig});
+            defer gpa.free(second);
+            const before = try gpa.dupe(u8, (try read(host, "")).text);
+            defer gpa.free(before);
+
+            var outer = host.act(claude);
+            try std.testing.expect(host.callCommand("text.write", first, host.arena()) == .ok);
+            host.endAct(outer);
+            const claudes = (try editor.stepToTake(front, .undo, host.arena())).step.id;
+            outer = host.act(.person);
+            try editor.undo();
+            host.endAct(outer);
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+            outer = host.act(claude);
+            try std.testing.expect(host.callCommand("text.write", second, host.arena()) == .ok);
+            host.endAct(outer);
+
+            const hist = front.owner.historyLine(front, host.arena()) orelse return error.TestUnexpectedResult;
+            const top = hist.entries[hist.at - 1];
+            const reverse = hist.entries[hist.at - 2];
+            try std.testing.expectEqual(claudes, hist.entries[hist.at - 3].id);
+            try std.testing.expect(std.mem.startsWith(u8, reverse.title, "Back to "));
+            try std.testing.expectEqual(sdk.Author.Kind.person, host.stepAuthor(front.id, reverse.id).kind);
+            try std.testing.expectEqualStrings("Claude", host.stepAuthor(front.id, top.id).label);
+            try std.testing.expectEqualStrings("Claude", host.stepAuthor(front.id, claudes).label);
+            // Claude's first write is still there to go to, and before it the text as it was.
+            try std.testing.expect(front.owner.historyGoTo(front, claudes));
+            try std.testing.expectEqualStrings("// first\n", (try read(host, "")).text);
+            try std.testing.expect(front.owner.historyGoTo(front, hist.entries[hist.at - 4].id));
             try std.testing.expectEqualStrings(before, (try read(host, "")).text);
         }
 
@@ -7895,11 +8228,12 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try editor.undo();
         try editor.redo();
         try editor.undo();
-        // An edit after going back: the step gone back over stays undone.
+        // An edit after going back: the step gone back over comes back on the line, then its
+        // reverse, then the edit, so the text is as it was gone back to and nothing is lost.
         try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"Y\", .line = 1 }", host.arena()) == .ok);
         try dvui.testing.settle(headlessFrame);
         try std.testing.expectEqualStrings("Yab", try textOf(host, a));
-        try std.testing.expectEqualSlices(sdk.Step.Kind, &.{ .added, .joined, .added, .undone, .redone, .undone, .added }, rec.kinds.items);
+        try std.testing.expectEqualSlices(sdk.Step.Kind, &.{ .added, .joined, .added, .undone, .redone, .undone, .redone, .added, .added }, rec.kinds.items);
 
         // Played into a document of its own, forward, in order: the same text.
         const b = try newDoc(editor, host, a.id);
@@ -7909,7 +8243,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("Yab", try textOf(host, b));
         // Unrecorded, B reported nothing; and a step that does not fit is refused, B untouched:
         // the undo takes back an `X` that is not there.
-        try std.testing.expectEqual(@as(usize, 7), rec.kinds.items.len);
+        try std.testing.expectEqual(@as(usize, 9), rec.kinds.items.len);
         // (Through the hook itself: the wrapper logs the refusal as an error, which fails a run.)
         try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.applyStep.?(b.owner.state, b, rec.effects.items[3], "", 0));
         try std.testing.expectEqualStrings("Yab", try textOf(host, b));
@@ -8255,7 +8589,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("", kf.files[0].text);
         // Played in a tab of its own (`TapeTabs`, the transport's share), each step at its moment:
         // the same text, under the tape's own mount, with the person's documents untouched.
-        try editor.tape_tabs.open(editor, bytes, .{});
+        // A tape naming a plugin that is not loaded is not played: natively nothing is fetched,
+        // and it says which plugin it needs rather than open a document no owner can step.
+        {
+            var tape_check = app.automation.Input.check;
+            tape_check.steps = fizzy.Editor.Demo.stepsCheck;
+            var loaded = try app.automation.Tape.load(gpa, bytes, tape_check);
+            defer loaded.deinit();
+            const files = try host.arena().dupe(app.automation.Tape.File, loaded.tape.keyframes[0].files);
+            files[0].owner = "no-such-plugin";
+            const keyframes = try host.arena().dupe(app.automation.Tape.Keyframe, loaded.tape.keyframes);
+            keyframes[0].files = files;
+            var orphan_tape = loaded.tape;
+            orphan_tape.keyframes = keyframes;
+            const orphan = try app.automation.binary.encode(gpa, orphan_tape, .{});
+            defer gpa.free(orphan);
+            const docs_before = editor.app.open_files.count();
+            try editor.tape_tabs.openWhenReady(editor, orphan, false);
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expect(editor.tape_tabs.waiting == null);
+            try std.testing.expectEqual(docs_before, editor.app.open_files.count());
+        }
+        // Its plugin loaded, a tape plays at the next frame's top (`openWhenReady`), as
+        // `Demo: Play a Tape…` and a page's `?tape=` both open one.
+        try editor.tape_tabs.openWhenReady(editor, bytes, false);
         const played_path = try std.fmt.allocPrint(gpa, "tape://1/{s}", .{std.fs.path.basename(path)});
         defer gpa.free(played_path);
         for (0..2000) |_| {
@@ -8336,8 +8693,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         try editor.rawCloseFileID(doc.id);
 
-        // A track whose start is gone from the history (undone past, and edited over) is
-        // refused, and the document is left as it was.
+        // A track whose start was undone past and edited over still exports: going back is a
+        // step, so its start is still on the line. The document is left as it was.
         editor.setTracking(false);
         try host.runCommand("fizzy.newFile");
         for (0..200) |_| {
@@ -8359,11 +8716,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const before_text = try gpa.dupe(u8, try textOf(host, gone_path));
         defer gpa.free(before_text);
         const gone_args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ gone_path, out });
-        try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) != .ok);
+        try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) == .ok);
         try std.testing.expectEqualStrings(before_text, try textOf(host, gone_path));
         try editor.rawCloseFileID(gone.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
+    }
+
+    // Recording follows its setting (`record_history`, on by default) each time it changes, a
+    // command's say (`setTracking`, as the tests above used) holding until then: turned off,
+    // nothing is recorded and what was is forgotten; turned on, every open document gets a track.
+    {
+        const tracks = &editor.app.tracks.?;
+        try std.testing.expect(editor.app.settings.record_history);
+        editor.setTracking(true);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(tracks.open.count() > 0);
+        editor.app.settings.record_history = false;
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!tracks.on and editor.app.host.recorder == null);
+        try std.testing.expectEqual(@as(usize, 0), tracks.open.count());
+        editor.app.settings.record_history = true;
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(tracks.on and editor.app.host.recorder != null);
+        try std.testing.expectEqual(editor.app.open_files.count(), tracks.open.count());
     }
 
     // Revealing a view (`Host.revealSurface`): with the bottom panel shut, revealing Output opens
@@ -8399,7 +8775,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             // has passed on screen, which a few test frames are not.
             profile: struct { frame: struct { fps: f64 } },
         };
-        const stats = try std.zon.parse.fromSliceAlloc(Stats, host.arena(), try host.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+        var stats_diag: std.zon.parse.Diagnostics = undefined;
+        const stats = try std.zon.parse.fromSlice(Stats, .{ .gpa = host.arena(), .arena = host.arena(), .source = try host.arena().dupeSentinel(u8, zon, 0), .diagnostics = &stats_diag, .ignore_unknown_fields = true });
         try std.testing.expect(for (stats.plugins) |pl| {
             if (std.mem.eql(u8, pl.id, "devtools")) break pl.link == .bundled;
         } else false);
@@ -8419,7 +8796,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             else => return error.TestUnexpectedResult,
         };
         const Written = struct { path: []const u8, frames: u64 };
-        const written = try std.zon.parse.fromSliceAlloc(Written, host.arena(), try host.arena().dupeZ(u8, zon), null, .{ .ignore_unknown_fields = true });
+        var written_diag: std.zon.parse.Diagnostics = undefined;
+        const written = try std.zon.parse.fromSlice(Written, .{ .gpa = host.arena(), .arena = host.arena(), .source = try host.arena().dupeSentinel(u8, zon, 0), .diagnostics = &written_diag, .ignore_unknown_fields = true });
         try std.testing.expect(written.frames > 0);
         const input_path = try std.fs.path.join(host.arena(), &.{ written.path, "input.bin" });
         const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, input_path, host.arena(), .unlimited);
@@ -8686,10 +9064,56 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.workbench.pending_new_file_path == null);
     }
 
+    // A file opened before its plugin is there (launched with it while the plugin was refused,
+    // before a dropped-in build was loaded) is the fallback's, as text, until the plugin arrives;
+    // then it moves to it, in the same tab (`Editor.rehomeFallbackDocuments`).
+    {
+        const host = &editor.app.host;
+        const image = host.pluginById("image") orelse return error.TestUnexpectedResult;
+        host.unregisterPlugin(image);
+        editor.rebuildExtensionOwnerCache();
+        // One white pixel, uncompressed true-colour TGA.
+        const tga = [_]u8{ 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 32, 8, 255, 255, 255, 255 };
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "project/late.tga", .data = &tga });
+        const late = try std.fs.path.join(gpa, &.{ project, "late.tga" });
+        defer gpa.free(late);
+        const ownerOf = struct {
+            fn ownerOf(e: *fizzy.Editor, path: []const u8) ?*sdk.Plugin {
+                const d = e.docFromPath(path) orelse return null;
+                return d.owner;
+            }
+        }.ownerOf;
+        _ = try editor.openFilePath(late, editor.workbench.currentGroupingID());
+        for (0..200) |_| {
+            if (ownerOf(editor, late) != null) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(host.fallback_editor, ownerOf(editor, late));
+        const docs_before = editor.app.open_files.count();
+
+        try host.registerPlugin(image);
+        editor.rebuildExtensionOwnerCache();
+        for (0..200) |_| {
+            if (ownerOf(editor, late) == image) break;
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(image, ownerOf(editor, late).?);
+        try std.testing.expectEqual(docs_before, editor.app.open_files.count());
+        // Its tab was taken over, not added beside it: one tab for the file, the image's.
+        const surface = try sdk.document.surfaceId(host.arena(), image.id, late);
+        try std.testing.expect(editor.workbench.hasTabAnywhere(surface));
+        const text_surface = try sdk.document.surfaceId(host.arena(), host.fallback_editor.?.id, late);
+        try std.testing.expect(!editor.workbench.hasTabAnywhere(text_surface));
+        try editor.closeFileID(editor.docFromPath(late).?.id);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // A quit straight after a pane slid shut (`snapshotClosingPane`): the pane still holds its
     // picture, and the quit comes after the last frame, when nothing can be freed at a frame's end.
     {
-        const pixels = [_]u8{0} ** (4 * 4 * 4);
+        const pixels: [4 * 4 * 4]u8 = @splat(0);
         const snap = try t.window.backend.textureCreate(&pixels, .{ .width = 4, .height = 4 });
         editor.workbench.workspaces.values()[0].closing_snapshot = snap;
     }
@@ -8876,7 +9300,7 @@ test "automation service: refused while something drives the app, or for a demo'
     // A demo's tape opens on a keyframe; garbage is no tape at all. Both say why.
     try std.testing.expectEqualStrings("KeyframeInLiveTape", api.play(demo).invalid);
     try std.testing.expect(api.play("not a tape") == .invalid);
-    try std.testing.expect(api.outcome(@enumFromInt(12345)) == .unknown);
+    try std.testing.expect(api.outcome(@fromBackingInt(@intCast(12345))) == .unknown);
 
     // A demo loaded: refused, and nothing is settled while it plays.
     service_demo_loaded = true;
@@ -8887,7 +9311,7 @@ test "automation service: refused while something drives the app, or for a demo'
     // One tape at a time, and only its own ticket stops it.
     const ticket = try started(api.play(live));
     try std.testing.expect(api.play(live) == .busy);
-    api.stop(@enumFromInt(@intFromEnum(ticket) + 1));
+    api.stop(@fromBackingInt(@intCast(@backingInt(ticket) + 1)));
     try std.testing.expect(api.outcome(ticket) == .playing);
     api.stop(ticket);
     try std.testing.expect(api.outcome(ticket) == .stopped);
@@ -8956,7 +9380,11 @@ test "the output panel settles at its tail with a line wider than it anywhere in
     defer t.deinit();
     defer fizzy.OutputLog.clear();
 
-    const wide = "a line far wider than the panel " ** 12;
+    const wide = comptime blk: {
+        var s: []const u8 = "";
+        for (0..12) |_| s = s ++ "a line far wider than the panel ";
+        break :blk s;
+    };
     const rows = 40;
     // The wide line at each of the last rows in turn, wherever the top of the view falls.
     for (0..20) |from_tail| {

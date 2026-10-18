@@ -49,9 +49,10 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
     if (core.fs.readZ(allocator, dvui.io, path) catch null) |data| {
         defer allocator.free(data);
 
-        if (std.zon.parse.fromSliceAlloc(Disk, allocator, data, null, .{ .ignore_unknown_fields = true }) catch null) |disk| {
-            defer std.zon.parse.free(allocator, disk);
-
+        var disk_arena: std.heap.ArenaAllocator = .init(allocator);
+        defer disk_arena.deinit();
+        var disk_diag: std.zon.parse.Diagnostics = undefined;
+        if (std.zon.parse.fromSlice(Disk, .{ .gpa = allocator, .arena = disk_arena.allocator(), .source = data, .diagnostics = &disk_diag, .ignore_unknown_fields = true }) catch null) |disk| {
             for (disk.folders) |folder| {
                 // A folder on a mount (`gdrive://…`) is not the disk's to check: it exists
                 // whenever its plugin is signed in, which is decided at open time.

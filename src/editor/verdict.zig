@@ -126,7 +126,7 @@ var path: []const u8 = "";
 var expect: Expect = .{};
 var start_ns: i128 = 0;
 var waited_frames: u32 = 0;
-var failures: [@typeInfo(Failure).@"enum".fields.len]Failure = undefined;
+var failures: [@typeInfo(Failure).@"enum".field_names.len]Failure = undefined;
 var failure_count: usize = 0;
 var ended_buf: [64]u8 = undefined;
 var tape_buf: [128]u8 = undefined;
@@ -188,9 +188,12 @@ pub fn init(gpa: std.mem.Allocator, process_io: std.Io, profile: ?[]const u8) ?u
 fn readExpect(gpa: std.mem.Allocator, file: []const u8) !Expect {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, file, gpa, .limited(1 << 16));
     defer gpa.free(bytes);
-    const source = try gpa.dupeZ(u8, bytes);
+    const source = try gpa.dupeSentinel(u8, bytes, 0);
     defer gpa.free(source);
-    return std.zon.parse.fromSlice(Expect, gpa, source, null, .{});
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSliceNoAlloc(Expect, .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag });
 }
 
 /// Once a displayed frame, after the app's: watch the tape start and end. True: the tape has

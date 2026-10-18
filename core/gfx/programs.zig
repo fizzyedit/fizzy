@@ -120,7 +120,7 @@ pub const Hooks = extern struct {
     end: *const fn () callconv(.c) void,
 };
 
-const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7072_6f67); // "fizzprog"
+const publish_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_7072_6f67)); // "fizzprog"
 const publish_key = "_programs";
 
 /// Host only, once a frame: publish this backend's programs, if it has any.
@@ -241,7 +241,7 @@ pub const Program = struct {
             },
             .asked => {},
         }
-        return switch (@as(Status, @enumFromInt(h.status(self.id)))) {
+        return switch (@as(Status, @fromBackingInt(@intCast(h.status(self.id))))) {
             .ready => blk: {
                 if (!self.logged) {
                     self.logged = true;
@@ -349,7 +349,7 @@ const Job = struct {
         const h = hooks() orelse return;
         if (!h.begin(self.program, &self.textures, self.n_textures, self.uniforms.ptr, @intCast(self.uniforms.len))) return;
         defer h.end();
-        h.blend(@intFromEnum(self.blend));
+        h.blend(@backingInt(self.blend));
         dvui.renderTriangles(self.triangles, self.tex) catch {};
     }
 };

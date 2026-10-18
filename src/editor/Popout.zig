@@ -97,7 +97,7 @@ const Out = struct {
     serial: u64,
     viewport: *viewports.Viewport,
     /// Its part of the frame, drawn every frame for its window: `drawn` of it, from its top left —
-    /// the texture is kept larger through a fullscreen transition (`keepTarget`).
+    /// the texture is kept larger through a fullscreen transition (`viewports.keptTarget`).
     target: ?dvui.Texture.Target = null,
     drawn: [2]u32 = .{ 0, 0 },
     /// The part of the frame its picture shows this frame, once drawn (`overlaysFrame`).
@@ -196,7 +196,7 @@ pub fn beginFrame(state: *State) void {
     menus_left_behind = false;
     // Whatever happened, the screens floating things are placed on this frame: each window's,
     // besides the main window's (`dvui.screensSet`).
-    defer publishScreens();
+    defer viewports.publishScreens(null);
     // And where a held pointer is read: pinned while a float's window is being moved or resized.
     defer pinPointer(state);
     for (&outs) |*slot| {
@@ -257,7 +257,7 @@ fn popOut(f: *Floats.Float) void {
         if (o.* == null) break o;
     } else return;
     var title_buf: [96]u8 = undefined;
-    const title = std.fmt.bufPrintZ(&title_buf, "{s}", .{f.titleText()}) catch "Fizzy";
+    const title = std.fmt.bufPrintSentinel(&title_buf, "{s}", .{f.titleText()}, 0) catch "Fizzy";
     const s = dvui.windowNaturalScale();
     // Where it goes in the main window's frame, whole — not where it was last drawn: made last
     // frame, it may have been drawn as the carried glass it lands from, a drop's size.
@@ -299,19 +299,6 @@ fn pinPointer(state: *const State) void {
 
 /// Each window's part of the frame, natural, as a screen menus, tooltips and popovers opened in its
 /// float are placed on and kept within (`dvui.screensSet`, `core.screens.screenFor`).
-fn publishScreens() void {
-    var rects: [max_out]dvui.Rect.Natural = undefined;
-    var n: usize = 0;
-    const s = dvui.windowNaturalScale();
-    for (outs) |slot| {
-        const o = slot orelse continue;
-        const f = viewports.frameOf(o.viewport);
-        rects[n] = .{ .x = f.x / s, .y = f.y / s, .w = f.w / s, .h = f.h / s };
-        n += 1;
-    }
-    dvui.screensSet(rects[0..n]);
-}
-
 fn find(state: *const State, serial: u64) ?usize {
     for (state.floats.items.items, 0..) |f, i| {
         if (f.serial == serial) return i;
@@ -1136,7 +1123,8 @@ fn windowFrame(state: *State, o: *Out) void {
     }
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
-    const target = keepTarget(o, w, h) orelse return;
+    const target = viewports.keptTarget(o.viewport, &o.target, w, h) orelse return;
+    o.drawn = .{ w, h };
 
     // Transparent where the float is not: past its corners.
     const picture: viewports.Picture = .begin(target, shown);
@@ -1223,30 +1211,6 @@ fn displayNatural() dvui.Rect.Natural {
 /// same sizes shrinking, did not (the user; measured 20–59 ms frames growing, 5–9 shrinking). There
 /// it is made once at the display's size, kept while the window fits in it, and let go for one its
 /// size once the window has settled.
-fn keepTarget(o: *Out, w: u32, h: u32) ?dvui.Texture.Target {
-    const moving = viewports.spaceFullness(o.viewport) != null;
-    if (o.target) |t| {
-        const fits = t.width >= w and t.height >= h;
-        const exact = t.width == w and t.height == h;
-        if (!fits or (!moving and !exact)) {
-            t.destroyLater();
-            o.target = null;
-        }
-    }
-    if (o.target == null) {
-        var tw = w;
-        var th = h;
-        if (moving) {
-            const d = viewports.displayInMain();
-            tw = @max(w, @as(u32, @intFromFloat(@max(0, @round(d.w)))));
-            th = @max(h, @as(u32, @intFromFloat(@max(0, @round(d.h)))));
-        }
-        o.target = dvui.textureCreateTarget(.{ .width = tw, .height = th, .interpolation = .nearest }) catch return null;
-    }
-    o.drawn = .{ w, h };
-    return o.target.?;
-}
-
 /// The least window opacity a menu's glass takes: a menu carries text, and over a clear window
 /// there was too little behind it to read it by.
 const menu_opacity_floor: f32 = 0.6;

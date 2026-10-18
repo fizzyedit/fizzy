@@ -387,7 +387,8 @@ pub fn loadSession(gpa: std.mem.Allocator, dir: []const u8) ?KeptDocuments {
     defer gpa.free(text);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const saved = std.zon.parse.fromSliceAlloc(Saved, arena.allocator(), text, null, .{ .ignore_unknown_fields = true }) catch |err| {
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const saved = std.zon.parse.fromSlice(Saved, .{ .gpa = gpa, .arena = arena.allocator(), .source = text, .diagnostics = &diag, .ignore_unknown_fields = true }) catch |err| {
         dvui.log.warn("restart: the last session could not be read ({t}); documents open from disk", .{err});
         return null;
     };

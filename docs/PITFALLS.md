@@ -23,6 +23,53 @@ goes beside the code if it has an area, here if not.
   this; don't fold the two steps back together, or start anything long-lived inside `zig build
   test`.
 
+## The build (Zig 0.17)
+
+`build.zig` runs in a configurer, and its result is cached; a separate maker runs the steps.
+Four things in that split cost time on the move to 0.17:
+
+- **The configuration is cached without regard to the environment.** A variable that
+  `build.zig` reads with `b.graph.environ_map` is seen on the first configure and then ignored
+  until something else forces a reconfigure. Anything that changes the build is a `-D` option.
+  Scripts that hold a setting in the environment (`scripts/release.sh`, `release.yml`) turn it
+  into the option.
+- **`Run.setEnvironmentVariable` freezes the whole environment.** Its first call copies the
+  configure-time environment into the Run, and that copy is cached with the configuration. The
+  command then keeps the environment of the first configure (a `DOTNET_ROOT` exported later never
+  arrived). A command that needs its environment changed runs through velopack-zig's
+  `tools/run_env.zig` (`velopack.addVpkRun`), which applies the changes when it runs. A step
+  that reads the environment itself, as `sdk/plugin_sdk_install.zig` does, reads it at make time.
+- **A file read while configuring must be declared**, or a change to it is never seen:
+  `b.dependOnFileContents`, `dependOnFileMetadata` (existence), `dependOnDirectoryContents`
+  (a listing). `--cache-poison=disallowed` does not catch an undeclared read.
+- **A declared path must not be inside a missing directory.** The maker cannot load the
+  configuration ("configuration failed: FileSystemFailure"); a plugin without `.github/` hit it.
+  `common.dependOnPathExistence` (and its copy in `sdk/plugin_sdk.zig`) declares the nearest
+  directory that exists instead.
+- **Some GitHub `archive/<sha>.tar.gz` URLs fetch wrong.** `zig fetch` reports the package's
+  hash, but a build's own fetch leaves the archive's top folder in place: no `build.zig.zon` at
+  the package's root, an unnamed `N-V-…` hash, and "hash mismatch" (dvui-dev `bd7736d`). Pin the
+  same commit as `git+https://github.com/<owner>/<repo>#<sha>`; the hash is the same.
+
+### Windows, on 0.17
+
+Three that the release builds (`zig build package`, MSVC) hit and the macOS build never shows:
+
+- **An `*-windows-msvc` exe must link `oldnames` itself.** MSVC's C runtime spells the POSIX
+  calls `_getcwd`, `_chdir`, …, and `oldnames.lib` maps the plain names onto them. Zig 0.16
+  linked it into every MSVC exe; 0.17 does not, so C that calls `getcwd` (dvui's
+  tinyfiledialogs, fizzy's startup) fails to link with unresolved symbols. `build/exe.zig` adds
+  it for `abi == .msvc`; any other MSVC exe built from this tree needs the same line.
+- **The `translate-c` tool takes `--libc=<ini>` before its `--`.** Everything after `--` goes to
+  the C front end, which doesn't know the flag, so a `--libc` appended at the end is lost and the
+  MSVC headers aren't found. `build/msvc.zig` inserts it ahead of the `--`. (The deprecated
+  `addTranslateC` step has no way to pass a libc file at all; it gets the include dirs instead.)
+- **sdl_zig must leave SDL's `core/linux/` out of a Windows build.** SDL lists those sources as
+  generic because they compile to nothing off Linux, but `core/linux/SDL_dbus.c` includes
+  `<unistd.h>` before its guard, and MSVC has no `unistd.h`. fizzyedit/sdl_zig filters them
+  (`ef7eb36`, pinned in `backend/build.zig.zon`); a move to upstream sdl_zig or a new SDL must
+  keep the filter.
+
 ## Running a second fizzy
 
 - **`fizzy --profile <dir>`** keeps config, recents, plugins, the single-instance lock and its

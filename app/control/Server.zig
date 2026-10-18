@@ -29,6 +29,23 @@ pub const max_backlog = 8 * 1024 * 1024;
 /// How long a stream may stay quiet before a keep-alive comment: how a client that went away
 /// without closing is noticed.
 pub const keep_alive_ms = 15_000;
+/// The longest socket path the OS takes, without its terminating zero. std's
+/// `UnixAddress.max_len` says 108 everywhere but Windows, where Darwin's `sockaddr_un` holds 104:
+/// a path between them passes `UnixAddress.init` and then overruns the copy in `listen`.
+pub const max_path = if (builtin.target.os.tag == .windows) 107 else @sizeOf(std.posix.sockaddr.un) - @offsetOf(std.posix.sockaddr.un, "path") - 1;
+
+/// Where an app whose config folder is `config_folder` listens: `control/control.sock` in it, a folder
+/// of its own only this user can open (`start` makes it). When that is longer than the OS takes
+/// (`max_path`, a deep profile), a folder in `runtime_dir` (`$TMPDIR`, `$XDG_RUNTIME_DIR`, else
+/// `/tmp`) named by a hash of the config folder: per config folder still, and just as private.
+pub fn socketPath(gpa: std.mem.Allocator, config_folder: []const u8, runtime_dir: ?[]const u8) ![]u8 {
+    const preferred = try std.fs.path.join(gpa, &.{ config_folder, "control", "control.sock" });
+    if (preferred.len <= max_path) return preferred;
+    gpa.free(preferred);
+    var name: [32]u8 = undefined;
+    const folder = try std.fmt.bufPrint(&name, "fizzy-control-{x:0>16}", .{std.hash.Wyhash.hash(0, config_folder)});
+    return std.fs.path.join(gpa, &.{ runtime_dir orelse "/tmp", folder, "control.sock" });
+}
 
 gpa: std.mem.Allocator,
 io: Io,
@@ -51,6 +68,9 @@ socket_inode: ?Io.File.INode = null,
 /// Requests waiting for the UI thread, under `lock`.
 lock: Io.Mutex = .init,
 pending: std.ArrayListUnmanaged(*Request) = .empty,
+/// Requests the UI thread took and has not answered yet (a command answering in a later frame),
+/// under `lock`: `stop` answers them too.
+outstanding: std.ArrayListUnmanaged(*Request) = .empty,
 /// Connections streaming events (`publish`), under `lock`.
 streams: std.ArrayListUnmanaged(*Stream) = .empty,
 
@@ -118,14 +138,17 @@ pub const Request = struct {
         const topics = topicsOf(self.arena, self.target) catch
             return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
         self.stream = .{ .topics = topics, .conn = self.conn };
-        {
+        const added = added: {
             server.lock.lockUncancelable(server.io);
             defer server.lock.unlock(server.io);
-            server.streams.append(server.gpa, &self.stream) catch
-                return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
+            server.streams.append(server.gpa, &self.stream) catch break :added false;
             self.conn.streaming = true;
-        }
+            break :added true;
+        };
+        // Answered outside the lock, which `answer` takes.
+        if (!added) return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
         self.response = .{ .stream = true, .status = .ok };
+        server.settle(self);
         self.done.set(server.io);
     }
 
@@ -137,6 +160,7 @@ pub const Request = struct {
             .body = server.gpa.dupe(u8, body) catch null,
         };
         if (self.response.body == null) self.response.status = .internal_server_error;
+        server.settle(self);
         self.done.set(server.io);
     }
 };
@@ -157,7 +181,19 @@ pub fn start(self: *Server) !void {
     // Windows has AF_UNIX from 10 1803, and std offers it only to a target whose minimum is that
     // (`std.Io.net.has_unix_sockets`); fizzy's build sets it.
     if (!Io.net.has_unix_sockets) return error.UnixSocketsUnsupported;
+    if (self.socket_path.len > max_path) return error.NameTooLong;
     const addr = try Io.net.UnixAddress.init(self.socket_path);
+    // Its folder, this user's only: the socket is unreachable to others from the moment it exists,
+    // before its own permissions are set below. A link in its place is refused, not followed: its
+    // target may be a folder shared with others, which the mode would then be set on.
+    if (std.fs.path.dirname(self.socket_path)) |dir| {
+        try Io.Dir.cwd().createDirPath(self.io, dir);
+        if (comptime builtin.target.os.tag != .windows) {
+            const st = try Io.Dir.cwd().statFile(self.io, dir, .{ .follow_symlinks = false });
+            if (st.kind != .directory) return error.NotAFolder;
+            try Io.Dir.cwd().setFilePermissions(self.io, dir, .fromMode(0o700), .{ .follow_symlinks = false });
+        }
+    }
     // A socket left by a fizzy that did not quit cleanly, or one a fizzy this one takes over from
     // still holds: this run's now. The other leaves it alone at its stop (`socket_inode`).
     Io.Dir.deleteFileAbsolute(self.io, self.socket_path) catch {};
@@ -165,8 +201,9 @@ pub fn start(self: *Server) !void {
     errdefer {
         self.listener.?.deinit(self.io);
         self.listener = null;
+        Io.Dir.deleteFileAbsolute(self.io, self.socket_path) catch {};
     }
-    if (comptime builtin.os.tag != .windows) {
+    if (comptime builtin.target.os.tag != .windows) {
         // This user only. The umask usually says so already; a shared machine's may not.
         try Io.Dir.cwd().setFilePermissions(self.io, self.socket_path, .fromMode(0o600), .{});
         // Not on Windows, where the socket is a reparse point `statFile` cannot open: there this
@@ -182,9 +219,21 @@ pub fn take(self: *Server, out: *std.ArrayListUnmanaged(*Request)) usize {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     // Out of memory: left queued for the next frame, never dropped unanswered.
+    self.outstanding.ensureUnusedCapacity(self.gpa, self.pending.items.len) catch return self.streams.items.len;
     out.appendSlice(self.gpa, self.pending.items) catch return self.streams.items.len;
+    self.outstanding.appendSliceAssumeCapacity(self.pending.items);
     self.pending.clearRetainingCapacity();
     return self.streams.items.len;
+}
+
+/// `req` is answered: no longer `outstanding`.
+fn settle(self: *Server, req: *Request) void {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    for (self.outstanding.items, 0..) |r, i| if (r == req) {
+        _ = self.outstanding.swapRemove(i);
+        return;
+    };
 }
 
 /// Whether any stream wants the event `name`: the caller skips building a message nobody reads.
@@ -222,17 +271,25 @@ pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
 pub fn stop(self: *Server) void {
     self.stopping.store(true, .release);
     // The connections whose requests this answers ("fizzy is closing"): each writes it and ends.
+    // Queued, or taken and still to be answered (a command answering later).
     var answered: std.ArrayListUnmanaged(*Conn) = .empty;
     defer answered.deinit(self.gpa);
+    // Moved out whole, not copied: running out of memory here must not drop one unanswered, whose
+    // task would then wait for good.
+    var queued: std.ArrayListUnmanaged(*Request) = .empty;
+    defer queued.deinit(self.gpa);
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(self.gpa);
     {
         self.lock.lockUncancelable(self.io);
         defer self.lock.unlock(self.io);
-        for (self.pending.items) |r| {
-            answered.append(self.gpa, r.conn) catch {};
-            r.answer(self, .service_unavailable, "text/plain", "fizzy is closing\n");
-        }
-        self.pending.clearRetainingCapacity();
+        std.mem.swap(std.ArrayListUnmanaged(*Request), &queued, &self.pending);
+        std.mem.swap(std.ArrayListUnmanaged(*Request), &taken, &self.outstanding);
     }
+    for ([_][]const *Request{ queued.items, taken.items }) |owed| for (owed) |r| {
+        answered.append(self.gpa, r.conn) catch {};
+        r.answer(self, .service_unavailable, "text/plain", "the control server is stopping\n");
+    };
     if (self.accept_task) |*t| t.cancel(self.io);
     self.accept_task = null;
     // No more are accepted, so `conns` holds still. Every other task, reading its next request or
@@ -252,6 +309,7 @@ pub fn stop(self: *Server) void {
         } else |_| {}
     }
     self.pending.deinit(self.gpa);
+    self.outstanding.deinit(self.gpa);
     self.streams.deinit(self.gpa);
 }
 
@@ -487,7 +545,7 @@ const TestClient = struct {
         }
         const head = self.reply[0..self.reply_len];
         const key = "content-length: ";
-        if (std.ascii.indexOfIgnoreCase(head, key)) |i| {
+        if (std.ascii.findIgnoreCase(head, key)) |i| {
             const end = std.mem.indexOfPos(u8, head, i, "\r\n") orelse return;
             const len = std.fmt.parseInt(usize, head[i + key.len .. end], 10) catch return;
             const want = @min(len, self.reply.len - self.reply_len);
@@ -507,7 +565,8 @@ test "a request reaches the UI thread and its answer goes back" {
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
     defer gpa.free(dir);
-    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    // In a folder of its own that `start` makes, as the app's is (`control/control.sock`).
+    const path = try std.fs.path.join(gpa, &.{ dir, "control", "c.sock" });
     defer gpa.free(path);
 
     var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
@@ -545,9 +604,12 @@ test "a request reaches the UI thread and its answer goes back" {
     try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\n{\"ok\":true}"));
 
     // Only this user may open it.
-    if (builtin.os.tag == .windows) return;
+    if (builtin.target.os.tag == .windows) return;
     const st = try Io.Dir.cwd().statFile(io, path, .{});
     try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), st.permissions.toMode() & 0o777);
+    // And its folder: nobody else reaches it, even before the socket's own mode is set.
+    const folder = try Io.Dir.cwd().statFile(io, std.fs.path.dirname(path).?, .{});
+    try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), folder.permissions.toMode() & 0o777);
 }
 
 fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
@@ -556,7 +618,7 @@ fn testSocket(gpa: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     return std.fs.path.join(gpa, &.{ dir, "c.sock" });
 }
 
-test "a request still queued at quit is answered: fizzy is closing" {
+test "a request still queued at quit is answered: the server is stopping" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -582,7 +644,7 @@ test "a request still queued at quit is answered: fizzy is closing" {
     thread.join();
     const reply = client.reply[0..client.reply_len];
     try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 503 Service Unavailable\r\n"));
-    try std.testing.expect(std.mem.endsWith(u8, reply, "fizzy is closing\n"));
+    try std.testing.expect(std.mem.endsWith(u8, reply, "the control server is stopping\n"));
 }
 
 test "what cannot be served is refused before its body, and never reaches the app" {
@@ -617,9 +679,32 @@ test "what cannot be served is refused before its body, and never reaches the ap
     try std.testing.expectEqual(@as(usize, 0), taken.items.len);
 }
 
+test "a config folder too deep for a socket path listens in a runtime folder instead" {
+    const gpa = std.testing.allocator;
+    const short = try socketPath(gpa, "/home/me/.config/fizzy", "/run/user/1000");
+    defer gpa.free(short);
+    // Joined as the OS joins paths: `\` between them on Windows.
+    const want = try std.fs.path.join(gpa, &.{ "/home/me/.config/fizzy", "control", "control.sock" });
+    defer gpa.free(want);
+    try std.testing.expectEqualStrings(want, short);
+    // Between Darwin's 104 and std's 108, the length that crashed `listen`: not used as it is.
+    const deep = "/" ++ @as([max_path - "/control/control.sock".len + 2]u8, @splat('d'));
+    const fallback = try socketPath(gpa, deep, "/tmp/me");
+    defer gpa.free(fallback);
+    try std.testing.expect(fallback.len <= max_path);
+    const folder = try std.fs.path.join(gpa, &.{ "/tmp/me", "fizzy-control-" });
+    defer gpa.free(folder);
+    try std.testing.expect(std.mem.startsWith(u8, fallback, folder));
+    // Per config folder: another deep one gets another folder.
+    const other = try socketPath(gpa, deep ++ "x", "/tmp/me");
+    defer gpa.free(other);
+    try std.testing.expect(!std.mem.eql(u8, fallback, other));
+}
+
 test "a socket path the OS cannot hold fails at start, not later" {
     if (!Io.net.has_unix_sockets) return error.SkipZigTest;
-    const long = "/" ++ "d" ** (Io.net.UnixAddress.max_len + 8);
+    // Longer than the OS takes but within std's limit: refused here, not overrun in `listen`.
+    const long = "/" ++ @as([max_path]u8, @splat('d'));
     var server: Server = .{ .gpa = std.testing.allocator, .io = std.testing.io, .socket_path = long, .wake = noWake };
     try std.testing.expectError(error.NameTooLong, server.start());
 }
@@ -769,7 +854,7 @@ test "a client that stops reading neither holds up the quit nor buffers without 
     try answerStreams(&server, 1);
     // Until its task blocks writing and the backlog passes the cap; how much the socket takes first
     // is the OS's (Windows grows its buffers), so publish until then, up to far more than any.
-    const chunk = "\"" ++ "x" ** (64 * 1024) ++ "\"";
+    const chunk = "\"" ++ @as([64 * 1024]u8, @splat('x')) ++ "\"";
     var published: usize = 0;
     while (!overrun(&server) and published < 256 * 1024 * 1024) : (published += chunk.len) server.publish("e", chunk);
     try std.testing.expect(overrun(&server));
@@ -810,7 +895,7 @@ test "a stopped server ends a stream whose client stopped reading" {
     }
     try answerStreams(&server, 1);
     // Enough to block its write, not enough to overrun.
-    const chunk = "\"" ++ "x" ** (64 * 1024) ++ "\"";
+    const chunk = "\"" ++ @as([64 * 1024]u8, @splat('x')) ++ "\"";
     for (0..16) |_| server.publish("e", chunk);
     io.sleep(.fromMilliseconds(50), .awake) catch {};
     // Returns: the stream's socket is shut down under its blocked write.

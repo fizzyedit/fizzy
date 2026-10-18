@@ -182,7 +182,7 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: D
     };
     var allocated: usize = 0;
     for (0..path_count) |i| {
-        zig_files[i] = alloc().dupeZ(u8, std.mem.span(files[i])) catch {
+        zig_files[i] = alloc().dupeSentinel(u8, std.mem.span(files[i]), 0) catch {
             dvui.log.err("Failed to dupe dialog result path", .{});
             for (zig_files[0..allocated]) |f| alloc().free(f);
             alloc().free(zig_files);

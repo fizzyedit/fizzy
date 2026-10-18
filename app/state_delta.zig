@@ -43,11 +43,11 @@ pub fn encode(gpa: std.mem.Allocator, ref: []const u8, new: []const u8) std.mem.
     const w = &out.writer;
     write(w, new.len, prefix, suffix) catch return error.OutOfMemory;
     if (a.len != b.len) {
-        w.writeByte(@intFromEnum(Mode.raw)) catch return error.OutOfMemory;
+        w.writeByte(@backingInt(Mode.raw)) catch return error.OutOfMemory;
         w.writeAll(b) catch return error.OutOfMemory;
         return out.toOwnedSlice();
     }
-    w.writeByte(@intFromEnum(Mode.runs)) catch return error.OutOfMemory;
+    w.writeByte(@backingInt(Mode.runs)) catch return error.OutOfMemory;
     // Runs of differing blocks, found in one pass and kept so their count can lead them.
     var runs: std.ArrayList(Run) = .empty;
     defer runs.deinit(gpa);
@@ -159,7 +159,13 @@ test "an edit in one place is a delta of about its size" {
 }
 
 test "text inserted shifts what follows, and the delta is still the part between the edits" {
-    const ref = "fn main() void {\n    std.debug.print(\"hello\", .{});\n}\n" ** 100;
+    const line = "fn main() void {\n    std.debug.print(\"hello\", .{});\n}\n";
+    const ref: *const [line.len * 100]u8 = comptime blk: {
+        var buf: [line.len * 100]u8 = undefined;
+        for (0..100) |i| buf[i * line.len ..][0..line.len].* = line.*;
+        const out = buf;
+        break :blk &out;
+    };
     const new = ref[0..2000] ++ "// inserted\n" ++ ref[2000..];
     const size = try roundTrip(ref, new);
     try testing.expect(size < 32);
