@@ -2486,6 +2486,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .closeProjectFolder = fizzyCloseProjectFolder,
     .recentFolderCount = fizzyRecentFolderCount,
     .recentFolderAt = fizzyRecentFolderAt,
+    .recentFolderOpened = fizzyRecentFolderOpened,
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
     .folderWatchActive = fizzyFolderWatchActive,
@@ -2728,7 +2729,13 @@ fn fizzyRecentFolderCount(ctx: *anyopaque) usize {
 fn fizzyRecentFolderAt(ctx: *anyopaque, index: usize) ?[]const u8 {
     const editor = fizzyCtx(ctx);
     if (index >= editor.app.recents.folders.items.len) return null;
-    return editor.app.recents.folders.items[index];
+    return editor.app.recents.folders.items[index].path;
+}
+fn fizzyRecentFolderOpened(ctx: *anyopaque, index: usize) ?i64 {
+    const editor = fizzyCtx(ctx);
+    if (index >= editor.app.recents.folders.items.len) return null;
+    const opened = editor.app.recents.folders.items[index].opened;
+    return if (opened == 0) null else opened;
 }
 fn fizzyOpenInFileBrowser(ctx: *anyopaque, path: []const u8) anyerror!void {
     return fizzyCtx(ctx).openInFileBrowser(path);
@@ -5466,7 +5473,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     editor.command_palette.invalidate();
     // A demo's folder is not one the user opened, and is gone when the demo is.
     if (!editor.demo.active()) {
-        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
+        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path), std.Io.Clock.real.now(dvui.io).toSeconds());
         editor.recentFoldersChanged();
     }
     if (editor.app.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
@@ -5501,11 +5508,11 @@ fn recentFoldersChanged(editor: *Editor) void {
 pub fn openRecentFolder(editor: *Editor, index: usize) void {
     const recents = &editor.app.recents;
     if (index >= recents.folders.items.len) return;
-    editor.setProjectFolder(recents.folders.items[index]) catch |err| {
+    editor.setProjectFolder(recents.folders.items[index].path) catch |err| {
         // As `anyerror`: on the web there is no disk to check, so neither is in the set.
         const e: anyerror = err;
         if (e == error.NotADirectory or e == error.NotDir) {
-            recents.folders.allocator.free(recents.folders.orderedRemove(index));
+            recents.removeFolder(index);
             editor.recentFoldersChanged();
         } else if (e != error.FileNotFound) dvui.log.err("open recent folder failed: {t}", .{err});
     };

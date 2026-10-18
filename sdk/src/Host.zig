@@ -792,6 +792,13 @@ pub fn recentFolderAt(self: *Host, index: usize) ?[]const u8 {
     return if (self.fizzy_api) |a| a.recentFolderAt(index) else null;
 }
 
+/// When the recent folder at `index` (as `recentFolderAt`) was last opened, in seconds since the
+/// Unix epoch: what an app groups recents by ("today", "last week"). Null when not known (a
+/// folder remembered before fizzy kept times) or past the end.
+pub fn recentFolderOpened(self: *Host, index: usize) ?i64 {
+    return if (self.fizzy_api) |a| a.recentFolderOpened(index) else null;
+}
+
 pub fn openInFileBrowser(self: *Host, path: []const u8) !void {
     return if (self.fizzy_api) |a| try a.openInFileBrowser(path) else error.FizzyApiNotInstalled;
 }

@@ -343,7 +343,7 @@ pub fn rebuildNativeRecentFolders() void {
     const folders = fizzy.editor().app.recents.folders.items;
     const titles = alloc().alloc([]const u8, folders.len) catch return;
     defer alloc().free(titles);
-    for (folders, 0..) |f, i| titles[folders.len - 1 - i] = f;
+    for (folders, 0..) |f, i| titles[folders.len - 1 - i] = f.path;
     native_recent_count = folders.len;
     platform.menu.setList(0, titles);
 }

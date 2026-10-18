@@ -1296,6 +1296,12 @@ Everything a plugin might reasonably ask *fizzy* for lives on `Host` instead —
 `closeDocById`, `docFromPath`, `revealPosition`, `setProjectFolder`, `isPathIgnored`, … — where it
 degrades to a no-op in an app that ships no workbench rather than being unreachable.
 
+The app's recent folders are `host.recentFolderCount()` and `host.recentFolderAt(i)`, oldest
+first: the last is the folder opened most recently. `host.recentFolderOpened(i)` says when it was
+last opened, in seconds since the Unix epoch, which is what a home page groups recents by
+("today", "this week"). It is null for a folder remembered before fizzy kept times (a
+`recents.zon` an older fizzy wrote), so order by the index and put those under "earlier".
+
 **Every lookup must tolerate absence.** A service's provider may be uninstalled, disabled, or
 simply not built for this target — `files` and `markdown` are missing on web, and `wikilink` is
 missing unless the user installed an indexer. The idiom is one line, and the fallback is a real

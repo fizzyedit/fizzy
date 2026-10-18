@@ -201,4 +201,5 @@ test {
     _ = dome;
     _ = control.routes;
     _ = HistoryFrames;
+    _ = Recents;
 }

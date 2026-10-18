@@ -7981,6 +7981,15 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     const notes = try std.fs.path.join(gpa, &.{ project, "notes.md" });
     defer gpa.free(notes);
     try editor.setProjectFolder(project);
+    // It is now the most recent folder, and a plugin can read when it was opened.
+    {
+        const host = &editor.app.host;
+        const last = host.recentFolderCount() - 1;
+        try std.testing.expectEqualStrings(project, host.recentFolderAt(last).?);
+        const opened = host.recentFolderOpened(last) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(@abs(std.Io.Clock.real.now(dvui.io).toSeconds() - opened) < 60);
+        try std.testing.expect(host.recentFolderOpened(last + 1) == null);
+    }
     _ = try editor.openFilePath(notes, editor.workbench.currentGroupingID());
     for (0..200) |_| {
         if (editor.activeDoc() != null) break;
