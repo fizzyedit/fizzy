@@ -1729,7 +1729,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
         // matches the bubbles it is carried among and runs into (the user).
         for (d.drop_shapes[0..d.drop_n]) |sh| core.native_glass.add(.{ .rect = sh.rect, .radius = d.drop_radius });
     }
-    if (!taken and !own_window) {
+    if (!taken and (!own_window or !core.dialogs.carry_material)) {
         // At the merge it is drawn at inside a place's drop (`DropZones.merge`): drawn alone at a
         // wider one, between two places — over the sash between them — the drop grew by some 8% of
         // its radius, and shrank back as the pointer reached either side.
@@ -1937,7 +1937,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     });
     defer fw.deinit();
     if (own_window and core.native_glass.on()) core.native_glass.add(.{ .rect = rect, .radius = radius });
-    if (!own_window) {
+    if (!own_window or !core.dialogs.carry_material) {
         // Glass, like every floating surface. Where the glass program draws it is the same glass
         // the drop is (`drawDrop`), under one id, so a tab becoming the drop and back is one
         // piece of glass changing shape; elsewhere the carried look (`core.dialogs.carriedGlass`),

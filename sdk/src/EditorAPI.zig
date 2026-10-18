@@ -159,10 +159,9 @@ pub const VTable = struct {
     /// plugin is made ready here, so asks from other threads never walk the host's plugin list.
     /// Null where the app keeps nothing per plugin.
     pluginRegistered: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
-    /// A plugin was unregistered (`Host.unregisterPlugin`), before its `deinit` runs: what the app
-    /// keeps for it must still serve that `deinit`, and goes once it has run. Null where the app
-    /// keeps nothing per plugin.
-    pluginUnregistered: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
+    /// A plugin was taken out for good (`Host.retirePlugin`): unregistered, and its `deinit` has
+    /// run, so what the app kept for it goes now. Null where the app keeps nothing per plugin.
+    pluginRetired: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
     /// Mark fizzy's settings dirty so the debounced autosave persists them.
     markSettingsDirty: *const fn (ctx: *anyopaque) void,
     /// A credential kept for a plugin, by key (`<plugin>.<what>`), outside `settings.zon` —
@@ -331,6 +330,9 @@ pub const VTable = struct {
     /// Bring the surface `id` into sight wherever it lives: selected in the region showing it,
     /// that region opened if it was shut. False when no region shows it.
     revealSurface: *const fn (ctx: *anyopaque, id: []const u8) bool,
+    /// Put the surface `id` away: shut the open tray showing it, or close the float it is alone
+    /// in. False, changing nothing, otherwise. During a frame it acts once the frame has drawn.
+    hideSurface: *const fn (ctx: *anyopaque, id: []const u8) bool,
     /// Draw the app's glyph for a declared file kind ("image", "source", …), or return false if
     /// this app has no glyph for it.
     ///
@@ -654,6 +656,10 @@ pub fn selectInRegion(self: EditorAPI, region: []const u8, id: []const u8) void 
 
 pub fn revealSurface(self: EditorAPI, id: []const u8) bool {
     return self.vtable.revealSurface(self.ctx, id);
+}
+
+pub fn hideSurface(self: EditorAPI, id: []const u8) bool {
+    return self.vtable.hideSurface(self.ctx, id);
 }
 
 pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) bool {

@@ -60,6 +60,24 @@ const Named = struct {
 var named_list: [max_outs]Named = undefined;
 var named_n: usize = 0;
 
+/// The floating windows begun this frame that can close (`open_flag`), every one, OS window or
+/// not (`closable`): a window can tear off only if its window's close can close it. Read from what
+/// dvui named instead (`named`), which holds only the windows already shown as OS windows, no
+/// window being dragged in the app was in it, and none tore off (the user).
+var closable_list: [64]dvui.Id = undefined;
+var closable_n: usize = 0;
+
+/// Floating window `id` begins this frame, closable or not (`SDLBackend.floatingWindowOs`).
+pub fn closable(id: dvui.Id, can_close: bool) void {
+    if (!can_close or closable_n == closable_list.len) return;
+    closable_list[closable_n] = id;
+    closable_n += 1;
+}
+
+fn canClose(id: dvui.Id) bool {
+    return std.mem.indexOfScalar(dvui.Id, closable_list[0..closable_n], id) != null;
+}
+
 /// The floating window that has the keyboard, as last read from the OS's key window: null for the
 /// main window's own subwindow.
 var keyed: ?dvui.Id = null;
@@ -216,6 +234,7 @@ fn physical(r: dvui.Rect, s: f32) viewports.Rect {
 /// After `dvui.Window.begin`, before the app's frame.
 pub fn beforeFrame() void {
     named_n = 0;
+    closable_n = 0;
     const s = dvui.windowNaturalScale();
     for (&outs) |*slot| {
         const o = if (slot.*) |*o| o else continue;
@@ -353,8 +372,8 @@ fn tearFrame() void {
     if (t.moving and over != t.over) if (over) |w| viewports.bringForward(w);
     t.over = over;
     // One with no `open_flag` gets no window (`named`), and its window could not close: it stays
-    // in the window it was dragged in, as dvui keeps it.
-    if (!t.moving or over != null or namedOf(t.id) == null) {
+    // in the window it was dragged in, as dvui keeps it (`closable`).
+    if (!t.moving or over != null or !canClose(t.id)) {
         // In a window of the app's: drawn there, as dvui draws it, its header back — from where the
         // pointer took it, back over a window: dvui kept it at the edge it left by (`screenFor`)
         // while the pointer went on, and it came back that far from the pointer (the user).
@@ -441,7 +460,10 @@ fn dropContent(size: dvui.Rect.Physical, grab: dvui.Point.Physical) dvui.Rect.Ph
         .x = mouse.x - grab.x,
         .y = mouse.y - std.math.clamp(grab.y, 0, @max(0, band - 1)),
         .w = size.w,
-        .h = size.h + band,
+        // The floating window's rect holds its header, which the title bar takes the place of: its
+        // content is that much shorter. Given the whole rect, the window came back from each trip
+        // out and in a header taller (`Merge` puts the header back above the content; the user).
+        .h = @max(1, size.h - headerHeight()) + band,
     };
     const u = viewports.usableAtPointer();
     if (u.w > 0 and u.h > 0) {
@@ -602,6 +624,11 @@ fn endTear(t: *Tear) void {
 
 /// After the app's frame, before `dvui.Window.end`.
 pub fn afterFrame() void {
+    // What dvui draws late — its Debug window, dialogs, toasts — drawn before the tear-off looks for
+    // the floating window being dragged: drawn after, the Debug window was not yet drawn (`used`)
+    // nor asked about (`closable`) when it looked, and never tore off (the user). Once a frame
+    // (`drawRetained` keeps to that), and `Window.end` would draw them here anyway.
+    if (viewports.tears()) dvui.currentWindow().drawRetained(.{});
     tearFrame();
     if (named_n == 0 and for (outs) |slot| {
         if (slot != null) break false;

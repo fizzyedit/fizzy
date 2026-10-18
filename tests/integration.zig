@@ -759,9 +759,13 @@ test "markdown preview: skipping off-screen blocks lays the document out identic
         // each table's grid — a scroll container in its own right — ask the scroll area for more
         // room than the block actually occupies, which is why that number comes out ~20% larger
         // than the document really is.
+        //
+        // Within f32's precision at the document's size: both totals are f32 sums of hundreds of
+        // heights, and at ~40000 pt one rounding step is already 0.004, so an absolute tolerance
+        // failed whenever docs/PLUGINS.md (this sample) grew.
         var sum: f32 = 0;
         for (virtualized.heights) |h| sum += h;
-        try std.testing.expectApproxEqAbs(sum + 16, virtualized.virtual_h, 0.01);
+        try std.testing.expectApproxEqRel(sum + 16, virtualized.virtual_h, 1e-6);
     };
 }
 
@@ -2332,6 +2336,8 @@ const EmptyPanelFrame = struct {
 /// Main above a keyword-matched Panel showing several, as fizzy's own shape has them.
 const ManyPanelFrame = struct {
     var editor: ?*fizzy.Editor = null;
+    /// This frame's layout, while it draws: what a view asking for it mid-frame reaches.
+    var layout: ?*fizzy.Editor.Layout = null;
 
     fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         return .ok;
@@ -2339,17 +2345,19 @@ const ManyPanelFrame = struct {
 
     fn frame() anyerror!dvui.App.Result {
         const e = editor.?;
-        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        var l = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        layout = &l;
+        defer layout = null;
         {
-            var content = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            var content = try l.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
             defer content.deinit();
             {
-                var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
+                var main = try l.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
                 defer main.deinit();
             }
-            layout.split(@src(), .{});
+            l.split(@src(), .{});
             {
-                var panel = try layout.region(@src(), .{
+                var panel = try l.region(@src(), .{
                     .name = "Panel",
                     .keywords = fizzy.sdk.keywords.ide.panel,
                     .shows = .many,
@@ -2359,9 +2367,11 @@ const ManyPanelFrame = struct {
                 defer panel.deinit();
             }
         }
-        // As fizzy's frame does: the floats over the shape, before its regions are published.
-        layout.drawFloats();
+        // As fizzy's frame does: the floats over the shape, before its regions are published,
+        // and what a view asked to put away once all of it has drawn.
+        l.drawFloats();
         e.app.layout.publishRegions();
+        _ = l.applyHides();
         return .ok;
     }
 };
@@ -5753,6 +5763,142 @@ fn holds(ids: []const []const u8, id: []const u8) bool {
     return false;
 }
 
+// ── Putting a view away (`Host.hideSurface`) ──────────────────────────────────────────────────
+
+/// `Layout.hide` between frames, as `Host.hideSurface` runs it, then the frames after.
+fn hideView(editor: *fizzy.Editor, id: []const u8) !bool {
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const acted = layout.hide(id);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    return acted;
+}
+
+fn revealView(editor: *fizzy.Editor, id: []const u8) !bool {
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const acted = layout.reveal(id);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    return acted;
+}
+
+fn placeShut(editor: *fizzy.Editor, name: []const u8) bool {
+    for (editor.app.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, name)) return r.isClosed();
+    }
+    return false;
+}
+
+test "hide: a tray's view shuts the tray, and reveal opens it again" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try std.testing.expect(!placeShut(editor, "Panel"));
+
+    try std.testing.expect(try hideView(editor, "test.output"));
+    try std.testing.expect(placeShut(editor, "Panel"));
+    // Out of sight already: nothing to put away.
+    try std.testing.expect(!try hideView(editor, "test.output"));
+    try std.testing.expect(!try hideView(editor, "test.nothing"));
+
+    try std.testing.expect(try revealView(editor, "test.output"));
+    try std.testing.expect(!placeShut(editor, "Panel"));
+    // Round again: a toggle.
+    try std.testing.expect(try hideView(editor, "test.output"));
+    try std.testing.expect(placeShut(editor, "Panel"));
+}
+
+test "hide: a view in Main, or in a place a split made, stays and nothing changes" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try std.testing.expect(!try hideView(editor, "test.main"));
+    try std.testing.expect(!placeShut(editor, "Main"));
+
+    // Split off Main.
+    try case.place("Panel", "Main", .{ .split = .right });
+    const half = case.placeNamed(&.{ "Main", "Panel" }) orelse return error.TestExpectedEqual;
+    try std.testing.expect(holds(case.shows(half), "test.output"));
+    try std.testing.expect(!try hideView(editor, "test.output"));
+    try std.testing.expect(!placeShut(editor, half));
+    try std.testing.expect(holds(case.shows(half), "test.output"));
+}
+
+test "hide: a view in a tray the user split stays, and nothing changes" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .{ .split = .right });
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+    try std.testing.expect(!try hideView(editor, "test.output"));
+    try std.testing.expect(!placeShut(editor, "Panel"));
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+}
+
+test "hide: a view alone in a float closes the float, and it goes home" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+
+    try std.testing.expect(try hideView(editor, "test.output"));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+}
+
+test "hide: a view in a float with others stays, and nothing changes" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.tools", .title = "Tools", .keywords = &.{"tools"}, .draw = ManyPanelFrame.draw });
+    try case.place("Panel", "Panel", .swap);
+    try editor.app.layout.assign(editor.app.gpa, "Float 1", &.{ "test.output", "test.tools" });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+
+    try std.testing.expect(!try hideView(editor, "test.output"));
+    try std.testing.expect(!try hideView(editor, "test.tools"));
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    try std.testing.expectEqual(@as(usize, 2), case.shows("Float 1").len);
+}
+
+/// A view that asks, from its own draw, to be put away (`hideLater`, as `Host.hideSurface` does
+/// during a frame), and what it saw when it asked.
+const HidingView = struct {
+    var ask = false;
+    var answer = false;
+    var floats_then: usize = 0;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        if (!ask) return .ok;
+        ask = false;
+        const l = ManyPanelFrame.layout orelse return .ok;
+        answer = l.hideLater("test.hider");
+        floats_then = openFloats(ManyPanelFrame.editor.?);
+        return .ok;
+    }
+};
+
+test "hide: asked from a floating view's own draw, it answers then and acts once the frame has drawn" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.hider", .title = "Hider", .keywords = &.{"tools"}, .draw = HidingView.draw });
+    try case.place("Panel", "Panel", .swap);
+    try editor.app.layout.assign(editor.app.gpa, "Float 1", &.{"test.hider"});
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), case.shows("Float 1").len);
+
+    HidingView.ask = true;
+    _ = try dvui.testing.step(ManyPanelFrame.frame);
+    try std.testing.expect(!HidingView.ask); // it drew, and asked
+    try std.testing.expect(HidingView.answer);
+    // Nothing moved while the float was drawing; by the frame's end it is closing.
+    try std.testing.expectEqual(@as(usize, 1), HidingView.floats_then);
+    try std.testing.expectEqual(@as(usize, 0), openFloats(editor));
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+}
+
 test "float: a view dropped on the middle of its own place floats, and the place keeps the rest" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
@@ -7697,36 +7843,63 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqual(data.ptr, (host.pluginDataFolder(text_plugin) orelse return error.TestUnexpectedResult).ptr);
         const other = host.pluginDataFolder(markdown_plugin) orelse return error.TestUnexpectedResult;
         try std.testing.expect(!std.mem.eql(u8, data, other));
-        // An id no registered plugin has gets no folder, and no entry; ids are one ignoring case.
-        try std.testing.expect(editor.app.pluginDataFolder("../escape") == null);
-        try std.testing.expect(editor.app.plugin_data_folders.get("../escape") == null);
-        try std.testing.expectEqual(data.ptr, (editor.app.pluginDataFolder("Text") orelse return error.TestUnexpectedResult).ptr);
         const level = std.testing.log_level;
         std.testing.log_level = .err; // the warnings the cases below ask for
         defer std.testing.log_level = level;
+        // An id that is not a plain identifier gets no folder and no entry, and one no plugin
+        // registered gets none either; `Text` is `text`'s folder, one entry per folder.
+        try std.testing.expect(editor.app.pluginDataFolder("../escape") == null);
+        try std.testing.expect(editor.app.plugin_data_folders.get("../escape") == null);
+        try std.testing.expect(editor.app.pluginDataFolder("nobody") == null);
+        try std.testing.expect(editor.app.plugin_data_folders.get("nobody") == null);
+        try std.testing.expectEqual(data.ptr, (editor.app.pluginDataFolder("Text") orelse return error.TestUnexpectedResult).ptr);
         const vt = sdk.Plugin.VTable{};
-        // A plugin whose id has capitals gets it in lowercase, the same folder on every
-        // filesystem; another in a different case of it is not registered at all.
+        // A plugin whose id has capitals gets it in lowercase; another in a different case of it
+        // is not registered at all. Retired (`Host.retirePlugin`), its folder is still its own
+        // in its `deinit`, and not handed out after.
         {
-            var cased = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "CaseTest", .display_name = "Case Test" };
-            try host.registerPlugin(&cased);
+            const Retiring = struct {
+                var plugin: sdk.Plugin = undefined;
+                var host_seen: ?*sdk.Host = null;
+                var in_deinit: ?bool = null;
+                fn deinit(_: *anyopaque) void {
+                    in_deinit = host_seen.?.pluginDataFolder(&plugin) != null;
+                }
+            };
+            const retiring_vt = sdk.Plugin.VTable{ .deinit = Retiring.deinit };
+            var state: u8 = 0;
+            Retiring.plugin = .{ .state = &state, .vtable = &retiring_vt, .id = "CaseTest", .display_name = "Case Test" };
+            Retiring.host_seen = host;
+            try host.registerPlugin(&Retiring.plugin);
             const want_cased = try std.fs.path.join(gpa, &.{ root, "plugin-data", "casetest" });
             defer gpa.free(want_cased);
-            try std.testing.expectEqualStrings(want_cased, host.pluginDataFolder(&cased) orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualStrings(want_cased, host.pluginDataFolder(&Retiring.plugin) orelse return error.TestUnexpectedResult);
             var lower = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "casetest", .display_name = "Case Test" };
             try std.testing.expectError(error.DuplicatePluginId, host.registerPlugin(&lower));
-            // Unregistered, its path is still handed out for its `deinit`, which runs after; from
-            // the next frame's top it is not.
-            host.unregisterPlugin(&cased);
-            try std.testing.expect(host.pluginDataFolder(&cased) != null);
-            editor.app.releaseRetiredFolders();
-            try std.testing.expect(host.pluginDataFolder(&cased) == null);
+            const kept = host.pluginDataFolder(&Retiring.plugin) orelse return error.TestUnexpectedResult;
+            host.retirePlugin(&Retiring.plugin, null);
+            try std.testing.expectEqual(@as(?bool, true), Retiring.in_deinit);
+            try std.testing.expect(host.pluginDataFolder(&Retiring.plugin) == null);
+            // The same id in another case, registered once the first is gone, is the same folder
+            // and the same entry: one per folder.
+            try host.registerPlugin(&lower);
+            defer host.retirePlugin(&lower, null);
+            try std.testing.expectEqual(kept.ptr, (host.pluginDataFolder(&lower) orelse return error.TestUnexpectedResult).ptr);
+        }
+        // Unregistered without being retired (an app's own unload, a test's), its folder is
+        // released all the same: no caller leaves a live one behind.
+        {
+            var released = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "released", .display_name = "Released" };
+            try host.registerPlugin(&released);
+            _ = host.pluginDataFolder(&released) orelse return error.TestUnexpectedResult;
+            host.unregisterPlugin(&released);
+            try std.testing.expect(host.pluginDataFolder(&released) == null);
         }
         // An id that is not a plain identifier names no folder.
         {
             var dotted = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "dotted.id", .display_name = "Dotted" };
             try host.registerPlugin(&dotted);
-            defer host.unregisterPlugin(&dotted);
+            defer host.retirePlugin(&dotted, null);
             try std.testing.expect(host.pluginDataFolder(&dotted) == null);
         }
         // Deleted since, it is made again by an ask once the second it is trusted for is over.
@@ -7741,7 +7914,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             var blocked = sdk.Plugin{ .state = undefined, .vtable = &vt, .id = "blocked", .display_name = "Blocked" };
             try host.registerPlugin(&blocked);
-            defer host.unregisterPlugin(&blocked);
+            defer host.retirePlugin(&blocked, null);
             try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugin-data/blocked", .data = "" });
             try std.testing.expect(host.pluginDataFolder(&blocked) == null);
             try tmp.dir.deleteFile(dvui.io, "plugin-data/blocked");
@@ -7770,14 +7943,30 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             _ = try tmp.dir.statFile(dvui.io, "plugins/text/keep", .{});
             try tmp.dir.deleteTree(dvui.io, "plugins/text");
         }
-        // A folder already in `plugins/` in another case clashes too, before a store install
-        // writes anything.
+        // A folder already in `plugins/` in another case clashes too, read fresh at each ask: an
+        // installed plugin that is not loaded.
         {
+            var clash_buf: [std.fs.max_name_bytes]u8 = undefined;
+            try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "graphl") == null);
             try tmp.dir.createDirPath(dvui.io, "plugins/Graphl");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/Graphl/keep", .data = "" });
             defer tmp.dir.deleteTree(dvui.io, "plugins/Graphl") catch {};
-            var clash_buf: [64]u8 = undefined;
-            try std.testing.expectEqualStrings("Graphl", editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult);
+            const found = editor.app.pluginCaseClash(&clash_buf, "graphl") orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("Graphl", found.other);
             try std.testing.expect(editor.app.pluginCaseClash(&clash_buf, "Graphl") == null);
+            // Its refused variant's card, uninstalled, never takes the installed plugin's folder,
+            // though on macOS and Windows `plugins/graphl` is that folder.
+            editor.app.recordCaseClash("graphl", "Graphl", null);
+            try editor.uninstallPlugin("graphl", true);
+            _ = try tmp.dir.statFile(dvui.io, "plugins/Graphl/keep", .{});
+            try std.testing.expectEqual(sdk.services.plugins.Api.State.not_loaded, editor.app.pluginStatus("graphl").state);
+        }
+        // A plugin's own folder, alone under its name, is still what uninstalling deletes.
+        {
+            try tmp.dir.createDirPath(dvui.io, "plugins/solo");
+            try tmp.dir.writeFile(dvui.io, .{ .sub_path = "plugins/solo/build", .data = "" });
+            try editor.uninstallPlugin("solo", true);
+            try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(dvui.io, "plugins/solo", .{}));
         }
     }
     // The app offers its plugins the `automation` service, and nothing is in flight.

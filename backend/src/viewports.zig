@@ -328,8 +328,13 @@ pub fn fade(vp: *Viewport, alpha: f32) void {
     dvui.currentWindow().backend.impl.viewportFade(vp, alpha);
 }
 
-/// Whether a carried view can be shown past every window (`openCarry`): macOS.
-pub const carries = builtin.target.os.tag == .macos;
+/// Whether a carried view can be shown past every window (`openCarry`): macOS and Windows.
+pub const carries = builtin.target.os.tag == .macos or builtin.target.os.tag == .windows;
+
+/// Whether a carry window wears the OS's material in its shape (`carryShape`), which is then the
+/// carried thing's glass: macOS. On Windows DWM can neither shape a backdrop nor round it as a drop
+/// is, so the window is clear and shows the glass the app draws into it.
+pub const carry_material = builtin.target.os.tag == .macos;
 
 pub fn close(vp: *Viewport) void {
     dvui.currentWindow().backend.impl.viewportClose(vp);

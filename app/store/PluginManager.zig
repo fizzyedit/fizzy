@@ -125,11 +125,6 @@ pub const VTable = struct {
     /// Bring the main region into view — on a narrow layout the store's README page is drawn
     /// somewhere the user cannot see yet. A no-op is a perfectly good implementation.
     revealMain: *const fn (ctx: *anyopaque) void,
-    /// Asked before an install or update writes anything into `plugins/<id>`: refuse `id` when it
-    /// is a plugin already loaded or installed in another case (on macOS and Windows that folder
-    /// is the other plugin's), saying why where the app shows load failures. True when refused.
-    /// Null for an app that keeps no such rule.
-    refuseCaseClash: ?*const fn (ctx: *anyopaque, id: []const u8) bool = null,
 };
 
 pub fn isDisabled(self: PluginManager, id: []const u8) bool {
@@ -197,10 +192,6 @@ pub fn offerUpdates(self: PluginManager) void {
 }
 pub fn revealMain(self: PluginManager) void {
     self.vtable.revealMain(self.ctx);
-}
-pub fn refuseCaseClash(self: PluginManager, id: []const u8) bool {
-    const refuse = self.vtable.refuseCaseClash orelse return false;
-    return refuse(self.ctx, id);
 }
 
 /// True when `id` has a dylib on disk that was refused at load.

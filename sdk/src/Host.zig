@@ -448,9 +448,10 @@ pub fn paletteFolder(self: *Host) ?[]const u8 {
 /// comes back then: a plugin whose write into a kept path fails with `FileNotFound` calls again
 /// (a second later, if it called just now). Safe to call from any thread.
 ///
-/// Null when no app is installed, when `plugin` is not registered, when its id is not a plain
-/// identifier (letters, digits, `-`, `_`; logged once), or when the folder could not be made
-/// (logged once, and tried again on a call a few seconds later).
+/// Null when no app is installed, when `plugin` is not registered (or has been retired,
+/// `retirePlugin`), when its id is not a plain identifier (letters, digits, `-`, `_`; logged
+/// once), or when the folder could not be made (logged once, and tried again on a call a few
+/// seconds later).
 ///
 /// On the web, as with `paletteFolder`, the path names no directory: it is the prefix under
 /// which `core.fs.read`, `readZ`, `write` and `remove` keep files in the page's storage. Those
@@ -679,6 +680,23 @@ pub fn selectInRegion(self: *Host, region_name: []const u8, id: []const u8) void
 pub fn revealSurface(self: *Host, id: []const u8) bool {
     const a = self.fizzy_api orelse return false;
     return a.revealSurface(id);
+}
+
+/// Put the surface `id` away, as the user would: `revealSurface`'s other half, so a button can
+/// toggle its view (`if (!host.hideSurface(id)) _ = host.revealSurface(id);`). Only two cases
+/// act, and anything else returns false and changes nothing:
+///
+/// - the view is what a tray shows (a place the shape declared resizable: fizzy's sidebar and
+///   bottom panel), and the tray is open: the tray shuts, with whatever else it holds, as its own
+///   close does. `revealSurface` opens it again at the size the user left it;
+/// - the view is alone in a float: the float closes as its close button does, and the view goes
+///   back to the place it floated out of.
+///
+/// Asked during a frame (from a surface's draw), it answers at once and acts once the frame has
+/// drawn. Full contract: `docs/PLUGINS.md` §3.1.2, "Showing and putting away a view".
+pub fn hideSurface(self: *Host, id: []const u8) bool {
+    const a = self.fizzy_api orelse return false;
+    return a.hideSurface(id);
 }
 
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
@@ -976,6 +994,30 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
     if (self.fizzy_api) |a| if (a.vtable.pluginRegistered) |registered| registered(a.ctx, plugin.id);
 }
 
+/// Take `plugin` out for good: its registrations go (`unregisterPlugin`'s work), then
+/// `before_deinit` runs if given (fizzy rebuilds its native menus, which may still name the
+/// plugin's strings), then the plugin's own `deinit`, then the app is told
+/// (`EditorAPI.pluginRetired`) so what it kept for the plugin (its data folder's entry) goes now,
+/// after a `deinit` that may still have used it. The unload path's one call: unload, disable,
+/// reload and uninstall all come through it, in any app. Before `dlclose`, as `unregisterPlugin`.
+pub fn retirePlugin(self: *Host, plugin: *Plugin, before_deinit: ?*const fn () void) void {
+    // The id is the plugin's own memory: copied before its `deinit`, which may free it. One longer
+    // than any valid id has nothing kept for it to tell about.
+    var buf: [64]u8 = undefined;
+    const told = plugin.id.len <= buf.len;
+    const n = if (told) plugin.id.len else 0;
+    @memcpy(buf[0..n], plugin.id[0..n]);
+    self.dropRegistrations(plugin);
+    if (before_deinit) |f| f();
+    plugin.deinit();
+    if (told) self.tellRetired(buf[0..n]);
+}
+
+/// The app is told `id` is gone (`EditorAPI.pluginRetired`).
+fn tellRetired(self: *Host, id: []const u8) void {
+    if (self.fizzy_api) |a| if (a.vtable.pluginRetired) |retired| retired(a.ctx, id);
+}
+
 /// Remove every contribution, service, and registry entry owned by `plugin`, then drop
 /// the plugin itself. The inverse of `registerPlugin` + the `register*` calls a plugin
 /// makes in its `register`. Used by the runtime unload path (the store's "disable" /
@@ -985,8 +1027,18 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
 /// `*Plugin` itself live in the plugin image's static memory. The caller must invoke
 /// this *before* `dlclose`, so that the active-selection ids (which may point into that
 /// image) are compared and reset while the memory is still mapped.
+///
+/// What the app kept for `plugin` goes too (`EditorAPI.pluginRetired`), so no caller leaves a
+/// live data folder behind. To unload a plugin that still writes out its state in `deinit`, call
+/// `retirePlugin`, which tells the app only after that `deinit`.
 pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
-    if (self.fizzy_api) |a| if (a.vtable.pluginUnregistered) |gone| gone(a.ctx, plugin.id);
+    self.dropRegistrations(plugin);
+    self.tellRetired(plugin.id);
+}
+
+/// `unregisterPlugin`'s work without telling the app: `retirePlugin` tells it after the plugin's
+/// `deinit`.
+fn dropRegistrations(self: *Host, plugin: *Plugin) void {
     for (self.surfaces.items) |s| if (s.owner == plugin) self.dropSurfaceTitle(s.id);
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
@@ -2906,7 +2958,7 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
     // Only the one vtable member `pluginForExtension` reaches; the rest stay unreachable here.
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
-    api_vt.pluginUnregistered = null;
+    api_vt.pluginRetired = null;
     api_vt.extensionOwnerOverride = Fake.extensionOwnerOverride;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
@@ -3298,7 +3350,7 @@ test "a claim on a document holds an override of its owner's command too" {
     S.owner = &pixi;
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
-    api_vt.pluginUnregistered = null;
+    api_vt.pluginRetired = null;
     api_vt.activeDoc = S.active;
     api_vt.refresh = S.refresh;
     var ctx: u8 = 0;
@@ -3607,7 +3659,7 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
     // ...and something required has the app ask for it.
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
-    api_vt.pluginUnregistered = null;
+    api_vt.pluginRetired = null;
     api_vt.askCommandArguments = S.ask;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
