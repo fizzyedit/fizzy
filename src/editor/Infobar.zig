@@ -101,8 +101,11 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
         }
         dvui.label(@src(), AppInfo.current.name, .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
 
+        // Through the command, so an app that replaces `fizzy.about` replaces this too.
         if (button.clicked()) {
-            Dialogs.AboutFizzy.request();
+            editor.app.host.runCommand("fizzy.about") catch |err| {
+                dvui.log.err("about command failed: {s}", .{@errorName(err)});
+            };
         }
 
         if (update_notify.badgeVisible()) {

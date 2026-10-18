@@ -14,6 +14,8 @@ const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 
 const Editor = @import("Editor.zig");
+const AppInfo = @import("app").AppInfo;
+const auto_update = @import("app").update.auto_update;
 
 /// A label that depends on state ("Show Explorer" / "Hide Explorer").
 pub const Title = union(enum) {
@@ -49,7 +51,7 @@ pub const CommandItem = struct {
     /// AppKit menus are retained, so the native side disables the item instead of rebuilding
     /// the whole bar every frame.
     visible: ?*const fn (*Editor) bool = null,
-    /// Greyed out when false. Null means always enabled.
+    /// Greyed out when false. Null means the command's own enablement (`Host.commandEnabled`).
     enabled: ?*const fn (*Editor) bool = null,
     /// Keep the macOS item enabled even when `enabled` says otherwise.
     ///
@@ -247,8 +249,9 @@ const demo_items = if (Editor.dvui_demo) [_]Item{
 
 const help_items = [_]Item{
     // The About dialog hosts the update check and install controls, which is why this and the
-    // macOS app menu's "About fizzy" are the same command.
-    .{ .command = .{ .id = "fizzy.about", .title = .{ .static = "Check for Updates…" } } },
+    // macOS app menu's "About fizzy" are the same command. Named for the updates only in a build
+    // that has an updater with a feed of the app's own; otherwise it is the dialog's own title.
+    .{ .command = .{ .id = "fizzy.about", .title = .{ .static = if (auto_update.impl and AppInfo.own_repo_url) "Check for Updates…" else AppInfo.about_title_z } } },
     .separator,
     // A demo of fizzy played by fizzy itself (`Editor.Demo`); the rest are in the palette.
     .{ .command = .{ .id = "fizzy.demo.tour", .title = .{ .static = "Take the Tour" }, .sf_symbol = "play.circle" } },

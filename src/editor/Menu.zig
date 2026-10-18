@@ -162,7 +162,7 @@ fn drawModelItem(
             if (c.visible) |f| {
                 if (!f(editor)) return;
             }
-            const enabled = if (c.enabled) |f| f(editor) else true;
+            const enabled = if (c.enabled) |f| f(editor) else editor.app.host.commandEnabled(c.id);
             const hotkey = hotkeyFor(editor, c.id);
             // The icon lives once, on the registered `Command` (`sdk.Command.icon`) — every
             // fizzy command is registered there too (`Keybinds.registerCommands`), so this and

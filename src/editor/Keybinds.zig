@@ -22,6 +22,7 @@ const sdk = @import("fizzy_sdk");
 const Keymap = @import("app").keymap.Keymap;
 const adapter = @import("app").keymap.dvui_adapter;
 const restart = @import("app").restart;
+const AppInfo = @import("app").AppInfo;
 
 pub const Keybinds = @This();
 
@@ -172,9 +173,9 @@ const fizzy_commands = [_]FizzyCommand{
     // Menu-bar-only actions. They had no command at all before Stage 1 — they existed solely as
     // `NativeMenuAction` switch arms — so they were unreachable from the palette and unbindable.
     .{ .id = "fizzy.debugToggleDvuiMenuOnMacOS", .title = "Show DVUI Menu (macOS)", .bind = null, .run = cmdToggleDvuiMenuOnMacOS },
-    .{ .id = "fizzy.about", .title = "About Fizzy", .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.download },
-    .{ .id = "fizzy.restart", .title = "Restart Fizzy", .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
-    .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
+    .{ .id = "fizzy.about", .title = AppInfo.about_title_z, .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.info },
+    .{ .id = "fizzy.restart", .title = "Restart " ++ AppInfo.current.display_name, .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
+    .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .isEnabled = canReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.capture", .title = "Capture the Last 30 Seconds", .bind = null, .run = cmdCapture, .params = CaptureArgs.params, .runWith = CaptureArgs.bind(cmdCaptureWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.record", .title = "Tracks: Record…", .bind = null, .run = cmdTracks, .params = TracksRecord.params, .runWith = TracksRecord.bind(cmdTracksRecord), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.replay", .title = "Tracks: Replay…", .bind = null, .run = cmdTracks, .params = TracksReplay.params, .runWith = TracksReplay.bind(cmdTracksReplay), .icon = icons.tvg.lucide.gauge },
@@ -766,7 +767,12 @@ fn writeTraceFile(editor: *Editor, path: []const u8, ms: u32) ![]const u8 {
 }
 
 fn cmdReportBug(_: *anyopaque) anyerror!void {
-    _ = dvui.openURL(.{ .url = "https://github.com/fizzyedit/fizzy/issues" });
+    if (AppInfo.current.issues_url.len > 0) _ = dvui.openURL(.{ .url = AppInfo.current.issues_url });
+}
+
+/// An app with nowhere to send reports greys Report a Bug out rather than sending them to fizzy.
+fn canReportBug(_: *anyopaque) bool {
+    return AppInfo.current.issues_url.len > 0;
 }
 
 /// Register every fizzy action in the Host command registry. Called once during `Editor.init`.
