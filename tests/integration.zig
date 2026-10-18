@@ -6881,8 +6881,9 @@ test "control: /openapi.json describes each command's body and the declared even
     try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off", .run = ControlFixture.nothing });
     // A `runWith` written by hand, declaring no parameters (as the chat plugin's are).
     try host.registerCommand(.{ .id = "t.by hand{x}", .owner = &plugin, .title = "By hand", .runWith = OpenApiFixture.byHand });
-    // A second of an id: the server runs the first, and the description has one path.
-    try host.registerCommand(.{ .id = "t.off", .owner = &plugin, .title = "Off again", .run = ControlFixture.nothing });
+    // Another plugin's command by the same id: held in reserve, the first kept and described once.
+    var other = sdk.Plugin{ .state = &state, .vtable = &vtable, .id = "u", .display_name = "U" };
+    try host.registerCommand(.{ .id = "t.off", .owner = &other, .title = "Off again", .run = ControlFixture.nothing });
     try host.declareEvent(.{ .name = "t.placed", .owner = &plugin, .description = "Something was placed.", .payload = ".{ .line = 4, .side = .left }" });
 
     var arena_state: std.heap.ArenaAllocator = .init(gpa);

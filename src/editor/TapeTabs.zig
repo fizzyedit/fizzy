@@ -18,7 +18,8 @@ const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 const core = fizzy.core;
 const sdk = fizzy.sdk;
-const automation = @import("app").automation;
+const app = @import("app");
+const automation = app.automation;
 const Editor = @import("Editor.zig");
 
 playing: std.ArrayListUnmanaged(*Playback) = .empty,
