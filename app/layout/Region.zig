@@ -679,8 +679,11 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     const picker_here = self.state.picker.is_open and std.mem.eql(u8, self.state.picker.region, opts.name);
     const filled = regionHasContent(self, opts, keywords);
     const dragging_this = self.state.view_drag.active() and std.mem.eql(u8, self.state.view_drag.name, opts.name);
+    // Not under a modal dialog, which takes the press: the button lit and the click did nothing.
+    // The rect test first, so the subwindow walk runs only with the pointer at the corner.
     const near = mouse.x >= rs.r.x + rs.r.w - corner_reach * rs.s and mouse.x <= rs.r.x + rs.r.w and
-        mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s;
+        mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s and
+        !core.dialogs.modalOverCurrent();
     const pressing = dvui.dataGet(null, box.data().id, "_chooser_press", bool) orelse false;
     if (self.state.view_drag.active()) ViewDrag.tick(self);
     // Not while a view is carried: the button is the way to pick or lift a view, and over a drag

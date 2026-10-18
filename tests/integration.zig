@@ -6859,6 +6859,73 @@ test "control: commands are listed, described and run over the routes" {
     try std.testing.expectEqualStrings("{\"error\":\"line 200 is past the end\"}", failed.body);
 }
 
+const ControlStreamClient = struct {
+    path: []const u8,
+    reply: [4096]u8 = undefined,
+    len: usize = 0,
+    fn run(self: *ControlStreamClient) void {
+        const io = std.testing.io;
+        const addr = std.Io.net.UnixAddress.init(self.path) catch return;
+        const stream = addr.connect(io) catch return;
+        defer stream.close(io);
+        var wbuf: [256]u8 = undefined;
+        var w = stream.writer(io, &wbuf);
+        w.interface.writeAll("GET /events?topics=t.* HTTP/1.1\r\nHost: x\r\n\r\n") catch return;
+        w.interface.flush() catch return;
+        var rbuf: [256]u8 = undefined;
+        var r = stream.reader(io, &rbuf);
+        self.len = r.interface.readSliceShort(&self.reply) catch 0;
+    }
+};
+
+test "control: the app's events reach a stream, and the bus listens only while one is open" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var relay: control.routes.Relay = .{};
+    try std.testing.expect(!host.listening.load(.acquire));
+
+    var client: ControlStreamClient = .{ .path = path };
+    const thread = try std.Thread.spawn(.{}, ControlStreamClient.run, .{&client});
+    // Frames, as the app would run them, until the stream is open and the relay listens.
+    var frames: usize = 0;
+    while (frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &relay, &host);
+        server.lock.lockUncancelable(io);
+        const open = server.streams.items.len;
+        server.lock.unlock(io);
+        if (open == 1) break;
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expect(host.listening.load(.acquire));
+
+    host.emitZon("t.done", .{ .n = 1, .mode = .fast });
+    host.emitZon("u.other", .{ .n = 2 });
+    host.deliverEvents();
+    io.sleep(.fromMilliseconds(50), .awake) catch {};
+    control.routes.stop(&server, &relay, &host);
+    thread.join();
+    // Stopped: nothing listens, so an emit costs the bus its one load again.
+    try std.testing.expect(!host.listening.load(.acquire));
+    const reply = client.reply[0..client.len];
+    try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\nevent: t.done\ndata: {\"n\":1,\"mode\":\"fast\"}\n\n"));
+}
+
 test "a failed open is not a load in flight: settled and live tapes go on" {
     const gpa = std.testing.allocator;
     const Openings = @FieldType(fizzy.Editor, "openings");
@@ -7533,6 +7600,32 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(before, (try read(host, notes_args)).text);
         }
 
+        // The person's Cmd-Z taking a step someone else made: the menu names it, and the pane says
+        // so with a Redo that puts it back.
+        {
+            const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            const before = (try read(host, "")).text;
+            const front_write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// by Claude\\n\" }}", .{main_zig});
+            defer gpa.free(front_write);
+            const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
+            try std.testing.expect(host.callCommand("text.write", front_write, host.arena()) == .ok);
+            host.endAct(outer);
+            const taken = try editor.stepToTake(front, .undo, host.arena());
+            try std.testing.expectEqualStrings("Claude", fizzy.Editor.authorName(taken.by));
+
+            try editor.undo();
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+            const ds = editor.doc_surfaces.get(front.id) orelse return error.TestUnexpectedResult;
+            const said = ds.feed.items[ds.feed.len - 1];
+            try std.testing.expect(std.mem.startsWith(u8, said.title[0..said.len], "Undid Claude's "));
+            const redo = said.action orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(taken.step.id, redo.tag);
+            editor.redoFromFeed(front, redo.tag);
+            try std.testing.expectEqualStrings("// by Claude\n", (try read(host, "")).text);
+            try editor.undo();
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+        }
+
         // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));
@@ -8139,70 +8232,45 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.docFromPath(played_path) == null);
         try std.testing.expectEqual(@as(usize, 0), editor.tape_tabs.playing.items.len);
 
-        // The transport's share (pressed: `share_pending`), at the top of the next frame: the
-        // whole track opened in a tab to trim, played in at once, nothing written yet. Trimmed
-        // to the part after two steps and shared, the tape kept holds that part: the document as
-        // it was after two steps, then the four after. Cancelled, nothing is written and the tab
-        // goes.
+        // The strip's export window (pressed: `share_pending`), at the top of the next frame:
+        // stops 2 to 5 of a line of five entries with the last undone. The tape kept holds what
+        // the strip shows: the document after two entries, then the steps that made the next
+        // three, the undone one too; the person's document and its history are where they were.
+        {
+            const tracks = &editor.app.tracks.?;
+            const line = doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 5), line.entries.len);
+            try std.testing.expectEqual(@as(usize, 4), line.at);
+            const sum = tracks.lineSummary(host, doc, host.arena(), line, 2, 5) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 3), sum.steps);
+        }
         const tapes_dir = try std.fs.path.join(gpa, &.{ editor.app.config_folder, "tapes" });
         defer gpa.free(tapes_dir);
-        const newest = struct {
-            /// How many tapes there are, and the newest name not in `before` (owned by `a`).
-            fn newest(a: std.mem.Allocator, dir_path: []const u8, before: []const []const u8) !struct { usize, ?[]const u8 } {
-                var dir = try std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true });
-                defer dir.close(dvui.io);
-                var it = dir.iterate();
-                var n: usize = 0;
-                var fresh: ?[]const u8 = null;
-                while (try it.next(dvui.io)) |e| {
-                    n += 1;
-                    for (before) |b| {
-                        if (std.mem.eql(u8, b, e.name)) break;
-                    } else fresh = try a.dupe(u8, e.name);
-                }
-                return .{ n, fresh };
-            }
-        }.newest;
         var keep_state: std.heap.ArenaAllocator = .init(gpa);
         defer keep_state.deinit();
         const keep = keep_state.allocator();
-        var names: std.ArrayListUnmanaged([]const u8) = .empty;
-        {
-            var dir = try std.Io.Dir.cwd().openDir(dvui.io, tapes_dir, .{ .iterate = true });
-            defer dir.close(dvui.io);
-            var it = dir.iterate();
-            while (try it.next(dvui.io)) |e| try names.append(keep, try keep.dupe(u8, e.name));
-        }
-        const kept_before = names.items.len;
-        const openTrim = struct {
-            fn open(ed: *fizzy.Editor, id: u64, at_path: []const u8) !sdk.DocHandle {
-                ed.share_pending = id;
-                for (0..400) |_| {
-                    _ = try dvui.testing.step(headlessFrame);
-                    if (ed.docFromPath(at_path)) |d| if (ed.tape_tabs.trimOf(d.id, dvui.currentWindow().arena()) != null) return d;
-                }
-                return error.TestUnexpectedResult;
+        const listing = struct {
+            fn names(a: std.mem.Allocator, dir_path: []const u8) ![]const []const u8 {
+                var dir = try std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true });
+                defer dir.close(dvui.io);
+                var it = dir.iterate();
+                var found: std.ArrayListUnmanaged([]const u8) = .empty;
+                while (try it.next(dvui.io)) |e| try found.append(a, try a.dupe(u8, e.name));
+                return found.items;
             }
-        }.open;
-        const shared_path = try std.fmt.allocPrint(gpa, "tape://2/{s}", .{std.fs.path.basename(path)});
-        defer gpa.free(shared_path);
-        const shared = try openTrim(editor, doc.id, shared_path);
-        try std.testing.expectEqual(kept_before, (try newest(keep, tapes_dir, names.items))[0]);
+        }.names;
+        const before = try listing(keep, tapes_dir);
+        editor.share_pending = .{ .doc_id = doc.id, .from = 2, .to = 5 };
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expectEqualStrings(want, try textOf(host, shared_path));
+        const after = try listing(keep, tapes_dir);
+        try std.testing.expectEqual(before.len + 1, after.len);
+        const fresh = for (after) |name| {
+            for (before) |b| {
+                if (std.mem.eql(u8, b, name)) break;
+            } else break name;
+        } else return error.TestUnexpectedResult;
         {
-            const trim, const said = editor.tape_tabs.trimOf(shared.id, host.arena()).?;
-            try std.testing.expectEqual(@as(usize, 6), trim.span.n);
-            try std.testing.expect(std.mem.startsWith(u8, said, "6 steps"));
-            trim.span.from = 2;
-            trim.action = .share;
-        }
-        for (0..20) |_| _ = try dvui.testing.step(headlessFrame);
-        try std.testing.expect(editor.tape_tabs.trimOf(shared.id, host.arena()) == null);
-        const kept_after, const fresh = try newest(keep, tapes_dir, names.items);
-        try std.testing.expectEqual(kept_before + 1, kept_after);
-        {
-            const kept_path = try std.fs.path.join(keep, &.{ tapes_dir, fresh.? });
+            const kept_path = try std.fs.path.join(keep, &.{ tapes_dir, fresh });
             const kept = try std.Io.Dir.cwd().readFileAlloc(dvui.io, kept_path, gpa, .limited(1 << 20));
             defer gpa.free(kept);
             var kept_check = app.automation.Input.check;
@@ -8212,21 +8280,10 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings("two\none\n", kept_tape.tape.keyframes[0].files[0].text);
             var kept_steps: usize = 0;
             for (kept_tape.tape.ops) |op| kept_steps += @intFromBool(op.do == .step);
-            try std.testing.expectEqual(@as(usize, 4), kept_steps);
+            try std.testing.expectEqual(@as(usize, 3), kept_steps);
         }
-        // The tab and the person's document are where they were.
-        try std.testing.expectEqualStrings(want, try textOf(host, shared_path));
         try std.testing.expectEqualStrings(want, try textOf(host, path));
-        try editor.rawCloseFileID(shared.id);
-        try dvui.testing.settle(headlessFrame);
-
-        const cancelled_path = try std.fmt.allocPrint(gpa, "tape://3/{s}", .{std.fs.path.basename(path)});
-        defer gpa.free(cancelled_path);
-        const cancelled = try openTrim(editor, doc.id, cancelled_path);
-        editor.tape_tabs.trimOf(cancelled.id, host.arena()).?[0].action = .cancel;
-        try dvui.testing.settle(headlessFrame);
-        try std.testing.expect(editor.docFromPath(cancelled_path) == null);
-        try std.testing.expectEqual(kept_after, (try newest(keep, tapes_dir, names.items))[0]);
+        try std.testing.expectEqual(@as(usize, 4), (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult).at);
 
         try editor.rawCloseFileID(doc.id);
 

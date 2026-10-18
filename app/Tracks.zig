@@ -463,6 +463,9 @@ pub const ExportError = error{
     StartNotInHistory,
     /// The range holds no steps.
     EmptyRange,
+    /// An entry in the range was made before the document's track began: its steps were never
+    /// recorded.
+    NotRecorded,
     /// The owner could not write the document as a file.
     NoBytes,
     /// The document went back to the track's start for its file and could not come forward
@@ -607,32 +610,8 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     const line = doc.owner.historyLine(doc, arena) orelse return error.NoHistory;
     const now_top = if (line.at == 0) 0 else line.entries[line.at - 1].id;
 
-    const name = blk: {
-        const base_name = std.fs.path.basename(doc.owner.documentPath(doc));
-        if (std.fs.path.extension(base_name).len > 0) break :blk base_name;
-        const types = doc.owner.fileTypes();
-        if (types.len == 0) break :blk base_name;
-        break :blk try std.mem.concat(arena, u8, &.{ base_name, types[0] });
-    };
-
-    // Back to where the range begins, the file written there, and forward again: that last
-    // move is checked, since a failure would leave the person's document at the range's start.
-    const bytes = bytes: {
-        const was_track_muted = self.muted;
-        self.muted = doc.id;
-        defer self.muted = was_track_muted;
-        const was_muted = host.activity_muted;
-        host.activity_muted = true;
-        defer host.activity_muted = was_muted;
-        const moved = now_top != start_top;
-        if (moved and !doc.owner.historyGoTo(doc, start_top)) return error.StartNotInHistory;
-        const written = doc.owner.documentBytes(doc, name, arena) catch null;
-        if (moved and !doc.owner.historyGoTo(doc, now_top)) {
-            std.log.err("tracks: {s} went back to its track's start and could not come forward; redo brings the rest back", .{doc.owner.documentPath(doc)});
-            return error.NotReturned;
-        }
-        break :bytes written orelse return error.NoBytes;
-    };
+    const name = try fileName(doc, arena);
+    const bytes = try self.fileAt(host, doc, arena, name, start_top, now_top);
 
     const files = try arena.alloc(tape.Tape.File, 1);
     files[0] = .{ .path = name, .text = bytes, .owner = doc.owner.id, .format = t.format };
@@ -643,6 +622,117 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     ops[1] = .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } };
     var timing: Timing = .init(t, base, first, opts.real_time);
     for (t.steps.items[first..to], ops[2..]) |r, *op| {
+        op.* = .{ .at = timing.place(r), .ms = r.ms, .do = .{ .step = .{ .file = name, .effect = t.effect(r), .motion = t.motion(r) } } };
+    }
+    const title = try std.fmt.allocPrint(arena, "How {s} was made", .{name});
+    return tape.binary.encode(gpa, .{ .name = "share", .title = title, .ops = ops, .keyframes = keyframes }, .{ .deflate = true }) catch return error.OutOfMemory;
+}
+
+/// The document's file name for a tape: its own, with its owner's first extension when it has
+/// none (an untitled document), so it opens with the right owner.
+fn fileName(doc: sdk.DocHandle, arena: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    const base_name = std.fs.path.basename(doc.owner.documentPath(doc));
+    if (std.fs.path.extension(base_name).len > 0) return base_name;
+    const types = doc.owner.fileTypes();
+    if (types.len == 0) return base_name;
+    return std.mem.concat(arena, u8, &.{ base_name, types[0] });
+}
+
+/// `doc`'s file as it stood with history entry `top` on top, written by its owner: the document
+/// taken back there through its history, written, and brought forward to `now_top` again in the
+/// same call, with nothing drawn between and neither its track nor the activity feed hearing of
+/// it. The move forward is checked, since a failure would leave the person's document back there.
+fn fileAt(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, arena: std.mem.Allocator, name: []const u8, top: u64, now_top: u64) ExportError![]const u8 {
+    const was_track_muted = self.muted;
+    self.muted = doc.id;
+    defer self.muted = was_track_muted;
+    const was_muted = host.activity_muted;
+    host.activity_muted = true;
+    defer host.activity_muted = was_muted;
+    const moved = now_top != top;
+    if (moved and !doc.owner.historyGoTo(doc, top)) return error.StartNotInHistory;
+    const written = doc.owner.documentBytes(doc, name, arena) catch null;
+    if (moved and !doc.owner.historyGoTo(doc, now_top)) {
+        std.log.err("tracks: {s} went back for a tape's file and could not come forward; redo brings the rest back", .{doc.owner.documentPath(doc)});
+        return error.NotReturned;
+    }
+    return written orelse error.NoBytes;
+}
+
+/// The recorded steps that made the entries of `doc`'s history line from stop `lo` to stop
+/// `hi` (the entries `line.entries[lo..hi]`): each entry's step that added it and those that
+/// joined it, in the order they came, which is the line's. What the strip shows played forward,
+/// with the undos and redos between left out. `error.NotRecorded` when an entry was made before
+/// its track began.
+fn lineSteps(t: *const Track, arena: std.mem.Allocator, line: sdk.Plugin.HistoryLine, lo: usize, hi: usize) ExportError![]Track.Rec {
+    var want: std.AutoHashMapUnmanaged(u64, bool) = .empty;
+    for (line.entries[lo..hi]) |e| try want.put(arena, e.id, false);
+    var out: std.ArrayListUnmanaged(Track.Rec) = .empty;
+    for (t.steps.items) |r| switch (r.kind) {
+        .added, .joined => if (want.getPtr(r.id)) |seen| {
+            if (r.kind == .added) seen.* = true;
+            try out.append(arena, r);
+        },
+        else => {},
+    };
+    var it = want.valueIterator();
+    while (it.next()) |seen| if (!seen.*) return error.NotRecorded;
+    return out.items;
+}
+
+/// What a stretch of the history line holds, for the strip's export window to say: how many
+/// entries, how long they took to make (as the tape plays them), whose they are. Null when an
+/// entry in it was made before the track began.
+pub fn lineSummary(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, arena: std.mem.Allocator, line: sdk.Plugin.HistoryLine, lo: usize, hi: usize) ?Summary {
+    const t = self.open.get(doc.id) orelse return null;
+    if (lo >= hi or hi > line.entries.len) return null;
+    const recs = lineSteps(t, arena, line, lo, hi) catch return null;
+    if (recs.len == 0) return null;
+    var timing: Timing = .{ .recorded_end = recs[0].at, .real_time = false };
+    var out: Summary = .{ .from = lo, .to = hi, .steps = hi - lo, .recorded_ms = 0, .played_ms = 0, .authors = &.{} };
+    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    for (recs) |r| {
+        out.played_ms = timing.place(r) + r.ms;
+        const who = host.stepAuthor(doc.id, r.id);
+        for (authors.items) |a| {
+            if (a.same(who)) break;
+        } else authors.append(arena, who) catch {};
+    }
+    out.recorded_ms = timing.recorded_end -| recs[0].at;
+    out.authors = authors.items;
+    return out;
+}
+
+/// A stretch of `doc`'s history line as a tape, as the strip shows it (`HistoryTransport`'s
+/// export window): the document's file at stop `lo` (`fileAt`), then the steps that made each
+/// entry to stop `hi` (`lineSteps`), timed as they came. Owned by `gpa`.
+pub fn exportLine(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.mem.Allocator, lo: usize, hi: usize, opts: ExportOptions) ExportError![]u8 {
+    const prof = core.profile.begin("fizzy", "tracks.export");
+    defer prof.end();
+    const t = self.open.get(doc.id) orelse return error.NoTrack;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const line = doc.owner.historyLine(doc, arena) orelse return error.NoHistory;
+    if (lo >= hi or hi > line.entries.len) return error.EmptyRange;
+    const recs = try lineSteps(t, arena, line, lo, hi);
+    const stop = struct {
+        fn id(l: sdk.Plugin.HistoryLine, i: usize) u64 {
+            return if (i == 0) 0 else l.entries[i - 1].id;
+        }
+    }.id;
+    const name = try fileName(doc, arena);
+    const bytes = try self.fileAt(host, doc, arena, name, stop(line, lo), stop(line, line.at));
+
+    const files = try arena.alloc(tape.Tape.File, 1);
+    files[0] = .{ .path = name, .text = bytes, .owner = doc.owner.id, .format = t.format };
+    const keyframes = try arena.alloc(tape.Tape.Keyframe, 1);
+    keyframes[0] = .{ .root = "demo://share", .files = files, .open = try arena.dupe([]const u8, &.{name}), .layout = .focused };
+    const ops = try arena.alloc(tape.Tape.Op, recs.len + 2);
+    ops[0] = .{ .at = 0, .do = .{ .keyframe = 0 } };
+    ops[1] = .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } };
+    var timing: Timing = .{ .recorded_end = recs[0].at, .real_time = opts.real_time };
+    for (recs, ops[2..]) |r, *op| {
         op.* = .{ .at = timing.place(r), .ms = r.ms, .do = .{ .step = .{ .file = name, .effect = t.effect(r), .motion = t.motion(r) } } };
     }
     const title = try std.fmt.allocPrint(arena, "How {s} was made", .{name});

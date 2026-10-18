@@ -205,13 +205,9 @@ fn drawIcon(editor: *Editor, c: *Chooser, view: *Layout.Surface, index: usize) f
     // Register the icon as interactive in the title bar so clicks reach DVUI even when it
     // overlaps the top drag strip where fizzy draws its own title bar (Windows, Linux). Only the
     // topmost icon(s) actually sit inside the strip — anything below is registered harmlessly.
-    if (fizzy.backend.custom_titlebar) {
-        const r = it.data().rectScale().r;
-        const strip_h = (Constants.titlebar_top_buffer + Constants.titlebar_height) * dvui.windowNaturalScale();
-        if (r.y < strip_h) fizzy.backend.pushTitleBarInteractiveRect(r);
-    }
+    if (fizzy.backend.custom_titlebar) Editor.pushTitleStripRect(it.data().rectScale().r);
 
-    Chooser.icon(view, it.selected, it.hovered(), rail_icon, index);
+    Chooser.icon(view, it.selected, it.hovered(), it.data(), rail_icon, index);
 
     // Attention badge, same idiom (and colour) as the infobar's app-update dot: a plugin build
     // is sitting in `plugins/` waiting for the user to say whether to load it, and the card that

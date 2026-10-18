@@ -45,6 +45,7 @@ const Host = sdk.Host;
 const PluginLoader = @import("root.zig").store.Loader;
 const SettingsWatcher = @import("watch/SettingsWatcher.zig");
 const ControlServer = @import("control/Server.zig");
+const ControlRelay = @import("control/routes.zig").Relay;
 const ExecutableWatcher = @import("watch/ExecutableWatcher.zig");
 const FolderWatcher = @import("watch/FolderWatcher.zig");
 const Keymap = @import("keymap/Keymap.zig");
@@ -208,7 +209,10 @@ open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
 /// and only then the host's recorder.
 tracks: ?Tracks = null,
 
-file_id_counter: u64 = 0,
+/// Atomic: plugins allocate ids through `Host.allocDocId` from `loadDocument`, on the load
+/// worker thread, while the UI thread may be creating a document of its own. `usize`, since
+/// wasm32 has no 64-bit atomics (and no room for 2^32 documents).
+file_id_counter: std.atomic.Value(usize) = .init(0),
 
 /// Filled from the async SDL save dialog callback, then applied inside `tick` (when `currentWindow` is valid).
 pending_save_as_path: ?[]u8 = null,
@@ -265,6 +269,8 @@ settings_watcher: ?SettingsWatcher = null,
 /// (plans/CONTROL_SERVER_PLAN.md, steps 1–3 land dark), answered each frame, stopped at quit.
 /// Always void on wasm, which has no socket.
 control: if (builtin.target.cpu.arch == .wasm32) void else ?ControlServer = if (builtin.target.cpu.arch == .wasm32) {} else null,
+/// What relays the app's events to the control server's streams (`control.routes.Relay`).
+control_relay: if (builtin.target.cpu.arch == .wasm32) void else ControlRelay = if (builtin.target.cpu.arch == .wasm32) {} else .{},
 
 /// Watches the app's own executable while `settings.restart_on_rebuild` is on: a rebuild restarts
 /// the app into it, keeping every document. Null while the setting is off, and wherever
@@ -704,8 +710,7 @@ pub fn docById(app: *App, id: u64) ?sdk.DocHandle {
 }
 
 pub fn newFileID(app: *App) u64 {
-    app.file_id_counter += 1;
-    return app.file_id_counter;
+    return app.file_id_counter.fetchAdd(1, .monotonic) + 1;
 }
 
 /// Heap-owned path like `untitled-1`, unique among open-document basenames.

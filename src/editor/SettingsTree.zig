@@ -22,7 +22,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
-const assets = @import("assets");
 const core = @import("core");
 const fizzy = @import("../fizzy.zig");
 const PluginSettingsPane = @import("app").settings.PluginPane;
@@ -582,9 +581,9 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
         // `icon.png` is the pixel-art F (not `fox.png`). Use `.imageFile` so dvui caches the
         // texture — `fromImageFileBytes` re-decodes and leaks a 1024² buffer every frame.
         const logo: dvui.ImageSource = .{ .imageFile = .{
-            .bytes = assets.files.@"icon.png",
+            .bytes = @import("app_icon").png,
             .name = "icon.png",
-            .interpolation = .nearest,
+            .interpolation = if (@import("app_icon").pixel_art) .nearest else .linear,
         } };
         _ = dvui.image(@src(), .{ .source = core.image.cachedTexture(logo), .shrink = .ratio }, core.widgets.treeRowIconOptions(.{}));
         return;
