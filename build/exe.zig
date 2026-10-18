@@ -266,6 +266,9 @@ pub fn addFizzyExecutableForTarget(
     // On dvui's own SDL3 backend (`-Dnative-backend=sdl3`), which has no viewports.
     exe.root_module.addImport("viewports_none", fizzy_backend.viewportsNoneModule(backendDependency(b), dvui_mod));
 
+    // The glass look the backend dresses OS windows with; `core` takes the same module.
+    const glass_look = fizzy_backend.glassLookModule(backendDependency(b));
+
     // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
     // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.
     const core_module = b.createModule(.{
@@ -273,7 +276,7 @@ pub fn addFizzyExecutableForTarget(
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    const icons_module = core_mod.addImports(b, core_module, dvui_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize);
+    const icons_module = core_mod.addImports(b, core_module, dvui_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize, glass_look);
     exe.root_module.addImport("core", core_module);
     if (icons_module) |icons| exe.root_module.addImport("icons", icons);
 
@@ -282,7 +285,7 @@ pub fn addFizzyExecutableForTarget(
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize);
+    _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize, glass_look);
 
     // `macos_fsevents` is load-bearing for `FolderWatcher`: it watches a whole project folder,
     // and the kqueue fallback needs a file descriptor per directory *and* per file — exactly the

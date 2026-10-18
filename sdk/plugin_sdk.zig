@@ -22,19 +22,7 @@ const std = @import("std");
 /// the five `core` compiles and miss this one (see its doc comment).
 const core_module = @import("core_module.zig");
 
-/// LazyPath to a source tree this package needs (`src/…` for the SDK itself, `core/…` for the
-/// shared floor).
-///
-/// The SDK's own source lives inside this package (`sdk/src/`) and resolves directly. `core/`
-/// is the one tree that does not: in-repo it sits beside this package (`../core/…`), and in the
-/// release tarball (`fizzy-sdk-v*.tar.gz`) it is vendored at the archive root, which *is* this
-/// package — so the access check below picks whichever layout is present.
-fn repoPath(b: *std.Build, sub_path: []const u8) std.Build.LazyPath {
-    b.root.access(b.graph.io, sub_path, .{}) catch {
-        return .{ .cwd_relative = b.root.joinString(b.allocator, b.pathJoin(&.{ "..", sub_path })) catch @panic("OOM") };
-    };
-    return b.path(sub_path);
-}
+const repoPath = core_module.repoPath;
 
 /// C-ABI entry symbols every plugin dylib must export.
 pub const dylib_exports = [_][]const u8{
@@ -593,7 +581,7 @@ pub fn exportModules(
         .root_source_file = repoPath(b, "core/core.zig"),
         .link_libc = !is_wasm,
     });
-    _ = core_module.addImports(b, core_mod, dvui_proxy_mod, b, target, optimize);
+    _ = core_module.addImports(b, core_mod, dvui_proxy_mod, b, target, optimize, null);
 
     const sdk_mod = b.addModule("fizzy_sdk", .{
         .target = target,

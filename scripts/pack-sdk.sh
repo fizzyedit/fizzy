@@ -4,7 +4,8 @@
 # Zig has no "depend on a subdirectory of this archive" — plugins must fetch a
 # package whose root build.zig.zon has no Velopack. This script stages `sdk/` as
 # the package root. The SDK's own source already lives inside it (`sdk/src/`), so only
-# `core/` is vendored in beside it — `plugin_sdk.repoPath` resolves both (see that function).
+# `core/` and the glass look `core` imports (`backend/src/glass_look.zig`) are vendored in
+# beside it — `core_module.repoPath` resolves them (see that function).
 #
 # Usage:
 #   ./scripts/pack-sdk.sh                 # writes zig-out/sdk/fizzy-sdk-vX.Y.Z.tar.gz
@@ -38,9 +39,11 @@ mkdir -p "$pkg"
 
 # Package root = the sdk/ build surface plus its own src/ (no app-only deps).
 cp -R sdk/. "$pkg/"
-# The one module source that lives outside the package in-repo, and the license every copy of
-# it carries.
+# The module sources that live outside the package in-repo, and the license every copy of
+# them carries.
 cp -R core "$pkg/core"
+mkdir -p "$pkg/backend/src"
+cp backend/src/glass_look.zig "$pkg/backend/src/glass_look.zig"
 cp LICENSE "$pkg/LICENSE"
 
 # Drop build/editor-only noise if any leaked into the copy (none expected).
@@ -60,14 +63,14 @@ text = open(path).read()
 paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
 if not paths:
     sys.exit("pack-sdk: no .paths list in the package's build.zig.zon")
-for entry in ("core", "LICENSE"):
+for entry in ("core", "backend", "LICENSE"):
     if f'"{entry}"' not in paths.group(1):
         text = text[:paths.end(1)] + f'\n        "{entry}",' + text[paths.end(1):]
         paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
 text = re.sub(r'\.version = "[^"]*"', f'.version = "{version}"', text, count=1)
 paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
-if '"core",' not in paths.group(1) or '"LICENSE",' not in paths.group(1):
-    sys.exit("pack-sdk: could not add core and LICENSE to the package's .paths")
+if any(f'"{e}",' not in paths.group(1) for e in ("core", "backend", "LICENSE")):
+    sys.exit("pack-sdk: could not add core, backend and LICENSE to the package's .paths")
 open(path, "w").write(text)
 PY
 

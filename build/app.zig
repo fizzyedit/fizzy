@@ -849,7 +849,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
-        .{ "fizzy-glass-look-tests", "core/gfx/glass_look.zig" },
+        .{ "fizzy-glass-look-tests", "backend/src/glass_look.zig" },
         // What the app's windows are made of, and the fallback to what the backend can show.
         // std-only but for `publish`/`get`, which reach dvui and are not under test here.
         .{ "fizzy-material-tests", "core/material.zig" },
@@ -1071,7 +1071,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), b.dependency("fizzy_sdk", .{}).builder, target, optimize);
+    const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), b.dependency("fizzy_sdk", .{}).builder, target, optimize, null);
     fizzy_test_module.addImport("core", core_module_test);
     if (icons_test) |icons| fizzy_test_module.addImport("icons", icons);
 
@@ -1527,6 +1527,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
         // `core/widgets.zig` names widgets through `replay`'s anchors; the test `core`'s own.
         split_tests_module.addImport("replay", core_module_test.import_table.get("replay").?);
+        split_tests_module.addImport("glass_look", core_module_test.import_table.get("glass_look").?);
 
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },
