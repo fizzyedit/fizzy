@@ -149,6 +149,11 @@ screen_watched_until_ns: i96 = 0,
 /// `host.command_runs` as this frame's requests began to be answered: a command run since has not
 /// been drawn yet, so the frame last drawn no longer shows what is on screen (`fizzy.screen`).
 command_runs_at_requests: u64 = 0,
+/// How many event streams named `fizzy.screen` at the last frame's end (`streamScreen`): one more
+/// is sent the screen as it is now, changed or not.
+screen_streams: usize = 0,
+/// The screen last streamed, hashed: a frame that changed nothing sends nothing.
+screen_streamed_hash: u64 = 0,
 /// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
 later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
 /// The control server would not start (`syncControlServer`): not retried until the setting goes
@@ -5443,6 +5448,34 @@ pub fn answerLaterCommands(editor: *Editor) void {
         _ = editor.later_settles.swapRemove(i);
         host.finishCall(w.ticket, .{ .ok = if (settled) "true" else "false" });
     }
+}
+
+/// The screen to the event streams that name `fizzy.screen` (`Server.publishNamed`), at a frame's end
+/// once its snapshot is written: the whole of it, as JSON, each frame it changed. While any stream
+/// names it every frame is taken, as for `fizzy.screen` (`Snapshot.keepTaking`); with none, this
+/// costs a lock and nothing is taken. Straight to the streams, not through the event bus, which
+/// would deliver it a frame later.
+pub fn streamScreen(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const server = if (editor.app.control) |*c| c else return;
+    const n = server.streamsNaming("fizzy.screen");
+    defer editor.screen_streams = n;
+    if (n == 0) return;
+    const snapshot = &editor.demo.snapshot;
+    editor.screen_watched_until_ns = std.Io.Clock.awake.now(dvui.io).nanoseconds + 2 * std.time.ns_per_s;
+    snapshot.keepTaking(true);
+    if (n > editor.screen_streams) {
+        // A new stream gets the screen as it is, even from an app drawing nothing: a frame for it.
+        editor.screen_streamed_hash = 0;
+        editor.app.host.refresh();
+    }
+    const text = snapshot.latest() orelse return;
+    const hash = std.hash.Wyhash.hash(0, text);
+    if (hash == editor.screen_streamed_hash) return;
+    editor.screen_streamed_hash = hash;
+    const arena = dvui.currentWindow().arena();
+    const json = @import("app").control.json.jsonFromZon(arena, text) catch return;
+    server.publishNamed("fizzy.screen", json);
 }
 
 /// Run the control server while `control_server` is on, and stop it when it goes off. Once a frame;

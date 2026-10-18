@@ -89,7 +89,18 @@ pub const Stream = struct {
     conn: *Conn,
 
     fn wants(self: *const Stream, name: []const u8) bool {
+        return self.matches(name, true);
+    }
+
+    /// Wants `name` by naming it, or a prefix of it: not by asking for everything (`*`). For an
+    /// event too heavy to send everyone (`publishNamed`).
+    fn names(self: *const Stream, name: []const u8) bool {
+        return self.matches(name, false);
+    }
+
+    fn matches(self: *const Stream, name: []const u8, everything: bool) bool {
         for (self.topics) |t| {
+            if (!everything and std.mem.eql(u8, t, "*")) continue;
             if (t.len > 0 and t[t.len - 1] == '*') {
                 if (std.mem.startsWith(u8, name, t[0 .. t.len - 1])) return true;
             } else if (std.mem.eql(u8, t, name)) return true;
@@ -247,12 +258,34 @@ pub fn wants(self: *Server, name: []const u8) bool {
 /// Send the event `name`, its payload already JSON on one line, to every stream that wants it.
 /// The message is built once and copied to each. From any thread.
 pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
+    self.send(name, json, true);
+}
+
+/// `publish`, to the streams that name the event (or a prefix of it) only, not those asking for
+/// everything: for an event too heavy for those (`fizzy.screen`, the whole screen each frame it
+/// changes).
+pub fn publishNamed(self: *Server, name: []const u8, json: []const u8) void {
+    self.send(name, json, false);
+}
+
+/// How many streams name the event `name` (`publishNamed`).
+pub fn streamsNaming(self: *Server, name: []const u8) usize {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    var n: usize = 0;
+    for (self.streams.items) |st| {
+        if (!st.overrun and st.names(name)) n += 1;
+    }
+    return n;
+}
+
+fn send(self: *Server, name: []const u8, json: []const u8, everything: bool) void {
     // A line break would end the `event:` line early, and let a name forge messages of its own.
     if (std.mem.indexOfAny(u8, name, "\r\n") != null) return;
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     for (self.streams.items) |st| {
-        if (st.overrun or !st.wants(name)) continue;
+        if (st.overrun or !st.matches(name, everything)) continue;
         const fits = st.backlog.items.len + name.len + json.len + 16 <= max_backlog;
         if (fits) {
             if (st.backlog.print(self.gpa, "event: {s}\ndata: {s}\n\n", .{ name, json })) |_| {
@@ -791,6 +824,13 @@ test "topics come from the query, and none means everything" {
     try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "fizzy.document.*", "x.y" }), try topicsOf(a, "/events?a=1&topics=fizzy.document.%2A,%20x.y"));
     const st: Stream = .{ .topics = &.{ "fizzy.document.*", "x.y" }, .conn = undefined };
     try std.testing.expect(st.wants("fizzy.document.saved"));
+    // Named, or by a prefix: what `publishNamed` sends to. Everything (`*`) is not naming it.
+    try std.testing.expect(st.names("fizzy.document.saved"));
+    const all: Stream = .{ .topics = &.{"*"}, .conn = undefined };
+    try std.testing.expect(all.wants("fizzy.screen"));
+    try std.testing.expect(!all.names("fizzy.screen"));
+    const fizzy_all: Stream = .{ .topics = &.{ "*", "fizzy.*" }, .conn = undefined };
+    try std.testing.expect(fizzy_all.names("fizzy.screen"));
     try std.testing.expect(st.wants("x.y"));
     try std.testing.expect(!st.wants("x.yz"));
     try std.testing.expect(!st.wants("fizzy.folder.opened"));

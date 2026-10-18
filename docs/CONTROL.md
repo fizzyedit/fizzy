@@ -100,6 +100,14 @@ event: fizzy.document.saved
 data: {"path":"/abs/notes.md"}
 ```
 
+**The screen, pushed.** `?topics=fizzy.screen` streams what is on screen, the same data
+`fizzy.screen` answers, as JSON, each frame it changes, the moment that frame is drawn: an agent
+watching what it does reads the screen without asking for it, about one frame after its command
+answered. It goes only to streams that name it (`fizzy.screen`, or a prefix like `fizzy.*`), never
+to one asking for everything, since it can be large and frequent. A stream joining gets the screen as
+it is at once. While any stream names it, every frame is taken (as asking for `fizzy.screen` often
+does); with none, nothing is.
+
 `/openapi.json` lists the events plugins declared, with an example payload each. A stream gets a
 keep-alive comment every 15 seconds; one that falls more than 8 MB behind gets nothing more. With
 no stream open, events cost the bus nothing extra.
