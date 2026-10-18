@@ -655,13 +655,18 @@ test "a config folder too deep for a socket path listens in a runtime folder ins
     const gpa = std.testing.allocator;
     const short = try socketPath(gpa, "/home/me/.config/fizzy", "/run/user/1000");
     defer gpa.free(short);
-    try std.testing.expectEqualStrings("/home/me/.config/fizzy/control/control.sock", short);
+    // Joined as the OS joins paths: `\` between them on Windows.
+    const want = try std.fs.path.join(gpa, &.{ "/home/me/.config/fizzy", "control", "control.sock" });
+    defer gpa.free(want);
+    try std.testing.expectEqualStrings(want, short);
     // Between Darwin's 104 and std's 108, the length that crashed `listen`: not used as it is.
     const deep = "/" ++ "d" ** (max_path - "/control/control.sock".len + 2);
     const fallback = try socketPath(gpa, deep, "/tmp/me");
     defer gpa.free(fallback);
     try std.testing.expect(fallback.len <= max_path);
-    try std.testing.expect(std.mem.startsWith(u8, fallback, "/tmp/me/fizzy-control-"));
+    const folder = try std.fs.path.join(gpa, &.{ "/tmp/me", "fizzy-control-" });
+    defer gpa.free(folder);
+    try std.testing.expect(std.mem.startsWith(u8, fallback, folder));
     // Per config folder: another deep one gets another folder.
     const other = try socketPath(gpa, deep ++ "x", "/tmp/me");
     defer gpa.free(other);
