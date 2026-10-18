@@ -1261,6 +1261,34 @@ int fizzy_macos_window_has_liquid_glass(void *nswindow) {
  */
 /* The glass parts beside SDL's view in `window`'s frame view (`window_glass_ids`), once; 1 where they
  * are (or already were), 0 where the OS has no Liquid Glass. A titled window's and a menu's alike. */
+/* A window glass part's feather mask (`windowFeatherMask`) sized with the part as AppKit resizes
+ * it, not at the next frame's look: a mask left at the old size for a frame, anchored at the
+ * bottom, masked the frost out along the top of a window growing under a live resize, its old
+ * corner showing as a diagonal (the user). One observer for every part
+ * (`windowGlassMaskFollows`), each part's registration gone with it (`windowGlassRemove`). */
+@interface FizzyGlassMaskFollower : NSObject
+@end
+
+@implementation FizzyGlassMaskFollower
+- (void)partResized:(NSNotification *)note {
+    CALayer *layer = [(NSView *)[note object] layer];
+    CALayer *mask = [layer mask];
+    if (mask == nil || CGRectEqualToRect([mask frame], [layer bounds])) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [mask setFrame:[layer bounds]];
+    [CATransaction commit];
+}
+@end
+
+static FizzyGlassMaskFollower *g_glass_mask_follower = nil;
+
+static void windowGlassMaskFollows(NSView *part) {
+    if (g_glass_mask_follower == nil) g_glass_mask_follower = [[FizzyGlassMaskFollower alloc] init];
+    [part setPostsFrameChangedNotifications:YES];
+    [[NSNotificationCenter defaultCenter] addObserver:g_glass_mask_follower selector:@selector(partResized:) name:NSViewFrameDidChangeNotification object:part];
+}
+
 static int windowGlassInstall(NSWindow *window, long blur_material) {
     if (window == nil || !fizzy_macos_liquid_glass_available()) return 0;
     if (windowGlassPart(window, window_glass_under) != nil) return 1;
@@ -1301,6 +1329,7 @@ static int windowGlassInstall(NSWindow *window, long blur_material) {
         /* Its own layer, which keeps the feather's mask: one AppKit lends a view not asking
          * for a layer (the glass, the blur) drops the mask set on it. */
         [part setWantsLayer:YES];
+        if (k == window_glass_over || k == window_glass_fill) windowGlassMaskFollows(part);
         [frame addSubview:part positioned:NSWindowBelow relativeTo:content];
     }
     return 1;
@@ -1309,7 +1338,12 @@ static int windowGlassInstall(NSWindow *window, long blur_material) {
 /* `window`'s glass parts gone (`windowGlassInstall`): a plain dvui app's window made of another
  * material (`fizzy_macos_window_plain_material`). */
 static void windowGlassRemove(NSWindow *window) {
-    for (int k = 0; k < window_glass_parts; k++) [windowGlassPart(window, k) removeFromSuperview];
+    for (int k = 0; k < window_glass_parts; k++) {
+        NSView *part = windowGlassPart(window, k);
+        if (part == nil) continue;
+        if (g_glass_mask_follower != nil) [[NSNotificationCenter defaultCenter] removeObserver:g_glass_mask_follower name:NSViewFrameDidChangeNotification object:part];
+        [part removeFromSuperview];
+    }
 }
 
 int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
