@@ -50,9 +50,7 @@ for repo in example-app example-plugin; do
     mkdir -p "$work/$repo"
     pack "$EXAMPLES_DIR/$repo" | tar -x -C "$work/$repo"
   else
-    # ZIG017: the examples' zig-0.17 branches until their 0.17 PRs land (just after fizzy's
-    # switch to 0.17), then `main` again in a PR of its own.
-    git clone --quiet --depth 1 --branch "${EXAMPLES_REF:-zig-0.17}" "https://github.com/fizzyedit/$repo" "$work/$repo"
+    git clone --quiet --depth 1 "https://github.com/fizzyedit/$repo" "$work/$repo"
   fi
 done
 
