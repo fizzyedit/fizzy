@@ -245,7 +245,7 @@ const native_menus: []const platform.menu.Menu = blk: {
             .aliases = sub.aliases,
             .title = sub.title,
             .entries = &done,
-            .help = std.mem.eql(u8, sub.id, "fizzy.menu.help"),
+            .help = sub == menu_model.help,
         };
     }
     const done = menus;

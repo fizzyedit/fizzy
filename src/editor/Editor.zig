@@ -2207,9 +2207,8 @@ pub fn postInit(editor: *Editor) !void {
         .draw = drawSettingsPane,
     });
 
-    // Menu bar contributions (non-macOS in-app bar). The File/Edit draw bodies still live
-    // in fizzy's `Menu.zig`; a later step could move them into the workbench / pixel-art
-    // plugins so those self-register. Order = bar order.
+    // Menu bar contributions (non-macOS in-app bar). Registered after the plugins', so
+    // registration order isn't bar order: `Menu.draw` puts plugin menus between these and Help.
     // One registration per `menu_model.menu_bar` entry, all pointing at the same generic
     // renderer with the model node as `ctx`. There is no longer a per-menu draw function that
     // could disagree with the macOS builder walking the same tree.
@@ -4642,6 +4641,14 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
 /// only those over fizzy's strip: AppKit's region is its own height. Each where it stands on the
 /// stack: those drawn later this frame (dialogs land at the frame's end) are still last frame's,
 /// which is the frame the OS's hit test answers for; one closed since goes with the stack.
+/// Mark `r` as taking presses rather than dragging the window, if it reaches into the title-bar
+/// strip at the top of the window. Something lower needs no rect: the OS asks only about the
+/// strip.
+pub fn pushTitleStripRect(r: dvui.Rect.Physical) void {
+    const strip_h = (Constants.titlebar_top_buffer + Constants.titlebar_height) * dvui.windowNaturalScale();
+    if (r.y < strip_h) fizzy.backend.pushTitleBarInteractiveRect(r);
+}
+
 fn registerFloatingTitleBarRects() void {
     if (!fizzy.backend.titlebar_hit_tested) return;
     // The first is the window itself.

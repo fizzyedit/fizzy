@@ -262,6 +262,9 @@ pub const menu_bar = [_]Submenu{
     .{ .id = "fizzy.menu.help", .title = "Help", .items = &help_items },
 };
 
+/// Help, which every bar keeps last, after the menus plugins add.
+pub const help = &menu_bar[menu_bar.len - 1];
+
 /// Whether a plugin's `parent_menu_id` refers to `sub`, under its current id or a legacy one.
 pub fn menuMatches(sub: Submenu, parent_menu_id: []const u8) bool {
     if (std.mem.eql(u8, sub.id, parent_menu_id)) return true;

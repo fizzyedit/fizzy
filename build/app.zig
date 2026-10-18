@@ -661,6 +661,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
         .{ "fizzy-glass-look-tests", "core/gfx/glass_look.zig" },
+        // The in-app menu bar's order: fizzy's menus, then plugins', then Help. std-only (see
+        // menu_order.zig); `Menu.draw` walks it.
+        .{ "fizzy-menu-order-tests", "src/editor/menu_order.zig" },
         // Demo automation's std-only core (`sdk/tape/`): the tape format and its codecs, the
         // sequencer that replays it deterministically, the script builder and key spelling. The
         // dvui half (`sdk/replay/`) compiles on its own below, and is covered by
