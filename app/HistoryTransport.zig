@@ -7,23 +7,25 @@
 //!
 //! **The grip.** Every pane whose document has history (`DrawOptions.history`) has a grip: a small
 //! semicircle on the middle of its bottom edge, standing on the edge, so it covers next to
-//! nothing. The pointer held on it a moment (`dwell_ns`) grows the bar out of it, the grip swelling
-//! as the moment runs, so passing over it on the way somewhere never does; a press brings the bar
-//! at once. The grip gives way to the bar while it shows. It fills with the document's history
-//! (`DrawOptions.steps`), its colour rising in it as steps are made, and brightens a moment at each
-//! new one: it is recording, and there is more to scrub.
+//! nothing. At rest it is quiet, mostly see-through (`rest_presence`); the pointer on it, a step or
+//! a slosh brings it up. The pointer held on it a moment (`dwell_ns`) grows the bar out of it, the
+//! grip lightening as the moment runs, so passing over it on the way somewhere never does; a press
+//! brings the bar at once. The grip gives way to the bar while it shows. It fills with the
+//! document's history (`DrawOptions.steps`) slowly, an hour or so of editing most of the way
+//! (`fill_steps`), and brightens a moment at each new step: it is recording, and there is more to
+//! scrub.
 //!
 //! **Going.** It goes a few seconds after the pointer was last on it, and soon after the pointer
 //! leaves it (`Shown.soon`). A bar grown from a grip has a tab over it, a chevron down, that sends
 //! it back into the grip at once (`Shown.hide`): the growing run backwards. Pressed, the pointer
 //! resting on the bar does not bring it back until it has left.
 //!
-//! **The liquid.** What fills the grip is an opaque liquid in its glass, inside its rim. Grown into
-//! the bar, the liquid runs along the line up to the knob, what is applied, under the bar's glass:
-//! drawn first, so the glass bends and frosts it as it does anything behind it (with no glass, it
-//! lies over the plain fill). A new step or a scrub knocks it (`history_transport.Slosh`), its surface tips
-//! and swings back level; still, it asks for no frames. Each shape is its vessel's outline cut by
-//! its surface (`history_transport.cut`), convex, so dvui's smooth fill draws it.
+//! **The liquid.** What fills the grip is an opaque liquid in its glass, inside its rim, never past
+//! three quarters. Grown into the bar, the liquid runs along the line up to the knob, what is
+//! applied. A new step or a scrub knocks it (`history_transport.Slosh`, a damped spring): knocks
+//! close together build on its swing or cancel it as their timing falls, each a little different,
+//! so rapid edits make a living swing; still, it asks for no frames. Each shape is its vessel's
+//! outline cut by its surface (`history_transport.cut`), convex, so dvui's smooth fill draws it.
 //!
 //! Over any owner's history (`Plugin.historyLine`, `historyGoTo`); an owner without them has no
 //! transport. Nothing runs for a bar that is not showing: no history is asked for, no timer is
@@ -62,6 +64,9 @@ dwelling: ?i128 = null,
 /// brightens a moment.
 grip_steps: ?usize = null,
 stepped_at: ?i128 = null,
+/// How much of the grip shows (`rest_presence` to 1), and when it last moved toward what it wants.
+presence: f32 = rest_presence,
+presence_at: ?i128 = null,
 /// The liquid's swing, and the step the document stood at when it was last drawn: a scrub knocks it.
 slosh: rules.Slosh = .{},
 slosh_at: ?usize = null,
@@ -83,7 +88,11 @@ const button_d: f32 = 34;
 const gap: f32 = 10;
 const max_w: f32 = 460;
 /// The grip's radius: a semicircle twice as wide as it is tall.
-const grip_r: f32 = 9;
+const grip_r: f32 = 13;
+/// How much of the grip shows at rest; in use (the pointer on it, a step, a slosh) all of it.
+const rest_presence: f32 = 0.4;
+/// How long the grip takes to come up to use and to settle back.
+const presence_ns: i128 = 220 * std.time.ns_per_ms;
 /// How far round the grip the pointer is on it.
 const grip_reach: f32 = 8;
 /// The collapse tab's size, and its gap over the bar.
@@ -97,9 +106,10 @@ const dwell_ns: i128 = 900 * std.time.ns_per_ms;
 const step_glow_ns: i128 = 450 * std.time.ns_per_ms;
 /// How high the grip's liquid reaches at its fullest: three quarters, room left to slosh.
 const fill_top: f32 = 0.75;
-/// The steps that fill the grip as far as it goes (`fill_top`); it fills by their logarithm,
-/// quickly at first.
-const full_steps: f32 = 200;
+/// How the grip fills with steps: `1 - e^(-steps / fill_steps)`, so some 1200 steps (an hour or
+/// so of editing) fill it most of the way, and the first few show as a sliver (`min_fill`).
+const fill_steps: f32 = 600;
+const min_fill: f32 = 0.08;
 
 /// Undo or redo was pressed at `now_ns`, or something else asked for the bar: it shows.
 pub fn stir(self: *HistoryTransport, now_ns: i128) void {
@@ -225,27 +235,34 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         self.strip.stir(now);
     }
     const p = self.shown.openness(now);
-    // The grip, giving way to the bar as it comes in, swelling while the pointer is held on it: a
-    // frame each while it does, and none while it only sits there.
+    // The grip, giving way to the bar as it comes in, quiet at rest and coming up while in use: a
+    // frame each while it changes, and none while it only sits there.
     if (opts.history and p < 1) {
         const held: f32 = if (self.dwelling) |t| @floatCast(@min(1, @as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(dwell_ns)))) else 0;
         if (self.grip_steps) |was| if (opts.steps > was) {
             self.stepped_at = now;
-            self.slosh.knock(now, 0.7);
+            self.slosh.knock(now, 0.35);
         };
         self.grip_steps = opts.steps;
         const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
         if (glow == 0) self.stepped_at = null;
-        const fill: f32 = @min(1, @log2(1 + @as(f32, @floatFromInt(opts.steps))) / @log2(1 + full_steps));
-        if (gripRect(area, grip_r * (1 + 0.5 * core.motion.fade(held)), opts.edge)) |g| if (drawGrip(g, id_extra, .{
-            // While the bar grows out of it, the grip is the bar's glass.
-            .alpha = if (p > 0) 0 else 1,
+        const fill: f32 = if (opts.steps == 0) 0 else @max(min_fill, 1 - @exp(-@as(f32, @floatFromInt(opts.steps)) / fill_steps));
+        const in_use = on_grip or self.stepped_at != null or !self.slosh.settled(now);
+        const want: f32 = if (in_use) 1 else rest_presence;
+        const since = now - (self.presence_at orelse now);
+        const by: f32 = @floatCast(@as(f64, @floatFromInt(since)) / @as(f64, @floatFromInt(presence_ns)) * (1 - rest_presence));
+        self.presence = if (self.presence < want) @min(want, self.presence + by) else @max(want, self.presence - by);
+        self.presence_at = now;
+        // While the bar grows out of it, the grip is the bar's glass: not drawn here.
+        if (p <= 0) if (gripRect(area, grip_r, opts.edge)) |g| if (drawGrip(g, id_extra, .{
+            .alpha = self.presence,
             .lit = on_grip,
+            .held = held,
             .fill = fill,
             .glow = glow,
             .tilt = self.slosh.tilt(now),
         }, doc.owner.documentPath(doc))) self.stir(now);
-        if (self.dwelling != null or self.stepped_at != null or !self.slosh.settled(now)) dvui.refresh(null, @src(), null);
+        if (self.dwelling != null or self.stepped_at != null or !self.slosh.settled(now) or self.presence != want) dvui.refresh(null, @src(), null);
     }
     if (p <= 0) return pressed;
     const arena = dvui.currentWindow().arena();
@@ -482,6 +499,8 @@ const GripLook = struct {
     alpha: f32,
     /// The pointer is on it.
     lit: bool,
+    /// How far through the wait before the bar grows the pointer is, 0 to 1: it brightens.
+    held: f32 = 0,
     /// How full of history it is, 0 to 1.
     fill: f32,
     /// A new step's brightening, 1 as it lands to 0.
@@ -549,10 +568,15 @@ fn drawGrip(r: dvui.Rect, id_extra: usize, look: GripLook, path: []const u8) boo
     if (!glass) disc.fill(.round(R), .{ .color = .{ .color = theme.color(.window, .text).opacity(look.alpha * @as(f32, if (look.lit) 0.45 else 0.22)) }, .fade = 1 });
     // The glass, and the history in it: a liquid up to its level, its surface tipped by its slosh.
     // Over the glass, inside its rim: a grip this small frosts nearly all of what is under it.
-    if (glass) core.dialogs.glassBubbles(float.data().id, &.{.{
-        .rect = disc,
-        .light = if (look.lit) core.dialogs.bubble_hover else 0,
-    }}, s, .{ .shadow = 0.5 });
+    if (glass) {
+        const prev_alpha = dvui.alpha(look.alpha);
+        defer dvui.alphaSet(prev_alpha);
+        core.dialogs.glassBubbles(float.data().id, &.{.{
+            .rect = disc,
+            // Lit under the pointer, lighter still as the wait before the bar runs.
+            .light = if (look.lit) std.math.lerp(core.dialogs.bubble_hover, core.dialogs.bubble_press, look.held) else 0,
+        }}, s, .{ .shadow = 0.5 });
+    }
     // Its body and rim of its own, over the glass: glass at full opacity is the card's colour,
     // and a dome of only that is not there.
     if (glass) {
@@ -571,7 +595,7 @@ fn drawGrip(r: dvui.Rect, id_extra: usize, look: GripLook, path: []const u8) boo
         // Never full: at most `fill_top` of the way up, so there is always room for it to swing.
         const level = edge - (R - inset) * fill_top * look.fill;
         const poly = rules.cut(above, .{ pr.x + R, level }, .{ @sin(a), -@cos(a) }, &kept);
-        pour(poly, liquidColor(look.glow).opacity(look.alpha));
+        pour(poly, liquidColor(@max(look.glow, 0.6 * look.held)).opacity(look.alpha));
     }
     return pressed;
 }

@@ -180,42 +180,61 @@ pub fn stopX(i: usize, x0: f32, x1: f32, n: usize) f32 {
 
 // ---- tests ---------------------------------------------------------------------------------
 
-/// A liquid's surface after a knock (a step made, a scrub): it tips and swings back level, each
-/// swing smaller. Worked out from the time since the knock, so it holds nothing but the knock and
-/// asks for frames only until it settles.
+/// A liquid's surface, swinging: a damped spring, its tilt and its speed. A knock (a step made, a
+/// scrub) adds to how fast it moves, on top of what it is doing, so knocks close together build on
+/// each other or cancel as their timing falls, and no two are the same strength: rapid edits make a
+/// living, uneven swing rather than one swing played again. Worked out from the last knock, so it
+/// holds nothing but that and asks for frames only until it is still.
 pub const Slosh = struct {
     at_ns: ?i128 = null,
-    /// How far the knock tipped it, and which way: -1 to 1.
-    amount: f32 = 0,
+    /// Its tilt and speed (tilts a second) at `at_ns`.
+    x0: f32 = 0,
+    v0: f32 = 0,
+    /// Knocks so far: each one's strength varies by it.
+    knocks: u32 = 0,
 
-    /// Gone still by then.
-    pub const settle_ns: i128 = 1600 * std.time.ns_per_ms;
-    const decay_s: f32 = 0.34;
-    const hz: f32 = 1.6;
+    const hz: f32 = 1.5;
+    /// How quickly a swing dies: a share of critical damping.
+    const damping: f32 = 0.28;
+    /// Below this much swing it is still.
+    const still: f32 = 0.01;
+    const omega: f32 = 2 * std.math.pi * hz;
+    const decay: f32 = damping * omega;
+    const omega_d: f32 = omega * @sqrt(1 - damping * damping);
 
-    /// Knocked at `now_ns` by `by` (-1 to 1, its sign the way it goes): on top of what still swings.
+    /// Knocked at `now_ns` by `by` (its sign the way it goes; 1 swings it about all the way on
+    /// its own), as strong as 70% to 130% of that.
     pub fn knock(self: *Slosh, now_ns: i128, by: f32) void {
-        self.amount = std.math.clamp(by + 0.5 * self.amount * self.envelope(now_ns), -1, 1);
+        const st = self.state(now_ns);
+        self.knocks +%= 1;
+        const h: f32 = @as(f32, @floatFromInt((self.knocks *% 2654435761) >> 16 & 0xffff)) / 65536.0;
+        self.x0 = st[0];
+        self.v0 = st[1] + by * (0.7 + 0.6 * h) * omega_d;
         self.at_ns = now_ns;
     }
 
-    /// How tipped it is at `now_ns`, -1 to 1: level at the knock, swinging out and back.
+    /// How tipped it is at `now_ns`, -1 to 1.
     pub fn tilt(self: Slosh, now_ns: i128) f32 {
-        const at = self.at_ns orelse return 0;
-        const t = seconds(now_ns - at);
-        if (now_ns - at >= settle_ns or t < 0) return 0;
-        return self.amount * self.envelope(now_ns) * @sin(2 * std.math.pi * hz * t);
+        if (self.settled(now_ns)) return 0;
+        return std.math.clamp(self.state(now_ns)[0], -1, 1);
     }
 
     pub fn settled(self: Slosh, now_ns: i128) bool {
         const at = self.at_ns orelse return true;
-        return now_ns - at >= settle_ns;
+        const t = seconds(now_ns - at);
+        const b = (self.v0 + decay * self.x0) / omega_d;
+        return @exp(-decay * @max(0, t)) * @sqrt(self.x0 * self.x0 + b * b) < still;
     }
 
-    fn envelope(self: Slosh, now_ns: i128) f32 {
-        const at = self.at_ns orelse return 0;
-        if (now_ns - at >= settle_ns) return 0;
-        return @exp(-@max(0, seconds(now_ns - at)) / decay_s);
+    /// Tilt and speed at `now_ns`: the spring's free swing from its last knock.
+    fn state(self: Slosh, now_ns: i128) [2]f32 {
+        const at = self.at_ns orelse return .{ 0, 0 };
+        const t = @max(0, seconds(now_ns - at));
+        const b = (self.v0 + decay * self.x0) / omega_d;
+        const e = @exp(-decay * t);
+        const c = @cos(omega_d * t);
+        const sn = @sin(omega_d * t);
+        return .{ e * (self.x0 * c + b * sn), e * ((b * omega_d - decay * self.x0) * c - (decay * b + self.x0 * omega_d) * sn) };
     }
 
     fn seconds(ns: i128) f32 {
@@ -327,9 +346,31 @@ test "a knocked liquid swings back level and settles" {
     try testing.expect(sl.tilt(1150 * ms) > 0.3);
     try testing.expect(sl.tilt(1450 * ms) < 0);
     try testing.expect(!sl.settled(1500 * ms));
-    try testing.expect(sl.settled(1000 * ms + Slosh.settle_ns));
-    try testing.expectEqual(@as(f32, 0), sl.tilt(1000 * ms + Slosh.settle_ns));
-    for (0..200) |i| try testing.expect(@abs(sl.tilt(1000 * ms + @as(i128, @intCast(i)) * 10 * ms)) <= 1);
+    try testing.expect(sl.settled(4000 * ms));
+    try testing.expectEqual(@as(f32, 0), sl.tilt(4000 * ms));
+    for (0..300) |i| try testing.expect(@abs(sl.tilt(1000 * ms + @as(i128, @intCast(i)) * 10 * ms)) <= 1);
+}
+
+test "knocks build on the swing they land in" {
+    // Knocked again as it swings the same way, it swings further than one knock does; knocked
+    // against its swing, less.
+    var one: Slosh = .{};
+    one.knock(0, 0.4);
+    var with: Slosh = .{};
+    with.knock(0, 0.4);
+    with.knock(20 * ms, 0.4);
+    var against: Slosh = .{};
+    against.knock(0, 0.4);
+    against.knock(20 * ms, -0.4);
+    const t = 170 * ms;
+    try testing.expect(with.tilt(t) > one.tilt(t));
+    try testing.expect(@abs(against.tilt(t)) < one.tilt(t));
+    // No two knocks the same strength.
+    var a: Slosh = .{};
+    a.knock(0, 0.5);
+    var b: Slosh = .{ .knocks = 1 };
+    b.knock(0, 0.5);
+    try testing.expect(a.tilt(t) != b.tilt(t));
 }
 
 test "a vessel cut by a surface keeps the part below it" {
