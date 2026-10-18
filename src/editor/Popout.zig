@@ -336,8 +336,9 @@ pub const Shown = struct {
 /// stacks them: the floats, then the dialogs and menus. After `endFrame`.
 pub fn windowsShown(buf: []Shown) []Shown {
     var n: usize = 0;
-    for (outs) |slot| {
-        const o = slot orelse continue;
+    // By pointer: the title is a slice of the float's own buffer, which a copy would take with it.
+    for (&outs) |*slot| {
+        const o = if (slot.*) |*o| o else continue;
         const p = o.part orelse continue;
         const t = o.target orelse continue;
         if (n == buf.len) break;
