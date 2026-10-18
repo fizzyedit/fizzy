@@ -177,6 +177,7 @@ pub fn beginFrame(state: *State) void {
     // Carried things are windows of their own here (`carryFrame`): photographed without their
     // place's background (`ViewDrag.photographFromFrame`).
     fizzy.core.dialogs.carry_windows = viewports.carries;
+    fizzy.core.dialogs.carry_material = viewports.carry_material;
     // And a view drag's glass is the OS's where it has Liquid Glass (`overlayFrame`): while the drag
     // is on, and after it while its drops are still running back together (`ViewDrag.last_pending`)
     // — their going, as their coming, is the OS's glass too.
@@ -336,8 +337,9 @@ pub const Shown = struct {
 /// stacks them: the floats, then the dialogs and menus. After `endFrame`.
 pub fn windowsShown(buf: []Shown) []Shown {
     var n: usize = 0;
-    for (outs) |slot| {
-        const o = slot orelse continue;
+    // By pointer: the title is a slice of the float's own buffer, which a copy would take with it.
+    for (&outs) |*slot| {
+        const o = if (slot.*) |*o| o else continue;
         const p = o.part orelse continue;
         const t = o.target orelse continue;
         if (n == buf.len) break;
@@ -741,7 +743,7 @@ fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, r
         if (fill > 0) {
             var color = base(false);
             color.a = @intFromFloat(@round(255 * std.math.clamp(fill, 0, 1)));
-            shape.fill(dvui.CornerRect.Physical.all(radius), .{ .color = .{ .color = color } });
+            shape.fill(.round(radius), .{ .color = .{ .color = color } });
         }
     }
     return .{ .picture = picture, .shown = shown };

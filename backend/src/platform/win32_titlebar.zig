@@ -540,6 +540,69 @@ fn menuSubclassProc(
     return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
+const carry_subclass_id: usize = 0x50584934; // "PXI4"
+
+/// Dress a carry window (`SDLBackend.viewportOpenCarry`), which shows a dragged view past every
+/// window of the app's: above every window, never activated, no taskbar button, the pointer passing
+/// through it to the window under it (the main window, which holds the press's capture anyway).
+/// No frame, so DWM gives it no corners, border or shadow, and no backdrop: what it carries is
+/// round as often as not (a drop), and DWM rounds only by its own radii and draws a backdrop over
+/// the whole window, a window region or not. It shows the app's glass alone, in its own shape.
+pub fn viewportCarryChrome(hwnd: *anyopaque) void {
+    if (builtin.target.os.tag != .windows) return;
+    const h: win32.foundation.HWND = @ptrCast(hwnd);
+    const dwm = win32.graphics.dwm;
+    const wm = win32.ui.windows_and_messaging;
+    const corner: u32 = DWMWCP_DONOTROUND;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    const none: u32 = dwm.DWMWA_COLOR_NONE;
+    _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
+    const no_transitions: u32 = 1;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_TRANSITIONS_FORCEDISABLED), &no_transitions, @sizeOf(u32));
+    _ = win32.ui.shell.SetWindowSubclass(h, carrySubclassProc, carry_subclass_id, 0);
+    const style = wm.GetWindowLongPtrW(h, wm.GWL_STYLE);
+    _ = wm.SetWindowLongPtrW(h, wm.GWL_STYLE, style & ~carry_ws_frame);
+    const ws_ex_noactivate: isize = 0x08000000;
+    const ws_ex_toolwindow: isize = 0x00000080;
+    const ex = wm.GetWindowLongPtrW(h, wm.GWL_EXSTYLE);
+    _ = wm.SetWindowLongPtrW(h, wm.GWL_EXSTYLE, (ex | ws_ex_noactivate | ws_ex_toolwindow) & ~viewport_ws_ex_appwindow);
+    // Topmost here rather than through SDL's always-on-top, which activated it as it showed: the
+    // main window lost the press it was carrying the view by.
+    const HWND_TOPMOST: isize = -1;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    _ = wm.SetWindowPos(h, @ptrFromInt(@as(usize, @bitCast(HWND_TOPMOST))), 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED));
+}
+
+/// The frame a carry window never has: caption, sizing border, system menu and its buttons.
+const carry_ws_frame: isize = 0x00C00000 | 0x00040000 | viewport_ws_sysmenu | 0x00020000 | 0x00010000;
+
+fn carrySubclassProc(
+    hWnd: ?win32.foundation.HWND,
+    uMsg: u32,
+    wParam: win32.foundation.WPARAM,
+    lParam: win32.foundation.LPARAM,
+    uIdSubclass: usize,
+    dwRefData: usize,
+) callconv(.winapi) win32.foundation.LRESULT {
+    _ = uIdSubclass;
+    _ = dwRefData;
+    const wm = win32.ui.windows_and_messaging;
+    const HTTRANSPARENT: isize = -1;
+    const MA_NOACTIVATE: isize = 3;
+    if (uMsg == WM_NCHITTEST) return HTTRANSPARENT;
+    if (uMsg == wm.WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    // SDL sets the window's style again as it likes: never a frame.
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
+        const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        ss.styleNew &= ~@as(u32, @intCast(carry_ws_frame));
+    }
+    if (uMsg == wm.WM_NCDESTROY) _ = win32.ui.shell.RemoveWindowSubclass(hWnd, carrySubclassProc, carry_subclass_id);
+    return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 /// The backdrop, and the frame extended over the whole window for it to show through — again on
 /// every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
 fn applyViewportBackdrop(h: win32.foundation.HWND) bool {

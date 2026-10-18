@@ -23,6 +23,7 @@ const store = @import("registry/store.zig");
 const Page = @import("PluginPage.zig");
 const PluginLoader = @import("PluginLoader.zig");
 const PluginManager = @import("PluginManager.zig");
+const plugin_folders = @import("plugin_folders.zig");
 const App = @import("../App.zig");
 /// Pretend two installed plugins have store updates waiting, so the update flow (the app's
 /// offer, or the silent path's logging) can be exercised without an actually out-of-date
@@ -103,6 +104,9 @@ const Job = struct {
     win: *dvui.Window,
     err_buf: [64]u8 = undefined,
     err_len: usize = 0,
+    /// Refused before it started, and why (`refusal`): owned. Such a job never downloads; its card
+    /// shows the reason with a Dismiss, and the plugin's own controls stay below it.
+    refused: ?[]u8 = null,
     /// This job's download worker, as a cancelable `Io` task group rather than a detached
     /// `std.Thread`. The worker writes `err_buf`/`err_len`/`status` back into the `Job`, so the
     /// `Job` must not be freed while it is alive — and a detached thread gave `freeJob` no way to
@@ -127,6 +131,8 @@ const PendingAction = union(enum) {
     set_enabled: struct { id: []u8, enabled: bool },
     set_auto_update: struct { id: []u8, on: bool },
     uninstall: struct { id: []u8 },
+    /// A refused job's card dismissed (`Job.refused`).
+    dismiss: struct { id: []u8 },
 };
 
 var pending_actions: std.ArrayListUnmanaged(PendingAction) = .empty;
@@ -782,6 +788,7 @@ pub fn deinit() void {
             .set_enabled => |a| app.gpa.free(a.id),
             .set_auto_update => |a| app.gpa.free(a.id),
             .uninstall => |a| app.gpa.free(a.id),
+            .dismiss => |a| app.gpa.free(a.id),
         };
         pending_actions.deinit(app.gpa);
         clearPendingUpdates();
@@ -797,6 +804,7 @@ pub fn deinit() void {
         .set_enabled => |a| app.gpa.free(a.id),
         .set_auto_update => |a| app.gpa.free(a.id),
         .uninstall => |a| app.gpa.free(a.id),
+        .dismiss => |a| app.gpa.free(a.id),
     };
     pending_actions.deinit(app.gpa);
     for (name_cache.keys()) |k| app.gpa.free(k);
@@ -831,6 +839,7 @@ fn freeJob(job: *Job) void {
     app.gpa.free(job.url);
     app.gpa.free(job.sha256);
     app.gpa.free(job.dest);
+    if (job.refused) |r| app.gpa.free(r);
     app.gpa.destroy(job);
 }
 
@@ -1073,6 +1082,16 @@ pub fn updateStatus(id: []const u8) ?[]const u8 {
 }
 
 pub fn applyAllPendingUpdates() void {
+    // One listing of `plugins/` for the whole pass (`refusal`). Unreadable, each install reads its
+    // own and is refused on its own.
+    const folders: ?plugin_folders.Folders = if (comptime builtin.target.cpu.arch == .wasm32) null else read: {
+        const plugins_dir = std.fs.path.join(app.gpa, &.{ app.config_folder, "plugins" }) catch break :read null;
+        defer app.gpa.free(plugins_dir);
+        break :read plugin_folders.read(app.gpa, dvui.io, plugins_dir) catch null;
+    };
+    defer if (folders) |f| f.deinit(app.gpa);
+    pass_folders = if (folders) |*f| f else null;
+    defer pass_folders = null;
     // Index rather than pointer iteration: `applyPendingUpdate` writes back into the list.
     var i: usize = 0;
     while (i < pending_updates.items.len) : (i += 1) {
@@ -1394,7 +1413,7 @@ pub fn tick() void {
                 // Nobody asked for a quiet job, so it leaves no failed card to retry from. Log it,
                 // drop the job, and put the Update button back on its row as Retry.
                 if (job.quiet) {
-                    dvui.log.warn("plugin updates: '{s}' could not be downloaded ({s})", .{ job.id, job.err_buf[0..job.err_len] });
+                    dvui.log.warn("plugin updates: '{s}' could not be downloaded ({s})", .{ job.id, job.refused orelse job.err_buf[0..job.err_len] });
                     markPendingUpdateFailed(job.id);
                     jobs.swapRemoveAt(i);
                     freeJob(job);
@@ -1698,10 +1717,20 @@ fn startDownload(id: []const u8, release: store.ShardRelease, opts: DownloadOpti
 /// wasm *compile* error rather than dead code.
 fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
+    removeJob(id); // replace any prior failed job
     // Before anything is written into `plugins/<id>`: on macOS and Windows a case variant's
     // folder is that folder, and the download would overwrite the plugin installed there.
-    if (app.refuseCaseClash(id)) return;
-    removeJob(id); // replace any prior failed job
+    // Refused, the job fails at once and says why: on its card, or as the update offer marked
+    // failed for the automatic pass (`tick`), never left "Installing…".
+    var why_buf: [512]u8 = undefined;
+    if (refusal(&why_buf, id)) |why| {
+        var refused = opts;
+        refused.refused = why;
+        const job = buildJob(id, url, sha256, refused) catch return reportError("could not refuse the download for '{s}'", .{id});
+        jobs.put(app.gpa, job.id, job) catch freeJob(job);
+        dvui.log.warn("plugin '{s}': not installed: {s}", .{ id, why });
+        return;
+    }
 
     const job = buildJob(id, url, sha256, opts) catch {
         reportError("could not prepare download for '{s}'", .{id});
@@ -1720,6 +1749,28 @@ fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: D
     };
 }
 
+/// The listing of `plugins/` an automatic update pass reads once and asks about every plugin it
+/// updates (`applyAllPendingUpdates`); null outside one, when each install reads its own.
+var pass_folders: ?*const plugin_folders.Folders = null;
+
+/// Why installing `id` now must not go ahead, written into `buf`; null when it may. Another plugin
+/// goes by `id` in another case, loaded or installed, or `plugins/` cannot be read to tell: on
+/// macOS and Windows that other plugin's folder *is* `plugins/<id>`. A name too long for the
+/// message gets the message without it, never cut short.
+fn refusal(buf: []u8, id: []const u8) ?[]const u8 {
+    if (app.host.pluginByIdIgnoringCase(id)) |p| if (!std.mem.eql(u8, p.id, id))
+        return std.fmt.bufPrint(buf, "its id differs only in case from the loaded plugin '{s}'", .{p.id}) catch "its id differs only in case from a loaded plugin";
+    const read: ?plugin_folders.Folders = if (pass_folders == null) fresh: {
+        const plugins_dir = std.fs.path.join(app.gpa, &.{ app.config_folder, "plugins" }) catch return "the plugins folder could not be read to check it";
+        defer app.gpa.free(plugins_dir);
+        break :fresh plugin_folders.read(app.gpa, dvui.io, plugins_dir) catch return "the plugins folder could not be read to check it";
+    } else null;
+    defer if (read) |f| f.deinit(app.gpa);
+    const folders = if (pass_folders) |f| f.* else read.?;
+    const other = plugin_folders.clash(folders.names, id) orelse return null;
+    return std.fmt.bufPrint(buf, "its id differs only in case from the installed plugin '{s}'", .{other}) catch "its id differs only in case from an installed plugin";
+}
+
 /// Allocate a `Job` with all strings owned; `errdefer` unwinds every partial allocation so a
 /// mid-build OOM never leaks.
 pub const DownloadOptions = struct {
@@ -1727,6 +1778,9 @@ pub const DownloadOptions = struct {
     is_update: bool,
     /// Suppress the error reporting and Retry card a user-initiated job leaves behind.
     quiet: bool = false,
+    /// Refused before it starts, and why (`refusal`): the job is built failed, and nothing is
+    /// made on disk.
+    refused: ?[]const u8 = null,
 };
 
 fn buildJob(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) !*Job {
@@ -1736,8 +1790,10 @@ fn buildJob(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadO
     defer a.free(plugins_dir);
     const plugin_dir = try std.fs.path.join(a, &.{ plugins_dir, id });
     defer a.free(plugin_dir);
-    std.Io.Dir.createDirAbsolute(dvui.io, plugins_dir, .default_dir) catch {}; // best-effort; exists is fine
-    std.Io.Dir.createDirAbsolute(dvui.io, plugin_dir, .default_dir) catch {}; // best-effort; exists is fine
+    if (opts.refused == null) {
+        std.Io.Dir.createDirAbsolute(dvui.io, plugins_dir, .default_dir) catch {}; // best-effort; exists is fine
+        std.Io.Dir.createDirAbsolute(dvui.io, plugin_dir, .default_dir) catch {}; // best-effort; exists is fine
+    }
     const file_name = try PluginLoader.pluginFilename(id, a);
     defer a.free(file_name);
 
@@ -1751,9 +1807,12 @@ fn buildJob(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadO
     errdefer a.free(sha_dup);
     const dest = try std.fs.path.join(a, &.{ plugin_dir, file_name });
     errdefer a.free(dest);
+    const refused: ?[]u8 = if (opts.refused) |why| try a.dupe(u8, why) else null;
+    errdefer if (refused) |r| a.free(r);
 
     job.* = .{
-        .status = .init(@backingInt(JobStatus.downloading)),
+        .status = .init(@backingInt(if (refused != null) JobStatus.failed else JobStatus.downloading)),
+        .refused = refused,
         .id = id_dup,
         .url = url_dup,
         .sha256 = sha_dup,
@@ -3113,7 +3172,12 @@ fn drawCardControls(entry: StoreEntry) void {
             drawInstalling(if (job.is_update) "Updating…" else "Installing…", muted);
             return;
         },
-        .failed => {
+        .failed => if (job.refused) |why| {
+            // Refused, not failed: Retry would only refuse again. Say why, offer to dismiss it,
+            // and leave the plugin's own controls (Uninstall among them) below.
+            dvui.labelNoFmt(@src(), why, .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } });
+            if (dvui.button(@src(), "Dismiss", .{}, .{ .gravity_y = 0.5 })) queueDismiss(entry.id);
+        } else {
             if (selectedRelease(entry)) |rel| {
                 if (dvui.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = theme.color(.err, .text) } }))
                     startDownload(entry.id, rel, .{ .is_update = job.is_update });
@@ -3399,13 +3463,13 @@ fn removePendingForId(id: []const u8) void {
             .uninstall => |a| std.mem.eql(u8, a.id, id),
             // A different axis entirely: enabling or uninstalling a plugin must not silently
             // swallow a queued auto-update toggle for the same id.
-            .set_auto_update => false,
+            .set_auto_update, .dismiss => false,
         };
         if (matches) {
             switch (action) {
                 .set_enabled => |a| app.gpa.free(a.id),
                 .uninstall => |a| app.gpa.free(a.id),
-                .set_auto_update => unreachable,
+                .set_auto_update, .dismiss => unreachable,
             }
             _ = pending_actions.orderedRemove(i);
         } else {
@@ -3444,6 +3508,12 @@ fn queueSetAutoUpdate(id: []const u8, on: bool) void {
     };
 }
 
+/// Drop a refused job's card in `tick`, not mid-draw: its reason is what the card is drawing.
+fn queueDismiss(id: []const u8) void {
+    const dup = app.gpa.dupe(u8, id) catch return;
+    pending_actions.append(app.gpa, .{ .dismiss = .{ .id = dup } }) catch app.gpa.free(dup);
+}
+
 fn queueUninstall(id: []const u8) void {
     removePendingForId(id);
     const dup = app.gpa.dupe(u8, id) catch {
@@ -3473,7 +3543,13 @@ fn applyPendingActions() void {
             app.gpa.free(a.id);
         },
         .uninstall => |a| {
+            // A refused job's card goes with the plugin it was refused beside.
+            removeJob(a.id);
             applyUninstall(a.id);
+            app.gpa.free(a.id);
+        },
+        .dismiss => |a| {
+            removeJob(a.id);
             app.gpa.free(a.id);
         },
     };

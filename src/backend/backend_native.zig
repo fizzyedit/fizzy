@@ -150,7 +150,9 @@ pub fn windowGlass(win: *dvui.Window, look: WindowGlassLook) bool {
 /// OS windows besides the main one, each showing a part of the one frame — a float popped out
 /// (`plans/POPOUT_WINDOWS_PLAN.md`): the backend package's, for any dvui app on it. On dvui's own
 /// SDL3 backend (`-Dnative-backend=sdl3`) there are none, as on the web, and floats stay in.
-pub const viewports = if (@hasDecl(@import("backend"), "viewports")) @import("backend").viewports else @import("viewports_none");
+/// Chosen by the backend the build linked, not by looking for the declaration: a `viewports` the
+/// backend stops exporting fails the build here instead of quietly keeping every float in.
+pub const viewports = if (@import("native_backend").fizzy) @import("backend").viewports else @import("viewports_none");
 
 /// Fizzy keeps the window's geometry in `layout.zon`, beside its regions — one file for where the
 /// window and everything in it were left, and the file it has always kept the frame in.
