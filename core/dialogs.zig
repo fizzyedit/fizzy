@@ -716,13 +716,21 @@ pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) 
 /// - Any other window over the pointer — a non-modal dialog (e.g. Export), a menu, a float over
 ///   the canvas's own — blocks it only while the pointer is over that window.
 pub fn canvasPointerInputSuppressed() bool {
+    if (modalOverCurrent()) return true;
     const cw = dvui.currentWindow();
+    const target = cw.subwindows.windowFor(cw.mouse_pt);
+    return target != .zero and target != dvui.subwindowCurrentId();
+}
+
+/// True while a modal subwindow other than the one being drawn into is open: it takes every
+/// press, wherever the pointer is. The part of `canvasPointerInputSuppressed` for a control that
+/// shows on hover (a place's corner button) and should not light when its click cannot land.
+pub fn modalOverCurrent() bool {
     const here = dvui.subwindowCurrentId();
-    for (cw.subwindows.stack.items[1..]) |sub| {
+    for (dvui.currentWindow().subwindows.stack.items[1..]) |sub| {
         if (sub.modal and sub.id != here) return true;
     }
-    const target = cw.subwindows.windowFor(cw.mouse_pt);
-    return target != .zero and target != here;
+    return false;
 }
 
 /// In-dialog preview canvases (Grid Layout): allow pan/zoom while the pointer is over the
