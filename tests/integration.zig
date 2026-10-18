@@ -8651,10 +8651,16 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         const a = try newDoc(editor, host, was.id);
         rec.doc = a.id;
-        // Typed a keystroke at a time: one step, joined.
-        for ([_][]const u8{ "a", "b" }) |key| {
+        // Typed a keystroke at a time: one step, joined. A crash checkpoint between them (one is
+        // taken every few seconds of typing, by the wall clock: `Checkpoint`) is no save, so the
+        // run stays open; taken here, it is between them however long a frame takes.
+        for ([_][]const u8{ "a", "b" }, 0..) |key, i| {
             try dvui.testing.writeText(key);
             try dvui.testing.settle(headlessFrame);
+            if (i == 0) {
+                var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+                kept.deinit();
+            }
         }
         try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"X\", .line = 1 }", host.arena()) == .ok);
         try editor.undo();
@@ -8680,6 +8686,23 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.applyStep.?(b.owner.state, b, rec.effects.items[3], "", 0));
         try std.testing.expectEqualStrings("Yab", try textOf(host, b));
 
+        // A save is an undo stop, made when its write lands (`documentWritten`): typing after it
+        // is a step of its own, and undoing that step comes back to the saved, clean document.
+        const c = try newDoc(editor, host, b.id);
+        try dvui.testing.writeText("a");
+        try dvui.testing.settle(headlessFrame);
+        const bytes = (try c.owner.documentBytes(c, c.owner.documentPath(c), gpa)) orelse return error.TestUnexpectedResult;
+        gpa.free(bytes);
+        try c.owner.documentWritten(c, c.owner.documentPath(c));
+        try std.testing.expect(!c.owner.isDirty(c));
+        try dvui.testing.writeText("b");
+        try dvui.testing.settle(headlessFrame);
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("a", try textOf(host, c));
+        try std.testing.expect(!c.owner.isDirty(c));
+
+        try editor.rawCloseFileID(c.id);
         try editor.rawCloseFileID(b.id);
         try editor.rawCloseFileID(a.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);

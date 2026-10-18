@@ -400,8 +400,11 @@ pub fn save(self: *Document) !void {
 /// The bytes `save` would write, for a host that does the writing itself (a mounted drive).
 /// Remembers which edit those bytes stand for: the write lands later, and edits typed in the
 /// meantime must still count as unsaved when it does.
+///
+/// Not a save in itself, so the run of typing stays open: the host takes these bytes for a crash
+/// checkpoint too (`KeptDocuments`), every few seconds while someone types, and never writes them
+/// over the file. The save's undo stop is made when its write lands (`written`).
 pub fn savedBytes(self: *Document, allocator: std.mem.Allocator) ![]u8 {
-    self.history.closeGroup();
     self.serialized_op_id = self.history.topOpId();
     return allocator.dupe(u8, self.text.items);
 }
@@ -418,6 +421,10 @@ pub fn written(self: *Document, path: []const u8) !void {
         self.unsaved = false;
     }
     self.clean_op_id = self.serialized_op_id;
+    // The state written is an undo stop, as `save` makes it, while it is still the top. Typed
+    // while the write was in flight, a keystroke has already joined that step: the step is newer
+    // than the file, so the document stays dirty, and undo takes it back past the saved state.
+    if (self.history.topOpId() == self.serialized_op_id) self.history.closeGroup();
     self.notifyContentChanged();
 }
 
