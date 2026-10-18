@@ -90,24 +90,21 @@ snapshots: std.StringHashMapUnmanaged(Snapshot) = .empty,
 /// `Layout.captureUnplaced` draws the ones whose cards the picker shows offscreen, one at a time
 /// (`offscreen`). Set by `openPicker`.
 snapshots_wanted: bool = false,
-/// Set by `openPicker`, taken by `Layout.captureUnplaced`: the views that drew before the picker
-/// opened, this frame, are captured where they live on the next, which this asks for.
-snapshots_requested: bool = false,
 /// The one view `Layout.captureUnplaced` is drawing offscreen for its picture, chosen by the picker
 /// from the cards it shows (`Picker.draw`): where it is in the registry, checked against its id's
 /// hash (`std.hash.Wyhash`, seed 0) before each use; the frames of warm-up drawn, and when the
-/// first was (`dvui.frameTimeNS`); whether the list had its card in view on its last draw.
-offscreen: ?struct { index: usize, id: u64, warm: u8 = 0, since_ns: i128 = 0, in_view: bool = true } = null,
+/// first was; when the list last had its card in view (`dvui.frameTimeNS`, as `Picker.list_ns`).
+offscreen: ?struct { index: usize, id: u64, warm: u8 = 0, since_ns: i128 = 0, card_ns: i128 } = null,
 /// No picture can be taken here: nothing more is captured, on screen or off, and no frame asked
-/// for one, until the picker reopens. Set once `capture_unstarted_limit` captures in a row could
-/// not even start (a backend without texture targets), or `capture_failed` is full.
+/// for one, until the picker reopens. Set once `offscreen_unstarted_limit` offscreen captures in a
+/// row could not even start (`noteOffscreenStart`): their target is small and fixed, so that is
+/// the backend (no texture targets), not the view.
 capture_unavailable: bool = false,
-/// Captures in a row, each of a different view, that could not start (`dvui.Picture.start`).
-capture_unstarted: u8 = 0,
-/// The views (id hashes) whose capture failed since the picker opened: not tried again until it
-/// reopens (`captureFailed`, `recordCaptureFailed`).
-capture_failed: [16]u64 = undefined,
-capture_failed_len: usize = 0,
+/// Offscreen captures in a row, each of a different view, that could not start.
+offscreen_unstarted: u8 = 0,
+/// The views (id hashes) whose capture failed since the picker opened, gpa-owned: not tried again
+/// until it reopens (`captureFailed`, `recordCaptureFailed`).
+capture_failed: std.AutoHashMapUnmanaged(u64, void) = .empty,
 /// The one surface picker, if open. On the state rather than in whichever pane opened it so the
 /// settings table and a region's corner button open the same thing, and the app draws it in
 /// one place above everything else (`Picker.draw`).
@@ -684,38 +681,33 @@ pub fn discardSnapshots(self: *State, gpa: std.mem.Allocator) void {
     }
     self.snapshots.clearRetainingCapacity();
     self.snapshots_wanted = false;
-    self.snapshots_requested = false;
     self.offscreen = null;
     self.capture_unavailable = false;
-    self.capture_unstarted = 0;
-    self.capture_failed_len = 0;
+    self.offscreen_unstarted = 0;
+    self.capture_failed.clearAndFree(gpa);
 }
 
 /// Whether surface `id`'s capture failed since the picker opened (`capture_failed`).
 pub fn captureFailed(self: *const State, id: []const u8) bool {
-    const hash = std.hash.Wyhash.hash(0, id);
-    for (self.capture_failed[0..self.capture_failed_len]) |f| {
-        if (f == hash) return true;
-    }
-    return false;
+    return self.capture_failed.contains(std.hash.Wyhash.hash(0, id));
 }
 
-/// How many captures in a row may fail to start, each a different view, before capture counts as
-/// unavailable: one alone is that view's (too large a target, say), not the backend's.
-const capture_unstarted_limit = 3;
+/// Surface `id`'s capture failed (its picture could not start, or gave no texture): it is not
+/// tried again until the picker reopens. Nothing else is affected.
+pub fn recordCaptureFailed(self: *State, gpa: std.mem.Allocator, id: []const u8) void {
+    self.capture_failed.put(gpa, std.hash.Wyhash.hash(0, id), {}) catch {};
+}
 
-/// Surface `id`'s capture failed: it is not tried again until the picker reopens. `started` is
-/// whether its picture could begin at all (`dvui.Picture.start`); several in a row that could not,
-/// or more failures than are remembered, and capture is given up for the session
-/// (`capture_unavailable`) rather than tried view after view.
-pub fn recordCaptureFailed(self: *State, id: []const u8, started: bool) void {
-    self.capture_unstarted = if (started) 0 else self.capture_unstarted + 1;
-    if (self.capture_unstarted >= capture_unstarted_limit or self.capture_failed_len == self.capture_failed.len) {
-        self.capture_unavailable = true;
-        return;
-    }
-    self.capture_failed[self.capture_failed_len] = std.hash.Wyhash.hash(0, id);
-    self.capture_failed_len += 1;
+/// How many offscreen captures in a row may fail to start, each a different view, before capture
+/// counts as unavailable here.
+const offscreen_unstarted_limit = 3;
+
+/// An offscreen capture began (`started`), or could not: its target is small and fixed, so several
+/// in a row that could not mean the backend has no texture targets, and capture is given up for
+/// the picker's session (`capture_unavailable`).
+pub fn noteOffscreenStart(self: *State, started: bool) void {
+    self.offscreen_unstarted = if (started) 0 else self.offscreen_unstarted + 1;
+    if (self.offscreen_unstarted >= offscreen_unstarted_limit) self.capture_unavailable = true;
 }
 
 /// Open the picker for region `name`, anchored at `anchor` (or centred when null), and start
@@ -723,7 +715,6 @@ pub fn recordCaptureFailed(self: *State, id: []const u8, started: bool) void {
 pub fn openPicker(self: *State, gpa: std.mem.Allocator, name: []const u8, anchor: ?dvui.Point.Natural) void {
     self.discardSnapshots(gpa);
     self.snapshots_wanted = true;
-    self.snapshots_requested = true;
     self.picker.open(gpa, name, anchor);
 }
 

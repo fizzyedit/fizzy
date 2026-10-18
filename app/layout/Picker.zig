@@ -50,6 +50,10 @@ anchor: ?dvui.Point.Natural = null,
 /// `ViewDrag`. The popup is closed; `draw` drives the drag instead until the
 /// button comes up.
 lifted: bool = false,
+/// When the list last laid its cards out (`dvui.frameTimeNS`): a view being drawn for its picture
+/// whose card was not in view then has left the list (`Layout.captureUnplaced`). A draw that
+/// returned before the list leaves it alone.
+list_ns: i128 = 0,
 
 /// Card geometry, in points. The preview keeps the snapshot's aspect inside this box.
 const preview: dvui.Size = .{ .w = 150, .h = 100 };
@@ -80,9 +84,6 @@ pub fn draw(self: *Picker, f: *Layout) void {
     const prof = core.profile.begin("fizzy", "picker");
     defer prof.end();
     const state = f.state;
-    // Whether the view being drawn for its picture still has its card in view: its card says so
-    // as it draws (`nextOffscreen`).
-    if (state.offscreen) |*o| o.in_view = false;
     const gpa = f.gpa;
 
     const region = blk: {
@@ -278,6 +279,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
     defer core.widgets.scrollShadows(scroll);
 
     var grid = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    self.list_ns = dvui.frameTimeNS();
     defer grid.deinit();
 
     var row: ?*dvui.BoxWidget = null;
@@ -532,20 +534,19 @@ const Hit = union(enum) {
 
 /// Choose surface `s` (at `index` in the registry) to be drawn offscreen for its picture
 /// (`State.offscreen`, `Layout.captureUnplaced`) when none is: its card in view, as the list laid
-/// it out, its view drawn nowhere this frame, and no picture or failed capture yet. Not on the
-/// card's first frame, before it has a size: every card then packs into the top of the list. The
-/// card of the view already chosen says whether it is still in view.
+/// it out, and the view one that may be (`Layout.mayDrawOffscreen`). Not on the card's first
+/// frame, before it has a size: every card then packs into the top of the list. The card of the
+/// view already chosen stamps that it is still in view (`card_ns`).
 fn nextOffscreen(f: *Layout, s: *const sdk.Surface, index: usize, card_data: *dvui.WidgetData) void {
     const state = f.state;
-    if (state.capture_unavailable) return;
-    const in_view = !dvui.firstFrame(card_data.id) and !card_data.borderRectScale().r.intersect(dvui.clipGet()).empty();
+    if (dvui.firstFrame(card_data.id) or card_data.borderRectScale().r.intersect(dvui.clipGet()).empty()) return;
+    const now = dvui.frameTimeNS();
     if (state.offscreen) |*o| {
-        if (o.index == index and in_view) o.in_view = true;
+        if (o.index == index) o.card_ns = now;
         return;
     }
-    if (!in_view or state.snapshot(s.id) != null or state.captureFailed(s.id)) return;
-    for (f.drawn.items) |d| if (d == s) return;
-    state.offscreen = .{ .index = index, .id = std.hash.Wyhash.hash(0, s.id) };
+    if (!f.mayDrawOffscreen(s)) return;
+    state.offscreen = .{ .index = index, .id = std.hash.Wyhash.hash(0, s.id), .card_ns = now };
     dvui.refresh(null, @src(), null);
 }
 

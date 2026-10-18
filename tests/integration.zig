@@ -2676,7 +2676,7 @@ test "picker: a view that draws nowhere is drawn for its card one at a time, onl
     // not drawn.
     UnplacedViews.draws = @splat(0);
     editor.app.layout.openPicker(editor.app.gpa, "Sidebar", null);
-    for (0..shown) |i| editor.app.layout.recordCaptureFailed(UnplacedViews.ids[i], true);
+    for (0..shown) |i| editor.app.layout.recordCaptureFailed(editor.app.gpa, UnplacedViews.ids[i]);
     for (0..200) |_| try UnplacedViews.step();
     try std.testing.expectEqual(@as([UnplacedViews.ids.len]u32, @splat(0)), UnplacedViews.draws);
 
