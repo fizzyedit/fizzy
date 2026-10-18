@@ -35,7 +35,6 @@ const Allocator = std.mem.Allocator;
 
 const PathEvent = sdk.events.PathEvent;
 const folder_events = @import("folder_events.zig");
-const underDotSegment = folder_events.underDotSegment;
 
 /// One side of the double buffer. The watcher thread fills `shared`; `tick` swaps it with
 /// `staging` under the mutex and then reads at leisure, so no plugin call ever runs with the
@@ -144,7 +143,7 @@ const Impl = if (have_impl) struct {
         // Cheap dot-directory reject before taking the lock. The authoritative `IgnoreRules`
         // pass happens on the main thread in `tick`; this one exists only so a `git checkout`
         // or a build churning `.zig-cache` can't flood the ring before we get there.
-        if (underDotSegment(folder, path)) return;
+        if (folder_events.underSegment(folder, path, folder_events.dotName)) return;
 
         self.mutex.lock();
         self.shared.push(path, old_path, kind, object);
