@@ -7064,6 +7064,75 @@ test "control: a command that answers in a later frame holds its request open un
     host.finishCall(ticket, .{ .ok = null });
 }
 
+test "control: MCP on the socket lists the commands as tools and calls them, now or later" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    const vtable = sdk.Plugin.VTable{};
+    var slow: SlowCommand = .{};
+    var plugin = sdk.Plugin{ .state = &slow, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.slow", .owner = &plugin, .title = "Slow", .runWith = SlowCommand.start });
+    try host.registerCommand(.{
+        .id = "t.place",
+        .owner = &plugin,
+        .title = "Place",
+        .params = PaletteArgs.Params.params,
+        .runWith = PaletteArgs.Params.bind(ControlFixture.place),
+    });
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const routes = control.routes;
+    // Without a socket (`handle`): the replies a client reads.
+    const init = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\"}}", arena);
+    try std.testing.expect(std.mem.indexOf(u8, init.body, "\"protocolVersion\":\"2025-03-26\"") != null);
+    try std.testing.expectEqual(std.http.Status.accepted, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", arena).status);
+    const list = try std.json.parseFromSliceLeaky(std.json.Value, arena, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", arena).body, .{});
+    const tools = list.object.get("result").?.object.get("tools").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), tools.len);
+    const place = tools[1].object;
+    try std.testing.expectEqualStrings("t.place", place.get("name").?.string);
+    try std.testing.expectEqualStrings("integer", place.get("inputSchema").?.object.get("properties").?.object.get("line").?.object.get("type").?.string);
+    const called = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"line\":4,\"side\":\"right\"}}}", arena);
+    try std.testing.expect(std.mem.indexOf(u8, called.body, "\"isError\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, called.body, "\\\"note\\\":\\\"placed\\\"") != null);
+    const refused = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"side\":\"right\"}}}", arena);
+    try std.testing.expect(std.mem.indexOf(u8, refused.body, "\"isError\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"nope\"}", arena).body, "-32601") != null);
+
+    // Over the socket, a tool whose command answers later answers its call then.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var state: control.routes.State = .{};
+    defer control.routes.stop(&server, &state, &host);
+    const body = "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"method\":\"tools/call\",\"params\":{\"name\":\"t.slow\"}}";
+    const request = try std.fmt.allocPrint(arena, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
+    var client: ControlOneShot = .{ .path = path, .request = request };
+    const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&client});
+    var frames: usize = 0;
+    while (state.waiters.items.len == 0 and frames < 2000) : (frames += 1) {
+        control.routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), state.waiters.items.len);
+    host.finishCall(slow.ticket, .{ .ok = ".{ .done = true }" });
+    thread.join();
+    try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.len], "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"done\\\":true}\"}],\"isError\":false}}"));
+}
+
 const ControlStreamClient = struct {
     path: []const u8,
     reply: [4096]u8 = undefined,

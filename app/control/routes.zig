@@ -7,6 +7,7 @@
 //!   GET  /commands/{id}    one of them
 //!   POST /commands/{id}    run it: the body is its arguments, the response its result
 //!   GET  /openapi.json     all of this as OpenAPI 3.1, generated from what is registered now
+//!   POST /mcp              the Model Context Protocol, its tools the commands (`mcp.zig`)
 //!   GET  /events           the app's events as Server-Sent Events, `?topics=a,b` to choose
 //!                          (a name, or a prefix ending in `*`); every event when absent
 //!
@@ -19,6 +20,7 @@ const sdk = @import("fizzy_sdk");
 const AppInfo = @import("../AppInfo.zig");
 const json = @import("json.zig");
 const openapi = @import("openapi.zig");
+const mcp = @import("mcp.zig");
 const Server = @import("Server.zig");
 
 pub const Answer = struct {
@@ -58,11 +60,11 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
             state.waiters.append(server.gpa, waiter) catch {
                 host.abandonCall(waiter.ticket);
                 req.answer(server, .internal_server_error, "text/plain", "out of memory\n");
-                server.gpa.destroy(waiter);
+                waiter.destroy();
             };
             continue;
         }
-        server.gpa.destroy(waiter);
+        waiter.destroy();
         if (a.stream) {
             req.answerStream(server);
             streaming = true;
@@ -77,7 +79,7 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
 pub fn stop(server: *Server, state: *State, host: *sdk.Host) void {
     for (state.waiters.items) |w| {
         host.abandonCall(w.ticket);
-        server.gpa.destroy(w);
+        w.destroy();
     }
     state.waiters.clearAndFree(server.gpa);
     state.follow(host, server, false);
@@ -93,22 +95,29 @@ const Waiter = struct {
     req: *Server.Request,
     zon: bool,
     ticket: u32 = 0,
+    /// An MCP tool call's JSON-RPC id, as JSON (`gpa`): answered as JSON-RPC, not REST.
+    mcp_id: ?[]u8 = null,
+
+    fn destroy(self: *Waiter) void {
+        if (self.mcp_id) |id| self.server.gpa.free(id);
+        self.server.gpa.destroy(self);
+    }
 
     fn done(ctx: *anyopaque, outcome: sdk.Host.CommandOutcome) void {
         const self: *Waiter = @ptrCast(@alignCast(ctx));
         var arena: std.heap.ArenaAllocator = .init(self.server.gpa);
         defer arena.deinit();
-        const a = outcomeAnswer(arena.allocator(), self.zon, "", outcome) catch Answer{
-            .status = .internal_server_error,
-            .content_type = "text/plain",
-            .body = "out of memory\n",
-        };
+        const oom: Answer = .{ .status = .internal_server_error, .content_type = "text/plain", .body = "out of memory\n" };
+        const a: Answer = if (self.mcp_id) |id|
+            if (mcp.outcomeReply(arena.allocator(), id, outcome)) |body| .{ .status = .ok, .body = body } else |_| oom
+        else
+            outcomeAnswer(arena.allocator(), self.zon, "", outcome) catch oom;
         self.req.answer(self.server, a.status, a.content_type, a.body);
         for (self.state.waiters.items, 0..) |w, i| if (w == self) {
             _ = self.state.waiters.swapRemove(i);
             break;
         };
-        self.server.gpa.destroy(self);
+        self.destroy();
     }
 };
 
@@ -192,6 +201,23 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
             // Not generated only to be thrown away.
             .HEAD => .{ .status = .ok, .body = "" },
             else => notAllowed(arena, "GET"),
+        };
+    }
+    if (std.mem.eql(u8, trimmed, "/mcp")) {
+        if (method != .POST) return notAllowed(arena, "POST");
+        const sink: ?sdk.Host.CallSink = if (waiter) |w| .{ .ctx = w, .done = Waiter.done } else null;
+        return switch (try mcp.handle(host, body, arena, sink)) {
+            .now => |reply| .{ .status = .ok, .body = reply },
+            .none => .{ .status = .accepted, .body = "" },
+            .later => |l| later: {
+                const w = waiter.?;
+                w.ticket = l.ticket;
+                w.mcp_id = w.server.gpa.dupe(u8, l.id) catch {
+                    host.abandonCall(l.ticket);
+                    return failure(arena, .internal_server_error, "out of memory");
+                };
+                break :later .{ .status = .ok, .later = true, .body = "" };
+            },
         };
     }
     if (std.mem.eql(u8, trimmed, "/events")) {

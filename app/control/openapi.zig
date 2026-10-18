@@ -16,7 +16,7 @@ const AppInfo = @import("../AppInfo.zig");
 const json = @import("json.zig");
 
 const Stringify = std.json.Stringify;
-const Error = Stringify.Error || error{OutOfMemory};
+pub const Error = Stringify.Error || error{OutOfMemory};
 
 /// The whole description as JSON, in `arena`.
 pub fn generate(host: *sdk.Host, arena: std.mem.Allocator) error{OutOfMemory}![]u8 {
@@ -61,6 +61,16 @@ fn write(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!void {
         .operationId = "control.openapi",
         .summary = "This description, generated from what is registered now.",
         .responses = .{ .@"200" = jsonResponse("The description.", true) },
+    } });
+    try s.objectField("/mcp");
+    try s.write(.{ .post = .{
+        .operationId = "control.mcp",
+        .summary = "The Model Context Protocol (Streamable HTTP): a JSON-RPC message, its tools the commands.",
+        .requestBody = .{ .required = true, .content = .{ .@"application/json" = .{ .schema = .{ .type = "object" } } } },
+        .responses = .{
+            .@"200" = jsonResponse("The JSON-RPC response.", .{ .type = "object" }),
+            .@"202" = .{ .description = "A notification, taken." },
+        },
     } });
     try eventsPath(s, host, arena);
     // The first of an id is the one the server runs (`Host.command`): a later one is not a path
@@ -194,27 +204,7 @@ fn commandPath(s: *Stringify, c: *const sdk.Command, arena: std.mem.Allocator) E
         try s.objectField("application/json");
         try s.beginObject();
         try s.objectField("schema");
-        try s.beginObject();
-        try s.objectField("type");
-        try s.write("object");
-        // Parameters declared: exactly those (`Command.Params` refuses others). None declared, as a
-        // `runWith` written by hand: whatever it reads, which the description cannot know.
-        if (c.params.len > 0) {
-            try s.objectField("additionalProperties");
-            try s.write(false);
-            try s.objectField("properties");
-            try s.beginObject();
-            for (c.params) |p| {
-                try s.objectField(p.key);
-                try paramSchema(s, arena, p);
-            }
-            try s.endObject();
-            try s.objectField("required");
-            try s.beginArray();
-            for (c.params) |p| if (p.required) try s.write(p.key);
-            try s.endArray();
-        }
-        try s.endObject();
+        try bodySchema(s, c, arena);
         try s.endObject();
         try s.endObject();
         try s.endObject();
@@ -228,6 +218,32 @@ fn commandPath(s: *Stringify, c: *const sdk.Command, arena: std.mem.Allocator) E
         .@"500" = error_response,
     });
     try s.endObject();
+    try s.endObject();
+}
+
+/// The JSON Schema of what `c` takes as arguments: exactly its declared parameters
+/// (`Command.Params` refuses others); any object for a `runWith` written by hand, which declares
+/// none and reads whatever it reads; nothing for a command with only `run`. Shared by this
+/// description's request bodies and MCP's tool inputs (`mcp.zig`).
+pub fn bodySchema(s: *Stringify, c: *const sdk.Command, arena: std.mem.Allocator) Error!void {
+    try s.beginObject();
+    try s.objectField("type");
+    try s.write("object");
+    if (c.params.len > 0 or c.runWith == null) {
+        try s.objectField("additionalProperties");
+        try s.write(false);
+        try s.objectField("properties");
+        try s.beginObject();
+        for (c.params) |p| {
+            try s.objectField(p.key);
+            try paramSchema(s, arena, p);
+        }
+        try s.endObject();
+        try s.objectField("required");
+        try s.beginArray();
+        for (c.params) |p| if (p.required) try s.write(p.key);
+        try s.endArray();
+    }
     try s.endObject();
 }
 

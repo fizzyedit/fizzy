@@ -47,6 +47,7 @@ fizzy with its own Windows target must set it too, or its server logs that it ca
 | `POST /commands/{id}` | runs it: the body is its arguments, the response its result |
 | `GET /events?topics=a,b` | the app's events as Server-Sent Events |
 | `GET /openapi.json` | all of this as OpenAPI 3.1, generated from what is registered now |
+| `POST /mcp` | the Model Context Protocol, its tools the commands |
 
 **Bodies are JSON**, converted to the ZON commands take at the server's edge: an object of
 arguments keyed by the command's parameter names, a string where the parameter is an enumeration
@@ -97,6 +98,22 @@ data: {"path":"/abs/notes.md"}
 `/openapi.json` lists the events plugins declared, with an example payload each. A stream gets a
 keep-alive comment every 15 seconds; one that falls more than 8 MB behind gets nothing more. With
 no stream open, events cost the bus nothing extra.
+
+## MCP
+
+`POST /mcp` speaks the Model Context Protocol's Streamable HTTP transport: one JSON-RPC message
+per request, answered as JSON. Its tools are the commands. `tools/list` reads the registry, each
+tool's `inputSchema` is the body schema `/openapi.json` gives the command, and `tools/call` runs it
+as `POST /commands/{id}` would. A command that answers later answers its call then.
+
+```sh
+curl --unix-socket "$SOCK" localhost/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+curl --unix-socket "$SOCK" localhost/mcp -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fizzy.screen"}}'
+```
+
+It answers `initialize`, `ping`, `tools/list` and `tools/call`, and notifications get a `202`. There
+is no server-sent stream yet (`GET /mcp`), no `Mcp-Session-Id`, and no resources or prompts. An
+MCP client that can only dial a URL or speak stdio reaches it through a proxy for now.
 
 ## The description
 
