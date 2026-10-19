@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) !void {
     // options (a plugin is a module from another package, not a value), so it passes
     // `defer-app` here and calls `buildApp` below with its plugin modules instead.
     const app = @import("build/app.zig");
+    @import("build/zig_shaders.zig").addSteps(b);
     const cfg = try app.readConfig(b, target, base);
     if (b.option(bool, "defer-app", "Do not build the application here; the consumer calls `buildApp` with its own plugins") orelse false) {
         deferred = .{ .target = target, .optimize = optimize, .base = base, .cfg = cfg };
