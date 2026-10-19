@@ -82,6 +82,12 @@ pub fn windowAtPointer() ?*anyopaque {
     return dvui.currentWindow().backend.impl.windowAtPointer();
 }
 
+/// The app's window whose content (below its title bar) the pointer is over, or null
+/// (`SDLBackend.windowContentAtPointer`).
+pub fn windowContentAtPointer() ?*anyopaque {
+    return dvui.currentWindow().backend.impl.windowContentAtPointer();
+}
+
 /// `window` (`windowAtPointer`'s) in front of the app's other windows, not made key.
 pub fn bringForward(window: *anyopaque) void {
     dvui.currentWindow().backend.impl.bringForward(window);

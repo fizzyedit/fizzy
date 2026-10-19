@@ -367,8 +367,9 @@ fn tearFrame() void {
     }
     t.last = r;
     // The app's window it is over in front, to show where it would land (the user): once, as it
-    // comes over each.
-    const over = viewports.windowAtPointer();
+    // comes over each. Over its content, not its title bar, where it stays out
+    // (`windowContentAtPointer`).
+    const over = viewports.windowContentAtPointer();
     if (t.moving and over != t.over) if (over) |w| viewports.bringForward(w);
     t.over = over;
     // One with no `open_flag` gets no window (`named`), and its window could not close: it stays

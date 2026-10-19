@@ -1221,6 +1221,23 @@ pub fn windowAtPointer(_: *SDLBackend) ?*anyopaque {
     return fizzy_macos_app_window_at_pointer();
 }
 
+/// The app's window whose content the pointer is over — below its title bar — or null: over a title
+/// bar (the main window's, a window of the OS's own frame's) it is over no window's content. A
+/// floating window dragged there took the window for the one to land in, and dvui held its top
+/// below the title bar, away from the pointer (the user).
+pub fn windowContentAtPointer(self: *SDLBackend) ?*anyopaque {
+    if (comptime builtin.target.os.tag != .macos) return null;
+    const window = fizzy_macos_app_window_at_pointer() orelse return null;
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    if (window == cocoaWindow(self.window)) return if (gy < self.mainOnScreen().y) null else window;
+    for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (cocoaWindow(vp.window) == window and vp.native) {
+        return if (gy < @as(f32, @floatFromInt(vp.screen.y))) null else window;
+    };
+    return window;
+}
+
 /// `window` (`windowAtPointer`'s) in front of the app's other windows, not made key.
 pub fn bringForward(_: *SDLBackend, window: *anyopaque) void {
     if (comptime builtin.target.os.tag != .macos) return;
