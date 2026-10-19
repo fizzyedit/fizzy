@@ -1082,6 +1082,26 @@ pub fn trackOf(self: *Tracks, doc_id: u64) ?*Track {
     return null;
 }
 
+/// How long going from history entry `prev` (0: before any) to entry `to` took as it was made, in
+/// ms, for playing the history at its pace: the pause between them, a long one as `short_gap_ms`
+/// (as a tape plays it), and the time `to` itself took. Null when the track holds no `to`.
+pub fn playGap(t: *const Track, prev: u64, to: u64) ?u32 {
+    var from_end: ?u32 = null;
+    var to_start: ?u32 = null;
+    var to_end: u32 = 0;
+    for (t.steps.items) |r| {
+        if (r.kind != .added and r.kind != .joined) continue;
+        if (prev != 0 and r.id == prev) from_end = r.at + r.ms;
+        if (r.id == to) {
+            if (to_start == null) to_start = r.at;
+            to_end = r.at + r.ms;
+        }
+    }
+    const start = to_start orelse return null;
+    const gap = if (from_end) |e| start -| e else 0;
+    return (if (gap > gap_ms) short_gap_ms else gap) + (to_end -| start);
+}
+
 // ---- tests ---------------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -1289,4 +1309,22 @@ test "the history a track recorded, as its owner takes it back" {
     // An undo of an entry from before the track cannot be put back.
     try t.steps.append(testing.allocator, .{ .kind = .undone, .id = 3, .at = 0, .ms = 0, .effect = .{ .start = 0, .len = 1 }, .motion = .{ .start = 0, .len = 0 } });
     try testing.expectEqual(@as(?sdk.Plugin.RestoredHistory, null), try historyOf(&t, arena.allocator()));
+}
+
+test "play waits as long as the history took, a long pause cut short" {
+    var t: Track = undefined;
+    t.steps = .empty;
+    defer t.steps.deinit(testing.allocator);
+    const recs = [_]struct { sdk.Step.Kind, u64, u32, u32 }{
+        .{ .added, 1, 0, 100 },
+        .{ .added, 2, 300, 0 },
+        .{ .joined, 2, 400, 50 },
+        .{ .added, 3, 9000, 0 },
+    };
+    for (recs) |r| try t.steps.append(testing.allocator, .{ .kind = r[0], .id = r[1], .at = r[2], .ms = r[3], .effect = .{ .start = 0, .len = 0 }, .motion = .{ .start = 0, .len = 0 } });
+    try testing.expectEqual(@as(?u32, 100), playGap(&t, 0, 1));
+    // 200 ms between them, then 150 ms of the entry's own typing.
+    try testing.expectEqual(@as(?u32, 350), playGap(&t, 1, 2));
+    try testing.expectEqual(@as(?u32, short_gap_ms), playGap(&t, 2, 3));
+    try testing.expectEqual(@as(?u32, null), playGap(&t, 3, 4));
 }

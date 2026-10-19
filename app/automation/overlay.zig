@@ -5,9 +5,11 @@
 //! whichever the tape has at `now`, the keystroke pill the last key op within a second of it —
 //! so a seek shows exactly what live play showed at that moment, and there is nothing to rewind.
 //!
-//! The cards are the app's floating surface — a menu's, a tooltip's: frosted at the dialog style
-//! (blur, opacity, refraction), cut with its corners, shadowed with its ring, and
-//! opening and closing on its curves (`Reveal`). With the blur off, the plain dialog fill.
+//! The cards are the app's floating surface — a menu's, a tooltip's: in the window's material
+//! (`core.material`), Liquid Glass where the window is made of it, as the key pills and the bar
+//! are, else frosted at the dialog style (blur, opacity, refraction); cut with its corners,
+//! shadowed with its ring, and opening and closing on its curves (`Reveal`). With the blur off,
+//! the plain dialog fill.
 //!
 //! Each part is a subwindow that takes no input (events fall through to the app; the bar is
 //! hit-tested by `Player.frame` from the rects recorded here), raised above every other subwindow
@@ -145,18 +147,24 @@ const Reveal = struct {
 };
 
 /// The surface under a card — `wd` a box that paints nothing of its own (`cardOptions`) — `r` of
-/// the way open, grown out of `origin` (a point in it, as fractions): the frost at the dialog
-/// style and the shadow ring round it, or with the blur off the dialog fill over its shadow.
-/// What the card draws after this is cut to the glass as it grows.
+/// the way open, grown out of `origin` (a point in it, as fractions), in the window's material
+/// (`core.material`): Liquid Glass where the window is made of it, the same lens as the key pills
+/// and the transport's bubbles (`core.dialogs.glassBubbles`), a card's corners rather than a
+/// capsule's; else the frost at the dialog style and the shadow ring round it, or with the blur
+/// off the dialog fill over its shadow. What the card draws after this is cut to the glass as it
+/// grows.
 ///
 /// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) — a frost
-/// replaces what it covers, and at partial alpha would punch a hole.
+/// replaces what it covers, and at partial alpha would punch a hole. Liquid Glass grows with the
+/// card instead, whole from its first frame, as the pills' does.
 fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     const s = wd.borderRectScale().s;
     const rect = grown(wd, origin, r);
     const c = corners();
     const bs = core.dialogs.surfaceShadow();
-    if (core.dialogs.dialogFrost()) |f| {
+    if (core.widgets.LiquidField.ready() and core.widgets.liquidFrost() != null) {
+        if (rect.w >= 1 and rect.h >= 1) core.dialogs.glassBubbles(wd.id, &.{.{ .rect = rect, .radius = c.tl.radius() * s }}, s, .{ .shadow = r.alpha });
+    } else if (core.dialogs.dialogFrost()) |f| {
         // The ring after the frost, so the glass does not blur it in (`dialogs.glassShadow`).
         defer core.dialogs.glassShadow(rect, c, s, bs, r.alpha);
         // Under a couple of pixels of blur there is nothing to see yet.
