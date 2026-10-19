@@ -5169,6 +5169,35 @@ test "liquid field: a rounded box's outline is its rect with its own corner per 
     try std.testing.expect(f.hit(.{ .x = 50, .y = 30 }) and !f.hit(.{ .x = 2, .y = 2 }));
 }
 
+test "liquid field: a shape near its place's edge joins it by a neck, and none of it crosses the edge" {
+    const LF = fizzy.core.LiquidField;
+    // A place 200 x 100 at the origin, a 24 radius at its top right; a drop 6px in from its top.
+    var f: LF = .{ .merge_px = 16, .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 }, .radii = .{ 0, 24, 0, 0 } } };
+    f.add(LF.Shape.circle(.{ .x = 100, .y = 26 }, 20));
+    // Between the drop and the edge, a neck: glass where the drop alone has none.
+    try std.testing.expect(f.sample(.{ .x = 100, .y = 3 }).d < 0);
+    var alone: LF = .{ .merge_px = 16 };
+    alone.add(LF.Shape.circle(.{ .x = 100, .y = 26 }, 20));
+    try std.testing.expect(alone.sample(.{ .x = 100, .y = 3 }).d > 0);
+    // The neck is only near the drop: along the edge away from it, no glass, not even a sliver.
+    try std.testing.expectEqual(@as(f32, 0), f.sample(.{ .x = 20, .y = 0.5 }).coverage);
+    try std.testing.expectEqual(@as(f32, 0), f.sample(.{ .x = 20, .y = 3 }).coverage);
+    // A drop pushed past the edge is cut at it: none of it outside the place.
+    var past: LF = .{ .merge_px = 16, .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 } } };
+    past.add(LF.Shape.circle(.{ .x = 100, .y = 0 }, 20));
+    try std.testing.expectEqual(@as(f32, 0), past.sample(.{ .x = 100, .y = -5 }).coverage);
+    try std.testing.expect(past.sample(.{ .x = 100, .y = 5 }).d < 0);
+    // Round the curved corner too: a point past the curve, inside the rect, is outside the place.
+    var corner: LF = .{ .merge_px = 16, .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 }, .radii = .{ 0, 24, 0, 0 } } };
+    corner.add(LF.Shape.circle(.{ .x = 200, .y = 0 }, 20));
+    try std.testing.expectEqual(@as(f32, 0), corner.sample(.{ .x = 199, .y = 1 }).coverage);
+    try std.testing.expect(corner.sample(.{ .x = 190, .y = 10 }).d < 0);
+    // A field with an edge holds one shape fewer: the last slot is the edge's.
+    var full: LF = .{ .edge = .{ .rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 } } };
+    for (0..LF.max_shapes) |_| full.add(LF.Shape.circle(.{ .x = 50, .y = 50 }, 5));
+    try std.testing.expectEqual(LF.max_shapes - 1, full.len);
+}
+
 test "liquid field: shapes bridge within the merge width, swell no more than a quarter of it, and part beyond" {
     const LF = fizzy.core.LiquidField;
     var f: LF = .{ .merge_px = 16 };
@@ -8217,6 +8246,15 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     const none = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "a.md" }, null);
     defer si.freeResolvedArgv(gpa, none.argv);
     try std.testing.expectEqual(@as(?[]u8, null), none.profile);
+    try std.testing.expect(!none.quiet);
+
+    // `--quiet` comes out with it, wherever it is, and is never a path to open.
+    const quiet = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "--quiet", "a.md", "--profile", "p", "--quiet" }, null);
+    defer si.freeResolvedArgv(gpa, quiet.argv);
+    defer gpa.free(quiet.profile.?);
+    try std.testing.expect(quiet.quiet);
+    try std.testing.expectEqual(@as(usize, 2), quiet.argv.len);
+    try std.testing.expectEqualStrings("/work/a.md", quiet.argv[1]);
 
     // Taking the lock with a profile is native startup, not something a test process can do
     // twice; it is compiled here, so a mistake in it fails this build rather than only the app's.
@@ -10488,6 +10526,44 @@ test "executable watcher: a rebuild is a replaced executable that has held still
     try std.testing.expect(!w.tick()); // settling
     w.pending_ns -= ExecutableWatcher.settle_ns;
     try std.testing.expect(w.tick());
+}
+
+// A build that lands while the app is still starting (the window, the GPU, the plugins take a
+// second or so, more under load): measured against the executable as the process started from it
+// (`noteLaunch`), it is a rebuild, and the watcher looks once as it starts, since the build's events
+// came before anyone listened. Measured when watching began, it was taken for the build running.
+test "executable watcher: a build that lands while the app starts is restarted into" {
+    if (comptime !ExecutableWatcher.have_impl) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    const path = try std.fs.path.join(gpa, &.{ root, "app" });
+    defer gpa.free(path);
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "app", .data = "the launched build" });
+    ExecutableWatcher.noteLaunchAt(dvui.io, path);
+
+    // Replaced during startup, before the watcher exists.
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "app.new", .data = "the rebuilt build, longer" });
+    try tmp.dir.rename("app.new", tmp.dir, "app", dvui.io);
+
+    var w = try ExecutableWatcher.init(gpa, path);
+    defer w.deinit();
+    try w.start();
+    // Settled each time round: a late event from the watch itself only starts the wait again.
+    var restarts = false;
+    for (0..8) |_| {
+        if (w.tick()) {
+            restarts = true;
+            break;
+        }
+        if (w.pending_ns != 0) w.pending_ns -= ExecutableWatcher.settle_ns;
+    }
+    try std.testing.expect(restarts);
 }
 
 // `SettingsWatcher` over the config folder while the app keeps its own state beside the settings:

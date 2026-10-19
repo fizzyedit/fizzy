@@ -1,5 +1,11 @@
-//! A tour of fizzy: the explorer, editing, the command palette and a live markdown preview — a
-//! minute and a half, in chapters a viewer can jump between.
+//! A tour of fizzy: tabs that go where they are dragged, places that split and views that float,
+//! the window's materials, the plugins everything is made of, and the history kept of every change
+//! — about a minute, in chapters a viewer can jump between (the guides view lists them).
+//!
+//! Each chapter that rearranges the window opens on a keyframe of its own: a snapshot holds the
+//! documents and settings but not the layout, so a seek back across a split or a float lands on a
+//! cut rather than on a window still arranged the later way.
+const Tape = @import("tape").Tape;
 const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
 
@@ -7,11 +13,7 @@ const readme =
     \\# Welcome to fizzy
     \\
     \\A small, fast editor built out of plugins. This folder lives in
-    \\memory: it belongs to the demo, and nothing in it touches your disk.
-    \\
-    \\- Files open from the explorer on the left
-    \\- The command palette runs anything
-    \\- Markdown previews as you type
+    \\memory: it belongs to the tour, and nothing in it touches your disk.
     \\
 ;
 
@@ -27,91 +29,117 @@ const main_zig =
 const ideas =
     \\# Ideas
     \\
-    \\- [x] a demo that plays itself
-    \\- [ ] a demo that writes itself
+    \\- [x] a tour that plays itself
+    \\- [ ] a tour you can take over
     \\
 ;
 
-pub fn build(s: *Script) !void {
+const files = [_]Tape.File{
+    .{ .path = "README.md", .text = readme },
+    .{ .path = "src/main.zig", .text = main_zig },
+    .{ .path = "notes/ideas.md", .text = ideas },
+};
+
+/// The tour's folder, cut to: its three files open as tabs, README in front.
+fn scene(s: *Script, layout: Tape.Keyframe.Layout) !void {
     try s.keyframe(.{
         .root = "demo://tour",
-        .files = &.{
-            .{ .path = "README.md", .text = readme },
-            .{ .path = "src/main.zig", .text = main_zig },
-            .{ .path = "notes/ideas.md", .text = ideas },
-        },
-        // What the script types assumes an editor that closes brackets, and a preview beside the
-        // markdown rather than over it.
-        .settings = &.{
-            .{ .owner = "text", .key = "auto_close_brackets", .value = "true" },
-            .{ .owner = "markdown", .key = "default_md_view", .value = ".split" },
-        },
+        .files = &files,
+        .open = &.{ "src/main.zig", "notes/ideas.md", "README.md" },
+        .layout = layout,
+        // A preview beside the markdown rather than over it.
+        .settings = &.{.{ .owner = "markdown", .key = "default_md_view", .value = ".split" }},
     });
     s.home = catalog.documents;
+}
+
+pub fn build(s: *Script) !void {
+    try scene(s, .focused);
 
     try s.chapter("Welcome");
-    try s.caption("This is fizzy itself, driving its own controls. Click, scroll or press a key at any time to take over; press play to carry on.", .{
+    try s.caption("This is fizzy itself, played by a tape. Click anywhere to take over, and press play to carry on.", .{
         .title = "A tour of fizzy",
         .place = .middle,
-        .ms = 8500,
-        .hold = true,
+        .ms = 4000,
     });
+    s.pause(3600);
 
-    // From here, each caption is a callout beside what the pointer does while it shows.
-    try s.chapter("The explorer");
-    try s.caption("The project folder is in the explorer, a click away on the rail.", .{});
-    s.pause(1600);
-    try s.click(.{ .tag = catalog.files_icon }, .{});
-    try s.caption("Folders open with a click\u{2026}", .{});
-    s.pause(900);
-    try s.click(.{ .tag = try catalog.file(s, "src") }, .{});
-    try s.caption("\u{2026}and files open in tabs.", .{});
-    s.pause(900);
-    try s.click(.{ .tag = try catalog.file(s, "src/main.zig") }, .{});
+    try s.chapter("Tabs");
+    try s.caption("Tabs go where you drag them.", .{ .near = try catalog.tab(s, "README.md") });
+    try s.drag(.{ .tag = try catalog.tab(s, "README.md") }, .{ .tag = try catalog.tab(s, "src/main.zig"), .x = 0.2 }, .{});
+    try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
+    try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = catalog.documents, .dx = 132 }, .{});
     try s.waitFor(try catalog.editor(s, "src/main.zig"), .{});
-    s.pause(1200);
-    try s.caption("Put the explorer away again, and the editor has the room.", .{});
     s.pause(900);
-    try s.click(.{ .tag = catalog.files_icon }, .{});
-    s.pause(2000);
 
-    try s.chapter("Editing");
-    try s.caption("Typing is typing: brackets close themselves, and Enter keeps the indent.", try catalog.aboutWriting(s, "src/main.zig"));
-    // Where the new lines will go: the end of the file.
-    try s.click(.{ .tag = try catalog.end(s, "src/main.zig") }, .{});
-    try s.typeText("\npub fn greet(name: []const u8) void {\nstd.debug.print(\"hi, {s}\\n\", .{name});", .{});
-    s.pause(1400);
+    try s.chapter("Places");
+    try scene(s, .reset);
+    try s.caption("Every place has a corner. Its button chooses what the place shows…", .{});
+    try catalog.cornerButton(s, "Sidebar", 26);
+    try s.click(try catalog.corner(s, "Sidebar", 26), .{ .move_ms = 0 });
+    try s.waitFor("picker.action:split", .{});
+    s.pause(1200);
+    try s.caption("…and splits it, for two views side by side.", .{ .near = "picker.action:split" });
+    try s.click(.{ .tag = "picker.action:split" }, .{});
+    try s.click(.{ .tag = "picker.split:horizontal" }, .{});
+    s.pause(1200);
 
-    try s.chapter("The command palette");
-    try s.caption("Every action is a command, and the palette finds commands by name.", .{});
-    s.pause(2000);
-    try s.command("fizzy.commandPalette");
-    try s.waitFor(catalog.palette, .{});
-    try s.typeText("toggle explorer", .{});
-    s.pause(400);
-    try s.key("enter");
-    try s.caption("Enter runs it, and the explorer is back\u{2026}", .{});
-    s.pause(2400);
-    try s.caption("\u{2026}and its shortcut puts it away again.", .{});
-    s.pause(800);
-    try s.command("fizzy.toggleExplorer");
-    s.pause(2000);
-
-    try s.chapter("Markdown");
-    try s.caption("Markdown opens beside its preview\u{2026}", .{});
+    try s.chapter("Floats");
+    try scene(s, .reset);
+    try s.caption("Carry a view from its corner and drop it on the middle of its own place: it floats.", .{});
+    try catalog.cornerButton(s, "Sidebar", 26);
+    try s.drag(try catalog.corner(s, "Sidebar", 26), .{ .tag = try catalog.place(s, "Sidebar") }, .{ .ms = 900 });
+    try s.waitFor(try catalog.place(s, "Float 1"), .{});
+    try s.caption("A float goes wherever you carry it by its header.", .{ .near = "float-header:Float 1" });
+    try s.drag(.{ .tag = "float-header:Float 1" }, .{ .tag = catalog.documents, .x = 0.45, .y = 0.15 }, .{ .ms = 1000 });
     s.pause(600);
-    try catalog.openFile(s, "README.md");
-    s.pause(800);
-    try s.caption("\u{2026}which follows every keystroke.", try catalog.aboutWriting(s, "README.md"));
+
+    try s.chapter("Materials");
+    try s.commandWith("fizzy.windowMaterial", .{ .kind = "liquid" });
+    try s.caption("Over the code you can see what it is made of. The window, its floats, menus and dialogs are one material, Liquid Glass here…", .{ .near = "float-header:Float 1" });
+    s.pause(1800);
+    try s.caption("…or frosted…", .{ .near = "float-header:Float 1" });
+    try s.commandWith("fizzy.windowMaterial", .{ .kind = "frost" });
+    s.pause(1400);
+    try s.caption("…blurred…", .{ .near = "float-header:Float 1" });
+    try s.commandWith("fizzy.windowMaterial", .{ .kind = "blur" });
+    s.pause(1400);
+    try s.caption("…clear, or opaque. Settings › Window keeps your choice.", .{ .near = "float-header:Float 1" });
+    try s.commandWith("fizzy.windowMaterial", .{ .kind = "transparent" });
+    s.pause(1200);
+    try s.commandWith("fizzy.windowMaterial", .{ .kind = "none" });
+    s.pause(1200);
+    try s.commandWith("fizzy.windowMaterial", .{ .kind = "liquid" });
+    try s.caption("Close a float, and its views go back where they came from.", .{ .near = "float-close:Float 1" });
+    try s.click(.{ .tag = "float-close:Float 1" }, .{});
+    try s.waitGone(try catalog.place(s, "Float 1"), .{});
+    s.pause(600);
+
+    try s.chapter("Plugins");
+    try s.caption("Everything you have seen is a plugin: the files, the editor, the previews, these guides. More are in the store.", .{ .near = "fizzy.rail:fizzy.store" });
+    try s.click(.{ .tag = "fizzy.rail:fizzy.store" }, .{});
+    s.pause(2600);
+
+    try s.chapter("History");
+    try scene(s, .focused);
+    try s.caption("Every change is kept, a step at a time.", try catalog.aboutWriting(s, "README.md"));
     try s.click(.{ .tag = try catalog.end(s, "README.md") }, .{});
-    try s.typeText("\n## Your turn\n\nPress **play** to watch again, or click anywhere and make it yours.\n", .{ .cps = 18 });
-    s.pause(2400);
+    try s.typeText("\n## History\n\nEvery keystroke is a step you can go back to.\n", .{ .cps = 20 });
+    s.pause(500);
+    try s.caption("The grip at the foot of the page fills as the history grows, full at its limit (Settings › History)…", .{ .near = try catalog.historyGrip(s, "README.md") });
+    try s.click(.{ .tag = try catalog.historyGrip(s, "README.md") }, .{});
+    try s.waitFor(try catalog.historyLine(s, "README.md"), .{});
+    // Shown, not scrubbed: a snapshot puts a document's text back but not its history, so a seek
+    // replaying a scrub would land on other text.
+    try s.moveTo(.{ .tag = try catalog.historyLine(s, "README.md"), .x = 0.35 }, .{});
+    try s.caption("…and dragging along it goes back through every step. A stretch of it is a tape to share, as this tour is.", .{ .near = try catalog.historyLine(s, "README.md") });
+    s.pause(3200);
 
     try s.chapter("Your turn");
-    try s.caption("That's the tour. Everything you saw is the real editor: pause, rewind, or take over at any moment.", .{
+    try s.caption("That's the tour. Find it again, and more, in Guides on the rail.", .{
         .title = "Your turn",
         .place = .middle,
-        .ms = 8000,
-        .hold = true,
+        .ms = 4000,
     });
+    s.pause(3600);
 }

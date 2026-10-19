@@ -1358,14 +1358,16 @@ fn dialogsRide() void {
 /// What takes no input, drawn last: a demo's pointer and the ripple of its click
 /// (`replay.overlay`, its layer round the pointer's tip), a tooltip. Each goes into the topmost of
 /// the app's windows over its middle — a menu's or a dialog's, else a float's — over all that
-/// window shows, so the pointer is seen on whatever it is over; over none of them it is left to
-/// the main window. Those windows' pictures are handed over already (`windowFrame`, `menuFrame`):
-/// a window copies its picture only when the frame ends, so this still goes in.
+/// window shows, so the pointer is seen on whatever it is over; over none of them, or marked as the
+/// main window's (`core.screens.markMain`), it is left to the main window. Those windows' pictures
+/// are handed over already (`windowFrame`, `menuFrame`): a window copies its picture only when the
+/// frame ends, so this still goes in.
 fn overlaysFrame() void {
     const cw = dvui.currentWindow();
     for (cw.subwindows.stack.items) |*sw| {
         if (sw.mouse_events) continue;
         if (fizzy.core.screens.isCarried(sw.id) or fizzy.core.screens.isEverywhere(sw.id)) continue;
+        if (fizzy.core.screens.isMain(sw.id)) continue;
         const mid = sw.rect_pixels.center();
         const Into = struct { target: dvui.Texture.Target, part: viewports.Rect };
         const into: ?Into = blk: {

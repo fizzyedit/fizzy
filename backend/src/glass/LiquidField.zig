@@ -63,6 +63,12 @@ pub const Shape = struct {
 
 shapes: [max_shapes]Shape = undefined,
 len: usize = 0,
+/// The place the glass belongs to: a view's card, rounded or square. Its outside is one more
+/// shape the others run into, so a shape near its outline joins the edge by a neck, metaball-like,
+/// and its outline cuts the glass, so none of it crosses. Never drawn on its own: only the shapes,
+/// and their necks where they come near the edge. It takes the program's last shape slot, so a
+/// field with it holds one shape fewer.
+edge: ?Edge = null,
 /// Physical pixels: how far apart two shapes still bridge. 0 never joins.
 merge_px: f32 = 0,
 scale: f32 = 1,
@@ -77,11 +83,45 @@ refraction: f32 = 1,
 /// It carries text — a dialog, a menu — and takes the window's colour as the opacity has it
 /// (`glass_look.forText`).
 text: bool = false,
+/// The window's own material (`tint`, the window's base colour, translucent): its colour in place
+/// of what is behind it, as see-through as that colour is, so the desktop shows through it as it
+/// does through the window round a card. Glass that reads as the window's edge reaching into a
+/// card. Its tint is kept over the published look, as `surface`'s is.
+window: bool = false,
+/// Drawn as over an opaque window wherever it is (`publishOpaqueWindow`): glass that must be glass
+/// even where the window is see-through behind it, as a place's corner button over the explorer,
+/// which is the window's own material. Off, it is as see-through there as the window is.
+solid: bool = false,
+/// Its tint and mix are its own, kept over the look the app publishes (`publishLook`): glass that
+/// must read as part of a surface, as a place's corner at rest does its card's fill.
+surface: bool = false,
 /// It is a lens over a picture of the caller's own (`drawPicture`): its middle the picture as it
 /// is, only the band along its edge glass (`glass_look.forLens`).
 lens: bool = false,
+/// A drop's rim lit from the top right rather than the top left: lit along the other diagonal,
+/// top right and bottom left, and shaded across top left and bottom right. The glass program's
+/// only; the fallback without it (`liquid_glass`) keeps its light at the top left. For glass whose edges
+/// that show face that way, as a piece in a place's top-right corner does — its arc down and to
+/// the left, its cut up and to the right — where the usual light would leave both in shade.
+light_across: bool = false,
+
+/// A place's outline (`edge`), physical: its rect and its corner radii, top-left, top-right,
+/// bottom-right, bottom-left.
+pub const Edge = struct {
+    rect: dvui.Rect.Physical,
+    radii: [4]f32 = @splat(0),
+    /// Cut by the outline with an edge of its own there, rather than joined to the outside: a
+    /// rim and a bend along the cut, as a piece of glass laid in the place, its edge against the
+    /// place's, bending what lies along it (a focus ring, the place's border). Joined, the glass
+    /// carries on past the outline as far as its light and bend go, and the cut shows neither.
+    cut: bool = false,
+};
+
+/// Pixels past its place's outline the outside of the place begins: `EDGE_GAP` in the program.
+const edge_gap: f32 = 1;
 
 pub fn add(self: *LiquidField, shape: Shape) void {
+    if (self.len >= max_shapes - 1 and self.edge != null) return;
     if (self.len >= max_shapes) return;
     self.shapes[self.len] = shape;
     self.len += 1;
@@ -91,7 +131,15 @@ pub fn add(self: *LiquidField, shape: Shape) void {
 pub fn bounds(self: *const LiquidField) dvui.Rect.Physical {
     var r: dvui.Rect.Physical = .{};
     for (self.shapes[0..self.len], 0..) |s, i| r = if (i == 0) s.rect else r.unionWith(s.rect);
-    return r.outsetAll(self.merge_px * 0.25 + 1);
+    return self.withReach(r);
+}
+
+/// `r`, some shapes' rect, with room for what joins them: the bridges between them, and with an
+/// edge, the neck to it (as far as a shape can be from the outline and still join it, half the
+/// merge width), kept inside the place.
+fn withReach(self: *const LiquidField, r: dvui.Rect.Physical) dvui.Rect.Physical {
+    const e = self.edge orelse return r.outsetAll(self.merge_px * 0.25 + 1);
+    return r.outsetAll(self.merge_px * 0.5 + 1).intersect(e.rect.outsetAll(1));
 }
 
 // ── Groups ──────────────────────────────────────────────────────────────────────────────────────
@@ -209,7 +257,7 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
         .depths = .{ self.merge_px, liquid_glass.softness * rim, liquid_glass.depthPx(self.look(), rim), liquid_glass.falloff * glow },
         .rim = .{ liquid_glass.refraction * rim * self.refraction, liquid_glass.clarity * @min(1, self.refraction), rim_line_width * s, @min(1, self.refraction) },
         .tint = tint,
-        .face = .{ std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
+        .face = .{ if (self.window) 2 else std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
         .dither = .{ 1.0 / 255.0, 0, 0, 0 },
         .shapes = undefined,
     };
@@ -221,6 +269,17 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
             .{ r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2 },
             sh.radii,
             .{ sh.blur, sh.lens, sh.light, if (sh.round) 1 else 0 },
+        };
+    }
+    if (self.edge) |e| {
+        // In the last slot, flagged 2: the program reads it there, whatever the groups. Its glass is
+        // the first shape's, where they meet.
+        const first: Shape = if (self.len > 0) self.shapes[0] else .{ .rect = e.rect };
+        u.shapes[max_shapes - 1] = .{
+            .{ e.rect.x + e.rect.w / 2, e.rect.y + e.rect.h / 2, e.rect.w / 2, e.rect.h / 2 },
+            e.radii,
+            // 3: cut, with an edge of its own (`Edge.cut`); 2: joined to the outside.
+            .{ first.blur, first.lens, 0, if (e.cut) 3 else 2 },
         };
     }
     return u;
@@ -304,9 +363,12 @@ fn applyLook(self: *const LiquidField, u: *Uniforms, l: glass_look.InApp) void {
     u.backdrop[3] = l.bevel_cap * self.scale;
     u.rim[1] = l.clarity * bend_scale;
     u.rim[3] = l.rim;
-    u.face[0] = std.math.clamp(l.mix, 0, 1);
-    u.face[1] = std.math.clamp(l.lift, 0, 1);
+    if (!self.surface and !self.window) {
+        u.face[0] = std.math.clamp(l.mix, 0, 1);
+        u.face[1] = std.math.clamp(l.lift, 0, 1);
+    }
     for (u.shapes[0..self.len]) |*sh| sh[2][0] *= l.frost;
+    if (self.edge != null) u.shapes[max_shapes - 1][2][0] *= l.frost;
 }
 
 /// Whether `draw` would draw now: programs here, switched on, compiled.
@@ -330,7 +392,9 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     const groups = self.clusters();
     var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
     // The window behind the glass, published for this frame.
-    u.backdrop[0] = if (opaqueWindow()) 1 else 0;
+    // And the light turned (`light_across`): +2 on the same lane, so it holds on every look,
+    // published or not.
+    u.backdrop[0] = (if (opaqueWindow() or self.solid) @as(f32, 1) else 0) + (if (self.light_across) @as(f32, 2) else 0);
     // And the glass the sliders make of it this frame (`publishLook`).
     if (publishedLook()) |l| self.applyLook(&u, if (self.lens) glass_look.forLens(l) else if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
@@ -403,7 +467,8 @@ fn quads(self: *const LiquidField, groups: Clusters, glass: bool, frost: dvui.Te
         const n = groups.size[g];
         var r = self.shapes[groups.order[first]].rect;
         for (groups.order[first..][0..n]) |i| r = r.unionWith(self.shapes[i].rect);
-        r = r.outsetAll(self.merge_px * 0.25 + 1);
+        r = self.withReach(r);
+        if (r.empty()) continue;
         const col: dvui.Color.PMA = .{ .r = if (glass) 255 else 0, .g = first, .b = n, .a = 255 };
         const base: dvui.Vertex.Index = @intCast(4 * g);
         for ([_]dvui.Point.Physical{ r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft() }) |p| {
@@ -474,16 +539,58 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
             o2 = o;
         }
     }
+    // The place (`edge`): its outside one more shape, its outline cutting the coverage.
+    var in_place: f32 = -big;
+    var place_out: [2]f32 = .{ 0, 0 };
+    const cut = if (self.edge) |e| e.cut else false;
+    if (self.edge) |e| {
+        const c: [2]f32 = .{ e.rect.x + e.rect.w / 2, e.rect.y + e.rect.h / 2 };
+        const half: [2]f32 = .{ e.rect.w / 2, e.rect.h / 2 };
+        const lim = @min(half[0], half[1]);
+        const radii: [4]f32 = .{ @min(e.radii[0], lim), @min(e.radii[1], lim), @min(e.radii[2], lim), @min(e.radii[3], lim) };
+        var g: [2]f32 = undefined;
+        in_place = roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
+        place_out = g;
+    }
+    if (self.edge != null and !cut) {
+        const d = edge_gap - in_place;
+        const mat: [3]f32 = .{ m1[0], m1[1], 0 };
+        if (d < d1) {
+            d2 = d1;
+            m2 = m1;
+            d1 = d;
+            m1 = mat;
+        } else if (d < d2) {
+            d2 = d;
+            m2 = mat;
+        }
+        const o: [2]f32 = .{ -place_out[0], -place_out[1] };
+        if (d < f1) {
+            f2 = f1;
+            o2 = o1;
+            f1 = d;
+            o1 = o;
+        } else if (d < f2) {
+            f2 = d;
+            o2 = o;
+        }
+    }
     const k = @max(self.merge_px, 0.0001);
     var wm: f32 = 0;
     var wf: f32 = 0;
     const d = smin(d1, d2, k, &wm);
-    const f = smin(f1, f2, k, &wf);
+    var f = smin(f1, f2, k, &wf);
+    var out: [2]f32 = .{ std.math.lerp(o1[0], o2[0], wf), std.math.lerp(o1[1], o2[1], wf) };
+    // Cut: where the place's outline is nearer than the shapes' own, the glass's edge is the cut.
+    if (cut and in_place > f) {
+        f = in_place;
+        out = place_out;
+    }
     const soft = @max(0, -f);
     return .{
-        .d = d,
-        .coverage = std.math.clamp(0.5 - d, 0, 1),
-        .out = .{ .x = std.math.lerp(o1[0], o2[0], wf), .y = std.math.lerp(o1[1], o2[1], wf) },
+        .d = @max(d, in_place),
+        .coverage = std.math.clamp(0.5 - @max(d, in_place), 0, 1),
+        .out = .{ .x = out[0], .y = out[1] },
         .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
         .blur = std.math.lerp(m1[0], m2[0], wm),
         .lens = std.math.lerp(m1[1], m2[1], wm),

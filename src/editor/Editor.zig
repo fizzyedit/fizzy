@@ -4595,6 +4595,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // app's), the base is its colour over that material at this opacity (`materialBase`): clear
         // on Liquid Glass, whose colour is the glass's. Elsewhere fizzy's own (`windowBase`).
         const window_color = fizzy.backend.windowMaterialBase(dvui.currentWindow(), dvui.themeGet().color(.content, .fill), editor.window_opacity_anim.value, windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size())) orelse windowBase(editor.window_opacity_anim.value);
+        // For glass that is the window's own material (`core.dialogs.windowBase`).
+        fizzy.core.dialogs.publishWindowBase(window_color);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
         // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline
@@ -4821,6 +4823,17 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // out and removes itself when the timer expires.
     editor.drawSaveToasts();
 
+    // The app's OS windows over the main one: a demo's bar stays in the main window, under them,
+    // so a press on one is that window's, not the bar's (`replay.Player.Transport.covered`).
+    if (editor.demo.player.tape() != null) {
+        var buf: [8]Popout.Shown = undefined;
+        const tr = &editor.demo.player.transport;
+        tr.covered_n = 0;
+        for (Popout.windowsShown(&buf)) |w| {
+            tr.covered[tr.covered_n] = w.part;
+            tr.covered_n += 1;
+        }
+    }
     // Over everything the frame drew: a demo's pointer, keystrokes, captions and transport bar,
     // or a live tape's pointer.
     @import("app").automation.overlay.draw(&editor.demo.player);
@@ -5948,13 +5961,14 @@ fn syncExecutableWatcher(editor: *Editor) void {
         return;
     }
     if (editor.executable_watch_failed) return;
+    // As the process started (`noteLaunch`): asked now, a replaced executable can go by another name.
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe = std.process.executablePath(dvui.io, &buf) catch |err| {
+    const exe = ExecutableWatcher.launchPath() orelse buf[0 .. std.process.executablePath(dvui.io, &buf) catch |err| {
         dvui.log.warn("restart: cannot find this executable ({t}); a rebuild will not restart fizzy", .{err});
         editor.executable_watch_failed = true;
         return;
-    };
-    editor.app.executable_watcher = ExecutableWatcher.init(editor.app.gpa, buf[0..exe]) catch |err| {
+    }];
+    editor.app.executable_watcher = ExecutableWatcher.init(editor.app.gpa, exe) catch |err| {
         dvui.log.warn("restart: cannot watch this executable ({t}); a rebuild will not restart fizzy", .{err});
         editor.executable_watch_failed = true;
         return;
@@ -5974,9 +5988,13 @@ fn syncExecutableWatcher(editor: *Editor) void {
 fn driveHandover(editor: *Editor) void {
     // The new instance's side: the lock, once the old instance has let go of it.
     if (restart.startedByHandover()) {
-        if (restart.pollReleased(dvui.io, editor.app.gpa)) {
-            @import("app").single_instance.acquireLock(editor.app.gpa, &.{}) catch |err| dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
-            fizzy.core.profile.phase(dvui.io, "handover lock");
+        if (restart.pollReleased(dvui.io)) {
+            const taken = @import("app").single_instance.tryAcquireLock(editor.app.gpa, &.{}) catch |err| blk: {
+                dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
+                break :blk false;
+            };
+            restart.tookLock(dvui.io, editor.app.gpa, taken);
+            if (taken) fizzy.core.profile.phase(dvui.io, "handover lock");
         }
         return;
     }

@@ -222,6 +222,11 @@ pub const Transport = struct {
     scrub: ?f64 = null,
     /// The real pointer, physical, as last seen.
     pointer: ?dvui.Point.Physical = null,
+    /// Where an app shows parts of its frame in OS windows of their own (a dialog's, a menu's) over
+    /// the window the bar is in, those windows' rects last frame, physical: the app's to set. The
+    /// bar is drawn under them, so a press there is theirs, not the bar's.
+    covered: [8]dvui.Rect.Physical = undefined,
+    covered_n: u8 = 0,
     /// When the real pointer was last on the bar, or the dome brought it (ns, `wallNs`): while
     /// playing, the bar shows for a while after, then goes back into its dome.
     stirred_ns: ?i128 = null,
@@ -880,6 +885,10 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         e.handle(@src(), wd);
         return true;
     }
+    for (tr.covered[0..tr.covered_n]) |r| if (r.contains(me.p)) {
+        tr.pointer = null;
+        return false;
+    };
     // A press on the dome brings the bar out of it at once, and is not the app's.
     if (tr.dome) |d| if (d.contains(me.p)) {
         if (me.action == .press and me.button.pointer() and !tr.closing) {

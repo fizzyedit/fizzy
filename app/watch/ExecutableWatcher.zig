@@ -10,8 +10,10 @@
 //! short coalesce covers an installer that writes in place, and the stamp (size and modification
 //! time) must hold still across it before the app restarts.
 //!
-//! The path is read at launch: once the file is replaced, the running process's own idea of its
-//! path can change (Linux reads `/proc/self/exe`, which then says "(deleted)").
+//! The path and its stamp are read at launch (`noteLaunch`), not when watching starts: the app
+//! takes a second or so to come up, and a build that lands in it would otherwise be taken for the
+//! one running, and never restarted into. Once the file is replaced, the running process's own
+//! idea of its path can change too (Linux reads `/proc/self/exe`, which then says "(deleted)").
 const builtin = @import("builtin");
 const std = @import("std");
 const core = @import("core");
@@ -38,12 +40,40 @@ dirty: std.atomic.Value(bool) = .init(false),
 pending_ns: i128 = 0,
 pending: Stamp = .{},
 
+/// This executable and its stamp as the process started (`noteLaunch`).
+var launch: struct { path_buf: [std.fs.max_path_bytes]u8 = undefined, path_len: usize = 0, stamp: ?Stamp = null } = .{};
+
+/// First thing in `main`: the executable this process was started from, as it is now — before the
+/// window, the GPU and the plugins, during which a build can land. `init` compares against it.
+pub fn noteLaunch(io: std.Io) void {
+    if (comptime !have_impl) return;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = std.process.executablePath(io, &buf) catch return;
+    noteLaunchAt(io, buf[0..n]);
+}
+
+/// `noteLaunch` for the executable at `path`.
+pub fn noteLaunchAt(io: std.Io, path: []const u8) void {
+    if (comptime !have_impl) return;
+    if (path.len > launch.path_buf.len) return;
+    @memcpy(launch.path_buf[0..path.len], path);
+    launch.path_len = path.len;
+    launch.stamp = Stamp.of(io, path);
+}
+
+/// The executable as `noteLaunch` found it, null when it did not: the path to watch. Asked again
+/// later, Linux names a replaced executable `<path> (deleted)` (`/proc/self/exe`).
+pub fn launchPath() ?[]const u8 {
+    if (launch.path_len == 0) return null;
+    return launch.path_buf[0..launch.path_len];
+}
+
 const Stamp = struct {
     size: u64 = 0,
     mtime_ns: i96 = 0,
 
-    fn of(path: []const u8) ?Stamp {
-        const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch return null;
+    fn of(io: std.Io, path: []const u8) ?Stamp {
+        const st = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
         return .{ .size = st.size, .mtime_ns = st.mtime.nanoseconds };
     }
 
@@ -87,13 +117,15 @@ const Impl = if (have_impl) struct {
     }
 } else void;
 
-/// The executable at `path` (the app's own: `std.process.executablePath`, read at launch) and
-/// its stamp now. `path` is copied. Does not start watching (`start`).
+/// The executable at `path` (the app's own: `std.process.executablePath`) and its stamp at launch
+/// (`noteLaunch`), or now when launch did not note it. `path` is copied. Does not start watching
+/// (`start`).
 pub fn init(gpa: Allocator, exe_path: []const u8) !ExecutableWatcher {
     if (comptime !have_impl) return error.Unsupported;
     const path = try gpa.dupe(u8, exe_path);
     errdefer gpa.free(path);
-    return .{ .gpa = gpa, .path = path, .launched = Stamp.of(path) orelse return error.NoExecutable };
+    const noted = if (std.mem.eql(u8, launch.path_buf[0..launch.path_len], path)) launch.stamp else null;
+    return .{ .gpa = gpa, .path = path, .launched = noted orelse Stamp.of(dvui.io, path) orelse return error.NoExecutable };
 }
 
 /// Delete what a Windows build set aside beside `exe_path` (`<name>.<time>.old`: an executable that
@@ -125,6 +157,8 @@ pub fn start(self: *ExecutableWatcher) !void {
     errdefer nw.deinit();
     try nw.watch(std.fs.path.dirname(self.path) orelse return error.NoExecutable);
     self.impl.nw = nw;
+    // A build that landed before the watch began sent its event to no one: look once now.
+    self.dirty.store(true, .release);
 }
 
 /// Stop watching (joins nightwatch's thread) and free the path. Safe without `start`.
@@ -143,7 +177,7 @@ pub fn tick(self: *ExecutableWatcher) bool {
     const now = core.perf.nanoTimestamp();
     if (self.dirty.swap(false, .acquire)) {
         self.pending_ns = now;
-        self.pending = Stamp.of(self.path) orelse .{};
+        self.pending = Stamp.of(dvui.io, self.path) orelse .{};
     }
     if (self.pending_ns == 0) return false;
     if (now - self.pending_ns < settle_ns) {
@@ -151,7 +185,7 @@ pub fn tick(self: *ExecutableWatcher) bool {
         return false;
     }
     self.pending_ns = 0;
-    const stamp = Stamp.of(self.path) orelse return false; // mid-replace: the rename's event follows
+    const stamp = Stamp.of(dvui.io, self.path) orelse return false; // mid-replace: the rename's event follows
     if (!stamp.eql(self.pending)) {
         // Still being written: wait for it to hold still.
         self.pending_ns = now;
