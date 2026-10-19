@@ -1117,19 +1117,29 @@ pub fn setWindowMaterial(material: MaterialKind, opacity: f32) void {
     window_material = .{ .kind = material, .opacity = opacity };
 }
 
-/// `window_material`, or the best kind below it this backend can show (`materialKinds`).
+/// `window_material`, or the best kind below it this backend can show (`materialKinds`), its
+/// colour less opaque in a light theme (`light_tint`).
 fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
     const offered = self.materialKinds();
+    // In a light theme the window's colour is light over a desktop that is mostly darker, and at
+    // the opacity a dark theme reads well at, little showed through it (the user): a light theme's
+    // colour covers `light_tint` as much. Fizzy's own defaults are the same ratio (`app/settings`:
+    // 0.7 dark, 0.3 light), which fizzy's people set apart; a plain app has the one value.
+    const opacity = if (dvui.themeGet().dark) window_material.opacity else window_material.opacity * light_tint;
     var k = @backingInt(window_material.kind);
     while (k > 0) : (k -= 1) {
         const material: MaterialKind = @fromBackingInt(k);
         const has = switch (material) {
             inline else => |t| @field(offered, @tagName(t)),
         };
-        if (has) return .{ .kind = material, .opacity = window_material.opacity };
+        if (has) return .{ .kind = material, .opacity = opacity };
     }
-    return .{ .kind = .none, .opacity = window_material.opacity };
+    return .{ .kind = .none, .opacity = opacity };
 }
+
+/// How much of a light theme's window colour covers what is behind, beside a dark theme's at the
+/// same material opacity (`effectiveMaterial`).
+const light_tint: f32 = 0.3 / 0.7;
 
 /// The OS's own title bar on a plain dvui app's windows — the main one and each of the OS's own
 /// frame (`Viewport.native`) — in the theme's colour, made of the window material: set again only
