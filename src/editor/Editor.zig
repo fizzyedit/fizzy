@@ -42,6 +42,7 @@ pub const FailedPlugin = App.FailedPlugin;
 pub const PendingReveal = App.PendingReveal;
 
 pub const Recents = @import("app").Recents;
+const Tracks = @import("app").Tracks;
 pub const Settings = @import("app").settings.Settings;
 
 pub const Dialogs = @import("dialogs/Dialogs.zig");
@@ -3182,13 +3183,23 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
             .export_from = if (track) |tr| tr.base_top else null,
             .window_summary = summary,
             .progress = editor.tape_tabs.progress(doc.owner.documentPath(doc)),
+            .tape_playing = editor.tape_tabs.landing(doc.owner.documentPath(doc)),
+            .pace = if (editor.app.tracks) |*t| .{ .ctx = t, .gapFn = trackPace } else null,
         });
         if (pressed.exported) |win| {
             editor.share_pending = .{ .doc_id = doc.id, .from = win.from, .to = win.to };
             dvui.refresh(null, @src(), null);
         }
+        if (pressed.tape) |on| editor.tape_tabs.setPaused(doc.owner.documentPath(doc), !on);
     }
     return .ok;
+}
+
+/// The transport's play goes at the pace `doc`'s track recorded (`HistoryTransport.Pace`).
+fn trackPace(ctx: *const anyopaque, doc: sdk.DocHandle, from: u64, to: u64) ?u32 {
+    const tracks: *Tracks = @ptrCast(@alignCast(@constCast(ctx)));
+    const t = tracks.trackOf(doc.id) orelse return null;
+    return Tracks.playGap(t, from, to);
 }
 
 /// What the export window from stop `from` to stop `to` of `doc`'s history holds, in words: "4

@@ -42,6 +42,12 @@
 //! bracket over the part to export, dragged from either side (`history_transport.Trim`), the
 //! document going to wherever a side is dragged and the rest dimmed. Pressed again, the part is
 //! the app's (`Pressed.exported`); undo's button, a cross while the window is open, closes it.
+//!
+//! **Play.** Beside undo, play steps the document forward through its history at the pace it was
+//! made (`DrawOptions.pace`), from where it stands, or from the start when it is at the end; inside
+//! the export window, through the window's part. Any other move of the person's stops it. A tape
+//! still playing into the document (`DrawOptions.tape_playing`) is paused and played on by the
+//! same button (`Pressed.tape`), and play reaching the end of what has landed plays the tape on.
 const HistoryTransport = @This();
 
 const std = @import("std");
@@ -82,6 +88,15 @@ held_off: bool = false,
 /// The stop the pointer holds the knob at while it drags the line, until the drag ends. Only
 /// while the bar holds the mouse: a drag whose capture went (the bar stopped drawing) is over.
 drag: ?usize = null,
+/// Playing through the history: when it next steps. Null: not playing.
+play: ?Play = null,
+
+const Play = struct { next_ns: i128 };
+
+/// How long each step waits when the app gives no pace (`DrawOptions.pace`), and the least any
+/// waits, in ms.
+const play_step_ms: u32 = 250;
+const play_least_ms: u32 = 40;
 
 const bar_h: f32 = 40;
 /// How much taller the bar grows for its strip.
@@ -105,6 +120,7 @@ pub fn stir(self: *HistoryTransport, now_ns: i128) void {
 /// held key is scrubbing: the strip grows.
 pub fn press(self: *HistoryTransport, now_ns: i128, forward: bool) usize {
     self.stir(now_ns);
+    self.play = null;
     const by = self.repeat.press(now_ns, forward);
     if (self.repeat.run > 1) self.strip.stir(now_ns);
     return by;
@@ -138,7 +154,7 @@ fn gripRect(area: dvui.Rect.Physical, r: f32, edge: ?f32) ?dvui.Rect {
 /// when the pane is too narrow for it.
 fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
     const w = @min(max_w, nat.w - 24);
-    if (w < 3 * button_d) return null;
+    if (w < 4 * button_d) return null;
     const h = bar_h + strip_h * grown;
     const bottom = nat.y + nat.h - 14;
     return .{ .x = nat.x + nat.w / 2 - w / 2, .y = bottom - h, .w = w, .h = h };
@@ -169,6 +185,18 @@ pub const DrawOptions = struct {
     /// A tape playing into the document (fizzy: in a tape's tab), how far it has played, 0 to 1:
     /// the grip fills as it plays rather than by `steps`. Null: none.
     progress: ?f32 = null,
+    /// That tape's steps are landing now (it is neither played out nor held): play's button pauses
+    /// it.
+    tape_playing: bool = false,
+    /// How long play waits before each step, as the history was made; null: `play_step_ms` each.
+    pace: ?Pace = null,
+};
+
+/// The app's word on how long play waits going from one history entry to the next (`from` 0:
+/// before any), in ms; null when it does not know, and the step waits `play_step_ms`.
+pub const Pace = struct {
+    ctx: *const anyopaque,
+    gapFn: *const fn (ctx: *const anyopaque, doc: sdk.DocHandle, from: u64, to: u64) ?u32,
 };
 
 const HistoryFrames = @import("HistoryFrames.zig");
@@ -177,6 +205,8 @@ const HistoryFrames = @import("HistoryFrames.zig");
 pub const Pressed = struct {
     /// The window's part was exported: from stop `from` to stop `to` of the line.
     exported: ?rules.Trim = null,
+    /// The tape playing into the document: true, play it on; false, pause it (`DrawOptions.tape_playing`).
+    tape: ?bool = null,
 };
 
 /// Draw the bar over `area` (the document's pane, physical) when it shows, and take its input.
@@ -270,7 +300,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const back: dvui.Rect = .{ .x = whole.x, .y = center.y - button_d / 2, .w = button_d, .h = button_d };
     const fwd: dvui.Rect = .{ .x = whole.x + w - button_d - end_w, .y = back.y, .w = button_d, .h = button_d };
     const share: dvui.Rect = .{ .x = whole.x + w - button_d * export_g, .y = back.y + button_d * (1 - export_g) / 2, .w = button_d * export_g, .h = button_d * export_g };
-    const track: dvui.Rect = .{ .x = back.x + button_d + gap, .y = whole.y, .w = w - 2 * (button_d + gap) - end_w, .h = whole.h };
+    const play_r: dvui.Rect = .{ .x = back.x + button_d + gap, .y = back.y, .w = button_d, .h = button_d };
+    const track: dvui.Rect = .{ .x = play_r.x + button_d + gap, .y = whole.y, .w = w - 3 * (button_d + gap) - end_w, .h = whole.h };
     // The collapse tab, over the middle of the bar: back into the grip.
     const tab = dome.tabRect(whole);
     const hit = if (self.place(area, now)) |pl| pl else wrs.rectToPhysical(whole.outsetAll(4));
@@ -285,7 +316,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (self.drag != null and !dvui.captured(fid)) self.drag = null;
     if (self.grip != null and !dvui.captured(fid)) self.grip = null;
 
-    const phys = [4]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd), wrs.rectToPhysical(share) };
+    const phys = [5]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd), wrs.rectToPhysical(share), wrs.rectToPhysical(play_r) };
     const tab_p = wrs.rectToPhysical(tab);
     const pad = 14;
     const x0 = phys[1].x + pad * s;
@@ -301,11 +332,13 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     core.anchor.markRect(fid, phys[0], true, "history.back:{s}", .{path});
     core.anchor.markRect(fid, .{ .x = x0, .y = phys[1].y, .w = x1 - x0, .h = phys[1].h }, true, "history.line:{s}", .{path});
     core.anchor.markRect(fid, phys[2], true, "history.forward:{s}", .{path});
+    core.anchor.markRect(fid, phys[4], true, "history.play:{s}", .{path});
     if (export_g > 0) core.anchor.markRect(fid, phys[3], true, "history.export:{s}", .{path});
     if (self.tab) core.anchor.markRect(fid, tab_p, true, "history.collapse:{s}", .{path});
 
     // Input: the buttons step, the line goes where it is pressed and follows a drag.
     var go: ?usize = null;
+    var play_pressed = false;
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = fid, .r = hit })) continue;
         const me = switch (e.evt) {
@@ -320,10 +353,13 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                     if (self.window != null) self.window = null else go = line.at -| 1;
                 } else if (phys[2].contains(me.p)) {
                     if (self.window == null) go = @min(n, line.at + 1);
+                } else if (phys[4].contains(me.p)) {
+                    play_pressed = true;
                 } else if (self.tab and tab_p.contains(me.p)) {
                     // An open export window would keep the bar: it closes with it.
                     self.window = null;
                     self.grip = null;
+                    self.play = null;
                     self.shown.hide(now);
                     self.held_off = true;
                     self.was_on = false;
@@ -363,6 +399,35 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         }
     }
     if (self.drag) |d| go = d;
+    // Any other move of the person's stops play; play's own button starts or stops it.
+    if (go != null) self.play = null;
+    const lo: usize = if (self.window) |win| win.from else 0;
+    const hi: usize = if (self.window) |win| win.to else n;
+    if (play_pressed) {
+        if (self.play != null or opts.tape_playing) {
+            self.play = null;
+            if (opts.tape_playing) pressed.tape = false;
+        } else if (line.at >= hi and opts.progress != null and opts.progress.? < 1) {
+            // At the end of what a held tape has landed: it plays on.
+            pressed.tape = true;
+        } else {
+            const from = if (line.at >= hi or line.at < lo) lo else line.at;
+            if (from != line.at) go = from;
+            self.play = .{ .next_ns = now + std.time.ns_per_ms * @as(i128, playGap(opts.pace, doc, line, from)) };
+        }
+    }
+    if (self.play) |*pl| if (go == null and now >= pl.next_ns) {
+        if (line.at >= hi or line.at < lo) {
+            self.play = null;
+            // Played to the end of what has landed: a held tape plays on from there.
+            if (self.window == null and opts.progress != null and opts.progress.? < 1) pressed.tape = true;
+        } else {
+            go = line.at + 1;
+            pl.next_ns = now + std.time.ns_per_ms * @as(i128, playGap(opts.pace, doc, line, line.at + 1));
+            self.shown.stir(now);
+            if (opts.frames != null) self.strip.stir(now);
+        }
+    };
     var at = line.at;
     if (go) |to| if (to != at) {
         if (doc.owner.historyGoTo(doc, stopId(line, to))) at = to;
@@ -387,32 +452,34 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const prev_alpha = dvui.alpha(if (from != null) dome.glassAlpha(self.presence.value, p) else p);
     defer dvui.alphaSet(prev_alpha);
     const pt = dvui.currentWindow().mouse_pt;
-    var bubbles: [5]core.dialogs.Bubble = undefined;
+    var bubbles: [6]core.dialogs.Bubble = undefined;
     const trimming = self.window != null;
     // The line's bubble: a capsule round the line alone, easing to a surface's corners as the
     // strip grows, so the pictures sit inside them.
     const line_radius = std.math.lerp(phys[1].h / 2, core.corners.scaled(core.corners.card) * s, @min(1, grown * 1.5));
-    for (phys, bubbles[0..4], 0..) |r, *b, i| b.* = .{
+    for (phys, bubbles[0..5], 0..) |r, *b, i| b.* = .{
         .rect = if (bud) |f| dome.lerpRect(f, r, dome.emerge(p, bud_delays[i])) else r,
         .radius = if (i == 1 and grown > 0) line_radius else null,
         .light = if (r.contains(pt) and switch (i) {
             0 => trimming or at > 0,
             2 => !trimming and at < n,
-            3 => true,
+            3, 4 => true,
             else => false,
         }) core.dialogs.bubble_hover else 0,
     };
     // The tab, a small drop on the bar's top that its glass runs into.
-    var count: usize = if (export_g > 0) 4 else 3;
+    // Play's bubble rides behind export's in the list, so export's may be left out.
+    if (export_g <= 0) bubbles[3] = bubbles[4];
+    var count: usize = if (export_g > 0) 5 else 4;
     if (self.tab) {
         bubbles[count] = .{
-            .rect = if (bud) |f| dome.lerpRect(f, tab_p, dome.emerge(p, bud_delays[4])) else tab_p,
+            .rect = if (bud) |f| dome.lerpRect(f, tab_p, dome.emerge(p, bud_delays[5])) else tab_p,
             .light = if (tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
         };
         count += 1;
     }
     // The grip itself, in the same glass, shrinking into the pane's edge as the bar leaves it.
-    var shapes: [6]core.dialogs.Bubble = undefined;
+    var shapes: [7]core.dialogs.Bubble = undefined;
     @memcpy(shapes[0..count], bubbles[0..count]);
     if (from) |f| {
         shapes[count] = dome.shrinking(f, p);
@@ -439,6 +506,9 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         button(bounds, back, "history_cancel", icons.tvg.lucide.x, ink.opacity(0.85));
     } else button(bounds, back, "history_back", icons.tvg.lucide.undo, ink.opacity(if (at > 0) 0.85 else 0.3));
     button(bounds, fwd, "history_forward", icons.tvg.lucide.redo, ink.opacity(if (!trimming and at < n) 0.85 else 0.3));
+    if (self.play != null or opts.tape_playing) {
+        button(bounds, play_r, "history_pause", icons.tvg.lucide.pause, ink.opacity(0.85));
+    } else button(bounds, play_r, "history_play", icons.tvg.lucide.play, ink.opacity(if (hi > lo) 0.85 else 0.3));
     if (self.tab) dome.chevron(bounds, tab, ink.opacity(0.85));
     if (export_g > 0.3) {
         if (trimming) {
@@ -480,14 +550,15 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // Comes in, goes: a frame each while it fades, and one wake for when it next changes on its
     // own (it starts to go, it is gone).
     if (p < 1 or (grown > 0 and grown < 1) or !self.slosh.settled(now)) dvui.refresh(null, @src(), fid);
-    const next = if (self.strip.nextChange(now)) |t| @min(t, self.shown.nextChange(now) orelse t) else self.shown.nextChange(now);
+    var next = if (self.strip.nextChange(now)) |t| @min(t, self.shown.nextChange(now) orelse t) else self.shown.nextChange(now);
+    if (self.play) |pl| next = if (next) |t| @min(t, pl.next_ns) else pl.next_ns;
     if (next) |t| dvui.timer(fid, @intCast(@min(@divTrunc(t - now, 1000) + 1, std.math.maxInt(i32))));
     return pressed;
 }
 
-/// When each bubble buds out of the grip, as a share of the growing: the line first, undo and
-/// redo after it, then export, then the tab.
-const bud_delays = [5]f32{ 0.12, 0, 0.12, 0.22, 0.3 };
+/// When each bubble buds out of the grip, as a share of the growing: the line first, undo, play and
+/// redo after it, then export, then the tab (as `phys`: undo, line, redo, export, play).
+const bud_delays = [6]f32{ 0.12, 0, 0.12, 0.22, 0.06, 0.3 };
 
 /// macOS's trim yellow.
 const yellow: dvui.Color = .{ .r = 0xF5, .g = 0xC0, .b = 0x2E };
@@ -496,6 +567,13 @@ const yellow: dvui.Color = .{ .r = 0xF5, .g = 0xC0, .b = 0x2E };
 /// the stop the document goes to.
 fn dragWindow(win: *rules.Trim, grip: rules.Trim.Grip, stop: usize, min_from: usize) usize {
     return win.drag(grip, @max(stop, if (grip == .to) min_from + 1 else min_from));
+}
+
+/// How long play waits at stop `at` before going on to the next, in ms.
+fn playGap(pace: ?Pace, doc: sdk.DocHandle, line: sdk.Plugin.HistoryLine, at: usize) u32 {
+    if (at >= line.entries.len) return play_step_ms;
+    const ms = if (pace) |pc| pc.gapFn(pc.ctx, doc, stopId(line, at), stopId(line, at + 1)) orelse play_step_ms else play_step_ms;
+    return @max(play_least_ms, ms);
 }
 
 /// The export window over `r` (physical: the strip and the line under it): the rest dimmed, a
