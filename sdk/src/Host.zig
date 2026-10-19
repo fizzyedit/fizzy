@@ -2207,6 +2207,9 @@ pub const PendingCall = struct {
     owner: *Plugin,
     /// Who waits. Kept only while someone does (a call nobody waits for keeps nothing).
     sink: CallSink,
+    /// Who called, as `acted` said when the command deferred: `finishCall` acts as them while the
+    /// waiter hears the answer, so a deferred command keeps its caller's author unasked.
+    acting: Acting = .{},
 };
 
 /// Who hears a later answer (`callCommandAwaiting`): `done` is called once, on the UI thread, with
@@ -2408,7 +2411,7 @@ fn callResolved(self: *Host, c: Command, args: []const u8, results: std.mem.Allo
     // Nobody waits: started, with nothing kept for an answer nobody hears (`callWanted` is false).
     const s = sink orelse return .{ .later = ticket };
     // Out of memory: answered now as failed, rather than owed to a waiter that never hears.
-    self.calls_pending.append(self.allocator, .{ .ticket = ticket, .owner = owner, .sink = s }) catch
+    self.calls_pending.append(self.allocator, .{ .ticket = ticket, .owner = owner, .sink = s, .acting = self.acted() }) catch
         return .{ .now = .{ .failed = "out of memory" } };
     return .{ .later = ticket };
 }
@@ -2438,6 +2441,8 @@ pub fn finishCall(self: *Host, ticket: u32, outcome: CommandOutcome) void {
     for (self.calls_pending.items, 0..) |p, i| {
         if (p.ticket != ticket) continue;
         _ = self.calls_pending.swapRemove(i);
+        const outer = self.actAgain(p.acting);
+        defer self.endAct(outer);
         p.sink.done(p.sink.ctx, outcome);
         return;
     }
@@ -3928,9 +3933,12 @@ const LaterFixture = struct {
         count: u32 = 0,
         result: ?[]const u8 = null,
         failed: ?[]const u8 = null,
+        host: ?*Host = null,
+        who: ?Author = null,
         fn done(ctx: *anyopaque, outcome: CommandOutcome) void {
             const self: *Heard = @ptrCast(@alignCast(ctx));
             self.count += 1;
+            if (self.host) |h| self.who = h.author();
             switch (outcome) {
                 .ok => |r| self.result = r,
                 .failed => |m| self.failed = m,
@@ -3983,6 +3991,30 @@ test "a command answering later: its waiter hears it once, a caller that cannot 
     try testing.expectEqual(@as(u32, 1), owed.count);
     try testing.expect(owed.failed != null);
     try testing.expectEqual(@as(usize, 0), host.calls_pending.items.len);
+}
+
+test "a command answering later is finished as the author who called it" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var fixture: LaterFixture = .{};
+    var plugin = Plugin{ .state = &fixture, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.slow", .owner = &plugin, .title = "Slow", .runWith = LaterFixture.start });
+    var results: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer results.deinit();
+
+    var heard: LaterFixture.Heard = .{ .host = &host };
+    const outer = host.act(.{ .kind = .agent, .plugin = "agent", .session = 7, .label = "Claude" });
+    _ = host.callCommandAwaiting("t.slow", "", results.allocator(), .{ .ctx = &heard, .done = LaterFixture.Heard.done });
+    host.endAct(outer);
+
+    // A later frame: nobody acts now, yet the answer is the caller's.
+    try testing.expectEqual(Author.Kind.unattributed, host.author().kind);
+    host.finishCall(fixture.ticket, .{ .ok = null });
+    try testing.expectEqual(@as(u32, 1), heard.count);
+    try testing.expectEqual(Author.Kind.agent, heard.who.?.kind);
+    try testing.expectEqual(@as(u32, 7), heard.who.?.session);
+    try testing.expectEqual(Author.Kind.unattributed, host.author().kind);
 }
 
 const NestedFixture = struct {
