@@ -88,12 +88,13 @@ var keyed: ?dvui.Id = null;
 /// the app's, the window hides and the floating window is there again. Let go over the desktop, the
 /// window grows to the floating window's size (`Grow`) and is its window from then (`torn`). Let go
 /// by the OS's move over the main window's content, it is the floating window there again, dvui's
-/// header where its title bar was (`beforeFrame`, `closing`). One window all the way: a borderless card that grew and
-/// then gave way to a window opened for it jumped as one replaced the other (the user). Only one
-/// that can close (`open_flag`, `named`): a window's close clears it. dvui says nothing of a drag,
-/// so it is read from what dvui shows: the floating window that has the mouse, its rect moving
-/// while its size stays — moved by its header, not resized from an edge. Over another of the app's
-/// windows the held pointer already takes it into that window (`SDLBackend.heldPoint`).
+/// header where its title bar was, the window fading out over it (`beforeFrame`, `closing`). One
+/// window all the way: a borderless card that grew and then gave way to a window opened for it
+/// jumped as one replaced the other (the user). Only one that can close (`open_flag`, `named`): a
+/// window's close clears it. dvui says nothing of a drag, so it is read from what dvui shows: the
+/// floating window that has the mouse, its rect moving while its size stays — moved by its header,
+/// not resized from an edge. Over another of the app's windows the held pointer already takes it
+/// into that window (`SDLBackend.heldPoint`).
 const Tear = struct {
     id: dvui.Id,
     /// Where on it the pointer took it, from its top left (physical, at its size).
@@ -141,13 +142,15 @@ const Grow = struct {
 };
 var grow: ?Grow = null;
 
-/// Torn-off windows gone back into the main window (`beforeFrame`), closed the frame after: the
-/// frame that goes back in draws the floating window in the main window where its window was, and
-/// its window, over it, shows its last picture till then. Closed at once, neither showed it for a
-/// frame; shrunk back through a card of its last picture, its title bar's place became dvui's
-/// header's as it went and the window flashed a title, and only went back in once all of it was
-/// over the main window (the user).
-var closing: [max_outs]?struct { viewport: *viewports.Viewport, target: ?dvui.Texture.Target } = @splat(null);
+/// Torn-off windows gone back into the main window (`beforeFrame`), fading out over it: the frame
+/// that goes back in draws the floating window in the main window where its window was, and its
+/// window, over it with its last picture, the pointer passing through it, fades out over
+/// `back_ns`, its title bar into dvui's header, its content still. Closed at once, the window
+/// snapped into the floating window (the user); closed before the main window had drawn it,
+/// neither showed it for a frame; shrunk back through a card of its last picture, its title bar's
+/// place became dvui's header's as it went and the window flashed a title.
+var closing: [max_outs]?struct { viewport: *viewports.Viewport, target: ?dvui.Texture.Target, start_ns: i128 } = @splat(null);
+const back_ns: i128 = 150 * std.time.ns_per_ms;
 
 /// How long the card takes to grow into its window, or a window to shrink back into the main one,
 /// and the floating window to shrink into the card as it goes past the app's windows.
@@ -227,9 +230,15 @@ fn physical(r: dvui.Rect, s: f32) viewports.Rect {
 pub fn beforeFrame() void {
     named_n = 0;
     closable_n = 0;
-    // The windows gone back in last frame (`closing`): the main window has drawn their floating
-    // windows by now.
+    // The windows gone back in (`closing`), fading out over the floating windows the main window
+    // draws under them, then closed.
     for (&closing) |*c| if (c.*) |w| {
+        const k = ease(dvui.currentWindow().frame_time_ns - w.start_ns, back_ns);
+        if (k < 1) {
+            viewports.fade(w.viewport, 1 - k);
+            dvui.refresh(null, @src(), null);
+            continue;
+        }
         viewports.close(w.viewport);
         if (w.target) |t| t.destroyLater();
         c.* = null;
@@ -259,11 +268,15 @@ pub fn beforeFrame() void {
             for (&torn_list) |*ts| if (ts.*) |tt| if (tt.id == o.id) {
                 ts.* = null;
             };
-            // Its window closed next frame, over the floating window this frame draws (`closing`).
+            // Its window fading out over the floating window this frame draws (`closing`), the
+            // pointer through it to the floating window under it.
             const free = for (&closing) |*cl| {
                 if (cl.* == null) break cl;
             } else null;
-            if (free) |cl| cl.* = .{ .viewport = o.viewport, .target = o.target } else {
+            if (free) |cl| {
+                viewports.held(o.viewport, true);
+                cl.* = .{ .viewport = o.viewport, .target = o.target, .start_ns = dvui.currentWindow().frame_time_ns };
+            } else {
                 viewports.close(o.viewport);
                 if (o.target) |t| t.destroyLater();
             }
