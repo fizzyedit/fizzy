@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
 const auto_update = @import("auto_update.zig");
 const update_install = @import("update_install.zig");
 const restart = @import("../restart.zig");
@@ -218,20 +219,9 @@ fn displayUpdateToast(id: dvui.Id) !void {
     });
     defer animator.deinit();
 
-    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .background = true,
-        .corners = dvui.CornerRect.all(1000),
-        .padding = .{ .x = 16, .y = 8, .w = 8, .h = 8 },
-        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
-        .box_shadow = .{
-            .color = .black,
-            .offset = .{ .x = -2.0, .y = 2.0 },
-            .fade = 6.0,
-            .alpha = 0.25,
-            .corners = dvui.CornerRect.all(1000),
-        },
-    });
+    var box = dvui.box(@src(), .{ .dir = .horizontal }, core.dialogs.toastOptions(0));
     defer box.deinit();
+    core.dialogs.toastSurface(box.data(), animator.val orelse 1);
 
     dvui.labelNoFmt(@src(), "Update available!", .{}, .{
         .gravity_y = 0.5,
@@ -282,7 +272,7 @@ pub fn kickInstall() void {
     };
     _ = update_install.startOrGet(gpa, dvui.io) catch |err| {
         dvui.log.err("update install kick failed: {any}", .{err});
-        dvui.toast(@src(), .{ .message = "Update failed to start — see logs." });
+        core.dialogs.toast(@src(), .{ .message = "Update failed to start — see logs." });
         return;
     };
     armProgressToast();
@@ -320,20 +310,9 @@ fn displayProgressToast(id: dvui.Id) !void {
     });
     defer animator.deinit();
 
-    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .background = true,
-        .corners = dvui.CornerRect.all(1000),
-        .padding = .{ .x = 16, .y = 8, .w = 8, .h = 8 },
-        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
-        .box_shadow = .{
-            .color = .black,
-            .offset = .{ .x = -2.0, .y = 2.0 },
-            .fade = 6.0,
-            .alpha = 0.25,
-            .corners = dvui.CornerRect.all(1000),
-        },
-    });
+    var box = dvui.box(@src(), .{ .dir = .horizontal }, core.dialogs.toastOptions(0));
     defer box.deinit();
+    core.dialogs.toastSurface(box.data(), animator.val orelse 1);
 
     // Downloaded, and the restart into it called off (an unsaved document kept open): offered
     // again here, and in the app's own restart affordances; Velopack installs it on the next

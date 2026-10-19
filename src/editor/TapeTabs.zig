@@ -160,7 +160,7 @@ fn wait(self: *TapeTabs, editor: *Editor) void {
         const native = comptime @import("builtin").target.cpu.arch != .wasm32;
         if (native or failed or dvui.frameTimeNS() - since > wait_limit_ns) {
             dvui.log.warn("tape: it needs the plugin '{s}', which is not loaded", .{o});
-            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(dvui.currentWindow().arena(), "This tape needs the {s} plugin", .{o}) catch "This tape needs a plugin that is not loaded" });
+            core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(dvui.currentWindow().arena(), "This tape needs the {s} plugin", .{o}) catch "This tape needs a plugin that is not loaded" });
             w.deinit(gpa);
             self.waiting = null;
             return;

@@ -25,4 +25,6 @@ test {
     // `blitData` is pixi's, not fizzy's: nothing else here compiles it, and it speaks in dvui
     // colours.
     _ = @import("gfx/image.zig");
+    // A toast's surface follows the window's material, as every floating surface's does.
+    _ = @import("dialogs.zig");
 }

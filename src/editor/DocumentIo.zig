@@ -217,7 +217,7 @@ const Load = struct {
             // Its placeholder says so; only an open with none needs a toast.
             const why = std.fmt.allocPrint(editor.app.arena.allocator(), "Reading it failed ({t}).", .{err}) catch "Reading it failed.";
             if (!editor.openings.fail(editor, load.path, why)) {
-                dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+                core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
                     editor.app.arena.allocator(),
                     "Could not open {s}.",
                     .{std.fs.path.basename(load.path)},
@@ -421,7 +421,7 @@ const Save = struct {
                 // and the next save from the user goes through regardless.
                 io.force_next.put(editor.app.gpa, job.doc_id, {}) catch {};
                 dvui.log.warn("{s} changed since it was opened", .{job.path});
-                dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+                core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
                     editor.app.arena.allocator(),
                     "{s} changed since you opened it. Save again to overwrite it, or Save As to keep both.",
                     .{std.fs.path.basename(job.path)},
@@ -478,7 +478,7 @@ const Save = struct {
 };
 
 fn couldNotSave(editor: *Editor, path: []const u8) void {
-    dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
         editor.app.arena.allocator(),
         "Could not save {s}.",
         .{std.fs.path.basename(path)},
