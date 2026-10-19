@@ -265,13 +265,13 @@ fn mayStart(self: *Demo) bool {
 /// Whether a demo can start now (`.started`), and if not why, told to the person as a toast too.
 pub fn startable(self: *Demo) sdk.services.demos.Api.Play {
     if (self.live.playing()) {
-        dvui.toast(@src(), .{ .message = "Something is driving fizzy right now — the demo can start once it has finished." });
+        core.dialogs.toast(@src(), .{ .message = "Something is driving fizzy right now — the demo can start once it has finished." });
         return .busy;
     }
     for (self.editor.app.open_files.values()) |doc| {
         if (!doc.owner.isDirty(doc)) continue;
         if (std.mem.startsWith(u8, doc.owner.documentPath(doc), "demo://")) continue;
-        dvui.toast(@src(), .{ .message = "Save or close your changes first — a demo replaces the open files while it plays." });
+        core.dialogs.toast(@src(), .{ .message = "Save or close your changes first — a demo replaces the open files while it plays." });
         return .unsaved;
     }
     return .started;
@@ -459,7 +459,7 @@ fn step(ctx: *anyopaque, st: automation.Tape.Step, ms: u32) void {
     // The document no longer is what the step was made on: every step after would miss too, so
     // the tape stops where the viewer can see it went wrong.
     self.player.pause();
-    dvui.toast(@src(), .{ .message = "This tape's steps no longer fit its document: it stopped here." });
+    core.dialogs.toast(@src(), .{ .message = "This tape's steps no longer fit its document: it stopped here." });
 }
 
 fn from(ctx: *anyopaque) *Demo {

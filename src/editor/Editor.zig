@@ -4576,7 +4576,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 editor.session_frames += 1;
                 dvui.refresh(null, @src(), null);
                 if (KeptDocuments.recoveredFromCheckpoint())
-                    dvui.toast(@src(), .{ .message = "fizzy did not quit cleanly last time. Its unsaved changes are back." });
+                    core.dialogs.toast(@src(), .{ .message = "fizzy did not quit cleanly last time. Its unsaved changes are back." });
             }
         }
     }
@@ -5563,7 +5563,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     // Recents after a sign-out, it does not.
     const on_mount = fizzy.core.paths.isMountPath(path);
     if (on_mount and !editor.app.file_table.isMounted(path)) {
-        dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+        core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
             editor.app.arena.allocator(),
             "{s} is not connected. Sign in or open it first.",
             .{path[0..(fizzy.core.paths.mountPrefixLen(path) orelse path.len)]},
@@ -5576,14 +5576,14 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) if (!on_mount) {
         const arena = editor.app.arena.allocator();
         const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch |err| {
-            dvui.toast(@src(), .{ .message = if (err == error.FileNotFound)
+            core.dialogs.toast(@src(), .{ .message = if (err == error.FileNotFound)
                 std.fmt.allocPrint(arena, "{s} can't be found.", .{path}) catch "That folder can't be found."
             else
                 std.fmt.allocPrint(arena, "{s} can't be opened ({t}).", .{ path, err }) catch "That folder can't be opened." });
             return err;
         };
         if (st.kind != .directory) {
-            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(arena, "{s} is not a folder.", .{path}) catch "That is not a folder." });
+            core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(arena, "{s} is not a folder.", .{path}) catch "That is not a folder." });
             return error.NotADirectory;
         }
     };
@@ -6062,7 +6062,7 @@ fn driveHandover(editor: *Editor) void {
                 defer editor.app.gpa.free(dir);
                 SettingsWatcher.emptyStateFolder(dvui.io, dir);
             } else |_| {}
-            dvui.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
+            core.dialogs.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
         },
     }
 }
@@ -6366,7 +6366,7 @@ pub fn processLoadingJobs(editor: *Editor) void {
                 dvui.log.err("Failed to open file: {s}", .{job.path});
                 // Its placeholder says so; only an open with none (a plugin's, say) needs a toast.
                 if (!editor.openings.fail(editor, job.path, "Its plugin could not read it. See the Output panel.")) {
-                    dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+                    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
                         editor.app.arena.allocator(),
                         "Could not open {s}.",
                         .{std.fs.path.basename(job.path)},
@@ -6638,7 +6638,7 @@ fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
         error.SaveInProgress => {},
         error.OwnerCannotSaveToMount => {
             dvui.log.err("{s} cannot be saved to a mounted drive by its editor", .{doc.owner.documentPath(doc)});
-            dvui.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." });
+            core.dialogs.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." });
         },
         else => return err,
     };
@@ -6826,7 +6826,7 @@ pub fn processPendingSaveAs(editor: *Editor) void {
     // untitled document) closes once it has landed clean.
     editor.doc_io.save(doc, path) catch |err| {
         switch (err) {
-            error.OwnerCannotSaveToMount => dvui.toast(@src(), .{ .message = "This editor cannot save to another file." }),
+            error.OwnerCannotSaveToMount => core.dialogs.toast(@src(), .{ .message = "This editor cannot save to another file." }),
             else => dvui.log.err("Save As: {any}", .{err}),
         }
         return;

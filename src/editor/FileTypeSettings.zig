@@ -480,7 +480,7 @@ fn drawReopenAction(row: Row, ri: usize) void {
         const reopened, const skipped = editor.reopenDocsUnderCurrentOwner(stale);
         if (skipped > 0) {
             // Unsaved work is never closed to satisfy a preference — say which files were left.
-            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+            core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
                 arena,
                 "Reopened {d}; left {d} with unsaved changes alone.",
                 .{ reopened, skipped },

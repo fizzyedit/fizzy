@@ -33,6 +33,7 @@ const KeptDocuments = @This();
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const core = @import("core");
 const Editor = @import("Editor.zig");
 const sdk = Editor.sdk;
 const emptyStateFolder = @import("app").watch.SettingsWatcher.emptyStateFolder;
@@ -536,5 +537,5 @@ fn recover(editor: *Editor, d: Kept) void {
         return;
     };
     dvui.log.warn("reload: the unsaved contents of {s} are in {s}", .{ path, out });
-    dvui.toast(@src(), .{ .message = std.fmt.allocPrint(editor.app.arena.allocator(), "Unsaved changes to {s} were kept in {s}", .{ std.fs.path.basename(path), out }) catch "Unsaved changes were kept in fizzy's recovered folder." });
+    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(editor.app.arena.allocator(), "Unsaved changes to {s} were kept in {s}", .{ std.fs.path.basename(path), out }) catch "Unsaved changes were kept in fizzy's recovered folder." });
 }

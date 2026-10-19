@@ -1399,6 +1399,17 @@ pub fn spinner(src: std.builtin.SourceLocation, spinner_opts: SpinnerOptions, op
     path.build().stroke(.{ .thickness = 3.0 * rs.s, .color = .{ .color = options.color(.text) } });
 }
 
+/// A toast: `dvui.toast` with fizzy's look (`toastDisplay`) in place of dvui's, which paints a
+/// plain theme-coloured label whatever the window's material. Every toast the app raises goes
+/// through here; a toast that names its own `displayFn` keeps it.
+pub fn toast(src: std.builtin.SourceLocation, opts: dvui.ToastOptions) void {
+    var o = opts;
+    if (o.displayFn == @as(dvui.Dialog.DisplayFn, dvui.toastDisplay)) o.displayFn = toastDisplay;
+    dvui.toast(src, o);
+}
+
+/// A toast's message on a floating surface of the window's material (`toastSurface`), fading
+/// in, and out once its timer runs down.
 pub fn toastDisplay(id: dvui.Id) !void {
     const message = dvui.dataGetSlice(null, id, "_message", []u8) orelse {
         // The `_message` slice is dvui frame-data: it is freed after any frame where
@@ -1411,30 +1422,21 @@ pub fn toastDisplay(id: dvui.Id) !void {
         return;
     };
 
-    var box = dvui.box(@src(), .{}, .{
-        .id_extra = id.asUsize(),
-        .background = true,
-        .corners = dvui.CornerRect.all(1000),
-        .margin = .all(2),
-        .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
-        .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) },
-        .box_shadow = .{
-            .color = .black,
-            .offset = .{ .x = -2.0, .y = 2.0 },
-            .fade = 6.0,
-            .alpha = 0.25,
-            .corners = dvui.CornerRect.all(10000),
-        },
-        .gravity_x = 0.5,
-    });
-    defer box.deinit();
-
     var animator = dvui.animate(@src(), .{ .kind = .alpha, .duration = motion.duration(400_000) }, .{ .id_extra = id.asUsize(), .gravity_x = 0.5 });
     defer animator.deinit();
 
-    dvui.labelNoFmt(@src(), message, .{}, .{
-        .gravity_x = 0.5,
-    });
+    {
+        // Its own scope: the box gives the animator its size as it ends, which must come before
+        // the size is taken back below once the toast is gone.
+        var box = dvui.box(@src(), .{}, toastOptions(id.asUsize()));
+        defer box.deinit();
+        toastSurface(box.data(), animator.val orelse 1);
+
+        var label_wd: dvui.WidgetData = undefined;
+        dvui.labelNoFmt(@src(), message, .{}, .{ .gravity_x = 0.5, .data_out = &label_wd });
+        // Read out as it arrives, as dvui's own toast is.
+        if (label_wd.accesskit_node()) |node| dvui.AccessKit.nodeSetLive(node, dvui.AccessKit.Live.polite);
+    }
 
     if (dvui.timerDone(id)) {
         animator.startEnd();
@@ -1442,7 +1444,37 @@ pub fn toastDisplay(id: dvui.Id) !void {
 
     if (animator.end()) {
         dvui.toastRemove(id);
+        // Its column needs no room for it next frame.
+        animator.data().min_size = .{};
     }
+}
+
+/// The options of the box a toast draws its contents in: no background or shadow of its own —
+/// `toastSurface` lays the surface under it — and a toast's padding, its contents kept clear of
+/// the surface's corners.
+pub fn toastOptions(id_extra: usize) dvui.Options {
+    const inset = cornerInset(tooltipCorners().tl.radius());
+    return .{
+        .id_extra = id_extra,
+        .background = false,
+        .border = .all(0),
+        .corners = tooltipCorners(),
+        // Room for the shadow round it: the window toasts are shown in is cut to what it holds.
+        .margin = .all(surfaceShadow().fade + 2),
+        .padding = .{ .x = 12 + inset, .y = 6 + inset, .w = 12 + inset, .h = 6 + inset },
+        .gravity_x = 0.5,
+    };
+}
+
+/// The surface under a toast, from its box's widget data (`toastOptions`): the window's material,
+/// as every floating surface is — the frost or Liquid Glass at the dialog style (`dialogFrost`),
+/// or with the blur off (`transparent`, `none`) the plain `dialogFill` — and the floating
+/// surfaces' shadow. `fade` (0…1) is the toast's own alpha animation: the plain paint is faded
+/// by that alpha already, and the frost, drawn outside it, forms by it instead. Call after the
+/// box, before its contents.
+pub fn toastSurface(wd: *dvui.WidgetData, fade: f32) void {
+    const brs = wd.borderRectScale();
+    tooltipGlass(wd, brs.r, brs.s, std.math.clamp(fade, 0, 1), 1);
 }
 
 pub const BubbleSpinnerInit = struct {
@@ -1831,4 +1863,54 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
     if (animator.end()) {
         dvui.toastRemove(id);
     }
+}
+
+test "a toast goes through fizzy's display, unless it names its own" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+    defer t.deinit();
+    const fns = struct {
+        var own_drawn = false;
+        fn own(id: dvui.Id) !void {
+            own_drawn = true;
+            dvui.toastRemove(id);
+        }
+        fn frame() !dvui.App.Result {
+            return .ok;
+        }
+    };
+    _ = try dvui.testing.step(fns.frame);
+    toast(@src(), .{ .message = "fizzy's", .window = dvui.currentWindow() });
+    toast(@src(), .{ .message = "its own", .window = dvui.currentWindow(), .id_extra = 1, .displayFn = fns.own });
+    var it = dvui.toastsFor(null).?;
+    try std.testing.expectEqual(@as(dvui.Dialog.DisplayFn, toastDisplay), it.next().?.display);
+    try std.testing.expectEqual(@as(dvui.Dialog.DisplayFn, fns.own), it.next().?.display);
+}
+
+test "a toast's surface is the window's material: frosted with the blur on, filled with it off" {
+    const fns = struct {
+        var blur: f32 = 0;
+        var frosted = false;
+        fn frame() !dvui.App.Result {
+            publishStyle(.{ .blur = blur, .opacity = 0.5 });
+            var box = dvui.box(@src(), .{}, toastOptions(0));
+            defer box.deinit();
+            toastSurface(box.data(), 1);
+            frosted = dvui.dataGetPtr(null, box.data().id, "_frost", widgets.BlurBackdrop) != null;
+            dvui.labelNoFmt(@src(), "toast", .{}, .{});
+            return .ok;
+        }
+        /// A window of its own each, so no frost is left over from the other's frame.
+        fn drawnAt(b: f32) !bool {
+            var t = try dvui.testing.init(.{ .window_size = .{ .w = 300, .h = 200 } });
+            defer t.deinit();
+            blur = b;
+            _ = try dvui.testing.step(frame);
+            return frosted;
+        }
+    };
+    // The `frost` material's blur: the surface asks for a frost behind it.
+    try std.testing.expect(try fns.drawnAt(20));
+    // `transparent` and `none` have no blur: a plain fill, and no frost (`LiquidField` is not
+    // there to draw clear glass in the testing backend).
+    try std.testing.expect(!try fns.drawnAt(0));
 }
