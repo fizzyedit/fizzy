@@ -770,6 +770,12 @@ fn drawToggle(value: *bool, name: []const u8) void {
 
 fn drawWindowMaterial() void {
     const editor = fizzy.editor();
+    // `FIZZY_GLASS` overrides the setting for this run: say so, rather than offer a choice that
+    // does nothing.
+    if (fizzy.Entry.materialOverride()) |kind| {
+        dvui.label(@src(), "{s}, set by FIZZY_GLASS", .{materialName(kind)}, .{ .gravity_x = 1.0 });
+        return;
+    }
     const asked = editor.app.settings.window_material;
     const shown = fizzy.core.material.get().kind;
     var dropdown: core.widgets.DropdownWidget = undefined;

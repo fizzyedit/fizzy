@@ -196,6 +196,15 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     frames = 0;
     while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
     try std.testing.expectEqual(fizzy.core.material.Kind.frost, settings.window_material);
+    // Written while the tape has it frosted, the file says what the person chose.
+    app.editor.flushSettings();
+    {
+        const path = try std.fs.path.join(gpa, &.{ app.editor.app.config_folder, "settings.zon" });
+        defer gpa.free(path);
+        const written = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(1 << 20));
+        defer gpa.free(written);
+        try std.testing.expect(std.mem.indexOf(u8, written, ".window_material = .blur") != null);
+    }
     p.seek(0);
     frames = 0;
     while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);

@@ -3558,7 +3558,11 @@ fn activelyDrawing(editor: *const Editor) bool {
 /// overlaid). External hand-edits are reconciled live by `SettingsWatcher` (R11/R12) before the
 /// next autosave can clobber them. Caller-owned; free with `gpa`.
 fn composeSettingsText(editor: *Editor, gpa: std.mem.Allocator, settings_path: []const u8, overlay: []const SettingsPluginsZon.Entry) ![]u8 {
-    const fizzy_text = try Settings.serialize(&editor.app.settings, gpa);
+    // The person's own values where a demo has changed one: whatever writes the file while a
+    // tape plays (a plugin's flags, a file type's owner) writes theirs, not the tape's.
+    var own = editor.app.settings;
+    editor.demo.personsSettings(&own);
+    const fizzy_text = try Settings.serialize(&own, gpa);
     defer gpa.free(fizzy_text);
 
     const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
@@ -3759,6 +3763,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_glass = parsed.native_glass;
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
+    editor.app.settings.window_material = parsed.window_material;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
     editor.app.settings.kept_history_gb = parsed.kept_history_gb;

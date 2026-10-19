@@ -264,21 +264,25 @@ const WindowMaterial = sdk.Command.Params(struct {
 
 /// The next material, round from Liquid Glass back to opaque, as a row or a shortcut runs it.
 fn cmdWindowMaterialStep(state: *anyopaque) anyerror!void {
-    const settings = &editorFromState(state).app.settings;
-    const Kind = fizzy.core.material.Kind;
-    const next = (@backingInt(settings.window_material) + 1) % std.enums.values(Kind).len;
-    setWindowMaterial(editorFromState(state), @fromBackingInt(@intCast(next)));
+    _ = stepWindowMaterial(editorFromState(state));
 }
 
-/// The window's material (`Settings.window_material`), as the Window settings set it. Answers the
-/// kind asked and the kind this platform shows for it.
+/// The window's material (`Settings.window_material`), as the Window settings set it, or the next
+/// one with no `kind`. Answers the kind it set.
 fn cmdWindowMaterial(state: *anyopaque, args: WindowMaterial.Args, call: *sdk.Command.Call) anyerror!void {
     const editor = editorFromState(state);
-    if (args.kind.len == 0) return cmdWindowMaterialStep(state);
+    if (args.kind.len == 0) return call.returns(.{ .kind = stepWindowMaterial(editor) });
     const kind = std.meta.stringToEnum(fizzy.core.material.Kind, args.kind) orelse
         return call.fail("not a material: {s} (none, transparent, blur, frost or liquid)", .{args.kind});
     setWindowMaterial(editor, kind);
     try call.returns(.{ .kind = kind });
+}
+
+fn stepWindowMaterial(editor: *Editor) fizzy.core.material.Kind {
+    const Kind = fizzy.core.material.Kind;
+    const next: Kind = @fromBackingInt(@intCast((@backingInt(editor.app.settings.window_material) + 1) % std.enums.values(Kind).len));
+    setWindowMaterial(editor, next);
+    return next;
 }
 
 fn setWindowMaterial(editor: *Editor, kind: fizzy.core.material.Kind) void {

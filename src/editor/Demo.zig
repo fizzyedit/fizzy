@@ -621,6 +621,12 @@ fn settingsBlob(gpa: std.mem.Allocator, arena: std.mem.Allocator, schema: *const
     return out.toOwnedSlice();
 }
 
+/// `s` with the person's own values where the demo has set them aside: what the settings file is
+/// written with while a demo plays (`Editor.composeSettingsText`).
+pub fn personsSettings(self: *const Demo, s: *Editor.Settings) void {
+    if (self.material_saved) |m| s.window_material = m;
+}
+
 fn saveSettings(self: *Demo) void {
     const editor = self.editor;
     const gpa = editor.app.gpa;

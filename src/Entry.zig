@@ -526,6 +526,11 @@ fn materialOffered() fizzy.core.material.Kinds {
 /// The kind of window material asked for: `FIZZY_GLASS` where it names one, else the setting
 /// (`Settings.window_material`).
 fn materialAsked() fizzy.core.material.Kind {
+    return materialOverride() orelse fizzy.editor().app.settings.window_material;
+}
+
+/// The kind `FIZZY_GLASS` names, which overrides the setting; null where it names none.
+pub fn materialOverride() ?fizzy.core.material.Kind {
     const Env = struct {
         var read = false;
         var kind: ?fizzy.core.material.Kind = null;
@@ -535,7 +540,7 @@ fn materialAsked() fizzy.core.material.Kind {
         const env = if (comptime builtin.target.cpu.arch == .wasm32) null else std.c.getenv("FIZZY_GLASS");
         if (env) |v| Env.kind = std.meta.stringToEnum(fizzy.core.material.Kind, std.mem.span(v));
     }
-    return Env.kind orelse fizzy.editor().app.settings.window_material;
+    return Env.kind;
 }
 
 /// One run of the app's frame.
