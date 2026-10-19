@@ -55,8 +55,9 @@ While a demo plays:
   corner glass a document's history rests in (`app/dome.zig`, `Corner`), cut by the window's
   outline and marked with a tape, filling with liquid as the demo plays: a new chapter splashes
   it, a seek knocks it. The pointer held on the corner (or a press on it) grows the bar up out of
-  it, right-aligned over the corner; it goes back soon after the pointer leaves it. Paused or
-  ended it stays out, unless its chevron tab sent it in.
+  it to the middle of the window's bottom, above any pane's history vial or bar it would cover;
+  it goes back soon after the pointer leaves it. Paused or ended it stays out, unless its chevron
+  tab sent it in.
 - **Nothing is persisted.** The stage sets the user's session aside when a demo loads (project
   folder, open documents, layout as on disk, plugin settings) and gives it back when it is
   stopped. A demo refuses to start over unsaved changes. Its files live in memory

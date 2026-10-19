@@ -623,6 +623,14 @@ const CornerState = struct {
     lift: f32 = 0,
 };
 
+/// Microseconds, as written, the bar takes to grow out of its corner and to go back: a little
+/// brisker than a history bar's (`dome.growNs`), on the same curves.
+const bar_grow_us: i32 = 450_000;
+/// How far along its own growing (0 to 1, `dome.emerge`'s) a bubble's icon starts to show, and is
+/// all there: hidden while the bubbles are still one glass, fading in once they have parted.
+const icon_in_from: f32 = 0.45;
+const icon_in_to: f32 = 0.8;
+
 /// The space between the tape's bar and a bar it stacks above.
 const bar_stack_gap: f32 = 10;
 /// How quickly the bar moves up to clear a bar out under it, and back down: the time constant of
@@ -634,15 +642,14 @@ const lift_ms: f32 = 120;
 /// history rests in (`dome.Corner`), cut by the window's outline rather than a card's and marked
 /// with a tape: a tape plays over the whole app, not one document. Its liquid fills as the tape
 /// plays (`Liquid`: a new chapter splashes it, a seek knocks it). The pointer held on it, or a
-/// press, grows the bar up out of it, right-aligned over the corner, its bubbles budding out of
-/// the corner and its liquid pouring into the scrubber's line; going back, the bubbles change back
-/// into the corner and the liquid pours back in, as the history bar does into its vial. The pointer
-/// on the bar keeps it; leaving, it goes back soon. Paused or ended it stays out, unless its tab
-/// sent it in (`Transport.tucked`). A document's history bar out under it (along the bottom of a
-/// pane in the window's corner) it stacks above (`dome.barsOut`), easing up to clear it and back
-/// down as it goes, so both show at once. Returns how far down the window captions may come: above
-/// the bar, as much as it is out. Records its parts' rects on `player.transport` for
-/// `Player.frame` to hit-test.
+/// press, grows the bar out of it to the middle of the window's bottom, its bubbles budding out of
+/// the corner, their icons riding on them, and its liquid pouring into the scrubber's line; going
+/// back, the bubbles change back into the corner and the liquid pours back in, as the history bar
+/// does into its vial. The pointer on the bar keeps it; leaving, it goes back soon. Paused or ended
+/// it stays out, unless its tab sent it in (`Transport.tucked`). A pane's history vial or history
+/// bar under it it stacks above (`dome.barsOut`), easing up to clear it and back down as it goes,
+/// so both show at once. Returns how far down the window captions may come: above the bar, as much
+/// as it is out. Records its parts' rects on `player.transport` for `Player.frame` to hit-test.
 fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const tr = &player.transport;
     // Wall time: it answers the viewer's pointer, not the demo. (A playing player asks for every
@@ -657,9 +664,9 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         .icon_name = "demo_tape",
     };
     const box = corner.box(s);
-    // The bar over the corner, right-aligned to it, clear of the corner's glass.
+    // The bar along the bottom of the window, in its middle, above the corner's glass.
     const full_w = @min(560, win.w - 24);
-    const place: dvui.Rect = .{ .x = win.x + win.w - 12 - full_w, .y = win.y + win.h - dome.corner_radius - 8 - bar_h, .w = full_w, .h = bar_h };
+    const place: dvui.Rect = .{ .x = win.x + win.w / 2 - full_w / 2, .y = win.y + win.h - dome.corner_radius - 8 - bar_h, .w = full_w, .h = bar_h };
 
     const st = dvui.dataGetPtrDefault(null, dvui.currentWindow().data().id, "_demo_corner", CornerState, .{});
     if (st.tape != @intFromPtr(tape)) st.* = .{ .tape = @intFromPtr(tape) };
@@ -706,7 +713,7 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     st.at = played;
     st.chapter = chapter;
     st.liquid.setLevel(fill);
-    st.liquid.step(wall_ns, corner.point(), corner.radiusPx(s), corner.liquidDepth(s, st.liquid.shownLevel()));
+    st.liquid.step(wall_ns, corner.point());
     // A paused player asks for no frames of its own but while the corner lightens under a held
     // pointer, or its liquid moves.
     if (st.dwell.since != null or !st.liquid.settled()) dvui.refresh(null, @src(), null);
@@ -803,14 +810,35 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         // What the bubbles hold comes once they are most of the way out, and goes first.
         const prev_alpha = dvui.alpha(dome.contentAlpha(p));
         defer dvui.alphaSet(prev_alpha);
+        tr.track = barTrack(player, tape, bounds, pieces[@backingInt(Piece.track)], ink);
+    }
+    {
+        // Each icon on its bubble where the bubble is now, as big as it is, so it rides out of the
+        // corner with it and back in, rather than fading.
         const playing = player.state == .playing or (player.state == .seeking and player.after_seek == .play);
         const play_glyph: Glyph = if (playing) .pause else if (player.state == .ended) .replay else .play;
-        barIcon(bounds, pieces[@backingInt(Piece.prev)], .prev, ink.opacity(0.8));
-        barIcon(bounds, pieces[@backingInt(Piece.play)], play_glyph, ink);
-        barIcon(bounds, pieces[@backingInt(Piece.next)], .next, ink.opacity(0.8));
-        barIcon(bounds, pieces[@backingInt(Piece.close)], .close, ink.opacity(0.65));
-        dome.chevron(bounds, tab, ink.opacity(0.85));
-        tr.track = barTrack(player, tape, bounds, pieces[@backingInt(Piece.track)], ink);
+        const now_r = struct {
+            fn f(b: core.dialogs.Bubble) dvui.Rect {
+                return dvui.windowRectScale().rectFromPhysical(b.rect);
+            }
+        }.f;
+        // And fading with how far its bubble has come: gone by the time the bubbles run together
+        // going back, and there only once they have parted coming out.
+        const icon_alpha = struct {
+            fn f(pp: f32, i: usize) f32 {
+                const d = bud_delays[i];
+                const t = dome.smooth(std.math.clamp((pp - d) / (1 - d), 0, 1));
+                return dome.smooth((t - icon_in_from) / (icon_in_to - icon_in_from));
+            }
+        }.f;
+        const glyphs = [_]Glyph{ .prev, play_glyph, .next };
+        const inks = [_]f32{ 0.8, 1, 0.8 };
+        for ([_]Piece{ .prev, .play, .next }, glyphs, inks) |pc, g, k| {
+            const i = @backingInt(pc);
+            barIcon(bounds, now_r(bubbles[i]), g, ink.opacity(k * icon_alpha(p, i)));
+        }
+        barIcon(bounds, now_r(bubbles[@backingInt(Piece.close)]), .close, ink.opacity(0.65 * icon_alpha(p, @backingInt(Piece.close))));
+        dome.chevron(bounds, now_r(bubbles[5]), ink.opacity(0.85 * icon_alpha(p, 5)));
     }
 
     // The played part of the line: the corner's liquid, pouring out of it into the line as the bar
@@ -957,12 +985,11 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
 }
 
 /// The bar opening when `want` turns true and closing when it turns false — 0 shut to 1 open,
-/// linear in time over the dome's growing time (`dome.growNs`) at the user's speed, the curves
-/// being `dome.emerge`'s — kept on `tr` from frame to frame. Wall time (`now_ns`, `Player.wallNs`):
-/// it answers the viewer's pointer, not the demo. Turned round part way, it carries on from as
-/// open as it is.
+/// linear in time over `bar_grow_us` at the user's speed, the curves being `dome.pullFrom`'s —
+/// kept on `tr` from frame to frame. Wall time (`now_ns`, `Player.wallNs`): it answers the
+/// viewer's pointer, not the demo. Turned round part way, it carries on from as open as it is.
 fn barProgress(tr: *Player.Transport, now_ns: i128, want: bool) f32 {
-    const span: f64 = @floatFromInt(dome.growNs());
+    const span: f64 = @floatFromInt(@as(i128, motion.duration(bar_grow_us)) * std.time.ns_per_us);
     if (tr.since_ns == null or want != tr.wanted) {
         const was: f64 = if (tr.since_ns == null) 0 else tr.openness;
         const back: f64 = if (want) was * span else (1 - was) * span;

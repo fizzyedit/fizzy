@@ -234,7 +234,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     var reach = area;
     if (opts.edge) |y| reach.h = @max(reach.h, y - reach.y);
     const on_grip = opts.history and !core.dialogs.modalOverCurrent() and if (opts.corner) |c|
-        c.box(dvui.windowRectScale().s).contains(mouse)
+        c.hit(dvui.windowRectScale().s).contains(mouse)
     else
         reach.contains(mouse) and if (gripRect(area, dome.radius, opts.edge)) |g| dvui.windowRectScale().rectToPhysical(g.outsetAll(dome.reach)).contains(mouse) else false;
     self.tab = opts.history;
@@ -267,15 +267,13 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (self.grip_steps) |was| if (opts.steps > was) {
             self.stepped_at = now;
             self.slosh.knock(now, 0.35);
-            // Into a vial, the new step splashes the surface, as a drop landing would.
-            self.liquid.splashIn();
+            // Into a vial, the new step splashes the surface, as a drop landing would. Only into
+            // one: a liquid nothing steps would hold its splashes for when a vial came.
+            if (opts.corner != null) self.liquid.splashIn();
         };
         self.grip_steps = opts.steps;
         self.liquid.setLevel(fill);
-        if (opts.corner) |c| {
-            const s = dvui.windowRectScale().s;
-            self.liquid.step(now, c.point(), c.radiusPx(s), c.liquidDepth(s, self.liquid.shownLevel()));
-        }
+        if (opts.corner) |c| self.liquid.step(now, c.point());
         const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
         if (glow == 0) self.stepped_at = null;
         const in_use = on_grip or self.stepped_at != null or !self.slosh.settled(now);
@@ -291,6 +289,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
             .liquid = if (opts.corner != null) &self.liquid else null,
         };
         if (p <= 0) if (opts.corner) |c| {
+            // Where it is, for a bar that would cover it to stand clear (`dome.barsOut`).
+            dome.publishBar(c.box(dvui.windowRectScale().s));
             if (dome.drawCorner(c, id_extra, grip_look, "history.grip:{s}", .{doc.owner.documentPath(doc)})) self.stir(now);
         } else if (gripRect(area, dome.radius, opts.edge)) |g| if (dome.draw(g, id_extra, grip_look, "history.grip:{s}", .{doc.owner.documentPath(doc)})) self.stir(now);
         if (self.dwell.since != null or self.stepped_at != null or !self.slosh.settled(now) or self.presence.moving(in_use) or
@@ -465,6 +465,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (self.slosh_at) |was| if (was != at) {
         const by = (@as(f32, @floatFromInt(at)) - @as(f32, @floatFromInt(was))) / @as(f32, @floatFromInt(@max(1, n)));
         self.slosh.knock(now, dome_rules.knockFor(by));
+        // The vial's liquid too, a scrub's step tipping it as the dome's swing does.
+        if (opts.corner != null) self.liquid.knock(dome_rules.knockFor(by));
     };
     self.slosh_at = at;
     const tilt = self.slosh.tilt(now);

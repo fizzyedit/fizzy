@@ -99,7 +99,8 @@ surface: bool = false,
 /// is, only the band along its edge glass (`glass_look.forLens`).
 lens: bool = false,
 /// A drop's rim lit from the top right rather than the top left: lit along the other diagonal,
-/// top right and bottom left, and shaded across top left and bottom right. For glass whose edges
+/// top right and bottom left, and shaded across top left and bottom right. The glass program's
+/// only; the fallback without it (`liquid_glass`) keeps its light at the top left. For glass whose edges
 /// that show face that way, as a piece in a place's top-right corner does — its arc down and to
 /// the left, its cut up and to the right — where the usual light would leave both in shade.
 light_across: bool = false,
@@ -391,14 +392,11 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     const groups = self.clusters();
     var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
     // The window behind the glass, published for this frame.
-    u.backdrop[0] = if (opaqueWindow() or self.solid) 1 else 0;
+    // And the light turned (`light_across`): +2 on the same lane, so it holds on every look,
+    // published or not.
+    u.backdrop[0] = (if (opaqueWindow() or self.solid) @as(f32, 1) else 0) + (if (self.light_across) @as(f32, 2) else 0);
     // And the glass the sliders make of it this frame (`publishLook`).
-    if (publishedLook()) |l| {
-        var drawn = if (self.lens) glass_look.forLens(l) else if (self.text) glass_look.forText(l) else glass_look.forDrops(l);
-        // Carried to the program as the diagonal's sign (`g6.z`): negative, the light turned.
-        if (self.light_across) drawn.diagonal = -drawn.diagonal;
-        self.applyLook(&u, drawn);
-    }
+    if (publishedLook()) |l| self.applyLook(&u, if (self.lens) glass_look.forLens(l) else if (self.text) glass_look.forText(l) else glass_look.forDrops(l));
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();

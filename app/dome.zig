@@ -165,6 +165,7 @@ pub fn tabRect(whole: dvui.Rect) dvui.Rect {
 /// The tab's chevron, in the middle of its bubble `r` (window-natural; `bounds` the layer's).
 pub fn chevron(bounds: dvui.Rect, r: dvui.Rect, color: dvui.Color) void {
     const d = r.w * 0.44;
+    if (d < 2) return;
     core.icon.icon(@src(), "dome_collapse", icons.tvg.lucide.@"chevron-down", .{
         .stroke_color = .{ .color = color },
         .fill_color = .{ .color = color },
@@ -389,11 +390,13 @@ pub const Corner = struct {
         return .{ .rect = self.card, .radii = self.radii, .cut = true };
     }
 
-    /// How far down from the vessel's top the liquid's level is at `level` (0 to 1), physical:
-    /// where a drop falling from the top meets it (`Liquid.step`).
-    pub fn liquidDepth(self: Corner, s: f32, level: f32) f32 {
-        const deep = self.radiusPx(s) - 2 * liquid_inset * s;
-        return deep * (1 - rules.fill_top * level);
+    /// Where the pointer is on it: the square from the corner that lies inside the quarter drawn
+    /// (its far corner on the circle), so nothing past the glass — the document's last columns,
+    /// a scroll bar's end — is taken for the grip's.
+    pub fn hit(self: Corner, s: f32) dvui.Rect.Physical {
+        const d = self.radiusPx(s) * std.math.sqrt1_2;
+        const p = self.point();
+        return .{ .x = p[0] - d, .y = p[1] - d, .w = d, .h = d };
     }
 
     /// Where the icon is centred: on the diagonal, in the middle of what of the quarter shows.
@@ -410,7 +413,7 @@ pub const Corner = struct {
 pub fn drawCorner(c: Corner, id_extra: usize, look: Look, comptime anchor_fmt: []const u8, anchor_args: anytype) bool {
     const wrs = dvui.windowRectScale();
     const s = wrs.s;
-    const pr = c.box(s);
+    const pr = c.hit(s);
     var float: dvui.FloatingWidget = undefined;
     float.init(@src(), .{}, .{ .rect = wrs.rectFromPhysical(pr), .id_extra = id_extra });
     defer float.deinit();
@@ -469,7 +472,7 @@ pub fn paintCorner(id: dvui.Id, c: Corner, t: f32, look: Look) void {
 }
 
 /// The liquid in the vial at `c`, `t` of its size, up to its level and tipped by its slosh, without
-/// its glass: the vial's own, and the bar going back draws it fading in over the bar's glass.
+/// its glass: the vial's own, and the bar going back draws it filling again inside the bar's glass.
 pub fn paintCornerLiquid(c: Corner, t: f32, look: Look) void {
     const s = dvui.windowRectScale().s;
     const prev = dvui.clip(c.card);
@@ -501,8 +504,6 @@ pub fn paintCornerLiquid(c: Corner, t: f32, look: Look) void {
 
 /// How far in from the glass and the card's edge the liquid keeps, points.
 const liquid_inset: f32 = 2.5;
-/// A drop's radius, points.
-const drop_r: f32 = 2.4;
 
 /// The liquid `liq` in `vessel` (physical, convex), its top `top` and its bottom `bottom` (y): the
 /// surface drawn column to column in strips, each cut by the vessel, with a lighter line along
@@ -516,7 +517,7 @@ fn pourLiquid(vessel: []const rules.Pt, liq: *const Liquid, top: f32, bottom: f3
         minx = @min(minx, q[0]);
         maxx = @max(maxx, q[0]);
     }
-    const level_y = std.math.lerp(bottom, top, rules.fill_top * liq.shownLevel());
+    const level_y = std.math.lerp(bottom, top, rules.fill_top * liq.level);
     const dx = (maxx - minx) / @as(f32, Liquid.columns - 1);
     const shine = color.lerp(.white, 0.35);
     var out: [256]geometry.Pt = undefined;
@@ -531,11 +532,6 @@ fn pourLiquid(vessel: []const rules.Pt, liq: *const Liquid, top: f32, bottom: f3
         pour(geometry.cut(&strip, vessel, &out, &scratch), color);
         const line = [_]geometry.Pt{ .{ x0, y0 - 0.5 * s }, .{ x1, y1 - 0.5 * s }, .{ x1, y1 + 0.9 * s }, .{ x0, y0 + 0.9 * s } };
         pour(geometry.cut(&line, vessel, &out, &scratch), shine);
-    }
-    var circle: [48]geometry.Pt = undefined;
-    for (liq.drops[0..liq.drop_n]) |d| {
-        const c: geometry.Shape = .circle(.{ minx + d.x * (maxx - minx), top + d.y }, drop_r * s);
-        pour(geometry.cut(c.outline(12, &circle), vessel, &out, &scratch), color);
     }
 }
 
@@ -586,9 +582,9 @@ fn pourStream(lip: [2]f32, end: [2]f32, tail: f32, head: f32, th: f32, color: dv
 
 // ── Bars out this frame ──────────────────────────────────────────────────────────────────────
 //
-// Each transport's bar that is out says where it is (`publishBar`), so another that would cover it
-// can stand clear (`barsOut`): the tape's bar, out of the window's corner, stacks above a history
-// bar out along the bottom of a pane under it. Per frame, kept in dvui's data; a bar not out
+// Each transport's bar that is out, and each corner vial at rest, says where it is (`publishBar`),
+// so a bar that would cover it can stand clear (`barsOut`): the tape's bar, out along the bottom
+// of the window, stacks above a pane's history vial or history bar under it. Per frame, kept in dvui's data; a bar not out
 // publishes nothing, so a frame with none out costs nothing.
 
 const max_bars = 16;

@@ -26,7 +26,8 @@ pub const Shape = struct {
         return .{ .center = center, .half = .{ r, r }, .radii = @splat(r) };
     }
 
-    /// A box `rect` (x, y, w, h) with all four corners `r`; `r` at half the shorter side is a capsule.
+    /// A box `rect` (x, y, w, h) with its corners' `radii` (top-left, top-right, bottom-right,
+    /// bottom-left); all of them at half the shorter side is a capsule.
     pub fn box(x: f32, y: f32, w: f32, h: f32, radii: [4]f32) Shape {
         return .{ .center = .{ x + w / 2, y + h / 2 }, .half = .{ w / 2, h / 2 }, .radii = radii };
     }
@@ -120,8 +121,10 @@ pub fn cut(subject: []const Pt, clip: []const Pt, out: []Pt, scratch: []Pt) []Pt
         dst = if (dst.ptr == out.ptr) scratch else out;
         src = written;
     }
-    if (src.ptr != out.ptr) @memcpy(out[0..len], src[0..len]);
-    return out[0..len];
+    // Within `out` whatever `scratch` held: a larger scratch could have held more than fits.
+    const n = @min(len, out.len);
+    if (src.ptr != out.ptr) @memcpy(out[0..n], src[0..n]);
+    return out[0..n];
 }
 
 /// Which side of the edge `a`→`b` `p` is on: positive inside a clockwise (y-down) polygon.
