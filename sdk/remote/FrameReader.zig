@@ -44,7 +44,7 @@ pub fn next(self: *FrameReader) codec.Error!?codec.Frame {
     const body = avail[codec.prefix_len..][0..len];
     self.pos += codec.prefix_len + len;
     return .{
-        .type = @enumFromInt(std.mem.readInt(u16, body[0..2], .little)),
+        .type = @fromBackingInt(@intCast(std.mem.readInt(u16, body[0..2], .little))),
         .flags = std.mem.readInt(u16, body[2..4], .little),
         .payload = body[codec.header_len..],
     };

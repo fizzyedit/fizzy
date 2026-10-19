@@ -34,8 +34,10 @@ pub fn start(self: *Endpoint) Error!void {
 
 /// Check `msg` against the conversation's rules and queue its frame.
 pub fn send(self: *Endpoint, msg: message.Message) Error!void {
-    try self.conn.sending(msg);
+    const mark = self.out.items.len;
     try codec.encode(self.gpa, &self.out, msg, self.reader.max_frame);
+    errdefer self.out.shrinkRetainingCapacity(mark);
+    try self.conn.sending(msg);
 }
 
 /// Bytes waiting to be written to the stream.
@@ -45,6 +47,7 @@ pub fn pending(self: *const Endpoint) []const u8 {
 
 /// `n` bytes of `pending` were written.
 pub fn consume(self: *Endpoint, n: usize) void {
+    std.debug.assert(n <= self.out.items.len);
     const rest = self.out.items.len - n;
     std.mem.copyForwards(u8, self.out.items[0..rest], self.out.items[n..]);
     self.out.shrinkRetainingCapacity(rest);
@@ -81,10 +84,10 @@ fn violation(self: *Endpoint, e: Error) Error {
     return e;
 }
 
-/// Best effort: a bye that cannot be queued is not worth failing the failure for.
+/// The stream is dead either way; the bye is best effort.
 fn queueBye(self: *Endpoint, bye: message.Bye) void {
-    codec.encode(self.gpa, &self.out, .{ .bye = bye }, codec.default_max_frame) catch return;
     self.conn.state = .closed;
+    codec.encode(self.gpa, &self.out, .{ .bye = bye }, codec.default_max_frame) catch return;
 }
 
 /// Move everything `from` has queued into `to`, `chunk` bytes at a time (a stream may split

@@ -80,7 +80,8 @@ pub fn view(self: *const Connection, id: ViewId) ?View {
     return self.views.get(id);
 }
 
-/// The tiers both sides can do and this side's peer asked for.
+/// The tiers both sides offer. (`tiers_wanted` is the peer's preference among them; the editor
+/// decides the tier a view gets.)
 pub fn tiersAgreed(self: *const Connection) message.Tiers {
     return self.local.tiers_offered.both(self.peer.tiers_offered);
 }
@@ -112,7 +113,11 @@ fn apply(self: *Connection, msg: Message, from: Role) Error!void {
     }
     switch (msg) {
         .hello => |h| {
-            if (h.version_min > h.version_max) return error.BadHello;
+            if (h.version_min > h.version_max) {
+                self.state = .closed;
+                self.close_reason = .protocol_error;
+                return error.BadHello;
+            }
             if (mine) {
                 if (self.hello_sent) return error.BadHello;
                 self.hello_sent = true;
@@ -146,6 +151,7 @@ fn apply(self: *Connection, msg: Message, from: Role) Error!void {
 
     switch (msg) {
         .create_view => |m| {
+            if (m.view == 0) return error.UnknownView;
             if (self.views.contains(m.view)) return error.DuplicateView;
             try self.views.put(self.gpa, m.view, .{ .tier = m.tier, .width = m.width, .height = m.height, .scale = m.scale });
         },
@@ -162,6 +168,7 @@ fn apply(self: *Connection, msg: Message, from: Role) Error!void {
         },
         .frame => |m| {
             const v = self.views.getPtr(m.view) orelse return error.UnknownView;
+            if (!v.created or m.tier != v.tier) return error.UnexpectedFrame;
             if (m.seq <= v.answered or m.seq > v.requested) return error.UnexpectedFrame;
             v.answered = m.seq;
         },
@@ -315,4 +322,17 @@ test "bye closes" {
     try say(&p.host, &p.editor, .{ .bye = .{ .reason = .shutdown } });
     try t.expectEqual(State.closed, p.editor.state);
     try t.expectError(error.Closed, p.editor.sending(.{ .frame_ready = .{ .view = 1 } }));
+}
+
+test "view 0 is no view, and a frame must match its view's tier" {
+    var p = pair();
+    defer p.host.deinit();
+    defer p.editor.deinit();
+    try open(&p);
+    try t.expectError(error.UnknownView, p.host.sending(.{ .create_view = .{ .view = 0, .width = 1, .height = 1 } }));
+    try say(&p.host, &p.editor, .{ .create_view = .{ .view = 1, .width = 1, .height = 1 } });
+    try say(&p.host, &p.editor, .{ .frame_request = .{ .view = 1, .seq = 1 } });
+    try t.expectError(error.UnexpectedFrame, p.editor.sending(.{ .frame = .{ .view = 1, .seq = 1, .tier = .draw_list } }));
+    try say(&p.editor, &p.host, .{ .view_created = .{ .view = 1, .tier = .draw_list, .width = 1, .height = 1 } });
+    try t.expectError(error.UnexpectedFrame, p.editor.sending(.{ .frame = .{ .view = 1, .seq = 1, .tier = .shared_texture } }));
 }

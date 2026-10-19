@@ -72,7 +72,7 @@ fn encoded(msg: Message) !std.ArrayList(u8) {
 
 fn frameOf(bytes: []const u8) codec.Frame {
     return .{
-        .type = @enumFromInt(std.mem.readInt(u16, bytes[4..6], .little)),
+        .type = @fromBackingInt(@intCast(std.mem.readInt(u16, bytes[4..6], .little))),
         .flags = std.mem.readInt(u16, bytes[6..8], .little),
         .payload = bytes[8..],
     };
@@ -80,7 +80,7 @@ fn frameOf(bytes: []const u8) codec.Frame {
 
 test "every message round-trips" {
     inline for (@typeInfo(message.Type).@"enum".field_values) |fv| {
-        const msg = sample(@enumFromInt(fv));
+        const msg = sample(@fromBackingInt(@intCast(fv)));
         var bytes = try encoded(msg);
         defer bytes.deinit(t.allocator);
         var arena = std.heap.ArenaAllocator.init(t.allocator);
@@ -96,7 +96,7 @@ test "every message's frame is cut and decoded from a stream too" {
     var all: std.ArrayList(u8) = .empty;
     defer all.deinit(t.allocator);
     inline for (@typeInfo(message.Type).@"enum".field_values) |fv| {
-        try codec.encode(t.allocator, &all, sample(@enumFromInt(fv)), codec.default_max_frame);
+        try codec.encode(t.allocator, &all, sample(@fromBackingInt(@intCast(fv))), codec.default_max_frame);
     }
     var r = FrameReader.init(t.allocator);
     defer r.deinit();
@@ -115,7 +115,7 @@ test "every message's frame is cut and decoded from a stream too" {
 
 test "a truncated payload is refused at every length" {
     inline for (@typeInfo(message.Type).@"enum".field_values) |fv| {
-        var bytes = try encoded(sample(@enumFromInt(fv)));
+        var bytes = try encoded(sample(@fromBackingInt(@intCast(fv))));
         defer bytes.deinit(t.allocator);
         const full = frameOf(bytes.items);
         var arena = std.heap.ArenaAllocator.init(t.allocator);
@@ -162,7 +162,7 @@ test "trailing bytes from a newer peer are ignored" {
 test "unknown types: optional skipped, required refused" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
-    const unknown: message.Type = @enumFromInt(5000);
+    const unknown: message.Type = @fromBackingInt(@intCast(5000));
     try t.expect(try codec.decode(arena.allocator(), .{ .type = unknown, .flags = 0, .payload = "abc" }) == null);
     try t.expectError(error.UnknownRequired, codec.decode(arena.allocator(), .{ .type = unknown, .flags = codec.flag_required, .payload = "abc" }));
 
@@ -220,7 +220,7 @@ test "fuzz: random and mutated frames never crash, only error" {
 
     // Mutated valid frames.
     inline for (@typeInfo(message.Type).@"enum".field_values) |fv| {
-        var bytes = try encoded(sample(@enumFromInt(fv)));
+        var bytes = try encoded(sample(@fromBackingInt(@intCast(fv))));
         defer bytes.deinit(t.allocator);
         for (0..300) |_| {
             const copy = try t.allocator.dupe(u8, bytes.items);

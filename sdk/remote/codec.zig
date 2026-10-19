@@ -39,7 +39,8 @@ pub const Frame = struct {
     payload: []const u8,
 };
 
-/// Append the frame for `msg` to `out`. On error `out` is left as it was.
+/// Append the frame (the whole message is built before the limit is checked, so a huge one costs
+/// its memory briefly) for `msg` to `out`. On error `out` is left as it was.
 pub fn encode(gpa: std.mem.Allocator, out: *std.ArrayList(u8), msg: Message, max_frame: usize) Error!void {
     const start = out.items.len;
     errdefer out.shrinkRetainingCapacity(start);
@@ -50,10 +51,10 @@ pub fn encode(gpa: std.mem.Allocator, out: *std.ArrayList(u8), msg: Message, max
         inline else => |p| try encodeValue(@TypeOf(p), p, &sink),
     }
     const len = out.items.len - start - prefix_len;
-    if (len > max_frame) return error.FrameTooLarge;
+    if (len > max_frame or len > std.math.maxInt(u32)) return error.FrameTooLarge;
     const h = out.items[start..][0 .. prefix_len + header_len];
     std.mem.writeInt(u32, h[0..4], @intCast(len), .little);
-    std.mem.writeInt(u16, h[4..6], @intFromEnum(t), .little);
+    std.mem.writeInt(u16, h[4..6], @backingInt(t), .little);
     std.mem.writeInt(u16, h[6..8], if (t.required()) flag_required else 0, .little);
 }
 
@@ -112,7 +113,7 @@ fn encodeValue(comptime T: type, v: T, sink: *Sink) Error!void {
             try encodeValue(U, @bitCast(v), sink);
         },
         .bool => try sink.bytes(&.{@intFromBool(v)}),
-        .@"enum" => |e| try encodeValue(e.tag_type, @intFromEnum(v), sink),
+        .@"enum" => |e| try encodeValue(e.tag_type, @backingInt(v), sink),
         .optional => |o| {
             try sink.bytes(&.{@intFromBool(v != null)});
             if (v) |x| try encodeValue(o.child, x, sink);
@@ -160,7 +161,7 @@ fn decodeValue(comptime T: type, src: *Source) Error!T {
             1 => true,
             else => error.InvalidValue,
         },
-        .@"enum" => |e| return @enumFromInt(try decodeValue(e.tag_type, src)),
+        .@"enum" => |e| return @fromBackingInt(@intCast(try decodeValue(e.tag_type, src))),
         .optional => |o| return switch ((try src.take(1))[0]) {
             0 => null,
             1 => try decodeValue(o.child, src),
