@@ -5,7 +5,8 @@
 //! under a root of its own (`tape://<n>`) and opened like any file; then each step is applied as
 //! its moment comes, by the document's owner (`Plugin.applyStep`, at pace). Each step lands as an
 //! entry on the document's history, so the document's transport plays back over what has played:
-//! scrub back through it, step through it, as through any document's history.
+//! scrub back through it, step through it, as through any document's history. Gone back while it
+//! plays, the playback holds; back at the end, it plays on. Its transport's play button pauses it.
 //!
 //! Unlike the demo stage, nothing of the person's is set aside or waits on their unsaved work: the
 //! tape is a document among theirs. Closing it ends the playback and the mount. While nothing is
@@ -62,8 +63,13 @@ const Playback = struct {
     doc_id: ?u64 = null,
     /// The next op to apply.
     op: usize = 0,
-    /// When the document opened: the tape's time 0.
+    /// When the document opened: the tape's time 0, moved on by each pause.
     start_ns: i128 = 0,
+    /// Since when the person has held the tape back: they went back along its document's history
+    /// (its transport), so its steps wait rather than land over where they went. Null: playing.
+    held_ns: ?i128 = null,
+    /// The person paused it, with its transport's play button (`setPaused`).
+    paused: bool = false,
     /// When the tape was opened: a document that has not come by `load_limit_ns` after never
     /// will (its load failed), and the playback lets its mount go.
     opened_ns: i128,
@@ -273,6 +279,19 @@ pub fn tick(self: *TapeTabs, editor: *Editor) void {
 fn advance(editor: *Editor, p: *Playback, doc: sdk.DocHandle, now: i128) void {
     const ops = p.owned.tape.ops;
     if (p.op == ops.len) return;
+    // Gone back along what has played: held there, as a recorder's playhead stops where it is put,
+    // until the person comes back to the end, and it plays on from there. A step landing now would
+    // take the place of all they went back over.
+    if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| {
+        if (p.paused or line.at < line.entries.len) {
+            if (p.held_ns == null) p.held_ns = now;
+            return;
+        }
+    }
+    if (p.held_ns) |since| {
+        p.start_ns += now - since;
+        p.held_ns = null;
+    }
     const elapsed_ms: u64 = @intCast(@max(0, @divTrunc(now - p.start_ns, std.time.ns_per_ms)));
     while (p.op < ops.len and ops[p.op].at <= elapsed_ms) : (p.op += 1) {
         const op = ops[p.op];
@@ -307,6 +326,21 @@ fn openUnder(editor: *Editor, root: []const u8) bool {
 pub fn isPlaying(self: *const TapeTabs, path: []const u8) bool {
     for (self.playing.items) |p| if (std.mem.eql(u8, p.path, path) and p.op < p.owned.tape.ops.len) return true;
     return false;
+}
+
+/// Whether the tape in the document at `path` is landing its steps now: neither played out, nor
+/// held (gone back along, or paused). Its transport's play button pauses it.
+pub fn landing(self: *const TapeTabs, path: []const u8) bool {
+    for (self.playing.items) |p| if (std.mem.eql(u8, p.path, path)) return p.op < p.owned.tape.ops.len and !p.paused and p.held_ns == null;
+    return false;
+}
+
+/// Pause the tape in the document at `path`, or play it on (`paused` false) from where it stands.
+pub fn setPaused(self: *TapeTabs, path: []const u8, paused: bool) void {
+    for (self.playing.items) |p| if (std.mem.eql(u8, p.path, path)) {
+        p.paused = paused;
+        dvui.refresh(null, @src(), null);
+    };
 }
 
 /// How far the tape in the document at `path` has played, 0 to 1, by its ops applied: its

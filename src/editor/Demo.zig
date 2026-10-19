@@ -139,6 +139,9 @@ pub fn attach(self: *Demo, editor: *Editor) void {
     };
     self.service.bind();
     self.snapshot.windows = .{ .ctx = self, .list = listWindows };
+    // Numbered from somewhere of this run's own, not 1: a screen's number (`fizzy.screen`'s `seq`)
+    // kept from an earlier run is then not some other screen of this one (`since`).
+    self.snapshot.taken = @as(u32, @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(dvui.io).nanoseconds)))) & 0x3fff_ffff;
     // A seek's catch-up frames draw nothing where the backend can drop them (the web's).
     self.player.set_unseen = core.FrameTarget.setUnseen;
 }
@@ -346,7 +349,12 @@ pub fn frameEnd(self: *Demo, main: ?Picture) void {
     self.windows = windows;
     defer self.windows = &.{};
     if (naming) for (windows) |w| core.anchor.markRect(w.subwindow orelse .zero, w.rect, true, "{s}", .{w.tag});
+    const taken = self.snapshot.taken;
     self.snapshot.endFrame();
+    // What the snapshot just written shows: every command run up to now (`fizzy.screen`).
+    if (self.snapshot.taken != taken) {
+        self.editor.command_runs_at_snapshot = self.editor.app.host.command_runs;
+    }
     if (main != null) self.picture.endFrame(sources);
 }
 
@@ -463,6 +471,8 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     editor.flushLayout();
     editor.flushSettings();
     self.saveSettings();
+    // The document panes too: kept in memory, and none of the demo's saved over them.
+    editor.workbench.holdPanes();
 
     const gpa = editor.app.gpa;
     var docs: std.ArrayList(Saved.Doc) = .empty;
@@ -500,11 +510,14 @@ fn end(ctx: *anyopaque) void {
     if (self.quitting) {
         self.freeSaved();
         self.freeSavedSettings();
+        editor.workbench.restorePanes();
         return;
     }
     self.restoreSettings();
     self.closeAllDocuments();
     self.unmountFiles();
+    // Before the person's documents reopen: into the pane they were in.
+    editor.workbench.restorePanes();
 
     // The layout as the user left it: `begin` flushed it, and nothing has been written since.
     editor.app.layout.resetLayout(gpa);
@@ -571,6 +584,8 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
 
     editor.command_palette.finishClose();
     self.closeAllDocuments();
+    // One pane: a split a later moment made is gone at a cut, as on the first pass.
+    editor.workbench.onePane();
     self.applySettings(kf.settings);
     // The app's settings a tape changes are the person's again at a cut: a keyframe declares its
     // state outright, and declares none of them.

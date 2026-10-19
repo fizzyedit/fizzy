@@ -499,6 +499,13 @@ pub fn contentOpacity(self: *Host) f32 {
     return if (self.fizzy_api) |a| a.contentOpacity() else 1.0;
 }
 
+/// The most steps a document's undo history keeps: fizzy's setting, the same in every editor, so a
+/// plugin that owns a history trims its own past it, oldest first. 0 keeps every one, as without
+/// fizzy (headless, a test).
+pub fn historyLimit(self: *Host) u32 {
+    return if (self.fizzy_api) |a| a.historyLimit() else 0;
+}
+
 /// Whether the OS window is currently maximized. False if fizzy isn't installed (headless/web).
 pub fn isMaximized(self: *Host) bool {
     return if (self.fizzy_api) |a| a.isMaximized() else false;
