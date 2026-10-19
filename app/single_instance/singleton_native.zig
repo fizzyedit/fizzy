@@ -77,6 +77,16 @@ pub fn consumeStartupArgv() []const []const u8 {
 /// already resolved to absolute (so the primary doesn't need to know the
 /// secondary's working directory).
 pub fn acquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !void {
+    if (!try tryAcquireLock(gpa, argv)) {
+        log.info("another instance holds the lock: this launch is handed to it", .{});
+        std.process.exit(0);
+    }
+}
+
+/// `acquireLock` without the exit: false when another instance holds the lock, which has been
+/// handed `argv`. A restart's new instance takes the lock this way (`restart.pollReleased`): it is
+/// the window on screen, and must not quit because the old one has yet to let go.
+pub fn tryAcquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !bool {
     state.allocator = gpa;
 
     var socket_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -116,11 +126,11 @@ pub fn acquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !void {
     });
 
     switch (try state.instance.?.requestSingleInstanceLock(argv)) {
-        .acquired => {},
+        .acquired => return true,
         .already_running => {
             state.instance.?.deinit();
             state.instance = null;
-            std.process.exit(0);
+            return false;
         },
     }
 }

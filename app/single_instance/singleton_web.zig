@@ -20,6 +20,10 @@ pub fn consumeStartupArgv() []const []const u8 {
 
 pub fn acquireLock(_: std.mem.Allocator, _: []const []const u8) !void {}
 
+pub fn tryAcquireLock(_: std.mem.Allocator, _: []const []const u8) !bool {
+    return true;
+}
+
 pub fn registerWindow(_: *dvui.Window, _: []const []const u8) void {}
 
 pub fn deinit() void {}

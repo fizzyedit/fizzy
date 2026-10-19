@@ -502,7 +502,7 @@ const quit_signals = struct {
         for (signals, chained) |s, old| if (s == sig) {
             if (old) |o| o.handler.handler.?(sig);
         };
-        const byte: u8 = 0;
+        const byte: u8 = @intCast(@backingInt(sig));
         _ = std.c.write(wake_fd, @ptrCast(&byte), 1);
     }
 
@@ -515,6 +515,9 @@ const quit_signals = struct {
                 if (std.c._errno().* == @backingInt(posix.E.INTR)) continue;
                 return;
             }
+            // A quit no one asked for in the app says where it came from: a process that dies
+            // this way leaves no crash report.
+            log.info("quit signals: {s} received; quitting", .{if (buf[0] == @backingInt(posix.SIG.INT)) "SIGINT" else "SIGTERM"});
             const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
             defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
             var ue = std.mem.zeroes(c.SDL_Event);

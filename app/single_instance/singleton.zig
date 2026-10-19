@@ -17,6 +17,7 @@ pub const app_id = impl.app_id;
 pub const earlyStartup = impl.earlyStartup;
 pub const consumeStartupArgv = impl.consumeStartupArgv;
 pub const acquireLock = impl.acquireLock;
+pub const tryAcquireLock = impl.tryAcquireLock;
 pub const registerWindow = impl.registerWindow;
 pub const deinit = impl.deinit;
 pub const drainPending = impl.drainPending;

@@ -10490,6 +10490,44 @@ test "executable watcher: a rebuild is a replaced executable that has held still
     try std.testing.expect(w.tick());
 }
 
+// A build that lands while the app is still starting (the window, the GPU, the plugins take a
+// second or so, more under load): measured against the executable as the process started from it
+// (`noteLaunch`), it is a rebuild, and the watcher looks once as it starts, since the build's events
+// came before anyone listened. Measured when watching began, it was taken for the build running.
+test "executable watcher: a build that lands while the app starts is restarted into" {
+    if (comptime !ExecutableWatcher.have_impl) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    const path = try std.fs.path.join(gpa, &.{ root, "app" });
+    defer gpa.free(path);
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "app", .data = "the launched build" });
+    ExecutableWatcher.noteLaunchAt(dvui.io, path);
+
+    // Replaced during startup, before the watcher exists.
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "app.new", .data = "the rebuilt build, longer" });
+    try tmp.dir.rename("app.new", tmp.dir, "app", dvui.io);
+
+    var w = try ExecutableWatcher.init(gpa, path);
+    defer w.deinit();
+    try w.start();
+    // Settled each time round: a late event from the watch itself only starts the wait again.
+    var restarts = false;
+    for (0..8) |_| {
+        if (w.tick()) {
+            restarts = true;
+            break;
+        }
+        if (w.pending_ns != 0) w.pending_ns -= ExecutableWatcher.settle_ns;
+    }
+    try std.testing.expect(restarts);
+}
+
 // `SettingsWatcher` over the config folder while the app keeps its own state beside the settings:
 // a crash checkpoint, a restart's session. On Linux the watch is recursive by hand (nightwatch adds
 // an inotify watch for each folder it sees appear, on its own thread), so a folder made and

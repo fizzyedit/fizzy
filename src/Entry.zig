@@ -143,6 +143,8 @@ pub const dvui_app: dvui.App = .{
 pub fn main(main_init: std.process.Init) !u8 {
     // Time zero for the app's start (`core.profile.phase`).
     fizzy.core.profile.phase(main_init.io, "main");
+    // What a rebuild is measured against: the executable as this process started from it.
+    if (comptime builtin.target.cpu.arch != .wasm32) @import("app").watch.ExecutableWatcher.noteLaunch(main_init.io);
     crash.init(.{ .app = AppInfo.current.name, .version = AppInfo.current.version, .sdk = sdk_version });
     std.log.info("{s} version {s} ({s})", .{ AppInfo.current.display_name, AppInfo.current.version, @tagName(@import("builtin").mode) });
 

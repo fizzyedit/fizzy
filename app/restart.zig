@@ -13,7 +13,9 @@
 //! plugins: the slow part), reads the session, and says it is `ready` (`awaitHandover`). This one
 //! then quits without asking (`handedOver`), and at the end of its teardown, its lock released,
 //! says `released` (`relaunch`). The new one takes the lock and shows its window where this one's
-//! was. If the new build never says ready (it crashed starting), this one goes on as it was.
+//! was; it never quits for the lock, as a second launch does, but tries again until this one has
+//! let go. If the new build never says ready (it crashed starting, or is still coming up), this one
+//! stops it and goes on as it was.
 //!
 //! For a while two instances run on one profile. A plugin holding something there by path (the
 //! agent plugin's socket) finds the new instance's in its place as it stops: it must not reach,
@@ -45,6 +47,18 @@ var handover_deadline_ns: i96 = 0;
 var handover_buf: [if (supported) std.fs.max_path_bytes else 0]u8 = undefined;
 /// The folder the two instances meet in (`ready`, `released`).
 var handover_dir: ?[]const u8 = null;
+/// The new instance, until it says it is ready: one that never does is stopped when this one
+/// gives up on it, or it would come up late and take the lock from this one, which carried on.
+var new_instance: ?std.process.Child = null;
+
+/// End the new instance this one gave up on, at once. Not a quit (SIGTERM, which std's `kill`
+/// sends and then waits on): that would run its teardown beside this instance, on the same
+/// profile, and could stop on a question about unsaved documents while this one waits.
+fn stop(io: std.Io, child: *std.process.Child) void {
+    if (comptime builtin.target.os.tag == .windows) return child.kill(io); // TerminateProcess
+    std.posix.kill(child.id.?, .KILL) catch return;
+    _ = child.wait(io) catch {};
+}
 /// The new instance's side: the folder it was started with (`--handover <dir>`). Owned.
 var handed_from: ?[]u8 = null;
 pub const handover_flag = "--handover";
@@ -108,8 +122,11 @@ pub fn relaunch(io: std.Io, gpa: std.mem.Allocator) void {
         const dir = handover_dir orelse return;
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const released = std.fmt.bufPrint(&buf, "{s}/released", .{dir}) catch return;
-        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = released, .data = "" }) catch |err|
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = released, .data = "" }) catch |err| {
             dvui.log.err("restart: could not hand the lock over ({t}); the new instance takes it when it times out", .{err});
+            return;
+        };
+        dvui.log.info("restart: the lock is let go of; the new instance takes it", .{});
         return;
     }
     // Velopack waits for this process to exit, swaps the install and starts the new version.
@@ -122,12 +139,12 @@ pub fn relaunch(io: std.Io, gpa: std.mem.Allocator) void {
 /// fixed environment, so a profile named by `FIZZY_PROFILE` goes on as the flag. The files this
 /// run was started with are not passed again: the session brings back what is still open.
 fn relaunchSelf(io: std.Io, gpa: std.mem.Allocator) void {
-    start(io, gpa, null) catch |err| dvui.log.err("restart: could not launch again: {t}", .{err});
+    _ = start(io, gpa, null, null) catch |err| dvui.log.err("restart: could not launch again: {t}", .{err});
 }
 
 /// This executable, on this profile, as a process of its own that nothing waits on; with
-/// `--handover <dir>` when `handover_to` is given.
-fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8) !void {
+/// `--handover <dir>` when `handover_to` is given; its output to `log` when given, else nowhere.
+fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8, log: ?std.Io.File) !std.process.Child {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = try std.process.executablePath(io, &buf);
     var argv_buf: [5][]const u8 = undefined;
@@ -142,14 +159,15 @@ fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8) !void {
     // console of its own (no-op for a Release build, which has none), so closing the launcher's
     // console does not close it.
     if (comptime builtin.target.os.tag.isDarwin()) {
-        _ = try core.darwin_spawn.spawn(gpa, .{ .argv = argv.items, .stdin = .discard, .stdout = .discard, .stderr = .discard, .new_session = true }, null);
-        return;
+        const out: core.darwin_spawn.StdIo = if (log) |f| .{ .fd = f.handle } else .discard;
+        return core.darwin_spawn.spawn(gpa, .{ .argv = argv.items, .stdin = .discard, .stdout = out, .stderr = out, .new_session = true }, null);
     }
-    _ = try std.process.spawn(io, .{
+    const out: std.process.SpawnOptions.StdIo = if (log) |f| .{ .file = f } else .ignore;
+    return std.process.spawn(io, .{
         .argv = argv.items,
         .stdin = .ignore,
-        .stdout = .ignore,
-        .stderr = .ignore,
+        .stdout = out,
+        .stderr = out,
         .pgid = if (builtin.target.os.tag == .windows) null else 0,
         .create_no_window = true,
     });
@@ -181,9 +199,37 @@ pub fn beginHandover(io: std.Io, gpa: std.mem.Allocator, dir: []const u8) !void 
     try std.Io.Dir.cwd().createDirPath(io, dir);
     @memcpy(handover_buf[0..dir.len], dir);
     handover_dir = handover_buf[0..dir.len];
-    try start(io, gpa, handover_dir);
+    // The new instance's output, which nothing else sees: it has no terminal. The last handover's
+    // and the one before it, beside the folder (`<config>/logs/`), where a restart that left nothing
+    // running can be read back.
+    const log = openLog(io, gpa, dir);
+    defer if (log) |f| f.close(io);
+    new_instance = try start(io, gpa, handover_dir, log);
     handover = .waiting;
     handover_deadline_ns = std.Io.Clock.awake.now(io).nanoseconds + handover_timeout_ns;
+}
+
+/// A new `<config>/logs/handover.log` beside the handover folder `dir`; null when it cannot be.
+fn openLog(io: std.Io, gpa: std.mem.Allocator, dir: []const u8) ?std.Io.File {
+    const logs = std.fs.path.join(gpa, &.{ std.fs.path.dirname(dir) orelse return null, "logs" }) catch return null;
+    defer gpa.free(logs);
+    std.Io.Dir.cwd().createDirPath(io, logs) catch return null;
+    const path = std.fs.path.join(gpa, &.{ logs, "handover.log" }) catch return null;
+    defer gpa.free(path);
+    // A file of its own, the last one's kept beside it: this instance may itself be writing to
+    // `handover.log`, if a handover started it.
+    const prev = std.fs.path.join(gpa, &.{ logs, "handover.prev.log" }) catch return null;
+    defer gpa.free(prev);
+    std.Io.Dir.rename(.cwd(), path, .cwd(), prev, io) catch {};
+    if (std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true })) |f| return f else |_| {}
+    // Still there: Windows renames no open file, and this instance's own output may be it. The
+    // next handover's goes beside it instead; at most one of the two is open at a time.
+    const next = std.fs.path.join(gpa, &.{ logs, "handover.next.log" }) catch return null;
+    defer gpa.free(next);
+    return std.Io.Dir.cwd().createFile(io, next, .{}) catch |err| {
+        dvui.log.warn("restart: cannot write {s} ({t}); the new instance's output goes nowhere", .{ next, err });
+        return null;
+    };
 }
 
 pub const Poll = enum {
@@ -205,12 +251,19 @@ pub fn pollHandover(io: std.Io) Poll {
     const dir = handover_dir orelse return .none;
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const ready = std.fmt.bufPrint(&buf, "{s}/ready", .{dir}) catch return .waiting;
+    // The time first: a new instance that says ready by the time its deadline is seen is not stopped.
+    const late = std.Io.Clock.awake.now(io).nanoseconds > handover_deadline_ns;
     if (std.Io.Dir.cwd().access(io, ready, .{})) |_| {
+        dvui.log.info("restart: the new instance is ready; quitting", .{});
         handover = .handed_over;
+        // It outlives this one: nothing waits on it.
+        new_instance = null;
         dvui.currentWindow().addEventApp(.{ .action = .quit }) catch {};
         return .ready;
     } else |_| {}
-    if (std.Io.Clock.awake.now(io).nanoseconds > handover_deadline_ns) {
+    if (late) {
+        if (new_instance) |*child| stop(io, child);
+        new_instance = null;
         handover = .none;
         requested_ = false;
         emptyStateFolder(io, dir);
@@ -263,25 +316,63 @@ pub fn signalReady(io: std.Io) void {
 }
 
 var released_deadline_ns: i96 = 0;
+/// When the lock is next tried, once the first try found it still held (`tookLock`).
+var retry_ns: i96 = 0;
+const retry_interval_ns = std.time.ns_per_s;
+/// When the tries stop: the old instance hung quitting, or the lock cannot be had.
+var give_up_ns: i96 = 0;
+const give_up_after_ns = 30 * std.time.ns_per_s;
 
-/// Once a frame while this instance was started by a handover: true once the old one has let go
-/// of the single-instance lock (or has taken too long, and the lock is tried anyway), when the
-/// caller takes it. The handover is over then.
-pub fn pollReleased(io: std.Io, gpa: std.mem.Allocator) bool {
+/// Once a frame while this instance was started by a handover: true when the caller should try
+/// the single-instance lock — the old instance has let go of it, or has taken too long and it is
+/// tried anyway — and say how that went (`tookLock`).
+pub fn pollReleased(io: std.Io) bool {
     if (comptime !supported) return false;
     const dir = handed_from orelse return false;
     // Not yet ready (`signalReady`, once the window is on screen): the old instance still holds
     // the lock, and has not been asked to let go of it.
     if (released_deadline_ns == 0) return false;
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const released = std.fmt.bufPrint(&buf, "{s}/released", .{dir}) catch return false;
-    const done = if (std.Io.Dir.cwd().access(io, released, .{})) |_| true else |_| std.Io.Clock.awake.now(io).nanoseconds > released_deadline_ns;
-    if (!done) {
+    const now = std.Io.Clock.awake.now(io).nanoseconds;
+    if (retry_ns != 0) {
+        if (now >= retry_ns) return true;
         dvui.refresh(null, @src(), null);
         return false;
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const released = std.fmt.bufPrint(&buf, "{s}/released", .{dir}) catch return false;
+    if (std.Io.Dir.cwd().access(io, released, .{})) |_| {
+        dvui.log.info("restart: the old instance let go of the lock", .{});
+    } else |_| if (now > released_deadline_ns) {
+        dvui.log.warn("restart: the old instance did not let go of the lock in time; taking it anyway", .{});
+    } else {
+        dvui.refresh(null, @src(), null);
+        return false;
+    }
+    return true;
+}
+
+/// After `pollReleased`: whether the lock was taken. Taken, the handover is over. Still held (the
+/// old instance is yet to finish quitting), it is tried again each second for a while, then this
+/// instance runs without it: it is the window on screen, and never quits for the lock the way a
+/// second launch does.
+pub fn tookLock(io: std.Io, gpa: std.mem.Allocator, taken: bool) void {
+    if (comptime !supported) return;
+    const dir = handed_from orelse return;
+    if (!taken) {
+        const now = std.Io.Clock.awake.now(io).nanoseconds;
+        if (retry_ns == 0) {
+            dvui.log.warn("restart: the old instance still holds the lock; trying again until it lets go", .{});
+            give_up_ns = now + give_up_after_ns;
+        }
+        if (now < give_up_ns) {
+            retry_ns = now + retry_interval_ns;
+            dvui.refresh(null, @src(), null);
+            return;
+        }
+        dvui.log.err("restart: the single-instance lock was not to be had; running without it", .{});
     }
     emptyStateFolder(io, dir);
     gpa.free(dir);
     handed_from = null;
-    return true;
+    retry_ns = 0;
 }
