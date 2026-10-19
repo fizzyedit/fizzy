@@ -496,6 +496,41 @@ pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{Out
     return if (at == 0) t.base_top else line.items[at - 1];
 }
 
+/// The history `t` recorded, as its owner takes it back (`sdk.Plugin.restoreHistory`): the
+/// entries added since the track began, oldest first, each with its parts (its `added` step's
+/// effect and every `joined` one after it), and how many stand applied at its end. Worked out from
+/// the steps alone, on `topAfter`'s rules, so it holds for any owner. Null where it cannot be
+/// known (an undo or redo reaching an entry from before the track began, or a restart), or where
+/// a step's effect was not kept. The parts are `t`'s bytes: they last as long as it does.
+pub fn historyOf(t: *const Track, arena: std.mem.Allocator) error{OutOfMemory}!?sdk.Plugin.RestoredHistory {
+    const Building = struct { id: u64, parts: std.ArrayListUnmanaged([]const u8) = .empty };
+    var line: std.ArrayListUnmanaged(Building) = .empty;
+    var at: usize = 0;
+    for (t.steps.items) |r| switch (r.kind) {
+        .added => {
+            if (r.effect.len == 0) return null;
+            line.shrinkRetainingCapacity(at);
+            try line.append(arena, .{ .id = r.id });
+            try line.items[at].parts.append(arena, t.effect(r));
+            at += 1;
+        },
+        .joined => {
+            if (at == 0 or line.items[at - 1].id != r.id or r.effect.len == 0) return null;
+            try line.items[at - 1].parts.append(arena, t.effect(r));
+        },
+        .undone => at = for (line.items[0..at], 0..) |e, i| {
+            if (e.id == r.id) break i;
+        } else return null,
+        .redone => at = 1 + for (line.items, 0..) |e, i| {
+            if (e.id == r.id) break i;
+        } else return null,
+        .restarted => return null,
+    };
+    const entries = try arena.alloc(sdk.Plugin.RestoredHistory.Entry, line.items.len);
+    for (line.items, entries) |b, *e| e.* = .{ .id = b.id, .parts = b.parts.items };
+    return .{ .entries = entries, .applied = at };
+}
+
 /// What a range of a track holds, for the person to see before it is shared (`summarize`).
 pub const Summary = struct {
     /// The range, as it will be exported (`to` resolved and clamped).
@@ -928,4 +963,33 @@ test "where the history stood after each step, from the steps alone" {
     // overwrites it, and undoing 7 (from before the track) cannot be known.
     const want = [_]?u64{ 7, 10, 10, 11, 10, 7, 10, 12, null };
     for (want, 0..) |w, count| try testing.expectEqual(w, try topAfter(&t, testing.allocator, count));
+}
+
+test "the history a track recorded, as its owner takes it back" {
+    var t: Track = .{ .doc_id = 1, .doc = Stand.doc(1), .owner = &Stand.plugin, .format = 1 };
+    defer t.steps.deinit(testing.allocator);
+    defer t.bytes.deinit(testing.allocator);
+    // Each step's effect is one byte, its letter, so the parts can be read back.
+    const steps = [_]struct { sdk.Step.Kind, u64, u8 }{
+        .{ .added, 10, 'a' }, .{ .joined, 10, 'b' }, .{ .added, 11, 'c' },  .{ .undone, 11, 'C' },
+        .{ .added, 12, 'd' }, .{ .added, 13, 'e' },  .{ .undone, 13, 'E' },
+    };
+    for (steps) |st| {
+        try t.bytes.append(testing.allocator, st[2]);
+        try t.steps.append(testing.allocator, .{ .kind = st[0], .id = st[1], .at = 0, .ms = 0, .effect = .{ .start = t.bytes.items.len - 1, .len = 1 }, .motion = .{ .start = 0, .len = 0 } });
+    }
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const h = (try historyOf(&t, arena.allocator())).?;
+    // 11 was undone and written over by 12; 13 is undone, a redo away.
+    try testing.expectEqual(@as(usize, 3), h.entries.len);
+    try testing.expectEqual(@as(usize, 2), h.applied);
+    try testing.expectEqual(@as(u64, 10), h.entries[0].id);
+    try testing.expectEqual(@as(usize, 2), h.entries[0].parts.len);
+    try testing.expectEqualStrings("b", h.entries[0].parts[1]);
+    try testing.expectEqual(@as(u64, 12), h.entries[1].id);
+    try testing.expectEqual(@as(u64, 13), h.entries[2].id);
+    // An undo of an entry from before the track cannot be put back.
+    try t.steps.append(testing.allocator, .{ .kind = .undone, .id = 3, .at = 0, .ms = 0, .effect = .{ .start = 0, .len = 1 }, .motion = .{ .start = 0, .len = 0 } });
+    try testing.expectEqual(@as(?sdk.Plugin.RestoredHistory, null), try historyOf(&t, arena.allocator()));
 }

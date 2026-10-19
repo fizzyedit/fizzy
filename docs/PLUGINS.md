@@ -735,6 +735,11 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   holds, leaving it as it was. Nobody recording, nothing is encoded. `text` implements both:
   each step is a transaction's edits, removed and inserted bytes, and the selection after. Fill
   `top` (the entry on top once the step is done) so Undo can say whose step it takes back.
+  `restoreHistory(doc, history)` puts a document's history back as its track recorded it
+  (`sdk.Plugin.RestoredHistory`: each entry's id and parts, its `added` effect and every `joined`
+  one, and how many are applied), the document already standing where they leave it: a document
+  opened again picks up the history it had. Keep each entry's id; refuse a history that does not
+  undo to a document, leaving the history as it was. `text` implements it.
 - **Authors** — who made each step (`sdk.Author`: the person, an agent, a tape;
   `plans/SHARED_HISTORY_PLAN.md`). The host keeps it by step id; owners never store one. A plugin
   changing a document on someone's behalf acts as them around the commands it runs

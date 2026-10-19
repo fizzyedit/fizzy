@@ -403,6 +403,44 @@ pub fn trim(self: *History, gpa: Allocator, limit: usize) void {
     self.version += 1;
 }
 
+/// An entry put back by `restore`: its step id and what it did.
+pub const Restored = struct { step: u64, txn: Transaction };
+
+/// Put the history back as `entries` (taken: the history owns their transactions), oldest first,
+/// the first `applied` of them applied: a document's history read back from its track
+/// (`Document.restoreHistory`), in place of what it held. Each keeps its step id, and steps
+/// after it are numbered past the highest. What the text is does not change.
+pub fn restore(self: *History, gpa: Allocator, entries: []Restored, applied: usize) !void {
+    var undo: std.ArrayList(Entry) = .empty;
+    errdefer undo.deinit(gpa);
+    var redo: std.ArrayList(Entry) = .empty;
+    errdefer redo.deinit(gpa);
+    try undo.ensureTotalCapacity(gpa, applied);
+    try redo.ensureTotalCapacity(gpa, entries.len - applied);
+    var next = self.next_id;
+    for (entries) |e| next = @max(next, e.step + 1);
+    for (entries[0..applied]) |e| {
+        undo.appendAssumeCapacity(.{ .txn = e.txn, .kind = .other, .id = next, .step = e.step });
+        next += 1;
+    }
+    // The redo stack's top is the next to redo: the first entry past `applied`.
+    var i = entries.len;
+    while (i > applied) {
+        i -= 1;
+        redo.appendAssumeCapacity(.{ .txn = entries[i].txn, .kind = .other, .id = next, .step = entries[i].step });
+        next += 1;
+    }
+    for (self.undo_stack.items) |*e| e.deinit(gpa);
+    self.undo_stack.deinit(gpa);
+    for (self.redo_stack.items) |*e| e.deinit(gpa);
+    self.redo_stack.deinit(gpa);
+    self.undo_stack = undo;
+    self.redo_stack = redo;
+    self.next_id = next;
+    self.group_open = false;
+    self.version += 1;
+}
+
 /// The `i`th step below the top of the line (0 is the top), as `lastApplied` gives the top: how
 /// a caller reads the steps `keepGoneBack` added below a commit.
 pub fn appliedBelowTop(self: *const History, i: usize) ?StepRef {

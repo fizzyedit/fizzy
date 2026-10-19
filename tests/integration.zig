@@ -9086,6 +9086,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const tb = tracks.trackOf(b.id) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(usize, 0), tb.steps.items.len);
 
+        // The history it recorded, put back into a document that stands where it ends
+        // (`Tracks.historyOf`, `restoreHistory`): the same line, ids and all, that undoes to where
+        // the track began and redoes to where it ended.
+        {
+            var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+            defer arena.deinit();
+            const h = (try Tracks.historyOf(track, arena.allocator())) orelse return error.TestUnexpectedResult;
+            const la = a.owner.historyLine(a, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(la.entries.len, h.entries.len);
+            try std.testing.expectEqual(la.at, h.applied);
+            for (la.entries, h.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            try tracks.replayInto(a.id, b, n);
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqualStrings(want, try textOf(host, b));
+            try std.testing.expect(b.owner.restoreHistory(b, h));
+            const lb = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(la.at, lb.at);
+            for (la.entries, lb.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            try std.testing.expectEqualStrings(want, try textOf(host, b));
+            try std.testing.expect(b.owner.historyGoTo(b, 0));
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqualStrings("", try textOf(host, b));
+            try std.testing.expect(b.owner.historyGoTo(b, la.entries[la.entries.len - 1].id));
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqual(want.len + 1, (try textOf(host, b)).len);
+            // A history that does not fit what the document holds is refused, and nothing moves:
+            // back at the start, there is nothing for its applied entries to undo.
+            try std.testing.expect(b.owner.historyGoTo(b, 0));
+            try dvui.testing.settle(headlessFrame);
+            const lb2 = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.restoreHistory.?(b.owner.state, b, .{ .entries = h.entries, .applied = h.applied }));
+            const lb3 = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(lb2.at, lb3.at);
+            try std.testing.expectEqual(lb2.version, lb3.version);
+        }
+
         // A frame nothing asked of does no tracks work: an idle app, recording, costs a branch.
         const worked = tracks.worked;
         for (0..120) |_| {
