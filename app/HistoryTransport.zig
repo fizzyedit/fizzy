@@ -12,8 +12,9 @@
 //! it a moment (`dome_rules.Dwell`) grows the bar out of it, the grip lightening as the moment
 //! runs, so passing over it on the way somewhere never does; a press brings the bar at once. The
 //! grip gives way to the bar while it shows. It fills with the document's history
-//! (`DrawOptions.steps`) slowly, an hour or so of editing most of the way
-//! (`dome_rules.stepsFill`), or with a tape playing into it as it plays (`DrawOptions.progress`),
+//! (`DrawOptions.steps`) toward the most a history keeps (`DrawOptions.limit`), full where its
+//! oldest steps start to go (`dome_rules.stepsFill`), or with a tape playing into it as it plays
+//! (`DrawOptions.progress`),
 //! and brightens a moment at each new step: it is recording, and there is more to scrub.
 //!
 //! **Going.** It goes a few seconds after the pointer was last on it, and soon after the pointer
@@ -33,15 +34,21 @@
 //! set. One per document pane, kept by the app beside the pane.
 //!
 //! **The strip.** Given the document's pictures (`DrawOptions.frames`, `HistoryFrames`), scrubbing
-//! (a drag on the line, a held undo or redo) grows the bar upward into a strip of them, as a
-//! video's scrubber shows frames: each tile the document at a stretch of its history, the nearest
-//! step to the tile's middle that has a picture. It stays while the pointer is on the bar.
+//! (a drag on the line, a held undo or redo) grows the bar upward into a strip of them: one picture
+//! of the history, each step a slice of it, under the knob that goes there (`paintStrip`). It
+//! stays while the pointer is on the bar.
 //!
 //! **Export.** The bar has an export button whenever the app can export (`DrawOptions.export_from`).
 //! Pressed, it grows the strip and opens a window over it, as macOS trims a recording: a yellow
 //! bracket over the part to export, dragged from either side (`history_transport.Trim`), the
-//! document going to wherever a side is dragged and the rest dimmed. Pressed again, the part is the app's (`Pressed.exported`); undo's
-//! button, a cross while the window is open, closes it.
+//! document going to wherever a side is dragged and the rest dimmed. Pressed again, the part is
+//! the app's (`Pressed.exported`); undo's button, a cross while the window is open, closes it.
+//!
+//! **Play.** Beside undo, play steps the document forward through its history at the pace it was
+//! made (`DrawOptions.pace`), from where it stands, or from the start when it is at the end; inside
+//! the export window, through the window's part. Any other move of the person's stops it. A tape
+//! still playing into the document (`DrawOptions.tape_playing`) is paused and played on by the
+//! same button (`Pressed.tape`), and play reaching the end of what has landed plays the tape on.
 const HistoryTransport = @This();
 
 const std = @import("std");
@@ -82,6 +89,15 @@ held_off: bool = false,
 /// The stop the pointer holds the knob at while it drags the line, until the drag ends. Only
 /// while the bar holds the mouse: a drag whose capture went (the bar stopped drawing) is over.
 drag: ?usize = null,
+/// Playing through the history: when it next steps. Null: not playing.
+play: ?Play = null,
+
+const Play = struct { next_ns: i128 };
+
+/// How long each step waits when the app gives no pace (`DrawOptions.pace`), and the least any
+/// waits, in ms.
+const play_step_ms: u32 = 250;
+const play_least_ms: u32 = 40;
 
 const bar_h: f32 = 40;
 /// How much taller the bar grows for its strip.
@@ -105,6 +121,7 @@ pub fn stir(self: *HistoryTransport, now_ns: i128) void {
 /// held key is scrubbing: the strip grows.
 pub fn press(self: *HistoryTransport, now_ns: i128, forward: bool) usize {
     self.stir(now_ns);
+    self.play = null;
     const by = self.repeat.press(now_ns, forward);
     if (self.repeat.run > 1) self.strip.stir(now_ns);
     return by;
@@ -138,7 +155,7 @@ fn gripRect(area: dvui.Rect.Physical, r: f32, edge: ?f32) ?dvui.Rect {
 /// when the pane is too narrow for it.
 fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
     const w = @min(max_w, nat.w - 24);
-    if (w < 3 * button_d) return null;
+    if (w < 4 * button_d) return null;
     const h = bar_h + strip_h * grown;
     const bottom = nat.y + nat.h - 14;
     return .{ .x = nat.x + nat.w / 2 - w / 2, .y = bottom - h, .w = w, .h = h };
@@ -153,9 +170,12 @@ pub const DrawOptions = struct {
     /// The document has history to show: its pane has a grip. The app says, as it knows cheaply,
     /// so a pane asks its owner for nothing while the bar is hidden.
     history: bool = false,
-    /// How many steps of it the app has kept (fizzy: its track's), for the grip's fill; 0: none
-    /// shows, the grip is plain.
+    /// How many steps of it are kept, in the units `limit` counts (fizzy: its owner's history
+    /// entries), for the grip's fill; 0: none shows, the grip is plain.
     steps: usize = 0,
+    /// The most steps a history keeps (fizzy: `Settings.history_limit`, which each owner trims
+    /// its own history to): the grip is full at it, where the oldest start to go. 0: kept whole.
+    limit: usize = 0,
     /// Where the pane's own bottom edge is (physical y), when its card reaches lower than `area`:
     /// the grip stands on it. Null: `area`'s.
     edge: ?f32 = null,
@@ -169,6 +189,18 @@ pub const DrawOptions = struct {
     /// A tape playing into the document (fizzy: in a tape's tab), how far it has played, 0 to 1:
     /// the grip fills as it plays rather than by `steps`. Null: none.
     progress: ?f32 = null,
+    /// That tape's steps are landing now (it is neither played out nor held): play's button pauses
+    /// it.
+    tape_playing: bool = false,
+    /// How long play waits before each step, as the history was made; null: `play_step_ms` each.
+    pace: ?Pace = null,
+};
+
+/// The app's word on how long play waits going from one history entry to the next (`from` 0:
+/// before any), in ms; null when it does not know, and the step waits `play_step_ms`.
+pub const Pace = struct {
+    ctx: *const anyopaque,
+    gapFn: *const fn (ctx: *const anyopaque, doc: sdk.DocHandle, from: u64, to: u64) ?u32,
 };
 
 const HistoryFrames = @import("HistoryFrames.zig");
@@ -177,6 +209,8 @@ const HistoryFrames = @import("HistoryFrames.zig");
 pub const Pressed = struct {
     /// The window's part was exported: from stop `from` to stop `to` of the line.
     exported: ?rules.Trim = null,
+    /// The tape playing into the document: true, play it on; false, pause it (`DrawOptions.tape_playing`).
+    tape: ?bool = null,
 };
 
 /// Draw the bar over `area` (the document's pane, physical) when it shows, and take its input.
@@ -216,7 +250,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     }
     const p = self.shown.openness(now);
     // A tape playing into the document fills it as it plays; else its history does.
-    const fill = if (opts.progress) |f| dome_rules.progressFill(f) else dome_rules.stepsFill(opts.steps);
+    const fill = if (opts.progress) |f| dome_rules.progressFill(f) else dome_rules.stepsFill(opts.steps, opts.limit);
     // The grip, giving way to the bar as it comes in, quiet at rest and coming up while in use: a
     // frame each while it changes, and none while it only sits there.
     if (opts.history and p < 1) {
@@ -270,7 +304,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const back: dvui.Rect = .{ .x = whole.x, .y = center.y - button_d / 2, .w = button_d, .h = button_d };
     const fwd: dvui.Rect = .{ .x = whole.x + w - button_d - end_w, .y = back.y, .w = button_d, .h = button_d };
     const share: dvui.Rect = .{ .x = whole.x + w - button_d * export_g, .y = back.y + button_d * (1 - export_g) / 2, .w = button_d * export_g, .h = button_d * export_g };
-    const track: dvui.Rect = .{ .x = back.x + button_d + gap, .y = whole.y, .w = w - 2 * (button_d + gap) - end_w, .h = whole.h };
+    const play_r: dvui.Rect = .{ .x = back.x + button_d + gap, .y = back.y, .w = button_d, .h = button_d };
+    const track: dvui.Rect = .{ .x = play_r.x + button_d + gap, .y = whole.y, .w = w - 3 * (button_d + gap) - end_w, .h = whole.h };
     // The collapse tab, over the middle of the bar: back into the grip.
     const tab = dome.tabRect(whole);
     const hit = if (self.place(area, now)) |pl| pl else wrs.rectToPhysical(whole.outsetAll(4));
@@ -285,7 +320,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (self.drag != null and !dvui.captured(fid)) self.drag = null;
     if (self.grip != null and !dvui.captured(fid)) self.grip = null;
 
-    const phys = [4]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd), wrs.rectToPhysical(share) };
+    const phys = [5]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd), wrs.rectToPhysical(share), wrs.rectToPhysical(play_r) };
     const tab_p = wrs.rectToPhysical(tab);
     const pad = 14;
     const x0 = phys[1].x + pad * s;
@@ -301,11 +336,13 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     core.anchor.markRect(fid, phys[0], true, "history.back:{s}", .{path});
     core.anchor.markRect(fid, .{ .x = x0, .y = phys[1].y, .w = x1 - x0, .h = phys[1].h }, true, "history.line:{s}", .{path});
     core.anchor.markRect(fid, phys[2], true, "history.forward:{s}", .{path});
+    core.anchor.markRect(fid, phys[4], true, "history.play:{s}", .{path});
     if (export_g > 0) core.anchor.markRect(fid, phys[3], true, "history.export:{s}", .{path});
     if (self.tab) core.anchor.markRect(fid, tab_p, true, "history.collapse:{s}", .{path});
 
     // Input: the buttons step, the line goes where it is pressed and follows a drag.
     var go: ?usize = null;
+    var play_pressed = false;
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = fid, .r = hit })) continue;
         const me = switch (e.evt) {
@@ -320,10 +357,13 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                     if (self.window != null) self.window = null else go = line.at -| 1;
                 } else if (phys[2].contains(me.p)) {
                     if (self.window == null) go = @min(n, line.at + 1);
+                } else if (phys[4].contains(me.p)) {
+                    play_pressed = true;
                 } else if (self.tab and tab_p.contains(me.p)) {
                     // An open export window would keep the bar: it closes with it.
                     self.window = null;
                     self.grip = null;
+                    self.play = null;
                     self.shown.hide(now);
                     self.held_off = true;
                     self.was_on = false;
@@ -337,7 +377,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                     dvui.captureMouse(float.data(), e.num);
                     const stop = rules.stopAt(me.p.x, x0, x1, n);
                     if (self.window) |*win| {
-                        const grip = win.grab(me.p.x, x0, x1, 12 * s);
+                        const grip = win.grab(me.p.x, x0, x1, (handle_w + trim_reach) * s, trim_reach * s);
                         self.grip = grip;
                         go = dragWindow(win, grip, stop, min_from.?);
                     } else self.drag = stop;
@@ -363,6 +403,35 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         }
     }
     if (self.drag) |d| go = d;
+    // Any other move of the person's stops play; play's own button starts or stops it.
+    if (go != null) self.play = null;
+    const lo: usize = if (self.window) |win| win.from else 0;
+    const hi: usize = if (self.window) |win| win.to else n;
+    if (play_pressed) {
+        if (self.play != null or opts.tape_playing) {
+            self.play = null;
+            if (opts.tape_playing) pressed.tape = false;
+        } else if (line.at >= hi and opts.progress != null and opts.progress.? < 1) {
+            // At the end of what a held tape has landed: it plays on.
+            pressed.tape = true;
+        } else {
+            const from = if (line.at >= hi or line.at < lo) lo else line.at;
+            if (from != line.at) go = from;
+            self.play = .{ .next_ns = now + std.time.ns_per_ms * @as(i128, playGap(opts.pace, doc, line, from)) };
+        }
+    }
+    if (self.play) |*pl| if (go == null and now >= pl.next_ns) {
+        if (line.at >= hi or line.at < lo) {
+            self.play = null;
+            // Played to the end of what has landed: a held tape plays on from there.
+            if (self.window == null and opts.progress != null and opts.progress.? < 1) pressed.tape = true;
+        } else {
+            go = line.at + 1;
+            pl.next_ns = now + std.time.ns_per_ms * @as(i128, playGap(opts.pace, doc, line, line.at + 1));
+            self.shown.stir(now);
+            if (opts.frames != null) self.strip.stir(now);
+        }
+    };
     var at = line.at;
     if (go) |to| if (to != at) {
         if (doc.owner.historyGoTo(doc, stopId(line, to))) at = to;
@@ -387,32 +456,34 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const prev_alpha = dvui.alpha(if (from != null) dome.glassAlpha(self.presence.value, p) else p);
     defer dvui.alphaSet(prev_alpha);
     const pt = dvui.currentWindow().mouse_pt;
-    var bubbles: [5]core.dialogs.Bubble = undefined;
+    var bubbles: [6]core.dialogs.Bubble = undefined;
     const trimming = self.window != null;
     // The line's bubble: a capsule round the line alone, easing to a surface's corners as the
     // strip grows, so the pictures sit inside them.
     const line_radius = std.math.lerp(phys[1].h / 2, core.corners.scaled(core.corners.card) * s, @min(1, grown * 1.5));
-    for (phys, bubbles[0..4], 0..) |r, *b, i| b.* = .{
+    for (phys, bubbles[0..5], 0..) |r, *b, i| b.* = .{
         .rect = if (bud) |f| dome.lerpRect(f, r, dome.emerge(p, bud_delays[i])) else r,
         .radius = if (i == 1 and grown > 0) line_radius else null,
         .light = if (r.contains(pt) and switch (i) {
             0 => trimming or at > 0,
             2 => !trimming and at < n,
-            3 => true,
+            3, 4 => true,
             else => false,
         }) core.dialogs.bubble_hover else 0,
     };
     // The tab, a small drop on the bar's top that its glass runs into.
-    var count: usize = if (export_g > 0) 4 else 3;
+    // Play's bubble rides behind export's in the list, so export's may be left out.
+    if (export_g <= 0) bubbles[3] = bubbles[4];
+    var count: usize = if (export_g > 0) 5 else 4;
     if (self.tab) {
         bubbles[count] = .{
-            .rect = if (bud) |f| dome.lerpRect(f, tab_p, dome.emerge(p, bud_delays[4])) else tab_p,
+            .rect = if (bud) |f| dome.lerpRect(f, tab_p, dome.emerge(p, bud_delays[5])) else tab_p,
             .light = if (tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
         };
         count += 1;
     }
     // The grip itself, in the same glass, shrinking into the pane's edge as the bar leaves it.
-    var shapes: [6]core.dialogs.Bubble = undefined;
+    var shapes: [7]core.dialogs.Bubble = undefined;
     @memcpy(shapes[0..count], bubbles[0..count]);
     if (from) |f| {
         shapes[count] = dome.shrinking(f, p);
@@ -439,6 +510,9 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         button(bounds, back, "history_cancel", icons.tvg.lucide.x, ink.opacity(0.85));
     } else button(bounds, back, "history_back", icons.tvg.lucide.undo, ink.opacity(if (at > 0) 0.85 else 0.3));
     button(bounds, fwd, "history_forward", icons.tvg.lucide.redo, ink.opacity(if (!trimming and at < n) 0.85 else 0.3));
+    if (self.play != null or opts.tape_playing) {
+        button(bounds, play_r, "history_pause", icons.tvg.lucide.pause, ink.opacity(0.85));
+    } else button(bounds, play_r, "history_play", icons.tvg.lucide.play, ink.opacity(if (hi > lo) 0.85 else 0.3));
     if (self.tab) dome.chevron(bounds, tab, ink.opacity(0.85));
     if (export_g > 0.3) {
         if (trimming) {
@@ -451,8 +525,13 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     var buf: [96]u8 = undefined;
     const title = if (at == 0) "Before any change" else line.entries[at - 1].title;
     const label = if (trimming and opts.window_summary.len > 0) opts.window_summary else std.fmt.bufPrint(&buf, "{s}   {d} / {d}", .{ title, at, n }) catch title;
-    const film: dvui.Rect.Physical = .{ .x = x0, .y = phys[1].y + 8 * s, .w = x1 - x0, .h = strip_h * grown * s - 6 * s };
-    if (grown > 0) if (opts.frames) |frames| paintStrip(film, frames, line, at, s, grown);
+    // The strip of pictures, inset from the bar's top far enough that the trim's bracket round it
+    // stays inside the glass, its corners the bar's own curve less that inset, so it never runs
+    // into it.
+    const film_top = strip_top * s;
+    const film: dvui.Rect.Physical = .{ .x = x0, .y = phys[1].y + film_top, .w = x1 - x0, .h = @max(0, strip_h * grown * s - film_top - 2 * s) };
+    const film_radius = @max(strip_radius * s, line_radius - film_top);
+    if (grown > 0) if (opts.frames) |frames| paintStrip(film, film_radius, frames, line, at, s, grown);
     dvui.labelNoFmt(@src(), label, .{}, .{
         .rect = .{ .x = track.x + pad - bounds.x, .y = track.y + track.h - bar_h + 4 - bounds.y, .w = track.w - 2 * pad, .h = font.lineHeight() },
         .padding = .{},
@@ -464,19 +543,26 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // The grip's liquid, flowing out of it into the line as the bar grows (`from`, the grip's lower
     // part), and back as it goes.
     paintLine(line_r, at, n, ink, s, .{ .tilt = tilt, .from = if (from) |f| dome.pool(f, fill) else null, .out = out, .alpha = shape_alpha });
-    if (self.window) |win| paintWindow(phys[1], if (grown > 0) line_radius else phys[1].h / 2, x0, x1, win, s);
+    if (self.window) |win| {
+        // Round the strip of pictures alone, as a recorder's trim wraps its strip, not the bar.
+        paintWindow(film.outsetAll(trim_inset * s + trim_edge * s), film_radius + trim_inset * s + trim_edge * s, x0, x1, win, s);
+        // Its sides are what drag: the pointer over one, or dragging it, shows they move sideways.
+        const over_side = film.outsetAll(8 * s).contains(pt) and win.grab(pt.x, x0, x1, (handle_w + trim_reach) * s, trim_reach * s) != .head;
+        if (over_side or self.grip != null) dvui.cursorSet(.arrow_w_e);
+    }
 
     // Comes in, goes: a frame each while it fades, and one wake for when it next changes on its
     // own (it starts to go, it is gone).
     if (p < 1 or (grown > 0 and grown < 1) or !self.slosh.settled(now)) dvui.refresh(null, @src(), fid);
-    const next = if (self.strip.nextChange(now)) |t| @min(t, self.shown.nextChange(now) orelse t) else self.shown.nextChange(now);
+    var next = if (self.strip.nextChange(now)) |t| @min(t, self.shown.nextChange(now) orelse t) else self.shown.nextChange(now);
+    if (self.play) |pl| next = if (next) |t| @min(t, pl.next_ns) else pl.next_ns;
     if (next) |t| dvui.timer(fid, @intCast(@min(@divTrunc(t - now, 1000) + 1, std.math.maxInt(i32))));
     return pressed;
 }
 
-/// When each bubble buds out of the grip, as a share of the growing: the line first, undo and
-/// redo after it, then export, then the tab.
-const bud_delays = [5]f32{ 0.12, 0, 0.12, 0.22, 0.3 };
+/// When each bubble buds out of the grip, as a share of the growing: the line first, undo, play and
+/// redo after it, then export, then the tab (as `phys`: undo, line, redo, export, play).
+const bud_delays = [6]f32{ 0.12, 0, 0.12, 0.22, 0.06, 0.3 };
 
 /// macOS's trim yellow.
 const yellow: dvui.Color = .{ .r = 0xF5, .g = 0xC0, .b = 0x2E };
@@ -487,72 +573,130 @@ fn dragWindow(win: *rules.Trim, grip: rules.Trim.Grip, stop: usize, min_from: us
     return win.drag(grip, @max(stop, if (grip == .to) min_from + 1 else min_from));
 }
 
+/// How long play waits at stop `at` before going on to the next, in ms.
+fn playGap(pace: ?Pace, doc: sdk.DocHandle, line: sdk.Plugin.HistoryLine, at: usize) u32 {
+    if (at >= line.entries.len) return play_step_ms;
+    const ms = if (pace) |pc| pc.gapFn(pc.ctx, doc, stopId(line, at), stopId(line, at + 1)) orelse play_step_ms else play_step_ms;
+    return @max(play_least_ms, ms);
+}
+
 /// The export window over `r` (physical: the strip and the line under it): the rest dimmed, a
 /// yellow bracket over the part, a handle at each side.
+/// The trim window's bracket, `trim_inset` inside `vessel` (physical), its outer corners `radius`
+/// less that: drawn round the strip of pictures (`vessel` is the strip grown by the inset and the
+/// bracket's own width), so its yellow wraps the pictures and nothing else.
 fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: rules.Trim, s: f32) void {
-    // Inside the line's bubble, by its own corners less the inset, so the bracket never reaches
-    // past the glass round it.
-    const inset = 5 * s;
+    const inset = trim_inset * s;
     const r = vessel.insetAll(inset);
     const ro = @max(2 * s, radius - inset);
     const ri: dvui.Corner.Physical = .round(1.5 * s);
     const outer: dvui.Corner.Physical = .round(ro);
-    const xf = rules.stopX(win.from, x0, x1, win.n);
-    const xt = rules.stopX(win.to, x0, x1, win.n);
-    const handle_w = 8 * s;
-    const edge = 2.5 * s;
+    // On the edges of the first and last stops' slices, so the bracket holds whole slices.
+    const xf = rules.cellStart(win.from, x0, x1, win.n);
+    const xt = rules.cellEnd(win.to, x0, x1, win.n);
+    const edge = trim_edge * s;
     const dim: dvui.Color = dvui.Color.black.opacity(0.6);
-    const left = xf - handle_w;
-    const right = xt + handle_w;
+    const left = xf - handle_w * s;
+    const right = xt + handle_w * s;
     if (left > r.x) (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = left - r.x, .h = r.h }).fill(.{ .tl = outer, .bl = outer, .tr = ri, .br = ri }, .{ .color = .{ .color = dim }, .fade = 1 });
     if (right < r.x + r.w) (dvui.Rect.Physical{ .x = right, .y = r.y, .w = r.x + r.w - right, .h = r.h }).fill(.{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = dim }, .fade = 1 });
     (dvui.Rect.Physical{ .x = xf, .y = r.y, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
     (dvui.Rect.Physical{ .x = xf, .y = r.y + r.h - edge, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
     for ([_]f32{ left, xt }, [_]bool{ true, false }) |x, is_left| {
-        const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y, .w = handle_w, .h = r.h };
+        const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y, .w = handle_w * s, .h = r.h };
         hr.fill(if (is_left) .{ .tl = outer, .bl = outer, .tr = ri, .br = ri } else .{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = yellow }, .fade = 1 });
-        const notch: dvui.Rect.Physical = .{ .x = x + handle_w / 2 - 0.75 * s, .y = r.y + r.h / 2 - 6 * s, .w = 1.5 * s, .h = 12 * s };
+        const notch: dvui.Rect.Physical = .{ .x = x + handle_w * s / 2 - 0.75 * s, .y = r.y + r.h / 2 - 6 * s, .w = 1.5 * s, .h = 12 * s };
         notch.fill(.round(0.75 * s), .{ .color = .{ .color = .black } });
     }
 }
 
-/// The strip `r` (physical): tiles across it, each the picture nearest its stretch's middle of the
-/// history (`line`), the tile under the knob at `at` lit; a stretch with no picture stays glass.
-fn paintStrip(r: dvui.Rect.Physical, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
+/// The strip `r` (physical), its ends where the line's are: one picture of the history, each stop
+/// a slice of it (`history_transport.stripColumns`). A stop takes the stretch round where its knob
+/// sits and shows that stretch of the document as it was then, so across the strip the document is
+/// read building up from left to right, and a slice is under the knob that goes to it. The strip
+/// frames the document's content, as a recorder's strip frames what changed: the part of the
+/// pictures round everything any of them holds (`HistoryFrames.Picture.content`), at the strip's
+/// shape (`history_transport.frameContent`), so a few words at the top of a wide pane fill it
+/// rather than empty pane. A stop with no picture shows the nearest that has one; none at all,
+/// the stretch stays glass. Where the document is, `at`, a line across the strip says, as a
+/// recorder's playhead does, over the middle of its stop's slice where the knob below it is.
+fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
     const n = line.entries.len;
-    // Tiles about square, as many as fit, each picture cropped to its middle: a wide pane's
-    // pictures at their own shape fit only three or four.
-    const aspect: f32 = 1.1;
-    const count: usize = @max(1, @as(usize, @intFromFloat(@floor(r.w / (r.h * aspect)))));
-    const tile_w = r.w / @as(f32, @floatFromInt(count));
-    const gap_px = 2 * s;
+    var buf: [256]rules.Column = undefined;
+    const columns = rules.stripColumns(n, r.x, r.x + r.w, 2 * s, &buf);
     const ink = dvui.themeGet().color(.window, .text);
-    for (0..count) |i| {
-        // The stretch of stops this tile stands for, and the stop nearest its middle with a picture.
-        const lo = i * (n + 1) / count;
-        const hi = @max(lo + 1, (i + 1) * (n + 1) / count);
-        const mid = (lo + hi) / 2;
-        var best: ?dvui.Texture = null;
-        // Outward from the middle, until both ends of the stretch are passed.
-        var d: usize = 0;
-        while (best == null and (mid + d < hi or mid >= lo + d)) : (d += 1) {
-            if (mid + d < hi) best = frames.get(stopId(line, mid + d));
-            if (best == null and d > 0 and mid >= lo + d) best = frames.get(stopId(line, mid - d));
-        }
-        const tile: dvui.Rect.Physical = .{ .x = r.x + @as(f32, @floatFromInt(i)) * tile_w + gap_px / 2, .y = r.y, .w = tile_w - gap_px, .h = r.h };
-        const lit = at >= lo and at < hi or (at == n and i == count - 1);
-        if (best) |tex| {
-            // Cover the tile, the picture's middle kept.
-            const ta = @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(@max(1, tex.height)));
-            const want = tile.w / tile.h;
-            const uv: dvui.Rect = if (ta > want) .{ .x = (1 - want / ta) / 2, .y = 0, .w = want / ta, .h = 1 } else .{ .x = 0, .y = (1 - ta / want) / 2, .w = 1, .h = ta / want };
-            dvui.renderTexture(tex, .{ .r = tile, .s = s }, .{ .uv = uv, .corners = .all(4), .colormod = dvui.Color.white.opacity(if (lit) grown else 0.75 * grown) }) catch {};
-        } else {
-            tile.fill(.all(4 * s), .{ .color = .{ .color = ink.opacity(0.06 * grown) } });
-        }
-        if (lit) tile.stroke(.all(4 * s), .{ .thickness = 1.5 * s, .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
+    // Round what the pictures shown hold, in fractions of a picture (they share the pane's shape).
+    var boxes: [256]rules.Frac = undefined;
+    var nb: usize = 0;
+    for (columns) |c| if (nearestPicture(frames, line, c.stop)) |pic| if (pic.content) |pc| {
+        boxes[nb] = pc;
+        nb += 1;
+    };
+    const content = rules.contentUnion(boxes[0..nb]);
+    const want = r.w / r.h;
+    for (columns, 0..) |c, i| {
+        // On whole pixels, so neighbouring slices meet edge to edge: a fractional edge is half
+        // covered on both sides, and the glass shows through the join as a seam.
+        const cx0 = @round(c.x0);
+        const cx1 = @round(c.x1);
+        const col: dvui.Rect.Physical = .{ .x = cx0, .y = r.y, .w = cx1 - cx0, .h = r.h };
+        // The strip's own corners on its two end columns, square between them.
+        const end: dvui.Corner.Physical = .round(radius);
+        const square: dvui.Corner.Physical = .{ .kind = .square };
+        const corners: dvui.CornerRect.Physical = .{
+            .tl = if (i == 0) end else square,
+            .bl = if (i == 0) end else square,
+            .tr = if (i == columns.len - 1) end else square,
+            .br = if (i == columns.len - 1) end else square,
+        };
+        const pic = nearestPicture(frames, line, c.stop) orelse {
+            col.fill(corners, .{ .color = .{ .color = ink.opacity(0.06 * grown) } });
+            continue;
+        };
+        const tex = pic.tex;
+        // The part of the picture the strip frames, round the content; this column's stretch of it.
+        const ta = @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(@max(1, tex.height)));
+        const cover = rules.frameContent(content, ta, want, content_pad, content_closest);
+        const fa = (cx0 - r.x) / r.w;
+        const fb = (cx1 - r.x) / r.w;
+        const uv: dvui.Rect = .{ .x = cover.x + fa * cover.w, .y = cover.y, .w = (fb - fa) * cover.w, .h = cover.h };
+        dvui.renderTexture(tex, .{ .r = col, .s = s }, .{ .uv = uv, .corners = corners.scale(1 / s, dvui.CornerRect), .colormod = dvui.Color.white.opacity(grown) }) catch {};
     }
+    // The playhead, standing a little past the strip's top and bottom, with a dark edge so it reads
+    // over any picture.
+    const hx = rules.stopX(at, r.x, r.x + r.w, n);
+    const over = 3 * s;
+    const head: dvui.Rect.Physical = .{ .x = hx - 1 * s, .y = r.y - over, .w = 2 * s, .h = r.h + 2 * over };
+    head.outsetAll(0.75 * s).fill(.round(1.75 * s), .{ .color = .{ .color = dvui.Color.black.opacity(0.4 * grown) } });
+    head.fill(.round(1 * s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
+}
+
+/// How much room the strip leaves round the content, as a share of it each side; and how close it
+/// comes, as the least share of a picture's height it shows (a single word is not blown up).
+const content_pad: f32 = 0.12;
+const content_closest: f32 = 0.15;
+
+/// The trim bracket's gap to what it holds, the width of its yellow and of its handles, in points;
+/// the strip's own corner radius; and how far past a handle, either way, a press still takes it
+/// (`Trim.grab`): inside that, a press on the strip is a seek.
+const trim_inset: f32 = 5;
+const trim_edge: f32 = 2.5;
+const handle_w: f32 = 8;
+const strip_radius: f32 = 4;
+/// The strip's inset from the top of the bar, in points: room for the trim's bracket round it.
+const strip_top: f32 = 12;
+const trim_reach: f32 = 3;
+
+/// The picture of stop `stop`, or of the nearest stop to it that has one.
+fn nearestPicture(frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, stop: usize) ?HistoryFrames.Picture {
+    const n = line.entries.len;
+    var d: usize = 0;
+    while (d <= n) : (d += 1) {
+        if (stop + d <= n) if (frames.get(stopId(line, stop + d))) |t| return t;
+        if (d > 0 and stop >= d) if (frames.get(stopId(line, stop - d))) |t| return t;
+    }
+    return null;
 }
 
 /// A step button's icon, in the middle of its bubble `r` (window-natural; `bounds` the layer's).

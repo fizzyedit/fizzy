@@ -19,7 +19,9 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     const host = runtime.host();
     const arena = host.arena();
 
-    if (!wb.restored) {
+    // Not while a demo has the window: last session's panes and tabs come back once it has gone
+    // (`restorePanes`), not into the middle of it.
+    if (!wb.restored and !wb.holding) {
         wb.restored = true;
         // Where the app arranges the panes, it brought them back itself — and carries an
         // arrangement saved before it did over into its own (fizzy's `Workspaces.carryOver`).
@@ -156,6 +158,8 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
 /// no plugin directory to offer.
 fn savePanes(wb: *Workbench) void {
     wb.panes_dirty = false;
+    // A demo has the window: what it arranges is not the person's (`holdPanes`).
+    if (wb.holding) return;
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const path = panesPath(wb) orelse return;
     defer wb.allocator.free(path);
@@ -214,7 +218,11 @@ fn loadPanes(wb: *Workbench) void {
         loaded.deinit();
         return;
     }
+    adoptPanes(wb, loaded);
+}
 
+/// Make `loaded` the arrangement, every pane in it a workspace.
+fn adoptPanes(wb: *Workbench, loaded: Panes) void {
     wb.panes.deinit();
     wb.panes = loaded;
     for (wb.panes.nodes.items) |n| {
@@ -229,6 +237,64 @@ fn loadPanes(wb: *Workbench) void {
     if (wb.workspaces.count() > 0 and wb.paneLeaf(wb.open_workspace_grouping) == null) {
         wb.open_workspace_grouping = wb.workspaces.keys()[0];
     }
+}
+
+/// Keep the person's arrangement while a demo has the window, and save nothing until it is put
+/// back (`restorePanes`): the demo's splits are not theirs. A second hold keeps the first.
+///
+/// Nothing is saved while holding, whatever else happens, so the arrangement on disk stays the
+/// person's: a copy that could not be made is read back from there instead. Before the first
+/// rebuild has restored last session's panes there is nothing of theirs here to copy; that
+/// restore waits for the demo to end.
+pub fn holdPanes(wb: *Workbench) void {
+    if (wb.holding) return;
+    wb.holding = true;
+    wb.held_open = wb.open_workspace_grouping;
+    if (!wb.restored) return;
+    // A copy through a snapshot: a snapshot borrows the pane names from the live tree, which the
+    // demo's first cut replaces (`onePane`).
+    const snap = wb.panes.snapshot(wb.allocator) catch |err| {
+        dvui.log.err("workbench: could not set the panes aside ({t}); they come back from disk", .{err});
+        return;
+    };
+    defer snap.deinit(wb.allocator);
+    wb.held_panes = Panes.fromSnapshot(wb.allocator, snap) catch |err| blk: {
+        dvui.log.err("workbench: could not set the panes aside ({t}); they come back from disk", .{err});
+        break :blk null;
+    };
+}
+
+/// One pane, as a demo's keyframe declares the window: the open one, the others closing with
+/// their leaves (`rebuildWorkspaces`). Its documents are the keyframe's to open.
+pub fn onePane(wb: *Workbench) void {
+    var one = Panes.init(wb.allocator);
+    one.owns_panel_ids = true;
+    one.animated = true;
+    const root = one.allocNodeForRoot() catch return;
+    var buf: [32]u8 = undefined;
+    one.insertTabOwned(root, 0, Workspace.name(&buf, wb.open_workspace_grouping)) catch {
+        one.deinit();
+        return;
+    };
+    adoptPanes(wb, one);
+}
+
+/// The person's arrangement again (`holdPanes`), and saving with it: the copy, or what is on disk
+/// where there is none. Before last session's panes were ever restored, one pane, for the next
+/// rebuild to restore them into.
+pub fn restorePanes(wb: *Workbench) void {
+    if (!wb.holding) return;
+    wb.holding = false;
+    if (wb.held_panes) |held| {
+        wb.held_panes = null;
+        adoptPanes(wb, held);
+    } else if (wb.restored) {
+        loadPanes(wb);
+    } else {
+        wb.open_workspace_grouping = wb.held_open;
+        onePane(wb);
+    }
+    if (wb.workspaces.contains(wb.held_open)) wb.open_workspace_grouping = wb.held_open;
 }
 
 /// Delete the saved arrangement: the app has taken it over (`Workbench.places`).

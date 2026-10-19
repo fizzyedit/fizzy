@@ -159,6 +159,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.close", .title = "Close", .bind = null, .run = cmdClose, .isEnabled = anyDocOpen, .params = ClosePath.params, .runWith = ClosePath.bind(cmdClosePath), .icon = icons.tvg.lucide.x },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll, .icon = icons.tvg.lucide.@"save-all" },
     .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdUndoWith), .icon = icons.tvg.lucide.undo },
+    .{ .id = "fizzy.goBackBefore", .title = "Go Back to Before the Last Agent's Change", .bind = null, .run = cmdGoBackBefore, .isEnabled = anyDocOpen, .params = GoBackBefore.params, .runWith = GoBackBefore.bind(cmdGoBackBeforeWith), .icon = icons.tvg.lucide.history },
     .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
@@ -199,6 +200,7 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
     .{ .id = "fizzy.demo.playTape", .title = "Demo: Play a Tape…", .bind = null, .run = cmdPlayTape, .params = TapePath.params, .runWith = TapePath.bind(cmdPlayTapePath), .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.demo.play", .title = "Demo: Play by Name…", .bind = null, .params = DemoByName.params, .runWith = DemoByName.bind(cmdDemoPlayNamed), .icon = icons.tvg.lucide.@"circle-play" },
+    .{ .id = "fizzy.windowMaterial", .title = "Window Material…", .bind = null, .run = cmdWindowMaterialStep, .params = WindowMaterial.params, .runWith = WindowMaterial.bind(cmdWindowMaterial), .icon = icons.tvg.lucide.@"app-window" },
     .{ .id = "fizzy.demo.speed", .title = "Demo: Speed…", .bind = null, .run = cmdDemoSpeedStep, .isEnabled = demoLoaded, .params = DemoSpeed.params, .runWith = DemoSpeed.bind(cmdDemoSpeed), .icon = icons.tvg.lucide.gauge },
 } ++ demoCatalogCommands();
 
@@ -254,6 +256,39 @@ fn cmdDemoPlayNamed(state: *anyopaque, args: DemoByName.Args, call: *sdk.Command
         .busy => return call.fail("something else is driving fizzy: a demo can start once it has finished", .{}),
         .unsaved => return call.fail("there is unsaved work open, which a demo would set aside", .{}),
     }
+}
+
+const WindowMaterial = sdk.Command.Params(struct {
+    kind: sdk.Command.Arg([]const u8, .{ .description = "What the window is made of: none (opaque), transparent, blur, frost or liquid. Each platform shows the best it has at or below it. Empty steps to the next." }) = .init(""),
+});
+
+/// The next material, round from Liquid Glass back to opaque, as a row or a shortcut runs it.
+fn cmdWindowMaterialStep(state: *anyopaque) anyerror!void {
+    _ = stepWindowMaterial(editorFromState(state));
+}
+
+/// The window's material (`Settings.window_material`), as the Window settings set it, or the next
+/// one with no `kind`. Answers the kind it set.
+fn cmdWindowMaterial(state: *anyopaque, args: WindowMaterial.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    if (args.kind.len == 0) return call.returns(.{ .kind = stepWindowMaterial(editor) });
+    const kind = std.meta.stringToEnum(fizzy.core.material.Kind, args.kind) orelse
+        return call.fail("not a material: {s} (none, transparent, blur, frost or liquid)", .{args.kind});
+    setWindowMaterial(editor, kind);
+    try call.returns(.{ .kind = kind });
+}
+
+fn stepWindowMaterial(editor: *Editor) fizzy.core.material.Kind {
+    const Kind = fizzy.core.material.Kind;
+    const next: Kind = @fromBackingInt(@intCast((@backingInt(editor.app.settings.window_material) + 1) % std.enums.values(Kind).len));
+    setWindowMaterial(editor, next);
+    return next;
+}
+
+fn setWindowMaterial(editor: *Editor, kind: fizzy.core.material.Kind) void {
+    editor.app.settings.window_material = kind;
+    editor.markSettingsDirty();
+    dvui.refresh(null, @src(), null);
 }
 
 const DemoSpeed = sdk.Command.Params(struct {
@@ -456,6 +491,33 @@ const HistoryStep = sdk.Command.Params(struct {
 /// the active document's own (`menu_model.canUndo`). An enabled check that sees the call's target
 /// is the control server's to decide (`plans/CONTROL_SERVER_PLAN.md`, "Commands that take a
 /// document").
+const GoBackBefore = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document, by its path. Empty: the active one." }) = .init(""),
+});
+
+fn cmdGoBackBefore(state: *anyopaque) anyerror!void {
+    const editor = editorFromState(state);
+    const doc = editor.activeDoc() orelse return;
+    const back = editor.backBefore(doc, null, editor.app.host.arena()) orelse return;
+    _ = doc.owner.historyGoTo(doc, back.to);
+}
+
+/// Go back to just before the last run an agent made on a document (one call of its, all its steps):
+/// "no, not like that". Its steps, and any of the person's since, stay on the line, so going
+/// forward brings them back (`plans/SHARED_HISTORY_PLAN.md`, step 6). Answers where it went, whose
+/// change it was, and how many steps that are not the run's went back with it.
+fn cmdGoBackBeforeWith(state: *anyopaque, args: GoBackBefore.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const doc = if (args.path.len == 0)
+        editor.activeDoc() orelse return call.fail("no document is active", .{})
+    else
+        editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
+    const back = editor.backBefore(doc, null, call.arena) orelse
+        return call.fail("nothing an agent did on {s} is left to go back before", .{doc.owner.documentPath(doc)});
+    if (doc.owner.historyGoToWhy(doc, back.to)) |why| return call.fail("{s} could not go back: {s}", .{ doc.owner.id, why });
+    try call.returns(.{ .to = back.to, .by = Editor.authorName(back.by), .also_taken_back = back.others });
+}
+
 fn cmdUndoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Call) anyerror!void {
     try historyStepWith(editorFromState(state), args, call, .undo);
 }
@@ -667,14 +729,29 @@ fn cmdCaptureWith(state: *anyopaque, args: CaptureArgs.Args, call: *sdk.Command.
     try call.returns(written);
 }
 
-const ScreenArgs = sdk.Command.Params(struct {});
+const ScreenArgs = sdk.Command.Params(struct {
+    since: sdk.Command.Arg(u32, .{ .description = "The `seq` of a screen already read: answered with what changed since it (added, removed, changed nodes) while it is one of the last few, else in full.", .min = 0, .max = std.math.maxInt(u32) }) = .init(0),
+});
 
-/// What is on screen, as ZON (`automation` service `snapshot`): each window, then each widget's
-/// role, name, tag, rect and parent. Taken over the next frame, so answered then
-/// (`Editor.answerLaterCommands`).
-fn cmdScreen(state: *anyopaque, _: ScreenArgs.Args, call: *sdk.Command.Call) anyerror!void {
+/// What is on screen, as ZON (`automation` service `snapshot`): `.{ .seq, .nodes }`, each window
+/// then each widget with a key that stays the same from frame to frame (`control.screen_diff`),
+/// its role, name, tag, rect and parent's key; with `since`, what changed since that screen
+/// (`Editor.screenAnswer`). Asked for often, every frame is taken (`Snapshot.keepTaking`)
+/// until two seconds pass without asking, and the answer is the frame last drawn, at once.
+/// Otherwise it is taken over the next frame, and answered then (`Editor.answerLaterCommands`).
+fn cmdScreen(state: *anyopaque, args: ScreenArgs.Args, call: *sdk.Command.Call) anyerror!void {
     const editor = editorFromState(state);
-    try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot() });
+    const snapshot = &editor.demo.snapshot;
+    editor.screen_watched_until_ns = std.Io.Clock.awake.now(dvui.io).nanoseconds + 2 * std.time.ns_per_s;
+    snapshot.keepTaking(true);
+    // The frame last drawn, unless a command ran this frame before this one (this one is counted):
+    // what that did is not drawn yet, so the next frame is taken instead.
+    const undrawn = editor.app.host.command_runs - 1 > editor.command_runs_at_snapshot;
+    if (!undrawn) if (snapshot.latest()) |text| {
+        call.result = try editor.screenAnswer(call.arena, snapshot.taken, text, args.since);
+        return;
+    };
+    try editor.later_screens.append(editor.app.gpa, .{ .ticket = call.later(), .snapshot = editor.demo.service.api.snapshot(), .since = args.since });
 }
 
 const SettledArgs = sdk.Command.Params(struct {

@@ -36,15 +36,6 @@ rainbow_brackets: settings.Value(bool, .{
     .description = "Tint matching brackets by nesting depth so each pair takes its own colour.",
 }) = .init(true),
 
-/// The most steps a document's history keeps (`tc.History.trim`). Going back and then editing
-/// keeps what was gone back over on the line, so the line grows each time; past this the oldest
-/// steps go, as an undo history's limit does.
-history_limit: settings.Value(u32, .{
-    .description = "The most steps a document's undo history keeps. Past it, the oldest go.",
-    .min = 100,
-    .max = 1_000_000,
-}) = .init(10_000),
-
 /// When true, `saveDocument` reformats the document (via the active `LanguageSupport.format`
 /// provider for its extension, if any) immediately before writing it to disk.
 format_on_save: settings.Value(bool, .{

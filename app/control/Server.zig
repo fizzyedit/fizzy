@@ -73,6 +73,9 @@ pending: std.ArrayListUnmanaged(*Request) = .empty,
 outstanding: std.ArrayListUnmanaged(*Request) = .empty,
 /// Connections streaming events (`publish`), under `lock`.
 streams: std.ArrayListUnmanaged(*Stream) = .empty,
+/// How many: read without the lock, so a frame with no stream takes none (`streamsNaming`'s
+/// callers ask this first).
+stream_count: std.atomic.Value(usize) = .init(0),
 
 /// A connection that asked for events: what it wants, and what is waiting to be written to it.
 pub const Stream = struct {
@@ -87,9 +90,45 @@ pub const Stream = struct {
     overrun: bool = false,
     ready: Io.Event = .unset,
     conn: *Conn,
+    /// Sent an event published to the streams naming it since it joined (`publishNamed`): one
+    /// that has not is sent the next, changed or not.
+    greeted: bool = false,
+    /// Asked for changes on a base (`?diff=1`): sent a change when it has the base it is on, the
+    /// whole event otherwise (`publishNamed`).
+    diff: bool = false,
+    /// What it was last sent (`publishNamed`'s `seq`), for the next change to be on.
+    seq: u32 = 0,
+
+    /// Add the message to what is waiting to be written, under the server's `lock`. Too far behind,
+    /// and the stream is closed instead.
+    fn queue(self: *Stream, server: *Server, name: []const u8, json: []const u8) void {
+        const fits = self.backlog.items.len + name.len + json.len + 16 <= max_backlog;
+        if (fits) {
+            if (self.backlog.print(server.gpa, "event: {s}\ndata: {s}\n\n", .{ name, json })) |_| {
+                self.ready.set(server.io);
+                return;
+            } else |_| {}
+        }
+        // Too far behind: shut down, which ends a blocked write on POSIX (not on Windows, where the
+        // task ends when its write returns or `stop` cancels it). Nothing more is buffered either way.
+        self.overrun = true;
+        if (!self.conn.done.load(.acquire)) self.conn.stream.shutdown(server.io, .both) catch {};
+        self.ready.set(server.io);
+    }
 
     fn wants(self: *const Stream, name: []const u8) bool {
+        return self.matches(name, true);
+    }
+
+    /// Wants `name` by naming it, or a prefix of it: not by asking for everything (`*`). For an
+    /// event too heavy to send everyone (`publishNamed`).
+    fn names(self: *const Stream, name: []const u8) bool {
+        return self.matches(name, false);
+    }
+
+    fn matches(self: *const Stream, name: []const u8, everything: bool) bool {
         for (self.topics) |t| {
+            if (!everything and std.mem.eql(u8, t, "*")) continue;
             if (t.len > 0 and t[t.len - 1] == '*') {
                 if (std.mem.startsWith(u8, name, t[0 .. t.len - 1])) return true;
             } else if (std.mem.eql(u8, t, name)) return true;
@@ -116,6 +155,10 @@ pub const Request = struct {
     /// The path and query, as sent: `/commands/text.insert?x=1`.
     target: []const u8,
     content_type: ?[]const u8,
+    /// The `Mcp-Session-Id` header, as sent (`routes`, `mcp.Sessions`).
+    mcp_session: ?[]const u8 = null,
+    /// The `Mcp-Session-Id` to answer with, formatted by the routes (`mcp.formatSession`).
+    mcp_session_reply: ?[16]u8 = null,
     body: []const u8,
     /// Set by `answer`. `body` is `gpa`-owned and the connection's thread frees it.
     response: Response = .{},
@@ -137,11 +180,12 @@ pub const Request = struct {
     pub fn answerStream(self: *Request, server: *Server) void {
         const topics = topicsOf(self.arena, self.target) catch
             return self.answer(server, .internal_server_error, "text/plain", "out of memory\n");
-        self.stream = .{ .topics = topics, .conn = self.conn };
+        self.stream = .{ .topics = topics, .conn = self.conn, .diff = wantsDiff(self.target) };
         const added = added: {
             server.lock.lockUncancelable(server.io);
             defer server.lock.unlock(server.io);
             server.streams.append(server.gpa, &self.stream) catch break :added false;
+            server.stream_count.store(server.streams.items.len, .release);
             self.conn.streaming = true;
             break :added true;
         };
@@ -252,20 +296,49 @@ pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     for (self.streams.items) |st| {
-        if (st.overrun or !st.wants(name)) continue;
-        const fits = st.backlog.items.len + name.len + json.len + 16 <= max_backlog;
-        if (fits) {
-            if (st.backlog.print(self.gpa, "event: {s}\ndata: {s}\n\n", .{ name, json })) |_| {
-                st.ready.set(self.io);
-                continue;
-            } else |_| {}
-        }
-        // Too far behind: shut down, which ends a blocked write on POSIX (not on Windows, where the
-        // task ends when its write returns or `stop` cancels it). Nothing more is buffered either way.
-        st.overrun = true;
-        if (!st.conn.done.load(.acquire)) st.conn.stream.shutdown(self.io, .both) catch {};
-        st.ready.set(self.io);
+        if (!st.overrun and st.wants(name)) st.queue(self, name, json);
     }
+}
+
+/// `publish`, to the streams that name the event (or a prefix of it) only, not those asking for
+/// everything: for an event too heavy for those (`fizzy.screen`, the whole screen each frame it
+/// changes). `changed`: to every such stream; otherwise only to those not yet sent it since
+/// joining, which want the state as it is.
+///
+/// `whole` is the event in full, numbered `seq`. A stream that asked for changes (`?diff=1`) and
+/// was last sent `delta.since` is sent `delta.json` instead, what changed since: the rest, `whole`,
+/// which a change-taking stream takes as its new base.
+pub fn publishNamed(self: *Server, name: []const u8, whole: []const u8, seq: u32, delta: ?Delta, changed: bool) void {
+    if (std.mem.indexOfAny(u8, name, "\r\n") != null) return;
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    for (self.streams.items) |st| {
+        if (st.overrun or !st.names(name)) continue;
+        if (!changed and st.greeted) continue;
+        const json = if (delta) |d| if (st.diff and st.greeted and st.seq == d.since) d.json else whole else whole;
+        st.greeted = true;
+        st.seq = seq;
+        st.queue(self, name, json);
+    }
+}
+
+pub const Delta = struct { since: u32, json: []const u8 };
+
+/// The streams naming the event `name` (`publishNamed`), and how many of them have not been sent
+/// it since joining.
+pub fn streamsNaming(self: *Server, name: []const u8) struct { naming: usize, new: usize, diffing: usize } {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    var naming: usize = 0;
+    var new: usize = 0;
+    var diffing: usize = 0;
+    for (self.streams.items) |st| {
+        if (st.overrun or !st.names(name)) continue;
+        naming += 1;
+        if (!st.greeted) new += 1;
+        if (st.diff) diffing += 1;
+    }
+    return .{ .naming = naming, .new = new, .diffing = diffing };
 }
 
 pub fn stop(self: *Server) void {
@@ -410,6 +483,7 @@ fn serve(self: *Server, conn: *Conn) void {
             .method = head.head.method,
             .target = arena.dupe(u8, head.head.target) catch return,
             .content_type = if (head.head.content_type) |t| arena.dupe(u8, t) catch return else null,
+            .mcp_session = mcpSession(&head, arena) catch return,
             .body = "",
             .conn = conn,
             .arena = arena,
@@ -435,9 +509,13 @@ fn serve(self: *Server, conn: *Conn) void {
         if (req.response.stream) return self.serveStream(&head, &req.stream);
         const body = req.response.body orelse "out of memory\n";
         defer if (req.response.body) |b| self.gpa.free(b);
+        const headers = [_]std.http.Header{
+            .{ .name = "content-type", .value = req.response.content_type },
+            .{ .name = "mcp-session-id", .value = if (req.mcp_session_reply) |*id| id else "" },
+        };
         const sent = head.respond(body, .{
             .status = req.response.status,
-            .extra_headers = &.{.{ .name = "content-type", .value = req.response.content_type }},
+            .extra_headers = headers[0..if (req.mcp_session_reply != null) 2 else 1],
         });
         {
             self.lock.lockUncancelable(self.io);
@@ -449,6 +527,13 @@ fn serve(self: *Server, conn: *Conn) void {
     }
 }
 
+/// The request's `Mcp-Session-Id`, copied into `arena`, or null.
+fn mcpSession(head: *std.http.Server.Request, arena: std.mem.Allocator) error{OutOfMemory}!?[]const u8 {
+    var it = head.iterateHeaders();
+    while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, "mcp-session-id")) return try arena.dupe(u8, h.value);
+    return null;
+}
+
 /// Write events to the connection until the client goes, falls too far behind, or the server
 /// stops. `stream` was registered by `answerStream`; it is removed here, whatever happens.
 fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) void {
@@ -457,6 +542,7 @@ fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) v
         defer self.lock.unlock(self.io);
         for (self.streams.items, 0..) |st, i| if (st == stream) {
             _ = self.streams.swapRemove(i);
+            self.stream_count.store(self.streams.items.len, .release);
             break;
         };
         stream.backlog.deinit(self.gpa);
@@ -495,6 +581,14 @@ fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) v
         body.flush() catch return;
         out.clearRetainingCapacity();
     }
+}
+
+/// `?diff=1`: the stream wants changes on a base where an event offers them (`publishNamed`).
+fn wantsDiff(target: []const u8) bool {
+    const query = target[(std.mem.indexOfScalar(u8, target, '?') orelse return false) + 1 ..];
+    var params = std.mem.tokenizeScalar(u8, query, '&');
+    while (params.next()) |param| if (std.mem.eql(u8, param, "diff=1") or std.mem.eql(u8, param, "diff=true")) return true;
+    return false;
 }
 
 /// `?topics=a,b` as a list; everything when absent or empty.
@@ -791,6 +885,13 @@ test "topics come from the query, and none means everything" {
     try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "fizzy.document.*", "x.y" }), try topicsOf(a, "/events?a=1&topics=fizzy.document.%2A,%20x.y"));
     const st: Stream = .{ .topics = &.{ "fizzy.document.*", "x.y" }, .conn = undefined };
     try std.testing.expect(st.wants("fizzy.document.saved"));
+    // Named, or by a prefix: what `publishNamed` sends to. Everything (`*`) is not naming it.
+    try std.testing.expect(st.names("fizzy.document.saved"));
+    const all: Stream = .{ .topics = &.{"*"}, .conn = undefined };
+    try std.testing.expect(all.wants("fizzy.screen"));
+    try std.testing.expect(!all.names("fizzy.screen"));
+    const fizzy_all: Stream = .{ .topics = &.{ "*", "fizzy.*" }, .conn = undefined };
+    try std.testing.expect(fizzy_all.names("fizzy.screen"));
     try std.testing.expect(st.wants("x.y"));
     try std.testing.expect(!st.wants("x.yz"));
     try std.testing.expect(!st.wants("fizzy.folder.opened"));
