@@ -159,6 +159,8 @@ pub const CaptionOptions = struct {
     near: []const u8 = "",
     /// What else it must not cover, by anchor: what the viewer is meant to be watching.
     clear: []const []const u8 = &.{},
+    /// Which side of what it is beside it would rather take, when that side is clear.
+    side: Tape.Caption.Side = .any,
     /// Hold the next action until the caption is done, rather than acting under it.
     hold: bool = false,
 };
@@ -174,6 +176,7 @@ pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
         .place = opts.place,
         .near = try self.dupe(opts.near),
         .clear = try self.dupeAll(opts.clear),
+        .side = opts.side,
     });
     if (opts.hold) self.t += ms;
 }

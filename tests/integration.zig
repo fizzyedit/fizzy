@@ -5848,6 +5848,100 @@ test "demo: the bar stacks above a history bar out under it, and comes back down
     try std.testing.expectApproxEqAbs(rest.y, down.y, 0.5);
 }
 
+/// A tape with one callout over the pointer: it goes to the Count button and wiggles there, then
+/// goes off across the field.
+fn calloutTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "callout", "Callout");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://callout", .files = &.{.{ .path = "field", .text = "" }} });
+    try s.caption("The pointer goes to Count, and wiggles there, then across the field.", .{ .ms = 9000 });
+    try s.moveTo(.{ .tag = "demo.count" }, .{});
+    for (0..8) |i| {
+        const k: f32 = if (i % 2 == 0) 4 else -4;
+        try s.moveTo(.{ .tag = "demo.count", .dx = k, .dy = -k / 2 }, .{ .ms = 150 });
+    }
+    try s.moveTo(.{ .tag = "demo.field", .x = 0.85, .y = 0.8 }, .{});
+    s.pause(2500);
+    return s.finish();
+}
+
+/// Where the callout is drawn this frame, natural; null when none is.
+fn calloutRect() ?dvui.Rect {
+    const td = dvui.tagGet(automation.overlay.callout_anchor) orelse return null;
+    return dvui.windowRectScale().rectFromPhysical(td.rect);
+}
+
+test "demo: a callout stays put through the pointer's wiggle, and moves once when it moves on" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    const tape = try calloutTape();
+    const wiggle_end = blk: {
+        // The last of the wiggles starts the move across.
+        var last: u32 = 0;
+        for (tape.tape.ops) |op| if (op.do == .move and std.mem.eql(u8, op.do.move.tag, "demo.count")) {
+            last = op.at + op.ms;
+        };
+        break :blk last;
+    };
+    demo_player.load(tape, .{});
+
+    var prev: ?dvui.Rect = null;
+    var travels: usize = 0;
+    var moving = false;
+    for (0..400) |_| {
+        if (demo_player.state == .ended) break;
+        _ = try dvui.testing.step(demoFrame);
+        const r = calloutRect() orelse {
+            prev = null;
+            continue;
+        };
+        defer prev = r;
+        const p = prev orelse continue;
+        // Past its opening, where it is placed by its size.
+        if (demo_player.now() < 800) continue;
+        const moved = @abs(r.x - p.x) > 0.5 or @abs(r.y - p.y) > 0.5;
+        // Until it sets off ahead of the pointer for the field (`overlay.lead_ms`, 250 ms).
+        if (demo_player.now() <= @as(f64, @floatFromInt(wiggle_end)) - 300) {
+            if (moved) std.debug.print("callout moved during the wiggle at {d:.0}ms: {any} -> {any}\n", .{ demo_player.now(), p, r });
+            try std.testing.expect(!moved);
+        }
+        if (moved and !moving) travels += 1;
+        moving = moved;
+    }
+    try std.testing.expectEqual(@as(usize, 1), travels);
+}
+
+test "demo: a callout never covers a history bar out beside its subject, nor the subject" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    defer demo_other_bar = null;
+
+    const count = (dvui.tagGet("demo.count") orelse return error.TestUnexpectedResult).rect;
+    // A history bar out along the button, where the callout would otherwise go: beside it.
+    demo_other_bar = .{ .x = count.x + count.w + 4, .y = count.y - 6, .w = 360, .h = count.h + 12 };
+    const bar = dvui.windowRectScale().rectFromPhysical(demo_other_bar.?);
+    const target = dvui.windowRectScale().rectFromPhysical(count);
+
+    demo_player.load(try calloutTape(), .{});
+    var seen: usize = 0;
+    for (0..400) |_| {
+        if (demo_player.state == .ended) break;
+        _ = try dvui.testing.step(demoFrame);
+        // While it is about the button: till the pointer sets off across the field.
+        if (demo_player.now() > 3000) break;
+        const r = calloutRect() orelse continue;
+        seen += 1;
+        const over_bar = r.intersect(bar);
+        const over_target = r.intersect(target);
+        if (over_bar.w > 0 and over_bar.h > 0 or over_target.w > 0 and over_target.h > 0) {
+            std.debug.print("callout {any} covers the bar {any} or the target {any}\n", .{ r, bar, target });
+            return error.TestUnexpectedResult;
+        }
+    }
+    try std.testing.expect(seen > 0);
+}
+
 test "demo: a replay that does not reach what playing did is caught" {
     var t = try demoCtx();
     defer deinitDemo(&t);

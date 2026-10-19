@@ -315,7 +315,10 @@ fn writeBody(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
     for (tape.captions) |c| {
         for ([_]u32{ c.at, c.ms, table.index(c.title), table.index(c.text) }) |v| try w.writeInt(u32, v, .little);
         try w.writeByte(@backingInt(c.place));
-        try w.splatByteAll(0, 3);
+        // The side hint in what was padding: a reader before it skips it, and a tape before it
+        // has none there (`.any`).
+        try w.writeByte(@backingInt(c.side));
+        try w.splatByteAll(0, 2);
         for ([_]u32{ table.index(c.near), clear_at, count(c.clear.len) }) |v| try w.writeInt(u32, v, .little);
         clear_at += count(c.clear.len);
     }
@@ -536,13 +539,16 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
         const title = try strings.get(try f.int(u32));
         const text = try strings.get(try f.int(u32));
         const place = std.enums.fromInt(Tape.Caption.Place, try f.int(u8)) orelse return error.Corrupt;
-        _ = try f.take(3);
+        // A side this reader does not know is only a hint it cannot take.
+        const side = std.enums.fromInt(Tape.Caption.Side, try f.int(u8)) orelse .any;
+        _ = try f.take(2);
         c.* = .{
             .at = at,
             .ms = ms,
             .title = title,
             .text = text,
             .place = place,
+            .side = side,
             .near = try strings.get(try f.int(u32)),
             .clear = try slice([]const u8, clear, try f.int(u32), try f.int(u32)),
         };
@@ -839,6 +845,21 @@ test "flipped bytes are an error, never a crash" {
             } else |_| {}
         }
     }
+}
+
+test "a caption's side hint round-trips, and a tape from before it has none" {
+    const captions = [_]Tape.Caption{.{ .at = 0, .ms = 900, .text = "Above it.", .near = "a", .side = .above }};
+    var t = everything();
+    t.captions = &captions;
+    const bytes = try encode(testing.allocator, t, .{});
+    defer testing.allocator.free(bytes);
+    var owned = try read(testing.allocator, bytes, steps_check);
+    defer owned.deinit();
+    try testing.expectEqual(Tape.Caption.Side.above, owned.tape.captions[0].side);
+
+    var old = try read(testing.allocator, v2_fixture, .{});
+    defer old.deinit();
+    for (old.tape.captions) |c| try testing.expectEqual(Tape.Caption.Side.any, c.side);
 }
 
 const v2_fixture = @embedFile("testdata/everything-v2.tape");
