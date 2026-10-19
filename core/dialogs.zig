@@ -285,6 +285,10 @@ pub const BubblesOptions = struct {
     witness: ?u64 = null,
 };
 
+/// A rounded box's smallest corner, in points, for its glass to bend along its own outline as a
+/// drop's does (`glassBubbles`); below it, the box keeps to the soft field of its sides.
+const round_corner: f32 = 4;
+
 /// Controls of glass over content, one look wherever they float: the demo player's transport, a
 /// plugin's buttons over its canvas. Each bubble is drawn as a drop is (`LiquidField`, its edge
 /// bending along its own outline — a capsule's ends round, as a circle's are), lit by its
@@ -303,10 +307,15 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
             var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale };
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
-                // A capsule's edge bends round as a drop's does; a rounded box's keeps to its sides.
+                // Its edge bends along its own outline, as a drop's does, with a drop's rim of light:
+                // a capsule, a circle, and a panel whose corners are round. Only a box with a corner
+                // near square keeps to the soft field of its sides (`liquid_glass.fieldAt`), which
+                // never folds at a corner; on a rounded panel that field left its rim faint, the
+                // history bar's grown strip dull beside the round buttons merged with it.
                 const capsule = b.radius == null and b.radii == null;
                 const radii: [4]f32 = if (capsule) @splat(@min(b.rect.w, b.rect.h)) else b.cornerRadii();
-                field.add(.{ .rect = b.rect, .radii = radii, .round = capsule, .light = b.light });
+                const round = capsule or @reduce(.Min, @as(@Vector(4, f32), radii)) >= round_corner * scale;
+                field.add(.{ .rect = b.rect, .radii = radii, .round = round, .light = b.light });
             }
             var pane = frost;
             pane.form = 1;
