@@ -150,6 +150,7 @@ pub const Target = struct {
     x: f32 = 0.5,
     y: f32 = 0.5,
     /// Then nudged by this many natural pixels — "just inside the left edge" is `x = 0, dx = 8`.
+    /// Not where a button goes down or up: that lands on the anchor (`firstButtonOffAnchor`).
     dx: f32 = 0,
     dy: f32 = 0,
 };
@@ -278,6 +279,25 @@ pub fn keyframeBefore(self: Tape, t: f64) usize {
         if (op.do == .keyframe) found = i;
     }
     return found;
+}
+
+/// The first press or release that is not aimed at an anchor, by index into `ops`, or null. A
+/// button lands where the pointer is, so the `move` or `trace` before it is its aim: that must name
+/// a tag a widget publishes and nudge nothing off it (`Target.dx`, `dy`), since the window itself
+/// (an empty tag) or a nudge is a coordinate that goes stale when the layout shifts. A keyframe
+/// is a fresh start: a button after it with no aim of its own is not aimed at anything.
+pub fn firstButtonOffAnchor(self: Tape) ?usize {
+    var aim: ?Target = null;
+    for (self.ops, 0..) |op, i| switch (op.do) {
+        .keyframe => aim = null,
+        .move, .trace => |t| aim = t,
+        .press, .release => {
+            const t = aim orelse return i;
+            if (t.tag.len == 0 or t.dx != 0 or t.dy != 0) return i;
+        },
+        else => {},
+    };
+    return null;
 }
 
 /// The chapter playing at `t`, by index, or null before the first.
@@ -686,6 +706,40 @@ pub const test_check: Check = .{ .key = struct {
         return c.len - last - 1 == 1;
     }
 }.ok };
+
+test "a button is aimed at an anchor, with nothing nudged off it" {
+    const anchored = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .move = .{ .tag = "fizzy.rail:files", .x = 1, .y = 0 } } },
+        .{ .at = 10, .do = .{ .press = .left } },
+        .{ .at = 20, .do = .{ .move = .{ .tag = "region:Sidebar" } } },
+        .{ .at = 30, .do = .{ .release = .left } },
+    };
+    try std.testing.expectEqual(@as(?usize, null), (Tape{ .name = "t", .ops = &anchored }).firstButtonOffAnchor());
+
+    const nudged = [_]Op{
+        .{ .at = 0, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -26, .dy = 26 } } },
+        .{ .at = 10, .do = .{ .press = .left } },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), (Tape{ .name = "t", .ops = &nudged }).firstButtonOffAnchor());
+
+    // A trace aims as a move does, and a raw drop counts as much as a raw press.
+    const traced = [_]Op{
+        .{ .at = 0, .do = .{ .move = .{ .tag = "fizzy.rail:files" } } },
+        .{ .at = 10, .do = .{ .press = .left } },
+        .{ .at = 20, .do = .{ .trace = .{ .x = 0.3, .y = 0.4 } } },
+        .{ .at = 30, .do = .{ .release = .left } },
+    };
+    try std.testing.expectEqual(@as(?usize, 3), (Tape{ .name = "t", .ops = &traced }).firstButtonOffAnchor());
+
+    // A cut forgets the aim before it.
+    const cut = [_]Op{
+        .{ .at = 0, .do = .{ .move = .{ .tag = "fizzy.rail:files" } } },
+        .{ .at = 10, .do = .{ .keyframe = 0 } },
+        .{ .at = 20, .do = .{ .press = .left } },
+    };
+    try std.testing.expectEqual(@as(?usize, 2), (Tape{ .name = "t", .ops = &cut }).firstButtonOffAnchor());
+}
 
 test "a tape round-trips through ZON" {
     const tape = sample();
