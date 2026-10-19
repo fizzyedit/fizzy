@@ -106,6 +106,9 @@ pub const lsp = @import("lsp/lsp.zig");
 /// lower scores are better.
 pub const fuzzy = @import("fuzzy.zig");
 
+/// Std-only diffing (images so far): which regions of a document's state differ. See `diff.zig`.
+pub const diff = @import("diff.zig");
+
 /// The project's file set: one cached, searchable view of what is on disk, owned by the host and
 /// shared by every plugin that cares about files. See `FileTable.zig`.
 pub const FileTable = @import("FileTable.zig");

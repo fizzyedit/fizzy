@@ -841,6 +841,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
+        // Image diff: RGBA8 rows and tiles to the rects that differ. std-only (see
+        // core/diff.zig); `bench-diff` measures it.
+        .{ "fizzy-diff-tests", "core/diff.zig" },
         // When a document's transport shows and for how long, how far a held undo goes, which
         // step a point on its line is. std-only (see history_transport.zig); `HistoryTransport`
         // draws it.
@@ -1494,6 +1497,27 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
         const bench_step = b.step("bench-tracks", "Benchmark a document's track: steps, checkpoints, replays (prints timings)");
         const run_bench = b.addRunArtifact(bench_tracks);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
+    // `zig build bench-diff` — core.diff on a 4K image and a 2048x2048 sprite of 50 layers (prints
+    // timings). Same rules as `bench-tape`; std-only, so it needs no window.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_diff.zig"),
+        });
+        bench_module.addImport("diff", b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("core/diff.zig"),
+        }));
+        const bench_diff = b.addTest(.{ .name = "fizzy-bench-diff", .root_module = bench_module });
+
+        const bench_step = b.step("bench-diff", "Benchmark core.diff: a 4K image, a 50-layer sprite (prints timings)");
+        const run_bench = b.addRunArtifact(bench_diff);
         run_bench.has_side_effects = true;
         bench_step.dependOn(&run_bench.step);
     }
