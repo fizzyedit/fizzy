@@ -103,8 +103,9 @@ will be unsigned — Gatekeeper will warn users. The release still goes out
 fine; you'd just want to sign before announcing it widely.
 
 For a **single-machine** build (e.g. on a Mac), `zig build packageall` is
-unchanged and still builds all six targets sequentially; CI parallelism is
-only in the workflow.
+unchanged and still builds all six targets sequentially, passing each run the
+`-D` options it was given but the target's own (the Windows MSVC ones to the
+Windows runs only); CI parallelism is only in the workflow.
 
 ### Option B: Run locally
 

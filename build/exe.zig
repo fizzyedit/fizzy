@@ -189,6 +189,10 @@ pub fn addFizzyExecutableForTarget(
     build_opts: *std.Build.Step.Options,
     workbench_opts: *std.Build.Step.Options,
     assets_module: *std.Build.Module,
+    /// `pub const png`: the window's icon (`app.Branding.png`).
+    app_icon_module: *std.Build.Module,
+    /// The resource script embedded on Windows (`app.Branding.rc`).
+    windows_rc: std.Build.LazyPath,
     macos_sdl_paths: ?MacosSdlPaths,
     velopack_enabled: bool,
     /// The application's short name (see app/AppInfo.zig) — the executable's name. Passed in
@@ -223,7 +227,7 @@ pub fn addFizzyExecutableForTarget(
 
     const exe = b.addExecutable(.{
         .name = app_name,
-        .root_module = b.addModule("App", .{
+        .root_module = b.createModule(.{ // private: one per target, and 0.17 refuses a second public "App"
             .target = resolved_target,
             .optimize = optimize,
             // `b.path`, not `.cwd_relative`: this resolves against *fizzy's* build root, which
@@ -239,19 +243,20 @@ pub fn addFizzyExecutableForTarget(
     if (resolved_target.result.ofmt == .elf) exe.build_id = .fast;
 
     exe.root_module.addImport("assets", assets_module);
+    exe.root_module.addImport("app_icon", app_icon_module);
     exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
-    if (optimize != .Debug) {
+    if (optimize != .debug) {
         switch (resolved_target.result.os.tag) {
             .windows => {
-                exe.subsystem = .Windows;
+                exe.subsystem = .windows;
                 // MSVC's libcmt links `WinMainCRTStartup` (needs `WinMain`) for /SUBSYSTEM:WINDOWS.
                 // Fizzy exposes `main`, so force the C `main` entry which works for either subsystem.
                 if (resolved_target.result.abi == .msvc) {
                     exe.entry = .{ .symbol_name = "mainCRTStartup" };
                 }
             },
-            else => exe.subsystem = .Posix,
+            else => exe.subsystem = .posix,
         }
     }
 
@@ -260,6 +265,15 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.addImport("platform", platformModule(b, native, resolved_target, optimize, macos_sdl_paths));
     // On dvui's own SDL3 backend (`-Dnative-backend=sdl3`), which has no viewports.
     exe.root_module.addImport("viewports_none", fizzy_backend.viewportsNoneModule(backendDependency(b), dvui_mod));
+    // Which of the two the executable links (`backend_native.viewports`).
+    const native_backend_opts = b.addOptions();
+    native_backend_opts.addOption(bool, "fizzy", native_backend == .fizzy);
+    exe.root_module.addImport("native_backend", native_backend_opts.createModule());
+
+    // The glass look the backend dresses OS windows with; `core` takes the same module.
+    const glass_look = fizzy_backend.glassLookModule(backendDependency(b));
+    // Its in-app glass, the backend's (`glassModule`): `core` over the same dvui takes the same one.
+    const glass = fizzy_backend.glassModule(backendDependency(b), dvui_mod);
 
     // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
     // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.
@@ -268,7 +282,7 @@ pub fn addFizzyExecutableForTarget(
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    const icons_module = core_mod.addImports(b, core_module, dvui_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize);
+    const icons_module = core_mod.addImports(b, core_module, dvui_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize, glass_look, glass);
     exe.root_module.addImport("core", core_module);
     if (icons_module) |icons| exe.root_module.addImport("icons", icons);
 
@@ -277,7 +291,7 @@ pub fn addFizzyExecutableForTarget(
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize);
+    _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize, glass_look, null);
 
     // `macos_fsevents` is load-bearing for `FolderWatcher`: it watches a whole project folder,
     // and the kqueue fallback needs a file descriptor per directory *and* per file — exactly the
@@ -405,15 +419,16 @@ pub fn addFizzyExecutableForTarget(
             app_module.addImport("win32", win32);
         }
         exe.root_module.linkSystemLibrary("comctl32", .{});
+        // MSVC's C runtime names the POSIX calls `_getcwd`, `_chdir`, …; `oldnames.lib` supplies
+        // the plain names, which dvui's tinyfiledialogs and fizzy's own startup use. Zig 0.16
+        // linked it for every *-windows-msvc exe; 0.17 does not.
+        if (resolved_target.result.abi == .msvc) exe.root_module.linkSystemLibrary("oldnames", .{});
 
-        // Embed assets/windows/fizzy.rc -> fizzy.ico into the exe so Explorer,
-        // Taskbar, Alt-Tab and the Velopack-generated Start Menu shortcut all
-        // show the right icon without any runtime work. fizzy.ico must be a
-        // multi-resolution ICO with 16/32/48/256 px frames (see the README in
-        // that directory).
-        exe.root_module.addWin32ResourceFile(.{
-            .file = b.path("assets/windows/fizzy.rc"),
-        });
+        // Embed the resource script (fizzy's: assets/windows/fizzy.rc -> fizzy.ico) into the
+        // exe so Explorer, Taskbar, Alt-Tab and the Velopack-generated Start Menu shortcut all
+        // show the right icon without any runtime work. The .ico must be a multi-resolution
+        // ICO with 16/32/48/256 px frames (see the README in assets/windows).
+        exe.root_module.addWin32ResourceFile(.{ .file = windows_rc });
     }
 
     // Zig's bundled libc++/libcxxabi cannot compile against MSVC headers
@@ -425,7 +440,7 @@ pub fn addFizzyExecutableForTarget(
         resolved_target.result.abi == .msvc;
     exe.root_module.link_libcpp = !exe_is_windows_msvc;
     if (velopack_enabled) if (vz) |v| {
-        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .include_modules = &.{app_module} });
+        try velopack.linkVelopack(b, v, exe, .{ .target = resolved_target, .optimize = optimize, .c_modules = &.{app_module} });
     };
 
     return .{

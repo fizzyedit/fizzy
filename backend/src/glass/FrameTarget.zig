@@ -22,7 +22,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const profile = @import("../profile.zig");
+const profile = @import("prof.zig");
 
 const FrameTarget = @This();
 
@@ -65,7 +65,7 @@ const skip_unread = builtin.target.cpu.arch == .wasm32;
 /// should not flip it on and off, and glass coming back finds it still there.
 const linger_frames: u32 = 60;
 
-const unseen_id: dvui.Id = @enumFromInt(0x6669_7a7a_756e_736e); // "fizzunsn"
+const unseen_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_756e_736e)); // "fizzunsn"
 const unseen_key = "_frame_unseen";
 
 /// Mark the frame running as one nobody will see — a demo catching up (`automation.Player.frames`)
@@ -90,7 +90,7 @@ pub fn unseen() bool {
     return dvui.dataGet(null, unseen_id, unseen_key, bool) orelse false;
 }
 
-const want_id: dvui.Id = @enumFromInt(0x6669_7a7a_6672_6d77); // "fizzfrmw"
+const want_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_6672_6d77)); // "fizzfrmw"
 const want_key = "_frame_target_wanted";
 
 /// Something will read what is under it this frame (a frost, `BlurBackdrop`) — keep the frame in
@@ -250,10 +250,20 @@ pub fn deinit(self: *FrameTarget) void {
 }
 
 /// `rect` (window pixels) as the last frame drew it, copied into a texture the caller owns
-/// (`dvui.textureDestroyLater` it). What a pane showed a moment ago, after what it showed has
-/// gone: a document closing can unload at once and its pane still slide shut over the picture
-/// of it. Null before a frame has been drawn, off the window, or on a backend without targets.
-pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
+/// (`dvui.textureDestroyLater` it): at its own size, or scaled to `size` (pixels; a picture of a
+/// document's pane small enough to line up in a strip, `HistoryFrames`). What a pane showed a
+/// moment ago, after what it showed has gone: a document closing can unload at once and its pane
+/// still slide shut over the picture of it. Null before a frame has been drawn, off the window, or
+/// on a backend without targets.
+pub fn snapshot(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.Texture {
+    const out = snapshotTarget(rect, size) orelse return null;
+    return dvui.textureFromTarget(out) catch null;
+}
+
+/// `snapshot`, kept as the target it was drawn into (the caller's: `dvui.Texture.fromTarget` it,
+/// or `destroyLater`): for a caller that reads its pixels back (`dvui.Texture.readTarget`), which
+/// it can do from the next frame, once the copy has landed.
+pub fn snapshotTarget(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.TextureTarget {
     const self = current orelse return null;
     // The last frame shown: the other target while one is bound; in a frame nobody will see, the
     // one bound last (`begin` leaves the targets as they were).
@@ -262,8 +272,8 @@ pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
     const prev = self.targets[last] orelse return null;
     const r = rect.intersect(dvui.windowRectPixels());
     if (r.w < 1 or r.h < 1) return null;
-    const w: u32 = @intFromFloat(@round(r.w));
-    const h: u32 = @intFromFloat(@round(r.h));
+    const w: u32, const h: u32 = size orelse .{ @intFromFloat(@round(r.w)), @intFromFloat(@round(r.h)) };
+    if (w == 0 or h == 0) return null;
     const src = dvui.Texture.fromTargetTemp(prev) catch return null;
     const out = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .linear }) catch return null;
 
@@ -291,5 +301,5 @@ pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
         dvui.renderTexture(src, .{ .r = dest, .s = 1 }, .{ .uv = .{ .x = r.x / sw, .y = r.y / sh, .w = r.w / sw, .h = r.h / sh } }) catch {};
     }
     _ = dvui.renderTarget(was);
-    return dvui.textureFromTarget(out) catch null;
+    return out;
 }

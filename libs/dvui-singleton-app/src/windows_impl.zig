@@ -32,11 +32,11 @@ const FILE_ATTRIBUTE_NORMAL: w.DWORD = 0x80;
 
 const NMPWAIT_USE_DEFAULT_WAIT: w.DWORD = 0x00000000;
 
-const ERROR_FILE_NOT_FOUND = @as(w.Win32Error, @enumFromInt(2));
-const ERROR_ACCESS_DENIED = @as(w.Win32Error, @enumFromInt(5));
-const ERROR_PIPE_BUSY = @as(w.Win32Error, @enumFromInt(231));
-const ERROR_PIPE_CONNECTED = @as(w.Win32Error, @enumFromInt(535));
-const ERROR_BROKEN_PIPE = @as(w.Win32Error, @enumFromInt(109));
+const ERROR_FILE_NOT_FOUND = @as(w.Win32Error, @fromBackingInt(@intCast(2)));
+const ERROR_ACCESS_DENIED = @as(w.Win32Error, @fromBackingInt(@intCast(5)));
+const ERROR_PIPE_BUSY = @as(w.Win32Error, @fromBackingInt(@intCast(231)));
+const ERROR_PIPE_CONNECTED = @as(w.Win32Error, @fromBackingInt(@intCast(535)));
+const ERROR_BROKEN_PIPE = @as(w.Win32Error, @fromBackingInt(@intCast(109)));
 
 extern "kernel32" fn CreateFileW(
     lpFileName: w.LPCWSTR,
@@ -172,7 +172,7 @@ pub const Primary = struct {
             }
 
             const ok = ConnectNamedPipe(current, null);
-            const err = if (ok == .FALSE) w.GetLastError() else @as(w.Win32Error, @enumFromInt(0));
+            const err = if (ok == .FALSE) w.GetLastError() else @as(w.Win32Error, @fromBackingInt(@intCast(0)));
             if (ok == .FALSE and err != ERROR_PIPE_CONNECTED) {
                 log.warn("ConnectNamedPipe failed: {t}", .{err});
                 w.CloseHandle(current);

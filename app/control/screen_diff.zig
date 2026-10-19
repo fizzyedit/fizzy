@@ -70,8 +70,14 @@ pub const Diff = struct {
 
 /// The nodes of a snapshot's text, keyed, in `arena`.
 pub fn parse(arena: std.mem.Allocator, text: []const u8) ![]const Keyed {
-    const source = try arena.dupeZ(u8, text);
-    const nodes = try std.zon.parse.fromSliceAlloc([]const Node, arena, source, null, .{ .ignore_unknown_fields = true });
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const nodes = try std.zon.parse.fromSlice([]const Node, .{
+        .gpa = arena,
+        .arena = arena,
+        .source = try arena.dupeSentinel(u8, text, 0),
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    });
     return key(arena, nodes);
 }
 

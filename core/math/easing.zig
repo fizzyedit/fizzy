@@ -59,8 +59,8 @@ test "square and flip are inverses through identity" {
 }
 
 test "ease pins endpoints regardless of curve" {
-    inline for (@typeInfo(EaseType).@"enum".fields) |f| {
-        const kind: EaseType = @enumFromInt(f.value);
+    inline for (@typeInfo(EaseType).@"enum".field_names, @typeInfo(EaseType).@"enum".field_values) |_, f_value| {
+        const kind: EaseType = @fromBackingInt(@intCast(f_value));
         try expectApproxEqAbs(@as(f32, 0.0), ease(0.0, 1.0, 0.0, kind), tolerance);
         try expectApproxEqAbs(@as(f32, 1.0), ease(0.0, 1.0, 1.0, kind), tolerance);
     }

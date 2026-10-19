@@ -25,7 +25,7 @@ const build_opts = @import("build_opts");
 /// dvui's demo window (View › Show DVUI Demo), in Debug builds only. Calling it at all links the
 /// whole of it — every example, widgetpedia's raw images, the demos' own source for its code
 /// viewer — into a release, where no one opens it: on the web that is download size.
-pub const dvui_demo = builtin.mode == .Debug;
+pub const dvui_demo = builtin.mode == .debug;
 
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
@@ -95,6 +95,7 @@ pub const FileLoadJob = workbench_mod.FileLoadJob;
 pub const sdk = fizzy.sdk;
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
+const Demos = @import("Demos.zig");
 const TapeTabs = @import("TapeTabs.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
 /// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
@@ -131,11 +132,15 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// The demo player and fizzy's stage for it. Attached in `postInit`, at the Editor's final
 /// address (the stage's context is this field).
 demo: Demo = .detached,
+/// Every demo fizzy can play, as the `demos` service lists them. Bound in `postInit`, beside `demo`.
+demos: Demos = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
 tape_tabs: TapeTabs = .{},
-/// A document whose transport's share was pressed: exported at the top of the next frame, before
-/// anything draws, since the export walks the document's history back and forth.
-share_pending: ?u64 = null,
+/// The recording setting as last applied (`tick`); null before the first frame.
+record_history_applied: ?bool = null,
+/// A part of a document's history to export (the strip's export window): at the top of the next
+/// frame, before anything draws, since the export walks the document's history back and forth.
+share_pending: ?struct { doc_id: u64, from: usize, to: usize } = null,
 
 /// Rebuilt plugins opening off the UI thread, swapped in once open (`PluginReloads`).
 plugin_reloads: @import("PluginReloads.zig") = .{},
@@ -262,6 +267,11 @@ pending_native_menu_item_indices_len: u8 = 0,
 
 /// When set, next `tick` runs `warmupDrawingComposites` on the active file (after open or drawing-tool select).
 pending_composite_warmup: bool = false,
+
+/// Set whenever who opens which extension may have changed (`rebuildExtensionOwnerCache`): the
+/// next `tick` moves documents the fallback editor holds only as the fallback to the plugin that
+/// owns them now (`rehomeFallbackDocuments`).
+rehome_pending: bool = false,
 
 /// When set, the next frame closes the explorer and the bottom panel, as their own close buttons
 /// would. Set by the page's `?show=`: an embed that opens on one file is about that file, and the
@@ -704,6 +714,18 @@ pub const view_settings = "fizzy.settings";
 /// Stable workbench sidebar view id (matches `workbench.view_files`).
 pub const workbench_files_view = workbench_mod.view_files;
 
+/// A hash-map context that takes two ids for one when they differ only in ASCII case.
+const CaseInsensitive = struct {
+    pub fn hash(_: CaseInsensitive, key: []const u8) u64 {
+        var h = std.hash.Wyhash.init(0);
+        for (key) |c| h.update(&.{std.ascii.toLower(c)});
+        return h.final();
+    }
+    pub fn eql(_: CaseInsensitive, a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
+
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return;
 
@@ -752,9 +774,33 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         }
     }.lt);
 
+    // The folders by their names ignoring case, in sorted order, made once: a group of more than
+    // one is the same id several times.
+    var case_groups: std.HashMapUnmanaged([]const u8, std.ArrayListUnmanaged([]const u8), CaseInsensitive, std.hash_map.default_max_load_percentage) = .empty;
+    for (ids.items) |id| {
+        const entry = case_groups.getOrPut(editor.app.arena.allocator(), id) catch continue;
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        entry.value_ptr.append(editor.app.arena.allocator(), id) catch {};
+    }
+
     for (ids.items) |plugin_id| {
         // Skip `.load-tmp` and any other dotfile/directory — not a plugin id.
         if (plugin_id.len == 0 or plugin_id[0] == '.') continue;
+
+        // Folders whose names differ only in case (a case-sensitive filesystem lets them all
+        // exist) are one id several times: none loads. Which one was meant cannot be told from
+        // the folders, and loading whichever sorts first would let byte order choose. One card,
+        // on the first by that order, names every one (`case_groups`, made in one pass above).
+        if (case_groups.get(plugin_id)) |group| if (group.items.len > 1) {
+            if (group.items[0].ptr == plugin_id.ptr) {
+                var names: std.Io.Writer.Allocating = .init(editor.app.arena.allocator());
+                for (group.items, 0..) |name, i| names.writer.print("{s}'{s}'", .{ @as([]const u8, if (i > 0) ", " else ""), name }) catch {};
+                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders {s} differ only in case, so none is loaded: keep one", .{names.written()}) catch "plugin folders differ only in case, so none is loaded";
+                dvui.log.warn("user plugin '{s}': {s}", .{ plugin_id, why });
+                editor.app.recordPluginFailure(plugin_id, why, null, null, .{});
+            }
+            continue;
+        };
 
         // User-disabled plugins (store "disable") stay on disk but are not loaded.
         if (editor.app.isPluginDisabled(plugin_id)) {
@@ -766,7 +812,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         defer editor.app.gpa.free(file_name);
         const path = std.fs.path.join(editor.app.gpa, &.{ plugins_dir, plugin_id, file_name }) catch continue;
 
-        if (editor.app.host.pluginById(plugin_id) != null) {
+        if (editor.app.host.pluginByIdIgnoringCase(plugin_id)) |loaded| {
             // A fizzy built-in (`text`/`workbench`/`image`/`markdown`) is loaded via its own
             // static/dylib path (see `postInit` above) and may *also* have its dylib sitting in
             // this same shared plugins directory — built-ins compile "the same third-party
@@ -777,7 +823,9 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             // plugin), which collides on the shared heading widget id. Only a genuine third-party
             // id clash (some other plugin trying to claim an id a built-in already owns) is
             // worth surfacing.
-            if (isBundledPluginId(plugin_id)) {
+            if (!std.mem.eql(u8, loaded.id, plugin_id)) {
+                editor.app.recordCaseClash(plugin_id, loaded.id, path);
+            } else if (isBundledPluginId(plugin_id)) {
                 dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
@@ -852,14 +900,7 @@ fn unloadPluginLibs(editor: *Editor) void {
     editor.app.failed_user_plugins.deinit(editor.app.gpa);
     editor.app.deinitPluginLoads();
 
-    for (editor.app.disabled_plugin_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.disabled_plugin_ids.deinit(editor.app.gpa);
-
-    for (editor.app.undecided_plugin_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.undecided_plugin_ids.deinit(editor.app.gpa);
-
-    for (editor.app.auto_update_off_ids.items) |id| editor.app.gpa.free(id);
-    editor.app.auto_update_off_ids.deinit(editor.app.gpa);
+    // The id lists (disabled, undecided, auto-update off) are the App's: `App.deinit`.
 
     {
         var it = editor.app.plugin_flags_pending.iterator();
@@ -908,8 +949,8 @@ pub fn builtinManifest(editor: *Editor, id: []const u8) ?sdk.Manifest {
     inline for (bundled_plugins) |m| {
         if (std.mem.eql(u8, m.plugin_id, id)) {
             const frame_gpa = editor.app.arena.allocator();
-            const zon = frame_gpa.dupeZ(u8, m.plugin_options.manifest_zon) catch return null;
-            return sdk.Manifest.parse(frame_gpa, zon) catch return null;
+            const zon = frame_gpa.dupeSentinel(u8, m.plugin_options.manifest_zon, 0) catch return null;
+            return sdk.Manifest.parse(frame_gpa, frame_gpa, zon) catch return null;
         }
     }
     return null;
@@ -1113,6 +1154,7 @@ pub fn rebuildExtensionOwnerCache(editor: *Editor) void {
             };
         }
     }
+    editor.rehome_pending = true;
 }
 
 /// **The only function that writes `.extensions` to disk**, and it runs only in direct response
@@ -1464,6 +1506,17 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
+    // Asked before the build is opened: a case variant of a loaded or installed id fails saying so.
+    var clash_buf: [std.fs.max_name_bytes]u8 = undefined;
+    if (editor.app.pluginCaseClash(&clash_buf, id)) |clash| {
+        switch (clash) {
+            .other => |other| editor.app.recordCaseClash(id, other, path),
+            // Refused as a possible clash: nothing says the folder is this plugin's alone.
+            .unreadable => editor.app.recordPluginFailure(id, "the plugins folder could not be read to check for a plugin whose id differs only in case", null, null, .of(path)),
+        }
+        editor.app.gpa.free(path);
+        return error.DuplicatePluginId;
+    }
     const opened = PluginLoader.open(editor.app.gpa, path, id) catch |err| {
         editor.userPluginLoadFailed(id, path, err);
         editor.app.gpa.free(path);
@@ -1643,7 +1696,7 @@ const WebPluginRequest = struct {
         // whether this host will accept the build (fingerprint, SDK version, declared id), and a
         // remembered build that is refused would greet the user with the same failure every
         // visit. What is remembered is what ran.
-        PluginLoader.remember(req.id, req.url);
+        if (!web_visit_only.contains(req.id)) PluginLoader.remember(req.id, req.url);
         PluginStore.webLoadSucceeded(req.id);
         dvui.log.info("web plugin '{s}' loaded from {s}", .{ req.id, req.url });
         editor.app.host.refresh();
@@ -1759,8 +1812,26 @@ export fn FizzyWebPlayDemo(ptr: [*]u8, len: usize, is_tape: bool) void {
     editor.app.host.refresh();
 }
 
+/// The page plays a tape it fetched from a link (`?tape=<url>`): once the plugins its documents
+/// belong to are loaded, asked of the store as needed (`TapeTabs.openWhenReady`), in a tab of its
+/// own with nothing else in view: the page is the tape.
+export fn FizzyWebPlayTape(ptr: [*]u8, len: usize) void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    const editor = web_editor orelse return;
+    const bytes = ptr[0..len];
+    defer editor.app.gpa.free(bytes);
+    editor.tape_tabs.openWhenReady(editor, bytes, true) catch |err| {
+        dvui.log.err("web: could not play the tape: {t}", .{err});
+        editor.demo.playTapeSoon(bytes);
+    };
+    editor.app.host.refresh();
+}
+
 /// The one editor, for the page's calls. Set by `postInit` on the web.
 var web_editor: ?*Editor = null;
+/// Plugin ids loaded for this visit only (`PluginManager.loadFromUrl`: a shared tape's owners),
+/// which the page does not bring back on the next.
+var web_visit_only: std.StringHashMapUnmanaged(void) = .empty;
 /// Plugin ids the page is fetching for us right now.
 var web_loads_in_flight: std.StringHashMapUnmanaged(void) = .empty;
 /// Plugin ids whose file-type prompt (`maybeShowFileTypeDialog`) waits for their web load to
@@ -1901,9 +1972,8 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) Unload
 
     // Remove all contributions + services + active-id references (before dlclose), then
     // run the plugin's own teardown.
-    editor.app.host.unregisterPlugin(plugin);
-    fizzy.backend.rebuildDynamicNativeMenus();
-    plugin.deinit();
+    // Native menus rebuilt before the plugin's `deinit`, as they may still name its strings.
+    editor.app.host.retirePlugin(plugin, fizzy.backend.rebuildDynamicNativeMenus);
 
     // Drop the unloaded plugin's keybinds by rebuilding from the survivors.
     rebuildKeybinds(editor);
@@ -2049,8 +2119,19 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
 
     const plugin_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", id });
     defer editor.app.gpa.free(plugin_dir);
-    std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
-        dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) });
+    // A build refused for its case (`App.recordCaseClash`) names a folder that, on macOS and
+    // Windows, is another installed plugin's own, loaded or not: its card drops, and that folder
+    // stays. Told apart by the names the filesystem lists now, never by the name asked for.
+    const plugins_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins" });
+    defer editor.app.gpa.free(plugins_dir);
+    switch (@import("app").store.folders.deletable(dvui.io, plugins_dir, id)) {
+        .folder => std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
+            dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) }),
+        // A dev setup's link: the link goes, never what it points at.
+        .link => std.Io.Dir.cwd().deleteFile(dvui.io, plugin_dir) catch |err|
+            dvui.log.warn("uninstallPlugin '{s}': could not remove the link {s}: {s}", .{ id, plugin_dir, @errorName(err) }),
+        .keep => dvui.log.info("uninstallPlugin '{s}': {s} is not this plugin's own folder alone; kept", .{ id, plugin_dir }),
+    }
     // A broken (failed-to-load) build can be uninstalled too; clear its failure record so the
     // card disappears instead of lingering as "Failed".
     editor.app.clearFailedUserPlugin(id);
@@ -2065,9 +2146,16 @@ fn storeUninstalled(arena: std.mem.Allocator) []const @import("app").layout.Stat
 }
 
 pub fn postInit(editor: *Editor) !void {
-    // Documents' tracks, while they are behind a switch (plans/RECORDING_PLAN.md, step 3).
+    // Documents' tracks (plans/RECORDING_PLAN.md): on as the setting says (`record_history`),
+    // applied each time it changes (`tick`).
     editor.app.tracks = .init(editor.app.gpa);
-    if (Popout.envSwitch("FIZZY_TRACKS") orelse false) editor.setTracking(true);
+    // Closed documents' tracks are kept in the profile, and picked up when they open again. Not
+    // on the web, which has no profile folder to keep them in.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        const dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "tracks" });
+        defer editor.app.gpa.free(dir);
+        try editor.app.tracks.?.keepIn(dir);
+    }
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});
     } else {
@@ -2129,6 +2217,14 @@ pub fn postInit(editor: *Editor) !void {
         .name = "fizzy.files.changed",
         .description = "Files under the project folder changed on disk (coalesced, ignore rules applied); truncated means rescan.",
         .payload = ".{ .events = .{ .{ .path = \"/abs\", .kind = .created, .object = .file, .old_path = \"\" } }, .truncated = false }",
+    }) catch {};
+    inline for (.{
+        .{ "fizzy.history.undone", "Someone took back a step another made: the person undoing an agent's draw, or the reverse." },
+        .{ "fizzy.history.redone", "Someone put back a step another made, after it was undone." },
+    }) |e| editor.app.host.declareEvent(.{
+        .name = e[0],
+        .description = e[1],
+        .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
     }) catch {};
     editor.app.host.declareEvent(.{
         .name = "fizzy.files.reveal",
@@ -2236,9 +2332,8 @@ pub fn postInit(editor: *Editor) !void {
         .draw = drawSettingsPane,
     });
 
-    // Menu bar contributions (non-macOS in-app bar). The File/Edit draw bodies still live
-    // in fizzy's `Menu.zig`; a later step could move them into the workbench / pixel-art
-    // plugins so those self-register. Order = bar order.
+    // Menu bar contributions (non-macOS in-app bar). Registered after the plugins', so
+    // registration order isn't bar order: `Menu.draw` puts plugin menus between these and Help.
     // One registration per `menu_model.menu_bar` entry, all pointing at the same generic
     // renderer with the model node as `ctx`. There is no longer a per-menu draw function that
     // could disagree with the macOS builder walking the same tree.
@@ -2297,6 +2392,10 @@ pub fn postInit(editor: *Editor) !void {
     // The `automation` service: plugins play live tapes on the app as it is (`automation.Service`).
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
+    // The `demos` service: fizzy's demos and plugins' (`Host.registerDemo`), listed and played.
+    editor.demos = .init(editor);
+    editor.demos.bind();
+    try editor.app.host.registerService(sdk.services.demos.Api, &editor.demos.api, null);
 
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
@@ -2363,17 +2462,22 @@ fn drawSettingsPane(_: ?*anyopaque) anyerror!dvui.App.Result {
 }
 
 // ---- EditorAPI: fizzy-provided read/utility surface for plugins ----------
-// Installed on the Host in `postInit`; `ctx` is this `*Editor`.
+// Installed on the Host in `postInit`; `ctx` is this `*Editor`. Public for a test that drives a
+// plugin through `Host` (`tests/integration.zig`, the workbench's home page).
 
-const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
+pub const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .arena = fizzyArena,
     .extensionOwnerOverride = fizzyExtensionOwnerOverride,
     .folder = fizzyFolder,
     .paletteFolder = fizzyPaletteFolder,
+    .pluginDataFolder = fizzyPluginDataFolder,
+    .pluginRegistered = fizzyPluginRegistered,
+    .pluginRetired = fizzyPluginRetired,
     .getSecret = fizzyGetSecret,
     .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
     .contentOpacity = fizzyContentOpacity,
+    .historyLimit = fizzyHistoryLimit,
     .dialogWindow = fizzyDialogWindow,
     .frostPane = fizzyFrostPane,
     .isMaximized = fizzyIsMaximized,
@@ -2413,12 +2517,14 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .assignedRegionNames = fizzyAssignedRegionNames,
     .selectInRegion = fizzySelectInRegion,
     .revealSurface = fizzyRevealSurface,
+    .hideSurface = fizzyHideSurface,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
     .closeProjectFolder = fizzyCloseProjectFolder,
     .recentFolderCount = fizzyRecentFolderCount,
     .recentFolderAt = fizzyRecentFolderAt,
+    .recentFolderOpened = fizzyRecentFolderOpened,
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
     .folderWatchActive = fizzyFolderWatchActive,
@@ -2536,6 +2642,15 @@ fn fizzyFolder(ctx: *anyopaque) ?[]const u8 {
 fn fizzyPaletteFolder(ctx: *anyopaque) ?[]const u8 {
     return fizzyCtx(ctx).app.palette_folder;
 }
+fn fizzyPluginDataFolder(ctx: *anyopaque, id: []const u8) ?[]const u8 {
+    return fizzyCtx(ctx).app.pluginDataFolder(id);
+}
+fn fizzyPluginRegistered(ctx: *anyopaque, id: []const u8) void {
+    fizzyCtx(ctx).app.pluginRegistered(id);
+}
+fn fizzyPluginRetired(ctx: *anyopaque, id: []const u8) void {
+    fizzyCtx(ctx).app.pluginRetired(id);
+}
 fn fizzyGetSecret(ctx: *anyopaque, key: []const u8) ?[]const u8 {
     return fizzyCtx(ctx).app.secrets.get(key);
 }
@@ -2555,6 +2670,10 @@ fn fizzyFrostPane(_: *anyopaque, id: dvui.Id, rect: dvui.Rect.Physical, corners:
 
 /// The cards' opacity: the setting while windowed, opaque while the window covers the desktop,
 /// eased between them with the window's own opacity (`easeWindowOpacity`).
+fn fizzyHistoryLimit(ctx: *anyopaque) u32 {
+    return fizzyCtx(ctx).app.settings.history_limit;
+}
+
 fn fizzyContentOpacity(ctx: *anyopaque) f32 {
     const editor = fizzyCtx(ctx);
     return std.math.lerp(editor.app.settings.content_opacity, 1.0, std.math.clamp(editor.window_opacity_anim.cover, 0, 1));
@@ -2652,7 +2771,13 @@ fn fizzyRecentFolderCount(ctx: *anyopaque) usize {
 fn fizzyRecentFolderAt(ctx: *anyopaque, index: usize) ?[]const u8 {
     const editor = fizzyCtx(ctx);
     if (index >= editor.app.recents.folders.items.len) return null;
-    return editor.app.recents.folders.items[index];
+    return editor.app.recents.folders.items[index].path;
+}
+fn fizzyRecentFolderOpened(ctx: *anyopaque, index: usize) ?i64 {
+    const editor = fizzyCtx(ctx);
+    if (index >= editor.app.recents.folders.items.len) return null;
+    const opened = editor.app.recents.folders.items[index].opened;
+    return if (opened == 0) null else opened;
 }
 fn fizzyOpenInFileBrowser(ctx: *anyopaque, path: []const u8) anyerror!void {
     return fizzyCtx(ctx).openInFileBrowser(path);
@@ -2768,6 +2893,13 @@ const DocSurface = struct {
     feed: @import("app").ActivityFeed = .{},
     /// Its history as a line at the bottom of the pane: undo and redo show it.
     transport: @import("app").HistoryTransport = .{},
+    /// Its history as pictures, for the transport's strip: one taken each time its track moves.
+    frames: @import("app").HistoryFrames = .{},
+    /// The track, and how many steps it held, when a picture was last asked for.
+    frames_track: usize = 0,
+    frames_steps: usize = 0,
+    /// The document has history (its grip shows): once it has, it keeps it (`drawDocSurface`).
+    has_history: bool = false,
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2827,6 +2959,7 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
     const kv = editor.doc_surfaces.fetchRemove(doc_id) orelse return;
+    kv.value.frames.deinit(editor.app.gpa);
     editor.app.host.unregisterSurface(kv.value.id);
     editor.app.gpa.free(kv.value.id);
     editor.app.gpa.destroy(kv.value);
@@ -2959,6 +3092,19 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // No fill: the place card the region draws is the document's background. A second coat of
     // the same translucent fill here doubled it — darker, and more opaque than the chrome
     // around it.
+    // The card the document is drawn on, the first box round it reaching lower (its padding): its
+    // bottom edge is where the history's grip stands.
+    const card_edge = edge: {
+        var wd = dvui.parentGet().data();
+        const own = wd.borderRectScale().r;
+        for (0..8) |_| {
+            const r = wd.borderRectScale().r;
+            if (r.y + r.h > own.y + own.h + 0.5) break :edge r.y + r.h;
+            if (wd.parent.data() == wd) break;
+            wd = wd.parent.data();
+        }
+        break :edge own.y + own.h;
+    };
     var canvas = sdk.pane_layout.mainCanvasVbox(dvui.themeGet().color(.window, .fill), false, @truncate(ds.doc_id));
     defer {
         dvui.toastsShow(canvas.data().id, canvas.data().contentRectScale().r.toNatural());
@@ -2976,9 +3122,26 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     // the next frame is held here too.
     if (claim_pill) |pill| if (!editor.demo.live.playing()) holdInput(canvas.data(), ds, pill.physical);
 
+    // The picture of it the history asked for, from the last frame, above where the bar sits.
+    const recorded = if (editor.app.tracks) |*t| t.trackOf(doc.id) else null;
+    if (recorded != null) {
+        const pane = canvas.data().borderRectScale().r;
+        // Above the bar as it stands, its strip and the feed over it included.
+        const under = if (ds.transport.place(pane, dvui.frameTimeNS())) |bar| pane.y + pane.h - bar.y + 40 * dvui.windowRectScale().s else 0;
+        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under));
+    }
+
     const focus_before = dvui.lastFocusedIdInFrame();
     _ = try doc.owner.drawDocument(doc);
     ds.focus_inside = dvui.lastFocusedIdInFrameSince(focus_before) != null;
+
+    // Its history moved (a step recorded, undone, redone, scrubbed to): a picture of it as it
+    // stands, a frame from now. The first frame it draws is one too.
+    if (recorded) |tr| if (@intFromPtr(tr) != ds.frames_track or tr.steps.items.len != ds.frames_steps) {
+        ds.frames_track = @intFromPtr(tr);
+        ds.frames_steps = tr.steps.items.len;
+        if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| ds.frames.moved(if (line.at == 0) 0 else line.entries[line.at - 1].id);
+    };
 
     // The commands run on it, as they run; none while a tape seeks, which replays them unseen.
     if (editor.app.host.activity_muted) ds.feed.clear() else {
@@ -2990,7 +3153,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
             area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
         };
-        ds.feed.draw(area, @truncate(ds.doc_id), now);
+        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |pressed| editor.actFromFeed(doc, ds, pressed);
     }
 
     // A menu inside the document only when its owner names one. The context is created *after*
@@ -3014,58 +3177,80 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         }
     }
     // Its history, while undo or redo or the pointer keep it: not while someone else holds it.
-    // A shared tape being trimmed has the trim bar instead.
-    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else if (editor.tape_tabs.trimOf(doc.id, dvui.currentWindow().arena())) |trim| {
-        TapeTabs.drawTrim(doc, trim[0], trim[1], canvas.data().borderRectScale().r, @truncate(ds.doc_id));
-    } else {
-        const shareable = if (editor.app.tracks) |*t| if (t.trackOf(doc.id)) |tr| tr.steps.items.len > 0 else false else false;
-        const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{ .share = shareable });
-        if (pressed.share) {
-            editor.share_pending = doc.id;
+    if (claim) |c| drawClaim(editor, c, claim_pill.?, doc.owner.documentPath(doc)) else {
+        // Exported from where its track began on; while the export window is open, what it holds.
+        const track = if (recorded) |tr| if (tr.steps.items.len > 0 and tr.base != null) tr else null else null;
+        const summary: []const u8 = if (track != null) if (ds.transport.window) |win| exportSummary(editor, doc, win.from, win.to) else "" else "";
+        // Whether it has history, for its grip: asked of its owner each frame it has none, which
+        // costs next to nothing (an empty line), and never again once it has. A recorded step says
+        // so without asking. Its history never empties but on a reload.
+        if (!ds.has_history) {
+            if (recorded) |tr| ds.has_history = tr.steps.items.len > 0;
+            if (!ds.has_history) if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| {
+                ds.has_history = line.entries.len > 0;
+            };
+        }
+        const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
+            .history = ds.has_history,
+            .steps = if (recorded) |tr| tr.steps.items.len else 0,
+            .edge = card_edge,
+            .frames = if (recorded != null) &ds.frames else null,
+            .export_from = if (track) |tr| tr.base_top else null,
+            .window_summary = summary,
+            .progress = editor.tape_tabs.progress(doc.owner.documentPath(doc)),
+        });
+        if (pressed.exported) |win| {
+            editor.share_pending = .{ .doc_id = doc.id, .from = win.from, .to = win.to };
             dvui.refresh(null, @src(), null);
         }
     }
     return .ok;
 }
 
-/// How `doc` was made, as a tape to trim: its whole track exported (`Tracks.exportTape`) and
-/// opened in a tab of its own, played in at once, for the person to trim and share
-/// (`TapeTabs`, `TrimBar`). Nothing is written until they share. The transport's share.
-pub fn shareDocument(editor: *Editor, doc: sdk.DocHandle) void {
+/// What the export window from stop `from` to stop `to` of `doc`'s history holds, in words: "4
+/// steps, 12 s, by you and Claude". Empty when part of it was made before its track began.
+fn exportSummary(editor: *Editor, doc: sdk.DocHandle, from: usize, to: usize) []const u8 {
+    const arena = dvui.currentWindow().arena();
+    const t = &(editor.app.tracks orelse return "");
+    const line = doc.owner.historyLine(doc, arena) orelse return "";
+    const sum = t.lineSummary(&editor.app.host, doc, arena, line, from, to) orelse return "";
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const w = &out.writer;
+    const secs = (sum.played_ms + 500) / 1000;
+    w.print("{d} step{s}, ", .{ sum.steps, if (sum.steps == 1) "" else "s" }) catch {};
+    if (secs < 60) w.print("{d} s", .{secs}) catch {} else w.print("{d} min {d} s", .{ secs / 60, secs % 60 }) catch {};
+    if (sum.authors.len > 0) w.writeAll(", by ") catch {};
+    for (sum.authors, 0..) |a, i| {
+        if (i > 0) w.writeAll(if (i == sum.authors.len - 1) " and " else ", ") catch {};
+        w.writeAll(switch (a.kind) {
+            .person => "you",
+            .unattributed => "someone unknown",
+            else => if (a.label.len > 0) a.label else @tagName(a.kind),
+        }) catch {};
+    }
+    return out.written();
+}
+
+/// A part of `doc`'s history as a tape (the strip's export window, stops `from` to `to`):
+/// exported as the strip shows it (`Tracks.exportLine`), kept in the config folder's `tapes/`,
+/// and said on the document.
+pub fn exportDocument(editor: *Editor, doc: sdk.DocHandle, from: usize, to: usize) void {
     const gpa = editor.app.gpa;
     const t = &(editor.app.tracks orelse return);
-    const bytes = t.exportTape(&editor.app.host, doc, gpa, .{}) catch |err| {
-        dvui.log.warn("share: could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
-        _ = editor.noteOnDocument(doc.id, "Could not share");
+    const bytes = t.exportLine(&editor.app.host, doc, gpa, from, to, .{}) catch |err| {
+        dvui.log.warn("export: could not export {s}: {t}", .{ doc.owner.documentPath(doc), err });
+        _ = editor.noteOnDocument(doc.id, "Could not export");
         return;
     };
     defer gpa.free(bytes);
-    // Whose each step is, for the trim to say.
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const arena = dvui.currentWindow().arena();
-    const steps = (t.trackOf(doc.id) orelse return).steps.items;
-    const by = arena.alloc(u8, steps.len) catch return;
-    var names: std.ArrayListUnmanaged([]const u8) = .empty;
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
-    for (steps, by) |r, *b| {
-        const who = editor.app.host.stepAuthor(doc.id, r.id);
-        const i = for (authors.items, 0..) |a, i| {
-            if (a.same(who)) break i;
-        } else i: {
-            if (authors.items.len == 255) break :i 254;
-            authors.append(arena, who) catch return;
-            names.append(arena, switch (who.kind) {
-                .person => "you",
-                .unattributed => "someone unknown",
-                else => if (who.label.len > 0) who.label else @tagName(who.kind),
-            }) catch return;
-            break :i authors.items.len - 1;
-        };
-        b.* = @intCast(i);
-    }
-    editor.tape_tabs.open(editor, bytes, .{ .trim = .{ .by = by, .names = names.items } }) catch |err| {
-        dvui.log.warn("share: could not open the tape: {t}", .{err});
-        _ = editor.noteOnDocument(doc.id, "Could not open the tape");
+    const saved = editor.keepTape(arena, doc, bytes, "") catch |err| {
+        dvui.log.warn("export: could not keep the tape: {t}", .{err});
+        _ = editor.noteOnDocument(doc.id, "Could not save the tape");
+        return;
     };
+    _ = editor.noteOnDocument(doc.id, std.fmt.allocPrint(arena, "Saved {s}", .{std.fs.path.basename(saved)}) catch "Saved the tape");
 }
 
 /// Say `message` on the document's own panes, in the glass its commands show in
@@ -3093,8 +3278,10 @@ pub fn keepTape(editor: *Editor, arena: std.mem.Allocator, doc: sdk.DocHandle, b
 }
 
 /// Record documents' tracks, or stop. Documents open now get one; those opened after too.
+/// Off, what was recorded is forgotten: documents keep only their undo history.
 pub fn setTracking(editor: *Editor, on: bool) void {
     const t = &(editor.app.tracks orelse return);
+    if (!on and t.on) t.deinit();
     t.on = on;
     editor.app.host.recorder = if (on) t.recorder() else null;
     if (on) for (editor.app.open_files.values()) |doc| t.opened(doc);
@@ -3162,7 +3349,7 @@ pub fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
             self.slot.packed_children = 0;
             self.slot.total_weight = 0;
             self.slot.min_space_taken = 0;
-            if (builtin.mode == .Debug) self.slot.child_id = .zero;
+            if (builtin.mode == .debug) self.slot.child_id = .zero;
         }
     };
 
@@ -3569,11 +3756,12 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     // plugin's settings. Left unreconciled until another external change retriggers a read
     // (rare in practice: the watcher's debounce already gives a normal atomic save time to
     // settle before this runs at all).
-    const parsed = Settings.parseOnly(gpa, data) catch |err| {
+    var parsed_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer parsed_arena.deinit();
+    const parsed = Settings.parseOnly(gpa, parsed_arena.allocator(), data) catch |err| {
         dvui.log.warn("settings watcher: could not parse external settings.zon change ({s}); skipping this reconciliation", .{@errorName(err)});
         return;
     };
-    defer Settings.freeParsed(gpa, parsed);
 
     // Fizzy fields, one at a time rather than `editor.app.settings = parsed` wholesale: `theme` is
     // runtime-owned (see its doc comment on `Settings`) and must not be clobbered by the raw
@@ -3582,6 +3770,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.setThemeName(gpa, parsed.theme) catch |err|
         dvui.log.warn("settings watcher: failed to apply external theme change: {s}", .{@errorName(err)});
     editor.app.settings.hold_menu_duration_ms = parsed.hold_menu_duration_ms;
+    editor.app.settings.history_limit = parsed.history_limit;
     editor.app.settings.font_body_size = parsed.font_body_size;
     editor.app.settings.font_title_size = parsed.font_title_size;
     editor.app.settings.font_heading_size = parsed.font_heading_size;
@@ -3599,6 +3788,8 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.black_box = parsed.black_box;
+    editor.app.settings.record_history = parsed.record_history;
+    editor.app.settings.kept_history_gb = parsed.kept_history_gb;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
@@ -4044,20 +4235,36 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // the glass program, Apple's lens (`inApp`), as the OS's Liquid Glass beside it is: its
         // frost over a blur at the full frost, and its own colour and bend. Elsewhere — the web,
         // Linux, Windows, where there is no OS glass to match — the app's frosted pane (`frosted`).
+        //
+        // The app's material (`core.material`, published by `Entry`) says how much of that there
+        // is, the same for every glass here and in every plugin, which reads these values:
+        // - `liquid`: all of it.
+        // - `frost`: the frosted pane, no bend and no glass program (`LiquidField`).
+        // - `blur`: the same at half the blur.
+        // - `transparent`: no blur, so no frost. Surfaces fall back to `dialogFill`, the window's
+        //   colour at its opacity over what is behind.
+        // - `none`: that fill, opaque.
+        const kind = fizzy.core.material.get().kind;
+        const liquid = kind == .liquid;
         const opacity = @max(if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light, glass_look.min_opacity);
-        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader;
+        const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader and liquid;
         const pane = glass_look.frosted(opacity);
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
-            .opacity = pane.mix,
-            .blur = if (lens) glass_look.text_blur else pane.blur,
+            .opacity = if (kind == .none) 1 else pane.mix,
+            .blur = switch (kind) {
+                .liquid => if (lens) glass_look.text_blur else pane.blur,
+                .frost => pane.blur,
+                .blur => pane.blur / 2,
+                .transparent, .none => 0,
+            },
             .lift = 0,
             .detail = 0,
             .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
             .has_chrome = true,
         });
         // The lens's bend fades with its own frost (`InApp.bend`): the whole of it here.
-        fizzy.core.dialogs.publishRefraction(if (lens) 1 else pane.refraction);
+        fizzy.core.dialogs.publishRefraction(if (lens) 1 else if (liquid) pane.refraction else 0);
         fizzy.core.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
@@ -4069,7 +4276,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).
     fizzy.core.screens.publishMainTop(if (builtin.target.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
-    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
+    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.get().kind == .liquid);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();
@@ -4085,14 +4292,32 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.app.file_table.pump();
     // Saves whose encode finished on their worker: on to their write, or done.
     editor.doc_io.tick();
-    // The document states tracks asked for since last frame, before anything draws.
-    if (editor.app.tracks) |*t| t.tick();
-    if (editor.share_pending) |id| {
+    // Recording as the setting says, when it changed (`FIZZY_TRACKS` over it): a command that
+    // turned it on or off (`fizzy.tracks.record`) holds until the setting next changes.
+    {
+        const want = Popout.envSwitch("FIZZY_TRACKS") orelse editor.app.settings.record_history;
+        if (editor.record_history_applied != want) {
+            editor.record_history_applied = want;
+            editor.setTracking(want);
+        }
+    }
+    // The document states tracks asked for since last frame, before anything draws; and what
+    // kept history may take, as the setting says.
+    if (editor.app.tracks) |*t| {
+        t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
+        t.tick();
+    }
+    if (editor.share_pending) |p| {
         editor.share_pending = null;
-        if (editor.app.open_files.get(id)) |doc| editor.shareDocument(doc);
+        if (editor.app.open_files.get(p.doc_id)) |doc| editor.exportDocument(doc, p.from, p.to);
     }
     editor.tape_tabs.tick(editor);
     editor.promoteEditedPreviews();
+    // Once the file-type question, if one is up, has its answer: that answer is who they go to.
+    if (editor.rehome_pending and !Dialogs.FileTypeDefaults.active(dvui.currentWindow())) {
+        editor.rehome_pending = false;
+        editor.rehomeFallbackDocuments();
+    }
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
@@ -4210,14 +4435,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             dvui.log.err("about command failed: {s}", .{@errorName(err)});
         };
     }
-    if (fizzy.backend.pollPendingRecentFolder()) |i| {
-        if (i < editor.app.recents.folders.items.len) {
-            const folder = editor.app.recents.folders.items[i];
-            editor.setProjectFolder(folder) catch |err| {
-                dvui.log.err("open recent folder failed: {s}", .{@errorName(err)});
-            };
-        }
-    }
+    if (fizzy.backend.pollPendingRecentFolder()) |i| editor.openRecentFolder(i);
     if (fizzy.backend.pollPendingNativeMenuAction()) |action| {
         editor.queueNativeMenuAction(action);
     }
@@ -4479,15 +4697,18 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
             editor.app.layout.publishRegions();
-            // A drag or a collapse moved a region: fizzy's answer to "remember that" is a
-            // debounced write to `layout.zon`.
-            if (layout.extents_changed) editor.markWindowRatiosDirty();
             // Over every place: a drag's join spans two of them.
             layout.drawDragOverlay();
             // The picker photographs surfaces that drew nowhere this frame, and floats above
             // everything the shape drew.
             layout.captureUnplaced();
             editor.app.layout.picker.draw(&layout);
+            // Everything that walks the places has drawn: what plugins asked to put away during
+            // the frame (`Host.hideSurface`) goes now.
+            if (layout.applyHides()) editor.afterHide();
+            // A drag, a collapse, the picker or a hide moved a region: fizzy's answer to
+            // "remember that" is a debounced write to `layout.zon`.
+            if (layout.extents_changed) editor.markWindowRatiosDirty();
             editor.app.frame_layout = null;
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
@@ -4658,6 +4879,14 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
 /// only those over fizzy's strip: AppKit's region is its own height. Each where it stands on the
 /// stack: those drawn later this frame (dialogs land at the frame's end) are still last frame's,
 /// which is the frame the OS's hit test answers for; one closed since goes with the stack.
+/// Mark `r` as taking presses rather than dragging the window, if it reaches into the title-bar
+/// strip at the top of the window. Something lower needs no rect: the OS asks only about the
+/// strip.
+pub fn pushTitleStripRect(r: dvui.Rect.Physical) void {
+    const strip_h = (Constants.titlebar_top_buffer + Constants.titlebar_height) * dvui.windowNaturalScale();
+    if (r.y < strip_h) fizzy.backend.pushTitleBarInteractiveRect(r);
+}
+
 fn registerFloatingTitleBarRects() void {
     if (!fizzy.backend.titlebar_hit_tested) return;
     // The first is the window itself.
@@ -5042,6 +5271,24 @@ fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {
     return layout.reveal(id);
 }
 
+fn fizzyHideSurface(ctx: *anyopaque, id: []const u8) bool {
+    const editor = fizzyCtx(ctx);
+    // Mid-frame the shape and the floats are walking what a hide changes: done at the frame's end.
+    if (editor.app.frame_layout) |layout| return layout.hideLater(id);
+    var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
+    if (!layout.hide(id)) return false;
+    editor.afterHide();
+    if (layout.extents_changed) editor.markWindowRatiosDirty();
+    return true;
+}
+
+/// A hide acted (`Layout.hide`). One that shut the sidebar goes through the explorer's own close,
+/// as the rail's does, so the `closed` that Toggle Explorer and its menu title read agrees.
+fn afterHide(editor: *Editor) void {
+    const side = editor.regionFor(sdk.keywords.ide.sidebar) orelse return;
+    if (side.isClosed() and !editor.explorer.closed) editor.explorer.close(editor);
+}
+
 fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {
     const editor = fizzyCtx(ctx);
     const arena = editor.app.arena.allocator();
@@ -5219,7 +5466,16 @@ pub fn close(app: *Entry, editor: *Editor) void {
 /// anything deriving a key from `editor.app.folder` (a language server's `rootUri`, notably) then
 /// can't disagree about how the same directory is spelled. See `fizzy.core.paths.normalize`.
 pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
-    const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
+    // A relative path (a plugin's `host.setProjectFolder("proj")`) is the cwd's: everything
+    // downstream — the watcher, recents, a language server's `rootUri` — wants it absolute.
+    const relative = builtin.target.cpu.arch != .wasm32 and
+        !fizzy.core.paths.isMountPath(path_in) and !std.fs.path.isAbsolute(path_in);
+    const path = if (relative) cwd: {
+        // No path limit on the web, so the buffer's size can't be named there.
+        if (comptime builtin.target.cpu.arch == .wasm32) unreachable;
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        break :cwd try fizzy.core.paths.normalizeJoin(editor.app.gpa, cwd_buf[0..try std.Io.Dir.cwd().realPath(dvui.io, &cwd_buf)], path_in);
+    } else try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
 
     // A root on a mount — a drive, a zip — is only openable while that mount exists. From
@@ -5233,6 +5489,23 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
         ) catch "That location is not connected." });
         return error.NotMounted;
     }
+
+    // Only a folder on disk is a project folder: a file, or one removed since it was recent,
+    // would be watched, listed and remembered as if it were one.
+    if (comptime builtin.target.cpu.arch != .wasm32) if (!on_mount) {
+        const arena = editor.app.arena.allocator();
+        const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch |err| {
+            dvui.toast(@src(), .{ .message = if (err == error.FileNotFound)
+                std.fmt.allocPrint(arena, "{s} can't be found.", .{path}) catch "That folder can't be found."
+            else
+                std.fmt.allocPrint(arena, "{s} can't be opened ({t}).", .{ path, err }) catch "That folder can't be opened." });
+            return err;
+        };
+        if (st.kind != .directory) {
+            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(arena, "{s} is not a folder.", .{path}) catch "That is not a folder." });
+            return error.NotADirectory;
+        }
+    };
 
     // Opening a folder makes a close queued during this frame's draw moot.
     editor.app.pending_folder_close = false;
@@ -5248,15 +5521,8 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     editor.command_palette.invalidate();
     // A demo's folder is not one the user opened, and is gone when the demo is.
     if (!editor.demo.active()) {
-        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
-        // Written now, not only at quit: a browser tab is closed, never quit, so the web keeps
-        // recents only if they are stored as they change. Cheap enough to do everywhere.
-        if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
-            defer editor.app.gpa.free(recents_path);
-            editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});
-        } else |_| {}
-        // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
-        fizzy.backend.rebuildNativeRecentFolders();
+        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path), std.Io.Clock.real.now(dvui.io).toSeconds());
+        editor.recentFoldersChanged();
     }
     if (editor.app.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
         editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, s.id);
@@ -5269,6 +5535,35 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     // burst arrive while the rules still belong to the previous folder.
     if (editor.app.folder_watcher) |*w| w.setFolder(if (on_mount) null else editor.app.folder);
     editor.app.host.emitZon("fizzy.folder.opened", .{ .path = path });
+}
+
+/// Store recents and rebuild the native menu after the recent folders change.
+fn recentFoldersChanged(editor: *Editor) void {
+    // Written now, not only at quit: a browser tab is closed, never quit, so the web keeps
+    // recents only if they are stored as they change. Cheap enough to do everywhere.
+    if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
+        defer editor.app.gpa.free(recents_path);
+        editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});
+    } else |_| {}
+    // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
+    fizzy.backend.rebuildNativeRecentFolders();
+}
+
+/// Open the recent folder at `index`. One that is there but no longer a folder leaves Recents
+/// instead of staying to fail again; one that can't be found stays, since a drive or a share
+/// can come back. `setProjectFolder` has said which in a toast. Never fails: it runs from menu
+/// draws, which an error would cut short.
+pub fn openRecentFolder(editor: *Editor, index: usize) void {
+    const recents = &editor.app.recents;
+    if (index >= recents.folders.items.len) return;
+    editor.setProjectFolder(recents.folders.items[index].path) catch |err| {
+        // As `anyerror`: on the web there is no disk to check, so neither is in the set.
+        const e: anyerror = err;
+        if (e == error.NotADirectory or e == error.NotDir) {
+            recents.removeFolder(index);
+            editor.recentFoldersChanged();
+        } else if (e != error.FileNotFound) dvui.log.err("open recent folder failed: {t}", .{err});
+    };
 }
 
 /// Perform a close queued by `closeProjectFolder` during an earlier frame.
@@ -5403,6 +5698,9 @@ pub const Placement = struct {
     take_slot_of: ?[]const u8 = null,
     /// `OpenOptions.beside`.
     beside: bool = false,
+    /// Take `take_slot_of`'s place without bringing it forward: it shows only if that tab was
+    /// showing (`rehomeFallbackDocuments`).
+    in_place: bool = false,
 };
 
 /// How many answers `screen_history` keeps: a few agents, or one looking back a few steps.
@@ -5461,7 +5759,7 @@ pub fn answerLaterCommands(editor: *Editor, at_frame_end: bool) void {
         }
         if (api.snapshotText(w.snapshot)) |text| {
             const ticket = w.ticket;
-            const answer = editor.screenAnswer(dvui.currentWindow().arena(), @intFromEnum(w.snapshot), text, w.since);
+            const answer = editor.screenAnswer(dvui.currentWindow().arena(), @backingInt(w.snapshot), text, w.since);
             _ = editor.later_screens.swapRemove(i);
             host.finishCall(ticket, if (answer) |a| .{ .ok = a } else |err| .{ .failed = @errorName(err) });
             continue;
@@ -5482,7 +5780,7 @@ pub fn answerLaterCommands(editor: *Editor, at_frame_end: bool) void {
             host.finishCall(ticket, .{ .failed = "no snapshot came in 120 frames" });
             continue;
         }
-        if (editor.demo.snapshot.taken >= @intFromEnum(w.snapshot)) w.snapshot = api.snapshot();
+        if (editor.demo.snapshot.taken >= @backingInt(w.snapshot)) w.snapshot = api.snapshot();
         host.refresh();
         i += 1;
     }
@@ -5782,6 +6080,64 @@ fn openPath(editor: *Editor, path_in: []const u8, grouping: u64, placement_in: P
     editor.openings.begin(editor, path, grouping, placement, owner);
 
     return true;
+}
+
+/// Hand each document the fallback editor holds only as the fallback (its extension is none of
+/// the fallback's own) to the plugin that opens that extension now, in the same tab. A file
+/// opened before its plugin was there — launched with it while the plugin was refused, before a
+/// dropped-in build was loaded, before a store install — is otherwise stuck as text until it is
+/// closed and opened again. One with unsaved changes, one someone is working on (`sdk.Claim`), and
+/// one with nothing on disk to read again stay as they are; so does one whose extension the
+/// fallback offers in its own `fileTypes` (bundled text offers none).
+pub fn rehomeFallbackDocuments(editor: *Editor) void {
+    const fallback = editor.app.host.fallback_editor orelse return;
+    const gpa = editor.app.gpa;
+    // Collected first: each move takes a document out of `open_files`.
+    var ids: std.ArrayListUnmanaged(u64) = .empty;
+    defer ids.deinit(gpa);
+    for (editor.app.open_files.values()) |doc| {
+        if (doc.owner != fallback) continue;
+        const ext = std.fs.path.extension(doc.owner.documentPath(doc));
+        const owner = editor.app.host.pluginForExtension(ext) orelse continue;
+        if (owner == fallback) continue;
+        const own = for (fallback.fileTypes()) |e| {
+            if (std.ascii.eqlIgnoreCase(e, ext)) break true;
+        } else false;
+        if (own) continue;
+        if (doc.owner.isDirty(doc) or editor.app.host.documentClaim(doc.id) != null) continue;
+        ids.append(gpa, doc.id) catch return;
+    }
+    for (ids.items) |id| editor.rehomeDocument(id) catch |err|
+        dvui.log.warn("could not move a document to the plugin that opens it now: {t}", .{err});
+}
+
+fn rehomeDocument(editor: *Editor, id: u64) !void {
+    const doc = editor.app.open_files.get(id) orelse return;
+    const gpa = editor.app.gpa;
+    const path = try gpa.dupe(u8, doc.owner.documentPath(doc));
+    defer gpa.free(path);
+    // Read again from where it came from: a mount, or the disk (which the web has none of).
+    if (!editor.doc_io.owns(path)) {
+        if (comptime builtin.target.cpu.arch == .wasm32) return;
+        std.Io.Dir.cwd().access(dvui.io, path, .{}) catch return;
+    }
+    const ds = editor.doc_surfaces.get(id) orelse return;
+    const slot = try gpa.dupe(u8, ds.id);
+    defer gpa.free(slot);
+    const grouping = doc.owner.documentGrouping(doc);
+    const preview = editor.documentIsPreview(id);
+    dvui.log.info("{s}: moving from {s} to {s}, which opens it now", .{
+        std.fs.path.basename(path),
+        doc.owner.display_name,
+        (editor.app.host.pluginForExtension(std.fs.path.extension(path)) orelse doc.owner).display_name,
+    });
+    // Out of fizzy with its tab left where it is, for the new owner's placeholder to take.
+    editor.app.host.emitZon("fizzy.document.closed", .{ .path = path });
+    editor.detachFileID(id);
+    // Whichever open the user asked for last is still the one focused when it lands.
+    const focus = editor.last_load_request_path;
+    defer editor.last_load_request_path = focus;
+    _ = try editor.openPath(path, grouping, .{ .preview = preview, .take_slot_of = slot, .in_place = true });
 }
 
 /// Stop loading `path`, wherever it is loading from. Its document never arrives.
@@ -6174,7 +6530,7 @@ pub fn documentSaved(editor: *Editor, doc: sdk.DocHandle) void {
 }
 
 /// Whether the host writes this document (`DocumentIo`) rather than its owner: always on a
-/// mount, and on the disk whenever the owner can serialize. An owner without `documentBytes`
+/// mount, and on the disk whenever the owner can serialize. An owner without `documentSnapshot`
 /// writes its own files — and can only ever reach the disk.
 pub fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
     if (editor.doc_io.owns(doc.owner.documentPath(doc))) return true;
@@ -6183,7 +6539,7 @@ pub fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
 }
 
 /// Save through the host: its owner serializes, the path's filesystem writes, and the owner
-/// hears back when the write lands. An owner without `documentBytes` cannot save to a mount
+/// hears back when the write lands. An owner without `documentSnapshot` cannot save to a mount
 /// at all, which is said once rather than failing silently.
 fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
     editor.doc_io.save(doc, doc.owner.documentPath(doc)) catch |err| switch (err) {
@@ -6200,7 +6556,7 @@ fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
 /// then tell the owner it was written under that name.
 fn downloadDocument(editor: *Editor, doc: sdk.DocHandle, path: []const u8) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) return error.Unsupported;
-    const bytes = (try doc.owner.documentBytes(doc, path, editor.app.gpa)) orelse return error.Unsupported;
+    const bytes = (try doc.owner.saveBytes(doc, path, editor.app.gpa)) orelse return error.Unsupported;
     defer editor.app.gpa.free(bytes);
     try dvui.backend.downloadData(std.fs.path.basename(path), bytes);
     try doc.owner.documentWritten(doc, path);
@@ -6401,17 +6757,163 @@ pub fn redo(editor: *Editor) !void {
 
 /// An undo or a redo of the active document, through its owner's command: its transport shows,
 /// and a key held down goes further each press (`HistoryTransport.press`), the command run that
-/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar.
-fn historyStep(editor: *Editor, action: enum { undo, redo }) !void {
+/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar. An undo of
+/// a step someone else made says so on the document, with a Redo (`ActivityFeed.pushAction`), in
+/// place of the plain "Undo" its run would show.
+fn historyStep(editor: *Editor, action: HistoryAction) !void {
     const doc = editor.activeDoc() orelse return;
     const name = @tagName(action);
-    const shows = editor.app.host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
+    const host = &editor.app.host;
+    const shows = host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
     const ds = if (shows) editor.doc_surfaces.get(doc.id) else null;
     const by = if (ds) |d| d.transport.press(dvui.frameTimeNS(), action == .redo) else 1;
     for (0..by) |_| {
         if (!editor.activeDocCommandEnabled(name)) break;
+        // Who made a step is kept only once someone besides the person has acted on it.
+        const others: ?StepToTake = if (action == .undo and host.step_authors.contains(doc.id)) blk: {
+            const t = editor.stepToTake(doc, .undo, host.arena()) catch break :blk null;
+            break :blk if (t.by.kind == .person) null else t;
+        } else null;
+        const t = others orelse {
+            try editor.runActiveDocCommand(name);
+            continue;
+        };
+        // The run's own "Undo" goes unrecorded (as while a demo seeks), so the bubble below is
+        // the one it shows. The flag is put back before the feed draws.
+        const muted = host.activity_muted;
+        host.activity_muted = true;
+        defer host.activity_muted = muted;
         try editor.runActiveDocCommand(name);
+        var buf: [96]u8 = undefined;
+        const said = std.fmt.bufPrint(&buf, "Undid {s}'s {s}", .{ authorName(t.by), t.step.title }) catch "Undid a change";
+        if (editor.doc_surfaces.get(doc.id)) |d| d.feed.pushAction(said, "Redo", .redo, t.step.id, dvui.frameTimeNS());
     }
+}
+
+/// Redo `doc`'s step `id` from its bubble's Redo: only while it is still the next one to redo.
+pub fn redoFromFeed(editor: *Editor, doc: sdk.DocHandle, id: u64) void {
+    const t = editor.stepToTake(doc, .redo, editor.app.host.arena()) catch return;
+    if (t.step.id == id) _ = doc.owner.historyGoTo(doc, t.to);
+}
+
+/// Carry out a button pressed on `doc`'s activity bubbles (`ActivityFeed.Act`).
+fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @import("app").ActivityFeed.Pressed) void {
+    const now = dvui.frameTimeNS();
+    var buf: [96]u8 = undefined;
+    switch (pressed.act) {
+        .redo => editor.redoFromFeed(doc, pressed.tag),
+        .forward => {
+            // Only while that step is still on the line: an edit since may have moved on.
+            const line = doc.owner.historyLine(doc, editor.app.host.arena()) orelse return;
+            for (line.entries) |e| if (e.id == pressed.tag) {
+                _ = doc.owner.historyGoTo(doc, pressed.tag);
+                return;
+            };
+        },
+        .go_back, .go_back_anyway => {
+            const who: u32 = @intCast(pressed.tag);
+            const back = editor.backBefore(doc, who, editor.app.host.arena()) orelse {
+                const said = std.fmt.bufPrint(&buf, "Nothing of {s}'s left to go back before", .{authorName(editor.app.host.authors.items[who])}) catch "Nothing to go back before";
+                ds.feed.push(said, now);
+                return;
+            };
+            // The person's own steps since the run began go back with it: say so first.
+            if (pressed.act == .go_back and back.yours > 0) {
+                const said = std.fmt.bufPrint(&buf, "Also takes back {d} of your edits", .{back.yours}) catch "Also takes back your edits";
+                ds.feed.pushAction(said, "Go back", .go_back_anyway, pressed.tag, now);
+                return;
+            }
+            if (!doc.owner.historyGoTo(doc, back.to)) return;
+            const said = std.fmt.bufPrint(&buf, "Back before {s}'s change", .{authorName(back.by)}) catch "Went back";
+            ds.feed.pushAction(said, "Forward", .forward, back.from, now);
+        },
+    }
+}
+
+/// Where "Go back to before Claude's change" goes (`plans/SHARED_HISTORY_PLAN.md`, step 6).
+pub const BackBefore = struct {
+    /// The step to go to: the one before the run's first, 0 before the first step.
+    to: u64,
+    /// The step on top now, to come forward to again.
+    from: u64,
+    /// Who made the run.
+    by: sdk.Author,
+    /// Steps since the run began that are not the run's: they go back with it, and stay on the line.
+    others: usize,
+    /// Of those, the person's own.
+    yours: usize,
+};
+
+/// The last run by author `who` (an index into the host's authors; null for whoever's is last,
+/// the person aside) on `doc`'s line, while it is still applied: where going back to before it
+/// goes, and what else that takes back. Null when there is none, it is already undone, or the
+/// history started over since (`Host.step_authors` forgets then).
+pub fn backBefore(editor: *Editor, doc: sdk.DocHandle, who: ?u32, arena: std.mem.Allocator) ?BackBefore {
+    const host = &editor.app.host;
+    const steps = &(host.step_authors.getPtr(doc.id) orelse return null).steps;
+    const line = doc.owner.historyLine(doc, arena) orelse return null;
+    // The last run on the line by `who`: its steps are stored; the person's never are.
+    var run: u64 = 0;
+    var author: u32 = 0;
+    var i = line.entries.len;
+    while (i > 0) {
+        i -= 1;
+        const made = steps.get(line.entries[i].id) orelse continue;
+        if (made.run == 0) continue;
+        if (who) |w| if (made.author != w) continue;
+        run = made.run;
+        author = made.author;
+        break;
+    }
+    if (run == 0) return null;
+    const first = for (line.entries, 0..) |e, k| {
+        if ((steps.get(e.id) orelse continue).run == run) break k;
+    } else return null;
+    if (first >= line.at) return null;
+    var others: usize = 0;
+    var yours: usize = 0;
+    for (line.entries[first..line.at]) |e| {
+        const made = steps.get(e.id);
+        if (made != null and made.?.run == run) continue;
+        others += 1;
+        if (made == null) yours += 1;
+    }
+    return .{
+        .to = if (first == 0) 0 else line.entries[first - 1].id,
+        .from = if (line.at == 0) 0 else line.entries[line.at - 1].id,
+        .by = host.authors.items[author],
+        .others = others,
+        .yours = yours,
+    };
+}
+
+pub const HistoryAction = enum { undo, redo };
+
+/// The step an undo or a redo of a document would take, the step it leaves on top (`to`, for
+/// `historyGoTo`; 0 before the first), and who made it.
+pub const StepToTake = struct { step: sdk.Plugin.HistoryLine.Entry, to: u64, by: sdk.Author };
+
+/// What an undo or a redo of `doc` would take, from its owner's line (`historyLine`):
+/// `error.NoLine` when the owner keeps none, `error.Nothing` when there is nothing to take.
+pub fn stepToTake(editor: *Editor, doc: sdk.DocHandle, action: HistoryAction, arena: std.mem.Allocator) error{ NoLine, Nothing }!StepToTake {
+    const line = doc.owner.historyLine(doc, arena) orelse return error.NoLine;
+    const step: sdk.Plugin.HistoryLine.Entry, const to: u64 = switch (action) {
+        .undo => blk: {
+            if (line.at == 0) return error.Nothing;
+            break :blk .{ line.entries[line.at - 1], if (line.at >= 2) line.entries[line.at - 2].id else 0 };
+        },
+        .redo => blk: {
+            if (line.at >= line.entries.len) return error.Nothing;
+            break :blk .{ line.entries[line.at], line.entries[line.at].id };
+        },
+    };
+    return .{ .step = step, .to = to, .by = editor.app.host.stepAuthor(doc.id, step.id) };
+}
+
+/// Who made a step, as a person reads it: "the person", else the author's label ("Claude").
+pub fn authorName(a: sdk.Author) []const u8 {
+    if (a.kind == .person) return "the person";
+    return if (a.label.len > 0) a.label else @tagName(a.kind);
 }
 
 pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
@@ -6496,7 +6998,7 @@ fn snapshotClosingPane(editor: *Editor, doc: sdk.DocHandle) void {
     for (wb.workspaces.values()) |*ws| {
         if (!ws.hasTab(id) or ws.tabCount() != 1) continue;
         const r = ws.pane_rect_physical orelse return;
-        const snap = fizzy.core.FrameTarget.snapshot(r) orelse return;
+        const snap = fizzy.core.FrameTarget.snapshot(r, null) orelse return;
         if (ws.closing_snapshot) |old| dvui.textureDestroyLater(old);
         ws.closing_snapshot = snap;
         return;
@@ -6549,14 +7051,21 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 }
 
 pub fn deinit(editor: *Editor) !void {
+    // Freed however this ends: the fallible steps below may return early.
+    defer editor.app.deinit();
     // A demo playing at quit leaves the user's layout and settings as `Demo.begin` flushed them:
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
+    editor.demos.deinit();
     editor.tape_tabs.deinit(editor);
     editor.black_box.deinit(editor.app.gpa);
     editor.app.host.recorder = null;
-    if (editor.app.tracks) |*t| t.deinit();
+    // Each open document's track is kept as the app quits, its document still there to read.
+    if (editor.app.tracks) |*t| {
+        t.keepOpen();
+        t.deinitAll();
+    }
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
@@ -6681,6 +7190,8 @@ pub fn deinit(editor: *Editor) !void {
         // The registry itself goes with `host.deinit` below; these are the app's own strings.
         var it = editor.doc_surfaces.valueIterator();
         while (it.next()) |ds| {
+            // Its history's pictures, taken while it recorded.
+            ds.*.frames.deinit(editor.app.gpa);
             editor.app.gpa.free(ds.*.id);
             editor.app.gpa.destroy(ds.*);
         }
@@ -6863,6 +7374,14 @@ const plugin_manager_vtable: PluginManager.VTable = .{
             editor.app.untrackDisabledPlugin(id);
             try editor.setPluginEnabledPersisted(id, true);
             queueWebFileTypePrompt(editor.app.gpa, id);
+            return editor.loadWebPlugin(id, url, sha256);
+        }
+    }.f,
+    .loadFromUrl = struct {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
+            const editor = pmSelf(ctx);
+            // For the visit: the arrival neither remembers it nor asks about its file types.
+            if (!web_visit_only.contains(id)) web_visit_only.put(editor.app.gpa, try editor.app.gpa.dupe(u8, id), {}) catch {};
             return editor.loadWebPlugin(id, url, sha256);
         }
     }.f,

@@ -138,7 +138,7 @@ fn save(self: *Secrets) !void {
     const tmp = try std.fmt.allocPrint(self.gpa, "{s}.tmp", .{self.path});
     defer self.gpa.free(tmp);
     {
-        var file = try std.Io.Dir.createFileAbsolute(self.io, tmp, .{ .permissions = @enumFromInt(0o600), .truncate = true });
+        var file = try std.Io.Dir.createFileAbsolute(self.io, tmp, .{ .permissions = @fromBackingInt(@intCast(0o600)), .truncate = true });
         defer file.close(self.io);
         try file.writeStreamingAll(self.io, out.written());
     }

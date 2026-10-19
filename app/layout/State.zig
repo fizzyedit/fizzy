@@ -8,6 +8,7 @@
 //! is framework, and the chrome beside it (explorer, sidebar, panes) is fizzy's own. Seventy-five
 //! flat fields made that invisible.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
@@ -48,6 +49,10 @@ pub const Documents = struct {
     /// The view holding document `id` and nothing else, if one does: carried alone, the
     /// document carries that view, which lands as itself rather than inside a new one.
     alone: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
+    /// View `id`, out of a float that is closing, going back into the main window: a view holding
+    /// documents gives them to the one the main window shows, and goes as an emptied one does.
+    /// True when it did; false for any other view, or with none in the main window to take them.
+    fold: *const fn (ctx: *anyopaque, id: []const u8) bool,
 };
 
 pub const StoreCatalog = struct {
@@ -87,8 +92,28 @@ shows: std.StringHashMapUnmanaged(Region.Shows) = .empty,
 /// unloaded) while the picker is open.
 snapshots: std.StringHashMapUnmanaged(Snapshot) = .empty,
 /// While true, `Layout.draw` captures any surface it draws that has no snapshot yet, and
-/// `Layout.captureUnplaced` draws the rest offscreen once. Set by `openPicker`.
+/// `Layout.captureUnplaced` draws the ones whose cards the picker shows offscreen, one at a time
+/// (`offscreen`). Set by `openPicker`.
 snapshots_wanted: bool = false,
+/// The one view `Layout.captureUnplaced` is drawing offscreen for its picture, chosen by the picker
+/// from the cards it shows (`Picker.draw`): where it is in the registry, checked against its id's
+/// hash (`std.hash.Wyhash`, seed 0) before each use; the frames of warm-up drawn, and when the
+/// first was; when the list last had its card in view (`dvui.frameTimeNS`, as `Picker.list_ns`).
+offscreen: ?struct { index: usize, id: u64, warm: u8 = 0, since_ns: i128 = 0, card_ns: i128 } = null,
+/// No picture can be taken here: nothing more is captured, on screen or off, and no frame asked
+/// for one, until the picker reopens. Set once `offscreen_unstarted_limit` offscreen captures in a
+/// row could not even start (`noteOffscreenStart`): their target is small and fixed, so that is
+/// the backend (no texture targets), not the view.
+capture_unavailable: bool = false,
+/// Offscreen captures in a row, each of a different view, that could not start.
+offscreen_unstarted: u8 = 0,
+/// The views (id hashes) whose capture failed since the picker opened, gpa-owned: not tried again
+/// until it reopens (`captureFailed`, `recordCaptureFailed`).
+capture_failed: std.AutoHashMapUnmanaged(u64, void) = .empty,
+/// Debug builds only: the views (id hashes) already warned about filling their place with a
+/// scroll area of their own without saying `Surface.scrolls_itself` (`noteUnmarkedScroller`), so
+/// each is named once rather than every frame. Nothing in a release build.
+unmarked_scrollers: if (builtin.mode == .debug) UnmarkedScrollers else void = if (builtin.mode == .debug) .{} else {},
 /// The one surface picker, if open. On the state rather than in whichever pane opened it so the
 /// settings table and a region's corner button open the same thing, and the app draws it in
 /// one place above everything else (`Picker.draw`).
@@ -665,6 +690,56 @@ pub fn discardSnapshots(self: *State, gpa: std.mem.Allocator) void {
     }
     self.snapshots.clearRetainingCapacity();
     self.snapshots_wanted = false;
+    self.offscreen = null;
+    self.capture_unavailable = false;
+    self.offscreen_unstarted = 0;
+    self.capture_failed.clearAndFree(gpa);
+}
+
+/// Whether surface `id`'s capture failed since the picker opened (`capture_failed`).
+pub fn captureFailed(self: *const State, id: []const u8) bool {
+    return self.capture_failed.contains(std.hash.Wyhash.hash(0, id));
+}
+
+/// Surface `id`'s capture failed (its picture could not start, or gave no texture): it is not
+/// tried again until the picker reopens. Nothing else is affected.
+pub fn recordCaptureFailed(self: *State, gpa: std.mem.Allocator, id: []const u8) void {
+    self.capture_failed.put(gpa, std.hash.Wyhash.hash(0, id), {}) catch {};
+}
+
+/// What `unmarked_scrollers` holds: a fixed list, so a debugging aid allocates nothing. Past
+/// `ids.len` views, the rest go unnamed.
+pub const UnmarkedScrollers = struct {
+    ids: [16]u64 = undefined,
+    len: u8 = 0,
+
+    pub fn contains(self: *const UnmarkedScrollers, id: []const u8) bool {
+        const h = std.hash.Wyhash.hash(0, id);
+        return std.mem.indexOfScalar(u64, self.ids[0..self.len], h) != null;
+    }
+};
+
+/// Surface `id` filled its place with an unmarked scroll area (Debug builds; `Layout.drawSolid`).
+/// True the first time, which is when to say so.
+pub fn noteUnmarkedScroller(self: *State, id: []const u8) bool {
+    if (builtin.mode != .debug) return false;
+    const list = &self.unmarked_scrollers;
+    if (list.contains(id) or list.len == list.ids.len) return false;
+    list.ids[list.len] = std.hash.Wyhash.hash(0, id);
+    list.len += 1;
+    return true;
+}
+
+/// How many offscreen captures in a row may fail to start, each a different view, before capture
+/// counts as unavailable here.
+const offscreen_unstarted_limit = 3;
+
+/// An offscreen capture began (`started`), or could not: its target is small and fixed, so several
+/// in a row that could not mean the backend has no texture targets, and capture is given up for
+/// the picker's session (`capture_unavailable`).
+pub fn noteOffscreenStart(self: *State, started: bool) void {
+    self.offscreen_unstarted = if (started) 0 else self.offscreen_unstarted + 1;
+    if (self.offscreen_unstarted >= offscreen_unstarted_limit) self.capture_unavailable = true;
 }
 
 /// Open the picker for region `name`, anchored at `anchor` (or centred when null), and start

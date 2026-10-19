@@ -112,7 +112,7 @@ fn playFor(self: *Service, bytes: []const u8, author: ?sdk.Author) Api.Play {
         else => .{ .invalid = @errorName(err) },
     };
     if (self.current) |t| self.remember(.{ .ticket = t, .outcome = last });
-    const ticket: Api.Ticket = @enumFromInt(self.next);
+    const ticket: Api.Ticket = @fromBackingInt(@intCast(self.next));
     self.next += 1;
     self.current = ticket;
     return .{ .started = ticket };
@@ -170,22 +170,22 @@ pub fn frameEnded(self: *Service, end_micros: ?u32) bool {
 }
 
 fn snapshot(ctx: *anyopaque) Api.SnapshotTicket {
-    const s = from(ctx).snapshots orelse return @enumFromInt(0);
-    return @enumFromInt(s.request());
+    const s = from(ctx).snapshots orelse return @fromBackingInt(@intCast(0));
+    return @fromBackingInt(@intCast(s.request()));
 }
 
 fn snapshotText(ctx: *anyopaque, ticket: Api.SnapshotTicket) ?[]const u8 {
     const s = from(ctx).snapshots orelse return null;
-    return s.get(@intFromEnum(ticket));
+    return s.get(@backingInt(ticket));
 }
 
 fn capture(ctx: *anyopaque, window: []const u8) Api.CaptureTicket {
-    const c = from(ctx).captures orelse return @enumFromInt(0);
-    return @enumFromInt(c.request(window));
+    const c = from(ctx).captures orelse return @fromBackingInt(@intCast(0));
+    return @fromBackingInt(@intCast(c.request(window)));
 }
 
 fn captureImage(ctx: *anyopaque, ticket: Api.CaptureTicket) ?Api.Image {
     const c = from(ctx).captures orelse return null;
-    const image = c.get(@intFromEnum(ticket)) orelse return null;
+    const image = c.get(@backingInt(ticket)) orelse return null;
     return .{ .pixels = image.pixels, .width = image.width, .height = image.height };
 }

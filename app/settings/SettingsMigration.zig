@@ -75,13 +75,13 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
     defer allocator.free(data);
 
     @setEvalBranchQuota(10_000);
-    const legacy = std.zon.parse.fromSliceAlloc(LegacyDisk, allocator, data, null, .{
-        .ignore_unknown_fields = true,
-    }) catch |err| {
+    var legacy_arena: std.heap.ArenaAllocator = .init(allocator);
+    defer legacy_arena.deinit();
+    var legacy_diag: std.zon.parse.Diagnostics = undefined;
+    const legacy = std.zon.parse.fromSlice(LegacyDisk, .{ .gpa = allocator, .arena = legacy_arena.allocator(), .source = data, .diagnostics = &legacy_diag, .ignore_unknown_fields = true }) catch |err| {
         dvui.log.warn("settings: could not parse settings.zon for R12 enabled migration ({s}); skipping", .{@errorName(err)});
         return;
     };
-    defer std.zon.parse.free(allocator, legacy);
 
     const blocks = SettingsPluginsZon.listPluginBlocks(allocator, data) catch return;
     defer SettingsPluginsZon.freeEntries(allocator, blocks);
@@ -157,11 +157,12 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
 
     // Regenerate fizzy's own fields from a Settings parse (unknown fields — including the legacy
     // `disabled_plugins` list — are ignored), so the rewritten file drops that list for free.
-    const parsed = Settings.parseOnly(allocator, data) catch |err| {
+    var parsed_arena: std.heap.ArenaAllocator = .init(allocator);
+    defer parsed_arena.deinit();
+    const parsed = Settings.parseOnly(allocator, parsed_arena.allocator(), data) catch |err| {
         dvui.log.warn("settings: could not re-serialize fizzy's own fields for R12 migration ({s}); skipping", .{@errorName(err)});
         return;
     };
-    defer Settings.freeParsed(allocator, parsed);
 
     const fizzy_text = Settings.serialize(&parsed, allocator) catch |err| {
         dvui.log.warn("settings: could not serialize fizzy's own fields for R12 migration ({s}); skipping", .{@errorName(err)});
@@ -195,15 +196,15 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
 /// `enabled` was listed, so an `.auto_update = false`-only block — which the app itself can
 /// write for a disabled plugin — was being swallowed too.)
 fn isAlreadyNested(gpa: std.mem.Allocator, text: []const u8) bool {
-    const z = gpa.dupeZ(u8, text) catch return false;
+    const z = gpa.dupeSentinel(u8, text, 0) catch return false;
     defer gpa.free(z);
 
     if (SettingsPluginsZon.extractField(gpa, z, "settings")) |s| {
         gpa.free(s);
         return true;
     }
-    inline for (@typeInfo(SettingsPluginsZon.Reserved).@"struct".fields) |field| {
-        if (SettingsPluginsZon.extractField(gpa, z, field.name)) |s| {
+    inline for (@typeInfo(SettingsPluginsZon.Reserved).@"struct".field_names, @typeInfo(SettingsPluginsZon.Reserved).@"struct".field_types, @typeInfo(SettingsPluginsZon.Reserved).@"struct".field_attrs) |field_name, _, _| {
+        if (SettingsPluginsZon.extractField(gpa, z, field_name)) |s| {
             gpa.free(s);
             return true;
         }
@@ -254,8 +255,10 @@ const LegacyGlass = struct {
 /// dialogs' blur goes with them, as the roughness that followed it does.
 pub fn windowGlass(allocator: std.mem.Allocator, data: [:0]const u8, settings: *Settings) void {
     @setEvalBranchQuota(10_000);
-    const legacy = std.zon.parse.fromSliceAlloc(LegacyGlass, allocator, data, null, .{ .ignore_unknown_fields = true }) catch return;
-    defer std.zon.parse.free(allocator, legacy);
+    var legacy_arena: std.heap.ArenaAllocator = .init(allocator);
+    defer legacy_arena.deinit();
+    var legacy_diag: std.zon.parse.Diagnostics = undefined;
+    const legacy = std.zon.parse.fromSlice(LegacyGlass, .{ .gpa = allocator, .arena = legacy_arena.allocator(), .source = data, .diagnostics = &legacy_diag, .ignore_unknown_fields = true }) catch return;
     if (legacy.dialog_opacity == null and legacy.dialog_blur == null and legacy.dialog_lift == null and
         legacy.dialog_detail == null and legacy.dialog_refraction == null) return;
     const opaque_window = comptime builtin.target.cpu.arch == .wasm32 or (builtin.target.os.tag != .macos and builtin.target.os.tag != .windows);

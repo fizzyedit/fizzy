@@ -19,12 +19,7 @@ const dvui = @import("dvui");
 const auto_update = @import("auto_update.zig");
 const build_opts = @import("build_opts");
 
-const Vpk = if (auto_update.impl)
-    @cImport({
-        @cInclude("Velopack.h");
-    })
-else
-    struct {};
+const Vpk = if (auto_update.impl) @import("velopack_c") else struct {};
 
 const UpdateJob = @This();
 
@@ -41,7 +36,7 @@ allocator: std.mem.Allocator,
 window: *dvui.Window,
 io: std.Io,
 
-phase: std.atomic.Value(u8) = .init(@intFromEnum(Phase.queued)),
+phase: std.atomic.Value(u8) = .init(@backingInt(Phase.queued)),
 /// 0–100 from Velopack's download callback. Stays at 0 outside `.downloading`.
 progress: std.atomic.Value(u8) = .init(0),
 /// Worker → main publish flag.
@@ -141,7 +136,7 @@ pub fn applyAtExit() bool {
 
 pub fn currentPhase(job: *const UpdateJob) Phase {
     const raw = job.phase.load(.acquire);
-    return @enumFromInt(raw);
+    return @fromBackingInt(@intCast(raw));
 }
 
 pub fn progressPercent(job: *const UpdateJob) u8 {
@@ -184,7 +179,7 @@ fn setFailed(job: *UpdateJob, e: auto_update.UpdateInstallError) void {
     } else {
         job.err_msg_len = 0;
     }
-    job.phase.store(@intFromEnum(Phase.failed), .release);
+    job.phase.store(@backingInt(Phase.failed), .release);
 }
 
 fn workerMain(job: *UpdateJob) void {
@@ -202,7 +197,7 @@ fn workerMain(job: *UpdateJob) void {
         return;
     }
 
-    job.phase.store(@intFromEnum(Phase.downloading), .release);
+    job.phase.store(@backingInt(Phase.downloading), .release);
     dvui.refresh(job.window, @src(), null);
 
     const mgr_opaque = auto_update.openUpdateManager(job.io, job.allocator) catch {
@@ -223,7 +218,7 @@ fn workerMain(job: *UpdateJob) void {
     switch (result) {
         Vpk.UPDATE_AVAILABLE => {},
         Vpk.NO_UPDATE_AVAILABLE, Vpk.REMOTE_IS_EMPTY => {
-            job.phase.store(@intFromEnum(Phase.no_update), .release);
+            job.phase.store(@backingInt(Phase.no_update), .release);
             return;
         },
         Vpk.UPDATE_ERROR => {
@@ -250,6 +245,6 @@ fn workerMain(job: *UpdateJob) void {
     job.manager = mgr_opaque;
     job.update_info = u;
     job.progress.store(100, .monotonic);
-    job.phase.store(@intFromEnum(Phase.downloaded), .release);
+    job.phase.store(@backingInt(Phase.downloaded), .release);
     job.downloaded_unseen.store(true, .release);
 }

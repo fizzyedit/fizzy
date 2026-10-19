@@ -52,7 +52,7 @@ const max_in_flight: usize = 6;
 
 const Entry = struct {
     id: u32 = 0,
-    status: std.atomic.Value(u8) = .init(@intFromEnum(Status.fetching)),
+    status: std.atomic.Value(u8) = .init(@backingInt(Status.fetching)),
     /// Encoded file bytes (`gpa`-owned). Native worker writes this before the release-store
     /// of `ready`. Unused on web.
     bytes: ?[]u8 = null,
@@ -65,7 +65,7 @@ const Entry = struct {
     url: []u8,
 
     fn statusValue(self: *Entry) Status {
-        return @enumFromInt(self.status.load(.acquire));
+        return @fromBackingInt(@intCast(self.status.load(.acquire)));
     }
 };
 
@@ -148,7 +148,7 @@ pub fn request(allocator: std.mem.Allocator, url: []const u8) Result {
     const io = dvui.io;
     const win = dvui.currentWindow();
     entry.thread = std.Thread.spawn(.{}, worker, .{ entry, io, win }) catch {
-        entry.status.store(@intFromEnum(Status.failed), .release);
+        entry.status.store(@backingInt(Status.failed), .release);
         return .failed;
     };
     return .pending;
@@ -193,7 +193,7 @@ pub fn deinit() void {
 fn worker(entry: *Entry, io: std.Io, win: *dvui.Window) void {
     defer dvui.refresh(win, @src(), null);
     const a = gpa orelse {
-        entry.status.store(@intFromEnum(Status.failed), .release);
+        entry.status.store(@backingInt(Status.failed), .release);
         return;
     };
 
@@ -207,20 +207,20 @@ fn worker(entry: *Entry, io: std.Io, win: *dvui.Window) void {
         .location = .{ .url = entry.url },
         .response_writer = &body.writer,
     }) catch {
-        entry.status.store(@intFromEnum(Status.failed), .release);
+        entry.status.store(@backingInt(Status.failed), .release);
         return;
     };
     if (result.status != .ok or body.written().len == 0 or body.written().len > max_bytes) {
-        entry.status.store(@intFromEnum(Status.failed), .release);
+        entry.status.store(@backingInt(Status.failed), .release);
         return;
     }
 
     const owned = a.dupe(u8, body.written()) catch {
-        entry.status.store(@intFromEnum(Status.failed), .release);
+        entry.status.store(@backingInt(Status.failed), .release);
         return;
     };
     entry.bytes = owned;
-    entry.status.store(@intFromEnum(Status.ready), .release);
+    entry.status.store(@backingInt(Status.ready), .release);
 }
 
 /// Allocate the pixel buffer the browser will write into. Same `gpa` as the rest of
@@ -240,14 +240,14 @@ export fn FizzyWebImageReady(id: u32, ptr: usize, len: usize, width: u32, height
     const a = gpa orelse return;
     if (ptr == 0 or len == 0 or width == 0 or height == 0) {
         if (ptr != 0 and len != 0) a.free(@as([*]u8, @ptrFromInt(ptr))[0..len]);
-        if (entryById(id)) |entry| entry.status.store(@intFromEnum(Status.failed), .release);
+        if (entryById(id)) |entry| entry.status.store(@backingInt(Status.failed), .release);
         return;
     }
     const rgba = @as([*]u8, @ptrFromInt(ptr))[0..len];
     const expected = @as(usize, width) * @as(usize, height) * 4;
     if (len != expected) {
         a.free(rgba);
-        if (entryById(id)) |entry| entry.status.store(@intFromEnum(Status.failed), .release);
+        if (entryById(id)) |entry| entry.status.store(@backingInt(Status.failed), .release);
         return;
     }
     const entry = entryById(id) orelse {
@@ -259,12 +259,12 @@ export fn FizzyWebImageReady(id: u32, ptr: usize, len: usize, width: u32, height
         return;
     }
     entry.pixels = .{ .rgba = rgba, .width = width, .height = height };
-    entry.status.store(@intFromEnum(Status.ready), .release);
+    entry.status.store(@backingInt(Status.ready), .release);
 }
 
 export fn FizzyWebImageFailed(id: u32) void {
     if (comptime !is_wasm) return;
     const entry = entryById(id) orelse return;
     if (entry.statusValue() != .fetching) return;
-    entry.status.store(@intFromEnum(Status.failed), .release);
+    entry.status.store(@backingInt(Status.failed), .release);
 }

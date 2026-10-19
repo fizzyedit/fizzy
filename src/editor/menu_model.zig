@@ -14,6 +14,8 @@ const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 
 const Editor = @import("Editor.zig");
+const AppInfo = @import("app").AppInfo;
+const auto_update = @import("app").update.auto_update;
 
 /// A label that depends on state ("Show Explorer" / "Hide Explorer").
 pub const Title = union(enum) {
@@ -49,7 +51,7 @@ pub const CommandItem = struct {
     /// AppKit menus are retained, so the native side disables the item instead of rebuilding
     /// the whole bar every frame.
     visible: ?*const fn (*Editor) bool = null,
-    /// Greyed out when false. Null means always enabled.
+    /// Greyed out when false. Null means the command's own enablement (`Host.commandEnabled`).
     enabled: ?*const fn (*Editor) bool = null,
     /// Keep the macOS item enabled even when `enabled` says otherwise.
     ///
@@ -110,6 +112,27 @@ fn canSaveAll(editor: *Editor) bool {
         if (doc.owner.isDirty(doc) and doc.owner.documentHasRecognizedSaveExtension(doc)) return true;
     }
     return false;
+}
+
+/// "Undo Claude's Draw" when the step it would take is someone else's; "Undo" for the person's
+/// own, so working alone reads as it always has.
+fn undoTitle(editor: *Editor) [:0]const u8 {
+    return historyTitle(editor, .undo, "Undo", &undo_title);
+}
+fn redoTitle(editor: *Editor) [:0]const u8 {
+    return historyTitle(editor, .redo, "Redo", &redo_title);
+}
+
+var undo_title: [96:0]u8 = undefined;
+var redo_title: [96:0]u8 = undefined;
+
+fn historyTitle(editor: *Editor, action: Editor.HistoryAction, plain: [:0]const u8, buf: *[96:0]u8) [:0]const u8 {
+    const doc = editor.activeDoc() orelse return plain;
+    // Who made a step is kept only once someone besides the person has acted on the document.
+    if (!editor.app.host.step_authors.contains(doc.id)) return plain;
+    const t = editor.stepToTake(doc, action, editor.app.host.arena()) catch return plain;
+    if (t.by.kind == .person) return plain;
+    return std.fmt.bufPrintSentinel(buf, "{s} {s}'s {s}", .{ plain, Editor.authorName(t.by), t.step.title }, 0) catch plain;
 }
 
 fn canUndo(editor: *Editor) bool {
@@ -193,8 +216,8 @@ const edit_items = [_]Item{
         .native_always_enabled = true,
     } },
     .separator,
-    .{ .command = .{ .id = "fizzy.undo", .title = .{ .static = "Undo" }, .sf_symbol = "arrow.uturn.backward", .enabled = canUndo } },
-    .{ .command = .{ .id = "fizzy.redo", .title = .{ .static = "Redo" }, .sf_symbol = "arrow.uturn.forward", .enabled = canRedo } },
+    .{ .command = .{ .id = "fizzy.undo", .title = .{ .dynamic = undoTitle }, .sf_symbol = "arrow.uturn.backward", .enabled = canUndo } },
+    .{ .command = .{ .id = "fizzy.redo", .title = .{ .dynamic = redoTitle }, .sf_symbol = "arrow.uturn.forward", .enabled = canRedo } },
     // Transform / Grid Layout are pixel-art concepts, not fizzy's own — pixi parents its own
     // section here rather than fizzy knowing about them.
     .{ .plugin_section = "fizzy.menu.edit" },
@@ -226,8 +249,9 @@ const demo_items = if (Editor.dvui_demo) [_]Item{
 
 const help_items = [_]Item{
     // The About dialog hosts the update check and install controls, which is why this and the
-    // macOS app menu's "About fizzy" are the same command.
-    .{ .command = .{ .id = "fizzy.about", .title = .{ .static = "Check for Updates…" } } },
+    // macOS app menu's "About fizzy" are the same command. Named for the updates only in a build
+    // that has an updater with a feed of the app's own; otherwise it is the dialog's own title.
+    .{ .command = .{ .id = "fizzy.about", .title = .{ .static = if (auto_update.impl and AppInfo.own_repo_url) "Check for Updates…" else AppInfo.about_title_z } } },
     .separator,
     // A demo of fizzy played by fizzy itself (`Editor.Demo`); the rest are in the palette.
     .{ .command = .{ .id = "fizzy.demo.tour", .title = .{ .static = "Take the Tour" }, .sf_symbol = "play.circle" } },
@@ -240,6 +264,9 @@ pub const menu_bar = [_]Submenu{
     .{ .id = "fizzy.menu.view", .title = "View", .items = &view_items },
     .{ .id = "fizzy.menu.help", .title = "Help", .items = &help_items },
 };
+
+/// Help, which every bar keeps last, after the menus plugins add.
+pub const help = &menu_bar[menu_bar.len - 1];
 
 /// Whether a plugin's `parent_menu_id` refers to `sub`, under its current id or a legacy one.
 pub fn menuMatches(sub: Submenu, parent_menu_id: []const u8) bool {

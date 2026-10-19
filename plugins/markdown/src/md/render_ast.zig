@@ -718,7 +718,7 @@ fn markUndecodable(ctx: RenderContext, bytes: []const u8) void {
 fn textureCacheKey(ptr: [*]const u8) dvui.Texture.Cache.Key {
     var h = dvui.fnv.init();
     h.update(std.mem.asBytes(&ptr));
-    const it = @intFromEnum(dvui.enums.TextureInterpolation.linear);
+    const it = @backingInt(dvui.enums.TextureInterpolation.linear);
     h.update(std.mem.asBytes(&it));
     return h.final();
 }

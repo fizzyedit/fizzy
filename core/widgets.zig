@@ -37,8 +37,8 @@ pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// widgets/DockingWidget/Layout.zig,BlurBackdrop.zig}` readable.
 pub const DockingWidget = @import("widgets/DockingWidget.zig");
 pub const DockLayout = DockingWidget.Layout;
-pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
-pub const LiquidField = @import("gfx/LiquidField.zig");
+pub const BlurBackdrop = @import("glass").BlurBackdrop;
+pub const LiquidField = @import("glass").LiquidField;
 pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
 
@@ -393,20 +393,19 @@ pub fn floatingWindow(src: std.builtin.SourceLocation, floating_opts: FloatingWi
     return ret;
 }
 
+/// Under the pointer, for a hover look. Decided by where the pointer ends the frame: dvui's one
+/// `.position` event, always the frame's last. Not while the widget holds the pointer itself
+/// (pressed, or dragged along), so a tab carried across its strip does not stay lit.
 pub fn hovered(wd: *dvui.WidgetData) bool {
-    for (dvui.events()) |*event| {
-        if (!dvui.eventMatchSimple(event, wd)) {
-            continue;
-        }
-
-        switch (event.evt) {
-            .mouse => |mouse| {
-                return wd.borderRectScale().r.contains(mouse.p);
-            },
-            else => {},
-        }
+    if (dvui.captured(wd.id)) return false;
+    const events = dvui.events();
+    var i = events.len;
+    while (i > 0) {
+        i -= 1;
+        const e = &events[i];
+        if (e.evt != .mouse or e.evt.mouse.action != .position) continue;
+        return dvui.eventMatchSimple(e, wd) and wd.borderRectScale().r.contains(e.evt.mouse.p);
     }
-
     return false;
 }
 

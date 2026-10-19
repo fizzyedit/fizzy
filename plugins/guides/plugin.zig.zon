@@ -1,0 +1,8 @@
+.{
+    .id = "guides",
+    .name = "Guides",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+    .description = "Every demo the app can play, a click away: fizzy's tour and each plugin's own, by chapter.",
+    .tags = .{ "demos", "help" },
+}

@@ -238,8 +238,8 @@ const dvui_shared_state_types = .{
 /// no store shard can ever match it, whatever the SDK version says (see `PluginStore`'s
 /// `host_optimize_matches_store`).
 pub const optimize_safety_class: []const u8 = switch (builtin.mode) {
-    .Debug, .ReleaseSafe => "safe",
-    .ReleaseFast, .ReleaseSmall => "fast",
+    .debug, .safe => "safe",
+    .fast, .small => "fast",
 };
 
 /// Runtime dlopen-time compatibility key, compared live host-vs-plugin (`fingerprintMatches`).
@@ -429,12 +429,12 @@ pub fn exportEntry(comptime plugin_mod: type, comptime identity: Identity, compt
             return tripletFromSemver(identity.version);
         }
         fn register(host: ?*Host) callconv(.c) u32 {
-            if (host == null) return @intFromEnum(RegisterStatus.err_null_host);
+            if (host == null) return @backingInt(RegisterStatus.err_null_host);
             if (!version.sdkVersionSatisfies(version.sdk_version, identity.min_sdk_version)) {
-                return @intFromEnum(RegisterStatus.err_sdk_version);
+                return @backingInt(RegisterStatus.err_sdk_version);
             }
-            plugin_mod.register(host.?) catch return @intFromEnum(RegisterStatus.err_register);
-            return @intFromEnum(RegisterStatus.ok);
+            plugin_mod.register(host.?) catch return @backingInt(RegisterStatus.err_register);
+            return @backingInt(RegisterStatus.ok);
         }
         fn setDvuiContext(
             window: ?*dvui.Window,

@@ -25,10 +25,21 @@ a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app
 
 | Where | How |
 |---|---|
-| Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop** |
+| Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop**; **Demo: Play by Name…** (`fizzy.demo.play`, with a `name` and a start `at`) plays any demo the `demos` service lists, a plugin's too |
+| A plugin | `host.registerDemo(.{ .name, .title, .tape })` in `register` adds its demo to the list; the `demos` service (`sdk.services.demos`) lists every demo and plays one by name |
 | Menu | Help › Take the Tour |
 | Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made); `FIZZY_DEMO=<file>.zon` (or `.tape`) plays a tape file, a live one through the live driver |
 | Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`) fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |
+
+**Hosted tapes.** `zig build demos` (part of `zig build web`) writes every tape fizzy hosts into
+`zig-out/web/demos/`: the bundled demos built from their scripts, and each hand-written tape in
+`docs/demos/`, all in the deflated binary form, with an `index.json` naming each one's title,
+length and whether it is live (`scripts/demos.zig`). Each copy of the app on the site serves the
+tapes built from its own commit, so a page embeds `fizzyed.it/app/?demo=demos/hello.tape` and
+the tape always matches the app that plays it. A new tape for the site is a `.zon` in
+`docs/demos/`, and nothing else. A bundled demo plays without fetching anything (`?demo=tour`);
+its tape is for a player that is not that build of fizzy. The scripts in `src/editor/demos/` need
+only `tape`, so the tool builds them on the host; one that needs more breaks `zig build demos`.
 
 While a demo plays:
 
@@ -38,9 +49,12 @@ While a demo plays:
 - **Play resumes it.** If the person did anything to the app while it was paused, the demo first
   replays to where it was, so it carries on from its own state rather than from whatever was left
   behind.
-- **The transport bar** (bottom; it fades while playing until the pointer comes near) has chapter
-  back / play-pause / chapter forward, the time, a scrubber with chapter ticks, and close.
-  Scrubbing backwards rewinds; forwards fast-forwards.
+- **The transport bar** (bottom) has chapter back / play-pause / chapter forward, the time, a
+  scrubber with chapter ticks, and close. Scrubbing backwards rewinds; forwards fast-forwards.
+  While the demo plays it hides into a dome on the window's bottom edge (`app/dome.zig`, the
+  same one a document's history transport hides into), filling with the demo's progress. The
+  pointer held on the dome (or a press on it) grows the bar back out; it goes back soon after
+  the pointer leaves it. Paused or ended it stays out, unless its chevron tab sent it in.
 - **Nothing is persisted.** The stage sets the user's session aside when a demo loads (project
   folder, open documents, layout as on disk, plugin settings) and gives it back when it is
   stopped. A demo refuses to start over unsaved changes. Its files live in memory
@@ -310,8 +324,14 @@ would play a document that never changes. The app applies them through its stage
 Fizzy applies them: a tape's steps are checked against the plugins loaded (`Demo.stepsCheck`: the
 owner loaded, writing that step format) and played on the demo stage into the documents its
 keyframe opened. A document's own history becomes such a tape with `fizzy.tracks.export` (while
-tracks record, `FIZZY_TRACKS=1` or `fizzy.tracks.record`): its file as the track began, then its
+tracks record: by default, the History setting's "Record document history"): its file as the track began, then its
 steps, pauses past 2 s played as 0.6 s unless `real_time`. `fizzy.demo.playTape` plays it.
+
+A link plays one on the web: `fizzyed.it/app?tape=<url>` fetches the tape, loads each plugin its
+documents belong to from the store if the page has not (for the visit: not installed, not
+remembered, nothing asked), and plays it in a tab of its own with nothing else in view
+(`TapeTabs.openWhenReady`). On the desktop, `Demo: Play a Tape…` opens one the same way, and says
+which plugin a tape needs when it is not loaded.
 
 ### The binary form (`.tape`)
 
@@ -484,4 +504,3 @@ to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
   so the recording is size-independent, and writes the tape in its binary form.
 - **Quick open over mounts** — the palette's index should come from `core.FileTable`, which
   already lists mounts; then a demo can show it.
-- **A `demos` build step** that writes every bundled demo as a tape, for a site to host.

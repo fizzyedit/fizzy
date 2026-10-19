@@ -30,7 +30,7 @@ pub const Readme = struct {
     /// Captured at select time so the worker can wake the blocked event loop when the fetch
     /// finishes (otherwise the UI stays on "Loading…" until an unrelated input event).
     window: *dvui.Window,
-    status: std.atomic.Value(u8) = .init(@intFromEnum(Status.idle)),
+    status: std.atomic.Value(u8) = .init(@backingInt(Status.idle)),
     /// Fetched README bytes (app-allocator owned). Written once by the worker before it flips
     /// `status` to `ready` with release ordering; read on the UI thread only after an acquire
     /// load sees `ready`, so no lock is needed for the bytes themselves.
@@ -48,7 +48,7 @@ pub const Readme = struct {
     preview: markdown.Preview = .{},
 
     fn statusValue(self: *Readme) Status {
-        return @enumFromInt(self.status.load(.acquire));
+        return @fromBackingInt(@intCast(self.status.load(.acquire)));
     }
 
     /// Start fetching `id`'s README (from its `repo` URL, optionally scoped to `subpath` within
@@ -72,7 +72,7 @@ pub const Readme = struct {
             .io = dvui.io,
             .window = dvui.currentWindow(),
         };
-        self.status.store(@intFromEnum(Status.fetching), .release);
+        self.status.store(@backingInt(Status.fetching), .release);
         return self;
     }
 
@@ -85,7 +85,7 @@ pub const Readme = struct {
             return;
         }
         self.thread = std.Thread.spawn(.{}, worker, .{self}) catch {
-            self.status.store(@intFromEnum(Status.failed), .release);
+            self.status.store(@backingInt(Status.failed), .release);
             return;
         };
     }
@@ -113,7 +113,7 @@ pub const Readme = struct {
         if (comptime !is_wasm) return;
         if (self.statusValue() != .fetching) return;
         if (self.wasm_url_i >= self.wasm_url_len) {
-            self.status.store(@intFromEnum(Status.not_found), .release);
+            self.status.store(@backingInt(Status.not_found), .release);
             return;
         }
         switch (web_fetch.request(repo_asset.gpa(), self.wasm_urls[self.wasm_url_i])) {
@@ -121,16 +121,16 @@ pub const Readme = struct {
             .failed => {
                 self.wasm_url_i += 1;
                 if (self.wasm_url_i >= self.wasm_url_len)
-                    self.status.store(@intFromEnum(Status.not_found), .release);
+                    self.status.store(@backingInt(Status.not_found), .release);
             },
             .ready => |body| {
                 const gpa = repo_asset.gpa();
                 self.bytes = gpa.dupe(u8, body) catch {
-                    self.status.store(@intFromEnum(Status.failed), .release);
+                    self.status.store(@backingInt(Status.failed), .release);
                     return;
                 };
                 self.image_base = gpa.dupe(u8, self.wasm_urls[self.wasm_url_i]) catch null;
-                self.status.store(@intFromEnum(Status.ready), .release);
+                self.status.store(@backingInt(Status.ready), .release);
             },
         }
     }
@@ -184,7 +184,7 @@ pub fn deinit() void {
 fn fillWasmCandidates(self: *Readme) void {
     var url_buf: [3][256]u8 = undefined;
     const candidates = repo_asset.rawGithubUrls(&url_buf, self.repo, self.subpath, readme_filename) orelse {
-        self.status.store(@intFromEnum(Status.not_found), .release);
+        self.status.store(@backingInt(Status.not_found), .release);
         return;
     };
     const gpa = repo_asset.gpa();
@@ -194,7 +194,7 @@ fn fillWasmCandidates(self: *Readme) void {
         n += 1;
     }
     self.wasm_url_len = n;
-    if (n == 0) self.status.store(@intFromEnum(Status.not_found), .release);
+    if (n == 0) self.status.store(@backingInt(Status.not_found), .release);
 }
 
 fn worker(self: *Readme) void {
@@ -206,14 +206,14 @@ fn worker(self: *Readme) void {
         if (repo_asset.readLocalAsset(self.io, self.subpath, readme_filename, limit)) |asset| {
             self.bytes = asset.bytes;
             self.image_base = asset.dir;
-            self.status.store(@intFromEnum(Status.ready), .release);
+            self.status.store(@backingInt(Status.ready), .release);
             return;
         }
     }
 
     var url_buf: [3][256]u8 = undefined;
     const candidates = repo_asset.rawGithubUrls(&url_buf, self.repo, self.subpath, readme_filename) orelse {
-        self.status.store(@intFromEnum(Status.not_found), .release);
+        self.status.store(@backingInt(Status.not_found), .release);
         return;
     };
 
@@ -222,9 +222,9 @@ fn worker(self: *Readme) void {
             self.bytes = body;
             // `url` lives in the worker's stack buffer — the preview needs it every frame.
             self.image_base = repo_asset.gpa().dupe(u8, url) catch null;
-            self.status.store(@intFromEnum(Status.ready), .release);
+            self.status.store(@backingInt(Status.ready), .release);
             return;
         }
     }
-    self.status.store(@intFromEnum(Status.not_found), .release);
+    self.status.store(@backingInt(Status.not_found), .release);
 }

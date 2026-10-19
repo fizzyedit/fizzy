@@ -7,9 +7,10 @@ bump it; keep it current whenever a pin or a patch moves.
 
 | Dependency | Upstream | Fizzy's changes | Pinned in | Carries |
 |---|---|---|---|---|
-| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `fizzy-dev` | `sdk/build.zig.zon` | dvui changes fizzy needs |
+| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
 | SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
 | [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
+| [`fizzyedit/nightwatch`](https://github.com/fizzyedit/nightwatch) | [`neurocyte/nightwatch`](https://github.com/neurocyte/nightwatch) | branch `fizzy` | `build.zig.zon` | a fix to its macOS FSEvents backend |
 
 SDL is fizzy's own dependency, not dvui's: fizzy's native backend (the `backend/` package) pins it
 in `backend/build.zig.zon` and translates its own `sdl3-c.h`. dvui's SDL pin is used only by the
@@ -42,8 +43,8 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 
 1. **render: a custom draw command (`deferRender`)** (`c703519`). A callback queued among a
    subwindow's render commands, run when they replay. The frost and liquid glass read back what
-   the windows under them drew, which only exists at that point (`core/widgets/BlurBackdrop.zig`,
-   `DropZones.zig`, `core/gfx/programs.zig`). Upstream: david-vanderson/dvui#988, open.
+   the windows under them drew, which only exists at that point (`backend/src/glass/BlurBackdrop.zig`,
+   `core/widgets/DropZones.zig`, `backend/src/glass/programs.zig`). Upstream: david-vanderson/dvui#988, open.
 2. **Texture: precision option for render targets** (`f091da0`). `CreateOptions.precision =
    .high` and `Backend.support_precise_targets`: float targets for the blur pyramid, which 8 bits
    a channel steps into contour blobs. Upstream: david-vanderson/dvui#989, open.
@@ -88,15 +89,90 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    `dvui.osWindow` takes this path, and `backend/src/os_windows.zig` shows the floating window in
    an OS window of its own. Upstream: to propose with `run-dvui` (fizzyedit/example-app) as the
    demonstration.
+9. **testing.snapshot: port to std.Io** (`e2c9a85`). Upstream's own port (`30adbcaa` to
+   `2fc3f883`), taken whole: `dvui.testing.snapshot` was still on the pre-0.16 file API, so a
+   test calling it failed to compile (#526). It takes `SnapshotOptions` now, and logs through
+   `std.log`. Upstream: already there; comes out empty at the next rebase.
+10. **RenderFrontToBack: closed blocks are drawn after draw-last commands** (`f07c334`, reworked
+   in `fdc03d4`, `cc60612` and `44010a3`). A closed block went in at the start of
+   `render_cmds_after` and draw-last strokes (`focusBorder`, a text entry's error ring) were
+   appended after it, so a focus ring drawn later lay on top of a block meant to cover it: the
+   pane corner button's glass under the explorer filter's ring (#519). Closed blocks now go in a
+   list of their own, `Subwindow.render_cmds_front` (a `RenderFrontToBack.Blocks`), drawn after
+   `render_cmds_after`. Closing a block appends its commands (amortized constant time a command;
+   a nested block's commands are copied again at each enclosing level), and they are drawn the
+   other way round, so the first closed is drawn last. A `Picture` or a block records into a
+   `RenderQueues` (commands, draw-last commands, blocks) installed as one unit,
+   `Window.defer_render`, which replaces `defer_render_cmds` and `defer_render_cmds_after`.
+   `RenderQueues.render` is the one place that says the order queued drawing is drawn in;
+   `Picture.stop` and `Window.renderSubwindow` use it, and fizzy draws a subwindow into a viewport
+   with `renderSubwindow` (`.take` empties the subwindow's queues before drawing them).
+   `Debug`'s widget outline, a draw-last stroke, now draws under such a block. Upstream: worth
+   proposing. Test: dvui's `zig build test -Dbackend=testing`, "closed RenderFrontToBack blocks
+   are drawn after draw-last strokes, before or after they closed".
+
+11. **Window: the pointer kind, and a lifted finger hovers nothing** (`e04bccc`).
+   `dvui.pointerKind()` is `.touch` or `.mouse`: what the last pointer event came from, set as the
+   backend adds events (a touch button is `.touch`; mouse motion, a mouse button or the wheel is
+   `.mouse`). It is the window's, so the app and every plugin dylib or wasm side module read the
+   same answer. The window keeps which touch buttons are down; after a touch with none, the
+   frame's `.position` event is off every window and targets no widget, so a tapped button, menu
+   row or tab is not left lit. Fizzy's hover looks and the corner button's tap (#555) read it.
+   Upstream: worth proposing. Test: "a finger that lifts hovers nothing, and a mouse hovers again".
+12. **cursorSet: a priority, so a resize handle's cursor wins** (`20e56f1`).
+   `dvui.cursorSetPriority(cursor, priority)` keeps the highest asked in a frame (between
+   equals, the first); `cursorSet` asks at `.normal`. Resize handles ask at `.resize` (dvui's
+   `PanedWidget`, `GridWidget` columns, a floating window's bottom-right corner; fizzy's
+   `Split`), a carried thing at `.drag` (fizzy's view drag), so a hover cursor such as a tab's
+   hand never takes a split's arrow. Which widget takes a press is unchanged. Upstream: worth
+   proposing. Test: "cursorSetPriority: the higher asked wins, whichever asked first".
+13. **FloatingWindowWidget: edges ask for their arrow at normal priority** (`40e664c`). Its
+   edges are handled after the window's children, which take a press there first, so their arrow
+   stays at `.normal` and a child under the band keeps both its cursor and its press. Only the
+   bottom-right corner, handled before the children, asks at `.resize`. Upstream: with 12.
 
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
+
+**Since fizzy moved to Zig 0.17 (#575)** the pin is `foxnne/dvui-dev` branch `zig-0.17`, by tag and
+as `git+https`: the eight above rebased onto upstream `main` (`41f6703`), then:
+
+9. **floatingWindow: a backend may show one in an OS window of its own** (`bd7736d`). Patch 8's
+   `osWindowFloating` became `Backend.floatingWindowOs(id, open_flag, min, max)`, asked as
+   any floating window (not modal) begins, and `floatingWindowTitle(id, header)`, asked by
+   `windowHeader`: true, and the backend shows it in an OS window with the OS's title bar, and
+   dvui draws it with no frame of its own. `screenFor` takes the nearest screen.
+10. **floatingWindow: an OS window only for a floating window that asks** (`98a0e07`):
+   `FloatingWindowWidget.InitOptions.os_window`, set by `dvui.osWindow`'s floating window, passed
+   to `floatingWindowOs` as `asked`. The backend's `floating_os_windows` (`.asked`, `.all`,
+   `.none`) says which it shows.
+11. **render: front-to-back blocks and deferred queues** (`ca8d4f8`, `8fa9b9c`): blocks close in
+   O(1), `Window.renderSubwindow` takes a subwindow's commands, and the deferred queues are one
+   unit, replayed in one place.
+12. **floatingWindow: one shown in an OS window draws no background of its own** (`59c45df`): the
+   OS window's material shows through.
+13. **The pointer and its cursor** (`48496b7`, `186a87f`, `1b29a16`): `Window` knows the pointer's
+   kind and a lifted finger hovers nothing; `cursorSet` takes a priority, so a resize handle's
+   cursor wins, and a floating window's edges ask at normal priority.
+14. **floatingWindow: the backend may draw a floating window's background** (`3d90fdd`):
+   `Backend.floatingWindowBackground(id, rect, corners)`, asked where `FloatingWindowWidget` would
+   fill its background (after its shadow and border, its subwindow current, before its content).
+   True: the backend drew it, and dvui draws no fill. Fizzy's backend draws a plain app's floating
+   windows in the window's material there: a frosted backdrop of what is under them needs the
+   backend's render targets at that point of the replay, which a theme fill cannot express.
 
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
 `f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70` (0.2.19 was not released yet, and a tag never
 moves, so the second pin of one version takes a suffix, as the SDL fork's tags do; SDK 0.2.19 to
-0.2.22); `fizzy-sdk-0.2.23` → `f646ec0`, what `sdk/build.zig.zon` pins now.
+0.2.22); `fizzy-sdk-0.2.23` → `f646ec0` (SDK 0.2.23 to 0.2.29); `fizzy-sdk-0.2.30` → `f07c334`
+(never pinned on `main`: its counter was reworked before merge); `fizzy-sdk-0.2.30-1` →
+`e2c9a85` (item 9 alone, never pinned); `fizzy-sdk-0.2.30-2` → `fdc03d4` (pinned by #540);
+`fizzy-sdk-0.2.30-3` → `cc60612` (never
+pinned); `fizzy-sdk-0.2.30-4` → `44010a3`; `fizzy-sdk-0.2.30-5` →
+`20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, the last pin on Zig 0.16;
+`fizzy-sdk-0.2.30-7` → `1b29a16` on `zig-0.17` (SDK 0.2.30, the first on Zig 0.17);
+`fizzy-sdk-0.2.30-8` → `3d90fdd` (item 14), what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
@@ -185,6 +261,23 @@ the stack as it was before it moved here, which older fizzy commits still build.
 
 Tags: `fizzy-1.0.3+3.4.16-1` to `-11` (`d0c70fe`) are the stack that built `fizzyedit/SDL`, kept
 for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`, what fizzy pins now.
+
+## fizzyedit/nightwatch
+
+The file watcher behind `app/watch/` (settings, open folders, documents). `fizzy` = upstream
+`master` (`023e79f`) plus:
+
+1. **fsevents: wait for a running callback before freeing its context** (`10c0207`): stopping the
+   stream schedules no further callbacks but does not wait for one already running on its
+   dispatch queue, and `stop_stream` freed that callback's context straight after (on each stop,
+   and each watch added or removed). A watcher stopped while events were arriving
+   (`SettingsWatcher.stop`, a folder's `FolderWatcher` closed) could leave a callback reading
+   freed memory and calling a handler its owner had let go of; under load it crashed
+   `zig build test-integration` (the test after the settings watcher's, with SIGABRT). Regression
+   test: "settings watcher: stop waits for a callback already running"
+   (`tests/integration.zig`). Upstream: not proposed yet; once it is merged there, the fork goes.
+
+Tags: `fizzy-1.0.0-1` → `10c0207`, what fizzy pins now.
 
 ## zig-patch
 

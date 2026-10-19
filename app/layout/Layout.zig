@@ -158,6 +158,12 @@ extents_changed: bool = false,
 /// Every surface `draw` ran this frame, so `captureUnplaced` knows which ones genuinely drew
 /// nowhere — as opposed to drew before the picker asked. Arena-backed, per frame.
 drawn: std.ArrayListUnmanaged(*Surface) = .empty,
+/// Views a plugin asked to put away during this frame (`hideLater`), put away once it has drawn
+/// (`applyHides`). Arena-backed, per frame.
+hides: std.ArrayListUnmanaged([]const u8) = .empty,
+/// Surfaces drawn this frame in a place with no room, so not captured (`drawCaptured`): no frame
+/// is asked for them until they have some. Arena-backed, per frame.
+unsized: std.ArrayListUnmanaged(*Surface) = .empty,
 
 /// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
 /// `split` know which axis it divides and which neighbour it resizes, without a shape having to
@@ -240,11 +246,11 @@ pub const slot_keywords: []const []const u8 = &.{"slot"};
 // timing, because a sidebar and a document pane travelling at different speeds reads as broken
 // without ever looking wrong in a screenshot.
 
-/// A frame's layout. Made at the top of the frame, before any place draws — which is why a view
-/// being carried asks for its cursor here: dvui gives the cursor to the first to ask, and the
-/// text under the pointer asking for a caret comes later.
+/// A frame's layout. Made at the top of the frame, before any place draws. A view being carried
+/// asks for its cursor at `.drag`, above the caret of the text under the pointer, a tab's hand or
+/// a split's arrow.
 pub fn init(host: *sdk.Host, state: *State, gpa: std.mem.Allocator, arena: std.mem.Allocator) Layout {
-    if (state.view_drag.active()) dvui.cursorSet(ViewDrag.cursor);
+    if (state.view_drag.active()) dvui.cursorSetPriority(ViewDrag.cursor, .drag);
     return .{ .host = host, .state = state, .gpa = gpa, .arena = arena };
 }
 
@@ -517,7 +523,7 @@ fn claimedElsewhere(
         if (sdk.keywords.groupKey(r.keywords) == want) continue;
         if (self.state.assignment(r.name) != null) continue;
         const theirs = sdk.keywords.strength(r.keywords, s.keywords);
-        if (@intFromEnum(theirs) > @intFromEnum(mine)) return true;
+        if (@backingInt(theirs) > @backingInt(mine)) return true;
         if (theirs == mine and mine_at != null and i < mine_at.?) return true;
     }
     return false;
@@ -597,6 +603,72 @@ pub fn reveal(self: *Layout, id: []const u8) bool {
     return false;
 }
 
+/// What putting a view away does (`hide`).
+pub const Hide = union(enum) {
+    /// Shut this tray, which shows the view.
+    tray: Region,
+    /// Close this float, the view's only place.
+    float: []const u8,
+};
+
+/// What `hide` would do for `id`, from the one region that shows it (as `reveal` finds it). A
+/// tray: a place the shape declared `resize` (not one a split made, which is `forget_when_empty`),
+/// in the main window, open and not folded, with `id` the view it shows. A float: one not closing,
+/// with `id` its only view. Null for anything else — Main, a split's half, a plugin's pane, a view
+/// behind another or out of sight, a float with other views — and `hide` then changes nothing.
+pub fn hideTarget(self: *Layout, id: []const u8) ?Hide {
+    const s = self.surface(id) orelse return null;
+    if (s.hidden) return null;
+    var it = self.declaredRegions();
+    const r = find: while (it.next()) |place| {
+        for (self.matchingIn(place)) |m| if (m == s) break :find place;
+    } else return null;
+    if (r.layer > 0) {
+        const name = self.state.floatRoot(r.name) orelse return null;
+        const i = self.state.floats.find(name) orelse return null;
+        if (self.state.floats.items.items[i].closing) return null;
+        var views: usize = 0;
+        for (self.state.splits.leavesUnder(self.arena, name)) |leaf| {
+            if (self.state.assignment(leaf)) |ids| views += ids.len;
+        }
+        return if (views == 1) .{ .float = name } else null;
+    }
+    if (!r.resize or r.forget_when_empty or r.isClosed() or r.isFolded()) return null;
+    const shown = self.selectedIn(r) orelse return null;
+    return if (shown == s) .{ .tray = r.* } else null;
+}
+
+/// Put `id` away now, as the user would (`Host.hideSurface`): shut its tray as the tray's own
+/// close does, or close its float as the float's close button does, the view going home. False,
+/// changing nothing, where `hideTarget` finds nothing to do. Not while the shape or the floats
+/// draw, which walk what this changes: `hideLater` is for then.
+pub fn hide(self: *Layout, id: []const u8) bool {
+    switch (self.hideTarget(id) orelse return false) {
+        .tray => |r| r.close(),
+        .float => |name| self.closeFloat(name),
+    }
+    return true;
+}
+
+/// `hide` asked during the frame: answered now, by the same `hideTarget`, and done by
+/// `applyHides` once the shape, the floats and the picker have drawn. A `reveal` asked later in
+/// the same frame acts at once, so it comes first: a caller toggling a view makes one call a frame.
+pub fn hideLater(self: *Layout, id: []const u8) bool {
+    if (self.hideTarget(id) == null) return false;
+    const kept = self.arena.dupe(u8, id) catch return false;
+    self.hides.append(self.arena, kept) catch return false;
+    return true;
+}
+
+/// Do the hides asked during this frame (`hideLater`), in order, each asking `hideTarget` again.
+/// The application calls this once its frame has drawn. True when any of them acted.
+pub fn applyHides(self: *Layout) bool {
+    var any = false;
+    for (self.hides.items) |id| any = self.hide(id) or any;
+    self.hides.clearRetainingCapacity();
+    return any;
+}
+
 /// Surfaces that appear in no region of the last completed shape — neither assigned to one nor
 /// attracted by keywords to an unassigned one. Never silently lost: the settings UI lists these
 /// so a user (or the plugin author) can see the gap and fix it.
@@ -667,7 +739,8 @@ fn pick(items: []const *Surface, current: ?[]const u8) ?*Surface {
 ///
 /// While the picker is collecting (`State.snapshots_wanted`), a surface without a snapshot is
 /// drawn through a texture target and the result both kept and put on screen — the pixels are
-/// the same ones, so nothing blinks, and the surface still ran exactly once.
+/// the same ones, so nothing blinks, and the surface still ran exactly once. Not once capture has
+/// failed for it, or here at all (`State.captureFailed`, `State.capture_unavailable`).
 pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(s.id);
@@ -683,7 +756,11 @@ pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
 /// `draw` without the fade-in: for a swap, whose overlay already carries the change.
 fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
     self.drawn.append(self.arena, s) catch {};
-    if (self.state.snapshots_wanted and self.state.snapshot(s.id) == null) {
+    const watching = ScrollWatch.enabled and !s.scrolls_itself;
+    var watch: ScrollWatch = undefined;
+    if (watching) watch.begin();
+    defer if (watching) watch.end(self.state, s.id);
+    if (self.state.snapshots_wanted and !self.state.capture_unavailable and self.state.snapshot(s.id) == null and !self.state.captureFailed(s.id)) {
         if (try self.drawCaptured(s)) |r| return r;
     }
     return surfaceDraw(s);
@@ -691,7 +768,9 @@ fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
 
 /// `s.draw` into a texture the size of the current parent's content, then that texture onto the
 /// screen where the surface would have drawn. Null when there is nothing to capture into — a
-/// zero-sized parent, or a backend without render targets — and the caller draws normally.
+/// zero-sized parent, or a backend without render targets — and the caller draws normally. A
+/// failure is remembered for the picker's session (`State.recordCaptureFailed`), so it is not
+/// tried every frame.
 ///
 /// Through `dvui.Picture` rather than a bare `renderTarget` switch: dvui defers part of its
 /// drawing (strokes after fills, subwindow content) to queues flushed later, and a bare switch
@@ -699,8 +778,17 @@ fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
 /// flushes them inside `stop`, which is the difference between a snapshot of a scroll area and
 /// a snapshot of its background.
 fn drawCaptured(self: *Layout, s: *Surface) !?dvui.App.Result {
+    const prof = core.profile.begin("fizzy", "picker: capture");
+    defer prof.end();
     const rs = dvui.parentGet().data().contentRectScale();
-    var pic = dvui.Picture.start(rs.r) orelse return null;
+    if (rs.r.empty()) {
+        self.unsized.append(self.arena, s) catch {};
+        return null;
+    }
+    var pic = dvui.Picture.start(rs.r) orelse {
+        self.state.recordCaptureFailed(self.gpa, s.id);
+        return null;
+    };
     // Some backends leave a fresh target uninitialised; the cross-fade learned this the hard way.
     pic.texture.clear();
     const old_clip = dvui.clipGet();
@@ -708,7 +796,10 @@ fn drawCaptured(self: *Layout, s: *Surface) !?dvui.App.Result {
     const result = surfaceDraw(s);
     dvui.clipSet(old_clip);
     pic.stop();
-    const texture = dvui.textureFromTarget(pic.texture) catch return try result;
+    const texture = dvui.textureFromTarget(pic.texture) catch {
+        self.state.recordCaptureFailed(self.gpa, s.id);
+        return try result;
+    };
     dvui.renderTexture(texture, .{ .r = pic.r, .s = rs.s }, .{}) catch {};
     self.state.takeSnapshot(self.gpa, s.id, .{ .texture = texture, .natural = .{ .w = pic.r.w / rs.s, .h = pic.r.h / rs.s } });
     return try result;
@@ -737,26 +828,58 @@ pub fn closeFloat(self: *Layout, name: []const u8) void {
     Floats.close(self, name, .home);
 }
 
-/// Snapshot every surface that drew nowhere this frame, by drawing each once offscreen at a
-/// fixed size. Only while the picker is collecting and only for surfaces still missing a
-/// snapshot, so a frame with nothing to do costs a lookup. The application calls this after
-/// its shape has run, from the base window.
+/// Draw the view the picker chose for a picture (`State.offscreen`, picked from the cards it
+/// shows) offscreen at a fixed size, one draw a frame: a few frames of warm-up, then its capture.
+/// Only while the picker is collecting, so a frame with nothing to do costs a check. The
+/// application calls this after its shape has run and before the picker draws, from the base
+/// window: what the view opens (a popup, a float) stacks under the picker, and a picture taken
+/// here shows on its card the same frame.
 ///
-/// "Drew nowhere" is decided by `drawn`, not by the missing snapshot: the picker opens
-/// mid-frame, after some regions have already run, and those surfaces must be captured where
-/// they live on the *next* frame rather than photographed offscreen now — an offscreen
-/// picture of the workspace is a picture of an empty box.
+/// Only a view that drew nowhere this frame (`drawn`) is drawn here: one on screen is captured
+/// where it lives (`draw`), and an offscreen picture of the workspace is a picture of an empty box.
+///
+/// Offscreen, a view costs what it draws: its first draw lays out a whole subtree from nothing,
+/// and its capture is the one draw that renders any of it (the warm-up draws are clipped away).
+/// The picker opening used to pay both for every view, each in one frame. One at a time, a view
+/// scrolled or filtered out of the list is never drawn for it, and a card waiting for its picture
+/// shows an empty tile.
 pub fn captureUnplaced(self: *Layout) void {
-    if (!self.state.snapshots_wanted) return;
+    const state = self.state;
+    if (!state.snapshots_wanted or state.capture_unavailable) return;
+    const prof = core.profile.begin("fizzy", "picker: capture unplaced");
+    defer prof.end();
+    // A view on screen without its picture (it drew before the picker opened, this frame) is
+    // captured where it lives on the next. Not one whose capture failed, or that has no room.
     var pending = false;
-    outer: for (self.host.surfaces.items, 0..) |*s, i| {
-        if (s.hidden or self.state.snapshot(s.id) != null) continue;
-        for (self.drawn.items) |d| if (d == s) {
-            pending = true; // drew this frame before the request: in-place capture next frame
-            continue :outer;
-        };
+    for (self.drawn.items) |d| {
+        if (state.snapshot(d.id) != null or state.captureFailed(d.id)) continue;
+        for (self.unsized.items) |u| {
+            if (u == d) break;
+        } else pending = true;
+    }
+
+    if (state.offscreen) |*o| step: {
+        const surfaces = self.host.surfaces.items;
+        // Where the picker found it, unless the registry changed since: then wherever it is now.
+        if (o.index >= surfaces.len or std.hash.Wyhash.hash(0, surfaces[o.index].id) != o.id) {
+            o.index = for (surfaces, 0..) |c, i| {
+                if (std.hash.Wyhash.hash(0, c.id) == o.id) break i;
+            } else {
+                state.offscreen = null;
+                break :step;
+            };
+        }
+        const s = &surfaces[o.index];
+        // Its card left the list before it got far (filtered out, scrolled away): the list drew
+        // since without it. Dropped, to be chosen again if the card comes back; further in, it is
+        // finished.
+        const out_of_view = o.card_ns < state.picker.list_ns and o.warm < offscreen_warmup_frames / 2;
+        if (out_of_view or !self.mayDrawOffscreen(s)) {
+            state.offscreen = null;
+            break :step;
+        }
         var box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = i,
+            .id_extra = @truncate(o.id),
             .rect = .{ .x = -20_000, .y = -20_000, .w = offscreen_capture.w, .h = offscreen_capture.h },
             .background = true,
             .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
@@ -765,15 +888,21 @@ pub fn captureUnplaced(self: *Layout) void {
         // A subtree drawn for the first time is not yet what it will look like: dvui lays it
         // out from last frame's sizes, which it has none of, and anything inside that reveals
         // itself starts hidden. So it is drawn unphotographed for a few frames first — the same
-        // settle-then-show the reveal does on screen, just without an audience.
-        const warm = dvui.dataGet(null, box.data().id, "_warm", u8) orelse 0;
-        if (warm < offscreen_warmup_frames) {
+        // settle-then-show the reveal does on screen, just without an audience: a few frames, and
+        // the reveal's whole fade, however fast the frames come.
+        const now = dvui.frameTimeNS();
+        if (o.warm == 0) o.since_ns = now;
+        if (o.warm < offscreen_warmup_frames or now - o.since_ns < offscreenWarmupNs()) {
             _ = surfaceDraw(s) catch {};
-            dvui.dataSet(null, box.data().id, "_warm", warm + 1);
+            o.warm +|= 1;
             pending = true;
-            continue;
+            break :step;
         }
-        _ = self.drawCaptured(s) catch null;
+        // Taken or failed (`drawCaptured` remembers which), it is done: the picker, drawing next,
+        // shows the picture and chooses the next view.
+        const started = if (self.drawCaptured(s)) |r| r != null else |_| true;
+        state.noteOffscreenStart(started);
+        state.offscreen = null;
     }
     if (pending) dvui.refresh(null, @src(), null);
 }
@@ -783,6 +912,23 @@ pub fn captureUnplaced(self: *Layout) void {
 const offscreen_capture: dvui.Size = .{ .w = 360, .h = 480 };
 /// Long enough for a 120 ms reveal to finish at 60 fps, with a little to spare.
 const offscreen_warmup_frames: u8 = 10;
+
+/// Whether surface `s` may be drawn offscreen for its picture (`captureUnplaced`, chosen by
+/// `Picker.draw`): capture works here, it has no picture and no failed capture, it is not hidden,
+/// and it drew nowhere this frame — one on screen is captured where it lives, never drawn twice.
+pub fn mayDrawOffscreen(self: *const Layout, s: *const Surface) bool {
+    const state = self.state;
+    if (state.capture_unavailable or s.hidden) return false;
+    if (state.snapshot(s.id) != null or state.captureFailed(s.id)) return false;
+    for (self.drawn.items) |d| if (d == s) return false;
+    return true;
+}
+
+/// How long the warm-up lasts at the least: a reveal's fade (`core.anim.reveal`) at the
+/// interface's speed (`core.motion`), so a picture is never taken mid-fade on a fast display.
+fn offscreenWarmupNs() i128 {
+    return @as(i128, core.motion.duration((core.anim.RevealOptions{}).duration_micros)) * std.time.ns_per_us;
+}
 
 /// Draw whichever surface is selected for these keywords, into the current parent. Everything
 /// it does is reachable through `matching` / `selected` / `draw`; `region` uses it to fill a
@@ -890,7 +1036,7 @@ fn resetPack(b: *dvui.BoxWidget) void {
     b.packed_children = 0;
     b.total_weight = 0;
     b.min_space_taken = 0;
-    if (builtin.mode == .Debug) b.child_id = .zero;
+    if (builtin.mode == .debug) b.child_id = .zero;
 }
 
 // ── The base layer: regions and keywords ────────────────────────────────────────────────────
@@ -1030,7 +1176,7 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
 
     self.plugin_regions[self.plugin_depth] = r;
     self.plugin_depth += 1;
-    return @enumFromInt(self.plugin_depth);
+    return @fromBackingInt(@intCast(self.plugin_depth));
 }
 
 pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvui.App.Result {
@@ -1109,7 +1255,7 @@ pub fn endPluginRegion(self: *Layout, token: sdk.RegionSpec.Token) void {
     // Strictly nested, like the boxes they are. Closing out of order would deinit the wrong box
     // and dvui would report it as a stack mismatch two widgets later, naming neither the plugin
     // nor the region — so say it here while the token still means something.
-    const depth = @intFromEnum(token);
+    const depth = @backingInt(token);
     if (depth != self.plugin_depth) {
         dvui.log.err("plugin region closed out of order ({d} of {d} open)", .{ depth, self.plugin_depth });
         return;
@@ -1119,7 +1265,7 @@ pub fn endPluginRegion(self: *Layout, token: sdk.RegionSpec.Token) void {
 }
 
 fn pluginRegion(self: *Layout, token: sdk.RegionSpec.Token) ?*Region {
-    const depth = @intFromEnum(token);
+    const depth = @backingInt(token);
     if (depth == 0 or depth > self.plugin_depth) return null;
     return &self.plugin_regions[depth - 1];
 }
@@ -1284,7 +1430,7 @@ pub fn tabsIn(f: *Layout, r: *const Region) void {
     for (strip.views()) |view| {
         var it = strip.item(@src(), view, .{});
         defer it.deinit();
-        Chooser.label(view, it.selected);
+        Chooser.label(view, it.selected, it.hovered());
     }
 }
 
@@ -1318,6 +1464,55 @@ pub fn tabbed(_: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.Ap
     const place: Region = .{ .keywords = keywords };
     return f.tabbedIn(&place);
 }
+
+/// Debug builds only: catches a surface that fills its place with a scroll area of its own but
+/// does not say `Surface.scrolls_itself`. In a place that scrolls what it shows (fizzy's
+/// explorer) that view grows wider without limit and never shrinks after a resize, and nothing
+/// on screen says why.
+///
+/// It stands in as the parent the surface draws into, passing everything through to the real
+/// one (whose data it hands out, so every id is unchanged) and noting the first child placed:
+/// a scroll area, when dvui has kept that id's `ScrollInfo`, which every scroll area does as it
+/// closes. Only the first child, which is what "the content is its own scroll area" means; one
+/// under a header is not seen.
+const ScrollWatch = struct {
+    const enabled = builtin.mode == .debug;
+
+    parent: dvui.Widget,
+    first: ?struct { id: dvui.Id, expand: dvui.Options.Expand } = null,
+
+    fn begin(self: *ScrollWatch) void {
+        self.* = .{ .parent = dvui.parentGet() };
+        dvui.parentSet(dvui.Widget.init(self, data, rectFor, screenRectScale, minSizeForChild));
+    }
+
+    fn end(self: *ScrollWatch, state: *State, id: []const u8) void {
+        dvui.parentSet(self.parent);
+        const first = self.first orelse return;
+        if (!first.expand.isHorizontal() and !first.expand.isVertical()) return;
+        if (dvui.dataGet(null, first.id, "_scroll_info", dvui.ScrollInfo) == null) return;
+        if (!state.noteUnmarkedScroller(id)) return;
+        // Not in tests, which check `State.unmarked_scrollers`: a logged warning fails the step.
+        if (!builtin.is_test) dvui.log.warn("surface \"{s}\" fills its place with its own scroll area but does not set `scrolls_itself`: in a place that scrolls (a sidebar) it grows wider without limit. Set `.scrolls_itself = true` on its `Surface`.", .{id});
+    }
+
+    fn data(self: *ScrollWatch) *dvui.WidgetData {
+        return self.parent.data();
+    }
+
+    fn rectFor(self: *ScrollWatch, id: dvui.Id, min_size: dvui.Size, e: dvui.Options.Expand, g: dvui.Options.Gravity) dvui.Rect {
+        if (self.first == null) self.first = .{ .id = id, .expand = e };
+        return self.parent.rectFor(id, min_size, e, g);
+    }
+
+    fn screenRectScale(self: *ScrollWatch, r: dvui.Rect) dvui.RectScale {
+        return self.parent.screenRectScale(r);
+    }
+
+    fn minSizeForChild(self: *ScrollWatch, s: dvui.Size) void {
+        self.parent.minSizeForChild(s);
+    }
+};
 
 /// A surface's draw, timed in the frame profiler under its owner (fizzy's own when it has none)
 /// and its id.

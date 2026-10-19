@@ -56,16 +56,19 @@ pub const IdentityManifest = @import("../../../sdk/src/manifest_identity.zig").I
 /// collide with the same file when the plugin is built standalone (its own `build.zig` already
 /// `@import`s it via `plugin_sdk.readManifest`). Panics clearly on a missing/invalid manifest.
 pub fn readManifestAt(b: *std.Build, zon_rel_path: []const u8) IdentityManifest {
-    const raw = b.build_root.handle.readFileAlloc(b.graph.io, zon_rel_path, b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
+    b.dependOnFileContents(b.path(zon_rel_path));
+    const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, zon_rel_path) catch @panic("OOM"), b.allocator, std.Io.Limit.limited(256 * 1024)) catch |e|
         std.debug.panic("fizzy: could not read {s}: {}", .{ zon_rel_path, e });
-    const src = b.allocator.dupeZ(u8, raw) catch @panic("OOM");
+    const src = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");
     const Target = struct {
         id: []const u8,
         name: []const u8,
         version: []const u8,
         min_sdk_version: []const u8 = "",
     };
-    const parsed = std.zon.parse.fromSliceAlloc(Target, b.allocator, src, null, .{ .ignore_unknown_fields = true }) catch |e|
+    // The build's allocator is freed only when the build ends: the manifest is read into it.
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const parsed = std.zon.parse.fromSlice(Target, .{ .gpa = b.allocator, .arena = b.allocator, .source = src, .diagnostics = &diag, .ignore_unknown_fields = true }) catch |e|
         std.debug.panic("fizzy: failed to parse {s}: {}", .{ zon_rel_path, e });
     _ = std.SemanticVersion.parse(parsed.version) catch
         std.debug.panic("fizzy: {s} .version \"{s}\" is not valid semver", .{ zon_rel_path, parsed.version });

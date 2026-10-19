@@ -18,7 +18,7 @@ third-party one has, depending only on `sdk/`):
            on the UI thread took (unload, register) — `PluginReloads`. Needs a plugin fizzy does
            not bundle (fizzy skips a user copy of a bundled one): pass `--plugin` and `--id`.
 
-`--backend llvm|self-hosted` forces the code generator for the plugin (`FIZZY_PLUGIN_USE_LLVM`,
+`--backend llvm|self-hosted` forces the code generator for the plugin (`-Dplugin-use-llvm`,
 read by `sdk/plugin_sdk.zig`); `default` leaves it to Zig. Compiler experiments like this run on
 Linux CI (`.github/workflows/plugin-loop.yml`), not on a shared workstation: an experimental
 backend on a large compile can take far more memory than LLVM.
@@ -59,13 +59,12 @@ def step_times(summary: str) -> dict:
     return out
 
 
-def env_for(profile: str, backend: str) -> dict:
-    env = dict(os.environ, FIZZY_PROFILE=profile)
-    if backend == "llvm":
-        env["FIZZY_PLUGIN_USE_LLVM"] = "1"
-    elif backend == "self-hosted":
-        env["FIZZY_PLUGIN_USE_LLVM"] = "0"
-    return env
+def env_for(profile: str) -> dict:
+    return dict(os.environ, FIZZY_PROFILE=profile)
+
+
+def backend_args(backend: str) -> list:
+    return {"llvm": ["-Dplugin-use-llvm=true"], "self-hosted": ["-Dplugin-use-llvm=false"]}.get(backend, [])
 
 
 class BuildFailed(Exception):
@@ -75,8 +74,8 @@ class BuildFailed(Exception):
 def build(plugin_dir: str, optimize: str, profile: str, backend: str) -> tuple:
     start = time.monotonic()
     proc = subprocess.run(
-        ["zig", "build", f"-Doptimize={optimize}", "--summary", "all"],
-        cwd=plugin_dir, env=env_for(profile, backend), capture_output=True, text=True,
+        ["zig", "build", f"-Doptimize={optimize}", "--summary", "all", *backend_args(backend)],
+        cwd=plugin_dir, env=env_for(profile), capture_output=True, text=True,
     )
     wall = (time.monotonic() - start) * 1000
     if proc.returncode != 0:
@@ -179,8 +178,8 @@ def bench_watch(report: Report, plugin_dir: str, optimize: str, profile: str, ba
     log_path = os.path.join(profile, "watch.log")
     log = open(log_path, "w")
     proc = subprocess.Popen(
-        ["zig", "build", "--watch", "-fincremental", f"-Doptimize={optimize}"],
-        cwd=plugin_dir, env=env_for(profile, backend), stdout=log, stderr=subprocess.STDOUT,
+        ["zig", "build", "--watch", "-fincremental", f"-Doptimize={optimize}", *backend_args(backend)],
+        cwd=plugin_dir, env=env_for(profile), stdout=log, stderr=subprocess.STDOUT,
         start_new_session=True,
     )
     try:

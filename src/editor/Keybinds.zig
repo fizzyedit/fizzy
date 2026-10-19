@@ -22,6 +22,7 @@ const sdk = @import("fizzy_sdk");
 const Keymap = @import("app").keymap.Keymap;
 const adapter = @import("app").keymap.dvui_adapter;
 const restart = @import("app").restart;
+const AppInfo = @import("app").AppInfo;
 
 pub const Keybinds = @This();
 
@@ -158,6 +159,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.close", .title = "Close", .bind = null, .run = cmdClose, .isEnabled = anyDocOpen, .params = ClosePath.params, .runWith = ClosePath.bind(cmdClosePath), .icon = icons.tvg.lucide.x },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll, .icon = icons.tvg.lucide.@"save-all" },
     .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdUndoWith), .icon = icons.tvg.lucide.undo },
+    .{ .id = "fizzy.goBackBefore", .title = "Go Back to Before the Last Agent's Change", .bind = null, .run = cmdGoBackBefore, .isEnabled = anyDocOpen, .params = GoBackBefore.params, .runWith = GoBackBefore.bind(cmdGoBackBeforeWith), .icon = icons.tvg.lucide.history },
     .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
@@ -174,13 +176,14 @@ const fizzy_commands = [_]FizzyCommand{
     // Menu-bar-only actions. They had no command at all before Stage 1 — they existed solely as
     // `NativeMenuAction` switch arms — so they were unreachable from the palette and unbindable.
     .{ .id = "fizzy.debugToggleDvuiMenuOnMacOS", .title = "Show DVUI Menu (macOS)", .bind = null, .run = cmdToggleDvuiMenuOnMacOS },
-    .{ .id = "fizzy.about", .title = "About Fizzy", .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.download },
-    .{ .id = "fizzy.restart", .title = "Restart Fizzy", .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
-    .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
+    .{ .id = "fizzy.about", .title = AppInfo.about_title_z, .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.info },
+    .{ .id = "fizzy.restart", .title = "Restart " ++ AppInfo.current.display_name, .bind = null, .run = cmdRestart, .isEnabled = canRestart, .icon = icons.tvg.lucide.@"rotate-ccw" },
+    .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .isEnabled = canReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.capture", .title = "Capture the Last 30 Seconds", .bind = null, .run = cmdCapture, .params = CaptureArgs.params, .runWith = CaptureArgs.bind(cmdCaptureWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.record", .title = "Tracks: Record…", .bind = null, .run = cmdTracks, .params = TracksRecord.params, .runWith = TracksRecord.bind(cmdTracksRecord), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.replay", .title = "Tracks: Replay…", .bind = null, .run = cmdTracks, .params = TracksReplay.params, .runWith = TracksReplay.bind(cmdTracksReplay), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.export", .title = "Tracks: Export as a Tape…", .bind = null, .run = cmdTracks, .params = TracksExport.params, .runWith = TracksExport.bind(cmdTracksExport), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks.forget", .title = "Forget This Document's History", .bind = null, .run = cmdTracksForget, .params = TracksForget.params, .runWith = TracksForget.bind(cmdTracksForgetWith), .icon = icons.tvg.lucide.history },
     .{ .id = "fizzy.tracks", .title = "Tracks: Report", .bind = null, .run = cmdTracks, .params = TracksArgs.params, .runWith = TracksArgs.bind(cmdTracksWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
     // For programs, answered a frame or more later (`Command.Call.later`): a test or a script on the
@@ -196,6 +199,7 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.restart", .title = "Demo: Restart", .bind = null, .run = cmdDemoRestart, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
     .{ .id = "fizzy.demo.playTape", .title = "Demo: Play a Tape…", .bind = null, .run = cmdPlayTape, .params = TapePath.params, .runWith = TapePath.bind(cmdPlayTapePath), .icon = icons.tvg.lucide.@"circle-play" },
+    .{ .id = "fizzy.demo.play", .title = "Demo: Play by Name…", .bind = null, .params = DemoByName.params, .runWith = DemoByName.bind(cmdDemoPlayNamed), .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.demo.speed", .title = "Demo: Speed…", .bind = null, .run = cmdDemoSpeedStep, .isEnabled = demoLoaded, .params = DemoSpeed.params, .runWith = DemoSpeed.bind(cmdDemoSpeed), .icon = icons.tvg.lucide.gauge },
 } ++ demoCatalogCommands();
 
@@ -218,7 +222,7 @@ fn playTapeCallback(paths: ?[][:0]const u8) void {
 /// sets the person's session aside and gives it back when it ends.
 fn cmdPlayTapePath(state: *anyopaque, args: TapePath.Args, call: *sdk.Command.Call) anyerror!void {
     if (args.path.len == 0) return cmdPlayTape(state);
-    if (comptime is_web) return call.fail("a page plays a tape from its address (?demo=<url>)", .{});
+    if (comptime is_web) return call.fail("a page plays a tape from its address (?tape=<url>)", .{});
     if (!std.fs.path.isAbsolute(args.path)) return call.fail("give an absolute path: {s}", .{args.path});
     playTapeFile(editorFromState(state), args.path) catch |err| return call.fail("could not play {s}: {t}", .{ args.path, err });
 }
@@ -230,10 +234,27 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
     defer gpa.free(bytes);
     // One document's track (a shared tape) plays in a tab of its own, beside the person's work;
     // anything else on the demo stage.
-    editor.tape_tabs.open(editor, bytes, .{}) catch |err| switch (err) {
-        error.NotOneDocument, error.BadTape => editor.demo.playTapeSoon(bytes),
+    editor.tape_tabs.openWhenReady(editor, bytes, false) catch |err| switch (err) {
+        error.BadTape => editor.demo.playTapeSoon(bytes),
         else => return err,
     };
+}
+
+const DemoByName = sdk.Command.Params(struct {
+    name: sdk.Command.Arg([]const u8, .{ .description = "The demo to play, by name: fizzy's own (\"tour\") or one a plugin registered. The `demos` service lists them." }) = .init(""),
+    at: sdk.Command.Arg(u32, .{ .description = "Where to start, in demo milliseconds: a chapter's start, say. 0 is the beginning." }) = .init(0),
+});
+
+/// Any demo the `demos` service lists (`Demos`), fizzy's or a plugin's.
+fn cmdDemoPlayNamed(state: *anyopaque, args: DemoByName.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.name.len == 0) return call.fail("name the demo to play: the `demos` service lists them", .{});
+    const api = editorFromState(state).demos.api;
+    switch (api.play(args.name, args.at)) {
+        .started => {},
+        .unknown => return call.fail("no demo named '{s}'", .{args.name}),
+        .busy => return call.fail("something else is driving fizzy: a demo can start once it has finished", .{}),
+        .unsaved => return call.fail("there is unsaved work open, which a demo would set aside", .{}),
+    }
 }
 
 const DemoSpeed = sdk.Command.Params(struct {
@@ -436,6 +457,33 @@ const HistoryStep = sdk.Command.Params(struct {
 /// the active document's own (`menu_model.canUndo`). An enabled check that sees the call's target
 /// is the control server's to decide (`plans/CONTROL_SERVER_PLAN.md`, "Commands that take a
 /// document").
+const GoBackBefore = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document, by its path. Empty: the active one." }) = .init(""),
+});
+
+fn cmdGoBackBefore(state: *anyopaque) anyerror!void {
+    const editor = editorFromState(state);
+    const doc = editor.activeDoc() orelse return;
+    const back = editor.backBefore(doc, null, editor.app.host.arena()) orelse return;
+    _ = doc.owner.historyGoTo(doc, back.to);
+}
+
+/// Go back to just before the last run an agent made on a document (one call of its, all its steps):
+/// "no, not like that". Its steps, and any of the person's since, stay on the line, so going
+/// forward brings them back (`plans/SHARED_HISTORY_PLAN.md`, step 6). Answers where it went, whose
+/// change it was, and how many steps that are not the run's went back with it.
+fn cmdGoBackBeforeWith(state: *anyopaque, args: GoBackBefore.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const doc = if (args.path.len == 0)
+        editor.activeDoc() orelse return call.fail("no document is active", .{})
+    else
+        editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
+    const back = editor.backBefore(doc, null, call.arena) orelse
+        return call.fail("nothing an agent did on {s} is left to go back before", .{doc.owner.documentPath(doc)});
+    if (doc.owner.historyGoToWhy(doc, back.to)) |why| return call.fail("{s} could not go back: {s}", .{ doc.owner.id, why });
+    try call.returns(.{ .to = back.to, .by = Editor.authorName(back.by), .also_taken_back = back.others });
+}
+
 fn cmdUndoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Call) anyerror!void {
     try historyStepWith(editorFromState(state), args, call, .undo);
 }
@@ -448,40 +496,35 @@ fn cmdRedoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Cal
 /// `historyGoTo`), so it reaches a document that is not active. With `expect`, only when that
 /// step is the one it would take, so a caller never takes back a step made since it looked
 /// (`plans/SHARED_HISTORY_PLAN.md`, step 5). Answers the step and whose it was.
-fn historyStepWith(editor: *Editor, args: HistoryStep.Args, call: *sdk.Command.Call, action: enum { undo, redo }) !void {
+fn historyStepWith(editor: *Editor, args: HistoryStep.Args, call: *sdk.Command.Call, action: Editor.HistoryAction) !void {
     const doc = if (args.path.len == 0)
         editor.activeDoc() orelse return call.fail("no document is active", .{})
     else
         editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
-    const line = doc.owner.historyLine(doc, call.arena) orelse {
+    const t = editor.stepToTake(doc, action, call.arena) catch |err| switch (err) {
+        error.Nothing => return call.fail("nothing to {s}", .{@tagName(action)}),
         // An owner with no line undoes the active document only, through its own command.
-        const active = editor.activeDoc();
-        if (args.expect != 0 or active == null or active.?.id != doc.id)
-            return call.fail("{s} keeps no history line, so it can only undo the active document, with no expect", .{doc.owner.id});
-        return switch (action) {
-            .undo => editor.undo(),
-            .redo => editor.redo(),
-        };
-    };
-    const host = &editor.app.host;
-    const step: sdk.Plugin.HistoryLine.Entry, const to: u64 = switch (action) {
-        .undo => blk: {
-            if (line.at == 0) return call.fail("nothing to undo", .{});
-            break :blk .{ line.entries[line.at - 1], if (line.at >= 2) line.entries[line.at - 2].id else 0 };
-        },
-        .redo => blk: {
-            if (line.at >= line.entries.len) return call.fail("nothing to redo", .{});
-            break :blk .{ line.entries[line.at], line.entries[line.at].id };
+        error.NoLine => {
+            const active = editor.activeDoc();
+            if (args.expect != 0 or active == null or active.?.id != doc.id)
+                return call.fail("{s} keeps no history line, so it can only {s} the active document, with no expect", .{ doc.owner.id, @tagName(action) });
+            return switch (action) {
+                .undo => editor.undo(),
+                .redo => editor.redo(),
+            };
         },
     };
-    const whose = host.stepAuthor(doc.id, step.id);
-    const by = if (whose.kind == .person) "the person" else if (whose.label.len > 0) whose.label else @tagName(whose.kind);
-    if (args.expect != 0 and args.expect != step.id) return call.fail(
+    const by = Editor.authorName(t.by);
+    if (args.expect != 0 and args.expect != t.step.id) return call.fail(
         "step {d} is not the one to {s}: that is step {d}, {s}, by {s}. The document changed since; fix it forward",
-        .{ args.expect, @tagName(action), step.id, step.title, by },
+        .{ args.expect, @tagName(action), t.step.id, t.step.title, by },
     );
-    if (!doc.owner.historyGoTo(doc, to)) return call.fail("{s} could not {s} step {d}", .{ doc.owner.id, @tagName(action), step.id });
-    try call.returns(.{ .step = step.id, .title = step.title, .by = by });
+    if (doc.owner.historyGoToWhy(doc, t.to)) |why| {
+        if (std.mem.eql(u8, why, "PersonBusy"))
+            return call.fail("the person is drawing in {s}; try again when they stop", .{doc.owner.documentPath(doc)});
+        return call.fail("{s} could not {s} step {d}: {s}", .{ doc.owner.id, @tagName(action), t.step.id, why });
+    }
+    try call.returns(.{ .step = t.step.id, .title = t.step.title, .by = by });
 }
 /// Set while `tick` is running a command because of a live key event. That event is never
 /// marked handled, so it goes on to reach the focused widget under its own steam — a clipboard
@@ -724,6 +767,29 @@ const TracksExport = sdk.Command.Params(struct {
     to: sdk.Command.Arg(u32, .{ .description = "End after this many of the track's steps. 0: the last." }) = .init(0),
 });
 
+const TracksForget = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document whose history to forget, by its path. Empty: the active one." }) = .init(""),
+    all: sdk.Command.Arg(bool, .{ .description = "Forget the history kept for every document not open now instead." }) = .init(false),
+});
+
+fn cmdTracksForget(state: *anyopaque) anyerror!void {
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return);
+    const doc = editor.activeDoc() orelse return;
+    _ = t.forget(doc);
+}
+
+/// Forget a document's history outright (`Tracks.forget`): what was kept of it, its track, and its
+/// undo. Or, with `all`, the history kept for every document not open now (`Tracks.forgetKept`).
+fn cmdTracksForgetWith(state: *anyopaque, args: TracksForget.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return call.fail("no tracks in this app", .{}));
+    if (args.all) return call.returns(.{ .forgotten = t.forgetKept() });
+    const doc = (if (args.path.len == 0) editor.activeDoc() else editor.docFromPath(args.path)) orelse
+        return call.fail("no open document at {s}", .{if (args.path.len == 0) "(active)" else args.path});
+    try call.returns(.{ .path = doc.owner.documentPath(doc), .undo = t.forget(doc) });
+}
+
 /// A document's track as a tape (`Tracks.exportTape`): how it was made, from where its track
 /// began, to play anywhere (`fizzy.demo.playTape`). Returns where it went and what it holds.
 fn cmdTracksExport(state: *anyopaque, args: TracksExport.Args, call: *sdk.Command.Call) anyerror!void {
@@ -820,7 +886,12 @@ fn writeTraceFile(editor: *Editor, path: []const u8, ms: u32) ![]const u8 {
 }
 
 fn cmdReportBug(_: *anyopaque) anyerror!void {
-    _ = dvui.openURL(.{ .url = "https://github.com/fizzyedit/fizzy/issues" });
+    if (AppInfo.current.issues_url.len > 0) _ = dvui.openURL(.{ .url = AppInfo.current.issues_url });
+}
+
+/// An app with nowhere to send reports greys Report a Bug out rather than sending them to fizzy.
+fn canReportBug(_: *anyopaque) bool {
+    return AppInfo.current.issues_url.len > 0;
 }
 
 /// Register every fizzy action in the Host command registry. Called once during `Editor.init`.
@@ -1094,8 +1165,8 @@ fn shadowedByHigherLayer(editor: *Editor, binding: Keymap.Binding, command_id: [
         else if (binding.owner_id) |b| (if (other.owner_id) |o| std.mem.eql(u8, b, o) else false) else false;
         if (!same_owner) continue;
 
-        const mine = (@as(u16, @intFromEnum(binding.source)) << 8) | binding.when.weight();
-        const theirs = (@as(u16, @intFromEnum(other.source)) << 8) | other.when.weight();
+        const mine = (@as(u16, @backingInt(binding.source)) << 8) | binding.when.weight();
+        const theirs = (@as(u16, @backingInt(other.source)) << 8) | other.when.weight();
         if (theirs > mine) return true;
     }
     return false;
@@ -1173,7 +1244,7 @@ fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
         if (b.args.len > 0) continue;
         if (!std.mem.eql(u8, cmd, command)) continue;
         if (best) |cur| {
-            if (@intFromEnum(b.source) >= @intFromEnum(cur.source)) best = b;
+            if (@backingInt(b.source) >= @backingInt(cur.source)) best = b;
         } else best = b;
     }
     return best;
@@ -1442,7 +1513,7 @@ pub fn webKeyBound(key_len: usize, mods_bits: u32) bool {
     };
     var buf: [16]u8 = undefined;
     const key = webKey(web_key_buf[0..key_len], &buf) orelse return false;
-    const function_key = @intFromEnum(key) >= @intFromEnum(Keymap.Key.f1) and @intFromEnum(key) <= @intFromEnum(Keymap.Key.f25);
+    const function_key = @backingInt(key) >= @backingInt(Keymap.Key.f1) and @backingInt(key) <= @backingInt(Keymap.Key.f25);
     if (!mods.ctrl and !mods.command and !function_key) return false;
 
     // Recording a new binding: every such chord is data for the settings pane, not the browser's.

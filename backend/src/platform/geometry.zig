@@ -73,9 +73,12 @@ fn fileLoad(_: ?*anyopaque) ?Geometry {
     const gpa = std.heap.page_allocator;
     const data = std.Io.Dir.cwd().readFileAlloc(file_io, path, gpa, .limited(4096)) catch return null;
     defer gpa.free(data);
-    const z = gpa.dupeZ(u8, data) catch return null;
+    const z = gpa.dupeSentinel(u8, data, 0) catch return null;
     defer gpa.free(z);
-    const g = std.zon.parse.fromSlice(Geometry, gpa, z, null, .{ .ignore_unknown_fields = true }) catch return null;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const g = std.zon.parse.fromSliceNoAlloc(Geometry, .{ .gpa = gpa, .arena = arena.allocator(), .source = z, .diagnostics = &diag, .ignore_unknown_fields = true }) catch return null;
     return if (g.valid()) g else null;
 }
 
@@ -131,7 +134,7 @@ pub fn capture(win: *dvui.Window) ?Geometry {
     switch (builtin.target.os.tag) {
         .macos => {
             const cocoa = cocoaWindowOf(win.backend.impl.window) orelse return null;
-            var out4: [4]f64 = .{0} ** 4;
+            var out4: [4]f64 = @splat(0);
             // The windowed frame — the one it had before a fullscreen Space, while it is in one.
             fizzy_macos_window_current_windowed_frame(cocoa, &out4);
             const g: Geometry = .{ .x = out4[0], .y = out4[1], .w = out4[2], .h = out4[3] };

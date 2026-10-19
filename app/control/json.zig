@@ -71,13 +71,13 @@ fn writeZon(w: *std.Io.Writer, value: std.json.Value) std.Io.Writer.Error!void {
 pub fn jsonFromZon(arena: std.mem.Allocator, zon: ?[]const u8) Error![]u8 {
     const text = zon orelse return arena.dupe(u8, "null");
     if (std.mem.trim(u8, text, " \t\r\n").len == 0) return arena.dupe(u8, "null");
-    const source = try arena.dupeZ(u8, text);
-    const ast = try std.zig.Ast.parse(arena, source, .zon);
+    const source = try arena.dupeSentinel(u8, text, 0);
+    const ast = try std.zig.Ast.parse(arena, source, .{ .mode = .zon });
     if (ast.errors.len > 0) return error.NotZon;
     const zoir = try std.zig.ZonGen.generate(arena, ast, .{ .parse_str_lits = true });
     if (zoir.hasCompileErrors()) return error.NotZon;
     var out: std.Io.Writer.Allocating = .init(arena);
-    writeJson(&out.writer, zoir, .root) catch |err| return switch (err) {
+    writeJson(&out.writer, &zoir, .root) catch |err| return switch (err) {
         error.NotUtf8 => error.NotUtf8,
         error.WriteFailed => error.OutOfMemory,
     };
@@ -91,7 +91,7 @@ fn writeString(w: *std.Io.Writer, s: []const u8) (std.Io.Writer.Error || error{N
     try std.json.Stringify.encodeJsonString(s, .{}, w);
 }
 
-fn writeJson(w: *std.Io.Writer, zoir: std.zig.Zoir, index: std.zig.Zoir.Node.Index) (std.Io.Writer.Error || error{NotUtf8})!void {
+fn writeJson(w: *std.Io.Writer, zoir: *const std.zig.Zoir, index: std.zig.Zoir.Node.Index) (std.Io.Writer.Error || error{NotUtf8})!void {
     switch (index.get(zoir)) {
         .true => try w.writeAll("true"),
         .false => try w.writeAll("false"),
@@ -152,7 +152,8 @@ test "arguments: JSON object to a ZON struct literal" {
     // Negative zero as ZON reads it.
     const neg = try zonFromJson(a, "{\"x\":-0.0}", &.{});
     try std.testing.expectEqualStrings(".{.x=-0.0}", neg);
-    _ = try std.zon.parse.fromSliceAlloc(struct { x: f64 }, a, try a.dupeZ(u8, neg), null, .{});
+    var diag: std.zon.parse.Diagnostics = undefined;
+    _ = try std.zon.parse.fromSlice(struct { x: f64 }, .{ .gpa = a, .arena = a, .source = try a.dupeSentinel(u8, neg, 0), .diagnostics = &diag });
     try std.testing.expectError(error.NotAnObject, zonFromJson(a, "[1]", &.{}));
 }
 
