@@ -185,6 +185,30 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
     try std.testing.expect(p.seq.now >= @as(f64, @floatFromInt(second)));
 
+    // The window's material a tape sets is the demo's: a cut and the end give the person theirs.
+    const settings = &app.editor.app.settings;
+    p.unload();
+    try dvui.testing.settle(headlessFrame);
+    settings.window_material = .blur;
+    const glassy = try materialDemo();
+    defer gpa.free(glassy);
+    try app.editor.demo.playTape(glassy);
+    frames = 0;
+    while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(fizzy.core.material.Kind.frost, settings.window_material);
+    p.seek(0);
+    frames = 0;
+    while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(fizzy.core.material.Kind.blur, settings.window_material);
+    p.seek(@floatFromInt(p.duration()));
+    frames = 0;
+    while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(fizzy.core.material.Kind.frost, settings.window_material);
+    p.unload();
+    try dvui.testing.settle(headlessFrame);
+    try std.testing.expectEqual(fizzy.core.material.Kind.blur, settings.window_material);
+    settings.window_material = .liquid;
+
     // A tape loaded some other way is not the one the service started.
     try app.editor.demo.play("markdown");
     try std.testing.expectEqual(@as(?[]const u8, null), api.current());
@@ -218,6 +242,20 @@ fn openZipFromBytes(editor: *fizzy.Editor, name: []const u8, files: []const stru
     const folder = editor.app.folder orelse return error.NotMounted;
     try std.testing.expect(std.mem.startsWith(u8, folder, "zip://"));
     return gpa.dupe(u8, folder);
+}
+
+/// A demo that frosts the window a moment in (`fizzy.windowMaterial`), encoded.
+fn materialDemo() ![]u8 {
+    const gpa = std.testing.allocator;
+    var s: automation.Script = .init(gpa, "glass", "Glass");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://glass", .files = &.{.{ .path = "notes.md", .text = "# Notes\n" }}, .open = &.{"notes.md"} });
+    s.pause(400);
+    try s.commandWith("fizzy.windowMaterial", .{ .kind = "frost" });
+    s.pause(600);
+    var owned = try s.finish();
+    defer owned.deinit();
+    return automation.binary.encode(gpa, owned.tape, .{});
 }
 
 /// A tape a plugin might register, encoded: a demo opening on a keyframe of one file, in two
