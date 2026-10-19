@@ -35,13 +35,29 @@ const Item = struct {
     }
 };
 
-/// A button on an item: its label, and the caller's own tag for it, which `draw` answers when
-/// it is pressed.
+/// A button on an item: its label, what it does, and the caller's own tag for it, which `draw`
+/// answers when it is pressed.
 const Action = struct {
     label: [16]u8,
     len: u8,
+    act: Act,
     tag: u64,
 };
+
+/// What a button does, for whoever draws the feed to carry out (`draw`'s answer).
+pub const Act = enum {
+    /// Redo step `tag` ("Undid Claude's Draw").
+    redo,
+    /// Go back to before the last run of author `tag` ("Claude · Draw").
+    go_back,
+    /// The same, told that it also takes back some of the person's own steps.
+    go_back_anyway,
+    /// Go forward to step `tag` again, undoing a go back.
+    forward,
+};
+
+/// A button pressed this frame.
+pub const Pressed = struct { act: Act, tag: u64 };
 
 /// A feed showing only what runs from now on.
 pub fn init(host: *const sdk.Host) ActivityFeed {
@@ -53,7 +69,9 @@ pub fn take(self: *ActivityFeed, host: *const sdk.Host, doc_id: u64, now: i128) 
     for (host.activity.items) |a| {
         if (a.seq <= self.seen) continue;
         self.seen = a.seq;
-        if (a.doc_id == doc_id) self.push(a.title, now);
+        if (a.doc_id != doc_id) continue;
+        // An agent's edit offers to go back to before its change.
+        if (a.agent) |who| self.pushAction(a.title, "Go back", .go_back, who, now) else self.push(a.title, now);
     }
 }
 
@@ -74,17 +92,17 @@ pub fn push(self: *ActivityFeed, title: []const u8, now: i128) void {
     self.len += 1;
 }
 
-/// `push`, with a button labelled `label` on it: `draw` answers `tag` when it is pressed.
-pub fn pushAction(self: *ActivityFeed, title: []const u8, label: []const u8, tag: u64, now: i128) void {
+/// `push`, with a button labelled `label` on it: `draw` answers `act` and `tag` when it is pressed.
+pub fn pushAction(self: *ActivityFeed, title: []const u8, label: []const u8, act: Act, tag: u64, now: i128) void {
     self.push(title, now);
-    var action: Action = .{ .label = undefined, .len = @intCast(@min(label.len, 16)), .tag = tag };
+    var action: Action = .{ .label = undefined, .len = @intCast(@min(label.len, 16)), .act = act, .tag = tag };
     @memcpy(action.label[0..action.len], label[0..action.len]);
     self.items[self.len - 1].action = action;
 }
 
-/// Draw the feed in the bottom right of `area` (physical), newest lowest. Answers the tag of the
-/// action pressed this frame, if one was.
-pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now: i128) ?u64 {
+/// Draw the feed in the bottom right of `area` (physical), newest lowest. Answers the action
+/// pressed this frame, if one was.
+pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now: i128) ?Pressed {
     // Those whose time is up go.
     var kept: usize = 0;
     for (self.items[0..self.len]) |item| {
@@ -132,7 +150,7 @@ pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now:
         bottom -= (h + gap) * in;
     }
     core.dialogs.glassBubbles(layer.data().id, bubbles[0..self.len], rs.s, .{});
-    var pressed: ?u64 = null;
+    var pressed: ?Pressed = null;
     for (self.items[0..self.len], rects[0..self.len], alphas[0..self.len], 0..) |item, rect, alpha, n| {
         dvui.labelNoFmt(@src(), item.title[0..item.len], .{}, .{
             .rect = rect,
@@ -156,7 +174,7 @@ pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now:
             .background = false,
             .border = .{},
             .color_text = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(alpha) },
-        })) pressed = a.tag;
+        })) pressed = .{ .act = a.act, .tag = a.tag };
     }
     return pressed;
 }

@@ -397,15 +397,9 @@ pub fn label(view: *const Layout.Surface, selected: bool, hovered: bool) void {
 }
 
 /// A rail's look: the view's icon, `size` points tall and centred, highlighted when selected and
-/// brightened under the pointer, on a soft row-hover wash (`core.dialogs.rowHover`) across
-/// `cell` (the item's box, `Item.data`) at the hover-wash radius. A view with no tvg icon gets a dot rather than no
-/// item. Draw it first inside the item, so the wash sits under the icon.
-pub fn icon(view: *const Layout.Surface, selected: bool, hovered: bool, cell: *dvui.WidgetData, size: f32, id_extra: usize) void {
+/// brightened under the pointer. A view with no tvg icon gets a dot rather than no item.
+pub fn icon(view: *const Layout.Surface, selected: bool, hovered: bool, size: f32, id_extra: usize) void {
     const theme = dvui.themeGet();
-    if (hovered and !selected) {
-        const rs = cell.borderRectScale();
-        rs.r.fill(.all(core.corners.scaled(core.corners.row) * rs.s), .{ .color = .{ .color = core.dialogs.rowHover() }, .fade = 1.0 });
-    }
     const color: dvui.Color = if (selected)
         theme.color(.highlight, .fill)
     else if (hovered)

@@ -109,9 +109,9 @@ fn writeJson(w: *std.Io.Writer, zoir: *const std.zig.Zoir, index: std.zig.Zoir.N
         .char_literal => |c| try w.print("{d}", .{c}),
         .enum_literal => |name| try writeString(w, name.get(zoir)),
         .string_literal => |s| try writeString(w, s),
-        // `.{}` is an empty struct as much as an empty tuple; an object is the likelier reading
-        // of a command's result.
-        .empty_literal => try w.writeAll("{}"),
+        // `.{}` is an empty struct as much as an empty tuple; a list is the likelier reading of a
+        // command's result (no changes, no matches), and a client iterating it must not choke.
+        .empty_literal => try w.writeAll("[]"),
         .array_literal => |range| {
             try w.writeByte('[');
             for (0..range.len) |i| {
@@ -163,7 +163,7 @@ test "results: ZON to JSON" {
     const a = arena.allocator();
     try std.testing.expectEqualStrings("null", try jsonFromZon(a, null));
     try std.testing.expectEqualStrings("null", try jsonFromZon(a, ""));
-    try std.testing.expectEqualStrings("{}", try jsonFromZon(a, ".{}"));
+    try std.testing.expectEqualStrings("[]", try jsonFromZon(a, ".{}"));
     try std.testing.expectEqualStrings(
         "{\"path\":\"a\\nb\",\"line\":12,\"big\":123456789012345678901234567890,\"f\":0.5,\"mode\":\"careful\",\"xs\":[1,true,null],\"c\":97}",
         try jsonFromZon(a, ".{ .path = \"a\\nb\", .line = 12, .big = 123456789012345678901234567890, .f = 0.5, .mode = .careful, .xs = .{ 1, true, null }, .c = 'a' }"),
@@ -181,6 +181,7 @@ test "round trip: what goes in comes back" {
     const a = arena.allocator();
     const json = "{\"s\":\"\\u00e9 \\\\ \\t\",\"n\":-3,\"o\":{\"xs\":[]}}";
     const zon = try zonFromJson(a, json, &.{});
-    // An empty array comes back as `{}`: ZON's `.{}` does not say which it was.
-    try std.testing.expectEqualStrings("{\"s\":\"é \\\\ \\t\",\"n\":-3,\"o\":{\"xs\":{}}}", try jsonFromZon(a, zon));
+    // An empty array comes back as one: ZON's `.{}` does not say which it was, and a list is
+    // the likelier.
+    try std.testing.expectEqualStrings("{\"s\":\"é \\\\ \\t\",\"n\":-3,\"o\":{\"xs\":[]}}", try jsonFromZon(a, zon));
 }
