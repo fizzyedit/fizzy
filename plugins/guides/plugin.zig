@@ -26,7 +26,7 @@ var plugin: sdk.Plugin = .{
     .display_name = plugin_options.name,
 };
 
-const vtable: sdk.Plugin.VTable = .{};
+const vtable: sdk.Plugin.VTable = .{ .deinit = deinit };
 
 var host_ptr: ?*sdk.Host = null;
 
@@ -50,6 +50,12 @@ pub fn register(host: *sdk.Host) !void {
         .run = cmdShow,
         .icon = dvui.entypo.graduation_cap,
     });
+}
+
+fn deinit(state: *anyopaque) void {
+    const host: *sdk.Host = @ptrCast(@alignCast(state));
+    List.deinit(host.allocator);
+    host_ptr = null;
 }
 
 fn drawView(_: ?*anyopaque) anyerror!dvui.App.Result {

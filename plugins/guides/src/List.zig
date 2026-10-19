@@ -16,6 +16,12 @@ const Api = sdk.services.demos.Api;
 /// never folded or unfolded is open if it is the first.
 var unfolded: std.AutoHashMapUnmanaged(u64, bool) = .empty;
 
+/// Forgets what was folded; the plugin's `deinit` calls it with the allocator `draw` was given.
+pub fn deinit(gpa: std.mem.Allocator) void {
+    unfolded.deinit(gpa);
+    unfolded = .empty;
+}
+
 pub fn draw(gpa: std.mem.Allocator, service: ?*Api) void {
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical_bar = .auto_overlay }, .{ .expand = .both, .background = false });
     defer scroll.deinit();
@@ -35,14 +41,15 @@ pub fn draw(gpa: std.mem.Allocator, service: ?*Api) void {
             continue;
         }
         const key = std.hash.Wyhash.hash(0, d.name);
-        const b = branch(tree, i, d, current, unfolded.get(key) orelse (i == 0));
+        const open = unfolded.get(key) orelse (i == 0);
+        const b = branch(tree, i, d, current, open);
         defer b.deinit();
         if (b.expander(@src(), .{ .indent = 14 }, .{ .expand = .horizontal })) {
             for (d.chapters, 0..) |c, j| {
                 if (row(tree, i * 1000 + j + 1, c.title, c.at, false, .chapter)) _ = api.play(d.name, c.at);
             }
         }
-        unfolded.put(gpa, key, b.expanded) catch {};
+        if (b.expanded != open) unfolded.put(gpa, key, b.expanded) catch {};
     }
 }
 
