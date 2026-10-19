@@ -337,7 +337,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                     dvui.captureMouse(float.data(), e.num);
                     const stop = rules.stopAt(me.p.x, x0, x1, n);
                     if (self.window) |*win| {
-                        const grip = win.grab(me.p.x, x0, x1, 12 * s);
+                        const grip = win.grab(me.p.x, x0, x1, trim_reach * s);
                         self.grip = grip;
                         go = dragWindow(win, grip, stop, min_from.?);
                     } else self.drag = stop;
@@ -464,7 +464,15 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // The grip's liquid, flowing out of it into the line as the bar grows (`from`, the grip's lower
     // part), and back as it goes.
     paintLine(line_r, at, n, ink, s, .{ .tilt = tilt, .from = if (from) |f| dome.pool(f, fill) else null, .out = out, .alpha = shape_alpha });
-    if (self.window) |win| paintWindow(phys[1], if (grown > 0) line_radius else phys[1].h / 2, x0, x1, win, s);
+    if (self.window) |win| {
+        // Round the strip of pictures alone, as a recorder's trim wraps its strip, not the bar.
+        paintWindow(film.outsetAll(trim_inset * s + trim_edge * s), strip_radius * s + trim_inset * s + trim_edge * s, x0, x1, win, s);
+        // Its sides are what drag: the pointer over one, or dragging it, shows they move sideways.
+        const xf = rules.stopX(win.from, x0, x1, win.n);
+        const xt = rules.stopX(win.to, x0, x1, win.n);
+        const over_side = film.outsetAll(8 * s).contains(pt) and (@abs(pt.x - xf) <= trim_reach * s or @abs(pt.x - xt) <= trim_reach * s);
+        if (over_side or self.grip != null) dvui.cursorSet(.arrow_w_e);
+    }
 
     // Comes in, goes: a frame each while it fades, and one wake for when it next changes on its
     // own (it starts to go, it is gone).
@@ -489,10 +497,11 @@ fn dragWindow(win: *rules.Trim, grip: rules.Trim.Grip, stop: usize, min_from: us
 
 /// The export window over `r` (physical: the strip and the line under it): the rest dimmed, a
 /// yellow bracket over the part, a handle at each side.
+/// The trim window's bracket, `trim_inset` inside `vessel` (physical), its outer corners `radius`
+/// less that: drawn round the strip of pictures (`vessel` is the strip grown by the inset and the
+/// bracket's own width), so its yellow wraps the pictures and nothing else.
 fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: rules.Trim, s: f32) void {
-    // Inside the line's bubble, by its own corners less the inset, so the bracket never reaches
-    // past the glass round it.
-    const inset = 5 * s;
+    const inset = trim_inset * s;
     const r = vessel.insetAll(inset);
     const ro = @max(2 * s, radius - inset);
     const ri: dvui.Corner.Physical = .round(1.5 * s);
@@ -500,7 +509,7 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
     const xf = rules.stopX(win.from, x0, x1, win.n);
     const xt = rules.stopX(win.to, x0, x1, win.n);
     const handle_w = 8 * s;
-    const edge = 2.5 * s;
+    const edge = trim_edge * s;
     const dim: dvui.Color = dvui.Color.black.opacity(0.6);
     const left = xf - handle_w;
     const right = xt + handle_w;
@@ -519,18 +528,30 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
 /// The strip `r` (physical), its ends where the line's are: one picture of the history, each stop
 /// a slice of it (`history_transport.stripColumns`). A stop takes the stretch round where its knob
 /// sits and shows that stretch of the document as it was then, so across the strip the document is
-/// read building up from left to right, and a slice is under the knob that goes to it. A stop with
-/// no picture shows the nearest that has one; none at all, the stretch stays glass. The stop at
-/// `at` is lit and outlined; the rest a little dimmer.
+/// read building up from left to right, and a slice is under the knob that goes to it. The strip
+/// frames the document's content, as a recorder's strip frames what changed: the part of the
+/// pictures round everything any of them holds (`HistoryFrames.Picture.content`), at the strip's
+/// shape (`history_transport.frameContent`), so a few words at the top of a wide pane fill it
+/// rather than empty pane. A stop with no picture shows the nearest that has one; none at all,
+/// the stretch stays glass. The stop at `at` is lit and outlined; the rest a little dimmer.
 fn paintStrip(r: dvui.Rect.Physical, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
     const n = line.entries.len;
     var buf: [256]rules.Column = undefined;
     const columns = rules.stripColumns(n, r.x, r.x + r.w, 2 * s, &buf);
     const ink = dvui.themeGet().color(.window, .text);
-    const radius = 4 * s;
+    const radius = strip_radius * s;
     var lit_x0: ?f32 = null;
     var lit_x1: f32 = 0;
+    // Round what the pictures shown hold, in fractions of a picture (they share the pane's shape).
+    var boxes: [256]rules.Frac = undefined;
+    var nb: usize = 0;
+    for (columns) |c| if (nearestPicture(frames, line, c.stop)) |pic| if (pic.content) |pc| {
+        boxes[nb] = pc;
+        nb += 1;
+    };
+    const content = rules.contentUnion(boxes[0..nb]);
+    const want = r.w / r.h;
     for (columns, 0..) |c, i| {
         const col: dvui.Rect.Physical = .{ .x = c.x0, .y = r.y, .w = c.x1 - c.x0, .h = r.h };
         // The strip's own corners on its two end columns, square between them.
@@ -547,14 +568,14 @@ fn paintStrip(r: dvui.Rect.Physical, frames: *const HistoryFrames, line: sdk.Plu
             if (lit_x0 == null) lit_x0 = c.x0;
             lit_x1 = c.x1;
         }
-        const tex = nearestPicture(frames, line, c.stop) orelse {
+        const pic = nearestPicture(frames, line, c.stop) orelse {
             col.fill(corners, .{ .color = .{ .color = ink.opacity(0.06 * grown) } });
             continue;
         };
-        // The picture covering the whole strip, its middle kept; this column's stretch of that.
+        const tex = pic.tex;
+        // The part of the picture the strip frames, round the content; this column's stretch of it.
         const ta = @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(@max(1, tex.height)));
-        const want = r.w / r.h;
-        const cover: dvui.Rect = if (ta > want) .{ .x = (1 - want / ta) / 2, .y = 0, .w = want / ta, .h = 1 } else .{ .x = 0, .y = (1 - ta / want) / 2, .w = 1, .h = ta / want };
+        const cover = rules.frameContent(content, ta, want, content_pad, content_closest);
         const fa = (c.x0 - r.x) / r.w;
         const fb = (c.x1 - r.x) / r.w;
         const uv: dvui.Rect = .{ .x = cover.x + fa * cover.w, .y = cover.y, .w = (fb - fa) * cover.w, .h = cover.h };
@@ -567,8 +588,20 @@ fn paintStrip(r: dvui.Rect.Physical, frames: *const HistoryFrames, line: sdk.Plu
     if (lit_x0) |x0| (dvui.Rect.Physical{ .x = x0, .y = r.y, .w = lit_x1 - x0, .h = r.h }).stroke(.round(radius), .{ .thickness = 1.5 * s, .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
 }
 
+/// How much room the strip leaves round the content, as a share of it each side; and how close it
+/// comes, as the least share of a picture's height it shows (a single word is not blown up).
+const content_pad: f32 = 0.12;
+const content_closest: f32 = 0.15;
+
+/// The trim bracket's gap to what it holds and the width of its yellow, in points; the strip's own
+/// corner radius; and how near a side of the bracket the pointer grabs it (`Trim.grab`).
+const trim_inset: f32 = 5;
+const trim_edge: f32 = 2.5;
+const strip_radius: f32 = 4;
+const trim_reach: f32 = 12;
+
 /// The picture of stop `stop`, or of the nearest stop to it that has one.
-fn nearestPicture(frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, stop: usize) ?dvui.Texture {
+fn nearestPicture(frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, stop: usize) ?HistoryFrames.Picture {
     const n = line.entries.len;
     var d: usize = 0;
     while (d <= n) : (d += 1) {

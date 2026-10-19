@@ -208,6 +208,62 @@ pub fn stripColumns(n: usize, x0: f32, x1: f32, min_w: f32, out: []Column) []Col
     return out[0..count];
 }
 
+/// A part of a picture, as fractions of it: 0 to 1 across and down.
+pub const Frac = struct { x: f32 = 0, y: f32 = 0, w: f32 = 1, h: f32 = 1 };
+
+/// The part of a picture `pic_aspect` wide for each high that a strip `want` wide for each high
+/// shows (`paintStrip`): round `content` (the whole picture without one), padded by `pad` of its
+/// size each side, grown to the strip's shape, and never closer in than `min` of the picture's
+/// height. Kept inside the picture, its middle where the content's is as far as that allows. A
+/// picture of another shape than the strip, its content all of it, is covered round its middle.
+pub fn frameContent(content: ?Frac, pic_aspect: f32, want: f32, pad: f32, min: f32) Frac {
+    const a = @max(pic_aspect, 1e-3);
+    const c = content orelse Frac{};
+    // In the picture's own units: `a` across, 1 down.
+    const cw = c.w * a * (1 + 2 * pad);
+    const ch = c.h * (1 + 2 * pad);
+    var h = @max(@max(ch, cw / want), min);
+    var w = h * want;
+    if (w > a) {
+        w = a;
+        h = w / want;
+    }
+    if (h > 1) {
+        h = 1;
+        w = want;
+    }
+    const mx = (c.x + c.w / 2) * a;
+    const my = c.y + c.h / 2;
+    const x = std.math.clamp(mx - w / 2, 0, a - w);
+    const y = std.math.clamp(my - h / 2, 0, 1 - h);
+    return .{ .x = x / a, .y = y, .w = w / a, .h = h };
+}
+
+/// What the strip frames of `boxes`, each one picture's content: the box round them all, leaving
+/// out any far bigger than most (four times the middle one's area), which is something passing
+/// over the pane when that picture was taken (the activity feed, a menu), not the document. Null
+/// for none.
+pub fn contentUnion(boxes: []Frac) ?Frac {
+    if (boxes.len == 0) return null;
+    std.mem.sort(Frac, boxes, {}, struct {
+        fn smaller(_: void, a: Frac, b: Frac) bool {
+            return a.w * a.h < b.w * b.h;
+        }
+    }.smaller);
+    const median = boxes[boxes.len / 2];
+    const most = 4 * median.w * median.h;
+    var u: ?Frac = null;
+    for (boxes) |b| {
+        if (b.w * b.h > most) break;
+        u = if (u) |v| blk: {
+            const x0 = @min(v.x, b.x);
+            const y0 = @min(v.y, b.y);
+            break :blk Frac{ .x = x0, .y = y0, .w = @max(v.x + v.w, b.x + b.w) - x0, .h = @max(v.y + v.h, b.y + b.h) - y0 };
+        } else b;
+    }
+    return u;
+}
+
 const testing = std.testing;
 const ms = std.time.ns_per_ms;
 
@@ -312,4 +368,43 @@ test "each stop takes the stretch of the strip round its knob, or columns share 
     try testing.expectEqual(@as(usize, 1), none.len);
     try testing.expectEqual(@as(f32, 10), none[0].x0);
     try testing.expectEqual(@as(f32, 50), none[0].x1);
+}
+
+test "the strip frames the content, at the strip's shape, inside the picture" {
+    const eq = struct {
+        fn eq(want: Frac, got: Frac) !void {
+            try testing.expectApproxEqAbs(want.x, got.x, 1e-4);
+            try testing.expectApproxEqAbs(want.y, got.y, 1e-4);
+            try testing.expectApproxEqAbs(want.w, got.w, 1e-4);
+            try testing.expectApproxEqAbs(want.h, got.h, 1e-4);
+        }
+    }.eq;
+    // No content known: the picture covers the strip round its middle.
+    try eq(.{ .x = 0, .y = 0.25, .w = 1, .h = 0.5 }, frameContent(null, 2, 4, 0.1, 0.3));
+    // A few words at the top left: framed close, as close as `min` allows, held to the corner.
+    try eq(.{ .x = 0, .y = 0, .w = 0.6, .h = 0.3 }, frameContent(.{ .x = 0, .y = 0, .w = 0.2, .h = 0.1 }, 2, 4, 0.1, 0.3));
+    // Content in the middle stays in the middle.
+    const mid = frameContent(.{ .x = 0.4, .y = 0.4, .w = 0.2, .h = 0.2 }, 2, 4, 0, 0.1);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), mid.x + mid.w / 2, 1e-4);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), mid.y + mid.h / 2, 1e-4);
+    // Always the strip's shape, in the picture's units.
+    for ([_]?Frac{ null, .{ .x = 0.1, .y = 0.7, .w = 0.05, .h = 0.05 }, .{ .x = 0, .y = 0, .w = 1, .h = 1 } }) |c| {
+        const f = frameContent(c, 2, 4, 0.1, 0.2);
+        try testing.expectApproxEqAbs(@as(f32, 4), f.w * 2 / f.h, 1e-3);
+        try testing.expect(f.x >= 0 and f.y >= 0 and f.x + f.w <= 1 + 1e-4 and f.y + f.h <= 1 + 1e-4);
+    }
+}
+
+test "the strip's content leaves out a picture of something passing over the pane" {
+    var boxes = [_]Frac{
+        .{ .x = 0, .y = 0, .w = 0.1, .h = 0.03 }, .{ .x = 0, .y = 0, .w = 0.2, .h = 0.03 },
+        .{ .x = 0, .y = 0, .w = 0.9, .h = 0.9 },  .{ .x = 0, .y = 0, .w = 0.25, .h = 0.03 },
+    };
+    const u = contentUnion(&boxes).?;
+    try testing.expectApproxEqAbs(@as(f32, 0.25), u.w, 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.03), u.h, 1e-5);
+    // All of them big: the document fills the pane, and the strip frames it all.
+    var big = [_]Frac{ .{ .w = 0.8, .h = 0.9 }, .{ .w = 0.9, .h = 0.9 } };
+    try testing.expectApproxEqAbs(@as(f32, 0.9), contentUnion(&big).?.w, 1e-5);
+    try testing.expectEqual(@as(?Frac, null), contentUnion(&.{}));
 }
