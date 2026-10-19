@@ -65,6 +65,46 @@ const DemoMoment = struct { now: f64, cursor: usize, print: u64 };
 const bundled_seek_seed: u64 = 0xf122_de40;
 const bundled_random_seeks = 16;
 
+/// A press lands where the pointer is, so the pointer's last `move` is what a press aims at. That
+/// move must name an anchor a widget publishes (docs/AUTOMATION.md, "Ops aim at anchors"), with no
+/// nudge off it, never the window (an empty tag, which is a raw coordinate) nor an offset from a
+/// corner. Returns the index of the first press that doesn't, or null.
+fn firstRawPress(tape: automation.Tape) ?usize {
+    var aim: ?automation.Tape.Target = null;
+    for (tape.ops, 0..) |op, i| switch (op.do) {
+        .move => |t| aim = t,
+        .press => {
+            const t = aim orelse return i;
+            if (t.tag.len == 0 or t.dx != 0 or t.dy != 0) return i;
+        },
+        else => {},
+    };
+    return null;
+}
+
+test "tapes: a press aims at an anchor, not a coordinate" {
+    // Bundled demos are checked in the test below, as they play. Drawing strokes on a canvas would
+    // be the legitimate raw coordinate; none of these tapes draw, so nothing is exempt on that
+    // ground. `soak.zon` presses an offset from the sidebar's corner until fizzyedit/fizzy#634
+    // moves it onto `region.arrange:<name>`; delete its entry then.
+    const exempt = [_][]const u8{"soak"};
+    const tapes = [_]struct { name: []const u8, source: [:0]const u8 }{
+        .{ .name = "soak", .source = @embedFile("tapes/soak.zon") },
+    };
+    for (tapes) |t| {
+        var owned = try automation.Tape.parse(std.testing.allocator, t.source, automation.Input.check);
+        defer owned.deinit();
+        const raw = firstRawPress(owned.tape);
+        const is_exempt = for (exempt) |e| {
+            if (std.mem.eql(u8, e, t.name)) break true;
+        } else false;
+        if (raw != null and !is_exempt) {
+            std.log.err("tape '{s}': op {d} presses a coordinate; aim at an anchor (docs/AUTOMATION.md)", .{ t.name, raw.? });
+            return error.PressByCoordinate;
+        }
+    }
+}
+
 test "demo: the rail's Files anchor the scripts spell out is the one fizzy publishes" {
     try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
 }
@@ -112,6 +152,10 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         // Seeks to random moments, and the first of each chapter, in an order that goes back and
         // forth: from snapshots, from the keyframe, and forward on the tape's own state.
         const tape = p.tape().?;
+        if (firstRawPress(tape.*)) |i| {
+            std.log.err("demo '{s}': op {d} presses a coordinate; aim at an anchor (docs/AUTOMATION.md)", .{ tape.name, i });
+            return error.PressByCoordinate;
+        }
         var picks: std.ArrayList(usize) = .empty;
         defer picks.deinit(gpa);
         for (0..bundled_random_seeks) |_| try picks.append(gpa, random.uintLessThan(usize, moments.items.len));

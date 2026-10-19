@@ -45,6 +45,9 @@ The open PR list is the board of who is working on what.
    yes without opening the PR.
 4. **Merging is the maintainer's.** On a yes, merge with `gh pr merge --squash`. Never push to
    `main`, and never merge a PR you opened unless asked to.
+5. **Auto-merge comes after review and a yes.** Turn it on only once the PR's code review is
+   done and the maintainer said yes; a worker never turns it on itself. On 2026-10-19 #623 and
+   #624 merged before their review landed, and the findings became follow-ups #639 and #640.
 
 ## jj
 

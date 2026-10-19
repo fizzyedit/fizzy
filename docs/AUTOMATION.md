@@ -137,6 +137,13 @@ which costs nothing unless someone asked for anchors this frame (`core.anchor.wa
 while a demo is loaded, the live driver while a live tape plays). dvui keeps tags on the shared
 window, so a plugin dylib's anchors are visible to the app.
 
+**A tape presses an anchor a widget publishes** (`region.*`, `fizzy.*`), never a screen coordinate
+or an offset from one: the `move` before a `press` names a tag and nudges nothing, because a
+nudge is a coordinate that goes stale when the layout shifts. fizzyedit/fizzy#634's soak tape
+pressed a fixed offset from the sidebar's corner and broke when the arrange button moved; it now
+presses `region.arrange:<name>`. If no anchor names what you need, publish one
+(`core.anchor.mark`). `tests/demos.zig` fails a bundled tape whose press is aimed any other way.
+
 **The overlay is a function of time.** The synthetic pointer and its click ripple (none until the
 tape first uses it after a keyframe; it goes away while the tape types, as a desktop's does, and
 comes back when it moves), the keys pressed (each with its chord from the user's own keymap),
