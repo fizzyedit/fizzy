@@ -560,7 +560,8 @@ pub fn undo(self: *Document) void {
     const sel = self.history.applyUndo(gpa, &self.text) orelse return;
     // Whoever goes back owns the jump, when an edit later makes it steps (`recordGoneBack`).
     self.went_back_by = sdk.host().acted();
-    if (self.history.lastUndone()) |s| self.recordEdits(.undone, s.step, s.edits, s.sel_before, true, null);
+    // Its effect is the entry's reverse, which reads as no kind of its own (`.other`) when played.
+    if (self.history.lastUndone()) |s| self.recordEdits(.undone, s.step, s.edits, s.sel_before, true, null, .{});
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
@@ -572,7 +573,7 @@ pub fn undo(self: *Document) void {
 pub fn redo(self: *Document) void {
     const gpa = sdk.allocator();
     const sel = self.history.applyRedo(gpa, &self.text) orelse return;
-    if (self.history.lastApplied()) |s| self.recordEdits(.redone, s.step, s.edits, s.sel_after, false, null);
+    if (self.history.lastApplied()) |s| self.recordEdits(.redone, s.step, s.edits, s.sel_after, false, null, s.label);
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
@@ -581,7 +582,8 @@ pub fn redo(self: *Document) void {
 }
 
 /// The text plugin's step encoding (`sdk.Plugin.step_format`): `tc.Transaction.encodeStep`'s.
-pub const step_format = 1;
+/// 2: each step carries its entry's label, so a history put back reads as it did.
+pub const step_format = 2;
 
 /// Report a step of this document's history to whoever records it (`sdk.Host.recordStep`), when
 /// anyone does: nothing is encoded otherwise.
@@ -593,7 +595,9 @@ fn recordStep(self: *const Document, step: sdk.Step) void {
 /// going back put on the line (`recordGoneBack`).
 pub fn recordCommitted(self: *Document, c: tc.History.Committed) void {
     if (c.back > 0) self.recordGoneBack(c.back);
-    self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false, null);
+    // The step is on top: its label as it reads now, a join's reclassifying included.
+    const label = if (self.history.lastApplied()) |top| top.label else tc.Transaction.Label{};
+    self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false, null, label);
     // Last: the steps reported above are read from the history.
     if (!c.joined) self.history.trim(sdk.allocator(), sdk.host().historyLimit());
 }
@@ -609,20 +613,20 @@ fn recordGoneBack(self: *const Document, n: usize) void {
     var i: usize = 2 * n;
     while (i > 0) : (i -= 1) {
         const s = self.history.appliedBelowTop(i) orelse continue;
-        if (i > n) self.recordEdits(.redone, s.step, s.edits, s.sel_after, false, s.step) else self.recordEdits(.added, s.step, s.edits, s.sel_after, false, s.step);
+        self.recordEdits(if (i > n) .redone else .added, s.step, s.edits, s.sel_after, false, s.step, s.label);
     }
 }
 
 /// `edits` of history step `id` reported as a step, forward or (`reverse`) as their undo, `sel`
-/// the selection they leave.
-fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool, on_top: ?u64) void {
+/// the selection they leave, `label` how the entry reads on the line.
+fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool, on_top: ?u64, label: tc.Transaction.Label) void {
     // Every step reaches the host, which keeps who made it; its bytes only while it is recorded.
     const top: u64 = on_top orelse if (self.history.lastApplied()) |r| r.step else 0;
     if (!sdk.host().recording(self.id)) return self.recordStep(.{ .kind = kind, .id = id, .top = top });
     const gpa = sdk.allocator();
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    tc.Transaction.encodeStep(&out.writer, edits, sel, reverse) catch {
+    tc.Transaction.encodeStep(&out.writer, edits, sel, reverse, label) catch {
         std.log.err("text: a step of {s} was not recorded: out of memory", .{self.path});
         return;
     };
@@ -637,7 +641,8 @@ pub fn applyStep(self: *Document, effect: []const u8) !void {
     const gpa = sdk.allocator();
     const view = try tc.Transaction.StepView.init(effect);
     var txn = try tc.Transaction.applyStepTo(gpa, &self.text, view);
-    const committed = self.history.push(gpa, txn) catch |err| {
+    // Its kind, not the jump it was part of: the step a jump went back to has another id here.
+    const committed = self.history.push(gpa, txn, view.label.kind) catch |err| {
         // Kept out of the history, the text would not undo: take it back.
         txn.applyInverse(gpa, &self.text) catch {};
         txn.deinit(gpa);
@@ -655,7 +660,8 @@ pub fn applyStep(self: *Document, effect: []const u8) !void {
 
 /// Put the history back as its track recorded it (`sdk.Plugin.VTable.restoreHistory`), in place
 /// of what it holds: each entry's parts (`step_format`, as `recordEdits` wrote them) joined into
-/// one transaction, its id kept. Checked against the text first, on a copy: undoing every applied
+/// one transaction, its id and label kept (the last part's: a join reclassifies the entry, as
+/// typing over a run does live). Checked against the text first, on a copy: undoing every applied
 /// entry, and redoing every one after them, must land, or `error.StepDoesNotApply` and nothing
 /// changes. The text is untouched, and a clean document stays clean.
 pub fn restoreHistory(self: *Document, history: sdk.Plugin.RestoredHistory) !void {
@@ -679,6 +685,7 @@ pub fn restoreHistory(self: *Document, history: sdk.Plugin.RestoredHistory) !voi
                 try b.txn.append(gpa, edit.pos, edit.removed, edit.inserted);
             }
             b.txn.sel_after = view.sel;
+            b.label = view.label;
         }
     }
     // Back to where the history began, and forward through what redo brings back: each must fit.

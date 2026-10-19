@@ -117,6 +117,12 @@ turns.
 
 ## Verify, and say how
 
+- **Heavy builds go through `scripts/zb`.** `scripts/zb build test` is `zig build test` once a
+  slot is free (two by default, `FIZZY_BUILD_SLOTS`) and the load average is under the machine's
+  performance cores (`FIZZY_BUILD_MAX_LOAD`). Agents and people share one Mac, and parallel builds
+  have taken its load past 17 and crashed it; don't poll `uptime` and start anyway. Every gate
+  below runs as `scripts/zb build …` (`scripts/zb build test-integration`). Not for `zig build run`
+  of the editor, which would hold the slot until it quits; `FIZZY_BUILD_SKIP=1` runs at once.
 - **Gates:** `scripts/check-fmt.sh` (`--fix` formats), `zig build`, `zig build test`,
   `zig build test-integration`, `zig build check-web`, `zig build test-sdk-version`. CI runs all
   of them, `test-integration` on Linux only, but a
@@ -132,6 +138,12 @@ turns.
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
   config, recents, lock and socket there too, apart from the person's own instance.
+- **A fizzy you launch takes the person's window focus.** macOS activates it, and a self-restart
+  into a rebuilt binary relaunches it, so never run a rebuild-and-relaunch loop, or a build that
+  triggers fizzy's self-restart, while a sandbox runs. Launch a sandbox fizzy only when a test or
+  the headless integration harness can't show the thing, at most a couple of times, and quit it
+  when done. On 2026-10-19 a worker's restart repro pulled the person out of their windows for an
+  hour.
 - **UI changes say how they were seen** (a test, a demo tape, a screenshot, a measurement) and
   on which platforms. CI's Windows cross-compile shows the app links, not that it works.
 

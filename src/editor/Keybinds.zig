@@ -200,6 +200,7 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
     .{ .id = "fizzy.demo.playTape", .title = "Demo: Play a Tape…", .bind = null, .run = cmdPlayTape, .params = TapePath.params, .runWith = TapePath.bind(cmdPlayTapePath), .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.demo.play", .title = "Demo: Play by Name…", .bind = null, .params = DemoByName.params, .runWith = DemoByName.bind(cmdDemoPlayNamed), .icon = icons.tvg.lucide.@"circle-play" },
+    .{ .id = "fizzy.windowMaterial", .title = "Window Material…", .bind = null, .run = cmdWindowMaterialStep, .params = WindowMaterial.params, .runWith = WindowMaterial.bind(cmdWindowMaterial), .icon = icons.tvg.lucide.@"app-window" },
     .{ .id = "fizzy.demo.speed", .title = "Demo: Speed…", .bind = null, .run = cmdDemoSpeedStep, .isEnabled = demoLoaded, .params = DemoSpeed.params, .runWith = DemoSpeed.bind(cmdDemoSpeed), .icon = icons.tvg.lucide.gauge },
 } ++ demoCatalogCommands();
 
@@ -255,6 +256,39 @@ fn cmdDemoPlayNamed(state: *anyopaque, args: DemoByName.Args, call: *sdk.Command
         .busy => return call.fail("something else is driving fizzy: a demo can start once it has finished", .{}),
         .unsaved => return call.fail("there is unsaved work open, which a demo would set aside", .{}),
     }
+}
+
+const WindowMaterial = sdk.Command.Params(struct {
+    kind: sdk.Command.Arg([]const u8, .{ .description = "What the window is made of: none (opaque), transparent, blur, frost or liquid. Each platform shows the best it has at or below it. Empty steps to the next." }) = .init(""),
+});
+
+/// The next material, round from Liquid Glass back to opaque, as a row or a shortcut runs it.
+fn cmdWindowMaterialStep(state: *anyopaque) anyerror!void {
+    _ = stepWindowMaterial(editorFromState(state));
+}
+
+/// The window's material (`Settings.window_material`), as the Window settings set it, or the next
+/// one with no `kind`. Answers the kind it set.
+fn cmdWindowMaterial(state: *anyopaque, args: WindowMaterial.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    if (args.kind.len == 0) return call.returns(.{ .kind = stepWindowMaterial(editor) });
+    const kind = std.meta.stringToEnum(fizzy.core.material.Kind, args.kind) orelse
+        return call.fail("not a material: {s} (none, transparent, blur, frost or liquid)", .{args.kind});
+    setWindowMaterial(editor, kind);
+    try call.returns(.{ .kind = kind });
+}
+
+fn stepWindowMaterial(editor: *Editor) fizzy.core.material.Kind {
+    const Kind = fizzy.core.material.Kind;
+    const next: Kind = @fromBackingInt(@intCast((@backingInt(editor.app.settings.window_material) + 1) % std.enums.values(Kind).len));
+    setWindowMaterial(editor, next);
+    return next;
+}
+
+fn setWindowMaterial(editor: *Editor, kind: fizzy.core.material.Kind) void {
+    editor.app.settings.window_material = kind;
+    editor.markSettingsDirty();
+    dvui.refresh(null, @src(), null);
 }
 
 const DemoSpeed = sdk.Command.Params(struct {

@@ -17,6 +17,7 @@ const dvui = @import("dvui");
 const singleton_app = @import("singleton_app");
 const core = @import("core");
 const profile = @import("../profile.zig");
+const quiet = @import("../quiet.zig");
 const restart = @import("../restart.zig");
 
 const log = std.log.scoped(.singleton);
@@ -60,7 +61,8 @@ pub fn earlyStartup(gpa: std.mem.Allocator, main_init: std.process.Init) !void {
     // this launch. It is taken once the old one has let go (`restart.awaitHandover`, then
     // `acquireLock`).
     if (restart.startedByHandover()) return;
-    try acquireLock(gpa, resolved);
+    // Quiet, only the program: an instance already on this lock may be the person's.
+    try acquireLock(gpa, if (quiet.on) resolved[0..@min(resolved.len, 1)] else resolved);
 }
 
 /// Take ownership of argv resolved in `earlyStartup`. Empty if `earlyStartup`
@@ -77,6 +79,16 @@ pub fn consumeStartupArgv() []const []const u8 {
 /// already resolved to absolute (so the primary doesn't need to know the
 /// secondary's working directory).
 pub fn acquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !void {
+    if (!try tryAcquireLock(gpa, argv)) {
+        log.info("another instance holds the lock: this launch is handed to it", .{});
+        std.process.exit(0);
+    }
+}
+
+/// `acquireLock` without the exit: false when another instance holds the lock, which has been
+/// handed `argv`. A restart's new instance takes the lock this way (`restart.pollReleased`): it is
+/// the window on screen, and must not quit because the old one has yet to let go.
+pub fn tryAcquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !bool {
     state.allocator = gpa;
 
     var socket_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -116,11 +128,11 @@ pub fn acquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !void {
     });
 
     switch (try state.instance.?.requestSingleInstanceLock(argv)) {
-        .acquired => {},
+        .acquired => return true,
         .already_running => {
             state.instance.?.deinit();
             state.instance = null;
-            std.process.exit(0);
+            return false;
         },
     }
 }
@@ -333,6 +345,8 @@ pub fn collectAndResolveArgv(
 
     const env_profile: ?[]const u8 = if (std.c.getenv(profile.env_var)) |v| std.mem.span(v) else null;
     const resolved = try resolveArgs(gpa, cwd, raw.items, env_profile);
+    quiet.on = resolved.quiet or quiet.fromEnv(if (std.c.getenv(quiet.env_var)) |v| std.mem.span(v) else null);
+    if (quiet.on) log.info("quiet: this run never takes the person's focus", .{});
     if (resolved.profile) |root| {
         if (profile.root) |old| gpa.free(old);
         profile.root = root;
@@ -342,14 +356,14 @@ pub fn collectAndResolveArgv(
 }
 
 /// `collectAndResolveArgv` once argv and the environment are read: the profile taken out of
-/// `raw` (or `env_profile` when argv names none) and made absolute against `cwd`, and the rest
-/// with every path made absolute. Both owned by `gpa` (`freeResolvedArgv` for `argv`).
+/// `raw` (or `env_profile` when argv names none) and made absolute against `cwd`, whether `raw`
+/// asks for a quiet run (the flag taken out too), and the rest with every path made absolute. Both owned by `gpa` (`freeResolvedArgv` for `argv`).
 pub fn resolveArgs(
     gpa: std.mem.Allocator,
     cwd: []const u8,
     raw: []const []const u8,
     env_profile: ?[]const u8,
-) !struct { argv: []const []const u8, profile: ?[]u8 } {
+) !struct { argv: []const []const u8, profile: ?[]u8, quiet: bool } {
     var out: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer {
         for (out.items) |s| gpa.free(s);
@@ -368,7 +382,12 @@ pub fn resolveArgs(
         };
     }
 
+    var quiet_flag = false;
     for (extracted.rest, 0..) |arg, i| {
+        if (i > 0 and std.mem.eql(u8, arg, quiet.flag)) {
+            quiet_flag = true;
+            continue;
+        }
         if (i == 0) {
             try out.append(gpa, try gpa.dupe(u8, arg));
             continue;
@@ -384,7 +403,7 @@ pub fn resolveArgs(
         };
         try out.append(gpa, abs);
     }
-    return .{ .argv = try out.toOwnedSlice(gpa), .profile = root };
+    return .{ .argv = try out.toOwnedSlice(gpa), .profile = root, .quiet = quiet_flag };
 }
 
 pub fn freeResolvedArgv(gpa: std.mem.Allocator, argv: []const []const u8) void {

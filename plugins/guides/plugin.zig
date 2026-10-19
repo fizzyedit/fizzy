@@ -26,7 +26,7 @@ var plugin: sdk.Plugin = .{
     .display_name = plugin_options.name,
 };
 
-const vtable: sdk.Plugin.VTable = .{};
+const vtable: sdk.Plugin.VTable = .{ .deinit = deinit };
 
 var host_ptr: ?*sdk.Host = null;
 
@@ -52,9 +52,15 @@ pub fn register(host: *sdk.Host) !void {
     });
 }
 
+fn deinit(state: *anyopaque) void {
+    const host: *sdk.Host = @ptrCast(@alignCast(state));
+    List.deinit(host.allocator);
+    host_ptr = null;
+}
+
 fn drawView(_: ?*anyopaque) anyerror!dvui.App.Result {
     const host = host_ptr orelse return .ok;
-    List.draw(host.getServiceTyped(sdk.services.demos.Api));
+    List.draw(host.allocator, host.getServiceTyped(sdk.services.demos.Api));
     return .ok;
 }
 

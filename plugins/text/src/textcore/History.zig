@@ -19,17 +19,18 @@ const History = @This();
 
 const Allocator = std.mem.Allocator;
 
-/// VSCode's `EditOperationType`. The numeric values don't matter to us, but the *set* does —
-/// the grouping rule is defined entirely in terms of these categories.
-pub const EditKind = enum {
+/// VSCode's `EditOperationType`: the grouping rule is defined entirely in terms of these
+/// categories. Their values are the text plugin's step format (`Transaction.encodeStep`): a
+/// recorded step names its kind by number, so a value never changes; a new kind takes the next.
+pub const EditKind = enum(u8) {
     /// Anything that isn't simple typing or deleting: paste, Enter, replace-selection,
     /// a command-driven edit. Always breaks the group.
-    other,
-    deleting_left,
-    deleting_right,
-    typing_other,
-    typing_first_space,
-    typing_consecutive_space,
+    other = 0,
+    deleting_left = 1,
+    deleting_right = 2,
+    typing_other = 3,
+    typing_first_space = 4,
+    typing_consecutive_space = 5,
 
     fn isTyping(self: EditKind) bool {
         return switch (self) {
@@ -211,9 +212,10 @@ pub const StepRef = struct {
     edits: []const Transaction.Edit,
     sel_before: Range,
     sel_after: Range,
+    label: Transaction.Label,
 
     fn of(e: *const Entry) StepRef {
-        return .{ .step = e.step, .edits = e.txn.edits.items, .sel_before = e.txn.sel_before, .sel_after = e.txn.sel_after };
+        return .{ .step = e.step, .edits = e.txn.edits.items, .sel_before = e.txn.sel_before, .sel_after = e.txn.sel_after, .label = .{ .kind = e.kind, .back_to = e.back_to } };
     }
 };
 
@@ -332,14 +334,14 @@ pub fn pushComplete(
         txn.deinit(gpa);
         return null;
     }
-    return try self.push(gpa, txn);
+    return try self.push(gpa, txn, .other);
 }
 
-/// Take `txn`, already applied, as a step of its own: a recorded step played into the document
-/// (`Transaction.applyStepTo`).
-pub fn push(self: *History, gpa: Allocator, txn: Transaction) !Committed {
+/// Take `txn`, already applied, as a step of its own, reading as `kind`: a recorded step played
+/// into the document (`Transaction.applyStepTo`).
+pub fn push(self: *History, gpa: Allocator, txn: Transaction, kind: EditKind) !Committed {
     const back = self.keepGoneBack(gpa);
-    try self.undo_stack.append(gpa, .{ .txn = txn, .kind = .other, .id = self.next_id, .step = self.next_id });
+    try self.undo_stack.append(gpa, .{ .txn = txn, .kind = kind, .id = self.next_id, .step = self.next_id });
     self.next_id += 1;
     self.group_open = false;
     self.version += 1;
@@ -403,8 +405,8 @@ pub fn trim(self: *History, gpa: Allocator, limit: usize) void {
     self.version += 1;
 }
 
-/// An entry put back by `restore`: its step id and what it did.
-pub const Restored = struct { step: u64, txn: Transaction };
+/// An entry put back by `restore`: its step id, what it did, and how it reads on the line.
+pub const Restored = struct { step: u64, txn: Transaction, label: Transaction.Label = .{} };
 
 /// Put the history back as `entries` (taken: the history owns their transactions), oldest first,
 /// the first `applied` of them applied: a document's history read back from its track
@@ -420,14 +422,14 @@ pub fn restore(self: *History, gpa: Allocator, entries: []Restored, applied: usi
     var next = self.next_id;
     for (entries) |e| next = @max(next, e.step + 1);
     for (entries[0..applied]) |e| {
-        undo.appendAssumeCapacity(.{ .txn = e.txn, .kind = .other, .id = next, .step = e.step });
+        undo.appendAssumeCapacity(.{ .txn = e.txn, .kind = e.label.kind, .id = next, .step = e.step, .back_to = e.label.back_to });
         next += 1;
     }
     // The redo stack's top is the next to redo: the first entry past `applied`.
     var i = entries.len;
     while (i > applied) {
         i -= 1;
-        redo.appendAssumeCapacity(.{ .txn = entries[i].txn, .kind = .other, .id = next, .step = entries[i].step });
+        redo.appendAssumeCapacity(.{ .txn = entries[i].txn, .kind = entries[i].label.kind, .id = next, .step = entries[i].step, .back_to = entries[i].label.back_to });
         next += 1;
     }
     for (self.undo_stack.items) |*e| e.deinit(gpa);
@@ -784,6 +786,54 @@ test "an edit after going back keeps what was gone back over, then its reverse" 
     try t.expectEqualStrings("abc", h.text.items);
     goTo(&h, after[5].step);
     try t.expectEqualStrings("abcz", h.text.items);
+}
+
+test "a history put back from its steps reads as it did: kinds and jumps kept" {
+    var h: Harness = .{ .gpa = t.allocator };
+    defer h.deinit();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+
+    try h.type_("abc");
+    try h.backspace(1);
+    try h.type_("\n");
+    _ = h.undo();
+    _ = h.undo();
+    try h.type_("z");
+    _ = h.undo();
+    const was = try h.hist.line(arena.allocator());
+
+    // Each entry as a recorded step (`Transaction.encodeStep`), read back as a track's would be.
+    const n_applied = h.hist.undo_stack.items.len;
+    var built: std.ArrayList(Restored) = .empty;
+    defer built.deinit(t.allocator);
+    errdefer for (built.items) |*b| b.txn.deinit(t.allocator);
+    for (was, 0..) |st, i| {
+        const ref: StepRef = if (i < n_applied) .of(&h.hist.undo_stack.items[i]) else .of(&h.hist.redo_stack.items[was.len - 1 - i]);
+        var out: std.Io.Writer.Allocating = .init(t.allocator);
+        defer out.deinit();
+        try Transaction.encodeStep(&out.writer, ref.edits, ref.sel_after, false, ref.label);
+        const view = try Transaction.StepView.init(out.written());
+        var txn: Transaction = .{ .sel_after = view.sel };
+        var it = view.iterator();
+        while (it.next()) |e| try txn.append(t.allocator, e.pos, e.removed, e.inserted);
+        try built.append(t.allocator, .{ .step = st.step, .txn = txn, .label = view.label });
+    }
+    var back: History = .{};
+    defer back.deinit(t.allocator);
+    try back.restore(t.allocator, built.items, n_applied);
+    built.clearRetainingCapacity();
+    const got = try back.line(arena.allocator());
+    try t.expectEqual(was.len, got.len);
+    for (was, got) |a, b| {
+        try t.expectEqual(a.step, b.step);
+        try t.expectEqual(a.kind, b.kind);
+        try t.expectEqual(a.back_to, b.back_to);
+    }
+    // Not all one kind: typing, deleting, Enter, and the jump's steps.
+    try t.expectEqual(EditKind.typing_other, got[0].kind);
+    try t.expectEqual(EditKind.deleting_left, got[1].kind);
+    try t.expect(got[3].back_to != null);
 }
 
 test "the line keeps to its limit, the oldest going first" {

@@ -1,0 +1,109 @@
+#!/bin/sh
+# zb: run a heavy `zig` command (build, test, run, build-exe, ...) once a build slot is free.
+#
+#   scripts/zb build test         # = zig build test, after waiting for a slot
+#   scripts/zb fmt --check .      # light commands pass straight through
+#
+# Several agents and people share one machine, and parallel Zig builds have driven its load past
+# 17 and crashed it. Every heavy build takes one of N slots (default 2) and waits while the
+# 1-minute load average is above a ceiling. Slots are per user, not per checkout, so a workspace
+# beside the main checkout shares them. A slot is a directory holding the pid of its zb; a slot
+# whose pid is dead is reclaimed. A slot is a symlink whose target is the pid, so taking one is
+# a single atomic step. Do not hold a slot for a long-running program: `zig build run` of the
+# editor keeps it until the editor quits; use plain `zig` (or FIZZY_BUILD_SKIP=1) for that.
+#
+#   FIZZY_BUILD_SLOTS      number of slots (default 2)
+#   FIZZY_BUILD_MAX_LOAD   load ceiling (default: performance cores, `nproc` off macOS)
+#   FIZZY_BUILD_SLOTS_DIR  where the slots live (default ~/.cache/fizzy-build-slots; not TMPDIR,
+#                          which differs between a terminal and a sandboxed agent)
+#   FIZZY_BUILD_SKIP       set to run zig at once, with no waiting
+#   FIZZY_BUILD_ZIG        the zig to run (default zig)
+#   FIZZY_BUILD_POLL       seconds between checks while waiting (default 2)
+
+zig=${FIZZY_BUILD_ZIG:-zig}
+
+[ -n "$FIZZY_BUILD_SKIP" ] && exec "$zig" "$@"
+
+case "$1" in
+build | test | build-exe | build-lib | build-obj | test-obj | translate-c | cc | c++) ;;
+*) exec "$zig" "$@" ;;
+esac
+
+slots=${FIZZY_BUILD_SLOTS:-2}
+poll=${FIZZY_BUILD_POLL:-2}
+dir=${FIZZY_BUILD_SLOTS_DIR:-$HOME/.cache/fizzy-build-slots}
+mkdir -p "$dir" || exit 1
+
+if [ -n "$FIZZY_BUILD_MAX_LOAD" ]; then
+    max_load=$FIZZY_BUILD_MAX_LOAD
+else
+    max_load=$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+fi
+
+load1() {
+    if [ -r /proc/loadavg ]; then
+        read -r l _ </proc/loadavg
+    else
+        l=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}')
+    fi
+    echo "${l:-0}" | tr ',' '.'
+}
+
+alive() { kill -0 "$1" 2>/dev/null; }
+
+# Take a free slot, reclaiming one whose holder died. Sets $mine.
+mine=
+try_slot() {
+    i=0
+    while [ "$i" -lt "$slots" ]; do
+        s=$dir/slot.$i
+        i=$((i + 1))
+        if ln -s "$$" "$s" 2>/dev/null; then
+            mine=$s
+            return 0
+        fi
+        p=$(readlink "$s" 2>/dev/null)
+        if [ -z "$p" ] || ! alive "$p"; then
+            # Rename is atomic, so only one waiter wins a dead slot; it retries the take next poll.
+            mv "$s" "$dir/dead.$$" 2>/dev/null && rm -f "$dir/dead.$$"
+            i=$((i - 1))
+        fi
+    done
+    return 1
+}
+
+busy_pids() {
+    for s in "$dir"/slot.*; do
+        [ -L "$s" ] && printf ' %s' "$(readlink "$s")"
+    done
+}
+
+child=
+release() {
+    [ -n "$mine" ] && rm -f "$mine"
+    mine=
+}
+trap 'release' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+told=
+while :; do
+    load=$(load1)
+    if awk "BEGIN{exit !($load <= $max_load)}" && try_slot; then break; fi
+    if [ -z "$told" ]; then
+        told=1
+        if [ -n "$(busy_pids)" ] && ! awk "BEGIN{exit !($load > $max_load)}"; then
+            echo "zb: waiting for a build slot ($slots busy: pids$(busy_pids))" >&2
+        else
+            echo "zb: waiting for load to fall ($load > $max_load; slots: pids$(busy_pids))" >&2
+        fi
+    fi
+    sleep "$poll"
+done
+
+# Foreground, so zig keeps the terminal's stdin and signals; Ctrl-C reaches it directly, and the
+# traps above run once it has exited, releasing the slot.
+"$zig" "$@"
+exit $?

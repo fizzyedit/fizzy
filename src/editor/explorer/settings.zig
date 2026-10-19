@@ -296,6 +296,16 @@ pub const groups = [_]Group{
 /// are OS windows to put things in, which things get one.
 const window_items = [_]Item{
     .{
+        .label = "Window material",
+        .key = "window_material",
+        .description = "What the window is made of: opaque, clear, blurred, frosted or Liquid " ++
+            "Glass, and every dialog, menu and float with it. Each platform shows the best it " ++
+            "has at or below the one chosen: Liquid Glass on macOS 26 and on the web, frost on " ++
+            "Windows, blur where a Linux compositor blurs.",
+        .keywords = "glass material liquid frost blur transparent opaque translucent window background",
+        .draw = drawWindowMaterial,
+    },
+    .{
         .label = "Window opacity",
         .key = "window_opacity_dark",
         .key_light = "window_opacity_light",
@@ -781,6 +791,53 @@ fn drawToggle(value: *bool, name: []const u8) void {
 }
 
 // ---- Debugging --------------------------------------------------------------------------
+
+fn drawWindowMaterial() void {
+    const editor = fizzy.editor();
+    // `FIZZY_GLASS` overrides the setting for this run: say so, rather than offer a choice that
+    // does nothing.
+    if (fizzy.Entry.materialOverride()) |kind| {
+        dvui.label(@src(), "{s}, set by FIZZY_GLASS", .{materialName(kind)}, .{ .gravity_x = 1.0 });
+        return;
+    }
+    const asked = editor.app.settings.window_material;
+    const shown = fizzy.core.material.get().kind;
+    var dropdown: core.widgets.DropdownWidget = undefined;
+    dropdown.init(@src(), .{}, .{ .expand = .horizontal, .corners = dvui.CornerRect.all(1000) });
+    defer dropdown.deinit();
+    {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .vertical, .gravity_x = 1.0 });
+        defer hbox.deinit();
+        if (shown == asked) {
+            dvui.labelNoFmt(@src(), materialName(asked), .{}, .{ .margin = .all(0), .padding = .all(0) });
+        } else {
+            // What this platform draws instead: the best it has at or below the one asked.
+            dvui.label(@src(), "{s}, shown as {s}", .{ materialName(asked), materialName(shown) }, .{ .margin = .all(0), .padding = .all(0) });
+        }
+        core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+    }
+    if (dropdown.dropped()) {
+        for (std.enums.values(fizzy.core.material.Kind)) |kind| {
+            if (dropdown.addChoiceLabel(materialName(kind))) {
+                editor.app.settings.window_material = kind;
+                editor.markSettingsDirty();
+                dvui.refresh(null, @src(), null);
+                break;
+            }
+        }
+    }
+}
+
+/// A material kind as the settings name it.
+pub fn materialName(kind: fizzy.core.material.Kind) []const u8 {
+    return switch (kind) {
+        .none => "Opaque",
+        .transparent => "Clear",
+        .blur => "Blur",
+        .frost => "Frost",
+        .liquid => "Liquid Glass",
+    };
+}
 
 fn drawGlassShader() void {
     const editor = fizzy.editor();
