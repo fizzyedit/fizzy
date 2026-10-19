@@ -325,7 +325,7 @@ test "one pixel gives its exact rect" {
     try testing.expectEqualDeep(Rect{ .x = 32, .y = 32, .w = 32, .h = 32 }, whole.rects[0]);
 }
 
-test "a block across tiles is one rect; apart is two" {
+test "changed tiles merge into disjoint rects by run" {
     const a = try blank(testing.allocator, 128, 128);
     defer testing.allocator.free(a);
     const b = try testing.allocator.dupe(u8, a);
@@ -340,8 +340,11 @@ test "a block across tiles is one rect; apart is two" {
     defer img.deinit(testing.allocator);
     const r = try img.diff(testing.allocator, .tight(a, 128, 128), .tight(b, 128, 128), .{});
     try testing.expectEqual(@as(usize, 2), r.rects.len);
-    try testing.expectEqualDeep(Rect{ .x = 120, .y = 5, .w = 1, .h = 1 }, r.rects[0]);
-    try testing.expectEqualDeep(Rect{ .x = 10, .y = 20, .w = 60, .h = 70 }, r.rects[1]);
+    // Greedy cover by tile runs: the top tile row's run (the block's tiles and the pixel's, one
+    // run, its box the union of their changes) and the block's lower rows, which share only the
+    // block's three tiles. Disjoint, and together exactly the changes.
+    try testing.expectEqualDeep(Rect{ .x = 10, .y = 5, .w = 111, .h = 27 }, r.rects[0]);
+    try testing.expectEqualDeep(Rect{ .x = 10, .y = 32, .w = 60, .h = 58 }, r.rects[1]);
     try testing.expectEqual(@as(u64, 60 * 70 + 1), r.changed_px);
 }
 
@@ -384,14 +387,14 @@ test "tolerance, sizes and coalescing" {
 
     // Three separated changes with room for two rects: the last two share a bounding box.
     setPx(b, 128, 100, 3, 1);
-    setPx(b, 128, 100, 50, 1);
+    setPx(b, 128, 40, 50, 1);
     const c = try img.diff(testing.allocator, .tight(a, 128, 64), .tight(b, 128, 64), .{ .max_rects = 2 });
     try testing.expect(c.coalesced);
     try testing.expectEqual(@as(usize, 2), c.rects.len);
-    try testing.expectEqualDeep(Rect{ .x = 100, .y = 3, .w = 1, .h = 48 }, c.rects[1]);
+    try testing.expectEqualDeep(Rect{ .x = 40, .y = 3, .w = 61, .h = 48 }, c.rects[1]);
 }
 
-test "property: rects cover every differing pixel and only those tiles" {
+test "property: rects cover every differing pixel and count them exactly" {
     var prng = std.Random.DefaultPrng.init(42);
     const rnd = prng.random();
     var img: Image = .{};
