@@ -80,11 +80,10 @@ pub fn build(s: *Script) !void {
     try s.caption("Every place has a corner. Its button chooses what the place shows…", .{});
     try catalog.cornerButton(s, "Sidebar");
     try s.click(try catalog.corner(s, "Sidebar"), .{ .move_ms = 0 });
-    try s.waitFor("picker.action:split", .{});
+    try s.waitFor("region.menu.split-down:Sidebar", .{});
     s.pause(1200);
-    try s.caption("…and splits it, for two views side by side.", .{ .near = "picker.action:split" });
-    try s.click(.{ .tag = "picker.action:split" }, .{});
-    try s.click(.{ .tag = "picker.split:horizontal" }, .{});
+    try s.caption("…and splits it, for two views one above the other.", .{ .near = "region.menu.split-down:Sidebar" });
+    try s.click(.{ .tag = "region.menu.split-down:Sidebar" }, .{});
     s.pause(1200);
 
     try s.chapter("Floats");

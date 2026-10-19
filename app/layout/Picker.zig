@@ -9,7 +9,7 @@
 //!
 //! Cards assign a surface here. That is how a sidebar view stays in the
 //! sidebar, and how a plugin readme lands in the center — keywords are the
-//! default guess, an assignment is the answer. "Back to defaults" undoes it.
+//! default guess, an assignment is the answer. Reset undoes it.
 //! The cards are listed under the place holding them, or else the place their
 //! keywords are for — this place first, then each other place by its name, then
 //! "Other" — so a view made for the panel reads as one, wherever the picker was
@@ -23,10 +23,12 @@
 //! card that started it went away with the popup.
 //!
 //! Each card carries a **snapshot** of the surface, not the live surface.
-//! A **pinned** place (Sidebar, Main, Panel, Center) can be emptied (**Clear**)
-//! or returned to keywords; it cannot be deleted. A **created** place
-//! (`Main/r1`) is **Remove**. Split offers Vertical or Horizontal, and keeps
-//! this place's view beside the new empty one — see `SPLITS.md`.
+//!
+//! The header is icons only, each a command (`place_commands`): split right or
+//! down, clear, reset to the layout's default, delete (in red). A **pinned**
+//! place (Sidebar, Main, Panel, Center) can be cleared or reset to its keywords;
+//! it cannot be deleted. A **created** place (`Main/r1`) can. A split keeps this
+//! place's view beside the new empty one — see `SPLITS.md`.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -36,6 +38,7 @@ const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
 const State = @import("State.zig");
 const ViewDrag = @import("ViewDrag.zig");
+const place_commands = @import("place_commands.zig");
 
 const Picker = @This();
 
@@ -52,10 +55,124 @@ grow_from: ?dvui.Rect.Natural = null,
 /// `ViewDrag`. The popup is closed; `draw` drives the drag instead until the
 /// button comes up.
 lifted: bool = false,
+/// What place commands asked of places (`place_commands`), in order, carried out by the next
+/// `draw`, where the live `Layout` is.
+requests: [max_requests]Request = undefined,
+request_n: usize = 0,
+/// The place commands' owner (`place_commands.register`): a pseudo-plugin whose state is the
+/// layout state this picker is part of, so each layout's commands reach their own.
+commands_owner: sdk.Plugin = .{ .state = undefined, .vtable = &place_commands.vtable, .id = "layout", .display_name = "Layout" },
 /// When the list last laid its cards out (`dvui.frameTimeNS`): a view being drawn for its picture
 /// whose card was not in view then has left the list (`Layout.captureUnplaced`). A draw that
 /// returned before the list leaves it alone.
 list_ns: i128 = 0,
+
+/// What the menu's header can do to a place, each a command (`place_commands`).
+pub const Action = enum {
+    split_right,
+    split_down,
+    clear,
+    reset,
+    delete,
+
+    /// The anchor name a control publishes says it this way: `region.menu.split-right:Main`.
+    pub fn format(self: Action, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        for (@tagName(self)) |ch| try w.writeByte(if (ch == '_') '-' else ch);
+    }
+};
+
+pub const Request = struct {
+    action: Action,
+    buf: [128]u8 = undefined,
+    len: usize = 0,
+
+    pub fn place(self: *const Request) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+/// How many place commands can wait for the next draw.
+const max_requests = 8;
+
+/// Ask for `action` on place `name` in the next draw. False when the name does not fit, or too
+/// many are waiting.
+pub fn ask(self: *Picker, action: Action, name: []const u8) bool {
+    if (self.request_n == max_requests) return false;
+    var r: Request = .{ .action = action };
+    if (name.len > r.buf.len) return false;
+    @memcpy(r.buf[0..name.len], name);
+    r.len = name.len;
+    self.requests[self.request_n] = r;
+    self.request_n += 1;
+    dvui.refresh(null, @src(), null);
+    return true;
+}
+
+/// Whether `action` applies to place `region`: `allows`, and Clear only while it shows something —
+/// which takes the live layout to know. The one rule the menu's buttons and the requests both
+/// follow.
+fn applies(f: *Layout, region: *const Layout.Region, action: Action) bool {
+    if (!allows(f.state, region.name, action)) return false;
+    if (action != .clear) return true;
+    return if (f.state.assignment(region.name)) |ids| ids.len > 0 else f.selectedIn(region) != null;
+}
+
+/// Whether `action` applies to place `name`, as far as the layout state says (`applies` adds what
+/// only the layout knows).
+pub fn allows(state: *State, name: []const u8, action: Action) bool {
+    const created = state.isMinted(name);
+    return switch (action) {
+        .split_right, .split_down => true,
+        .clear => !created,
+        .reset => !created and state.assignment(name) != null,
+        // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
+        // sibling. Off it, only a minted leaf can. A float can always go: it closes, and what it
+        // holds goes home. A minted half split again goes by merging its other half into it
+        // (`ViewDrag.closeEmptied`); with that half split too there is nothing to merge, and
+        // deleting would only clear it.
+        .delete => blk: {
+            const merges = !state.splits.isSplit(name) or state.siblingLeaf(name) != null;
+            break :blk (created and merges) or state.canRemove(name) or state.floats.find(name) != null;
+        },
+    };
+}
+
+/// Carry out what place commands asked, in order, each on the place it named.
+fn applyRequests(self: *Picker, f: *Layout) void {
+    const n = self.request_n;
+    self.request_n = 0;
+    for (self.requests[0..n]) |*req| self.applyRequest(f, req);
+}
+
+fn applyRequest(self: *Picker, f: *Layout, req: *const Request) void {
+    const name = req.place();
+    const region = for (f.state.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, name)) break r;
+    } else return dvui.log.warn("{s}: no place named '{s}' now", .{ place_commands.title(req.action), name });
+    if (!applies(f, &region, req.action)) return dvui.log.warn("{s}: does not apply to '{s}' now", .{ place_commands.title(req.action), name });
+    switch (req.action) {
+        // Vertical / horizontal name the divider: a vertical bar is side by side (the layout axis
+        // is horizontal).
+        .split_right, .split_down => if (f.splitOn(name, if (req.action == .split_right) .right else .bottom) == null) {
+            return dvui.log.warn("{s}: '{s}' is too small to split", .{ place_commands.title(req.action), name });
+        },
+        .clear => clearRegion(f, name),
+        .reset => {
+            f.state.unassign(f.gpa, name);
+            f.state.markDirty();
+            dvui.refresh(null, @src(), null);
+        },
+        .delete => removeRegion(f, &region),
+    }
+    // A split or a deleted place leaves the menu with nothing that is still true to show.
+    switch (req.action) {
+        .split_right, .split_down, .delete => if (self.is_open and std.mem.eql(u8, self.region, name)) {
+            self.close(f.gpa);
+            f.state.discardSnapshots(f.gpa);
+        },
+        .clear, .reset => {},
+    }
+}
 
 /// Card geometry, in points. The preview keeps the snapshot's aspect inside this box.
 const preview: dvui.Size = .{ .w = 150, .h = 100 };
@@ -82,6 +199,7 @@ pub fn close(self: *Picker, gpa: std.mem.Allocator) void {
 /// Draw the popup if it is open. Call once per frame after the shape has run. Closing —
 /// by the user or because the region vanished — also discards the snapshots.
 pub fn draw(self: *Picker, f: *Layout) void {
+    self.applyRequests(f);
     if (self.lifted) return self.drawLifted(f);
     if (!self.is_open) return;
     const prof = core.profile.begin("fizzy", "picker");
@@ -139,119 +257,26 @@ pub fn draw(self: *Picker, f: *Layout) void {
         defer box.deinit();
 
         {
-            var chrome = dvui.box(@src(), .{ .dir = .vertical }, .{
+            // The place's name, and on the same row what the menu can do to the place: icons
+            // only, each a command (`place_commands`), each running its command. Those that do
+            // not apply keep their places, dimmed: coming and going they shoved the row around
+            // under the pointer.
+            var title = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
                 .padding = .{ .h = 6 },
             });
-            defer chrome.deinit();
-
-            {
-                var title = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-                defer title.deinit();
-                dvui.labelNoFmt(@src(), region.name, .{}, .{
-                    .font = dvui.Font.theme(.heading),
-                    .gravity_y = 0.5,
-                });
-            }
-
-            const created = isCreated(state, region.name);
-            // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
-            // sibling. Off it, only a minted leaf can. A float can always go: it closes, and what
-            // it holds goes home.
-            // A minted half split again goes by merging its other half into it (`ViewDrag.closeEmptied`);
-            // with that half split too there is nothing to merge, and Remove would only clear it.
-            const merges = !state.splits.isSplit(region.name) or state.siblingLeaf(region.name) != null;
-            const removable = (created and merges) or state.canRemove(region.name) or state.floats.find(region.name) != null;
-            const assigned = state.assignment(region.name);
-            const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
-
-            // Every control on one row, what to do with the place on the right. Clear and
-            // Defaults keep their places, dimmed when they do not apply — each turns the other on
-            // as often as not (clearing leaves an assignment to go back from), and coming and
-            // going they shoved the row around under the pointer.
-            var controls = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .padding = .{ .y = 4 },
+            defer title.deinit();
+            dvui.labelNoFmt(@src(), region.name, .{}, .{
+                .font = dvui.Font.theme(.heading),
+                .gravity_y = 0.5,
             });
-            defer controls.deinit();
-
             var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
             defer actions.deinit();
-            {
-                // Vertical / Horizontal name the divider: a vertical bar is side by
-                // side (the layout axis is horizontal). The old "split horizontally"
-                // label was that axis and read as the opposite split.
-                //
-                // On `core.widgets`' menu chain, not a `dvui.DropdownWidget`: this popup is a core
-                // floating menu, and dvui's dropdown opens its list on dvui's own chain, which this
-                // popup cannot see. The popup took the list taking focus for focus moving elsewhere,
-                // and closed — so Split shut the picker instead of offering the two choices.
-                const split = core.widgets.menuItem(@src(), .{ .submenu = true }, .{
-                    .font = actionFont(),
-                    .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-                    .margin = .{ .w = 4 },
-                    .gravity_y = 0.5,
-                    .background = true,
-                    .border = dvui.ButtonWidget.defaults.border,
-                    .corners = dvui.ButtonWidget.defaults.corners,
-                    .style = .control,
-                });
-                const split_from = split.activeRect();
-                core.anchor.mark(split.data(), "picker.action:split", .{});
-                {
-                    var label = dvui.box(@src(), .{ .dir = .horizontal }, .{});
-                    defer label.deinit();
-                    dvui.labelNoFmt(@src(), "Split", .{}, .{
-                        .font = actionFont(),
-                        .padding = .{},
-                        .margin = .{},
-                        .gravity_y = 0.5,
-                    });
-                    core.icon.icon(@src(), "split_choice", dvui.entypo.triangle_down, .{}, .{
-                        .padding = .{ .x = 4 },
-                        .gravity_y = 0.5,
-                    });
-                }
-                split.deinit();
-                if (split_from) |r| {
-                    const choices = core.widgets.floatingMenu(@src(), .{
-                        .from = r,
-                        .avoid = .vertical,
-                        .frost = core.widgets.menuFrost(),
-                    }, core.widgets.menuSurfaceOptions());
-                    defer choices.deinit();
-                    if (core.widgets.menuRow(@src(), "Vertical", .{ .icon = icons.tvg.lucide.@"columns-2", .anchor = "picker.split:vertical" }) != null) {
-                        choices.close();
-                        f.splitNamed(region.name, .horizontal);
-                        self.close(gpa);
-                        state.discardSnapshots(gpa);
-                        return;
-                    }
-                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .icon = icons.tvg.lucide.@"rows-2", .id_extra = 1, .anchor = "picker.split:horizontal" }) != null) {
-                        choices.close();
-                        f.splitNamed(region.name, .vertical);
-                        self.close(gpa);
-                        state.discardSnapshots(gpa);
-                        return;
-                    }
-                }
-            }
-            if (!created) {
-                if (actionButton(@src(), "Clear", "picker.action:clear", showing, 2)) {
-                    clearRegion(f, region.name);
-                }
-                if (actionButton(@src(), "Defaults", "picker.action:defaults", assigned != null, 4)) {
-                    state.unassign(gpa, region.name);
-                    state.markDirty();
+            inline for (place_commands.all, 0..) |c, i| {
+                const enabled = applies(f, &region, c.action);
+                if (controlButton(@src(), c, region.name, enabled, i)) {
+                    f.host.runCommand(c.id) catch |err| dvui.log.err("{s}: {t}", .{ c.id, err });
                     dvui.refresh(null, @src(), null);
-                }
-            }
-            if (removable) {
-                if (actionButton(@src(), "Remove", "picker.action:remove", true, 3)) {
-                    removeRegion(f, &region);
-                    self.close(gpa);
-                    state.discardSnapshots(gpa);
-                    return;
                 }
             }
         }
@@ -723,54 +748,43 @@ fn drawLifted(self: *Picker, f: *Layout) void {
     ViewDrag.tick(f);
 }
 
-fn actionFont() dvui.Font {
-    return dvui.Font.theme(.body).larger(-1);
-}
-
-/// One of the picker's actions. Disabled, it keeps its place (dimmed, no hover, never clicked)
-/// rather than leaving a gap the row closes up over.
-fn actionButton(src: std.builtin.SourceLocation, label: []const u8, name: []const u8, enabled: bool, id_extra: usize) bool {
+/// One of the header's controls: an icon, a tooltip naming it, and its command run when pressed.
+/// Published as `region.menu.<action>:<place>` while it can be pressed — a dimmed one swallows the
+/// click, and a driver waiting for the name should wait for the action, not for the button.
+/// Delete wears the theme's error colour. Disabled, it keeps its place (dimmed, no hover).
+fn controlButton(src: std.builtin.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
-    // Named only while it can be pressed: a dimmed one swallows the click, and a driver waiting
-    // for the name should wait for the action, not for the button.
-    const clicked = namedButton(src, label, if (enabled) name else null, .{
-        .font = actionFont(),
-        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-        .margin = .{ .w = 4 },
-        .gravity_y = 0.5,
+    const tint = if (c.action == .delete) theme.color(.err, .text) else theme.color(.control, .text);
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(src, .{}, .{
         .id_extra = id_extra,
-        .color_text = if (enabled) null else .{ .color = theme.color(.control, .text).opacity(0.35) },
+        .padding = dvui.Rect.all(5),
+        .margin = .{ .x = 2 },
+        .gravity_y = 0.5,
         .color_fill_hover = if (enabled) null else .{ .color = theme.color(.control, .fill) },
         .color_fill_press = if (enabled) null else .{ .color = theme.color(.control, .fill) },
     });
-    return enabled and clicked;
-}
-
-/// `dvui.button`, named `name` (when there is one) for a demo or an agent to aim at (`core.anchor`, `picker.*` in
-/// docs/AUTOMATION.md). The row's buttons come and go with the place — Remove sits where Split
-/// sat on a place with nothing to Clear — so a point read off one place's picker can land on
-/// another action in the next; a name cannot.
-fn namedButton(src: std.builtin.SourceLocation, label: []const u8, name: ?[]const u8, opts: dvui.Options) bool {
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(src, .{}, opts);
     defer bw.deinit();
-    if (name) |n| core.anchor.mark(bw.data(), "{s}", .{n});
+    if (enabled) core.anchor.mark(bw.data(), "region.menu.{f}:{s}", .{ c.action, place });
     bw.processEvents();
     bw.drawBackground();
-    const clicked = bw.clicked();
-    dvui.labelNoFmt(@src(), label, .{ .align_x = 0.5, .align_y = 0.5 }, opts.strip().override(bw.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    core.icon.icon(@src(), c.id, c.icon, .{
+        .stroke_color = .{ .color = if (enabled) tint else tint.opacity(0.35) },
+    }, .{
+        .min_size_content = .{ .w = 14, .h = 14 },
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+    });
     bw.drawFocus();
-    return clicked;
+    // Its title less the "Place: " every command of the palette's carries.
+    const title = if (std.mem.indexOf(u8, c.title, ": ")) |at| c.title[at + 2 ..] else c.title;
+    core.widgets.tooltip(@src(), .{ .active_rect = bw.data().borderRectScale().r }, "{s}", .{title}, .{});
+    return enabled and bw.clicked();
 }
 
 fn contains(list: []const *sdk.Surface, id: []const u8) bool {
     for (list) |s| if (std.mem.eql(u8, s.id, id)) return true;
     return false;
-}
-
-/// A minted split leaf, not a name the shape declared.
-fn isCreated(state: *State, name: []const u8) bool {
-    return state.isMinted(name);
 }
 
 /// Empty the place: nothing draws, and keywords no longer attract a replacement.

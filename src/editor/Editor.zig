@@ -2200,6 +2200,7 @@ pub fn postInit(editor: *Editor) !void {
     // Fizzy commands must be registered against the Editor's *final* address — `init` returns
     // an Editor by value, so a pointer taken there would dangle the moment it's moved.
     try Keybinds.registerCommands(editor);
+    try Layout.place_commands.register(&editor.app.host, &editor.app.layout);
 
     // Install fizzy's read/utility surface so plugins reach shared fizzy state
     // (per-frame arena, project folder, content opacity, settings dirty-mark) through

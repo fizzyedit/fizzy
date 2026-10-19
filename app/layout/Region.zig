@@ -1685,7 +1685,7 @@ pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !v
 
 /// Divide `name` on `axis`, keeping its view and opening an empty place beside
 /// it on the trailing side. `axis` is the layout direction — `.horizontal` is a
-/// vertical divider (side by side), which is what the picker's Split menu names.
+/// vertical divider (side by side): the menu's Split Right (`layout.place.splitRight`).
 pub fn splitNamed(self: *Layout, name: []const u8, axis: dvui.enums.Direction) void {
     const side: SplitTree.Side = switch (axis) {
         .horizontal => .right,

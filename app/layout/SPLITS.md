@@ -200,7 +200,7 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
   160×96. A press anywhere in it brings it to the front, as on an OS window.
 - **Back again.** Dragged out by its corner button, a view lands like any other, and a float its
   last view leaves closes behind it. Closed from its header, its window's close button (or the
-  picker's Remove), a float moves everything it holds back into the main window and loses
+  menu's Delete), a float moves everything it holds back into the main window and loses
   nothing (`float_rules.goHome`): each view into the list of the place it floated out of when the
   user had arranged that place; let go where its keywords show it, which never freezes a place
   its keywords fill; and a view they would show nowhere — one merged in from elsewhere, a
@@ -234,7 +234,7 @@ its file's icon in the drop — and goes only to a document's slot, whose own dr
 ## Removing a split
 
 Carry the last view of one half onto the middle of the other (a join, above), carry it anywhere
-else out of a minted half, or pick Remove. A minted leaf can be emptied and removed; a
+else out of a minted half, or press Delete in its menu (`layout.place.delete`). A minted leaf can be emptied and removed; a
 shape-declared place can only be emptied. Removing
 the last leaf collapses the branch and the origin becomes a whole place again, with its extent
 and assignment untouched throughout — a split and its undo are symmetric.
@@ -254,7 +254,7 @@ the branch, never the leaf that kept the name).
 | `ViewDrag.zig` | The gesture: drag state, hit-testing, the card, the drop zones over every place, and the assignment that lands. |
 | `SplitTree.zig` | The tree: split, collapse, persistence links. Geometry-free. |
 | `Region.zig` | Declaring a place and walking the tree to draw its leaves. |
-| `Picker.zig` | The menu on a place: assign, clear, remove, split. |
+| `Picker.zig` | The menu on a place: assign, and its header's split, clear, reset and delete (`place_commands.zig`). |
 | `Floats.zig` | The floats: their windows, landing, closing, stacking. |
 | `float_rules.zig` | Where a float opens, what keeps it reachable, its name, where a closed float's views go. std-only, unit-tested. |
 

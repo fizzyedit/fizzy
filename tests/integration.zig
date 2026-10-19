@@ -3140,20 +3140,68 @@ test "picker: its controls are named for a tape or an agent to aim at, while the
     PickerFrame.editor = editor;
     defer PickerFrame.editor = null;
 
+    try fizzy.Editor.Layout.place_commands.register(&editor.app.host, &editor.app.layout);
     try dvui.testing.settle(PickerFrame.frame);
     editor.app.layout.picker.open(editor.app.gpa, "Main", null);
     _ = try dvui.testing.step(PickerFrame.frame);
     _ = try dvui.testing.step(PickerFrame.frame);
 
-    for ([_][]const u8{"picker.action:split"}) |name| {
+    for ([_][]const u8{ "region.menu.split-right:Main", "region.menu.split-down:Main" }) |name| {
         if (dvui.tagGet(name) == null) {
             std.debug.print("no anchor {s}\n", .{name});
             return error.TestExpectedEqual;
         }
     }
-    // Main shows nothing, so Clear is dimmed and has no name; a shape's place has no Remove.
-    try std.testing.expect(dvui.tagGet("picker.action:clear") == null);
-    try std.testing.expect(dvui.tagGet("picker.action:remove") == null);
+    // Main shows nothing, so Clear is dimmed and has no name; nothing was put there, so there is
+    // no default to go back to; and a shape's place cannot be deleted.
+    try std.testing.expect(dvui.tagGet("region.menu.clear:Main") == null);
+    try std.testing.expect(dvui.tagGet("region.menu.reset:Main") == null);
+    try std.testing.expect(dvui.tagGet("region.menu.delete:Main") == null);
+}
+
+test "picker: each header control runs its command, the button and the palette alike" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.splits.deinit(editor.app.gpa);
+    defer editor.app.layout.picker.close(editor.app.gpa);
+
+    PickerFrame.editor = editor;
+    defer PickerFrame.editor = null;
+    const state = &editor.app.layout;
+    try fizzy.Editor.Layout.place_commands.register(&editor.app.host, state);
+    try editor.app.host.registerSurface(.{ .id = "test.out", .title = "Out", .keywords = sdk.keywords.ide.panel, .draw = PickerFrame.draw });
+    try dvui.testing.settle(PickerFrame.frame);
+
+    // Run from the palette, with no place named: the place whose menu is open.
+    state.picker.open(editor.app.gpa, "Panel", null);
+    try editor.app.host.runCommand("layout.place.clear");
+    try dvui.testing.settle(PickerFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), (state.assignment("Panel") orelse return error.TestExpectedEqual).len);
+    try std.testing.expect(state.picker.is_open);
+
+    // The button: pressed, it runs `layout.place.reset`, and Panel goes back to its keywords.
+    try dvui.testing.settle(PickerFrame.frame);
+    try dvui.testing.moveTo("region.menu.reset:Panel");
+    try dvui.testing.click(.left);
+    try dvui.testing.settle(PickerFrame.frame);
+    try std.testing.expect(state.assignment("Panel") == null);
+
+    // Split, named: the place divides, and its menu, no longer true, shuts.
+    var results: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer results.deinit();
+    const out = editor.app.host.callCommand("layout.place.splitRight", ".{ .place = \"Panel\" }", results.allocator());
+    try std.testing.expect(out == .ok);
+    try dvui.testing.settle(PickerFrame.frame);
+    try std.testing.expect(state.splits.root("Panel") != null);
+    try std.testing.expect(!state.picker.is_open);
 }
 
 test "a fizzy Main split is a removable slot, not main.slot" {

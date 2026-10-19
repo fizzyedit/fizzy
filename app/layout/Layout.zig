@@ -1056,6 +1056,8 @@ pub const SplitTree = @import("SplitTree.zig");
 pub const Drop = @import("Drop.zig");
 /// Carrying a view from one place to another — the gesture `Drop` decides for.
 pub const ViewDrag = @import("ViewDrag.zig");
+/// What a place's menu does to a place, as commands (`Picker`'s header).
+pub const place_commands = @import("place_commands.zig");
 /// The views floating over the window, each in a place of its own — see `Floats.zig`.
 pub const Floats = @import("Floats.zig");
 /// The rules a float follows, as values (std-only).

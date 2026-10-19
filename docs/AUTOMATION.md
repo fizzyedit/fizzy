@@ -189,10 +189,9 @@ user's motion settings, timed in demo time.
 | `drop:center`, `drop:left`, `:right`, `:top`, `:bottom`, `:remove` | a bubble of the drop a carried view would land in, while it is carried over a place: only once the drag is under way, so `drag` carries it there `via` the place first |
 | `float-header:<place>`, `float-close:<place>` | a float's header, to carry it by, and its close button: `float-close:Float 1` |
 | `picker:<view id>` | a view's card in a place's picker |
-| `picker.mode:one`, `picker.mode:many` | the picker's Single / Multiple |
-| `picker.action:split`, `:clear`, `:defaults`, `:remove` | the picker's actions, each only while it can be pressed (a dimmed Clear has no name) |
+| `region.menu.split-right:<name>`, `.split-down:`, `.clear:`, `.reset:`, `.delete:` | the controls in the header of a place's menu, each only while it can be pressed (a dimmed Clear has no name); each runs its command (`layout.place.splitRight`, `splitDown`, `clear`, `reset`, `delete`), which a tape can call instead |
+| `tabs:<name>` | a place's tab strip, drawn while it holds more than one view |
 | `picker.empty` | the header of a place with nothing in it |
-| `picker.split:vertical`, `picker.split:horizontal` | the rows of the picker's Split menu |
 
 A demo's files live under its keyframe's `root`, so a path is `demo://tour/src/main.zig`.
 `src/editor/demos/catalog.zig` has helpers (`catalog.file(s, "src/main.zig")`) that build these.
