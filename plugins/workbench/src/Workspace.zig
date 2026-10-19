@@ -845,8 +845,31 @@ fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
         dvui.alphaSet(1.0);
         defer dvui.alphaSet(alpha);
 
-        try self.drawHomePage();
+        if (!try drawHome(runtime.host(), self.grouping)) try self.drawHomePage();
     }
+}
+
+/// The name of the place an app's home page goes, for `host.assignSurfaces` to choose between two.
+pub const home_region = "Home";
+
+/// An app's own home page, in place of ours: the `Home` place, which shows a surface keyworded
+/// `home` (`sdk.keywords.ide.home`). Declared only from the sole pane while it is empty, so it
+/// exists exactly while nothing is open — a document opening, or a restored session's landing
+/// a few frames after startup, puts the home away, and the last one closing brings it back.
+/// False when no surface is a home page (the place declines), for ours to be drawn instead.
+///
+/// Takes its host so a test can declare it without the plugin's runtime (`plugins/AGENTS.md`).
+pub fn drawHome(host: *sdk.Host, grouping: u64) !bool {
+    var home = host.region(.{
+        .name = home_region,
+        .keywords = sdk.keywords.ide.home,
+        .shows = .one,
+        .key = grouping,
+        .hide_when_empty = true,
+    }) orelse return false;
+    defer home.deinit();
+    _ = try home.drawContents();
+    return true;
 }
 
 fn dropSnapshot(self: *Workspace) void {

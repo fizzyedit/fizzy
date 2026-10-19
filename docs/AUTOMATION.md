@@ -25,7 +25,8 @@ a `Stage`; fizzy's glass overlay and its plugin service are host framework (`app
 
 | Where | How |
 |---|---|
-| Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop** |
+| Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop**; **Demo: Play by Name…** (`fizzy.demo.play`, with a `name` and a start `at`) plays any demo the `demos` service lists, a plugin's too |
+| A plugin | `host.registerDemo(.{ .name, .title, .tape })` in `register` adds its demo to the list; the `demos` service (`sdk.services.demos`) lists every demo and plays one by name |
 | Menu | Help › Take the Tour |
 | Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made); `FIZZY_DEMO=<file>.zon` (or `.tape`) plays a tape file, a live one through the live driver |
 | Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`) fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |

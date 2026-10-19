@@ -550,6 +550,7 @@ inventing a kind of panel never touches the ABI. Fizzy's shipped shapes accept t
 | `sdk.keywords.ide.sidebar` | `sidebar`, `explorer` | things you pick *from* — file trees, outlines |
 | `sdk.keywords.ide.panel` | `bottom`, `panel`, `output` | things a task *produces* — logs, diagnostics |
 | `sdk.keywords.ide.main` | `main`, `center`, `workspace` | the thing being worked on |
+| `sdk.keywords.ide.home` | `home` | what the main area shows while nothing is open (below) |
 | `sdk.document.keywords` | `document` | one open document (the app registers these, see below) |
 
 A keyword may name a place *inside* another, dot-separated (`main.document`). `keywords.Fit`
@@ -632,6 +633,27 @@ if (!host.hideSurface(id)) _ = host.revealSurface(id);    // toggle it
   drawn, since the places it changes are being drawn. `revealSurface` acts at once, so a hide
   asked first in a frame still lands after a reveal asked later in it: make one call a frame.
 
+**A home page.** What the main area shows while nothing is open (the workbench's logo, New File,
+Open Folder) is a place too. While its one document pane is empty, the workbench declares a
+region named `Home` inside it with keywords `sdk.keywords.ide.home` (`{"home"}`) and
+`shows = .one`, and draws the surface that region accepts. With no such surface the region
+declines, and the workbench draws its own page. A start page is just a surface that says what it
+is:
+
+```zig
+try host.registerSurface(.{ .id = "graphl.start", .title = "Start",
+    .keywords = sdk.keywords.ide.home, .draw = drawStart });
+```
+
+It needs no startup code. The place exists only while nothing is open, so a document opening
+puts the home page away, and so does a restored session landing a few frames after startup. The
+last document closing brings it back. None of the shape's own regions accept a `home` surface,
+so it never shows up as a tab in Main. When two plugins offer a home page, the first one
+registered shows until someone chooses. An app chooses with
+`host.assignSurfaces("Home", &.{"graphl.start"})`, the same list the picker writes, and a user
+chooses in Settings › Layout. A shape without the workbench has no `Home` place unless it
+declares a region that takes `home` itself.
+
 **Dragging a view onto a region is the app's gesture, everywhere.** While a view is dragged,
 the region under the pointer shows its drop (`core.widgets.DropZones`): a cluster of glass
 bubbles in its middle — the middle for into the place, one on each side for a split there, and a
@@ -713,6 +735,11 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   holds, leaving it as it was. Nobody recording, nothing is encoded. `text` implements both:
   each step is a transaction's edits, removed and inserted bytes, and the selection after. Fill
   `top` (the entry on top once the step is done) so Undo can say whose step it takes back.
+  `restoreHistory(doc, history)` puts a document's history back as its track recorded it
+  (`sdk.Plugin.RestoredHistory`: each entry's id and parts, its `added` effect and every `joined`
+  one, and how many are applied), the document already standing where they leave it: a document
+  opened again picks up the history it had. Keep each entry's id; refuse a history that does not
+  undo to a document, leaving the history as it was. `text` implements it.
 - **Authors** — who made each step (`sdk.Author`: the person, an agent, a tape;
   `plans/SHARED_HISTORY_PLAN.md`). The host keeps it by step id; owners never store one. A plugin
   changing a document on someone's behalf acts as them around the commands it runs
@@ -1295,10 +1322,17 @@ The SDK ships definitions for the services in this ecosystem, in
 | `"markdown"` | `markdown` | Render a markdown byte slice into the current dvui parent (native only — absent on web) |
 | `"wikilink"` | any indexer (e.g. `brain`) | Resolve `[[Note]]` to a file, plus completion candidates and index state |
 | `"automation"` | the application (fizzy: `app/automation/Service.zig`, over its live driver) | `play` a live tape — input on the app as it is, built with the `tape` module and handed over as ZON or binary bytes — and get a ticket to ask its `outcome` (finished, or interrupted / timed out / stopped before which op); `stop` your own tape; `settled` when nothing is in flight; `snapshot` / `snapshotText` for what is on screen as ZON, a line per widget a person acts on or a tape aims at (role, name, tag, rect, parent — `replay.Snapshot`). One tape at a time, refused while a demo plays; a person's input stops it. For plugin tests, macros, tutorials |
+| `"demos"` | the application (fizzy: `src/editor/Demos.zig`, over its demo player) | `list` every demo the app can play — its own, and each one a plugin registered with `host.registerDemo` (a name, a title, the tape as ZON or binary bytes, copied by the host and dropped when the plugin goes) — with each one's length, chapters and where it came from; `play` one by name, from a chapter if asked; `current` names the one playing; `generation` moves when the list does. A demo opens on a keyframe and sets the person's session aside while it plays; refused over unsaved work or while a live tape drives. For a guides browser, a plugin's own demos, an agent |
 
 Everything a plugin might reasonably ask *fizzy* for lives on `Host` instead — `openFile`,
 `closeDocById`, `docFromPath`, `revealPosition`, `setProjectFolder`, `isPathIgnored`, … — where it
 degrades to a no-op in an app that ships no workbench rather than being unreachable.
+
+The app's recent folders are `host.recentFolderCount()` and `host.recentFolderAt(i)`, oldest
+first: the last is the folder opened most recently. `host.recentFolderOpened(i)` says when it was
+last opened, in seconds since the Unix epoch, which is what a home page groups recents by
+("today", "this week"). It is null for a folder remembered before fizzy kept times (a
+`recents.zon` an older fizzy wrote), so order by the index and put those under "earlier".
 
 **Every lookup must tolerate absence.** A service's provider may be uninstalled, disabled, or
 simply not built for this target — `files` and `markdown` are missing on web, and `wikilink` is

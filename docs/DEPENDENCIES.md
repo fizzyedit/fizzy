@@ -7,7 +7,7 @@ bump it; keep it current whenever a pin or a patch moves.
 
 | Dependency | Upstream | Fizzy's changes | Pinned in | Carries |
 |---|---|---|---|---|
-| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `fizzy-dev` | `sdk/build.zig.zon` | dvui changes fizzy needs |
+| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
 | SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
 | [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
 
@@ -133,9 +133,8 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
 
-**On fizzy's `zig/0.17` branch** the pin is `foxnne/dvui-dev` branch `zig-0.17`, by commit and
-as `git+https` (Zig 0.17 hashes this repo's GitHub archive wrongly; `docs/PITFALLS.md`): the eight
-above rebased onto upstream `main` (`41f6703`), then:
+**Since fizzy moved to Zig 0.17 (#575)** the pin is `foxnne/dvui-dev` branch `zig-0.17`, by tag and
+as `git+https`: the eight above rebased onto upstream `main` (`41f6703`), then:
 
 9. **floatingWindow: a backend may show one in an OS window of its own** (`bd7736d`). Patch 8's
    `osWindowFloating` became `Backend.floatingWindowOs(id, open_flag, min, max)`, asked as
@@ -155,8 +154,6 @@ above rebased onto upstream `main` (`41f6703`), then:
    kind and a lifted finger hovers nothing; `cursorSet` takes a priority, so a resize handle's
    cursor wins, and a floating window's edges ask at normal priority.
 
-Tagged `fizzy-sdk-*` when `zig/0.17` merges to `main`, as rule 2 says.
-
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
 `f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70` (0.2.19 was not released yet, and a tag never
@@ -166,8 +163,9 @@ moves, so the second pin of one version takes a suffix, as the SDL fork's tags d
 `e2c9a85` (item 9 alone, never pinned); `fizzy-sdk-0.2.30-2` → `fdc03d4` (pinned by #540);
 `fizzy-sdk-0.2.30-3` → `cc60612` (never
 pinned); `fizzy-sdk-0.2.30-4` → `44010a3`; `fizzy-sdk-0.2.30-5` →
-`20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, what `sdk/build.zig.zon`
-pins now.
+`20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, the last pin on Zig 0.16;
+`fizzy-sdk-0.2.30-7` → `1b29a16` on `zig-0.17`, what `sdk/build.zig.zon` pins now (SDK 0.2.30, the
+first on Zig 0.17).
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`

@@ -48,7 +48,7 @@ pub fn wanted(gpa: std.mem.Allocator) bool {
 pub fn install(self: *Workspaces, wb: *Workbench) void {
     wb.places = .{ .ctx = self, .beside = beside, .placed = placed, .close = close, .open = open };
     // A document carried beside a view, rather than into a pane, opens a workspace there.
-    self.editorOf().app.layout.documents = .{ .ctx = self, .house = house, .alone = alone };
+    self.editorOf().app.layout.documents = .{ .ctx = self, .house = house, .alone = alone, .fold = fold };
 }
 
 pub fn deinit(self: *Workspaces, gpa: std.mem.Allocator) void {
@@ -365,6 +365,59 @@ fn alone(ctx: *anyopaque, id: []const u8) ?[]const u8 {
         return v.id;
     }
     return null;
+}
+
+/// A closing float's workspace, going back into the main window (`Layout.State.documents`): its
+/// documents go into the workspace the main window shows — the one the person was in, when that
+/// is there — after its own, in their order, the one the float showed shown. Emptied, it goes as
+/// any emptied workspace does. False for a view that is no workspace, or with no workspace in the
+/// main window to take them, when it goes home as itself.
+fn fold(ctx: *anyopaque, id: []const u8) bool {
+    const self: *Workspaces = @ptrCast(@alignCast(ctx));
+    if (!std.mem.startsWith(u8, id, id_prefix)) return false;
+    const g = std.fmt.parseInt(u64, id[id_prefix.len..], 10) catch return false;
+    const editor = self.editorOf();
+    const wb = &editor.workbench;
+    const host = &editor.app.host;
+    const from = wb.workspaces.getPtr(g) orelse return false;
+    const into_g = self.inMainWindow(g) orelse return false;
+    // Copied, ids and all: emptying this workspace, and each tab going into the other (which evicts
+    // it from every list), frees the strings the assignment held.
+    var buf: [32]u8 = undefined;
+    const held = host.assignedSurfaces(Editor.Workspace.name(&buf, g)) orelse &.{};
+    const tabs = host.arena().alloc([]const u8, held.len) catch return false;
+    for (held, tabs) |t, *copy| copy.* = host.arena().dupe(u8, t) catch return false;
+    const shown: ?[]const u8 = if (from.active) |doc|
+        sdk.document.surfaceId(host.arena(), doc.owner.id, doc.owner.documentPath(doc)) catch null
+    else
+        null;
+    from.setTabs(&.{}, null);
+    from.expecting = false;
+    const into = wb.workspaces.getPtr(into_g) orelse return false;
+    for (tabs) |t| into.addTab(t, false);
+    if (shown) |t| into.addTab(t, true);
+    return true;
+}
+
+/// The workspace the main window shows, other than `except`: the one the person was in when it
+/// is there, else the first in a place of the main window's — or in none, where the keywords
+/// show it in Main.
+fn inMainWindow(self: *Workspaces, except: u64) ?u64 {
+    const editor = self.editorOf();
+    const wb = &editor.workbench;
+    var l = layoutOf(editor);
+    const open_g = wb.open_workspace_grouping;
+    var first: ?u64 = null;
+    for (wb.workspaces.keys()) |g| {
+        if (g == except) continue;
+        var buf: [64]u8 = undefined;
+        if (Layout.ViewDrag.holderOf(&l, viewId(&buf, g))) |place| {
+            if (l.state.floatRoot(place) != null) continue;
+        }
+        if (g == open_g) return g;
+        if (first == null) first = g;
+    }
+    return first;
 }
 
 fn placed(ctx: *anyopaque, grouping: u64) bool {

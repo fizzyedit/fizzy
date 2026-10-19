@@ -95,6 +95,7 @@ pub const FileLoadJob = workbench_mod.FileLoadJob;
 pub const sdk = fizzy.sdk;
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
+const Demos = @import("Demos.zig");
 const TapeTabs = @import("TapeTabs.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
 /// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
@@ -131,6 +132,8 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// The demo player and fizzy's stage for it. Attached in `postInit`, at the Editor's final
 /// address (the stage's context is this field).
 demo: Demo = .detached,
+/// Every demo fizzy can play, as the `demos` service lists them. Bound in `postInit`, beside `demo`.
+demos: Demos = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
 tape_tabs: TapeTabs = .{},
 /// The recording setting as last applied (`tick`); null before the first frame.
@@ -2124,6 +2127,13 @@ pub fn postInit(editor: *Editor) !void {
     // Documents' tracks (plans/RECORDING_PLAN.md): on as the setting says (`record_history`),
     // applied each time it changes (`tick`).
     editor.app.tracks = .init(editor.app.gpa);
+    // Closed documents' tracks are kept in the profile, and picked up when they open again. Not
+    // on the web, which has no profile folder to keep them in.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        const dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "tracks" });
+        defer editor.app.gpa.free(dir);
+        try editor.app.tracks.?.keepIn(dir);
+    }
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});
     } else {
@@ -2360,6 +2370,10 @@ pub fn postInit(editor: *Editor) !void {
     // The `automation` service: plugins play live tapes on the app as it is (`automation.Service`).
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
+    // The `demos` service: fizzy's demos and plugins' (`Host.registerDemo`), listed and played.
+    editor.demos = .init(editor);
+    editor.demos.bind();
+    try editor.app.host.registerService(sdk.services.demos.Api, &editor.demos.api, null);
 
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
@@ -2426,9 +2440,10 @@ fn drawSettingsPane(_: ?*anyopaque) anyerror!dvui.App.Result {
 }
 
 // ---- EditorAPI: fizzy-provided read/utility surface for plugins ----------
-// Installed on the Host in `postInit`; `ctx` is this `*Editor`.
+// Installed on the Host in `postInit`; `ctx` is this `*Editor`. Public for a test that drives a
+// plugin through `Host` (`tests/integration.zig`, the workbench's home page).
 
-const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
+pub const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .arena = fizzyArena,
     .extensionOwnerOverride = fizzyExtensionOwnerOverride,
     .folder = fizzyFolder,
@@ -2486,6 +2501,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .closeProjectFolder = fizzyCloseProjectFolder,
     .recentFolderCount = fizzyRecentFolderCount,
     .recentFolderAt = fizzyRecentFolderAt,
+    .recentFolderOpened = fizzyRecentFolderOpened,
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
     .folderWatchActive = fizzyFolderWatchActive,
@@ -2728,7 +2744,13 @@ fn fizzyRecentFolderCount(ctx: *anyopaque) usize {
 fn fizzyRecentFolderAt(ctx: *anyopaque, index: usize) ?[]const u8 {
     const editor = fizzyCtx(ctx);
     if (index >= editor.app.recents.folders.items.len) return null;
-    return editor.app.recents.folders.items[index];
+    return editor.app.recents.folders.items[index].path;
+}
+fn fizzyRecentFolderOpened(ctx: *anyopaque, index: usize) ?i64 {
+    const editor = fizzyCtx(ctx);
+    if (index >= editor.app.recents.folders.items.len) return null;
+    const opened = editor.app.recents.folders.items[index].opened;
+    return if (opened == 0) null else opened;
 }
 fn fizzyOpenInFileBrowser(ctx: *anyopaque, path: []const u8) anyerror!void {
     return fizzyCtx(ctx).openInFileBrowser(path);
@@ -3739,6 +3761,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
+    editor.app.settings.kept_history_gb = parsed.kept_history_gb;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
@@ -4250,8 +4273,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.setTracking(want);
         }
     }
-    // The document states tracks asked for since last frame, before anything draws.
-    if (editor.app.tracks) |*t| t.tick();
+    // The document states tracks asked for since last frame, before anything draws; and what
+    // kept history may take, as the setting says.
+    if (editor.app.tracks) |*t| {
+        t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
+        t.tick();
+    }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
         if (editor.app.open_files.get(p.doc_id)) |doc| editor.exportDocument(doc, p.from, p.to);
@@ -5466,7 +5493,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     editor.command_palette.invalidate();
     // A demo's folder is not one the user opened, and is gone when the demo is.
     if (!editor.demo.active()) {
-        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
+        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path), std.Io.Clock.real.now(dvui.io).toSeconds());
         editor.recentFoldersChanged();
     }
     if (editor.app.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
@@ -5501,11 +5528,11 @@ fn recentFoldersChanged(editor: *Editor) void {
 pub fn openRecentFolder(editor: *Editor, index: usize) void {
     const recents = &editor.app.recents;
     if (index >= recents.folders.items.len) return;
-    editor.setProjectFolder(recents.folders.items[index]) catch |err| {
+    editor.setProjectFolder(recents.folders.items[index].path) catch |err| {
         // As `anyerror`: on the web there is no disk to check, so neither is in the set.
         const e: anyerror = err;
         if (e == error.NotADirectory or e == error.NotDir) {
-            recents.folders.allocator.free(recents.folders.orderedRemove(index));
+            recents.removeFolder(index);
             editor.recentFoldersChanged();
         } else if (e != error.FileNotFound) dvui.log.err("open recent folder failed: {t}", .{err});
     };
@@ -6797,10 +6824,15 @@ pub fn deinit(editor: *Editor) !void {
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
+    editor.demos.deinit();
     editor.tape_tabs.deinit(editor);
     editor.black_box.deinit(editor.app.gpa);
     editor.app.host.recorder = null;
-    if (editor.app.tracks) |*t| t.deinit();
+    // Each open document's track is kept as the app quits, its document still there to read.
+    if (editor.app.tracks) |*t| {
+        t.keepOpen();
+        t.deinitAll();
+    }
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;

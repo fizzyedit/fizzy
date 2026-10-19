@@ -34,6 +34,7 @@ pub const RailItemContribution = @import("menus.zig").RailItemContribution;
 pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
+pub const Demo = @import("Demo.zig");
 pub const Claim = @import("Claim.zig");
 pub const Step = @import("Step.zig");
 pub const Author = @import("Author.zig");
@@ -260,6 +261,10 @@ menu_context: ?EditorAPI.MenuContext = null,
 rail_items: std.ArrayListUnmanaged(RailItemContribution) = .empty,
 /// More ways to open something, listed beside fizzy's own (`OpenAction`).
 open_actions: std.ArrayListUnmanaged(OpenAction) = .empty,
+/// Plugins' demos (`registerDemo`), each string and tape the host's own copy.
+demos: std.ArrayListUnmanaged(Demo) = .empty,
+/// Moves whenever `demos` changes, so the app lists them again only then.
+demos_generation: u32 = 0,
 /// Who the user is signed in as, per service (`accounts.Provider`). The host draws the disc.
 account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
@@ -383,6 +388,8 @@ pub fn deinit(self: *Host) void {
     self.menu_sections.deinit(self.allocator);
     self.rail_items.deinit(self.allocator);
     self.open_actions.deinit(self.allocator);
+    for (self.demos.items) |d| self.freeDemo(d);
+    self.demos.deinit(self.allocator);
     self.account_providers.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
@@ -792,6 +799,13 @@ pub fn recentFolderAt(self: *Host, index: usize) ?[]const u8 {
     return if (self.fizzy_api) |a| a.recentFolderAt(index) else null;
 }
 
+/// When the recent folder at `index` (as `recentFolderAt`) was last opened, in seconds since the
+/// Unix epoch: what an app groups recents by ("today", "last week"). Null when not known (a
+/// folder remembered before fizzy kept times) or past the end.
+pub fn recentFolderOpened(self: *Host, index: usize) ?i64 {
+    return if (self.fizzy_api) |a| a.recentFolderOpened(index) else null;
+}
+
 pub fn openInFileBrowser(self: *Host, path: []const u8) !void {
     return if (self.fizzy_api) |a| try a.openInFileBrowser(path) else error.FizzyApiNotInstalled;
 }
@@ -1045,6 +1059,7 @@ fn dropRegistrations(self: *Host, plugin: *Plugin) void {
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
     removeOwned(OpenAction, &self.open_actions, plugin);
     removeOwned(RailItemContribution, &self.rail_items, plugin);
+    self.removeDemosOf(plugin);
     removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
     self.removeCommandsOf(plugin);
@@ -1591,6 +1606,41 @@ pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void 
 /// Put something small at the bottom of the rail — see `RailItemContribution`.
 pub fn registerRailItem(self: *Host, item: RailItemContribution) !void {
     try self.rail_items.append(self.allocator, item);
+}
+
+/// Add a demo the app lists and plays beside its own — see `Demo`. Copied: nothing of `demo` is
+/// kept. A name already registered is refused (`error.DemoExists`); the app refuses one of its own
+/// names when it lists them.
+pub fn registerDemo(self: *Host, demo: Demo) !void {
+    for (self.demos.items) |d| if (std.mem.eql(u8, d.name, demo.name)) return error.DemoExists;
+    const name = try self.allocator.dupe(u8, demo.name);
+    errdefer self.allocator.free(name);
+    const title = try self.allocator.dupe(u8, demo.title);
+    errdefer self.allocator.free(title);
+    const tape = try self.allocator.dupe(u8, demo.tape);
+    errdefer self.allocator.free(tape);
+    try self.demos.append(self.allocator, .{ .name = name, .title = title, .tape = tape, .owner = demo.owner });
+    self.demos_generation +%= 1;
+}
+
+fn freeDemo(self: *Host, d: Demo) void {
+    self.allocator.free(d.name);
+    self.allocator.free(d.title);
+    self.allocator.free(d.tape);
+}
+
+fn removeDemosOf(self: *Host, plugin: *Plugin) void {
+    var w: usize = 0;
+    for (self.demos.items) |d| {
+        if (d.owner == plugin) {
+            self.freeDemo(d);
+            continue;
+        }
+        self.demos.items[w] = d;
+        w += 1;
+    }
+    if (w != self.demos.items.len) self.demos_generation +%= 1;
+    self.demos.items.len = w;
 }
 
 /// Add a way to open something beside Open Folder / Open Files — see `OpenAction`.
@@ -2981,6 +3031,33 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
     try testing.expectEqual(&text, host.pluginForExtension(".png").?);
 
     Fake.override = null;
+}
+
+test "registerDemo keeps its own copy, refuses a name twice, and a plugin's demos go with it" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var plugin = Plugin{ .state = undefined, .vtable = &vtable, .id = "guide", .display_name = "Guide" };
+    try host.registerPlugin(&plugin);
+
+    var name_buf = "tour2".*;
+    var tape_buf = ".{}".*;
+    const before = host.demos_generation;
+    try host.registerDemo(.{ .name = &name_buf, .title = "Another tour", .tape = &tape_buf, .owner = &plugin });
+    // Nothing points into what the plugin handed over.
+    name_buf[0] = 'x';
+    tape_buf[0] = 'x';
+    try testing.expectEqualStrings("tour2", host.demos.items[0].name);
+    try testing.expectEqualStrings(".{}", host.demos.items[0].tape);
+    try testing.expect(host.demos_generation != before);
+
+    try testing.expectError(error.DemoExists, host.registerDemo(.{ .name = "tour2", .title = "Again", .tape = "" }));
+    try testing.expectEqual(@as(usize, 1), host.demos.items.len);
+
+    const registered = host.demos_generation;
+    host.unregisterPlugin(&plugin);
+    try testing.expectEqual(@as(usize, 0), host.demos.items.len);
+    try testing.expect(host.demos_generation != registered);
 }
 
 test "unregisterPlugin removes a plugin's contributions, service, and resets active ids" {
