@@ -165,12 +165,16 @@ user's motion settings, timed in demo time.
 | `fizzy.dialog:<title>:<label>` | a button in a dialog: its footer's, or one drawn with `core.dialogs.bodyButton` (`fizzy.dialog:About Fizzy:Close`) |
 | `history.line:<abs path>` | a document's transport line, from its first stop to its last, while the transport shows: `x` is that fraction of its history (`x = 0` before any change) |
 | `history.back:<abs path>`, `history.forward:<abs path>` | its undo and redo buttons |
+| `history.grip:<abs path>` | the grip at the foot of a pane with history, while its transport is hidden: a press grows the transport at once (a rest on it grows it after a moment) |
+| `history.export:<abs path>`, `history.collapse:<abs path>` | the transport's export button, and the chevron that sends it back into the grip |
 | `fizzy.window:main` | the main window |
 | `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
 | `region:<name>` | a layout region (`Main`, `Panel`, …) |
+| `float-header:<place>`, `float-close:<place>` | a float's header, to carry it by, and its close button: `float-close:Float 1` |
 | `picker:<view id>` | a view's card in a place's picker |
 | `picker.mode:one`, `picker.mode:many` | the picker's Single / Multiple |
 | `picker.action:split`, `:clear`, `:defaults`, `:remove` | the picker's actions, each only while it can be pressed (a dimmed Clear has no name) |
+| `picker.empty` | the header of a place with nothing in it |
 | `picker.split:vertical`, `picker.split:horizontal` | the rows of the picker's Split menu |
 
 A demo's files live under its keyframe's `root`, so a path is `demo://tour/src/main.zig`.

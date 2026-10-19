@@ -9,6 +9,7 @@
 //! the site's copies of the app serve beside themselves (`scripts/demos.zig`).
 const std = @import("std");
 const Script = @import("tape").Script;
+const Tape = @import("tape").Tape;
 
 pub const Entry = struct {
     /// Stable id: the command's suffix, the web's `?demo=`, the mount `demo://<name>`.
@@ -64,6 +65,36 @@ pub fn preview(s: *Script, rel: []const u8) ![]const u8 {
 pub fn aboutWriting(s: *Script, rel: []const u8) !Script.CaptionOptions {
     const clear = try s.arena.allocator().dupe([]const u8, &.{ try body(s, rel), try preview(s, rel) });
     return .{ .near = try end(s, rel), .clear = clear };
+}
+
+/// A place by name (`Sidebar`, `Main`, `Float 1`): the whole of it.
+pub fn place(s: *Script, name: []const u8) ![]const u8 {
+    return s.print("region:{s}", .{name});
+}
+
+/// Where a place's corner button is, `inset` points in from the top-right of the place's region:
+/// 26 for the sidebar, 34 for a card with padding round its contents (Main, the panel). The button
+/// shows only while the pointer is on the corner, so `cornerButton` comes at it from the corner.
+pub fn corner(s: *Script, name: []const u8, inset: f32) !Tape.Target {
+    return .{ .tag = try place(s, name), .x = 1, .y = 0, .dx = -inset, .dy = inset };
+}
+
+/// Bring a place's corner button up and rest on it: from the very corner, where it starts to
+/// show, then in onto it.
+pub fn cornerButton(s: *Script, name: []const u8, inset: f32) !void {
+    try s.moveTo(.{ .tag = try place(s, name), .x = 1, .y = 0, .dx = -3, .dy = 3 }, .{ .ms = 500 });
+    try s.moveTo(try corner(s, name, inset), .{ .ms = 200 });
+}
+
+/// The grip at the foot of `rel`'s pane, shown once it has history: holding on it grows the
+/// history's bar.
+pub fn historyGrip(s: *Script, rel: []const u8) ![]const u8 {
+    return s.print("history.grip:{s}/{s}", .{ s.root, rel });
+}
+
+/// The line of `rel`'s history in its bar: `x` 0 is before the first change, 1 the last.
+pub fn historyLine(s: *Script, rel: []const u8) ![]const u8 {
+    return s.print("history.line:{s}/{s}", .{ s.root, rel });
 }
 
 /// The tab for `rel`.
