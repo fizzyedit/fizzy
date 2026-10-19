@@ -3,9 +3,9 @@
 //! — about a minute, in chapters a viewer can jump between (the guides view lists them).
 //!
 //! One keyframe, at the start: each chapter carries on in the window the last one left, a split, a
-//! float and all, rather than cutting it back to a fresh one. A snapshot puts back only into the
-//! arrangement it was taken in (`Demo.layoutPrint`), so a seek back across a split or a float
-//! replays from further back rather than landing on a window still arranged the later way.
+//! float and all, rather than cutting it back to a fresh one. A snapshot holds the window's
+//! arrangement too (`Demo.Snapshot`), so a seek back across a split or a float puts the window
+//! back as it was then, rather than replaying from the keyframe.
 const Tape = @import("tape").Tape;
 const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");

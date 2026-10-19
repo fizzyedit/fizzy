@@ -137,10 +137,22 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         var wrong: usize = 0;
         for (picks.items) |i| {
             const want = moments.items[i];
+            const from_now = p.seq.now;
             p.seek(want.now);
             var steps: usize = 0;
             while ((p.state == .seeking or !p.stage.idle()) and steps < 400) : (steps += 1) {
                 _ = try dvui.testing.step(headlessFrame);
+            }
+            // A seek back lands from a snapshot whenever its scene has one before the moment,
+            // whatever the window was arranged as since: a snapshot holds the layout too. (A
+            // snapshot is still refused when a document it held has closed since; no bundled demo
+            // closes one mid-scene, and one that does wants a keyframe after the close.)
+            if (want.now < from_now and p.seek_stats.restored == null) {
+                const kf = tape.keyframeBefore(want.now);
+                for (p.snapshots.items) |snap| if (snap.scene == kf and snap.at <= want.now) {
+                    std.debug.print("demo '{s}': a seek back from {d:.0} to {d:.0} ms replayed from the keyframe past a snapshot at {d:.0}\n", .{ e.name, from_now, want.now, snap.at });
+                    return error.SeekPastSnapshot;
+                };
             }
             const got = p.stage.fingerprint().?;
             if (p.state == .paused and p.seq.cursor == want.cursor and got == want.print) continue;

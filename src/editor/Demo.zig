@@ -23,11 +23,13 @@
 //! **Snapshots** (`automation.Stage.capture`) hold what a scene changes as it plays: the mounted
 //! files as saved, each of the demo's open documents' state from its owner (`captureDocumentState` — contents,
 //! caret, scroll), which is active, the explorer open or shut and its open folders, every plugin's
-//! settings, and keyboard focus. Restoring one puts them back in place — documents opened since
-//! are closed, the rest restored where they sit — so a seek back within a scene costs no reload.
-//! One is taken only while nothing is loading and the palette is shut, and restored only into the
-//! scene it came from with its documents still open and the window arranged as it was
-//! (`layoutPrint`); otherwise the seek cuts to the keyframe.
+//! settings, keyboard focus, and how the window was arranged: the app's places (what each holds,
+//! its splits, its size, shut or not, which view it shows), the floats, the seed tree, and the
+//! documents' panes. Restoring one puts them back in place — documents opened since are closed,
+//! the rest restored where they sit, a split or a float made since undone — so a seek back within
+//! a scene costs no reload and no replay from the keyframe. One is taken only while nothing is
+//! loading and the palette is shut, and restored only into the scene it came from with its
+//! documents still open; otherwise the seek cuts to the keyframe.
 //!
 //! Demos start from the command palette ("Demo: …"), the Help menu, `FIZZY_DEMO=<name>` natively,
 //! or `?demo=<name>` / `?demo=<url of a .zon or .tape>` on the web — see `docs/AUTOMATION.md`.
@@ -844,13 +846,62 @@ const Snapshot = struct {
     material: core.material.Kind,
     focus: dvui.Id,
     focus_subwindow: dvui.Id,
-    /// How the window was arranged (`layoutPrint`): what a restore cannot put back, so it puts
-    /// back only into the arrangement it was taken in.
-    layout: u64,
+    /// How the window was arranged: the app's places as `layout.zon` would remember them
+    /// (`Editor.collectSavedRegions`, ZON, by name), its seed tree (ZON, null with none), each
+    /// place's widget state and view, and the documents' panes.
+    regions: [:0]const u8,
+    tree: ?[:0]const u8,
+    places: []const Place,
+    panes: Editor.Workbench.Arrangement,
 
     const Node = struct { path: []const u8, kind: @FieldType(core.vfs.Mem.Node, "kind"), bytes: []const u8 };
     const Doc = struct { path: []const u8, grouping: u64, state: []const u8 };
+    /// A place as it was drawn: how wide (`_size`; zero is shut), where it opens back to (`_open`),
+    /// whether it was opened on a window too narrow for it (`_peek`), and the view it showed. The
+    /// explorer's place keeps only its view: a restore opens or shuts the explorer itself
+    /// (`explorer_closed`), and a document pane only its view, the tab in front: its size is the
+    /// panes' tree.
+    const Place = struct {
+        id: dvui.Id,
+        key: u64,
+        view: ?[]const u8,
+        sized: bool,
+        size: ?f32,
+        open: ?f32,
+        peek: ?bool,
+    };
 };
+
+/// The app's places and seed tree as `Snapshot.regions` and `Snapshot.tree` hold them.
+const Arrangement = struct { regions: []const fizzy.backend.SavedRegion };
+
+/// The app's places as ZON, by name, in `gpa`: what a snapshot compares and puts back.
+fn regionsZon(editor: *Editor, gpa: std.mem.Allocator) ![:0]u8 {
+    const regions = editor.collectSavedRegions(gpa);
+    defer gpa.free(regions);
+    // By name: the layout's maps hand them over in no order of their own.
+    std.mem.sort(fizzy.backend.SavedRegion, regions, {}, struct {
+        fn less(_: void, a: fizzy.backend.SavedRegion, b: fizzy.backend.SavedRegion) bool {
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.less);
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    errdefer aw.deinit();
+    try std.zon.stringify.serializeMaxDepth(Arrangement{ .regions = regions }, .{}, &aw.writer, 16);
+    return aw.toOwnedSliceSentinel(0);
+}
+
+/// The seed tree as ZON, in `gpa`; null where the shape has none.
+fn treeZon(editor: *Editor, gpa: std.mem.Allocator) !?[:0]u8 {
+    const dock = &(editor.app.layout.dock orelse return null);
+    const snap = try dock.snapshot(gpa);
+    defer snap.deinit(gpa);
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    errdefer aw.deinit();
+    // `serializeMaxDepth`: a snapshot tree is a recursive type, which `serialize` refuses.
+    try std.zon.stringify.serializeMaxDepth(snap, .{}, &aw.writer, 64);
+    return try aw.toOwnedSliceSentinel(0);
+}
 
 fn capture(ctx: *anyopaque) ?*anyopaque {
     const self = from(ctx);
@@ -874,7 +925,10 @@ fn capture(ctx: *anyopaque) ?*anyopaque {
         .material = editor.app.settings.window_material,
         .focus = dvui.focusedWidgetId() orelse .zero,
         .focus_subwindow = dvui.focusedSubwindowId(),
-        .layout = layoutPrint(editor),
+        .regions = "",
+        .tree = null,
+        .places = &.{},
+        .panes = undefined,
     };
     const ok = fill(self, snap, root, mem) catch false;
     if (!ok) {
@@ -922,7 +976,129 @@ fn fill(self: *Demo, snap: *Snapshot, root: []const u8, mem: *core.vfs.Mem) !boo
         try settings.append(a, .{ .owner = try a.dupe(u8, schema.owner.id), .blob = blob });
     }
     snap.settings = settings.items;
+
+    snap.regions = try regionsZon(editor, a);
+    snap.tree = try treeZon(editor, a);
+    const explorer = if (editor.regionFor(sdk.keywords.ide.sidebar)) |r| r.name else "";
+    const regions = editor.app.layout.regions.items;
+    const places = try a.alloc(Snapshot.Place, regions.len);
+    var n: usize = 0;
+    for (regions) |r| {
+        if (r.name.len == 0 or r.id == .zero) continue;
+        const view = editor.app.host.selectionForKey(r.selectionKey());
+        places[n] = .{
+            .id = r.id,
+            .key = r.selectionKey(),
+            .view = if (view) |v| try a.dupe(u8, v) else null,
+            .sized = !r.by_name and !std.mem.eql(u8, r.name, explorer),
+            .size = dvui.dataGet(null, r.id, "_size", f32),
+            .open = dvui.dataGet(null, r.id, "_open", f32),
+            .peek = dvui.dataGet(null, r.id, "_peek", bool),
+        };
+        n += 1;
+    }
+    snap.places = places[0..n];
+    snap.panes = try editor.workbench.arrangement(a);
     return true;
+}
+
+/// Put the window back to how `snap` found it (`Snapshot.regions` and on): the app's places, the
+/// floats, the seed tree, the documents' panes and each place's size and view. What is the same
+/// already is left alone, so a restore within one arrangement touches nothing of it. An error —
+/// having changed nothing — when it could not be read back: everything that can fail is done
+/// before anything changes.
+fn restoreArrangement(editor: *Editor, snap: *const Snapshot) !void {
+    const gpa = editor.app.gpa;
+    const state = &editor.app.layout;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = undefined;
+
+    // The app's places as the snapshot had them, where they differ from now.
+    const regions: ?[]const fizzy.backend.SavedRegion = blk: {
+        const now = try regionsZon(editor, gpa);
+        defer gpa.free(now);
+        if (std.mem.eql(u8, now, snap.regions)) break :blk null;
+        break :blk (try std.zon.parse.fromSlice(Arrangement, .{ .gpa = gpa, .arena = arena.allocator(), .source = snap.regions, .diagnostics = &diag })).regions;
+    };
+    // Its seed tree, built, where it differs: null for none at all.
+    const same_tree = blk: {
+        const now = try treeZon(editor, gpa);
+        defer if (now) |t| gpa.free(t);
+        if (now == null or snap.tree == null) break :blk now == null and snap.tree == null;
+        break :blk std.mem.eql(u8, now.?, snap.tree.?);
+    };
+    var dock: ?core.widgets.DockLayout = null;
+    if (!same_tree) if (snap.tree) |source| {
+        const tree = try std.zon.parse.fromSlice(core.widgets.DockLayout.Snapshot, .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag });
+        dock = try core.widgets.DockLayout.fromSnapshot(gpa, tree);
+        dock.?.animated = true;
+    };
+    errdefer if (dock) |*d| d.deinit();
+    // The panes: all or nothing, and the last thing that can fail.
+    try editor.workbench.arrange(snap.panes);
+
+    if (regions) |saved| {
+        state.clearArrangement(gpa);
+        // The floats it had stay as they were, bottom to top, as far as they still are: re-made,
+        // a float draws afresh from nothing, and one moved has an OS window of its own to follow.
+        // From the first that differs (moved, restacked, flying shut, or not the snapshot's) they
+        // go, and come back from it in its order (`applySavedRegions`).
+        var floats: std.ArrayList(fizzy.backend.SavedRegion) = .empty;
+        for (saved) |r| if (r.floating != null) try floats.append(arena.allocator(), r);
+        std.mem.sort(fizzy.backend.SavedRegion, floats.items, {}, struct {
+            fn less(_: void, a: fizzy.backend.SavedRegion, b: fizzy.backend.SavedRegion) bool {
+                return a.floating.?.z < b.floating.?.z;
+            }
+        }.less);
+        var kept: usize = 0;
+        for (state.floats.items.items) |f| {
+            if (kept == floats.items.len or f.closing) break;
+            const was = floats.items[kept];
+            const at = was.floating.?;
+            if (!std.mem.eql(u8, was.name, f.name) or at.x != f.rect.x or at.y != f.rect.y or at.w != f.rect.w or at.h != f.rect.h) break;
+            kept += 1;
+        }
+        while (state.floats.items.items.len > kept) state.floats.removeAt(state.floats.items.items.len - 1);
+        editor.applySavedRegions(saved);
+    }
+    if (!same_tree) {
+        state.deinitDock();
+        state.pending_dock = dock;
+    }
+
+    // Each place drawn as it was. One drawn now that it did not have — a split made since — is
+    // forgotten too, or a split of that name made again would open at the size this one was left.
+    for (state.regions.items) |r| {
+        if (r.by_name or r.id == .zero) continue;
+        const had = for (snap.places) |p| {
+            if (p.id == r.id) break true;
+        } else false;
+        if (!had) @import("app").layout.Layout.State.forgetWidgetSize(r.id);
+    }
+    for (snap.places) |p| {
+        if (p.sized) {
+            putData(f32, p.id, "_size", p.size);
+            // At rest at that size, not easing toward it.
+            putData(f32, p.id, "_shown", p.size);
+            dvui.dataRemove(null, p.id, "_ease");
+            putData(f32, p.id, "_open", p.open);
+            putData(bool, p.id, "_peek", p.peek);
+        }
+        const now = editor.app.host.selectionForKey(p.key);
+        if (p.view) |v| {
+            if (now == null or !std.mem.eql(u8, now.?, v)) editor.app.host.setSelectionForKey(p.key, v);
+        } else if (now != null) {
+            editor.app.host.clearSelectionForKey(p.key);
+        }
+    }
+}
+
+/// `value` under `id`'s `key`, or nothing there where it is null.
+fn putData(comptime T: type, id: dvui.Id, key: []const u8, value: ?T) void {
+    if (value) |v| {
+        if (dvui.dataGet(null, id, key, T) != v) dvui.dataSet(null, id, key, v);
+    } else dvui.dataRemove(null, id, key);
 }
 
 /// Put fizzy back to `snap` where it stands (see the file comment). False — having changed
@@ -934,15 +1110,14 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     const root = self.mount orelse return false;
     const mem = self.mem orelse return false;
     if (!std.mem.eql(u8, root, snap.root)) return false;
-    // The window arranged as it was: a demo keeps one arrangement from chapter to chapter rather
-    // than cutting to a fresh one at each, and a split, a float or a place opened later is not
-    // something a restore takes away. Arranged otherwise, the seek replays from further back.
-    if (layoutPrint(editor) != snap.layout) return false;
-    // Every document it held still open, in its pane.
-    for (snap.docs) |d| {
-        const doc = openDoc(editor, d.path) orelse return false;
-        if (doc.owner.documentGrouping(doc) != d.grouping) return false;
-    }
+    // Every document it held still open.
+    for (snap.docs) |d| _ = openDoc(editor, d.path) orelse return false;
+    // The window as it was, before anything else is put back: it can fail, and fails changing
+    // nothing.
+    restoreArrangement(editor, snap) catch |err| {
+        dvui.log.warn("demo: could not put the window's layout back: {t}", .{err});
+        return false;
+    };
 
     // What has started since — loads, documents opened after it — goes.
     editor.command_palette.finishClose();
@@ -966,6 +1141,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     };
     for (snap.docs) |d| {
         const doc = openDoc(editor, d.path) orelse continue;
+        if (doc.owner.documentGrouping(doc) != d.grouping) doc.owner.setDocumentGrouping(doc, d.grouping);
         if (!doc.owner.restoreDocumentState(doc, d.state)) dvui.log.warn("demo: could not put {s} back", .{d.path});
     }
     if (snap.active) |a| {
@@ -1000,8 +1176,8 @@ fn release(ctx: *anyopaque, raw: *anyopaque) void {
 
 /// The model a snapshot holds (the demo's own documents, never the person's), less what may differ between passes — scroll, focus, and which
 /// folders the explorer shows open, whose root opens on its own when its listing lands:
-/// documents' fingerprints from their owners, which is active, the explorer shut or not, and the
-/// files as saved.
+/// documents' fingerprints from their owners, which is active, the explorer shut or not, the
+/// window's arrangement (`layoutPrint`), and the files as saved.
 fn fingerprint(ctx: *anyopaque) u64 {
     const self = from(ctx);
     const editor = self.editor;
@@ -1015,6 +1191,8 @@ fn fingerprint(ctx: *anyopaque) u64 {
     if (editor.activeDoc()) |d| h.update(d.owner.documentPath(d));
     h.update(std.mem.asBytes(&editor.explorer.closed));
     h.update(std.mem.asBytes(&editor.app.settings.window_material));
+    const layout = layoutPrint(editor);
+    h.update(std.mem.asBytes(&layout));
     if (self.mem) |mem| {
         for (mem.nodes.keys(), mem.nodes.values()) |path, node| {
             h.update(path);
@@ -1024,9 +1202,10 @@ fn fingerprint(ctx: *anyopaque) u64 {
     return h.final();
 }
 
-/// How the window is arranged, as far as a restore cannot put it back: each of the app's places by
-/// name, shut or not and what it shows, how many panes the documents have, and the floats. The explorer's own place opening and
-/// shutting is left out: a restore opens or shuts the explorer (`Snapshot.explorer_closed`).
+/// How the window is arranged, for a seek to land on what playing reached and a chapter to start in
+/// the window the last one left: each of the app's places by name, shut or not and what it shows,
+/// how many panes the documents have, and the floats not flying shut. The explorer's own place opening and
+/// shutting is left out: the fingerprint has the explorer shut or not on its own.
 /// Places are taken in any order: the same arrangement drawn in another order is the same.
 pub fn layoutPrint(editor: *Editor) u64 {
     const state = &editor.app.layout;
@@ -1044,7 +1223,10 @@ pub fn layoutPrint(editor: *Editor) u64 {
     }
     var h = std.hash.Wyhash.init(print);
     h.update(std.mem.asBytes(&editor.workbench.workspaces.count()));
-    h.update(std.mem.asBytes(&state.floats.items.items.len));
+    // One flying shut is already gone from the layout, as `layout.zon` has it.
+    var floats: usize = 0;
+    for (state.floats.items.items) |f| floats += @intFromBool(!f.closing);
+    h.update(std.mem.asBytes(&floats));
     return h.final();
 }
 

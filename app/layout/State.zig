@@ -841,7 +841,17 @@ pub fn deinitWarm(self: *State, gpa: std.mem.Allocator) void {
 pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
     for (self.regions.items) |r| forgetWidgetSize(r.id);
     for (self.regions_building.items) |r| forgetWidgetSize(r.id);
+    self.clearArrangement(gpa);
+    self.clearDock();
+    // The floats' places went with the assignments and splits; their windows go too.
+    self.floats.clear();
+}
 
+/// Forget what the user arranged — extents, assignments, orders, Single/Multiple and the splits —
+/// and any drag or transition under way, keeping each place's widget state (how wide it is drawn,
+/// shut or not), the seed tree and the floats. For putting an arrangement back on top of it
+/// (`Editor.applySavedRegions`), as a demo's snapshot does; `resetLayout` forgets the rest too.
+pub fn clearArrangement(self: *State, gpa: std.mem.Allocator) void {
     var eit = self.extents.keyIterator();
     while (eit.next()) |k| gpa.free(k.*);
     self.extents.clearRetainingCapacity();
@@ -858,9 +868,6 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
 
     self.splits.deinit(gpa);
     self.splits = .{};
-    self.clearDock();
-    // The floats' places went with the assignments and splits above; their windows go too.
-    self.floats.clear();
     self.slide_open = "";
     self.view_drag.discard();
     self.discardSwaps();
@@ -868,7 +875,8 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
     self.center_prev_id = null;
 }
 
-fn forgetWidgetSize(id: dvui.Id) void {
+/// Forget how place `id` was drawn: its size, shut or not, and any ease or drag under way.
+pub fn forgetWidgetSize(id: dvui.Id) void {
     if (id == .zero) return;
     dvui.dataRemove(null, id, "_size");
     dvui.dataRemove(null, id, "_shown");

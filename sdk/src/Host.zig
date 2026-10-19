@@ -2616,6 +2616,11 @@ pub fn selectionForKey(self: *Host, key: u64) ?[]const u8 {
     return self.selections.get(key);
 }
 
+/// No surface chosen under `key` any more: its region's keywords decide again.
+pub fn clearSelectionForKey(self: *Host, key: u64) void {
+    _ = self.selections.remove(key);
+}
+
 pub fn setSelectionForKey(self: *Host, key: u64, id: []const u8) void {
     // Store the registry pointer, never a frame-arena copy. A view-drag
     // used to hand an arena id to a new split; the next frame's `pick`

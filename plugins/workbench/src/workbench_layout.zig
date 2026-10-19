@@ -363,6 +363,64 @@ pub fn restorePanes(wb: *Workbench) void {
     if (wb.workspaces.contains(wb.held_open)) wb.open_workspace_grouping = wb.held_open;
 }
 
+/// The panes as they stand, for a demo's snapshot to put back (`arrange`): which there are, in
+/// row order, the one in front, and the tree they sit in as ZON (`Panes.Snapshot`). What each
+/// holds is the app's assignment under its name, which the app's layout keeps. All in `arena`.
+pub fn arrangement(wb: *Workbench, arena: std.mem.Allocator) !Workbench.Arrangement {
+    return .{
+        .open = wb.open_workspace_grouping,
+        .groupings = try arena.dupe(u64, wb.workspaces.keys()),
+        .tree = try panesZon(wb, arena),
+    };
+}
+
+fn panesZon(wb: *Workbench, gpa: std.mem.Allocator) ![:0]u8 {
+    const snap = try wb.panes.snapshot(wb.allocator);
+    defer snap.deinit(wb.allocator);
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    errdefer aw.deinit();
+    try std.zon.stringify.serializeMaxDepth(snap, .{}, &aw.writer, 64);
+    return aw.toOwnedSliceSentinel(0);
+}
+
+/// Put the panes back to `a` (`arrangement`): the panes it had, each a fresh workspace where it is
+/// not one now, those it did not have gone, and its tree. Their tabs are the app's assignments,
+/// for the caller to put back with the rest of the app's layout. Where the app arranges the panes
+/// (`places`) there is no tree of the workbench's to put back: `error.AppArranged` unless the
+/// panes are already the same.
+pub fn arrange(wb: *Workbench, a: Workbench.Arrangement) !void {
+    const same_panes = std.mem.eql(u64, wb.workspaces.keys(), a.groupings);
+    if (wb.places != null and !same_panes) return error.AppArranged;
+    const same_tree = wb.places != null or (same_panes and blk: {
+        const now = try panesZon(wb, wb.allocator);
+        defer wb.allocator.free(now);
+        break :blk std.mem.eql(u8, now, a.tree);
+    });
+    if (!same_tree) try replacePanes(wb, a);
+    if (wb.workspaces.contains(a.open)) wb.open_workspace_grouping = a.open;
+}
+
+fn replacePanes(wb: *Workbench, a: Workbench.Arrangement) !void {
+    var arena: std.heap.ArenaAllocator = .init(wb.allocator);
+    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const snap = try std.zon.parse.fromSlice(Panes.Snapshot, .{ .gpa = wb.allocator, .arena = arena.allocator(), .source = a.tree, .diagnostics = &diag });
+    var tree = try Panes.fromSnapshot(wb.allocator, snap);
+    errdefer tree.deinit();
+    tree.animated = true;
+
+    var panes: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty;
+    errdefer panes.deinit(wb.allocator);
+    try panes.ensureTotalCapacity(wb.allocator, a.groupings.len);
+    for (a.groupings) |g| panes.putAssumeCapacity(g, wb.workspaces.get(g) orelse Workspace.init(g));
+    for (wb.workspaces.values()) |*ws| {
+        if (!panes.contains(ws.grouping)) ws.deinit();
+    }
+    wb.workspaces.deinit(wb.allocator);
+    wb.workspaces = panes;
+    adoptPanes(wb, tree);
+}
+
 /// Delete the saved arrangement: the app has taken it over (`Workbench.places`).
 pub fn forgetPanes(wb: *Workbench) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;

@@ -450,6 +450,17 @@ pub fn restorePanes(self: *Workbench) void {
     workbench_layout.restorePanes(self);
 }
 
+/// The panes as they stand, for a demo's snapshot (`workbench_layout.arrangement`).
+pub const Arrangement = struct { open: u64, groupings: []const u64, tree: [:0]const u8 };
+
+pub fn arrangement(self: *Workbench, arena: std.mem.Allocator) !Arrangement {
+    return workbench_layout.arrangement(self, arena);
+}
+
+pub fn arrange(self: *Workbench, a: Arrangement) !void {
+    return workbench_layout.arrange(self, a);
+}
+
 pub fn forgetPanes(self: *Workbench) void {
     workbench_layout.forgetPanes(self);
 }
