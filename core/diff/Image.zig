@@ -161,7 +161,7 @@ pub fn diff(self: *Image, gpa: std.mem.Allocator, a: Source, b: Source, opts: Op
         if (firstDiff(a.pixels[0..n], b.pixels[0..n]) == null) return result;
     }
 
-    const shift: u5 = @intFromEnum(opts.tile);
+    const shift: u5 = @backingInt(opts.tile);
     const w_tiles = (w + (@as(u32, 1) << shift) - 1) >> shift;
     const h_tiles = (h + (@as(u32, 1) << shift) - 1) >> shift;
     try self.boxes.resize(gpa, @as(usize, w_tiles) * h_tiles);

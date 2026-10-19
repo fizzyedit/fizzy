@@ -24,7 +24,7 @@ pub fn deinit(self: *TileGrid, gpa: std.mem.Allocator) void {
 /// row slices), never per pixel.
 pub fn compute(self: *TileGrid, gpa: std.mem.Allocator, src: Image.Source, tile: Image.TileSize) !void {
     std.debug.assert(src.valid());
-    const shift: u5 = @intFromEnum(tile);
+    const shift: u5 = @backingInt(tile);
     const size = @as(u32, 1) << shift;
     self.tile = tile;
     self.width = src.width;
@@ -51,7 +51,7 @@ pub fn compute(self: *TileGrid, gpa: std.mem.Allocator, src: Image.Source, tile:
 /// is not compared, and `size_changed` says the rest was not looked at.
 pub fn diff(self: *const TileGrid, later: *const TileGrid, img: *Image, gpa: std.mem.Allocator, max_rects: u32) Error!Image.Result {
     if (self.tile != later.tile) return error.TileSizeMismatch;
-    const shift: u5 = @intFromEnum(self.tile);
+    const shift: u5 = @backingInt(self.tile);
     const size = @as(u32, 1) << shift;
     const same_size = self.width == later.width and self.height == later.height;
     const w = @min(self.width, later.width);
