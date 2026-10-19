@@ -217,5 +217,6 @@ as well as a PR. Admins can merge a PR past a failing check in an emergency, nev
 `main` directly.
 
 `ci-ok` passes when every other CI job passed or was skipped: a PR changing only Markdown skips
-the builds and still gets its check. CI also runs for a merge queue (`merge_group`), so turning
-the queue on needs no workflow change.
+the builds and still gets its check. `main` merges through the merge
+queue (squash, up to 4 PRs a batch, `ci-ok` rerun on the `merge_group` ref): `gh pr merge N --auto`
+queues a PR once its checks pass, and the queue lands it.
