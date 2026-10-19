@@ -105,6 +105,8 @@ jobs:
           use-cache: false
       - name: zig fmt --check
         run: bash scripts/check-fmt.sh
+      - name: scripts/zb (build lock)
+        run: sh scripts/test-zb.sh
 
   test:
     name: Tests (${{ matrix.name }})

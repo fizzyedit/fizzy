@@ -172,6 +172,8 @@ zig build test-integration  # headless integration tests (CI runs them on Linux)
 zig build test-sdk-version  # CI lock: the recorded fingerprint matches the live plugin boundary
 ```
 
+Run heavy builds as `scripts/zb build test` (same arguments): it waits for a free build slot and a calm load average first (`CONTRIBUTING.md`, "Verify, and say how").
+
 Run all of these after touching the SDK boundary (`sdk/src/**`) or a plugin's vtable usage.
 
 ### Keep the plugin build free of app-only dependencies

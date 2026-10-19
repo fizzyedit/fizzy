@@ -266,10 +266,8 @@ fn popOut(f: *Floats.Float) void {
     const b = at.outsetAll(reach() * s);
     const vp = viewports.open(.{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }, if (title.len > 0) title else "Fizzy", .os) orelse return;
     // A material behind its glass where the platform has one, so it looks there as it does in
-    // the main window (`Floats.Viewport.material`). The glass is the float's rect less its own
-    // margin: inside the clear one round it, or all of the window the OS frames.
-    const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
-    const material = viewports.glass(vp, (reach() + margin) * s, fizzy.core.corners.scaled(fizzy.core.corners.surface) * s, dvui.themeGet().dark);
+    // the main window (`Floats.Viewport.material`): all of the window the OS frames.
+    const material = viewports.glass(vp, fizzy.core.corners.scaled(fizzy.core.corners.surface) * s, dvui.themeGet().dark);
     const window = viewports.frameOf(vp);
     const frame = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(reach() * s);
     f.viewport = .{
@@ -1140,10 +1138,11 @@ fn windowFrame(state: *State, o: *Out) void {
     // OS's transitions as the main window's base is. Where it has no material it is opaque
     // throughout.
     Editor.easeWindowOpacity(&o.opacity, viewports.coversDesktop(o.viewport), viewports.enteringSpace(o.viewport), viewports.spaceFullness(o.viewport), if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
-    // A window of Liquid Glass (macOS 26) stands on its glass, its colour under it on the one
-    // slider, as the main window does (`Editor.windowGlassLook`): no base of its own in the frame.
-    if (!viewports.windowGlass(o.viewport, Editor.windowGlassLook(o.opacity.value, .{ .w = shown.w / s, .h = shown.h / s })))
-        backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, o.opacity.value);
+    // Made of the window material as the main window is (macOS: Liquid Glass, vibrancy or none),
+    // its colour over that by the same rule (`viewports.materialBase`) — none in the frame on
+    // Liquid Glass, whose colour is the glass's. Elsewhere fizzy's own base (`Editor.windowBase`).
+    const under = viewports.materialBase(o.viewport, dvui.themeGet().color(.content, .fill), o.opacity.value) orelse Editor.windowBase(o.opacity.value);
+    if (under.a > 0) backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, under);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
@@ -1164,11 +1163,11 @@ fn windowFrame(state: *State, o: *Out) void {
     viewports.present(o.viewport, target);
 }
 
-/// What the float out here stands on: the main window's base (`base`), as the main window's own
+/// What the float out here stands on: `color`, the main window's base, as the main window's own
 /// content does — all of its window where the OS frames it (`viewports.os_frame`), drawn as the main
 /// window is; elsewhere behind its glass, inside the clear margin its shadow is drawn in, in the
 /// glass's own corners, for the glass to read.
-fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, opacity: f32) void {
+fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, color: dvui.Color) void {
     const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
     const bounds = window.insetAll((reach() + margin) * dvui.windowNaturalScale());
     const cw = dvui.currentWindow();
@@ -1180,7 +1179,7 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, opacity: f32)
     defer dvui.alphaSet(prev_alpha);
     const theme = dvui.themeGet();
     const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
-    bounds.fill(corners, .{ .color = .{ .color = Editor.windowBase(opacity) } });
+    bounds.fill(corners, .{ .color = .{ .color = color } });
 }
 
 /// Whether menus are windows of their own (`menuFrame`): where the OS can show them (macOS; Windows,

@@ -117,6 +117,12 @@ turns.
 
 ## Verify, and say how
 
+- **Heavy builds go through `scripts/zb`.** `scripts/zb build test` is `zig build test` once a
+  slot is free (two by default, `FIZZY_BUILD_SLOTS`) and the load average is under the machine's
+  performance cores (`FIZZY_BUILD_MAX_LOAD`). Agents and people share one Mac, and parallel builds
+  have taken its load past 17 and crashed it; don't poll `uptime` and start anyway. Every gate
+  below runs as `scripts/zb build …` (`scripts/zb build test-integration`). Not for `zig build run`
+  of the editor, which would hold the slot until it quits; `FIZZY_BUILD_SKIP=1` runs at once.
 - **Gates:** `scripts/check-fmt.sh` (`--fix` formats), `zig build`, `zig build test`,
   `zig build test-integration`, `zig build check-web`, `zig build test-sdk-version`. CI runs all
   of them, `test-integration` on Linux only, but a

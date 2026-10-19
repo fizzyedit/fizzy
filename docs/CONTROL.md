@@ -27,6 +27,11 @@ under `$TMPDIR` (else `$XDG_RUNTIME_DIR`, else `/tmp`) instead, named by a hash 
 the path either way and exits (1, saying why, when it cannot), whether a fizzy runs or not. A
 Windows release has no console to print to: capture it, `$sock = fizzy --control-path`.
 
+**A fizzy started beside the person** (an agent's build, a sandbox) takes `--quiet`, or
+`FIZZY_QUIET=1`, beside its `--profile`: a quiet run is meant never to take the person's focus.
+Like `--profile` it is never forwarded to another instance, and a restart into a rebuilt binary
+keeps it. For now it is only carried; what it changes comes with `fizzyedit/plans#35`.
+
 **Who can use it:** only you. The socket's folder is `0700` and the socket `0600`, so nobody else
 on the machine can connect; there is no token. A link in the folder's place is refused rather than
 followed. On Windows the default config folder is under `%LOCALAPPDATA%`, which only you can open; a
@@ -140,12 +145,23 @@ as `POST /commands/{id}` would. A command that answers later answers its call th
 
 ```sh
 curl --unix-socket "$SOCK" localhost/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-curl --unix-socket "$SOCK" localhost/mcp -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fizzy.screen"}}'
+curl --unix-socket "$SOCK" localhost/mcp -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fizzy__screen"}}'
 ```
+
+**Tool names.** MCP clients take a tool name only in `[A-Za-z0-9_-]{1,64}`, and command ids have
+dots, so each tool is named from its id: `.` becomes `__`, any other character outside the set
+becomes `_` (`text.insert` is `text__insert`). The id is in the tool's description. Two ids that
+come out the same are told apart by a suffix, `_` and six hex digits of the id's hash, on the one
+whose name does not spell its id back (`a__b` beside `a.b`); one past 64 characters is cut and
+gets the same suffix (hashed again if that meets another tool's name). `tools/call` takes the name,
+or, when no tool has that name, the command's id as it is.
 
 It answers `initialize`, `ping`, `tools/list` and `tools/call`, and notifications get a `202`. There
 is no server-sent stream yet (`GET /mcp`), and no resources or prompts. An MCP client that can only
 dial a URL or speak stdio reaches it through a proxy for now.
+
+The dispatch (`app/mcp.zig`) holds no socket: the control server carries it, and it builds for the
+web as well, where the page's own MCP is to serve it.
 
 **Sessions.** `initialize` answers with an `Mcp-Session-Id` header, and each request that sends it
 back is made as that client: its tool calls run as the author `.{ .kind = .agent, .plugin =

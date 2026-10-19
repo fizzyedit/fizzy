@@ -32,12 +32,15 @@ const c = std.c;
 
 pub const SpawnError = error{ SpawnFailed, OutOfMemory };
 
-pub const StdIo = enum {
+pub const StdIo = union(enum) {
     /// A pipe is created; the corresponding `Child` field is populated.
     pipe,
     /// Redirected to `/dev/null` (read-only for stdin, write-only for stdout/stderr); the
     /// corresponding `Child` field stays null.
     discard,
+    /// This process's open descriptor, which the child gets as the stream (a log file). It stays
+    /// this process's to close; the corresponding `Child` field stays null.
+    fd: posix.fd_t,
 };
 
 pub const Options = struct {
@@ -144,6 +147,10 @@ fn setUpChildStream(actions: *c.posix_spawn_file_actions_t, mode: StdIo, fd: pos
             };
             const oflag: c_int = @bitCast(o);
             _ = c.posix_spawn_file_actions_addopen(actions, fd, "/dev/null", oflag, 0);
+            return null;
+        },
+        .fd => |from| {
+            _ = c.posix_spawn_file_actions_adddup2(actions, from, fd);
             return null;
         },
         .pipe => {

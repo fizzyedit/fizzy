@@ -2228,7 +2228,7 @@ pub fn postInit(editor: *Editor) !void {
         .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
     }) catch {};
     // The control server's (native only): an MCP client's session ended.
-    if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").control.mcp.session_ended) catch {};
+    if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").mcp.session_ended) catch {};
     editor.app.host.declareEvent(.{
         .name = "fizzy.files.reveal",
         .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",
@@ -4218,8 +4218,9 @@ pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, fullness: 
 
 /// A window of Liquid Glass at `opacity` (`backend.windowGlass`), `size` points: the glass
 /// `core.glass_look.window` makes of it, in the content fill as the window's colour, its
-/// clearing bevel the one every glass has for its size (`core.glass_look.band`). The main window's
-/// and every float's own window's alike.
+/// clearing bevel the one every glass has for its size (`core.glass_look.band`). A menu's window's,
+/// and the main window's on dvui's own SDL3 backend; fizzy's own backend sets the main window's and
+/// each float's itself, by the same curves (`SDLBackend.dressWindows`).
 pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.WindowGlassLook {
     const glass_look = fizzy.core.glass_look;
     const look = glass_look.window(opacity);
@@ -4244,8 +4245,9 @@ pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.Wind
 /// A window's base at `opacity` (`core.glass_look.base`): the theme's content fill over the OS's
 /// material where the window has one (macOS, Windows; Linux where the compositor blurs behind it),
 /// lightened as it goes see-through so the material behind reads as the same tone; opaque where
-/// there is none; clear at 0. Every window fizzy draws stands on it — the main window, a float's
-/// own window, the carry window (`Popout.base`) — so side by side they are one colour.
+/// there is none; clear at 0. What the main window and a float's own window stand on where the
+/// backend does not dress their material (`backend.windowMaterialBase`, `viewports.materialBase`:
+/// macOS's own backend), and the carry window (`Popout.base`).
 pub fn windowBase(opacity: f32) dvui.Color {
     const material = switch (builtin.target.os.tag) {
         .macos, .windows => true,
@@ -5974,13 +5976,14 @@ fn syncExecutableWatcher(editor: *Editor) void {
         return;
     }
     if (editor.executable_watch_failed) return;
+    // As the process started (`noteLaunch`): asked now, a replaced executable can go by another name.
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe = std.process.executablePath(dvui.io, &buf) catch |err| {
+    const exe = ExecutableWatcher.launchPath() orelse buf[0 .. std.process.executablePath(dvui.io, &buf) catch |err| {
         dvui.log.warn("restart: cannot find this executable ({t}); a rebuild will not restart fizzy", .{err});
         editor.executable_watch_failed = true;
         return;
-    };
-    editor.app.executable_watcher = ExecutableWatcher.init(editor.app.gpa, buf[0..exe]) catch |err| {
+    }];
+    editor.app.executable_watcher = ExecutableWatcher.init(editor.app.gpa, exe) catch |err| {
         dvui.log.warn("restart: cannot watch this executable ({t}); a rebuild will not restart fizzy", .{err});
         editor.executable_watch_failed = true;
         return;
@@ -6000,9 +6003,13 @@ fn syncExecutableWatcher(editor: *Editor) void {
 fn driveHandover(editor: *Editor) void {
     // The new instance's side: the lock, once the old instance has let go of it.
     if (restart.startedByHandover()) {
-        if (restart.pollReleased(dvui.io, editor.app.gpa)) {
-            @import("app").single_instance.acquireLock(editor.app.gpa, &.{}) catch |err| dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
-            fizzy.core.profile.phase(dvui.io, "handover lock");
+        if (restart.pollReleased(dvui.io)) {
+            const taken = @import("app").single_instance.tryAcquireLock(editor.app.gpa, &.{}) catch |err| blk: {
+                dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
+                break :blk false;
+            };
+            restart.tookLock(dvui.io, editor.app.gpa, taken);
+            if (taken) fizzy.core.profile.phase(dvui.io, "handover lock");
         }
         return;
     }
