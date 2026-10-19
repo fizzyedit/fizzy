@@ -583,3 +583,40 @@ fn pourStream(lip: [2]f32, end: [2]f32, tail: f32, head: f32, th: f32, color: dv
     const r: dvui.Rect.Physical = .{ .x = h[0] - hw, .y = h[1] - hw, .w = 2 * hw, .h = 2 * hw };
     r.fill(.all(hw), .{ .color = .{ .color = color }, .fade = 1 });
 }
+
+// ── Bars out this frame ──────────────────────────────────────────────────────────────────────
+//
+// Each transport's bar that is out says where it is (`publishBar`), so another that would cover it
+// can stand clear (`barsOut`): the tape's bar, out of the window's corner, stacks above a history
+// bar out along the bottom of a pane under it. Per frame, kept in dvui's data; a bar not out
+// publishes nothing, so a frame with none out costs nothing.
+
+const max_bars = 16;
+const Bars = struct {
+    /// The frame they were published in (`dvui.frameTimeNS`): an earlier frame's are gone.
+    frame_ns: i128 = 0,
+    n: usize = 0,
+    rects: [max_bars]dvui.Rect.Physical = undefined,
+};
+
+fn bars() *Bars {
+    const b = dvui.dataGetPtrDefault(null, dvui.Id.update(.zero, "app.dome.bars"), "_bars", Bars, .{});
+    const now = dvui.frameTimeNS();
+    if (b.frame_ns != now) b.* = .{ .frame_ns = now };
+    return b;
+}
+
+/// A bar is out at `r` (physical, with its tab) this frame.
+pub fn publishBar(r: dvui.Rect.Physical) void {
+    const b = bars();
+    if (b.n == max_bars) return;
+    b.rects[b.n] = r;
+    b.n += 1;
+}
+
+/// The bars out this frame so far: those drawn before the caller, as the panes' are before the
+/// demo's overlay.
+pub fn barsOut() []const dvui.Rect.Physical {
+    const b = bars();
+    return b.rects[0..b.n];
+}

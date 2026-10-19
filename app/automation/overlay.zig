@@ -49,8 +49,7 @@ pub fn draw(player: *Player) void {
 
     // Everything else keeps above the bar, as much as the bar is open, so it slides up as the
     // bar opens and back down as it closes.
-    const bar = drawTransport(player, tape, win);
-    drawCaptions(player, tape, win, win.y + win.h - 24 - bar * (slot_h + dome.corner_radius));
+    drawCaptions(player, tape, win, drawTransport(player, tape, win));
     // Only a seek long enough to notice says so: most land in a frame or a few.
     if (player.state == .seeking and player.seekingNs() > seeking_shown_after_ns) drawSeeking(player, win);
     // The pointer last: over the menu it opened and the caption explaining it.
@@ -620,7 +619,15 @@ const CornerState = struct {
     at: ?f32 = null,
     chapter: ?usize = null,
     was_on: bool = false,
+    /// How far the bar stands up from its place to clear a bar out under it, natural, eased.
+    lift: f32 = 0,
 };
+
+/// The space between the tape's bar and a bar it stacks above.
+const bar_stack_gap: f32 = 10;
+/// How quickly the bar moves up to clear a bar out under it, and back down: the time constant of
+/// its easing, as written.
+const lift_ms: f32 = 120;
 
 /// The bar: chapter back, play/pause, chapter forward, the time and the scrubber, close. While a
 /// tape plays it rests in the window's own bottom-right corner, in the corner glass a document's
@@ -631,8 +638,11 @@ const CornerState = struct {
 /// the corner and its liquid pouring into the scrubber's line; going back, the bubbles change back
 /// into the corner and the liquid pours back in, as the history bar does into its vial. The pointer
 /// on the bar keeps it; leaving, it goes back soon. Paused or ended it stays out, unless its tab
-/// sent it in (`Transport.tucked`). Returns how much of its slot it takes. Records its parts' rects
-/// on `player.transport` for `Player.frame` to hit-test.
+/// sent it in (`Transport.tucked`). A document's history bar out under it (along the bottom of a
+/// pane in the window's corner) it stacks above (`dome.barsOut`), easing up to clear it and back
+/// down as it goes, so both show at once. Returns how far down the window captions may come: above
+/// the bar, as much as it is out. Records its parts' rects on `player.transport` for
+/// `Player.frame` to hit-test.
 fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const tr = &player.transport;
     // Wall time: it answers the viewer's pointer, not the demo. (A playing player asks for every
@@ -649,11 +659,15 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const box = corner.box(s);
     // The bar over the corner, right-aligned to it, clear of the corner's glass.
     const full_w = @min(560, win.w - 24);
-    const whole: dvui.Rect = .{ .x = win.x + win.w - 12 - full_w, .y = win.y + win.h - dome.corner_radius - 8 - bar_h, .w = full_w, .h = bar_h };
-    const center: dvui.Point = .{ .x = whole.x + whole.w / 2, .y = whole.y + bar_h / 2 };
+    const place: dvui.Rect = .{ .x = win.x + win.w - 12 - full_w, .y = win.y + win.h - dome.corner_radius - 8 - bar_h, .w = full_w, .h = bar_h };
 
     const st = dvui.dataGetPtrDefault(null, dvui.currentWindow().data().id, "_demo_corner", CornerState, .{});
     if (st.tape != @intFromPtr(tape)) st.* = .{ .tape = @intFromPtr(tape) };
+    // Above any bar out under it, eased there; in the corner, already where it will grow to.
+    const lift = barLift(st, place, win, wrs, tr.openness <= 0);
+    const whole: dvui.Rect = .{ .x = place.x, .y = place.y - lift, .w = place.w, .h = place.h };
+    const center: dvui.Point = .{ .x = whole.x + whole.w / 2, .y = whole.y + bar_h / 2 };
+    const floor_rest = win.y + win.h - 24;
     const pointer = tr.pointer;
     const on = struct {
         fn f(r: ?dvui.Rect.Physical, pt: ?dvui.Point.Physical) bool {
@@ -725,7 +739,7 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
             tr.shut = true;
             dvui.refresh(null, @src(), null);
         }
-        return 0;
+        return floor_rest;
     }
 
     var pieces: [5]dvui.Rect = undefined;
@@ -816,7 +830,33 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         knob.addArc(.{ .x = knob_x, .y = mid }, 6 * s, std.math.tau, 0, true);
         knob.build().fillConvex(.{ .color = .{ .color = accent }, .fade = 1 });
     }
-    return std.math.clamp(p * 1.6, 0, 1);
+    return std.math.lerp(floor_rest, tab.y - 8, std.math.clamp(p * 1.6, 0, 1));
+}
+
+/// How far up from `place` (natural) the tape's bar stands to clear the bars out under it this
+/// frame (`dome.barsOut`): above each it would overlap, with `bar_stack_gap` between, looked at again
+/// from where that puts it so it clears a stack of them. Eased toward that on `st.lift`, asking
+/// for frames while it moves; `snap`, there at once (the bar is in its corner, and grows to it).
+fn barLift(st: *CornerState, place: dvui.Rect, win: dvui.Rect, wrs: dvui.RectScale, snap: bool) f32 {
+    var y = place.y;
+    for (0..3) |_| {
+        for (dome.barsOut()) |rp| {
+            const r = wrs.rectFromPhysical(rp);
+            const over = r.x < place.x + place.w and r.x + r.w > place.x and r.y < y + place.h + bar_stack_gap and r.y + r.h > y;
+            if (over) y = @min(y, r.y - bar_stack_gap - place.h);
+        }
+    }
+    // Never off the top of the window.
+    const target = @max(0, place.y - @max(y, win.y + 8));
+    if (snap) {
+        st.lift = target;
+        return target;
+    }
+    const tau = motion.durationMs(lift_ms);
+    const k: f32 = if (tau <= 0) 1 else 1 - @exp(-dvui.secondsSinceLastFrame() * 1000 / tau);
+    st.lift += (target - st.lift) * k;
+    if (@abs(target - st.lift) < 0.5) st.lift = target else dvui.refresh(null, @src(), null);
+    return st.lift;
 }
 
 /// The bar's pieces in place, window-natural, into `out`: round buttons and the track's capsule

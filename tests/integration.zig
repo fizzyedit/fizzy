@@ -5452,6 +5452,9 @@ var demo_player: automation.Player = undefined;
 /// its own, and its next frame's time comes from the last one's (`dvui.testing.step`) anyway.
 var demo_clock: i128 = 0;
 var demo_clock_on: bool = true;
+/// A bar out under the demo's (a document's history bar, as `HistoryTransport` publishes it), for
+/// the demo's to stack above; physical. Null: none.
+var demo_other_bar: ?dvui.Rect.Physical = null;
 
 /// The app's frame function, as an app runs it: through the player, which repeats it unseen
 /// while a seek catches up.
@@ -5475,6 +5478,7 @@ fn demoRun() !dvui.App.Result {
         te.draw();
         te.deinit();
     }
+    if (demo_other_bar) |b| @import("app").dome.publishBar(b);
     automation.overlay.draw(&demo_player);
     return .ok;
 }
@@ -5764,6 +5768,31 @@ test "demo: the bar goes into its corner and grows back out of it" {
     try std.testing.expect(!tr.tucked);
     // Not the app's: the demo was not diverged by it.
     try std.testing.expect(!demo_player.diverged);
+}
+
+test "demo: the bar stacks above a history bar out under it, and comes back down" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    defer demo_other_bar = null;
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    for (0..20) |_| _ = try dvui.testing.step(demoFrame);
+    const tr = &demo_player.transport;
+    const rest = tr.bar orelse return error.TestUnexpectedResult;
+
+    // A bar comes out where the tape's is: the tape's eases up until it is clear above it.
+    demo_other_bar = .{ .x = rest.x + 40, .y = rest.y - 4, .w = 300, .h = rest.h + 8 };
+    for (0..60) |_| _ = try dvui.testing.step(demoFrame);
+    const up = tr.bar orelse return error.TestUnexpectedResult;
+    try std.testing.expect(up.y + up.h <= demo_other_bar.?.y);
+    try std.testing.expectEqual(rest.x, up.x);
+
+    // It goes: the tape's comes back down to its place.
+    demo_other_bar = null;
+    for (0..60) |_| _ = try dvui.testing.step(demoFrame);
+    const down = tr.bar orelse return error.TestUnexpectedResult;
+    try std.testing.expectApproxEqAbs(rest.y, down.y, 0.5);
 }
 
 test "demo: a replay that does not reach what playing did is caught" {

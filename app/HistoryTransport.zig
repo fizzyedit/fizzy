@@ -297,6 +297,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
             (opts.corner != null and !self.liquid.settled())) dvui.refresh(null, @src(), null);
     }
     if (p <= 0) return pressed;
+    // Out: where, for a bar that would cover it to stand clear (`dome.barsOut`).
+    if (self.place(area, now)) |pl| dome.publishBar(pl);
     const arena = dvui.currentWindow().arena();
     const line = doc.owner.historyLine(doc, arena) orelse return pressed;
     const n = line.entries.len;
