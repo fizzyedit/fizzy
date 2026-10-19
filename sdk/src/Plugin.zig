@@ -92,6 +92,24 @@ pub const HistoryLine = struct {
     };
 };
 
+/// A document's history to put back (`restoreHistory`), as its track recorded it: each entry on
+/// it, oldest first, and how many are applied, the rest being what redo brings back. The document
+/// already stands where they leave it (applied, every entry up to `applied` is in it).
+pub const RestoredHistory = struct {
+    entries: []const Entry,
+    /// How many of `entries` are applied.
+    applied: usize,
+
+    pub const Entry = struct {
+        /// The entry's own id (`Step.id`, `HistoryLine.Entry.id`), kept: steps reported after
+        /// the restore name it by this.
+        id: u64,
+        /// What the entry did, in the owner's `step_format`, as it reported it: the `effect` of
+        /// its `added` step, then each `joined` part after it.
+        parts: []const []const u8,
+    };
+};
+
 /// A question an owner wants asked before fizzy saves a document (`saveQuestion`): a save that
 /// would flatten layers, drop data, change an encoding. fizzy asks it wherever a save starts
 /// (Save, Save All, Save and Close, the quit walk) and goes on by itself with the answer.
@@ -202,6 +220,15 @@ pub const VTable = struct {
     /// stood for, as `saveDocument` would; when `path` differs from the document's own, adopt it
     /// (Save As).
     documentWritten: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
+    /// On the UI thread: `doc` as it stands, encoded as `path`'s format, the bytes a save would
+    /// write, for a copy that is not a save. fizzy takes these for a crash checkpoint (every few
+    /// seconds while someone types), for a restart or a plugin reload carrying unsaved work, for a
+    /// tape's file, and for a `fizzy.document.changed` listener. So none of a save's bookkeeping
+    /// or side effects: no format on save, no edit remembered for `documentWritten`, no undo stop,
+    /// nothing the person sees change. Owned by the caller, allocated with `allocator`. Absent =
+    /// fizzy takes the save's two halves instead (`documentSnapshot` + `encodeSnapshot`), and
+    /// whatever those do to the document happens on every checkpoint too.
+    documentBytes: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) anyerror![]u8 = null,
     closeDocument: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
     /// Reload `doc` from its on-disk path, replacing in-memory contents and clearing dirty
     /// state / undo history as appropriate. Called by fizzy's document watcher when a
@@ -247,6 +274,13 @@ pub const VTable = struct {
     /// step that does not fit what `doc` holds is an error, and `doc` is left as it was. Absent =
     /// tapes of this owner's documents cannot be played.
     applyStep: ?*const fn (state: *anyopaque, doc: DocHandle, effect: []const u8, motion: []const u8, ms: u32) anyerror!void = null,
+    /// Put `doc`'s history back as its track recorded it (`RestoredHistory`), in place of what it
+    /// holds: a document opened again picks up the history it had. `doc` already stands where
+    /// the history leaves it; nothing in it changes, and it is not dirty for it. Each entry keeps
+    /// its id. A history that does not fit `doc` (an effect of another format, or one that does
+    /// not undo to a document) is an error, and `doc`'s history is left as it was. Absent = a
+    /// document of this owner opens with no history, as ever.
+    restoreHistory: ?*const fn (state: *anyopaque, doc: DocHandle, history: RestoredHistory) anyerror!void = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
 
     /// Register a loaded/created document in the plugin's open-doc map. `file` points at
@@ -582,9 +616,23 @@ pub fn bytesPath(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) ![]
     return allocator.dupe(u8, self.documentPath(doc));
 }
 
-/// Both halves at once, on the calling thread: for the few who need the bytes now (a crash
-/// recovery file, the browser's download). Null as `documentSnapshot`.
+/// `doc`'s bytes as a save to `path` would write them, now, for a copy that is not a save (a crash
+/// recovery file, a restart's kept documents, a tape's file): the owner's `documentBytes`, which
+/// leaves the document as it was. An owner without it gives the two halves of a save
+/// (`saveBytes`), bookkeeping included. Null when it can give neither.
 pub fn documentBytes(self: Plugin, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) !?[]u8 {
+    if (self.vtable.documentBytes) |f| {
+        const prof = core.profile.begin(self.id, "documentBytes");
+        defer prof.end();
+        return f(self.state, doc, path, allocator) catch |err| self.failed("documentBytes", err);
+    }
+    return self.saveBytes(doc, path, allocator);
+}
+
+/// Both halves of a save at once, on the calling thread, for a save that needs its bytes now (the
+/// browser's download). The owner remembers the edit they stand for, as at any save's start, so
+/// `documentWritten` must follow once they are written. Null as `documentSnapshot`.
+pub fn saveBytes(self: Plugin, doc: DocHandle, path: []const u8, allocator: std.mem.Allocator) !?[]u8 {
     const snapshot = (try self.documentSnapshot(doc, path, allocator)) orelse return null;
     defer self.releaseSnapshot(snapshot);
     return try self.encodeSnapshot(snapshot, path, allocator);
@@ -630,6 +678,18 @@ pub fn applyStep(self: Plugin, doc: DocHandle, effect: []const u8, motion: []con
     const f = self.vtable.applyStep orelse return false;
     f(self.state, doc, effect, motion, ms) catch |err| {
         std.log.err("{s}: applyStep failed: {s}", .{ self.id, self.errorName(err) });
+        return false;
+    };
+    return true;
+}
+
+/// Put `doc`'s history back from its track (`restoreHistory`). Returns whether it did.
+pub fn restoreHistory(self: Plugin, doc: DocHandle, history: RestoredHistory) bool {
+    const prof = core.profile.begin(self.id, "restoreHistory");
+    defer prof.end();
+    const f = self.vtable.restoreHistory orelse return false;
+    f(self.state, doc, history) catch |err| {
+        std.log.err("{s}: restoreHistory failed: {s}", .{ self.id, self.errorName(err) });
         return false;
     };
     return true;

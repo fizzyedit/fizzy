@@ -222,9 +222,14 @@ pub fn carriedCard(layer: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
 }
 
 /// Whether carried things are shown in windows of their own this run (fizzy's float windows on
-/// macOS): a carried view's photograph is taken without the place's background, its content over
-/// the window's material — set by the app before anything draws.
+/// macOS and Windows): a carried view's photograph is taken without the place's background, its
+/// content over the window's material — set by the app before anything draws.
 pub var carry_windows: bool = false;
+
+/// Whether a carry window's own material is the carried thing's glass (macOS: the OS's, masked to
+/// its shape). Where it has none (Windows, which cannot shape it), the app draws its glass into the
+/// window, as it does in its own windows. Set with `carry_windows`.
+pub var carry_material: bool = false;
 
 /// `carriedGlass` for glass whose shapes run together (`LiquidField`) — the dragged view as a
 /// drop — frosted at the dialog style. False when the style has the blur off, or the glass program
@@ -318,6 +323,10 @@ pub const BubblesOptions = struct {
     window: bool = false,
 };
 
+/// A rounded box's smallest corner, in points, for its glass to bend along its own outline as a
+/// drop's does (`glassBubbles`); below it, the box keeps to the soft field of its sides.
+const round_corner: f32 = 4;
+
 /// Controls of glass over content, one look wherever they float: the demo player's transport, a
 /// plugin's buttons over its canvas. Each bubble is drawn as a drop is (`LiquidField`, its edge
 /// bending along its own outline — a capsule's ends round, as a circle's are), lit by its
@@ -338,10 +347,15 @@ pub fn glassBubbles(id: dvui.Id, bubbles: []const Bubble, scale: f32, opts: Bubb
             var field: widgets.LiquidField = .{ .merge_px = opts.merge * scale, .scale = scale, .edge = opts.edge, .solid = opts.solid };
             for (bubbles) |b| {
                 if (b.rect.w < 1 or b.rect.h < 1) continue;
-                // A capsule's edge bends round as a drop's does; a rounded box's keeps to its sides.
+                // Its edge bends along its own outline, as a drop's does, with a drop's rim of light:
+                // a capsule, a circle, and a panel whose corners are round. Only a box with a corner
+                // near square keeps to the soft field of its sides (`liquid_glass.fieldAt`), which
+                // never folds at a corner; on a rounded panel that field left its rim faint, the
+                // history bar's grown strip dull beside the round buttons merged with it.
                 const capsule = b.radius == null and b.radii == null;
                 const radii: [4]f32 = if (capsule) @splat(@min(b.rect.w, b.rect.h)) else b.cornerRadii();
-                field.add(.{ .rect = b.rect, .radii = radii, .round = capsule, .light = b.light, .lens = b.lens, .blur = b.blur });
+                const round = capsule or @reduce(.Min, @as(@Vector(4, f32), radii)) >= round_corner * scale;
+                field.add(.{ .rect = b.rect, .radii = radii, .round = round, .light = b.light, .lens = b.lens, .blur = b.blur });
             }
             var pane = frost;
             pane.form = 1;

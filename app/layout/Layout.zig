@@ -158,6 +158,9 @@ extents_changed: bool = false,
 /// Every surface `draw` ran this frame, so `captureUnplaced` knows which ones genuinely drew
 /// nowhere — as opposed to drew before the picker asked. Arena-backed, per frame.
 drawn: std.ArrayListUnmanaged(*Surface) = .empty,
+/// Views a plugin asked to put away during this frame (`hideLater`), put away once it has drawn
+/// (`applyHides`). Arena-backed, per frame.
+hides: std.ArrayListUnmanaged([]const u8) = .empty,
 /// Surfaces drawn this frame in a place with no room, so not captured (`drawCaptured`): no frame
 /// is asked for them until they have some. Arena-backed, per frame.
 unsized: std.ArrayListUnmanaged(*Surface) = .empty,
@@ -600,6 +603,72 @@ pub fn reveal(self: *Layout, id: []const u8) bool {
     return false;
 }
 
+/// What putting a view away does (`hide`).
+pub const Hide = union(enum) {
+    /// Shut this tray, which shows the view.
+    tray: Region,
+    /// Close this float, the view's only place.
+    float: []const u8,
+};
+
+/// What `hide` would do for `id`, from the one region that shows it (as `reveal` finds it). A
+/// tray: a place the shape declared `resize` (not one a split made, which is `forget_when_empty`),
+/// in the main window, open and not folded, with `id` the view it shows. A float: one not closing,
+/// with `id` its only view. Null for anything else — Main, a split's half, a plugin's pane, a view
+/// behind another or out of sight, a float with other views — and `hide` then changes nothing.
+pub fn hideTarget(self: *Layout, id: []const u8) ?Hide {
+    const s = self.surface(id) orelse return null;
+    if (s.hidden) return null;
+    var it = self.declaredRegions();
+    const r = find: while (it.next()) |place| {
+        for (self.matchingIn(place)) |m| if (m == s) break :find place;
+    } else return null;
+    if (r.layer > 0) {
+        const name = self.state.floatRoot(r.name) orelse return null;
+        const i = self.state.floats.find(name) orelse return null;
+        if (self.state.floats.items.items[i].closing) return null;
+        var views: usize = 0;
+        for (self.state.splits.leavesUnder(self.arena, name)) |leaf| {
+            if (self.state.assignment(leaf)) |ids| views += ids.len;
+        }
+        return if (views == 1) .{ .float = name } else null;
+    }
+    if (!r.resize or r.forget_when_empty or r.isClosed() or r.isFolded()) return null;
+    const shown = self.selectedIn(r) orelse return null;
+    return if (shown == s) .{ .tray = r.* } else null;
+}
+
+/// Put `id` away now, as the user would (`Host.hideSurface`): shut its tray as the tray's own
+/// close does, or close its float as the float's close button does, the view going home. False,
+/// changing nothing, where `hideTarget` finds nothing to do. Not while the shape or the floats
+/// draw, which walk what this changes: `hideLater` is for then.
+pub fn hide(self: *Layout, id: []const u8) bool {
+    switch (self.hideTarget(id) orelse return false) {
+        .tray => |r| r.close(),
+        .float => |name| self.closeFloat(name),
+    }
+    return true;
+}
+
+/// `hide` asked during the frame: answered now, by the same `hideTarget`, and done by
+/// `applyHides` once the shape, the floats and the picker have drawn. A `reveal` asked later in
+/// the same frame acts at once, so it comes first: a caller toggling a view makes one call a frame.
+pub fn hideLater(self: *Layout, id: []const u8) bool {
+    if (self.hideTarget(id) == null) return false;
+    const kept = self.arena.dupe(u8, id) catch return false;
+    self.hides.append(self.arena, kept) catch return false;
+    return true;
+}
+
+/// Do the hides asked during this frame (`hideLater`), in order, each asking `hideTarget` again.
+/// The application calls this once its frame has drawn. True when any of them acted.
+pub fn applyHides(self: *Layout) bool {
+    var any = false;
+    for (self.hides.items) |id| any = self.hide(id) or any;
+    self.hides.clearRetainingCapacity();
+    return any;
+}
+
 /// Surfaces that appear in no region of the last completed shape — neither assigned to one nor
 /// attracted by keywords to an unassigned one. Never silently lost: the settings UI lists these
 /// so a user (or the plugin author) can see the gap and fix it.
@@ -687,6 +756,10 @@ pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
 /// `draw` without the fade-in: for a swap, whose overlay already carries the change.
 fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
     self.drawn.append(self.arena, s) catch {};
+    const watching = ScrollWatch.enabled and !s.scrolls_itself;
+    var watch: ScrollWatch = undefined;
+    if (watching) watch.begin();
+    defer if (watching) watch.end(self.state, s.id);
     if (self.state.snapshots_wanted and !self.state.capture_unavailable and self.state.snapshot(s.id) == null and !self.state.captureFailed(s.id)) {
         if (try self.drawCaptured(s)) |r| return r;
     }
@@ -1391,6 +1464,55 @@ pub fn tabbed(_: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.Ap
     const place: Region = .{ .keywords = keywords };
     return f.tabbedIn(&place);
 }
+
+/// Debug builds only: catches a surface that fills its place with a scroll area of its own but
+/// does not say `Surface.scrolls_itself`. In a place that scrolls what it shows (fizzy's
+/// explorer) that view grows wider without limit and never shrinks after a resize, and nothing
+/// on screen says why.
+///
+/// It stands in as the parent the surface draws into, passing everything through to the real
+/// one (whose data it hands out, so every id is unchanged) and noting the first child placed:
+/// a scroll area, when dvui has kept that id's `ScrollInfo`, which every scroll area does as it
+/// closes. Only the first child, which is what "the content is its own scroll area" means; one
+/// under a header is not seen.
+const ScrollWatch = struct {
+    const enabled = builtin.mode == .debug;
+
+    parent: dvui.Widget,
+    first: ?struct { id: dvui.Id, expand: dvui.Options.Expand } = null,
+
+    fn begin(self: *ScrollWatch) void {
+        self.* = .{ .parent = dvui.parentGet() };
+        dvui.parentSet(dvui.Widget.init(self, data, rectFor, screenRectScale, minSizeForChild));
+    }
+
+    fn end(self: *ScrollWatch, state: *State, id: []const u8) void {
+        dvui.parentSet(self.parent);
+        const first = self.first orelse return;
+        if (!first.expand.isHorizontal() and !first.expand.isVertical()) return;
+        if (dvui.dataGet(null, first.id, "_scroll_info", dvui.ScrollInfo) == null) return;
+        if (!state.noteUnmarkedScroller(id)) return;
+        // Not in tests, which check `State.unmarked_scrollers`: a logged warning fails the step.
+        if (!builtin.is_test) dvui.log.warn("surface \"{s}\" fills its place with its own scroll area but does not set `scrolls_itself`: in a place that scrolls (a sidebar) it grows wider without limit. Set `.scrolls_itself = true` on its `Surface`.", .{id});
+    }
+
+    fn data(self: *ScrollWatch) *dvui.WidgetData {
+        return self.parent.data();
+    }
+
+    fn rectFor(self: *ScrollWatch, id: dvui.Id, min_size: dvui.Size, e: dvui.Options.Expand, g: dvui.Options.Gravity) dvui.Rect {
+        if (self.first == null) self.first = .{ .id = id, .expand = e };
+        return self.parent.rectFor(id, min_size, e, g);
+    }
+
+    fn screenRectScale(self: *ScrollWatch, r: dvui.Rect) dvui.RectScale {
+        return self.parent.screenRectScale(r);
+    }
+
+    fn minSizeForChild(self: *ScrollWatch, s: dvui.Size) void {
+        self.parent.minSizeForChild(s);
+    }
+};
 
 /// A surface's draw, timed in the frame profiler under its owner (fizzy's own when it has none)
 /// and its id.

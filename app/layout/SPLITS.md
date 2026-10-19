@@ -149,6 +149,13 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
   document (its place is the slot its plugin made for it), and a view already alone in a float
   nobody split — floating it again would only move it, which its header already does. For those
   the middle stays bare glass.
+- **A document floats in a view of its own,** where the application gives documents one
+  (`State.documents`: fizzy's workspaces, behind `FIZZY_WORKSPACES=1`). A tab dropped on the
+  middle of its own pane, or let go over no window of the app's where floats are OS windows,
+  floats a new workspace holding just it; a workspace's only tab carries the workspace, which
+  floats itself. Its float closes when that workspace empties, and closed from its header gives
+  its documents to the workspace the main window shows (`Documents.fold`) rather than going home
+  as a view.
 - **Where it opens.** At 60% of the place it left, never under 360×240 nor over 90% of the window,
   centred on where the view was and held 8pt inside the window; out of another float, a step down
   and right of that one (`float_rules.zig`, unit-tested).

@@ -70,6 +70,8 @@ pub const MenuSectionContribution = menus.MenuSectionContribution;
 pub const NativeMenuItem = menus.NativeMenuItem;
 /// A named action fizzy invokes by id, without knowing what it does.
 pub const Command = @import("Command.zig");
+/// A demo a plugin ships (`Host.registerDemo`), played through the `demos` service.
+pub const Demo = @import("Demo.zig");
 pub const Claim = @import("Claim.zig");
 /// One step of a document's history, recorded (`Host.recordStep`) and applied (`Plugin.applyStep`).
 pub const Step = @import("Step.zig");
@@ -109,7 +111,7 @@ pub const Manifest = @import("Manifest.zig");
 
 /// Services: capability offered by name and version rather than by the ABI.
 ///
-/// `"files"` and `"automation"` are the application's; the rest are plugins'. Every one of them is
+/// `"files"`, `"automation"` and `"demos"` are the application's; the rest are plugins'. Every one of them is
 /// optional — a caller handles null and offers what it can, which is what lets one plugin build
 /// run in applications that have wildly different amounts of machinery.
 pub const services = struct {
@@ -118,6 +120,7 @@ pub const services = struct {
     pub const markdown = @import("services/markdown.zig");
     pub const wikilink = @import("services/wikilink.zig");
     pub const automation = @import("services/automation.zig");
+    pub const demos = @import("services/demos.zig");
     pub const plugins = @import("services/plugins.zig");
 };
 

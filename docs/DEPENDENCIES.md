@@ -7,9 +7,10 @@ bump it; keep it current whenever a pin or a patch moves.
 
 | Dependency | Upstream | Fizzy's changes | Pinned in | Carries |
 |---|---|---|---|---|
-| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `fizzy-dev` | `sdk/build.zig.zon` | dvui changes fizzy needs |
+| [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
 | SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
 | [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
+| [`fizzyedit/nightwatch`](https://github.com/fizzyedit/nightwatch) | [`neurocyte/nightwatch`](https://github.com/neurocyte/nightwatch) | branch `fizzy` | `build.zig.zon` | a fix to its macOS FSEvents backend |
 
 SDL is fizzy's own dependency, not dvui's: fizzy's native backend (the `backend/` package) pins it
 in `backend/build.zig.zon` and translates its own `sdl3-c.h`. dvui's SDL pin is used only by the
@@ -133,9 +134,8 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 Each of 5 and 6 is also a branch of its own on upstream `main` (`window-draw-retained`,
 `screens-set`), from which the upstream PR is opened.
 
-**On fizzy's `zig/0.17` branch** the pin is `foxnne/dvui-dev` branch `zig-0.17`, by commit and
-as `git+https` (Zig 0.17 hashes this repo's GitHub archive wrongly; `docs/PITFALLS.md`): the eight
-above rebased onto upstream `main` (`41f6703`), then:
+**Since fizzy moved to Zig 0.17 (#575)** the pin is `foxnne/dvui-dev` branch `zig-0.17`, by tag and
+as `git+https`: the eight above rebased onto upstream `main` (`41f6703`), then:
 
 9. **floatingWindow: a backend may show one in an OS window of its own** (`bd7736d`). Patch 8's
    `osWindowFloating` became `Backend.floatingWindowOs(id, open_flag, min, max)`, asked as
@@ -155,8 +155,6 @@ above rebased onto upstream `main` (`41f6703`), then:
    kind and a lifted finger hovers nothing; `cursorSet` takes a priority, so a resize handle's
    cursor wins, and a floating window's edges ask at normal priority.
 
-Tagged `fizzy-sdk-*` when `zig/0.17` merges to `main`, as rule 2 says.
-
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
 `f8b32db`; `fizzy-sdk-0.2.19-2` → `a90bc70` (0.2.19 was not released yet, and a tag never
@@ -166,8 +164,9 @@ moves, so the second pin of one version takes a suffix, as the SDL fork's tags d
 `e2c9a85` (item 9 alone, never pinned); `fizzy-sdk-0.2.30-2` → `fdc03d4` (pinned by #540);
 `fizzy-sdk-0.2.30-3` → `cc60612` (never
 pinned); `fizzy-sdk-0.2.30-4` → `44010a3`; `fizzy-sdk-0.2.30-5` →
-`20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, what `sdk/build.zig.zon`
-pins now.
+`20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, the last pin on Zig 0.16;
+`fizzy-sdk-0.2.30-7` → `1b29a16` on `zig-0.17`, what `sdk/build.zig.zon` pins now (SDK 0.2.30, the
+first on Zig 0.17).
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
@@ -256,6 +255,23 @@ the stack as it was before it moved here, which older fizzy commits still build.
 
 Tags: `fizzy-1.0.3+3.4.16-1` to `-11` (`d0c70fe`) are the stack that built `fizzyedit/SDL`, kept
 for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`, what fizzy pins now.
+
+## fizzyedit/nightwatch
+
+The file watcher behind `app/watch/` (settings, open folders, documents). `fizzy` = upstream
+`master` (`023e79f`) plus:
+
+1. **fsevents: wait for a running callback before freeing its context** (`10c0207`): stopping the
+   stream schedules no further callbacks but does not wait for one already running on its
+   dispatch queue, and `stop_stream` freed that callback's context straight after (on each stop,
+   and each watch added or removed). A watcher stopped while events were arriving
+   (`SettingsWatcher.stop`, a folder's `FolderWatcher` closed) could leave a callback reading
+   freed memory and calling a handler its owner had let go of; under load it crashed
+   `zig build test-integration` (the test after the settings watcher's, with SIGABRT). Regression
+   test: "settings watcher: stop waits for a callback already running"
+   (`tests/integration.zig`). Upstream: not proposed yet; once it is merged there, the fork goes.
+
+Tags: `fizzy-1.0.0-1` → `10c0207`, what fizzy pins now.
 
 ## zig-patch
 

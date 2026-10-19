@@ -222,7 +222,7 @@ fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
 
         var i: usize = editor.app.recents.folders.items.len;
         while (i > 0) : (i -= 1) {
-            const folder = editor.app.recents.folders.items[i - 1];
+            const folder = editor.app.recents.folders.items[i - 1].path;
             if (menuItem(@src(), folder, .{}, .{
                 .expand = .horizontal,
                 .font = dvui.Font.theme(.mono),

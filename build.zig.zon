@@ -50,9 +50,10 @@
             .url = "git+https://github.com/fizzyedit/md4zig#eb5241c9e46cd0a507c0c7a85b01afe2b51e58a8",
             .hash = "md4zig-0.1.0-iiatj6AQBgBP6PiK2c4MRhjNK2ZXjVg94GvbIEv5WEl7",
         },
+        // fizzyedit's fork, for a fix to its FSEvents backend: docs/DEPENDENCIES.md.
         .nightwatch = .{
-            .url = "git+https://github.com/neurocyte/nightwatch#023e79f52bde36ac8fa4c967bd8333b14efb93cc",
-            .hash = "nightwatch-1.0.0-uXzeH1ALAwAr6LLM0H1Z0aBO_a5gpxQ1YsXpdlh3Xv6U",
+            .url = "https://github.com/fizzyedit/nightwatch/archive/10c02078e3f8cb1d315cad0e45dd5f6796b25bd3.tar.gz",
+            .hash = "nightwatch-1.0.0-uXzeH34NAwBXlLhX7AFrPtOQWtO1svKrk-WZfXFkIrVr",
             .lazy = true,
         },
         .zf = .{

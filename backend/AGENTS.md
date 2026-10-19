@@ -10,6 +10,12 @@ how an app wires it).
   (`core.FrameTarget`, `core.widgets.BlurBackdrop`, …) and takes the backend's instance over the
   same dvui (`core_module.addImports`); it depends on dvui and `glass_look` only. Its profiler
   scopes reach `core.profile` through `glass/prof.zig`, which the profiler hands its scopes to.
+- **A plain dvui app's frame draws into a texture** (`plainFrameBegin`/`plainFrameEnd` in
+  `SDLBackend.zig`, a `glass.FrameTarget`), so glass drawn over it can read what is under it.
+  Fizzy wraps its own frame (`src/Entry.zig`), so the backend's wrap is only for an app that
+  does not dress its windows (`platform.window.app_dresses_windows`): never both. It sits inside
+  `os_windows`' `beforeFrame`/`afterFrame`, whose pictures bind their own targets and give this
+  one back; anything that draws into the main window's frame goes before `plainFrameEnd`.
 - **dvui is the caller's.** It is never pinned here; the backend compiles against the app's dvui.
 - **SDL is patched here,** not in a fork: `patches/sdl/*.patch`, applied by zig-patch. How to
   change, add or bump them is `docs/DEPENDENCIES.md` ("SDL", "Bumping"). Touching a patch or this

@@ -14,6 +14,7 @@ pub const markdown = @import("../plugins/markdown/static/integration.zig");
 pub const image = @import("../plugins/image/static/integration.zig");
 pub const archive = @import("../plugins/archive/static/integration.zig");
 pub const devtools = @import("../plugins/devtools/static/integration.zig");
+pub const guides = @import("../plugins/guides/static/integration.zig");
 
 /// Fizzy's own plugins, as entries in the list an application links (`fizzy.plugins`). An entry
 /// with no module is built by fizzy for each executable, wired to that executable's framework.
@@ -24,9 +25,10 @@ pub const entries = struct {
     pub const archive: BundledPlugin = .{ .name = "archive" };
     pub const markdown: BundledPlugin = .{ .name = "markdown" };
     pub const devtools: BundledPlugin = .{ .name = "devtools" };
+    pub const guides: BundledPlugin = .{ .name = "guides" };
 
     /// What fizzy itself links, in its sidebar order.
-    pub const all = [_]BundledPlugin{ @This().workbench, @This().text, @This().image, @This().archive, @This().markdown, @This().devtools };
+    pub const all = [_]BundledPlugin{ @This().workbench, @This().text, @This().image, @This().archive, @This().markdown, @This().devtools, @This().guides };
 };
 
 /// Whether `plugins` links fizzy's own `name`, rather than leaving it out or bringing a module of
@@ -92,6 +94,8 @@ pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
             archive.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
         else if (std.mem.eql(u8, p.name, "devtools"))
             devtools.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
+        else if (std.mem.eql(u8, p.name, "guides"))
+            guides.addStaticModule(b, w.target, w.optimize, .{ .dvui = w.dvui, .core = w.core, .sdk = w.sdk }, w.consumer)
         else
             std.debug.panic("fizzy: plugin '{s}' has no module and is not one of fizzy's own (`fizzy.plugins`)", .{p.name});
         // A plugin this target does not build (markdown for the native exe on wasm) is left out.

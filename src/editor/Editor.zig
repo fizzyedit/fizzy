@@ -95,6 +95,7 @@ pub const FileLoadJob = workbench_mod.FileLoadJob;
 pub const sdk = fizzy.sdk;
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
+const Demos = @import("Demos.zig");
 const TapeTabs = @import("TapeTabs.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
 /// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
@@ -131,6 +132,8 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// The demo player and fizzy's stage for it. Attached in `postInit`, at the Editor's final
 /// address (the stage's context is this field).
 demo: Demo = .detached,
+/// Every demo fizzy can play, as the `demos` service lists them. Bound in `postInit`, beside `demo`.
+demos: Demos = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
 tape_tabs: TapeTabs = .{},
 /// The recording setting as last applied (`tick`); null before the first frame.
@@ -689,6 +692,18 @@ pub const view_settings = "fizzy.settings";
 /// Stable workbench sidebar view id (matches `workbench.view_files`).
 pub const workbench_files_view = workbench_mod.view_files;
 
+/// A hash-map context that takes two ids for one when they differ only in ASCII case.
+const CaseInsensitive = struct {
+    pub fn hash(_: CaseInsensitive, key: []const u8) u64 {
+        var h = std.hash.Wyhash.init(0);
+        for (key) |c| h.update(&.{std.ascii.toLower(c)});
+        return h.final();
+    }
+    pub fn eql(_: CaseInsensitive, a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
+
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return;
 
@@ -737,25 +752,33 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         }
     }.lt);
 
+    // The folders by their names ignoring case, in sorted order, made once: a group of more than
+    // one is the same id several times.
+    var case_groups: std.HashMapUnmanaged([]const u8, std.ArrayListUnmanaged([]const u8), CaseInsensitive, std.hash_map.default_max_load_percentage) = .empty;
+    for (ids.items) |id| {
+        const entry = case_groups.getOrPut(editor.app.arena.allocator(), id) catch continue;
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        entry.value_ptr.append(editor.app.arena.allocator(), id) catch {};
+    }
+
     for (ids.items) |plugin_id| {
         // Skip `.load-tmp` and any other dotfile/directory — not a plugin id.
         if (plugin_id.len == 0 or plugin_id[0] == '.') continue;
 
-        // Two folders whose names differ only in case (a case-sensitive filesystem lets both
-        // exist) are one id twice: neither loads. Which one was meant cannot be told from the
-        // folders, and loading whichever sorts first would let byte order choose. One card, on
-        // the first by that order, names them both.
-        const twin: ?[]const u8 = for (ids.items) |other| {
-            if (other.ptr != plugin_id.ptr and std.ascii.eqlIgnoreCase(other, plugin_id)) break other;
-        } else null;
-        if (twin) |other| {
-            if (std.mem.lessThan(u8, plugin_id, other)) {
-                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders '{s}' and '{s}' differ only in case, so neither is loaded: remove one", .{ plugin_id, other }) catch "two plugin folders differ only in case, so neither is loaded";
+        // Folders whose names differ only in case (a case-sensitive filesystem lets them all
+        // exist) are one id several times: none loads. Which one was meant cannot be told from
+        // the folders, and loading whichever sorts first would let byte order choose. One card,
+        // on the first by that order, names every one (`case_groups`, made in one pass above).
+        if (case_groups.get(plugin_id)) |group| if (group.items.len > 1) {
+            if (group.items[0].ptr == plugin_id.ptr) {
+                var names: std.Io.Writer.Allocating = .init(editor.app.arena.allocator());
+                for (group.items, 0..) |name, i| names.writer.print("{s}'{s}'", .{ @as([]const u8, if (i > 0) ", " else ""), name }) catch {};
+                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders {s} differ only in case, so none is loaded: keep one", .{names.written()}) catch "plugin folders differ only in case, so none is loaded";
                 dvui.log.warn("user plugin '{s}': {s}", .{ plugin_id, why });
                 editor.app.recordPluginFailure(plugin_id, why, null, null, .{});
             }
             continue;
-        }
+        };
 
         // User-disabled plugins (store "disable") stay on disk but are not loaded.
         if (editor.app.isPluginDisabled(plugin_id)) {
@@ -1462,9 +1485,13 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32 or !App.loads_plugins) return error.NotUnloadable;
     const path = try App.userPluginPath(editor.app.gpa, &editor.app, id);
     // Asked before the build is opened: a case variant of a loaded or installed id fails saying so.
-    var clash_buf: [64]u8 = undefined;
-    if (editor.app.pluginCaseClash(&clash_buf, id)) |other| {
-        editor.app.recordCaseClash(id, other, path);
+    var clash_buf: [std.fs.max_name_bytes]u8 = undefined;
+    if (editor.app.pluginCaseClash(&clash_buf, id)) |clash| {
+        switch (clash) {
+            .other => |other| editor.app.recordCaseClash(id, other, path),
+            // Refused as a possible clash: nothing says the folder is this plugin's alone.
+            .unreadable => editor.app.recordPluginFailure(id, "the plugins folder could not be read to check for a plugin whose id differs only in case", null, null, .of(path)),
+        }
         editor.app.gpa.free(path);
         return error.DuplicatePluginId;
     }
@@ -1923,9 +1950,8 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, opts: UnloadOptions) Unload
 
     // Remove all contributions + services + active-id references (before dlclose), then
     // run the plugin's own teardown.
-    editor.app.host.unregisterPlugin(plugin);
-    fizzy.backend.rebuildDynamicNativeMenus();
-    plugin.deinit();
+    // Native menus rebuilt before the plugin's `deinit`, as they may still name its strings.
+    editor.app.host.retirePlugin(plugin, fizzy.backend.rebuildDynamicNativeMenus);
 
     // Drop the unloaded plugin's keybinds by rebuilding from the survivors.
     rebuildKeybinds(editor);
@@ -2072,16 +2098,18 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
     const plugin_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", id });
     defer editor.app.gpa.free(plugin_dir);
     // A build refused for its case (`App.recordCaseClash`) names a folder that, on macOS and
-    // Windows, is the loaded plugin's own: its card drops, and that folder stays. Told apart by
-    // what the folder is on disk, not by its name.
-    const keep = if (editor.app.host.pluginByIdIgnoringCase(id)) |loaded| keep: {
-        if (std.mem.eql(u8, loaded.id, id)) break :keep false;
-        const loaded_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins", loaded.id });
-        defer editor.app.gpa.free(loaded_dir);
-        break :keep App.sameFolder(plugin_dir, loaded_dir);
-    } else false;
-    if (!keep) std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
-        dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) });
+    // Windows, is another installed plugin's own, loaded or not: its card drops, and that folder
+    // stays. Told apart by the names the filesystem lists now, never by the name asked for.
+    const plugins_dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "plugins" });
+    defer editor.app.gpa.free(plugins_dir);
+    switch (@import("app").store.folders.deletable(dvui.io, plugins_dir, id)) {
+        .folder => std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
+            dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) }),
+        // A dev setup's link: the link goes, never what it points at.
+        .link => std.Io.Dir.cwd().deleteFile(dvui.io, plugin_dir) catch |err|
+            dvui.log.warn("uninstallPlugin '{s}': could not remove the link {s}: {s}", .{ id, plugin_dir, @errorName(err) }),
+        .keep => dvui.log.info("uninstallPlugin '{s}': {s} is not this plugin's own folder alone; kept", .{ id, plugin_dir }),
+    }
     // A broken (failed-to-load) build can be uninstalled too; clear its failure record so the
     // card disappears instead of lingering as "Failed".
     editor.app.clearFailedUserPlugin(id);
@@ -2099,6 +2127,13 @@ pub fn postInit(editor: *Editor) !void {
     // Documents' tracks (plans/RECORDING_PLAN.md): on as the setting says (`record_history`),
     // applied each time it changes (`tick`).
     editor.app.tracks = .init(editor.app.gpa);
+    // Closed documents' tracks are kept in the profile, and picked up when they open again. Not
+    // on the web, which has no profile folder to keep them in.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        const dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "tracks" });
+        defer editor.app.gpa.free(dir);
+        try editor.app.tracks.?.keepIn(dir);
+    }
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});
     } else {
@@ -2335,6 +2370,10 @@ pub fn postInit(editor: *Editor) !void {
     // The `automation` service: plugins play live tapes on the app as it is (`automation.Service`).
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
+    // The `demos` service: fizzy's demos and plugins' (`Host.registerDemo`), listed and played.
+    editor.demos = .init(editor);
+    editor.demos.bind();
+    try editor.app.host.registerService(sdk.services.demos.Api, &editor.demos.api, null);
 
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
@@ -2401,16 +2440,17 @@ fn drawSettingsPane(_: ?*anyopaque) anyerror!dvui.App.Result {
 }
 
 // ---- EditorAPI: fizzy-provided read/utility surface for plugins ----------
-// Installed on the Host in `postInit`; `ctx` is this `*Editor`.
+// Installed on the Host in `postInit`; `ctx` is this `*Editor`. Public for a test that drives a
+// plugin through `Host` (`tests/integration.zig`, the workbench's home page).
 
-const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
+pub const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .arena = fizzyArena,
     .extensionOwnerOverride = fizzyExtensionOwnerOverride,
     .folder = fizzyFolder,
     .paletteFolder = fizzyPaletteFolder,
     .pluginDataFolder = fizzyPluginDataFolder,
     .pluginRegistered = fizzyPluginRegistered,
-    .pluginUnregistered = fizzyPluginUnregistered,
+    .pluginRetired = fizzyPluginRetired,
     .getSecret = fizzyGetSecret,
     .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
@@ -2454,12 +2494,14 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .assignedRegionNames = fizzyAssignedRegionNames,
     .selectInRegion = fizzySelectInRegion,
     .revealSurface = fizzyRevealSurface,
+    .hideSurface = fizzyHideSurface,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
     .closeProjectFolder = fizzyCloseProjectFolder,
     .recentFolderCount = fizzyRecentFolderCount,
     .recentFolderAt = fizzyRecentFolderAt,
+    .recentFolderOpened = fizzyRecentFolderOpened,
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
     .folderWatchActive = fizzyFolderWatchActive,
@@ -2583,8 +2625,8 @@ fn fizzyPluginDataFolder(ctx: *anyopaque, id: []const u8) ?[]const u8 {
 fn fizzyPluginRegistered(ctx: *anyopaque, id: []const u8) void {
     fizzyCtx(ctx).app.pluginRegistered(id);
 }
-fn fizzyPluginUnregistered(ctx: *anyopaque, id: []const u8) void {
-    fizzyCtx(ctx).app.pluginUnregistered(id);
+fn fizzyPluginRetired(ctx: *anyopaque, id: []const u8) void {
+    fizzyCtx(ctx).app.pluginRetired(id);
 }
 fn fizzyGetSecret(ctx: *anyopaque, key: []const u8) ?[]const u8 {
     return fizzyCtx(ctx).app.secrets.get(key);
@@ -2702,7 +2744,13 @@ fn fizzyRecentFolderCount(ctx: *anyopaque) usize {
 fn fizzyRecentFolderAt(ctx: *anyopaque, index: usize) ?[]const u8 {
     const editor = fizzyCtx(ctx);
     if (index >= editor.app.recents.folders.items.len) return null;
-    return editor.app.recents.folders.items[index];
+    return editor.app.recents.folders.items[index].path;
+}
+fn fizzyRecentFolderOpened(ctx: *anyopaque, index: usize) ?i64 {
+    const editor = fizzyCtx(ctx);
+    if (index >= editor.app.recents.folders.items.len) return null;
+    const opened = editor.app.recents.folders.items[index].opened;
+    return if (opened == 0) null else opened;
 }
 fn fizzyOpenInFileBrowser(ctx: *anyopaque, path: []const u8) anyerror!void {
     return fizzyCtx(ctx).openInFileBrowser(path);
@@ -3713,6 +3761,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
+    editor.app.settings.kept_history_gb = parsed.kept_history_gb;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
@@ -4224,8 +4273,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.setTracking(want);
         }
     }
-    // The document states tracks asked for since last frame, before anything draws.
-    if (editor.app.tracks) |*t| t.tick();
+    // The document states tracks asked for since last frame, before anything draws; and what
+    // kept history may take, as the setting says.
+    if (editor.app.tracks) |*t| {
+        t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
+        t.tick();
+    }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
         if (editor.app.open_files.get(p.doc_id)) |doc| editor.exportDocument(doc, p.from, p.to);
@@ -4618,15 +4671,18 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
             editor.app.layout.publishRegions();
-            // A drag or a collapse moved a region: fizzy's answer to "remember that" is a
-            // debounced write to `layout.zon`.
-            if (layout.extents_changed) editor.markWindowRatiosDirty();
             // Over every place: a drag's join spans two of them.
             layout.drawDragOverlay();
             // The picker photographs surfaces that drew nowhere this frame, and floats above
             // everything the shape drew.
             layout.captureUnplaced();
             editor.app.layout.picker.draw(&layout);
+            // Everything that walks the places has drawn: what plugins asked to put away during
+            // the frame (`Host.hideSurface`) goes now.
+            if (layout.applyHides()) editor.afterHide();
+            // A drag, a collapse, the picker or a hide moved a region: fizzy's answer to
+            // "remember that" is a debounced write to `layout.zon`.
+            if (layout.extents_changed) editor.markWindowRatiosDirty();
             editor.app.frame_layout = null;
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
@@ -5189,6 +5245,24 @@ fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {
     return layout.reveal(id);
 }
 
+fn fizzyHideSurface(ctx: *anyopaque, id: []const u8) bool {
+    const editor = fizzyCtx(ctx);
+    // Mid-frame the shape and the floats are walking what a hide changes: done at the frame's end.
+    if (editor.app.frame_layout) |layout| return layout.hideLater(id);
+    var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
+    if (!layout.hide(id)) return false;
+    editor.afterHide();
+    if (layout.extents_changed) editor.markWindowRatiosDirty();
+    return true;
+}
+
+/// A hide acted (`Layout.hide`). One that shut the sidebar goes through the explorer's own close,
+/// as the rail's does, so the `closed` that Toggle Explorer and its menu title read agrees.
+fn afterHide(editor: *Editor) void {
+    const side = editor.regionFor(sdk.keywords.ide.sidebar) orelse return;
+    if (side.isClosed() and !editor.explorer.closed) editor.explorer.close(editor);
+}
+
 fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {
     const editor = fizzyCtx(ctx);
     const arena = editor.app.arena.allocator();
@@ -5421,7 +5495,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     editor.command_palette.invalidate();
     // A demo's folder is not one the user opened, and is gone when the demo is.
     if (!editor.demo.active()) {
-        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
+        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path), std.Io.Clock.real.now(dvui.io).toSeconds());
         editor.recentFoldersChanged();
     }
     if (editor.app.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
@@ -5456,11 +5530,11 @@ fn recentFoldersChanged(editor: *Editor) void {
 pub fn openRecentFolder(editor: *Editor, index: usize) void {
     const recents = &editor.app.recents;
     if (index >= recents.folders.items.len) return;
-    editor.setProjectFolder(recents.folders.items[index]) catch |err| {
+    editor.setProjectFolder(recents.folders.items[index].path) catch |err| {
         // As `anyerror`: on the web there is no disk to check, so neither is in the set.
         const e: anyerror = err;
         if (e == error.NotADirectory or e == error.NotDir) {
-            recents.folders.allocator.free(recents.folders.orderedRemove(index));
+            recents.removeFolder(index);
             editor.recentFoldersChanged();
         } else if (e != error.FileNotFound) dvui.log.err("open recent folder failed: {t}", .{err});
     };
@@ -6316,7 +6390,7 @@ pub fn documentSaved(editor: *Editor, doc: sdk.DocHandle) void {
 }
 
 /// Whether the host writes this document (`DocumentIo`) rather than its owner: always on a
-/// mount, and on the disk whenever the owner can serialize. An owner without `documentBytes`
+/// mount, and on the disk whenever the owner can serialize. An owner without `documentSnapshot`
 /// writes its own files — and can only ever reach the disk.
 pub fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
     if (editor.doc_io.owns(doc.owner.documentPath(doc))) return true;
@@ -6325,7 +6399,7 @@ pub fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
 }
 
 /// Save through the host: its owner serializes, the path's filesystem writes, and the owner
-/// hears back when the write lands. An owner without `documentBytes` cannot save to a mount
+/// hears back when the write lands. An owner without `documentSnapshot` cannot save to a mount
 /// at all, which is said once rather than failing silently.
 fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
     editor.doc_io.save(doc, doc.owner.documentPath(doc)) catch |err| switch (err) {
@@ -6342,7 +6416,7 @@ fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
 /// then tell the owner it was written under that name.
 fn downloadDocument(editor: *Editor, doc: sdk.DocHandle, path: []const u8) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) return error.Unsupported;
-    const bytes = (try doc.owner.documentBytes(doc, path, editor.app.gpa)) orelse return error.Unsupported;
+    const bytes = (try doc.owner.saveBytes(doc, path, editor.app.gpa)) orelse return error.Unsupported;
     defer editor.app.gpa.free(bytes);
     try dvui.backend.downloadData(std.fs.path.basename(path), bytes);
     try doc.owner.documentWritten(doc, path);
@@ -6752,10 +6826,15 @@ pub fn deinit(editor: *Editor) !void {
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
+    editor.demos.deinit();
     editor.tape_tabs.deinit(editor);
     editor.black_box.deinit(editor.app.gpa);
     editor.app.host.recorder = null;
-    if (editor.app.tracks) |*t| t.deinit();
+    // Each open document's track is kept as the app quits, its document still there to read.
+    if (editor.app.tracks) |*t| {
+        t.keepOpen();
+        t.deinitAll();
+    }
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
@@ -7114,15 +7193,6 @@ const plugin_manager_vtable: PluginManager.VTable = .{
     .revealMain = struct {
         fn f(ctx: *anyopaque) void {
             pmSelf(ctx).revealCenter();
-        }
-    }.f,
-    .refuseCaseClash = struct {
-        fn f(ctx: *anyopaque, id: []const u8) bool {
-            const app = &pmSelf(ctx).app;
-            var buf: [64]u8 = undefined;
-            const other = app.pluginCaseClash(&buf, id) orelse return false;
-            app.recordCaseClash(id, other, null);
-            return true;
         }
     }.f,
 };

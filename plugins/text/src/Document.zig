@@ -397,11 +397,12 @@ pub fn save(self: *Document) !void {
     self.notifyContentChanged();
 }
 
-/// The bytes `save` would write, for a host that does the writing itself (a mounted drive).
-/// Remembers which edit those bytes stand for: the write lands later, and edits typed in the
-/// meantime must still count as unsaved when it does.
+/// The bytes `save` would write, for a host that does the writing itself (a mounted drive), as a
+/// save starts. Remembers which edit those bytes stand for: the write lands later, and edits typed
+/// in the meantime must still count as unsaved when it does. The run of typing stays open until
+/// then: the save's undo stop is made when its write lands (`written`). A copy that is no save (a
+/// crash checkpoint) takes `text` instead (the plugin's `documentBytes`), remembering nothing.
 pub fn savedBytes(self: *Document, allocator: std.mem.Allocator) ![]u8 {
-    self.history.closeGroup();
     self.serialized_op_id = self.history.topOpId();
     return allocator.dupe(u8, self.text.items);
 }
@@ -418,6 +419,10 @@ pub fn written(self: *Document, path: []const u8) !void {
         self.unsaved = false;
     }
     self.clean_op_id = self.serialized_op_id;
+    // The state written is an undo stop, as `save` makes it, while it is still the top. Typed
+    // while the write was in flight, a keystroke has already joined that step: the step is newer
+    // than the file, so the document stays dirty, and undo takes it back past the saved state.
+    if (self.history.topOpId() == self.serialized_op_id) self.history.closeGroup();
     self.notifyContentChanged();
 }
 
@@ -646,6 +651,55 @@ pub fn applyStep(self: *Document, effect: []const u8) !void {
     self.sel_cursor = @min(sel.head, self.text.items.len);
     self.pending_sel = sel;
     sdk.host().documentEdited(self.id);
+}
+
+/// Put the history back as its track recorded it (`sdk.Plugin.VTable.restoreHistory`), in place
+/// of what it holds: each entry's parts (`step_format`, as `recordEdits` wrote them) joined into
+/// one transaction, its id kept. Checked against the text first, on a copy: undoing every applied
+/// entry, and redoing every one after them, must land, or `error.StepDoesNotApply` and nothing
+/// changes. The text is untouched, and a clean document stays clean.
+pub fn restoreHistory(self: *Document, history: sdk.Plugin.RestoredHistory) !void {
+    const gpa = sdk.allocator();
+    if (history.applied > history.entries.len) return error.BadStep;
+    const built = try gpa.alloc(tc.History.Restored, history.entries.len);
+    defer gpa.free(built);
+    var made: usize = 0;
+    var taken = false;
+    defer if (!taken) for (built[0..made]) |*b| b.txn.deinit(gpa);
+    for (history.entries, built) |e, *b| {
+        b.* = .{ .step = e.id, .txn = .{} };
+        made += 1;
+        var first = true;
+        for (e.parts) |part| {
+            const view = try tc.Transaction.StepView.init(part);
+            var it = view.iterator();
+            while (it.next()) |edit| {
+                if (first) b.txn.sel_before = .collapsed(edit.pos);
+                first = false;
+                try b.txn.append(gpa, edit.pos, edit.removed, edit.inserted);
+            }
+            b.txn.sel_after = view.sel;
+        }
+    }
+    // Back to where the history began, and forward through what redo brings back: each must fit.
+    {
+        var copy: std.ArrayList(u8) = .empty;
+        defer copy.deinit(gpa);
+        try copy.appendSlice(gpa, self.text.items);
+        var i = history.applied;
+        while (i > 0) {
+            i -= 1;
+            built[i].txn.applyInverse(gpa, &copy) catch return error.StepDoesNotApply;
+        }
+        copy.clearRetainingCapacity();
+        try copy.appendSlice(gpa, self.text.items);
+        for (built[history.applied..]) |b| b.txn.applyForward(gpa, &copy) catch return error.StepDoesNotApply;
+    }
+    const was_clean = !self.isDirty();
+    try self.history.restore(gpa, built, history.applied);
+    taken = true;
+    if (was_clean) self.clean_op_id = self.history.topOpId();
+    self.history.trim(gpa, @import("../plugin.zig").statePtr().settings.history_limit.get());
 }
 
 /// Undo or redo until history step `step` is the last applied; 0 goes back before the first.

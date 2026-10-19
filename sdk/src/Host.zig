@@ -34,6 +34,7 @@ pub const RailItemContribution = @import("menus.zig").RailItemContribution;
 pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
+pub const Demo = @import("Demo.zig");
 pub const Claim = @import("Claim.zig");
 pub const Step = @import("Step.zig");
 pub const Author = @import("Author.zig");
@@ -260,6 +261,10 @@ menu_context: ?EditorAPI.MenuContext = null,
 rail_items: std.ArrayListUnmanaged(RailItemContribution) = .empty,
 /// More ways to open something, listed beside fizzy's own (`OpenAction`).
 open_actions: std.ArrayListUnmanaged(OpenAction) = .empty,
+/// Plugins' demos (`registerDemo`), each string and tape the host's own copy.
+demos: std.ArrayListUnmanaged(Demo) = .empty,
+/// Moves whenever `demos` changes, so the app lists them again only then.
+demos_generation: u32 = 0,
 /// Who the user is signed in as, per service (`accounts.Provider`). The host draws the disc.
 account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
@@ -383,6 +388,8 @@ pub fn deinit(self: *Host) void {
     self.menu_sections.deinit(self.allocator);
     self.rail_items.deinit(self.allocator);
     self.open_actions.deinit(self.allocator);
+    for (self.demos.items) |d| self.freeDemo(d);
+    self.demos.deinit(self.allocator);
     self.account_providers.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
@@ -448,9 +455,10 @@ pub fn paletteFolder(self: *Host) ?[]const u8 {
 /// comes back then: a plugin whose write into a kept path fails with `FileNotFound` calls again
 /// (a second later, if it called just now). Safe to call from any thread.
 ///
-/// Null when no app is installed, when `plugin` is not registered, when its id is not a plain
-/// identifier (letters, digits, `-`, `_`; logged once), or when the folder could not be made
-/// (logged once, and tried again on a call a few seconds later).
+/// Null when no app is installed, when `plugin` is not registered (or has been retired,
+/// `retirePlugin`), when its id is not a plain identifier (letters, digits, `-`, `_`; logged
+/// once), or when the folder could not be made (logged once, and tried again on a call a few
+/// seconds later).
 ///
 /// On the web, as with `paletteFolder`, the path names no directory: it is the prefix under
 /// which `core.fs.read`, `readZ`, `write` and `remove` keep files in the page's storage. Those
@@ -681,6 +689,23 @@ pub fn revealSurface(self: *Host, id: []const u8) bool {
     return a.revealSurface(id);
 }
 
+/// Put the surface `id` away, as the user would: `revealSurface`'s other half, so a button can
+/// toggle its view (`if (!host.hideSurface(id)) _ = host.revealSurface(id);`). Only two cases
+/// act, and anything else returns false and changes nothing:
+///
+/// - the view is what a tray shows (a place the shape declared resizable: fizzy's sidebar and
+///   bottom panel), and the tray is open: the tray shuts, with whatever else it holds, as its own
+///   close does. `revealSurface` opens it again at the size the user left it;
+/// - the view is alone in a float: the float closes as its close button does, and the view goes
+///   back to the place it floated out of.
+///
+/// Asked during a frame (from a surface's draw), it answers at once and acts once the frame has
+/// drawn. Full contract: `docs/PLUGINS.md` §3.1.2, "Showing and putting away a view".
+pub fn hideSurface(self: *Host, id: []const u8) bool {
+    const a = self.fizzy_api orelse return false;
+    return a.hideSurface(id);
+}
+
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
 }
@@ -772,6 +797,13 @@ pub fn recentFolderCount(self: *Host) usize {
 
 pub fn recentFolderAt(self: *Host, index: usize) ?[]const u8 {
     return if (self.fizzy_api) |a| a.recentFolderAt(index) else null;
+}
+
+/// When the recent folder at `index` (as `recentFolderAt`) was last opened, in seconds since the
+/// Unix epoch: what an app groups recents by ("today", "last week"). Null when not known (a
+/// folder remembered before fizzy kept times) or past the end.
+pub fn recentFolderOpened(self: *Host, index: usize) ?i64 {
+    return if (self.fizzy_api) |a| a.recentFolderOpened(index) else null;
 }
 
 pub fn openInFileBrowser(self: *Host, path: []const u8) !void {
@@ -976,6 +1008,30 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
     if (self.fizzy_api) |a| if (a.vtable.pluginRegistered) |registered| registered(a.ctx, plugin.id);
 }
 
+/// Take `plugin` out for good: its registrations go (`unregisterPlugin`'s work), then
+/// `before_deinit` runs if given (fizzy rebuilds its native menus, which may still name the
+/// plugin's strings), then the plugin's own `deinit`, then the app is told
+/// (`EditorAPI.pluginRetired`) so what it kept for the plugin (its data folder's entry) goes now,
+/// after a `deinit` that may still have used it. The unload path's one call: unload, disable,
+/// reload and uninstall all come through it, in any app. Before `dlclose`, as `unregisterPlugin`.
+pub fn retirePlugin(self: *Host, plugin: *Plugin, before_deinit: ?*const fn () void) void {
+    // The id is the plugin's own memory: copied before its `deinit`, which may free it. One longer
+    // than any valid id has nothing kept for it to tell about.
+    var buf: [64]u8 = undefined;
+    const told = plugin.id.len <= buf.len;
+    const n = if (told) plugin.id.len else 0;
+    @memcpy(buf[0..n], plugin.id[0..n]);
+    self.dropRegistrations(plugin);
+    if (before_deinit) |f| f();
+    plugin.deinit();
+    if (told) self.tellRetired(buf[0..n]);
+}
+
+/// The app is told `id` is gone (`EditorAPI.pluginRetired`).
+fn tellRetired(self: *Host, id: []const u8) void {
+    if (self.fizzy_api) |a| if (a.vtable.pluginRetired) |retired| retired(a.ctx, id);
+}
+
 /// Remove every contribution, service, and registry entry owned by `plugin`, then drop
 /// the plugin itself. The inverse of `registerPlugin` + the `register*` calls a plugin
 /// makes in its `register`. Used by the runtime unload path (the store's "disable" /
@@ -985,14 +1041,25 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
 /// `*Plugin` itself live in the plugin image's static memory. The caller must invoke
 /// this *before* `dlclose`, so that the active-selection ids (which may point into that
 /// image) are compared and reset while the memory is still mapped.
+///
+/// What the app kept for `plugin` goes too (`EditorAPI.pluginRetired`), so no caller leaves a
+/// live data folder behind. To unload a plugin that still writes out its state in `deinit`, call
+/// `retirePlugin`, which tells the app only after that `deinit`.
 pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
-    if (self.fizzy_api) |a| if (a.vtable.pluginUnregistered) |gone| gone(a.ctx, plugin.id);
+    self.dropRegistrations(plugin);
+    self.tellRetired(plugin.id);
+}
+
+/// `unregisterPlugin`'s work without telling the app: `retirePlugin` tells it after the plugin's
+/// `deinit`.
+fn dropRegistrations(self: *Host, plugin: *Plugin) void {
     for (self.surfaces.items) |s| if (s.owner == plugin) self.dropSurfaceTitle(s.id);
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
     removeOwned(OpenAction, &self.open_actions, plugin);
     removeOwned(RailItemContribution, &self.rail_items, plugin);
+    self.removeDemosOf(plugin);
     removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
     self.removeCommandsOf(plugin);
@@ -1539,6 +1606,41 @@ pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void 
 /// Put something small at the bottom of the rail — see `RailItemContribution`.
 pub fn registerRailItem(self: *Host, item: RailItemContribution) !void {
     try self.rail_items.append(self.allocator, item);
+}
+
+/// Add a demo the app lists and plays beside its own — see `Demo`. Copied: nothing of `demo` is
+/// kept. A name already registered is refused (`error.DemoExists`); the app refuses one of its own
+/// names when it lists them.
+pub fn registerDemo(self: *Host, demo: Demo) !void {
+    for (self.demos.items) |d| if (std.mem.eql(u8, d.name, demo.name)) return error.DemoExists;
+    const name = try self.allocator.dupe(u8, demo.name);
+    errdefer self.allocator.free(name);
+    const title = try self.allocator.dupe(u8, demo.title);
+    errdefer self.allocator.free(title);
+    const tape = try self.allocator.dupe(u8, demo.tape);
+    errdefer self.allocator.free(tape);
+    try self.demos.append(self.allocator, .{ .name = name, .title = title, .tape = tape, .owner = demo.owner });
+    self.demos_generation +%= 1;
+}
+
+fn freeDemo(self: *Host, d: Demo) void {
+    self.allocator.free(d.name);
+    self.allocator.free(d.title);
+    self.allocator.free(d.tape);
+}
+
+fn removeDemosOf(self: *Host, plugin: *Plugin) void {
+    var w: usize = 0;
+    for (self.demos.items) |d| {
+        if (d.owner == plugin) {
+            self.freeDemo(d);
+            continue;
+        }
+        self.demos.items[w] = d;
+        w += 1;
+    }
+    if (w != self.demos.items.len) self.demos_generation +%= 1;
+    self.demos.items.len = w;
 }
 
 /// Add a way to open something beside Open Folder / Open Files — see `OpenAction`.
@@ -2906,7 +3008,7 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
     // Only the one vtable member `pluginForExtension` reaches; the rest stay unreachable here.
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
-    api_vt.pluginUnregistered = null;
+    api_vt.pluginRetired = null;
     api_vt.extensionOwnerOverride = Fake.extensionOwnerOverride;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });
@@ -2929,6 +3031,33 @@ test "pluginForExtension honors a user assignment and ignores a stale one" {
     try testing.expectEqual(&text, host.pluginForExtension(".png").?);
 
     Fake.override = null;
+}
+
+test "registerDemo keeps its own copy, refuses a name twice, and a plugin's demos go with it" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    const vtable = Plugin.VTable{};
+    var plugin = Plugin{ .state = undefined, .vtable = &vtable, .id = "guide", .display_name = "Guide" };
+    try host.registerPlugin(&plugin);
+
+    var name_buf = "tour2".*;
+    var tape_buf = ".{}".*;
+    const before = host.demos_generation;
+    try host.registerDemo(.{ .name = &name_buf, .title = "Another tour", .tape = &tape_buf, .owner = &plugin });
+    // Nothing points into what the plugin handed over.
+    name_buf[0] = 'x';
+    tape_buf[0] = 'x';
+    try testing.expectEqualStrings("tour2", host.demos.items[0].name);
+    try testing.expectEqualStrings(".{}", host.demos.items[0].tape);
+    try testing.expect(host.demos_generation != before);
+
+    try testing.expectError(error.DemoExists, host.registerDemo(.{ .name = "tour2", .title = "Again", .tape = "" }));
+    try testing.expectEqual(@as(usize, 1), host.demos.items.len);
+
+    const registered = host.demos_generation;
+    host.unregisterPlugin(&plugin);
+    try testing.expectEqual(@as(usize, 0), host.demos.items.len);
+    try testing.expect(host.demos_generation != registered);
 }
 
 test "unregisterPlugin removes a plugin's contributions, service, and resets active ids" {
@@ -3298,7 +3427,7 @@ test "a claim on a document holds an override of its owner's command too" {
     S.owner = &pixi;
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
-    api_vt.pluginUnregistered = null;
+    api_vt.pluginRetired = null;
     api_vt.activeDoc = S.active;
     api_vt.refresh = S.refresh;
     var ctx: u8 = 0;
@@ -3607,7 +3736,7 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
     // ...and something required has the app ask for it.
     var api_vt: EditorAPI.VTable = undefined;
     api_vt.pluginRegistered = null;
-    api_vt.pluginUnregistered = null;
+    api_vt.pluginRetired = null;
     api_vt.askCommandArguments = S.ask;
     var ctx: u8 = 0;
     host.installFizzyApi(.{ .ctx = &ctx, .vtable = &api_vt });

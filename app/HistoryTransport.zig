@@ -422,7 +422,10 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         // Not past the pane's edge, which the grip stands on.
         const prev_clip = if (from) |f| dvui.clip(dome.aboveEdge(f)) else dvui.clipGet();
         defer dvui.clipSet(prev_clip);
-        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = dome.merge(p, 14), .shadow = 1 });
+        // No shadow ring: each bubble's own ring lay dark across the necks where they run together
+        // (the tab into the bar). The one soft shadow of the merged shape is the orb's
+        // (`plans/LIQUID_EDGE_PLAN.md`); the rim and lens are what set the glass off meanwhile.
+        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = dome.merge(p, 14), .shadow = 0 });
     }
     // What is on the bubbles comes once they are most of the way out; the liquid comes with them.
     const shape_alpha = dvui.alpha(1);

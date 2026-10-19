@@ -829,6 +829,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
+        // Which plugin folders a case variant clashes with, and what an uninstall may delete
+        // there. std-only (see plugin_folders.zig); the store and the loader ask it.
+        .{ "fizzy-plugin-folders-tests", "app/store/plugin_folders.zig" },
         // Where a floating view's window opens, what keeps it reachable, its name, the floats'
         // stacking and where a closed float's views go. std-only (see float_rules.zig);
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
@@ -1163,6 +1166,12 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
+    // A `.zip` opened as a mounted folder, as the web opens the site (`tests/demos.zig`).
+    const archive_module_test = plugins.archive.addStaticModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+    }, fizzy_test_module);
     // What the test build bundles, as the exe's does (`build/exe.zig`), so a test can bring up
     // the whole editor — `Editor.postInit` registers whatever is listed here.
     fizzy_test_module.addImport("bundled_plugins", sdk.bundledPluginsModule(b, target, optimize, &.{
@@ -1171,6 +1180,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ .name = "image", .module = image_module_test },
         .{ .name = "markdown", .module = markdown_module_test },
         .{ .name = "devtools", .module = devtools_module_test },
+        .{ .name = "archive", .module = archive_module_test },
     }));
 
     if (target.result.os.tag == .macos) {

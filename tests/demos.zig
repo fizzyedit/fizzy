@@ -10,6 +10,7 @@ const dvui = @import("dvui");
 const fizzy = @import("fizzy");
 const automation = @import("app").automation;
 const workbench = @import("workbench");
+const sdk = fizzy.sdk;
 
 /// The app's frame as `Entry` runs it: the demo player, the frame target, the editor.
 fn headlessFrame() !dvui.App.Result {
@@ -68,12 +69,21 @@ test "demo: the rail's Files anchor the scripts spell out is the one fizzy publi
     try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
 }
 
-test "demo: every bundled demo plays to the end through fizzy's stage, and a seek lands on what playing reached" {
+test "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after" {
     var app: BundledApp = undefined;
     try app.up();
     defer app.down();
     const p = &app.editor.demo.player;
     const gpa = std.testing.allocator;
+
+    // What the person had before the demos: a folder opened from a zip's bytes, as the web's
+    // `?open=/site.zip` opens the site. There is no file to open it from again.
+    const site = try openZipFromBytes(app.editor, "site.zip", &.{.{ "README.md", "# The site\n" }});
+    defer gpa.free(site);
+    const docs_before = app.editor.app.open_files.count();
+    const active_before = try gpa.dupe(u8, activePath(app.editor));
+    defer gpa.free(active_before);
+    try std.testing.expectEqualStrings("site.zip", active_before);
     var moments: std.ArrayList(DemoMoment) = .empty;
     defer moments.deinit(gpa);
     var prng: std.Random.DefaultPrng = .init(bundled_seek_seed);
@@ -129,6 +139,100 @@ test "demo: every bundled demo plays to the end through fizzy's stage, and a see
         try std.testing.expectEqual(@as(u32, 0), p.mismatches);
         try std.testing.expectEqual(@as(u32, 0), p.timeouts);
     }
+
+    // The `demos` service lists them, fizzy's own in its order, with each one's length and chapters.
+    const api = app.editor.demos.api;
+    const catalog = fizzy.Editor.Demo.catalog;
+    try std.testing.expectEqual(catalog.entries.len, api.list().len);
+    for (catalog.entries, api.list()) |e, info| {
+        try std.testing.expectEqualStrings(e.name, info.name);
+        try std.testing.expectEqual(sdk.services.demos.Api.Origin.bundled, info.origin);
+        try std.testing.expect(info.ms > 0);
+    }
+
+    // A plugin's demo is listed beside them; one reusing a name fizzy has, and a live tape, are not.
+    const generation = api.generation();
+    const guide = try encodedDemo("guide", true);
+    defer gpa.free(guide);
+    const live = try encodedDemo("live", false);
+    defer gpa.free(live);
+    const host = &app.editor.app.host;
+    try host.registerDemo(.{ .name = "a-guide", .title = "A guide", .tape = guide });
+    try host.registerDemo(.{ .name = "tour", .title = "Not the tour", .tape = guide });
+    try host.registerDemo(.{ .name = "a-live-tape", .title = "Live", .tape = live });
+    try std.testing.expect(api.generation() != generation);
+    const listed = api.list();
+    try std.testing.expectEqual(catalog.entries.len + 1, listed.len);
+    const added = listed[listed.len - 1];
+    try std.testing.expectEqualStrings("a-guide", added.name);
+    try std.testing.expectEqualStrings("A guide", added.title);
+    try std.testing.expectEqual(sdk.services.demos.Api.Origin.plugin, added.origin);
+    try std.testing.expectEqual(@as(usize, 2), added.chapters.len);
+
+    // It plays by name, to its end, named the one playing while it does.
+    try std.testing.expectEqual(sdk.services.demos.Api.Play.unknown, api.play("no-such-demo", 0));
+    try std.testing.expectEqual(sdk.services.demos.Api.Play.started, api.play("a-guide", 0));
+    try std.testing.expectEqualStrings("a-guide", api.current().?);
+    var frames: usize = 0;
+    while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(automation.Player.State.ended, p.state);
+    try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+
+    // From a chapter, it starts there.
+    const second = added.chapters[1].at;
+    try std.testing.expectEqual(sdk.services.demos.Api.Play.started, api.play("a-guide", second));
+    frames = 0;
+    while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expect(p.seq.now >= @as(f64, @floatFromInt(second)));
+
+    // A tape loaded some other way is not the one the service started.
+    try app.editor.demo.play("markdown");
+    try std.testing.expectEqual(@as(?[]const u8, null), api.current());
+
     p.unload();
     try dvui.testing.settle(headlessFrame);
+    try std.testing.expectEqual(@as(?[]const u8, null), api.current());
+
+    try std.testing.expectEqualStrings(site, app.editor.app.folder orelse "");
+    try std.testing.expectEqual(docs_before, app.editor.app.open_files.count());
+    try std.testing.expect(app.editor.app.host.files.?.isMounted(site));
+    try std.testing.expectEqualStrings(active_before, activePath(app.editor));
+}
+
+fn activePath(editor: *fizzy.Editor) []const u8 {
+    const doc = editor.activeDoc() orelse return "";
+    return doc.owner.documentPath(doc);
+}
+
+/// Open a zip of `files` from its bytes, as the web page opens one it fetched
+/// (`FizzyWebOpenBytes`), and return the folder it mounted as, in `std.testing.allocator`.
+fn openZipFromBytes(editor: *fizzy.Editor, name: []const u8, files: []const struct { []const u8, []const u8 }) ![]u8 {
+    const gpa = std.testing.allocator;
+    var mem = try fizzy.core.vfs.Mem.init(gpa);
+    defer mem.deinit();
+    for (files) |f| try mem.put(f[0], f[1]);
+    const bytes = try fizzy.core.vfs.zip.pack(gpa, &mem);
+    defer gpa.free(bytes);
+    _ = try editor.openFileFromBytes(try editor.app.gpa.dupe(u8, name), bytes, 0);
+    try dvui.testing.settle(headlessFrame);
+    const folder = editor.app.folder orelse return error.NotMounted;
+    try std.testing.expect(std.mem.startsWith(u8, folder, "zip://"));
+    return gpa.dupe(u8, folder);
+}
+
+/// A tape a plugin might register, encoded: a demo opening on a keyframe of one file, in two
+/// chapters, or (`demo` false) a live tape of the same pauses, which a demo list leaves out.
+fn encodedDemo(name: []const u8, demo: bool) ![]u8 {
+    const gpa = std.testing.allocator;
+    var s: automation.Script = .init(gpa, name, name);
+    errdefer s.deinit();
+    s.check.live = !demo;
+    if (demo) try s.keyframe(.{ .root = "demo://guide", .files = &.{.{ .path = "notes.md", .text = "# Notes\n" }}, .open = &.{"notes.md"} });
+    try s.chapter("One");
+    s.pause(600);
+    try s.chapter("Two");
+    s.pause(600);
+    var owned = try s.finish();
+    defer owned.deinit();
+    return automation.binary.encode(gpa, owned.tape, .{});
 }

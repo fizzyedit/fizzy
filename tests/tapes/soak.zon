@@ -34,8 +34,10 @@
         .{ .at = 0, .do = .{ .wait = .{ .until = .{ .shown = "region:Sidebar" }, .timeout = 10000 } } },
 
         // The explorer out of its place by the place's corner button, dropped on the place's own
-        // middle: it floats. Back by resetting the layout, which closes the float and its window.
-        .{ .at = 1500, .ms = 400, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -20, .dy = 20 } } },
+        // middle: it floats. The pointer touches the corner first, which brings the button up, then
+        // goes onto the button. Back by resetting the layout, which closes the float and its window.
+        .{ .at = 1500, .ms = 250, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -3, .dy = 3 } } },
+        .{ .at = 1800, .ms = 150, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -26, .dy = 26 } } },
         .{ .at = 2000, .do = .{ .press = .left } },
         .{ .at = 2100, .ms = 600, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 0.5, .y = 0.5 } } },
         .{ .at = 2900, .do = .{ .release = .left } },
@@ -44,7 +46,8 @@
         .{ .at = 4500, .do = .{ .wait = .{ .until = .{ .gone = "region:Float 1" }, .timeout = 5000 } } },
         .{ .at = 4500, .do = .{ .wait = .{ .until = .{ .shown = "region:Sidebar" }, .timeout = 5000 } } },
 
-        .{ .at = 5500, .ms = 400, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -20, .dy = 20 } } },
+        .{ .at = 5500, .ms = 250, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -3, .dy = 3 } } },
+        .{ .at = 5800, .ms = 150, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -26, .dy = 26 } } },
         .{ .at = 6000, .do = .{ .press = .left } },
         .{ .at = 6100, .ms = 600, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 0.5, .y = 0.5 } } },
         .{ .at = 6900, .do = .{ .release = .left } },
@@ -53,7 +56,8 @@
         .{ .at = 8500, .do = .{ .wait = .{ .until = .{ .gone = "region:Float 1" }, .timeout = 5000 } } },
         .{ .at = 8500, .do = .{ .wait = .{ .until = .{ .shown = "region:Sidebar" }, .timeout = 5000 } } },
 
-        .{ .at = 9500, .ms = 400, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -20, .dy = 20 } } },
+        .{ .at = 9500, .ms = 250, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -3, .dy = 3 } } },
+        .{ .at = 9800, .ms = 150, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 1, .y = 0, .dx = -26, .dy = 26 } } },
         .{ .at = 10000, .do = .{ .press = .left } },
         .{ .at = 10100, .ms = 600, .do = .{ .move = .{ .tag = "region:Sidebar", .x = 0.5, .y = 0.5 } } },
         .{ .at = 10900, .do = .{ .release = .left } },
