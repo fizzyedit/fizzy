@@ -69,22 +69,16 @@ pub fn emerge(p: f32, delay: f32) f32 {
     return core.motion.enterFull(std.math.clamp((p - delay) / (1 - delay), 0, 1));
 }
 
-/// Where a bubble of the bar is, `p` of the way out (0 in its grip `from`, 1 at its place `to`),
-/// budding at `delay` (a share of the growing): a drop pulled out of the grip rather than a button
-/// sliding. Small while it travels, inflating as it nears its place; along an arc, up and then
-/// across, rather than straight, `arc` times the usual height (so bubbles leaving together fan out
-/// rather than travel stacked); on one smooth curve (`smooth`) both ways, so going back is coming
-/// played backwards — in the reverse order, as the later a bubble buds, the sooner it is in.
-pub fn pull(from: dvui.Rect.Physical, to: dvui.Rect.Physical, p: f32, delay: f32, arc: f32) dvui.Rect.Physical {
-    const a = bud(from);
-    return pullFrom(a, a.h, to, p, delay, arc);
-}
-
-/// `pull` from `home` (physical) rather than a dome's bud, travelling as a drop up to `size`
-/// across (physical): a bubble leaving `home` changes from `home`'s shape to its drop's as it sets
-/// off, and one coming back changes into `home` as it arrives. A corner vial's home is the vial's
-/// own circle (`Corner.home`), so the bubbles going back become the vial rather than sinking into
-/// it, and the glass the bar ends as is the vial at rest.
+/// Where a bubble of the bar is, `p` of the way out (0 at its `home` in the grip, 1 at its place
+/// `to`), budding at `delay` (a share of the growing): a drop pulled out of the grip rather than a
+/// button sliding. It changes from `home`'s shape to a drop up to `size` across as it sets off,
+/// travels small and inflates as it nears its place; along an arc, up and then across, rather than
+/// straight, `arc` times the usual height (so bubbles leaving together fan out rather than travel
+/// stacked); on one smooth curve (`smooth`) both ways, so going back is coming played backwards —
+/// in the reverse order, as the later a bubble buds, the sooner it is in — and one arriving takes
+/// `home`'s shape. A dome's home is its bud (`bud`); a corner vial's is the vial's own circle
+/// (`Corner.home`), so the bubbles going back become the vial, and the glass the bar ends as is the
+/// vial at rest. All physical.
 pub fn pullFrom(home: dvui.Rect.Physical, size: f32, to: dvui.Rect.Physical, p: f32, delay: f32, arc: f32) dvui.Rect.Physical {
     const k = std.math.clamp((p - delay) / (1 - delay), 0, 1);
     const t = smooth(k);
@@ -572,4 +566,18 @@ fn pourStream(lip: [2]f32, end: [2]f32, tail: f32, head: f32, th: f32, color: dv
     const hw = std.math.lerp(th * 0.45, th, head) / 2;
     const r: dvui.Rect.Physical = .{ .x = h[0] - hw, .y = h[1] - hw, .w = 2 * hw, .h = 2 * hw };
     r.fill(.all(hw), .{ .color = .{ .color = color }, .fade = 1 });
+}
+
+test "a bar going back into its corner vial ends as the vial, with no glass between" {
+    const c: Corner = .{ .card = .{ .x = 10, .y = 20, .w = 800, .h = 600 }, .radii = .{ 12, 12, 12, 12 } };
+    const s: f32 = 2;
+    const home = c.home(s);
+    const to: dvui.Rect.Physical = .{ .x = 300, .y = 500, .w = 68, .h = 68 };
+    // Every bubble arrives as the home, whatever it budded at.
+    for ([_]f32{ 0, 0.16, 0.36 }) |delay| try std.testing.expectEqual(home, pullFrom(home, bud(c.box(s)).h, to, 0, delay, 1));
+    // Its home is the vial whole: the bubbles arriving are the vial's own outline.
+    try std.testing.expectEqual(home, core.widgets.orb.rectOf(c.shape(s, 1)));
+    // And no glass runs between them and the vial at the end, which would bulge it.
+    try std.testing.expectEqual(@as(f32, 0), cornerMerge(0, 14));
+    try std.testing.expectApproxEqAbs(@as(f32, 14), cornerMerge(1, 14), 0.001);
 }
