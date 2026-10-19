@@ -578,19 +578,15 @@ fn frameOnce() !dvui.App.Result {
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
     Editor.Popout.beginFrame(&fizzy.editor().app.layout);
-    // The whole frame draws into a texture — see `core.FrameTarget` for why.
-    {
-        const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");
-        defer prof.end();
-        frame_target.begin();
-    }
+    // The main window shows the whole frame (`Editor.MainWindow`, a `ViewHost`): drawn into a
+    // texture — see `core.FrameTarget` for why.
+    const main_window = &fizzy.editor().main_window;
+    _ = main_window.host().begin();
     defer {
-        const prof = fizzy.core.profile.begin("fizzy", "frame target: onto the window");
-        defer prof.end();
-        frame_target.end();
+        main_window.host().end();
         // What an agent asked for (`automation` service): the snapshot, now that every dialog has
         // drawn, and a picture of a window as drawn, read back whether or not it is on screen.
-        fizzy.editor().demo.frameEnd(if (frame_target.picture()) |p| .{ .target = p.target, .w = p.w, .h = p.h } else null);
+        fizzy.editor().demo.frameEnd(if (main_window.frame_target.picture()) |p| .{ .target = p.target, .w = p.w, .h = p.h } else null);
         // A snapshot just written answers the `fizzy.screen` waiting on it now, not at the next
         // frame's start: a frame sooner.
         fizzy.editor().answerLaterCommands(true);
@@ -604,8 +600,6 @@ fn frameOnce() !dvui.App.Result {
     defer prof_tick.end();
     return try fizzy.editor().tick();
 }
-
-var frame_target: fizzy.core.FrameTarget = .{};
 
 /// `fizzy --control-path` (with `--profile` or `FIZZY_PROFILE` as any launch takes them): print where
 /// the control server listens, for a script to hand `curl --unix-socket`, and exit: 0 with the path,

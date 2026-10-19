@@ -101,6 +101,8 @@ const TapeTabs = @import("TapeTabs.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
 /// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
 pub const Popout = @import("Popout.zig");
+pub const MainWindow = @import("MainWindow.zig");
+const ViewHost = @import("app").view.ViewHost;
 pub const Host = sdk.Host;
 
 /// Workbench: the file-management home — file tree, open/load flow, and the
@@ -247,6 +249,8 @@ window_opacity: f32 = 1.0,
 /// OS's fullscreen transitions instead of snapping. Snaps to its target on the first frame, so
 /// there is no fade at launch.
 window_opacity_anim: WindowOpacity = .{},
+/// The main window, the host the whole frame is shown on (`MainWindow`, `app.view.ViewHost`).
+main_window: MainWindow = .{},
 /// Linux: the compositor blurs behind the window (`backend.blurBehind`), so the window's base is
 /// translucent over it, as over macOS's vibrancy and Windows' Acrylic (`windowBase`).
 blurred_behind: bool = false,
@@ -4211,9 +4215,9 @@ const cover_ms = 500;
 /// let go of covering the desktop (`tick`).
 const space_exit_watch_s = 4;
 
-/// Ease a window's opacity (`o`) toward `windowed` or, while it `covers` the desktop — zoomed, full
-/// screen (`backend.coversDesktop`) — opaque. While the window moves itself into a fullscreen Space
-/// or out of one (`fullness`, `backend.spaceFullness`) it is as opaque as it is far into full
+/// Ease a window's opacity (`o`) toward `windowed` or, while its host's surface covers the desktop
+/// — zoomed, full screen (`ViewHost.Space.covers`) — opaque. While the window moves itself into a
+/// fullscreen Space or out of one (`Space.fullness`) it is as opaque as it is far into full
 /// screen: the fade and the move are one motion. Across any other change of `covers` it takes
 /// `cover_ms` on a smoothstep from the moment the change is seen; otherwise — the opacity slider
 /// moving — it follows closely. Where AppKit animates a Space transition as pictures of the window
@@ -4222,7 +4226,11 @@ const space_exit_watch_s = 4;
 /// for the next: asked from a frame the window monitor drew through a transition, a plain refresh
 /// woke nothing, and the window sat opaque after leaving full screen until the mouse moved (the
 /// user).
-pub fn easeWindowOpacity(o: *WindowOpacity, covers: bool, snap: bool, fullness: ?f32, windowed: f32) void {
+pub fn easeWindowOpacity(o: *WindowOpacity, host: ViewHost, windowed: f32) void {
+    const at = host.space();
+    const covers = at.covers;
+    const snap = at.entering;
+    const fullness = at.fullness;
     const target: f32 = if (covers) 1.0 else windowed;
     const cover_target: f32 = if (covers) 1.0 else 0.0;
     const now = dvui.currentWindow().frame_time_ns;
@@ -4288,8 +4296,8 @@ pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.Wind
 /// material where the window has one (macOS, Windows; Linux where the compositor blurs behind it),
 /// lightened as it goes see-through so the material behind reads as the same tone; opaque where
 /// there is none; clear at 0. What the main window and a float's own window stand on where the
-/// backend does not dress their material (`backend.windowMaterialBase`, `viewports.materialBase`:
-/// macOS's own backend), and the carry window (`Popout.base`).
+/// backend does not dress their material (`ViewHost.materialBase`: macOS's own backend), and the
+/// carry window (`Popout.base`).
 pub fn windowBase(opacity: f32) dvui.Color {
     const material = switch (builtin.target.os.tag) {
         .macos, .windows => true,
@@ -4423,8 +4431,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
     // The draw uses `window_opacity_anim`.
-    const covers = fizzy.backend.coversDesktop(dvui.currentWindow());
-    easeWindowOpacity(&editor.window_opacity_anim, covers, fizzy.backend.enteringSpace(dvui.currentWindow()), fizzy.backend.spaceFullness(dvui.currentWindow()), editor.window_opacity);
+    easeWindowOpacity(&editor.window_opacity_anim, editor.main_window.host(), editor.window_opacity);
     // Linux: the desktop's blur behind the window's frame, where the compositor has one
     // (`backend.blurBehind`), asked for while the window is translucent at all, its corners the
     // frame's (square maximized, as `draw` draws it). Behind `FIZZY_BLUR_BEHIND=1` until it has been
@@ -4448,7 +4455,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         if (editor.chrome_was_hidden and !hidden) editor.space_exit_watch_ns = now + space_exit_watch_s * std.time.ns_per_s;
         editor.chrome_was_hidden = hidden;
         if (now < editor.space_exit_watch_ns) {
-            if (covers) dvui.refresh(dvui.currentWindow(), @src(), null) else editor.space_exit_watch_ns = 0;
+            // Whether it covers it, as its opacity was eased for this frame (`easeWindowOpacity`).
+            if (editor.window_opacity_anim.covers) dvui.refresh(dvui.currentWindow(), @src(), null) else editor.space_exit_watch_ns = 0;
         }
     }
 
@@ -4657,9 +4665,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
         // fullscreen transitions; at 1.0 the base is the opaque fill. Where the backend makes the
         // window of the window material (macOS: Liquid Glass, vibrancy or none, as a plain dvui
-        // app's), the base is its colour over that material at this opacity (`materialBase`): clear
+        // app's), the base is its colour over that material at this opacity (`ViewHost.materialBase`): clear
         // on Liquid Glass, whose colour is the glass's. Elsewhere fizzy's own (`windowBase`).
-        const window_color = fizzy.backend.windowMaterialBase(dvui.currentWindow(), dvui.themeGet().color(.content, .fill), editor.window_opacity_anim.value, windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size())) orelse windowBase(editor.window_opacity_anim.value);
+        const window_color = editor.main_window.host().materialBase(dvui.themeGet().color(.content, .fill), editor.window_opacity_anim.value) orelse windowBase(editor.window_opacity_anim.value);
         // For glass that is the window's own material (`core.dialogs.windowBase`).
         fizzy.core.dialogs.publishWindowBase(window_color);
 

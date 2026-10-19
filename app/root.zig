@@ -82,6 +82,11 @@ pub const layout = struct {
     pub const State = @import("layout/State.zig");
 };
 
+/// What shows a view of the frame: the main window, a float's window (`view/ViewHost.zig`).
+pub const view = struct {
+    pub const ViewHost = @import("view/ViewHost.zig");
+};
+
 /// Watching the filesystem for changes the application should react to.
 ///
 /// Opt-in: an app that does not want a folder watcher simply never starts one, and the cost is
@@ -203,6 +208,7 @@ pub const store = struct {
 // whose tests no std-only test root of their own reaches. `Layout`'s own `test` block brings in
 // the split trees, seeds, regions, drop plans and view drag beside it.
 test {
+    _ = view.ViewHost;
     _ = layout.Layout;
     _ = layout.Shape;
     _ = watch.FolderWatcher;
