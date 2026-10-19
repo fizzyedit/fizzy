@@ -155,6 +155,10 @@ pub const Request = struct {
     /// The path and query, as sent: `/commands/text.insert?x=1`.
     target: []const u8,
     content_type: ?[]const u8,
+    /// The `Mcp-Session-Id` header, as sent (`routes`, `mcp.Sessions`).
+    mcp_session: ?[]const u8 = null,
+    /// The `Mcp-Session-Id` to answer with, formatted by the routes (`mcp.formatSession`).
+    mcp_session_reply: ?[16]u8 = null,
     body: []const u8,
     /// Set by `answer`. `body` is `gpa`-owned and the connection's thread frees it.
     response: Response = .{},
@@ -479,6 +483,7 @@ fn serve(self: *Server, conn: *Conn) void {
             .method = head.head.method,
             .target = arena.dupe(u8, head.head.target) catch return,
             .content_type = if (head.head.content_type) |t| arena.dupe(u8, t) catch return else null,
+            .mcp_session = mcpSession(&head, arena) catch return,
             .body = "",
             .conn = conn,
             .arena = arena,
@@ -504,9 +509,13 @@ fn serve(self: *Server, conn: *Conn) void {
         if (req.response.stream) return self.serveStream(&head, &req.stream);
         const body = req.response.body orelse "out of memory\n";
         defer if (req.response.body) |b| self.gpa.free(b);
+        const headers = [_]std.http.Header{
+            .{ .name = "content-type", .value = req.response.content_type },
+            .{ .name = "mcp-session-id", .value = if (req.mcp_session_reply) |*id| id else "" },
+        };
         const sent = head.respond(body, .{
             .status = req.response.status,
-            .extra_headers = &.{.{ .name = "content-type", .value = req.response.content_type }},
+            .extra_headers = headers[0..if (req.mcp_session_reply != null) 2 else 1],
         });
         {
             self.lock.lockUncancelable(self.io);
@@ -516,6 +525,13 @@ fn serve(self: *Server, conn: *Conn) void {
         sent catch return;
         if (!head.head.keep_alive) return;
     }
+}
+
+/// The request's `Mcp-Session-Id`, copied into `arena`, or null.
+fn mcpSession(head: *std.http.Server.Request, arena: std.mem.Allocator) error{OutOfMemory}!?[]const u8 {
+    var it = head.iterateHeaders();
+    while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, "mcp-session-id")) return try arena.dupe(u8, h.value);
+    return null;
 }
 
 /// Write events to the connection until the client goes, falls too far behind, or the server

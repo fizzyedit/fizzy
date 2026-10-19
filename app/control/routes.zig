@@ -32,6 +32,8 @@ pub const Answer = struct {
     /// Static: a string literal.
     content_type: []const u8 = "application/json",
     body: []const u8,
+    /// The MCP session to name in the response's `Mcp-Session-Id` (`initialize` opened it).
+    mcp_session: ?u64 = null,
 };
 
 const zon_type = "application/zon";
@@ -51,7 +53,18 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
             continue;
         };
         waiter.* = .{ .server = server, .state = state, .host = host, .req = req, .zon = isZon(req.content_type) };
-        const a = route(host, req.method, req.path(), req.content_type, req.body, arena.allocator(), waiter) catch Answer{
+        // An MCP request is made as its client's session; everything else has none.
+        var ctx: mcp.Context = .{ .gpa = server.gpa, .sessions = &state.sessions, .header = req.mcp_session, .now = std.Io.Clock.awake.now(server.io).nanoseconds, .fresh_id = 0 };
+        const is_mcp = std.mem.eql(u8, std.mem.trimEnd(u8, req.path(), "/"), "/mcp");
+        if (is_mcp) {
+            var bytes: [8]u8 = undefined;
+            // Never 0: that is the shared author's session.
+            while (ctx.fresh_id == 0) {
+                server.io.random(&bytes);
+                ctx.fresh_id = std.mem.readInt(u64, &bytes, .little);
+            }
+        }
+        const a = route(host, req.method, req.path(), req.content_type, req.body, arena.allocator(), waiter, if (is_mcp) &ctx else null) catch Answer{
             .status = .internal_server_error,
             .content_type = "text/plain",
             .body = "out of memory\n",
@@ -68,8 +81,16 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
         if (a.stream) {
             req.answerStream(server);
             streaming = true;
-        } else req.answer(server, a.status, a.content_type, a.body);
+        } else {
+            if (a.mcp_session) |id| {
+                var header: [16]u8 = undefined;
+                _ = mcp.formatSession(id, &header);
+                req.mcp_session_reply = header;
+            }
+            req.answer(server, a.status, a.content_type, a.body);
+        }
     }
+    if (state.sessions.list.items.len > 0) state.sessions.expire(server.gpa, host, std.Io.Clock.awake.now(server.io).nanoseconds);
     state.follow(host, server, streaming);
 }
 
@@ -82,6 +103,10 @@ pub fn stop(server: *Server, state: *State, host: *sdk.Host) void {
         w.destroy();
     }
     state.waiters.clearAndFree(server.gpa);
+    // Their clients are gone with the server: the agent plugin hears each end.
+    state.sessions.endAll(server.gpa, host);
+    state.sessions.deinit(server.gpa);
+    state.sessions = .{};
     state.follow(host, server, false);
     server.stop();
 }
@@ -137,6 +162,8 @@ pub const State = struct {
     on: bool = false,
     /// Requests whose commands answer in a later frame (`Waiter`). UI thread.
     waiters: std.ArrayListUnmanaged(*Waiter) = .empty,
+    /// The MCP clients that initialized (`mcp.Sessions`). UI thread.
+    sessions: mcp.Sessions = .{},
 
     const relay_vtable: sdk.Plugin.VTable = .{};
 
@@ -172,14 +199,14 @@ fn relayEvent(state: *anyopaque, event: sdk.events.Event) void {
 
 /// Answer one request. Everything returned lives in `arena`.
 pub fn handle(host: *sdk.Host, method: std.http.Method, path: []const u8, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator) Answer {
-    return route(host, method, path, content_type, body, arena, null) catch .{
+    return route(host, method, path, content_type, body, arena, null, null) catch .{
         .status = .internal_server_error,
         .content_type = "text/plain",
         .body = "out of memory\n",
     };
 }
 
-fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator, waiter: ?*Waiter) error{OutOfMemory}!Answer {
+fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator, waiter: ?*Waiter, session: ?*mcp.Context) error{OutOfMemory}!Answer {
     const trimmed = std.mem.trimEnd(u8, path, "/");
     if (trimmed.len == 0) {
         if (method != .GET and method != .HEAD) return notAllowed(arena, "GET");
@@ -204,10 +231,21 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
         };
     }
     if (std.mem.eql(u8, trimmed, "/mcp")) {
-        if (method != .POST) return notAllowed(arena, "POST");
+        // A client ends its session.
+        if (method == .DELETE) {
+            const ctx = session orelse return notAllowed(arena, "POST");
+            const id = mcp.parseSession(ctx.header orelse return failure(arena, .bad_request, "DELETE /mcp names its session in Mcp-Session-Id")) orelse
+                return failure(arena, .bad_request, "Mcp-Session-Id is 16 hex digits");
+            if (!ctx.sessions.end(ctx.gpa, host, id)) return failure(arena, .not_found, "no such session");
+            return .{ .status = .ok, .body = "" };
+        }
+        if (method != .POST) return notAllowed(arena, if (session != null) "POST, DELETE" else "POST");
         const sink: ?sdk.Host.CallSink = if (waiter) |w| .{ .ctx = w, .done = Waiter.done } else null;
-        return switch (try mcp.handle(host, body, arena, sink)) {
-            .now => |reply| .{ .status = .ok, .body = reply },
+        const reply = try mcp.handle(host, body, arena, sink, session);
+        const opened = if (session) |ctx| ctx.opened else null;
+        return switch (reply) {
+            .now => |r| .{ .status = .ok, .body = r, .mcp_session = opened },
+            .unknown_session => failure(arena, .not_found, "no such session: initialize again"),
             .none => .{ .status = .accepted, .body = "" },
             .later => |l| later: {
                 const w = waiter.?;

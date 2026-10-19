@@ -48,6 +48,7 @@ fizzy with its own Windows target must set it too, or its server logs that it ca
 | `GET /events?topics=a,b` | the app's events as Server-Sent Events |
 | `GET /openapi.json` | all of this as OpenAPI 3.1, generated from what is registered now |
 | `POST /mcp` | the Model Context Protocol, its tools the commands |
+| `DELETE /mcp` | ends the MCP session its `Mcp-Session-Id` names |
 
 **Bodies are JSON**, converted to the ZON commands take at the server's edge: an object of
 arguments keyed by the command's parameter names, a string where the parameter is an enumeration
@@ -143,8 +144,16 @@ curl --unix-socket "$SOCK" localhost/mcp -d '{"jsonrpc":"2.0","id":2,"method":"t
 ```
 
 It answers `initialize`, `ping`, `tools/list` and `tools/call`, and notifications get a `202`. There
-is no server-sent stream yet (`GET /mcp`), no `Mcp-Session-Id`, and no resources or prompts. An
-MCP client that can only dial a URL or speak stdio reaches it through a proxy for now.
+is no server-sent stream yet (`GET /mcp`), and no resources or prompts. An MCP client that can only
+dial a URL or speak stdio reaches it through a proxy for now.
+
+**Sessions.** `initialize` answers with an `Mcp-Session-Id` header, and each request that sends it
+back is made as that client: its tool calls run as the author `.{ .kind = .agent, .plugin =
+"control", .session = <id> }`, labelled with `clientInfo.name`, so history and undo say which agent
+made a step. A request without the header is made as one shared author ("An agent"). One naming a
+session that is not open gets `404`, and the client initializes again. A session ends at
+`DELETE /mcp`, after an hour with no request, or when the server stops, and
+`fizzy.mcp.session_ended` (`.{ .session, .label, .plugin }`) says so.
 
 ## The description
 
@@ -156,6 +165,5 @@ hand) take any object. Results are not typed yet: any JSON value.
 
 ## Not yet
 
-From the plan, in order: MCP on the same socket and sessions (claims and tapes for scripts and
-agents), loopback TCP for clients that cannot dial a socket, the chat plugin's conversations as
+From the plan, in order: the agent plugin's claims and tapes per session, loopback TCP for clients that cannot dial a socket, the chat plugin's conversations as
 commands and events, and a second launch forwarding its files over this socket.

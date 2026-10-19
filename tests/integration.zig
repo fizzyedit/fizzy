@@ -7754,6 +7754,146 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.len], "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"done\\\":true}\"}],\"isError\":false}}"));
 }
 
+/// A command that keeps who called it (`Host.author`), and the events the bus delivered.
+const McpWho = struct {
+    host: *sdk.Host,
+    who: sdk.Author = .unattributed,
+    label: [64]u8 = undefined,
+    label_len: usize = 0,
+    ended: [256]u8 = undefined,
+    ended_len: usize = 0,
+    fn record(state: *anyopaque) anyerror!void {
+        const self: *McpWho = @ptrCast(@alignCast(state));
+        self.who = self.host.author();
+        self.label_len = @min(self.who.label.len, self.label.len);
+        @memcpy(self.label[0..self.label_len], self.who.label[0..self.label_len]);
+    }
+    fn heard(state: *anyopaque, event: sdk.events.Event) void {
+        const self: *McpWho = @ptrCast(@alignCast(state));
+        self.ended_len = @min(event.payload.len, self.ended.len);
+        @memcpy(self.ended[0..self.ended_len], event.payload[0..self.ended_len]);
+    }
+};
+
+test "control: each MCP client is a session, its calls made as its own author" {
+    const gpa = std.testing.allocator;
+    const mcp = @import("app").control.mcp;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    var who: McpWho = .{ .host = &host };
+    const vtable = sdk.Plugin.VTable{};
+    var plugin = sdk.Plugin{ .state = &who, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.who", .owner = &plugin, .title = "Who", .run = McpWho.record });
+    try host.subscribe(.{ .event = mcp.session_ended.name, .owner = &plugin, .handler = McpWho.heard });
+    var sessions: mcp.Sessions = .{};
+    defer sessions.deinit(gpa);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // `initialize` opens a session named by the client, and says which.
+    var ctx: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = null, .now = 0, .fresh_id = 0x2a };
+    _ = try mcp.handle(&host, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"Claude Code\"}}}", arena, null, &ctx);
+    try std.testing.expectEqual(@as(?u64, 0x2a), ctx.opened);
+    var buf: [16]u8 = undefined;
+    const header = mcp.formatSession(0x2a, &buf);
+    try std.testing.expectEqualStrings("000000000000002a", header);
+    try std.testing.expectEqual(@as(?u64, 0x2a), mcp.parseSession(header));
+
+    // A call with the session is made as its author, labelled with the client's name.
+    const call = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"t.who\"}}";
+    var with: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = header, .now = 1, .fresh_id = 0 };
+    _ = try mcp.handle(&host, call, arena, null, &with);
+    try std.testing.expect(who.who.same(.{ .kind = .agent, .plugin = "control", .session = 0x2a }));
+    try std.testing.expectEqualStrings("Claude Code", who.label[0..who.label_len]);
+    // Without one, the shared author, as every call was before sessions.
+    var without: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = null, .now = 1, .fresh_id = 0 };
+    _ = try mcp.handle(&host, call, arena, null, &without);
+    try std.testing.expect(who.who.same(mcp.Sessions.shared));
+    // A session that is not open is refused, so the client initializes again.
+    var unknown: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = "00000000000000ff", .now = 1, .fresh_id = 0 };
+    try std.testing.expect(try mcp.handle(&host, call, arena, null, &unknown) == .unknown_session);
+    var garbled: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = "not hex", .now = 1, .fresh_id = 0 };
+    try std.testing.expect(try mcp.handle(&host, call, arena, null, &garbled) == .unknown_session);
+    // Only the header's own form names a session: no sign, no separators, no short forms.
+    try std.testing.expectEqual(@as(?u64, null), mcp.parseSession("2a"));
+    try std.testing.expectEqual(@as(?u64, null), mcp.parseSession("+00000000000002a"));
+    try std.testing.expectEqual(@as(?u64, null), mcp.parseSession("0000_0000000002a"));
+    // A notification naming a session that is not open is refused as well.
+    var late: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = "00000000000000ff", .now = 1, .fresh_id = 0 };
+    try std.testing.expect(try mcp.handle(&host, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", arena, null, &late) == .unknown_session);
+
+    // At the cap, opening one more ends the one idle longest.
+    var capped: mcp.Sessions = .{};
+    defer capped.deinit(gpa);
+    for (0..mcp.Sessions.max + 1) |i| {
+        var open: mcp.Context = .{ .gpa = gpa, .sessions = &capped, .header = null, .now = @intCast(i), .fresh_id = 100 + i };
+        _ = try mcp.handle(&host, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}", arena, null, &open);
+    }
+    try std.testing.expectEqual(@as(usize, mcp.Sessions.max), capped.list.items.len);
+    for (capped.list.items) |c| try std.testing.expect(c.id != 100);
+    host.deliverEvents();
+
+    // Idle past the limit, it ends, and the bus says whose it was.
+    sessions.expire(gpa, &host, 1 + mcp.Sessions.idle_ns - 1);
+    try std.testing.expectEqual(@as(usize, 1), sessions.list.items.len);
+    sessions.expire(gpa, &host, 1 + mcp.Sessions.idle_ns);
+    try std.testing.expectEqual(@as(usize, 0), sessions.list.items.len);
+    host.deliverEvents();
+    try std.testing.expectEqualStrings(".{.session=42,.label=\"Claude Code\",.plugin=\"control\"}", who.ended[0..who.ended_len]);
+}
+
+test "control: an MCP session's id comes back as a header, and DELETE /mcp ends it" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var state: control.routes.State = .{};
+    defer control.routes.stop(&server, &state, &host);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const Exchange = struct {
+        fn run(server_: *control.Server, state_: *control.routes.State, host_: *sdk.Host, client: *ControlOneShot) !void {
+            const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{client});
+            var frames: usize = 0;
+            while (client.len == 0 and frames < 2000) : (frames += 1) {
+                control.routes.answerPending(server_, state_, host_);
+                std.testing.io.sleep(.fromMilliseconds(1), .awake) catch {};
+            }
+            thread.join();
+        }
+    };
+    const init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"probe\"}}}";
+    var opening: ControlOneShot = .{ .path = path, .request = try std.fmt.allocPrint(arena, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ init.len, init }) };
+    try Exchange.run(&server, &state, &host, &opening);
+    const reply = opening.reply[0..opening.len];
+    const key = "mcp-session-id: ";
+    const at = std.ascii.findIgnoreCase(reply, key) orelse return error.TestUnexpectedResult;
+    const id = reply[at + key.len ..][0..16];
+    try std.testing.expectEqual(@as(usize, 1), state.sessions.list.items.len);
+    try std.testing.expectEqual(control.mcp.parseSession(id), state.sessions.list.items[0].id);
+
+    var ending: ControlOneShot = .{ .path = path, .request = try std.fmt.allocPrint(arena, "DELETE /mcp HTTP/1.1\r\nHost: x\r\nMcp-Session-Id: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{id}) };
+    try Exchange.run(&server, &state, &host, &ending);
+    try std.testing.expect(std.mem.startsWith(u8, ending.reply[0..ending.len], "HTTP/1.1 200"));
+    try std.testing.expectEqual(@as(usize, 0), state.sessions.list.items.len);
+}
+
 const ControlStreamClient = struct {
     path: []const u8,
     reply: [4096]u8 = undefined,
