@@ -132,6 +132,12 @@ turns.
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
   config, recents, lock and socket there too, apart from the person's own instance.
+- **A fizzy you launch takes the person's window focus.** macOS activates it, and a self-restart
+  into a rebuilt binary relaunches it, so never run a rebuild-and-relaunch loop, or a build that
+  triggers fizzy's self-restart, while a sandbox runs. Launch a sandbox fizzy only when a test or
+  the headless integration harness can't show the thing, at most a couple of times, and quit it
+  when done. On 2026-10-19 a worker's restart repro pulled the person out of their windows for an
+  hour.
 - **UI changes say how they were seen** (a test, a demo tape, a screenshot, a measurement) and
   on which platforms. CI's Windows cross-compile shows the app links, not that it works.
 
