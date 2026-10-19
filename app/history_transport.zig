@@ -177,6 +177,37 @@ pub fn stopX(i: usize, x0: f32, x1: f32, n: usize) f32 {
     return x0 + (x1 - x0) * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(n));
 }
 
+/// One column of the strip (`stripColumns`): the stop it shows, and the stretch of the strip it
+/// takes, from `x0` to `x1`.
+pub const Column = struct { stop: usize, x0: f32, x1: f32 };
+
+/// How the strip from `x0` to `x1` is shared among the line's `n + 1` stops, into `out`: each stop
+/// takes the stretch round where its knob sits (`stopX`), halfway to its neighbours', so the
+/// picture of the document then stands under the knob that goes there. Too many stops for each
+/// to have `min_w`, the strip is cut into columns of `min_w` instead, each showing the stop at
+/// its middle (`stopAt`). Returns the columns, left to right, covering the strip.
+pub fn stripColumns(n: usize, x0: f32, x1: f32, min_w: f32, out: []Column) []Column {
+    const w = x1 - x0;
+    if (w <= 0 or out.len == 0) return out[0..0];
+    const stops = n + 1;
+    // Each stop's share, as `stopX` spaces them: the ends half as wide, being at the edges.
+    const share = if (n == 0) w else w / @as(f32, @floatFromInt(n));
+    if (share >= min_w and stops <= out.len) {
+        for (out[0..stops], 0..) |*c, i| {
+            const x = stopX(i, x0, x1, n);
+            c.* = .{ .stop = i, .x0 = if (i == 0) x0 else x - share / 2, .x1 = if (i == n) x1 else x + share / 2 };
+        }
+        return out[0..stops];
+    }
+    const count = @min(out.len, @max(1, @as(usize, @intFromFloat(@floor(w / @max(min_w, 1e-3))))));
+    const cw = w / @as(f32, @floatFromInt(count));
+    for (out[0..count], 0..) |*c, i| {
+        const lo = x0 + cw * @as(f32, @floatFromInt(i));
+        c.* = .{ .stop = stopAt(lo + cw / 2, x0, x1, n), .x0 = lo, .x1 = lo + cw };
+    }
+    return out[0..count];
+}
+
 const testing = std.testing;
 const ms = std.time.ns_per_ms;
 
@@ -258,4 +289,27 @@ test "a bar told to go goes from where it is, and one left goes soon" {
     near.stir(0);
     near.soon(linger_ns - 100 * ms, 600 * ms);
     try testing.expectEqual(@as(f32, 0), near.openness(linger_ns + fade_ns));
+}
+
+test "each stop takes the stretch of the strip round its knob, or columns share them out" {
+    var buf: [64]Column = undefined;
+    // Five stops over 100: the ends half as wide, each centred on where its knob sits.
+    const few = stripColumns(4, 0, 100, 2, &buf);
+    try testing.expectEqual(@as(usize, 5), few.len);
+    try testing.expectEqual(@as(f32, 0), few[0].x0);
+    try testing.expectEqual(@as(f32, 12.5), few[0].x1);
+    try testing.expectEqual(@as(f32, 37.5), few[2].x0);
+    try testing.expectEqual(@as(f32, 62.5), few[2].x1);
+    try testing.expectEqual(@as(f32, 100), few[4].x1);
+    for (few, 0..) |c, i| try testing.expectEqual(i, c.stop);
+    // More stops than room: columns of the least width, each the stop at its middle, in order.
+    const many = stripColumns(1000, 0, 100, 4, &buf);
+    try testing.expectEqual(@as(usize, 25), many.len);
+    try testing.expectEqual(@as(f32, 100), many[many.len - 1].x1);
+    for (many[1..], many[0 .. many.len - 1]) |b, a| try testing.expect(b.stop > a.stop);
+    // No history: the one stop takes it all.
+    const none = stripColumns(0, 10, 50, 2, &buf);
+    try testing.expectEqual(@as(usize, 1), none.len);
+    try testing.expectEqual(@as(f32, 10), none[0].x0);
+    try testing.expectEqual(@as(f32, 50), none[0].x1);
 }

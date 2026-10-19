@@ -33,15 +33,15 @@
 //! set. One per document pane, kept by the app beside the pane.
 //!
 //! **The strip.** Given the document's pictures (`DrawOptions.frames`, `HistoryFrames`), scrubbing
-//! (a drag on the line, a held undo or redo) grows the bar upward into a strip of them, as a
-//! video's scrubber shows frames: each tile the document at a stretch of its history, the nearest
-//! step to the tile's middle that has a picture. It stays while the pointer is on the bar.
+//! (a drag on the line, a held undo or redo) grows the bar upward into a strip of them: one picture
+//! of the history, each step a slice of it, under the knob that goes there (`paintStrip`). It
+//! stays while the pointer is on the bar.
 //!
 //! **Export.** The bar has an export button whenever the app can export (`DrawOptions.export_from`).
 //! Pressed, it grows the strip and opens a window over it, as macOS trims a recording: a yellow
 //! bracket over the part to export, dragged from either side (`history_transport.Trim`), the
-//! document going to wherever a side is dragged and the rest dimmed. Pressed again, the part is the app's (`Pressed.exported`); undo's
-//! button, a cross while the window is open, closes it.
+//! document going to wherever a side is dragged and the rest dimmed. Pressed again, the part is
+//! the app's (`Pressed.exported`); undo's button, a cross while the window is open, closes it.
 const HistoryTransport = @This();
 
 const std = @import("std");
@@ -516,43 +516,66 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
     }
 }
 
-/// The strip `r` (physical): tiles across it, each the picture nearest its stretch's middle of the
-/// history (`line`), the tile under the knob at `at` lit; a stretch with no picture stays glass.
+/// The strip `r` (physical), its ends where the line's are: one picture of the history, each stop
+/// a slice of it (`history_transport.stripColumns`). A stop takes the stretch round where its knob
+/// sits and shows that stretch of the document as it was then, so across the strip the document is
+/// read building up from left to right, and a slice is under the knob that goes to it. A stop with
+/// no picture shows the nearest that has one; none at all, the stretch stays glass. The stop at
+/// `at` is lit and outlined; the rest a little dimmer.
 fn paintStrip(r: dvui.Rect.Physical, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
     const n = line.entries.len;
-    // Tiles about square, as many as fit, each picture cropped to its middle: a wide pane's
-    // pictures at their own shape fit only three or four.
-    const aspect: f32 = 1.1;
-    const count: usize = @max(1, @as(usize, @intFromFloat(@floor(r.w / (r.h * aspect)))));
-    const tile_w = r.w / @as(f32, @floatFromInt(count));
-    const gap_px = 2 * s;
+    var buf: [256]rules.Column = undefined;
+    const columns = rules.stripColumns(n, r.x, r.x + r.w, 2 * s, &buf);
     const ink = dvui.themeGet().color(.window, .text);
-    for (0..count) |i| {
-        // The stretch of stops this tile stands for, and the stop nearest its middle with a picture.
-        const lo = i * (n + 1) / count;
-        const hi = @max(lo + 1, (i + 1) * (n + 1) / count);
-        const mid = (lo + hi) / 2;
-        var best: ?dvui.Texture = null;
-        // Outward from the middle, until both ends of the stretch are passed.
-        var d: usize = 0;
-        while (best == null and (mid + d < hi or mid >= lo + d)) : (d += 1) {
-            if (mid + d < hi) best = frames.get(stopId(line, mid + d));
-            if (best == null and d > 0 and mid >= lo + d) best = frames.get(stopId(line, mid - d));
+    const radius = 4 * s;
+    var lit_x0: ?f32 = null;
+    var lit_x1: f32 = 0;
+    for (columns, 0..) |c, i| {
+        const col: dvui.Rect.Physical = .{ .x = c.x0, .y = r.y, .w = c.x1 - c.x0, .h = r.h };
+        // The strip's own corners on its two end columns, square between them.
+        const end: dvui.Corner.Physical = .round(radius);
+        const square: dvui.Corner.Physical = .{ .kind = .square };
+        const corners: dvui.CornerRect.Physical = .{
+            .tl = if (i == 0) end else square,
+            .bl = if (i == 0) end else square,
+            .tr = if (i == columns.len - 1) end else square,
+            .br = if (i == columns.len - 1) end else square,
+        };
+        const lit = c.stop == at;
+        if (lit) {
+            if (lit_x0 == null) lit_x0 = c.x0;
+            lit_x1 = c.x1;
         }
-        const tile: dvui.Rect.Physical = .{ .x = r.x + @as(f32, @floatFromInt(i)) * tile_w + gap_px / 2, .y = r.y, .w = tile_w - gap_px, .h = r.h };
-        const lit = at >= lo and at < hi or (at == n and i == count - 1);
-        if (best) |tex| {
-            // Cover the tile, the picture's middle kept.
-            const ta = @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(@max(1, tex.height)));
-            const want = tile.w / tile.h;
-            const uv: dvui.Rect = if (ta > want) .{ .x = (1 - want / ta) / 2, .y = 0, .w = want / ta, .h = 1 } else .{ .x = 0, .y = (1 - ta / want) / 2, .w = 1, .h = ta / want };
-            dvui.renderTexture(tex, .{ .r = tile, .s = s }, .{ .uv = uv, .corners = .all(4), .colormod = dvui.Color.white.opacity(if (lit) grown else 0.75 * grown) }) catch {};
-        } else {
-            tile.fill(.all(4 * s), .{ .color = .{ .color = ink.opacity(0.06 * grown) } });
+        const tex = nearestPicture(frames, line, c.stop) orelse {
+            col.fill(corners, .{ .color = .{ .color = ink.opacity(0.06 * grown) } });
+            continue;
+        };
+        // The picture covering the whole strip, its middle kept; this column's stretch of that.
+        const ta = @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(@max(1, tex.height)));
+        const want = r.w / r.h;
+        const cover: dvui.Rect = if (ta > want) .{ .x = (1 - want / ta) / 2, .y = 0, .w = want / ta, .h = 1 } else .{ .x = 0, .y = (1 - ta / want) / 2, .w = 1, .h = ta / want };
+        const fa = (c.x0 - r.x) / r.w;
+        const fb = (c.x1 - r.x) / r.w;
+        const uv: dvui.Rect = .{ .x = cover.x + fa * cover.w, .y = cover.y, .w = (fb - fa) * cover.w, .h = cover.h };
+        dvui.renderTexture(tex, .{ .r = col, .s = s }, .{ .uv = uv, .corners = corners.scale(1 / s, dvui.CornerRect), .colormod = dvui.Color.white.opacity(if (lit) grown else 0.7 * grown) }) catch {};
+        // A hairline between stops wide enough to tell apart.
+        if (i > 0 and columns[i - 1].stop != c.stop and col.w >= 6 * s) {
+            (dvui.Rect.Physical{ .x = c.x0 - 0.5 * s, .y = r.y, .w = 1 * s, .h = r.h }).fill(.{}, .{ .color = .{ .color = dvui.Color.black.opacity(0.35 * grown) } });
         }
-        if (lit) tile.stroke(.all(4 * s), .{ .thickness = 1.5 * s, .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
     }
+    if (lit_x0) |x0| (dvui.Rect.Physical{ .x = x0, .y = r.y, .w = lit_x1 - x0, .h = r.h }).stroke(.round(radius), .{ .thickness = 1.5 * s, .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
+}
+
+/// The picture of stop `stop`, or of the nearest stop to it that has one.
+fn nearestPicture(frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, stop: usize) ?dvui.Texture {
+    const n = line.entries.len;
+    var d: usize = 0;
+    while (d <= n) : (d += 1) {
+        if (stop + d <= n) if (frames.get(stopId(line, stop + d))) |t| return t;
+        if (d > 0 and stop >= d) if (frames.get(stopId(line, stop - d))) |t| return t;
+    }
+    return null;
 }
 
 /// A step button's icon, in the middle of its bubble `r` (window-natural; `bounds` the layer's).
