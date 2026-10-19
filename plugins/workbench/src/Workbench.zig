@@ -38,8 +38,10 @@ workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
 /// plugin's own directory whenever it changes (`workbench_layout.savePanes`).
 panes: Panes,
 panes_dirty: bool = false,
-/// The person's arrangement while a demo has the window (`holdPanes`), a copy of its own, and the
-/// pane they were in: nothing is saved while it is held.
+/// A demo has the window (`holdPanes`): nothing is saved, and last session's panes wait.
+holding: bool = false,
+/// The person's arrangement while a demo has the window, a copy of its own (null where it could
+/// not be made, or before there was one), and the pane they were in.
 held_panes: ?Panes = null,
 held_open: u64 = 0,
 /// Where the panes are arranged when the app arranges them instead of `panes`: each pane a view

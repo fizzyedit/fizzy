@@ -104,6 +104,9 @@ const Saved = struct {
 
     const Doc = struct {
         path: []u8,
+        /// The pane it was in (`documentGrouping`): it opens there again, in the arrangement put
+        /// back (`Workbench.restorePanes`), rather than every document in the one pane.
+        grouping: u64,
         /// What it was opened from, when its path cannot open it again (`reopenable`): a file the
         /// web page fetched or the person uploaded, a zip whose folder is the project. Null: it
         /// reopens from its path.
@@ -481,7 +484,7 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
         // Never saved (`untitled-1`): no file, and clean, since `mayStart` refused unsaved work, so
         // nothing to give back. Opened from its bytes it would come back as a file of that name.
         if (!reopenable(editor, path) and !doc.owner.documentHasRecognizedSaveExtension(doc)) continue;
-        var saved: Saved.Doc = .{ .path = gpa.dupe(u8, path) catch continue };
+        var saved: Saved.Doc = .{ .path = gpa.dupe(u8, path) catch continue, .grouping = doc.owner.documentGrouping(doc) };
         if (!reopenable(editor, path)) {
             saved.bytes = doc.owner.documentBytes(doc, path, gpa) catch null;
             if (saved.bytes == null) dvui.log.warn("demo: {s} cannot be opened again after the demo: its owner gives no bytes for it", .{path});
@@ -528,7 +531,7 @@ fn end(ctx: *anyopaque) void {
     for (saved.docs) |d| {
         const bytes = d.bytes orelse continue;
         const path = gpa.dupe(u8, d.path) catch continue;
-        _ = editor.openFileFromBytes(path, bytes, editor.workbench.currentGroupingID()) catch |err|
+        _ = editor.openFileFromBytes(path, bytes, d.grouping) catch |err|
             dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
     }
     if (saved.folder) |f| {
@@ -538,7 +541,7 @@ fn end(ctx: *anyopaque) void {
     }
     for (saved.docs) |d| {
         if (d.bytes != null) continue;
-        _ = editor.openFilePath(d.path, editor.workbench.currentGroupingID()) catch |err|
+        _ = editor.openFilePath(d.path, d.grouping) catch |err|
             dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
     }
     // The active one last, whichever way it came back.

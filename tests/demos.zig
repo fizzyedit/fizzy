@@ -190,7 +190,20 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         const wb = &app.editor.workbench;
         p.unload();
         try dvui.testing.settle(headlessFrame);
+        // The person's own split first: a file of theirs in a pane of its own beside the zip's.
+        const readme = try std.fmt.allocPrint(gpa, "{s}/notes.md", .{app.root_buf[0 .. std.mem.indexOfScalar(u8, &app.root_buf, 0) orelse 0]});
+        defer gpa.free(readme);
+        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = readme, .data = "# Notes\n" });
+        const beside = wb.newGroupingID();
+        _ = try app.editor.openFilePath(readme, beside);
+        // Loaded off the UI thread: it lands a frame or more on.
+        frames = 0;
+        while (app.editor.app.host.docFromPath(readme) == null and frames < 200) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try dvui.testing.settle(headlessFrame);
+        const zip_pane = (app.editor.app.host.docFromPath("site.zip") orelse return error.TestUnexpectedResult).owner.documentGrouping(app.editor.app.host.docFromPath("site.zip").?);
+        try std.testing.expect(zip_pane != beside);
         const panes_before = wb.workspaces.count();
+        try std.testing.expectEqual(@as(usize, 2), panes_before);
         const split = try splitDemo();
         defer gpa.free(split);
         try app.editor.demo.playTape(split);
@@ -204,8 +217,20 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try std.testing.expectEqual(@as(usize, 1), wb.workspaces.count());
         p.unload();
         try dvui.testing.settle(headlessFrame);
+        frames = 0;
+        while (app.editor.app.host.docFromPath(readme) == null and frames < 200) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try dvui.testing.settle(headlessFrame);
         try std.testing.expectEqual(panes_before, wb.workspaces.count());
-        try std.testing.expect(wb.held_panes == null);
+        try std.testing.expect(wb.held_panes == null and !wb.holding);
+        // Each document back in its own pane, and both panes still there after a rebuild more.
+        const back = app.editor.app.host.docFromPath(readme) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(beside, back.owner.documentGrouping(back));
+        const zip_back = app.editor.app.host.docFromPath("site.zip") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(zip_pane, zip_back.owner.documentGrouping(zip_back));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(panes_before, wb.workspaces.count());
+        try app.editor.rawCloseFileID(back.id);
+        try dvui.testing.settle(headlessFrame);
     }
 
     // A tape loaded some other way is not the one the service started.
