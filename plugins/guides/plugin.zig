@@ -54,7 +54,7 @@ pub fn register(host: *sdk.Host) !void {
 
 fn drawView(_: ?*anyopaque) anyerror!dvui.App.Result {
     const host = host_ptr orelse return .ok;
-    List.draw(host.getServiceTyped(sdk.services.demos.Api));
+    List.draw(host.allocator, host.getServiceTyped(sdk.services.demos.Api));
     return .ok;
 }
 
