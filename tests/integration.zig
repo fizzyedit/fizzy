@@ -7242,6 +7242,56 @@ test "tree: a drag put down is not dropped where the pointer last was" {
     try std.testing.expect(CarriedTree.landed == null);
 }
 
+// A key fold sticks. The caller below passes the same `.expanded = true` every frame, as a list
+// whose open state lives elsewhere does until it reads `branch.expanded` back: Left must still
+// leave the branch folded next frame, and Right open it again.
+const KeyFoldTree = struct {
+    const TW = fizzy.core.widgets.TreeWidget;
+
+    var focus = false;
+    var expanded = false;
+    var body_drawn = false;
+
+    fn frame() anyerror!dvui.App.Result {
+        var tree = TW.tree(@src(), .{}, .{ .expand = .both });
+        defer tree.deinit();
+        const branch = tree.branch(@src(), .{ .expanded = true, .animation_duration = 0 }, .{ .expand = .horizontal });
+        defer branch.deinit();
+        if (focus) {
+            focus = false;
+            dvui.focusWidget(branch.button.data().id, null, null);
+        }
+        dvui.labelNoFmt(@src(), "row", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        body_drawn = false;
+        if (branch.expander(@src(), .{}, .{ .expand = .horizontal })) {
+            body_drawn = true;
+            dvui.labelNoFmt(@src(), "child", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        }
+        expanded = branch.expanded;
+        return .ok;
+    }
+};
+
+test "tree: a key fold stays folded when the caller keeps passing the same open state" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    KeyFoldTree.focus = true;
+    try dvui.testing.settle(KeyFoldTree.frame);
+    try std.testing.expect(KeyFoldTree.expanded and KeyFoldTree.body_drawn);
+
+    try dvui.testing.pressKey(.left, .none);
+    try dvui.testing.settle(KeyFoldTree.frame);
+    try std.testing.expect(!KeyFoldTree.expanded and !KeyFoldTree.body_drawn);
+    _ = try dvui.testing.step(KeyFoldTree.frame);
+    try std.testing.expect(!KeyFoldTree.expanded);
+
+    try dvui.testing.pressKey(.right, .none);
+    try dvui.testing.settle(KeyFoldTree.frame);
+    try std.testing.expect(KeyFoldTree.expanded and KeyFoldTree.body_drawn);
+    _ = try dvui.testing.step(KeyFoldTree.frame);
+    try std.testing.expect(KeyFoldTree.expanded);
+}
+
 test "a frost never captures more than the picture it reads" {
     const within = fizzy.core.widgets.BlurBackdrop.within;
     const Rect = dvui.Rect.Physical;
