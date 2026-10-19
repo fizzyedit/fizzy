@@ -21,13 +21,26 @@
 //! each, the copy being immutable once taken. They record while `on`: in fizzy by default, as its
 //! setting says (`record_history`, `FIZZY_TRACKS` over it). `zig build bench-tracks` measures what
 //! a step, a checkpoint and a replay cost.
+//!
+//! **A track outlives its document** (plan step 10). Where there is a profile to keep them in
+//! (`dir`), a document's track is written there as it closes, and every open one as the app quits
+//! (`keep`, `track_file`), one file per document, named by its path. Opened again, a document
+//! picks its track up at the next frame's top, in place of a new base (`pickUp`), when the same
+//! owner recorded it in the same format and the document is where the track ended
+//! (`track_file.End`: its file, as it closed saved, or its exact state, as a restart brings an
+//! unsaved one back): its steps and checkpoints come back, re-timed to end now, and its owner takes the
+//! history they hold back (`historyOf`, `Plugin.restoreHistory`). A document changed outside
+//! fizzy since, or an owner that cannot take its history back, starts a new track, which takes the
+//! old one's place when it is kept.
 const Tracks = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const state_delta = @import("state_delta.zig");
+const track_file = @import("track_file.zig");
 const tape = @import("tape");
 
 gpa: std.mem.Allocator,
@@ -53,6 +66,9 @@ held: usize = 0,
 cap: usize = default_cap,
 /// Frames whose top did any work (`tick`): one per state asked for, never one a frame.
 worked: u64 = 0,
+/// Where tracks are kept when their documents close (`<config>/tracks`), owned; null keeps none
+/// (the web, a test).
+dir: ?[]u8 = null,
 
 pub const default_cap = 256 << 20;
 /// Checkpoints older than this are thinned to one per `sparse_steps` steps.
@@ -183,13 +199,34 @@ pub fn init(gpa: std.mem.Allocator) Tracks {
     return .{ .gpa = gpa };
 }
 
+/// Keep tracks in `dir` (`<config>/tracks`) from now on: as documents close, and as the app quits
+/// (`keepOpen`).
+pub fn keepIn(self: *Tracks, dir: []const u8) !void {
+    if (self.dir) |d| self.gpa.free(d);
+    self.dir = try self.gpa.dupe(u8, dir);
+}
+
+/// The app is quitting: keep every open document's track, while its document can still be read.
+pub fn keepOpen(self: *Tracks) void {
+    for (self.open.values()) |t| self.keep(t);
+}
+
 pub fn deinit(self: *Tracks) void {
+    const dir = self.dir;
+    defer self.dir = dir;
     for (self.open.values()) |t| t.deinit(self.gpa);
     self.open.deinit(self.gpa);
     for (self.ended.items) |t| t.deinit(self.gpa);
     self.ended.deinit(self.gpa);
     self.focus.deinit(self.gpa);
     self.* = .{ .gpa = self.gpa, .clock = self.clock, .on = self.on, .cap = self.cap };
+}
+
+/// Free what `keepIn` holds: the app's last word on its tracks.
+pub fn deinitAll(self: *Tracks) void {
+    self.deinit();
+    if (self.dir) |d| self.gpa.free(d);
+    self.dir = null;
 }
 
 /// What the host calls with each step (`sdk.Host.recorder`).
@@ -215,7 +252,124 @@ pub fn opened(self: *Tracks, doc: sdk.DocHandle) void {
 /// holds nothing and goes.
 pub fn closed(self: *Tracks, doc_id: u64) void {
     const kv = self.open.fetchSwapRemove(doc_id) orelse return;
+    self.keep(kv.value);
     self.end(kv.value);
+}
+
+/// The file `path`'s document's track is kept in, under `dir`: named by a hash of the path, so any
+/// path names a file.
+fn keptFile(self: *const Tracks, gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
+    const dir = self.dir orelse return null;
+    var name: [16 + ".track".len]u8 = undefined;
+    _ = std.fmt.bufPrint(&name, "{x:0>16}.track", .{std.hash.Wyhash.hash(0, path)}) catch return null;
+    return std.fs.path.join(gpa, &.{ dir, &name }) catch null;
+}
+
+/// The hash of the file at `path` (`track_file.fileHash`), or null when it cannot be read.
+fn fileHashOf(gpa: std.mem.Allocator, path: []const u8) ?u64 {
+    if (comptime !can_keep) return null;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .unlimited) catch return null;
+    defer gpa.free(bytes);
+    return track_file.fileHash(bytes);
+}
+
+/// Whether this target keeps tracks on disk at all: not the web, which has no profile folder.
+const can_keep = builtin.target.cpu.arch != .wasm32;
+
+/// A document a track can be kept for: one with a file (an untitled one has none to come back to).
+fn keepable(path: []const u8) bool {
+    return std.fs.path.isAbsolute(path);
+}
+
+/// Write `t` to its document's file under `dir`, while its document is still open: where it ends,
+/// which reopening checks (`track_file.End`: its fingerprint, and its file's hash when it is
+/// saved). A track with no steps keeps nothing, and
+/// leaves an older file for that document as it was. Written beside, then renamed over, so a crash
+/// leaves the old one or the new one, never half of either.
+fn keep(self: *Tracks, t: *const Track) void {
+    // The web has no profile folder to keep them in.
+    if (comptime !can_keep) return;
+    if (t.base == null or t.steps.items.len == 0) return;
+    const path = t.owner.documentPath(t.doc);
+    if (!keepable(path)) return;
+    const fingerprint = t.owner.documentFingerprint(t.doc) orelse return;
+    const prof = core.profile.begin("fizzy", "tracks.keep");
+    defer prof.end();
+    const file = self.keptFile(self.gpa, path) orelse return;
+    defer self.gpa.free(file);
+    const ends: track_file.End = .{ .fingerprint = fingerprint, .file_hash = if (t.owner.isDirty(t.doc)) null else fileHashOf(self.gpa, path) };
+    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends) catch return;
+    defer self.gpa.free(bytes);
+    const part = std.fmt.allocPrint(self.gpa, "{s}.part", .{file}) catch return;
+    defer self.gpa.free(part);
+    const cwd = std.Io.Dir.cwd();
+    cwd.createDirPath(dvui.io, std.fs.path.dirname(file).?) catch {};
+    cwd.writeFile(dvui.io, .{ .sub_path = part, .data = bytes }) catch |err| {
+        dvui.log.warn("tracks: could not keep {s}'s history: {t}", .{ path, err });
+        return;
+    };
+    std.Io.Dir.renameAbsolute(part, file, dvui.io) catch |err| dvui.log.warn("tracks: could not keep {s}'s history: {t}", .{ path, err });
+}
+
+/// `t`'s document has just opened: take up its kept track, if it has one that fits (the same
+/// owner and format, ending where the document is), in place of a new base. Returns whether it
+/// did; `t` is untouched when not.
+fn pickUp(self: *Tracks, t: *Track) bool {
+    if (comptime !can_keep) return false;
+    const path = t.owner.documentPath(t.doc);
+    if (!keepable(path)) return false;
+    const file = self.keptFile(self.gpa, path) orelse return false;
+    defer self.gpa.free(file);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, file, self.gpa, .unlimited) catch return false;
+    defer self.gpa.free(bytes);
+    const prof = core.profile.begin("fizzy", "tracks.pickUp");
+    defer prof.end();
+    var kept = track_file.read(self.gpa, bytes) catch return false;
+    var taken = false;
+    defer if (!taken) kept.deinit(self.gpa);
+    if (!std.mem.eql(u8, kept.path, path) or !std.mem.eql(u8, kept.owner, t.owner.id) or kept.format != t.format) return false;
+    // Where the track ended: exactly (a restart's unsaved document), or its file (a saved one).
+    const at_end = t.owner.documentFingerprint(t.doc) == kept.end.fingerprint or
+        (kept.end.file_hash != null and !t.owner.isDirty(t.doc) and fileHashOf(self.gpa, path) == kept.end.file_hash);
+    if (!at_end) return false;
+    // Re-timed to end now, the pauses between its steps kept: its moments count from this
+    // session's start, as every step's does.
+    const now_ms = self.now();
+    const last = if (kept.steps.items.len > 0) kept.steps.getLast().at else 0;
+    const shift = struct {
+        fn at(v: u32, last_at: u32, to: u32) u32 {
+            return to -| (last_at -| v);
+        }
+    }.at;
+    for (kept.steps.items) |*r| r.at = shift(r.at, last, now_ms);
+    for (kept.checkpoints.items) |*c| c.at = shift(c.at, last, now_ms);
+    kept.base.at = shift(kept.base.at, last, now_ms);
+    var arena: std.heap.ArenaAllocator = .init(self.gpa);
+    defer arena.deinit();
+    var held: Track = .{
+        .doc_id = t.doc_id,
+        .doc = t.doc,
+        .owner = t.owner,
+        .format = t.format,
+        .base = kept.base,
+        .base_top = kept.base_top,
+        .steps = kept.steps,
+        .bytes = kept.bytes,
+        .checkpoints = kept.checkpoints,
+    };
+    const history = (historyOf(&held, arena.allocator()) catch null) orelse return false;
+    // Its owner takes the history back, or the track would name entries the document has not got.
+    if (!t.owner.restoreHistory(t.doc, history)) return false;
+    taken = true;
+    self.gpa.free(kept.owner);
+    self.gpa.free(kept.path);
+    held.checkpoint_due = false;
+    // What the new track held (steps reported before its base, cleared) goes for the kept one.
+    t.steps.deinit(self.gpa);
+    t.bytes.deinit(self.gpa);
+    t.checkpoints.deinit(self.gpa);
+    t.* = held;
+    return true;
 }
 
 fn end(self: *Tracks, t: *Track) void {
@@ -243,6 +397,11 @@ pub fn tick(self: *Tracks) void {
             // in it, so they go.
             t.steps.clearRetainingCapacity();
             t.bytes.clearRetainingCapacity();
+            // Opened again: its kept track, when it fits, in place of a new start.
+            if (self.pickUp(t)) {
+                self.held = self.held - @min(self.held, before) + t.size();
+                continue;
+            }
             t.base = self.take(t.doc, 0) orelse continue;
             t.base_top = historyTop(t.doc, self.gpa) orelse 0;
         } else if (t.checkpoint_due) {

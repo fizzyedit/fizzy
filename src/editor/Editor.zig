@@ -2124,6 +2124,13 @@ pub fn postInit(editor: *Editor) !void {
     // Documents' tracks (plans/RECORDING_PLAN.md): on as the setting says (`record_history`),
     // applied each time it changes (`tick`).
     editor.app.tracks = .init(editor.app.gpa);
+    // Closed documents' tracks are kept in the profile, and picked up when they open again. Not
+    // on the web, which has no profile folder to keep them in.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        const dir = try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "tracks" });
+        defer editor.app.gpa.free(dir);
+        try editor.app.tracks.?.keepIn(dir);
+    }
     if (comptime build_opts.has_app_layout) {
         dvui.log.info("layout: app-supplied", .{});
     } else {
@@ -6808,7 +6815,11 @@ pub fn deinit(editor: *Editor) !void {
     editor.tape_tabs.deinit(editor);
     editor.black_box.deinit(editor.app.gpa);
     editor.app.host.recorder = null;
-    if (editor.app.tracks) |*t| t.deinit();
+    // Each open document's track is kept as the app quits, its document still there to read.
+    if (editor.app.tracks) |*t| {
+        t.keepOpen();
+        t.deinitAll();
+    }
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;

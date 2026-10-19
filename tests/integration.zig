@@ -9147,6 +9147,83 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // A closed document's track is kept in the profile and picked up when the document opens
+    // again (`Tracks.keep`, `pickUp`, plan step 10): its history comes back, ids and all, and
+    // undoes to where the track began. A file changed outside fizzy since starts a new one.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+        const kept_path = try std.fs.path.join(gpa, &.{ root, "kept-history.txt" });
+        defer gpa.free(kept_path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-history.txt", .data = "" });
+        const open = struct {
+            fn open(ed: *fizzy.Editor, path: []const u8) !sdk.DocHandle {
+                _ = try ed.openFilePath(path, ed.workbench.currentGroupingID());
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (std.mem.eql(u8, d.owner.documentPath(d), path)) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.open;
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+
+        var doc = try open(editor, kept_path);
+        try dvui.testing.settle(headlessFrame);
+        for ([_][]const u8{ "a", "b", "c" }) |letter| {
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+            try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+        }
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try editor.save();
+        for (0..100) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (!editor.docSaving(doc)) break;
+        }
+        const before = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        const ids = try arena.allocator().alloc(u64, before.entries.len);
+        for (before.entries, ids) |e, *id| id.* = e.id;
+        const steps = (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len;
+        try std.testing.expectEqual(@as(usize, 3), ids.len);
+        try std.testing.expectEqual(@as(usize, 2), before.at);
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Opened again, saved: its file is where the track ended.
+        doc = try open(editor, kept_path);
+        try dvui.testing.settle(headlessFrame);
+        const after = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(before.at, after.at);
+        try std.testing.expectEqual(ids.len, after.entries.len);
+        for (ids, after.entries) |id, e| try std.testing.expectEqual(id, e.id);
+        try std.testing.expectEqual(steps, (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len);
+        try std.testing.expect(!doc.owner.isDirty(doc));
+        try std.testing.expect(doc.owner.historyGoTo(doc, 0));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.historyGoTo(doc, ids[1]));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!doc.owner.isDirty(doc));
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Changed outside fizzy: a new track, and no history.
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-history.txt", .data = "changed elsewhere" });
+        doc = try open(editor, kept_path);
+        try dvui.testing.settle(headlessFrame);
+        const fresh = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 0), fresh.entries.len);
+        try std.testing.expectEqual(@as(usize, 0), (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len);
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // A document's transport (`app.HistoryTransport`): undo shows it over the document's pane; a
     // press on its line goes to that step, its buttons step, a drag along it follows; and an undo
     // held down goes further each press.
