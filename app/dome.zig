@@ -132,10 +132,10 @@ pub fn merge(p: f32, settled: f32) f32 {
     return std.math.lerp(28, settled, smooth((p - 0.3) / 0.6));
 }
 
-/// `merge` for a bar growing out of a home its bubbles change back into (a corner vial, the tape's
-/// pill): none at all at the very start and end, so the glass the bar goes back into is the home's
-/// own outline, not the home swollen by the bubbles arriving on it, and the home at rest takes over
-/// without a step.
+/// `merge` for a bar growing out of a home its bubbles change back into (a corner vial: a card's,
+/// or the window's): none at all at the very start and end, so the glass the bar goes back into is
+/// the home's own outline, not the home swollen by the bubbles arriving on it, and the home at rest
+/// takes over without a step.
 pub fn homeMerge(p: f32, settled: f32) f32 {
     return merge(p, settled) * smooth(p / corner_merge_in);
 }
@@ -344,6 +344,10 @@ const corner_icon: f32 = 13;
 pub const Corner = struct {
     card: dvui.Rect.Physical,
     radii: [4]f32 = @splat(0),
+    /// The icon over its liquid, and the name it is cached by: the history's, or what else stands
+    /// in a corner (a playing tape's, in the window's own).
+    icon: []const u8 = icons.tvg.lucide.history,
+    icon_name: []const u8 = "history_grip",
 
     fn curveIn(self: Corner) f32 {
         return self.radii[2] * (std.math.sqrt2 - 1);
@@ -439,7 +443,7 @@ pub fn cornerIcon(c: Corner, t: f32, look: Look, bounds: dvui.Rect.Physical) voi
     const full = c.iconCenter(s);
     const ic: [2]f32 = .{ std.math.lerp(p[0], full[0], k), std.math.lerp(p[1], full[1], k) };
     const d = corner_icon * k * s;
-    core.icon.icon(@src(), "history_grip", icons.tvg.lucide.history, .{
+    core.icon.icon(@src(), c.icon_name, c.icon, .{
         .stroke_color = .white,
         .fill_color = .white,
     }, .{
@@ -578,79 +582,4 @@ fn pourStream(lip: [2]f32, end: [2]f32, tail: f32, head: f32, th: f32, color: dv
     const hw = std.math.lerp(th * 0.45, th, head) / 2;
     const r: dvui.Rect.Physical = .{ .x = h[0] - hw, .y = h[1] - hw, .w = 2 * hw, .h = 2 * hw };
     r.fill(.all(hw), .{ .color = .{ .color = color }, .fade = 1 });
-}
-
-// ── The tape's pill ──────────────────────────────────────────────────────────────────────────
-//
-// Where a playing tape's bar rests (`automation/overlay.zig`): a capsule of glass under the title
-// bar, at the top centre of the window, where the command palette opens, since a tape plays over
-// the whole app rather than one document. The same orb glass as the corner vial, and the same
-// liquid (`Liquid`), its level how far the tape has played.
-
-/// The pill's size in points.
-pub const pill_w: f32 = 72;
-pub const pill_h: f32 = 24;
-/// How far in from the glass the liquid keeps, points.
-const pill_inset: f32 = 3;
-
-/// The pill's capsule `t` of its size (1 whole), about the middle of `r` (physical).
-pub fn pillShape(r: dvui.Rect.Physical, t: f32) core.widgets.orb.Shape {
-    const k = @max(0, t);
-    const w = r.w * k;
-    const h = r.h * k;
-    return .box(r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h, @splat(h / 2));
-}
-
-/// The vessel the pill's liquid lies in, `t` of its size: the capsule a little in from its glass.
-fn pillVessel(r: dvui.Rect.Physical, t: f32, s: f32) dvui.Rect.Physical {
-    const k = @max(0, t);
-    const inset = pill_inset * s * k;
-    const w = r.w * k;
-    const h = r.h * k;
-    return .{ .x = r.x + (r.w - w) / 2 + inset, .y = r.y + (r.h - h) / 2 + inset, .w = @max(0, w - 2 * inset), .h = @max(0, h - 2 * inset) };
-}
-
-/// Where the pill's liquid stands, physical, at `level` (0 to 1): the part of its vessel below
-/// the level, the pool the bar's line pours out of and back into.
-pub fn pillPool(r: dvui.Rect.Physical, s: f32, level: f32) dvui.Rect.Physical {
-    const v = pillVessel(r, 1, s);
-    const h = @max(1, v.h * rules.fill_top * level);
-    return .{ .x = v.x, .y = v.y + v.h - h, .w = v.w, .h = h };
-}
-
-/// For `Liquid.step`: the pill's vessel's width, and how far down from its top the liquid's level
-/// is at `level`, physical.
-pub fn pillLiquidSpan(r: dvui.Rect.Physical, s: f32, level: f32) [2]f32 {
-    const v = pillVessel(r, 1, s);
-    return .{ v.w, v.h * (1 - rules.fill_top * level) };
-}
-
-/// The pill at `r` (physical), `t` of its size: its glass, an orb, then its liquid. `look.liquid`
-/// draws the living surface (waves, drops); without it, a still level at `look.fill`, tipped by
-/// `look.tilt`. `id` keys the glass's frost.
-pub fn paintPill(id: dvui.Id, r: dvui.Rect.Physical, t: f32, look: Look) void {
-    const s = dvui.windowRectScale().s;
-    const shape = pillShape(r, t);
-    if (shape.half[1] < 1) return;
-    core.widgets.orb.draw(id, shape, s, .{
-        .light = if (look.lit) std.math.lerp(core.dialogs.bubble_hover, core.dialogs.bubble_press, look.held) else 0,
-    });
-    paintPillLiquid(r, t, look);
-}
-
-/// The pill's liquid alone, `t` of its size: the pill's own, and the bar going back into the pill
-/// draws it filling again as the line's liquid pours in (`automation/overlay.zig`).
-pub fn paintPillLiquid(r: dvui.Rect.Physical, t: f32, look: Look) void {
-    const s = dvui.windowRectScale().s;
-    const v = pillVessel(r, t, s);
-    if (v.w < 2 or v.h < 2) return;
-    var outline: [4 * (rules.corner_points + 1)]rules.Pt = undefined;
-    const vessel = rules.roundedOutline(v.x, v.y, v.w, v.h, v.h / 2, &outline);
-    const color = liquidColor(@max(look.glow, 0.6 * look.held));
-    if (look.liquid) |liq| return pourLiquid(vessel, liq, v.y, v.y + v.h, s, color);
-    if (look.fill <= 0) return;
-    const level = std.math.lerp(v.y + v.h, v.y, rules.fill_top * look.fill);
-    const tip = look.tilt * 0.45;
-    var kept: [outline.len + 1]rules.Pt = undefined;
-    pour(rules.cut(vessel, .{ v.x + v.w / 2, level }, .{ @sin(tip), -@cos(tip) }, &kept), color);
 }

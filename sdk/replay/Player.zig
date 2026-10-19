@@ -205,9 +205,9 @@ pub const Transport = struct {
     close: dvui.Rect.Physical = .{},
     /// The tab on the bar that sends it into where it rests (`tucked`).
     tab: dvui.Rect.Physical = .{},
-    /// Where the bar rests was drawn last frame (fizzy: a pill of glass under the title bar),
-    /// physical, as far round it as the pointer is on
-    /// it: what the bar hides into, and a press there brings it back. Null when it was not drawn.
+    /// Where the bar rests was drawn last frame (fizzy: corner glass in the window's own corner),
+    /// physical, as far round it as the pointer is on it: what the bar hides into, and a press
+    /// there brings it back. Null when it was not drawn.
     rest: ?dvui.Rect.Physical = null,
     /// Sent into where it rests (its tab): the bar stays there, playing or not, until that brings it
     /// back (a press here, the pointer held on it in the overlay).

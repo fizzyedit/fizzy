@@ -4301,6 +4301,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).
     fizzy.core.screens.publishMainTop(if (builtin.target.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
+    // Its corner's curve, for what stands in the window's own corner (a playing tape's orb).
+    {
+        const win = dvui.currentWindow();
+        const square = fizzy.backend.isMaximized(win) or fizzy.backend.isFullscreenChromeHidden(win);
+        fizzy.core.screens.publishMainRadius(if (square) 0 else if (builtin.target.os.tag == .linux) Constants.linux_window_radius else fizzy.backend.viewports.windowRadius());
+    }
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.get().kind == .liquid);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.

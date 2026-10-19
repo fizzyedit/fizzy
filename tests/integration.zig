@@ -5718,7 +5718,7 @@ test "demo: closed from its bar, the bar runs back together before the demo goes
     try std.testing.expect(frames > 1);
 }
 
-test "demo: the bar goes into its pill and grows back out of it" {
+test "demo: the bar goes into its corner and grows back out of it" {
     var t = try demoCtx();
     defer deinitDemo(&t);
 
@@ -5728,7 +5728,7 @@ test "demo: the bar goes into its pill and grows back out of it" {
     const tr = &demo_player.transport;
     try std.testing.expect(tr.openness > 0.99);
 
-    // Its tab sends it into the pill, ended as it is, and the pill full: the tape has played out.
+    // Its tab sends it into the corner, ended as it is, and the corner full: the tape has played out.
     try std.testing.expect(tr.tab.w > 0);
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.tab.center() });
     _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
@@ -5738,11 +5738,11 @@ test "demo: the bar goes into its pill and grows back out of it" {
     var frames: usize = 0;
     while (tr.openness > 0 and frames < 60) : (frames += 1) _ = try dvui.testing.step(demoFrame);
     try std.testing.expectEqual(@as(f32, 0), tr.openness);
-    const pill = tr.rest orelse return error.TestUnexpectedResult;
-    try std.testing.expect(dvui.tagGet("demo.pill") != null);
+    const corner = tr.rest orelse return error.TestUnexpectedResult;
+    try std.testing.expect(dvui.tagGet("demo.corner") != null);
 
-    // Passing over the pill brings nothing; held on it, the bar grows back out.
-    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = pill.center() });
+    // Passing over the corner brings nothing; held on it, the bar grows back out.
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = corner.center() });
     for (0..3) |_| _ = try dvui.testing.step(demoFrame);
     try std.testing.expectEqual(@as(f32, 0), tr.openness);
     frames = 0;
@@ -5750,7 +5750,7 @@ test "demo: the bar goes into its pill and grows back out of it" {
     try std.testing.expect(tr.openness > 0.99);
     try std.testing.expect(!tr.tucked);
 
-    // In again, and a press on the pill brings it at once.
+    // In again, and a press on the corner brings it at once.
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = tr.tab.center() });
     _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
     _ = try dvui.testing.step(demoFrame);

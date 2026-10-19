@@ -33,6 +33,18 @@ pub fn publishMainTop(top: f32) void {
     dvui.dataSet(null, key_id, "_main_top", @max(0, top));
 }
 
+/// The main window's corner radius, natural: 0 maximized or full screen, else its frame's. The
+/// app's, each frame, for what stands in the window's own corner (a playing tape's orb). 0 when it
+/// publishes none.
+pub fn publishMainRadius(radius: f32) void {
+    dvui.dataSet(null, key_id, "_main_radius", @max(0, radius));
+}
+
+/// The main window's corner radius (`publishMainRadius`).
+pub fn mainRadius() f32 {
+    return dvui.dataGet(null, key_id, "_main_radius", f32) orelse 0;
+}
+
 /// The main window's screen: the window, below its title strip (`publishMainTop`). A dialog drawn
 /// in the window and dragged up over the strip took no press there, and could be neither clicked nor
 /// dragged back (the user); kept on this, it, a menu or a tooltip stays where the app takes presses.

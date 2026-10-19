@@ -49,14 +49,14 @@ While a demo plays:
 - **Play resumes it.** If the person did anything to the app while it was paused, the demo first
   replays to where it was, so it carries on from its own state rather than from whatever was left
   behind.
-- **The transport bar** (top, under the title bar, where the command palette opens) has chapter
-  back / play-pause / chapter forward, the time, a scrubber with chapter ticks, and close.
-  Scrubbing backwards rewinds; forwards fast-forwards. While the demo plays it rests in a pill of
-  glass there (`app/dome.zig`, `paintPill`), filling with liquid as the demo plays: a new chapter
-  splashes it, a seek knocks it. A tape plays over the whole app, so it stays clear of the
-  documents' history vials in their corners. The pointer held on the pill (or a press on it)
-  grows the bar down out of it; it goes back soon after the pointer leaves it. Paused or ended it
-  stays out, unless its chevron tab sent it in.
+- **The transport bar** (bottom right) has chapter back / play-pause / chapter forward, the
+  time, a scrubber with chapter ticks, and close. Scrubbing backwards rewinds; forwards
+  fast-forwards. While the demo plays it rests in the window's own bottom-right corner, in the
+  corner glass a document's history rests in (`app/dome.zig`, `Corner`), cut by the window's
+  outline and marked with a tape, filling with liquid as the demo plays: a new chapter splashes
+  it, a seek knocks it. The pointer held on the corner (or a press on it) grows the bar up out of
+  it, right-aligned over the corner; it goes back soon after the pointer leaves it. Paused or
+  ended it stays out, unless its chevron tab sent it in.
 - **Nothing is persisted.** The stage sets the user's session aside when a demo loads (project
   folder, open documents, layout as on disk, plugin settings) and gives it back when it is
   stopped. A demo refuses to start over unsaved changes. Its files live in memory
