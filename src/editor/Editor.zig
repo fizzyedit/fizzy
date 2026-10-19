@@ -3184,18 +3184,30 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     if (editor.app.host.activity_muted) ds.feed.clear() else {
         const now = dvui.frameTimeNS();
         ds.feed.take(&editor.app.host, doc.id, now);
-        // Above the pill while someone holds the document, and above the transport while it shows.
-        var area = canvas.data().borderRectScale().r;
-        if (claim_pill) |pill| area.h = pill.physical.y - area.y + 6 * dvui.windowRectScale().s;
-        if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
-            area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
-        };
-        // And above the history's vial in the card's corner, which the feed's newest would sit on.
-        if (claim_pill == null and ds.has_history) if (card_corner) |c| {
-            const s = dvui.windowRectScale().s;
-            area.h = @max(0, @min(area.h, c.point()[1] - c.radiusPx(s) - area.y + 6 * s));
-        };
-        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |pressed| editor.actFromFeed(doc, ds, pressed);
+        // Above the pill while someone holds the document, above the transport while it shows,
+        // and above the history's vial in the card's corner, which the feed's newest would sit on;
+        // `under` names which it stands on, and the feed eases there when that changes.
+        const pane = canvas.data().borderRectScale().r;
+        const s = dvui.windowRectScale().s;
+        var top = pane.y + pane.h;
+        var under: u32 = 0;
+        if (claim_pill) |pill| {
+            top = pill.physical.y + 6 * s;
+            under = 1;
+        } else {
+            if (ds.transport.place(pane, now)) |bar| if (bar.y + 6 * s < top) {
+                top = bar.y + 6 * s;
+                under = 2;
+            };
+            if (ds.has_history) if (card_corner) |c| {
+                const vial = c.point()[1] - c.radiusPx(s) + 6 * s;
+                if (vial < top) {
+                    top = vial;
+                    under = 3;
+                }
+            };
+        }
+        if (ds.feed.draw(pane, @max(0, pane.y + pane.h - top), under, @truncate(ds.doc_id), now)) |pressed| editor.actFromFeed(doc, ds, pressed);
     }
 
     // A menu inside the document only when its owner names one. The context is created *after*

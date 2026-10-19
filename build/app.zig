@@ -845,6 +845,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // step a point on its line is. std-only (see history_transport.zig); `HistoryTransport`
         // draws it.
         .{ "fizzy-history-transport-tests", "app/history_transport.zig" },
+        // How high the activity feed stands as what is under it comes and goes: eased on a change,
+        // following its target otherwise. std-only (see feed_lift.zig); `ActivityFeed` draws it.
+        .{ "fizzy-feed-lift-tests", "app/feed_lift.zig" },
         // A transport's dome: how long the pointer is held before its bar grows, how full it
         // is, its liquid's swing and shapes. std-only (see dome_rules.zig); `dome.zig` draws it.
         .{ "fizzy-dome-tests", "app/dome_rules.zig" },
