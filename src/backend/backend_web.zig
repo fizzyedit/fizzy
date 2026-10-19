@@ -144,8 +144,9 @@ pub fn macosLaunchComplete() void {}
 pub const viewports = @import("viewports_none");
 
 pub const WindowGlassLook = viewports.WindowGlassLook;
-pub fn windowGlass(_: *dvui.Window, _: WindowGlassLook) bool {
-    return false;
+
+pub fn windowMaterialBase(_: *dvui.Window, _: dvui.Color, _: f32, _: WindowGlassLook) ?dvui.Color {
+    return null;
 }
 
 pub fn titlebarStripHeight(_: *dvui.Window) f32 {

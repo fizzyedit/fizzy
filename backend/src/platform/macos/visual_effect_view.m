@@ -4,33 +4,6 @@
 #import <QuartzCore/CAShapeLayer.h>
 #import <QuartzCore/CATransaction.h>
 
-/**
- * Subclass of NSVisualEffectView that passes hit-testing through to its content subview
- * so right-click and all mouse events go to the subview (SDL). Also overrides
- * menuForEvent: to return nil so the system doesn't show a context menu and
- * delivers rightMouseDown to the hit-tested view.
- */
-@interface FizzyVisualEffectView : NSVisualEffectView
-@end
-
-@implementation FizzyVisualEffectView
-
-- (NSView *)hitTest:(NSPoint)point {
-    NSView *subview = self.subviews.firstObject;
-    if (subview != nil && NSPointInRect(point, self.bounds)) {
-        /* Always return the content subview so all mouse events (including right-click) are delivered to it (SDL). */
-        return subview;
-    }
-    return [super hitTest:point];
-}
-
-- (NSMenu *)menuForEvent:(NSEvent *)event {
-    /* Return nil so the system doesn't show a context menu and delivers rightMouseDown to the hit-tested view (SDL). */
-    return nil;
-}
-
-@end
-
 /*
  * Presses over what fizzy draws in the transparent titlebar's region — a dialog dragged up
  * there, an open menu — are the app's. SDL's view answers -mouseDownCanMoveWindow YES
@@ -79,10 +52,6 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
     if (g_sdl_can_move_window != NULL) return;
     NSWindow *window = (__bridge NSWindow *)nswindow;
     NSView *view = [window contentView];
-    /* Under fizzy's vibrancy wrapper, SDL's view is its first subview. */
-    if ([view isKindOfClass:[FizzyVisualEffectView class]] && view.subviews.firstObject != nil) {
-        view = view.subviews.firstObject;
-    }
     if (view == nil) return;
     /* Added only where SDL's view has none of its own. */
     class_addMethod([view class], @selector(mouseDown:), (IMP)fizzy_sdl_view_mouse_down, "v@:@");
@@ -1359,27 +1328,35 @@ static void windowGlassRemove(NSWindow *window) {
     }
 }
 
+/* A compact toolbar on `window`, once: what macOS 26 rounds a titled window by (20 points; 16 with
+ * none), the corner fizzy's windows and their glass are drawn to (`fizzy_macos_window_corner_radius`).
+ * Hidden with the menu bar in full screen. */
+static void windowCompactToolbar(NSWindow *window) {
+    if (window == nil || !fizzy_macos_liquid_glass_available()) return;
+    if ([window toolbar] == nil) {
+        /* Added, a toolbar grows the window by its height to keep the content's area: kept
+         * where it was instead, or a float's window — restored from its saved frame each
+         * launch — grew by 30 points every time. */
+        const NSRect was = [window frame];
+        NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"fizzy.window"];
+        [window setToolbar:toolbar];
+        [window setToolbarStyle:NSWindowToolbarStyleUnifiedCompact];
+        if (!NSEqualRects([window frame], was)) [window setFrame:was display:NO];
+#if !__has_feature(objc_arc)
+        [toolbar release];
+#endif
+    }
+    [window setTitlebarSeparatorStyle:NSTitlebarSeparatorStyleNone];
+    windowAutoHidesToolbar(window);
+}
+
 int fizzy_macos_window_liquid_glass(void *nswindow, long blur_material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil || !fizzy_macos_liquid_glass_available()) return 0;
         if (windowGlassPart(window, window_glass_under) != nil) return 1;
         if (!windowGlassInstall(window, blur_material)) return 0;
-        if ([window toolbar] == nil) {
-            /* Added, a toolbar grows the window by its height to keep the content's area: kept
-             * where it was instead, or a float's window — restored from its saved frame each
-             * launch — grew by 30 points every time. */
-            const NSRect was = [window frame];
-            NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"fizzy.window"];
-            [window setToolbar:toolbar];
-            [window setToolbarStyle:NSWindowToolbarStyleUnifiedCompact];
-            if (!NSEqualRects([window frame], was)) [window setFrame:was display:NO];
-#if !__has_feature(objc_arc)
-            [toolbar release];
-#endif
-        }
-        [window setTitlebarSeparatorStyle:NSTitlebarSeparatorStyleNone];
-        windowAutoHidesToolbar(window);
+        windowCompactToolbar(window);
         return 1;
     }
 }
@@ -1647,61 +1624,109 @@ void fizzy_macos_window_plain_backdrop(void *nswindow, double r, double g, doubl
     }
 }
 
-/* A plain dvui app's window made of `kind` (`core.material`'s order: 0 none, 1 transparent, 2 blur,
- * 3 frost, 4 liquid): its backdrop's colour `opacity` opaque over what is behind (opaque for none),
- * and under it the OS's material — a plain blur or frost (vibrancy) — or nothing. Liquid Glass
- * (macOS 26) is fizzy's own window glass instead (`windowGlassInstall`, `blur_material` its plain
- * blur), over a clear backdrop: its colour is the glass's, set each frame
+/* `window`'s OS material for `kind` (`core.material`'s order: 0 none, 1 transparent, 2 blur, 3 frost,
+ * 4 liquid), under `above` (a plain app's backdrop, or SDL's view): Liquid Glass — fizzy's own window
+ * glass (`windowGlassInstall`, `blur_material` its plain blur), a compact toolbar too where `toolbar`
+ * (a window whose title the app draws, rounded as fizzy's are) — or vibrancy, or nothing. Made again
+ * only as the kind changes; the rest taken away. Whether it stands on Liquid Glass. */
+static BOOL windowMaterialLayer(NSWindow *window, NSView *frame, NSView *above, int kind, BOOL toolbar, long blur_material) {
+    FizzyPlainMaterialView *mat = nil;
+    for (NSView *v in [frame subviews]) {
+        if ([v isKindOfClass:[FizzyPlainMaterialView class]]) mat = (FizzyPlainMaterialView *)v;
+    }
+    const BOOL liquid = kind == 4 && windowGlassInstall(window, blur_material);
+    if (!liquid) windowGlassRemove(window);
+    /* The corner its glass and vibrancy are drawn to, whatever the window is made of. */
+    if (toolbar) windowCompactToolbar(window);
+    const BOOL wants = kind >= 2 && !liquid;
+    if (mat != nil && (!wants || mat.kind != kind)) {
+        [mat removeFromSuperview];
+        mat = nil;
+    }
+    if (wants && mat == nil) {
+        mat = [[FizzyPlainMaterialView alloc] initWithFrame:[frame bounds]];
+        mat.kind = kind;
+        /* Sized with the window: without, a window resized kept its glass at the size it was
+         * made at (the user). */
+        [mat setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [mat setWantsLayer:YES];
+        mat.layer.masksToBounds = YES;
+        const BOOL full = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+        mat.layer.cornerRadius = full ? 0 : fizzy_macos_window_corner_radius();
+        NSVisualEffectView *inner = [[NSVisualEffectView alloc] initWithFrame:[mat bounds]];
+        inner.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+        inner.state = NSVisualEffectStateActive;
+        /* Frost the vibrancy fizzy's windows have always worn (`blur_material`); blur a plainer
+         * one. */
+        inner.material = kind == 3 ? (NSVisualEffectMaterial)blur_material : NSVisualEffectMaterialUnderWindowBackground;
+        [inner setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [mat addSubview:inner];
+        [frame addSubview:mat positioned:NSWindowBelow relativeTo:above];
+#if !__has_feature(objc_arc)
+        [inner release];
+        [mat release];
+#endif
+    }
+    return liquid;
+}
+
+/* A window whose title and colour the app draws itself (fizzy's) made of `kind`
+ * (`windowMaterialLayer`): its OS material under SDL's view, rounded as the app's windows are
+ * (`toolbar`). Again as the material changes. */
+static char g_app_material_key;
+
+/* Whether `nswindow` is one whose material the backend dresses and whose colour the app draws
+ * (`fizzy_macos_window_material`): its own background stays clear (`platform.window.skin`). */
+int fizzy_macos_window_app_material(void *nswindow) {
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    return window != nil && objc_getAssociatedObject(window, &g_app_material_key) != nil;
+}
+
+void fizzy_macos_window_material(void *nswindow, int kind, int toolbar, long blur_material) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSView *content = [window contentView];
+        NSView *frame = [content superview];
+        if (window == nil || frame == nil) return;
+        /* Clear, whatever it is made of: the app draws its colour over the material, opaque or
+         * not, and the window's own background — the theme's colour (`skin`) — showed through a
+         * clear window, and round the picture on its way into or out of full screen. */
+        objc_setAssociatedObject(window, &g_app_material_key, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if ([window isOpaque]) [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        windowMaterialLayer(window, frame, content, kind, toolbar != 0, blur_material);
+        [CATransaction commit];
+        [window invalidateShadow];
+    }
+}
+
+/* A plain dvui app's window made of `kind` (`windowMaterialLayer`), its backdrop the colour `r g b a`
+ * over it — the window's colour at what the material makes of its opacity (`glass_look.base`),
+ * reckoned by the backend; clear on Liquid Glass, whose colour is the glass's, set each frame
  * (`fizzy_macos_window_liquid_glass_look`). After `fizzy_macos_window_plain_backdrop`; again as the
- * material changes. */
-void fizzy_macos_window_plain_material(void *nswindow, int kind, double opacity, long blur_material) {
+ * material or the colour changes. */
+void fizzy_macos_window_plain_material(void *nswindow, int kind, double r, double g, double b, double a, long blur_material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         NSView *frame = [[window contentView] superview];
         if (window == nil || frame == nil) return;
         FizzyPlainBackdropView *backdrop = nil;
-        FizzyPlainMaterialView *mat = nil;
         for (NSView *v in [frame subviews]) {
             if ([v isKindOfClass:[FizzyPlainBackdropView class]]) backdrop = (FizzyPlainBackdropView *)v;
-            if ([v isKindOfClass:[FizzyPlainMaterialView class]]) mat = (FizzyPlainMaterialView *)v;
         }
         if (backdrop == nil) return;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
-        const BOOL liquid = kind == 4 && windowGlassInstall(window, blur_material);
-        if (!liquid) windowGlassRemove(window);
-        backdrop.fill = liquid ? 0 : kind == 0 ? 1 : fmin(fmax(opacity, 0), 1);
+        const BOOL liquid = windowMaterialLayer(window, frame, backdrop, kind, NO, blur_material);
+        backdrop.r = r;
+        backdrop.g = g;
+        backdrop.b = b;
+        backdrop.fill = liquid ? 0 : fmin(fmax(a, 0), 1);
         CGColorRef color = CGColorCreateSRGB(backdrop.r, backdrop.g, backdrop.b, backdrop.fill);
         backdrop.layer.backgroundColor = color;
         CGColorRelease(color);
-        /* The OS's material under it, made again only as its kind changes. */
-        const BOOL wants = kind >= 2 && !liquid;
-        if (mat != nil && (!wants || mat.kind != kind)) {
-            [mat removeFromSuperview];
-            mat = nil;
-        }
-        if (wants && mat == nil) {
-            mat = [[FizzyPlainMaterialView alloc] initWithFrame:[backdrop frame]];
-            mat.kind = kind;
-            /* Sized with the window, as the backdrop is: without, a window resized kept its glass
-             * at the size it was made at (the user). */
-            [mat setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-            [mat setWantsLayer:YES];
-            mat.layer.masksToBounds = YES;
-            mat.layer.cornerRadius = backdrop.layer.cornerRadius;
-            NSVisualEffectView *inner = [[NSVisualEffectView alloc] initWithFrame:[mat bounds]];
-            inner.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-            inner.state = NSVisualEffectStateActive;
-            /* Frost the window's own frosted material; blur the plainer one of full screen UI. */
-            inner.material = kind == 3 ? NSVisualEffectMaterialUnderWindowBackground : NSVisualEffectMaterialFullScreenUI;
-            [inner setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-            [mat addSubview:inner];
-            [frame addSubview:mat positioned:NSWindowBelow relativeTo:backdrop];
-#if !__has_feature(objc_arc)
-            [inner release];
-            [mat release];
-#endif
-        }
         [CATransaction commit];
         [window invalidateShadow];
     }
@@ -1802,6 +1827,18 @@ void fizzy_macos_window_glass_follow(void *nswindow) {
             NSView *part = windowGlassPart(window, k);
             const NSRect want = still ? picture : [frame bounds];
             if (part != nil && !NSEqualRects([part frame], want)) [part setFrame:want];
+        }
+        /* A window with no backdrop (one the app draws the colour of: fizzy's), its vibrancy where
+         * the window is and in its shape, as a backdrop's is above. */
+        BOOL backdropped = NO;
+        for (NSView *v in [frame subviews]) backdropped = backdropped || [v isKindOfClass:[FizzyPlainBackdropView class]];
+        if (!backdropped) for (NSView *m in [frame subviews]) {
+            if (![m isKindOfClass:[FizzyPlainMaterialView class]]) continue;
+            const double r = fizzy_macos_window_corner_radius();
+            const NSRect want = still ? picture : [frame bounds];
+            const double radius = still ? r * (1.0 - fmin(fmax(fullness, 0.0), 1.0)) : (full ? 0 : r);
+            if (!NSEqualRects([m frame], want)) [m setFrame:want];
+            if (m.layer.cornerRadius != radius) m.layer.cornerRadius = radius;
         }
         [CATransaction commit];
     }

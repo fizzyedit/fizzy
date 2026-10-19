@@ -557,9 +557,11 @@ fn frameOnce() !dvui.App.Result {
     // applier (`SDLBackend.window_material`).
     if (comptime @hasDecl(dvui.backend, "setWindowMaterial")) {
         const m = fizzy.core.material.get();
+        // Its kind; the opacity is the one fizzy draws, handed over with its colour as the editor
+        // eases it (`Editor`, `backend.windowMaterialBase`), kept as it was here.
         dvui.backend.setWindowMaterial(switch (m.kind) {
             inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
-        }, m.opacity);
+        }, dvui.backend.window_material.opacity);
     }
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).

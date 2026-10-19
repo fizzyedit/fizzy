@@ -4545,11 +4545,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
 
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
-        // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
-        // (macOS 26, `backend.windowGlass`) the base is the glass's at that opacity
-        // (`core.glass_look.window`), and the frame draws none of its own.
-        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size()));
-        const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
+        // fullscreen transitions; at 1.0 the base is the opaque fill. Where the backend makes the
+        // window of the window material (macOS: Liquid Glass, vibrancy or none, as a plain dvui
+        // app's), the base is its colour over that material at this opacity (`materialBase`): clear
+        // on Liquid Glass, whose colour is the glass's. Elsewhere fizzy's own (`windowBase`).
+        const window_color = fizzy.backend.windowMaterialBase(dvui.currentWindow(), dvui.themeGet().color(.content, .fill), editor.window_opacity_anim.value, windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size())) orelse windowBase(editor.window_opacity_anim.value);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
         // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline

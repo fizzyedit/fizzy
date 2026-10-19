@@ -321,8 +321,10 @@ pub fn isFullscreenChromeHidden(win: *dvui.Window) bool {
 /// returns `WS_SYSMENU` and its caption buttons, and the backdrop's frame with it). Applying it all
 /// unconditionally every frame was a `SetWindowPos(SWP_FRAMECHANGED)` — a `WM_NCCALCSIZE` — a
 /// library load and a class-brush write each frame on Windows, and two style-mask writes on macOS.
-/// Whether the app dresses its windows itself (`setStyle`, `setBackground`), as fizzy does: then the
-/// backend leaves a plain dvui app's look (`nativeTitleBar`) off its main window.
+/// Whether the app draws its windows' title bar and colour itself (`setStyle`, `setBackground`), as
+/// fizzy does: then the backend leaves a plain dvui app's look (`nativeTitleBar`, a backdrop, its own
+/// frame target and floating windows' backgrounds) off its main window, and dresses only what the
+/// window is made of (`SDLBackend.dressWindows`, `appMaterial`).
 pub var app_dresses_windows = false;
 
 pub fn setStyle(win: *dvui.Window) void {
@@ -419,7 +421,7 @@ extern fn fizzy_macos_window_corner_radius() f64;
 
 /// The OS's own title bar on `window` — its title, its buttons — coloured as the window is
 /// (`color`, the theme's window fill), the app's content below it: how a plain dvui app's windows
-/// look on this backend (`SDLBackend.floatingWindowOs`, `SDLBackend.dressPlainWindows`). Fizzy's
+/// look on this backend (`SDLBackend.floatingWindowOs`, `SDLBackend.dressWindows`). Fizzy's
 /// own windows draw their title bar themselves (`setStyle`). Cheap to call again: each setter
 /// is skipped when the window already has it.
 /// - macOS: fizzy's own shape (`styleTitled`), its content under a transparent title bar, but its
@@ -446,15 +448,30 @@ pub fn nativeTitleBar(window: *c.SDL_Window, color: dvui.Color, text: dvui.Color
 }
 
 /// A window the backend dresses itself (`nativeTitleBar`) made of material `kind` (`core.material`'s
-/// order: 0 none, 1 transparent, 2 blur, 3 frost, 4 liquid), its colour `opacity` over it
-/// (`SDLBackend.dressPlainWindows`). macOS; Windows (Acrylic) and Linux (the compositor's blur) are
-/// to follow it.
-pub fn plainMaterial(window: *c.SDL_Window, kind: u8, opacity: f32) void {
+/// order: 0 none, 1 transparent, 2 blur, 3 frost, 4 liquid), its backdrop `color` over it — the
+/// window's colour at what the material makes of its opacity, alpha and all (`SDLBackend`'s
+/// `materialBase`) — (`SDLBackend.dressWindows`). macOS; Windows (Acrylic) and Linux (the compositor's
+/// blur) are to follow it.
+pub fn plainMaterial(window: *c.SDL_Window, kind: u8, color: dvui.Color) void {
     if (comptime builtin.target.os.tag != .macos) return;
     const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
-    fizzy_macos_window_plain_material(raw_ptr, kind, opacity, ns_visual_effect_material);
+    const f = color.toRGBA();
+    fizzy_macos_window_plain_material(raw_ptr, kind, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, @as(f64, @floatFromInt(f[3])) / 255, ns_visual_effect_material);
 }
-extern fn fizzy_macos_window_plain_material(nswindow: ?*anyopaque, kind: c_int, opacity: f64, blur_material: c_long) void;
+extern fn fizzy_macos_window_plain_material(nswindow: ?*anyopaque, kind: c_int, r: f64, g: f64, b: f64, a: f64, blur_material: c_long) void;
+
+/// A window whose title and colour the app draws itself (fizzy's, `app_dresses_windows`) made of
+/// material `kind` (as `plainMaterial`'s): its OS material only — Liquid Glass, vibrancy or none —
+/// rounded as the app's windows are (a compact toolbar, macOS 26). The colour is the app's to draw
+/// (`SDLBackend.dressWindows`).
+pub fn appMaterial(window: *c.SDL_Window, kind: u8) void {
+    if (comptime builtin.target.os.tag != .macos) return;
+    const raw_ptr = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
+    fizzy_macos_window_material(raw_ptr, kind, 1, ns_visual_effect_material);
+}
+extern fn fizzy_macos_window_material(nswindow: ?*anyopaque, kind: c_int, toolbar: c_int, blur_material: c_long) void;
+extern fn fizzy_macos_window_app_material(nswindow: ?*anyopaque) c_int;
+extern fn fizzy_macos_liquid_glass_available() c_int;
 
 /// A window of fizzy's skinned as the app is: its background — what AppKit draws its title bar
 /// with, the one a fullscreen window reveals at the top among them — `color`, and its appearance
@@ -476,7 +493,9 @@ pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
     // colour (`nativeTitleBar`), whose colour is the backdrop's: on its way into or out of full
     // screen the window stands at the screen's size while the backdrop follows its picture, and a
     // background in the window's colour filled all of the screen round the picture (the user).
-    const glass = fizzy_macos_window_has_liquid_glass(raw_ptr) != 0;
+    // Clear too where the backend dresses the window's material and the app draws its colour
+    // (`appMaterial`): a clear window showed this colour through it.
+    const glass = fizzy_macos_window_has_liquid_glass(raw_ptr) != 0 or fizzy_macos_window_app_material(raw_ptr) != 0;
     if (fizzy_macos_window_has_plain_backdrop(raw_ptr) != 0) {
         const f = color.toRGBA();
         fizzy_macos_window_plain_backdrop(raw_ptr, @as(f64, @floatFromInt(f[0])) / 255, @as(f64, @floatFromInt(f[1])) / 255, @as(f64, @floatFromInt(f[2])) / 255, fizzy_macos_window_corner_radius());
@@ -515,9 +534,11 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
 
             setStyle(win);
 
-            // Liquid Glass where the OS has it (macOS 26), beside SDL's view as a float's window
-            // is; else the content view wrapped in an NSVisualEffectView once, for vibrancy.
-            if (!liquidGlass(raw_ptr.?)) wrapContentViewWithVibrancy(window);
+            // What the window is made of — Liquid Glass, vibrancy or none — is the backend's, by the
+            // window material, as a plain dvui app's is (`SDLBackend.dressWindows`, `appMaterial`).
+            // On dvui's own SDL3 backend nothing dresses it: Liquid Glass where the OS has it, else
+            // fizzy's vibrancy, as it always had.
+            if (comptime !own_backend) appMaterial(win.backend.impl.window, if (fizzy_macos_liquid_glass_available() != 0) 4 else 3);
 
             skin(raw_ptr.?, color, dvui.themeGet().dark);
             // Every float's own window too, and each opened from now on (`SDLBackend.viewportGlass`):
@@ -541,58 +562,6 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
         // As macOS's NSAppearance above: the backdrop matches the dvui theme.
         win32_titlebar.setDarkMode(win, dvui.themeGet().dark);
     }
-}
-
-/// Wraps the window's content view in an NSVisualEffectView so the window gets
-/// vibrancy (blur of the desktop behind it). Safe to call multiple times;
-/// only wraps once per window. Caller should set full-size content view style
-/// mask and titlebarAppearsTransparent before calling so the effect covers the titlebar.
-/// Uses FizzyVisualEffectView (custom subclass) when available so right-click is forwarded to the content view.
-fn wrapContentViewWithVibrancy(window: objc.Object) void {
-    const content_view = window.msgSend(objc.Object, "contentView", .{});
-    if (content_view.value == 0) return;
-
-    const NSVisualEffectViewClass = objc.getClass("NSVisualEffectView") orelse return;
-    const fill_mask: c_ulong = 18; // NSViewWidthSizable | NSViewHeightSizable
-
-    const is_effect_view = content_view.msgSend(bool, "isKindOfClass:", .{NSVisualEffectViewClass.value});
-    if (is_effect_view) {
-        content_view.msgSend(void, "setMaterial:", .{ns_visual_effect_material});
-        content_view.msgSend(void, "setMenu:", .{@as(usize, 0)});
-        // Keep the content subview's nextResponder pointing at the window delegate so rightMouseDown reaches SDL.
-        const subviews = content_view.msgSend(objc.Object, "subviews", .{});
-        const count: usize = subviews.msgSend(usize, "count", .{});
-        if (count > 0) {
-            const sub = subviews.msgSend(objc.Object, "objectAtIndex:", .{@as(c_ulong, 0)});
-            const delegate = window.msgSend(objc.Object, "delegate", .{});
-            if (delegate.value != 0) sub.msgSend(void, "setNextResponder:", .{delegate.value});
-        }
-        return;
-    }
-
-    // Prefer custom subclass that forwards rightMouseDown to the content view (see vibrancy_rightclick_fix.m).
-    const EffectViewClass = objc.getClass("FizzyVisualEffectView") orelse NSVisualEffectViewClass;
-    const effect_view = EffectViewClass.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
-    if (effect_view.value == 0) return;
-
-    effect_view.msgSend(void, "setBlendingMode:", .{@as(c_long, 0)}); // NSVisualEffectBlendingModeBehindWindow
-    effect_view.msgSend(void, "setState:", .{@as(c_long, 1)}); // NSVisualEffectStateActive
-    effect_view.msgSend(void, "setMaterial:", .{ns_visual_effect_material});
-    effect_view.msgSend(void, "setMenu:", .{@as(usize, 0)}); // no context menu so right-click can reach subview
-
-    window.msgSend(void, "setContentView:", .{effect_view.value});
-    effect_view.msgSend(void, "addSubview:", .{content_view.value});
-    content_view.msgSend(void, "setMenu:", .{@as(usize, 0)}); // no context menu so rightMouseDown is delivered
-    // SDL sets the content view's nextResponder to the window delegate (listener) so rightMouseDown reaches the handler.
-    // Adding the view as our subview made its nextResponder us; restore it so right-click events reach the app.
-    const delegate = window.msgSend(objc.Object, "delegate", .{});
-    if (delegate.value != 0) {
-        content_view.msgSend(void, "setNextResponder:", .{delegate.value});
-    }
-
-    const bounds = effect_view.msgSend(NSRect, "bounds", .{});
-    content_view.msgSend(void, "setFrame:", .{bounds});
-    content_view.msgSend(void, "setAutoresizingMask:", .{fill_mask});
 }
 
 /// Bring the window forward and make the app active, for a flow that had to leave it: signing
