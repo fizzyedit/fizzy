@@ -264,6 +264,22 @@ pub fn snapshot(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.Texture {
 /// or `destroyLater`): for a caller that reads its pixels back (`dvui.Texture.readTarget`), which
 /// it can do from the next frame, once the copy has landed.
 pub fn snapshotTarget(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.TextureTarget {
+    const src, const r = lastFrame(rect) orelse return null;
+    const w: u32, const h: u32 = size orelse .{ @intFromFloat(@round(r.w)), @intFromFloat(@round(r.h)) };
+    return copyRect(src, r, .{ w, h }, .linear);
+}
+
+/// `snapshotTarget` into `out`, a target the caller keeps and draws into again (`HistoryFrames`'
+/// copy of a pane, taken at each step of a held undo): `rect` scaled to `out`'s size. False when
+/// there is no last frame to copy (see `snapshot`).
+pub fn snapshotInto(rect: dvui.Rect.Physical, out: dvui.TextureTarget) bool {
+    const src, const r = lastFrame(rect) orelse return false;
+    copyInto(src, r, out);
+    return true;
+}
+
+/// The last frame shown, and `rect` (window pixels) cut to it; null as `snapshot` says.
+fn lastFrame(rect: dvui.Rect.Physical) ?struct { dvui.Texture, dvui.Rect.Physical } {
     const self = current orelse return null;
     // The last frame shown: the other target while one is bound; in a frame nobody will see, the
     // one bound last (`begin` leaves the targets as they were).
@@ -272,11 +288,26 @@ pub fn snapshotTarget(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.TextureTarg
     const prev = self.targets[last] orelse return null;
     const r = rect.intersect(dvui.windowRectPixels());
     if (r.w < 1 or r.h < 1) return null;
-    const w: u32, const h: u32 = size orelse .{ @intFromFloat(@round(r.w)), @intFromFloat(@round(r.h)) };
-    if (w == 0 or h == 0) return null;
     const src = dvui.Texture.fromTargetTemp(prev) catch return null;
-    const out = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .linear }) catch return null;
+    return .{ src, r };
+}
 
+/// `r` (`src`'s pixels) of `src`, copied into a new target `size` pixels (the caller's, as
+/// `snapshotTarget`'s), which draws with `interpolation`. The copy itself samples `src` as `src`
+/// does: at `r`'s own size on whole pixels it is `src`'s pixels exactly (a crop of a pane taken
+/// whole, `HistoryFrames`). Null when `size` is empty or the backend has no targets.
+pub fn copyRect(src: dvui.Texture, r: dvui.Rect.Physical, size: [2]u32, interpolation: dvui.enums.TextureInterpolation) ?dvui.TextureTarget {
+    const w, const h = size;
+    if (w == 0 or h == 0) return null;
+    const out = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = interpolation }) catch return null;
+    copyInto(src, r, out);
+    return out;
+}
+
+/// Draw `r` (`src`'s pixels) of `src` over the whole of `out`, replacing what it held.
+fn copyInto(src: dvui.Texture, r: dvui.Rect.Physical, out: dvui.TextureTarget) void {
+    const w = out.width;
+    const h = out.height;
     const prev_rendering = dvui.renderingSet(true);
     defer _ = dvui.renderingSet(prev_rendering);
     const prev_alpha = dvui.currentWindow().alpha;
@@ -293,13 +324,12 @@ pub fn snapshotTarget(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.TextureTarg
         dvui.clipSet(dest);
         const sw: f32 = @floatFromInt(src.width);
         const sh: f32 = @floatFromInt(src.height);
-        const copy = if (dvui.Backend.support_texture_blend) blk: {
+        const blended = if (dvui.Backend.support_texture_blend) blk: {
             dvui.currentWindow().backend.textureBlend(src, .copy) catch break :blk false;
             break :blk true;
         } else false;
-        defer if (copy) dvui.currentWindow().backend.textureBlend(src, .over) catch {};
+        defer if (blended) dvui.currentWindow().backend.textureBlend(src, .over) catch {};
         dvui.renderTexture(src, .{ .r = dest, .s = 1 }, .{ .uv = .{ .x = r.x / sw, .y = r.y / sh, .w = r.w / sw, .h = r.h / sh } }) catch {};
     }
     _ = dvui.renderTarget(was);
-    return out;
 }

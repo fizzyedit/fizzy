@@ -34,9 +34,9 @@
 //! set. One per document pane, kept by the app beside the pane.
 //!
 //! **The strip.** Given the document's pictures (`DrawOptions.frames`, `HistoryFrames`), scrubbing
-//! (a drag on the line, a held undo or redo) grows the bar upward into a strip of them: one picture
-//! of the history, each step a slice of it, under the knob that goes there (`paintStrip`). It
-//! stays while the pointer is on the bar.
+//! (a drag on the line, a held undo or redo) grows the bar upward into a strip of them: each step's
+//! picture of where it changed the document, at its own pixels, under the knob that goes there
+//! (`paintStrip`). It stays while the pointer is on the bar.
 //!
 //! **Export.** The bar has an export button whenever the app can export (`DrawOptions.export_from`).
 //! Pressed, it grows the strip and opens a window over it, as macOS trims a recording: a yellow
@@ -108,6 +108,8 @@ const bar_h: f32 = 40;
 /// How much taller the bar grows for its strip.
 const strip_h: f32 = 66;
 const button_d: f32 = 34;
+/// How far in from the track's ends the line, and the strip over it, start.
+const line_pad: f32 = 14;
 const gap: f32 = 10;
 const max_w: f32 = 460;
 const tab_d = dome.tab_d;
@@ -164,6 +166,23 @@ fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
     const h = bar_h + strip_h * grown;
     const bottom = nat.y + nat.h - 14;
     return .{ .x = nat.x + nat.w / 2 - w / 2, .y = bottom - h, .w = w, .h = h };
+}
+
+/// The strip's size over `pane` (physical) fully grown, in physical pixels, at its widest (no
+/// export button): what each step's picture is cut to (`HistoryFrames.take`), so the strip draws
+/// it one pixel for one. Null when the pane is too narrow for the bar.
+pub fn stripPixels(pane: dvui.Rect.Physical) ?[2]u32 {
+    const s = dvui.windowRectScale().s;
+    const whole = geometry(pane.toNatural(), 1) orelse return null;
+    // As `draw` lays it out: the track between the buttons, less the line's ends; the strip's
+    // height less its inset at the top and its gap at the bottom.
+    const w = (whole.w - 3 * (button_d + gap) - 2 * line_pad) * s;
+    const h = (strip_h - strip_top - 2) * s;
+    if (w < 1 or h < 1) return null;
+    // A pixel to spare each side: the strip's columns are rounded to whole pixels where `draw`
+    // places them, so one can come out a pixel wider than this, and a crop narrower than its
+    // column would leave glass beside it.
+    return .{ @intFromFloat(@ceil(w) + 2), @intFromFloat(@ceil(h) + 2) };
 }
 
 /// The id `historyGoTo` takes for stop `i`: 0 before the first step, else the step's.
@@ -267,16 +286,21 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (self.grip_steps) |was| if (opts.steps > was) {
             self.stepped_at = now;
             self.slosh.knock(now, 0.35);
-            // Into a vial, the new step splashes the surface, as a drop landing would. Only into
-            // one: a liquid nothing steps would hold its splashes for when a vial came.
-            if (opts.corner != null) self.liquid.splashIn();
         };
+        const stepped = if (self.grip_steps) |was| opts.steps > was else false;
         self.grip_steps = opts.steps;
         // Out of a corner vial, the liquid has poured into the line: the vial's own drains as the
         // bar comes out and fills again as it goes back, the one liquid all the way, so the vial at
         // rest takes over from the bar with no change of surface.
         self.liquid.setLevel(if (opts.corner != null) fill * (1 - dome.smooth(p / vial_drain)) else fill);
-        if (opts.corner) |c| self.liquid.step(now, c.point());
+        if (opts.corner) |c| {
+            self.liquid.step(now, c.point());
+            // Into a vial, the new step splashes the surface, as a drop landing would: after the
+            // step, so a step landing after an idle spell — when the liquid starts afresh, still —
+            // splashes all the same. Only into a vial: a liquid nothing steps would hold its
+            // splashes for when a vial came.
+            if (stepped) self.liquid.splashIn();
+        }
         const glow = self.stepGlow(now);
         if (glow == 0) self.stepped_at = null;
         const in_use = on_grip or self.stepped_at != null or !self.slosh.settled(now);
@@ -345,9 +369,8 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
 
     const phys = [5]dvui.Rect.Physical{ wrs.rectToPhysical(back), wrs.rectToPhysical(track), wrs.rectToPhysical(fwd), wrs.rectToPhysical(share), wrs.rectToPhysical(play_r) };
     const tab_p = wrs.rectToPhysical(tab);
-    const pad = 14;
-    const x0 = phys[1].x + pad * s;
-    const x1 = phys[1].x + phys[1].w - pad * s;
+    const x0 = phys[1].x + line_pad * s;
+    const x1 = phys[1].x + phys[1].w - line_pad * s;
     // Where a press goes to a step: the line's band, under the title, and the strip above it
     // while it shows. A press on the title or the capsule's ends is the bar's, and does nothing.
     const band_y = phys[1].y + phys[1].h - bar_h * s * 0.55;
@@ -586,7 +609,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const film_radius = @max(strip_radius * s, line_radius - film_top);
     if (grown > 0) if (opts.frames) |frames| paintStrip(film, film_radius, frames, line, at, s, grown);
     dvui.labelNoFmt(@src(), label, .{}, .{
-        .rect = .{ .x = track.x + pad - bounds.x, .y = track.y + track.h - bar_h + 4 - bounds.y, .w = track.w - 2 * pad, .h = font.lineHeight() },
+        .rect = .{ .x = track.x + line_pad - bounds.x, .y = track.y + track.h - bar_h + 4 - bounds.y, .w = track.w - 2 * line_pad, .h = font.lineHeight() },
         .padding = .{},
         .margin = .{},
         .font = font,
@@ -677,31 +700,20 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
     }
 }
 
-/// The strip `r` (physical), its ends where the line's are: one picture of the history, each stop
-/// a slice of it (`history_transport.stripColumns`). A stop takes the stretch round where its knob
-/// sits and shows that stretch of the document as it was then, so across the strip the document is
-/// read building up from left to right, and a slice is under the knob that goes to it. The strip
-/// frames the document's content, as a recorder's strip frames what changed: the part of the
-/// pictures round everything any of them holds (`HistoryFrames.Picture.content`), at the strip's
-/// shape (`history_transport.frameContent`), so a few words at the top of a wide pane fill it
-/// rather than empty pane. A stop with no picture shows the nearest that has one; none at all,
-/// the stretch stays glass. Where the document is, `at`, a line across the strip says, as a
-/// recorder's playhead does, over the middle of its stop's slice where the knob below it is.
+/// The strip `r` (physical), its ends where the line's are: each stop's picture
+/// (`HistoryFrames.Picture`) in its column (`history_transport.stripColumns`), under the knob that
+/// goes to it. A picture is a crop of the document round where that step changed it, drawn one
+/// pixel for one (`history_transport.oneToOne`), its middle in the column's, so across the strip
+/// the steps read as the actions themselves, as crisp as the pane. A stop with no picture shows the
+/// nearest that has one; none at all, the stretch stays glass. Where the document is, `at`, a line
+/// across the strip says, as a recorder's playhead does, over the middle of its stop's column where
+/// the knob below it is.
 fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
     const n = line.entries.len;
     var buf: [256]rules.Column = undefined;
     const columns = rules.stripColumns(n, r.x, r.x + r.w, 2 * s, &buf);
     const ink = dvui.themeGet().color(.window, .text);
-    // Round what the pictures shown hold, in fractions of a picture (they share the pane's shape).
-    var boxes: [256]rules.Frac = undefined;
-    var nb: usize = 0;
-    for (columns) |c| if (nearestPicture(frames, line, c.stop)) |pic| if (pic.content) |pc| {
-        boxes[nb] = pc;
-        nb += 1;
-    };
-    const content = rules.contentUnion(boxes[0..nb]);
-    const want = r.w / r.h;
     for (columns, 0..) |c, i| {
         // On whole pixels, so neighbouring slices meet edge to edge: a fractional edge is half
         // covered on both sides, and the glass shows through the join as a seam.
@@ -717,18 +729,19 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
             .tr = if (i == columns.len - 1) end else square,
             .br = if (i == columns.len - 1) end else square,
         };
+        const plain: dvui.Color = ink.opacity(0.06 * grown);
         const pic = nearestPicture(frames, line, c.stop) orelse {
-            col.fill(corners, .{ .color = .{ .color = ink.opacity(0.06 * grown) } });
+            col.fill(corners, .{ .color = .{ .color = plain } });
             continue;
         };
-        const tex = pic.tex;
-        // The part of the picture the strip frames, round the content; this column's stretch of it.
-        const ta = @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(@max(1, tex.height)));
-        const cover = rules.frameContent(content, ta, want, content_pad, content_closest);
-        const fa = (cx0 - r.x) / r.w;
-        const fb = (cx1 - r.x) / r.w;
-        const uv: dvui.Rect = .{ .x = cover.x + fa * cover.w, .y = cover.y, .w = (fb - fa) * cover.w, .h = cover.h };
-        dvui.renderTexture(tex, .{ .r = col, .s = s }, .{ .uv = uv, .corners = corners.scale(1 / s, dvui.CornerRect), .colormod = dvui.Color.white.opacity(grown) }) catch {};
+        const fit = rules.oneToOne(.{ .x = col.x, .y = col.y, .w = col.w, .h = col.h }, .{ pic.tex.width, pic.tex.height }) orelse continue;
+        // A picture smaller than its column (taken from a narrower pane): the rest plain.
+        if (fit.dest.w < col.w or fit.dest.h < col.h) col.fill(corners, .{ .color = .{ .color = plain } });
+        const dest: dvui.Rect.Physical = .{ .x = fit.dest.x, .y = fit.dest.y, .w = fit.dest.w, .h = fit.dest.h };
+        // The strip's round ends only where the picture reaches them.
+        const fills = dest.x == col.x and dest.w == col.w and dest.y == col.y and dest.h == col.h;
+        const uv: dvui.Rect = .{ .x = fit.uv.x, .y = fit.uv.y, .w = fit.uv.w, .h = fit.uv.h };
+        dvui.renderTexture(pic.tex, .{ .r = dest, .s = s }, .{ .uv = uv, .corners = (if (fills) corners else dvui.CornerRect.Physical{ .tl = square, .bl = square, .tr = square, .br = square }).scale(1 / s, dvui.CornerRect), .colormod = dvui.Color.white.opacity(grown) }) catch {};
     }
     // The playhead, standing a little past the strip's top and bottom, with a dark edge so it reads
     // over any picture.
@@ -738,11 +751,6 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
     head.outsetAll(0.75 * s).fill(.round(1.75 * s), .{ .color = .{ .color = dvui.Color.black.opacity(0.4 * grown) } });
     head.fill(.round(1 * s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
 }
-
-/// How much room the strip leaves round the content, as a share of it each side; and how close it
-/// comes, as the least share of a picture's height it shows (a single word is not blown up).
-const content_pad: f32 = 0.12;
-const content_closest: f32 = 0.15;
 
 /// The trim bracket's gap to what it holds, the width of its yellow and of its handles, in points;
 /// the strip's own corner radius; and how far past a handle, either way, a press still takes it

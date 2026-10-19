@@ -394,7 +394,9 @@ pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
 pub var floating_os_windows: enum { asked, all, none } = .asked;
 
 /// A quiet run (`--quiet`, `FIZZY_QUIET=1`): never to take the person's focus. Set by the app
-/// before the window exists; nothing reads it yet (fizzyedit/plans#35 steps 2 and 3).
+/// before the window exists. Its windows show without activating (`initSDL`'s hints), behind the
+/// person's (`platform.window.show`), and nothing of fizzy's raises them; on macOS it has no Dock
+/// icon. It reads as the active app to those deciding by that (`appActive`).
 pub var quiet: bool = false;
 
 /// The backend's health counters now (`Health`): frames, presents, swapchain resizes, the OS
@@ -423,6 +425,7 @@ pub fn health() Health.Snapshot {
     return s;
 }
 extern fn fizzy_macos_window_counts(all: *c_uint, visible: *c_uint) void;
+extern fn fizzy_macos_app_accessory() void;
 
 /// SDL initialization for the all SDL app, i.e. common for all OS Windows
 /// This is expected to be called only once.
@@ -438,7 +441,20 @@ pub fn initSDL() !void {
         log.err("failed to set libdecor hint", .{});
     }
 
+    // A quiet run never activates: a window shown or raised is not made the active one (Cocoa,
+    // Win32's SW_SHOWNOACTIVATE, X11 and Wayland alike), and on macOS SDL neither makes the app a
+    // regular one nor brings the Dock forward and then the app to get it to the front.
+    // Over SDL's environment variables of the same names, too.
+    if (quiet) {
+        _ = c.SDL_SetHintWithPriority(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0", c.SDL_HINT_OVERRIDE);
+        _ = c.SDL_SetHintWithPriority(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_RAISED, "0", c.SDL_HINT_OVERRIDE);
+        _ = c.SDL_SetHintWithPriority(c.SDL_HINT_MAC_BACKGROUND_APP, "1", c.SDL_HINT_OVERRIDE);
+    }
+
     try toErr(c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_EVENTS), "SDL_Init in initWindow");
+    // Left to SDL, a bare executable's activation policy is whatever AppKit gives it; an accessory
+    // app has no Dock icon and is never made active by launching.
+    if (comptime builtin.target.os.tag == .macos) if (quiet) fizzy_macos_app_accessory();
     quit_signals.install();
 }
 
@@ -1553,9 +1569,12 @@ pub const Ride = union(enum) {
     viewport: *Viewport,
 };
 
-/// Whether one of the app's windows has the keyboard: the app is the active one.
+/// Whether one of the app's windows has the keyboard: the app is the active one. Always, in a quiet
+/// run: it is never active, and its input comes from an agent, not the OS's keyboard, so what
+/// would otherwise go with leaving the app (`Popout` dismissing native menus, `os_windows` handing
+/// dvui's keyboard to the key window) would undo each menu it opened at once.
 pub fn appActive() bool {
-    return c.SDL_GetKeyboardFocus() != null;
+    return quiet or c.SDL_GetKeyboardFocus() != null;
 }
 
 /// Where menu `vp` is drawn in the frame from where its window lies over the main window, physical
@@ -2833,9 +2852,10 @@ pub fn renderPresent(self: *SDLBackend) void {
         const vp = if (slot.*) |*v| v else continue;
         if (!vp.mapped) {
             // Only while the app is active: one opened behind another app's window took its keyboard.
-            _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, if (vp.native and !vp.held and appActive()) "1" else "0");
+            // A quiet run leaves the hint as `initSDL` set it: never.
+            if (!quiet) _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, if (vp.native and !vp.held and appActive()) "1" else "0");
             _ = c.SDL_ShowWindow(vp.window);
-            _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
+            if (!quiet) _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
             vp.mapped = true;
             // Riding on its window from here (`Viewport.ride`) — not before it shows: made a child
             // window, AppKit shows it at once, before it has a picture.
@@ -2862,8 +2882,10 @@ pub fn renderPresent(self: *SDLBackend) void {
             vp.over_main = false;
             if (!vp.mapped or vp.passive or vp.menu) continue;
             // An ordinary window of the app's (`ViewportFrame.native`): in front where it opened, and
-            // ordered from there as the person orders it.
-            if (vp.native) continue;
+            // ordered from there as the person orders it. In a quiet run it opened in front of every
+            // app's (SDL only makes a window visible that it does not activate), so it goes over the
+            // main window, behind the person's, as the others do.
+            if (vp.native and !quiet) continue;
             fizzy_macos_viewport_over_main(cocoaWindow(vp.window), main_ns);
             self.stack_stale = true;
         }

@@ -13,6 +13,7 @@ recents.json
 !.claude/settings.json
 !.claude/hooks/
 !.claude/launch.json
+!.claude/skills/
 .config/
 .temp/
 web/app/

@@ -1,0 +1,119 @@
+name: Deps cache
+
+# Claude Code cloud sessions reach GitHub through a proxy that lets only fizzyedit/fizzy's own
+# URLs through, so `zig build` cannot fetch fizzy's other dependencies there. This workflow
+# fetches them all on Linux and publishes the Zig package cache (only what fizzy needs) as an
+# asset of a rolling release, `deps-cache`, which `scripts/cloud-setup.sh` unpacks in a cloud
+# session. The asset is replaced when a dependency changes; a push that moves none leaves it
+# alone. The setup script itself rides on the same release, so an environment can fetch it
+# before it has a checkout.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild the asset even when no dependency changed"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deps-cache
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  ZIG_VERSION: "0.17.0"
+  TAG: deps-cache
+  ASSET: zig-deps-linux.tar.zst
+  MANIFEST: zig-deps-manifest.txt
+
+jobs:
+  publish:
+    name: Publish the dependency cache
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The manifest is every package hash the build.zig.zon files name, a digest of the build
+      # scripts that choose which of them get fetched, and the Zig version.
+      # If the release already carries the same one, the asset is current.
+      - name: Manifest
+        id: manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          {
+            echo "zig $ZIG_VERSION"
+            find . -name build.zig.zon -print0 |
+              xargs -0 grep -h -o -E '\.hash = "[^"]+"' | sed -E 's/.*"([^"]+)"/\1/' | sort -u
+            # What a build reaches (a lazy dependency named by a build script) can change
+            # without a hash moving.
+            git ls-files 'build.zig' 'build/*' 'sdk/*.zig' 'plugins/*/build.zig' |
+              xargs sha256sum | sha256sum
+          } > "$RUNNER_TEMP/$MANIFEST"
+          cat "$RUNNER_TEMP/$MANIFEST"
+          current="$(gh release download "$TAG" -p "$MANIFEST" -O - 2>/dev/null || true)"
+          if [ "$FORCE" != true ] && [ "$current" = "$(cat "$RUNNER_TEMP/$MANIFEST")" ]; then
+            echo "the release already holds this dependency set"
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: mlugg/setup-zig@v2
+        if: steps.manifest.outputs.current != 'true'
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+
+      # A global cache of its own, so the tarball holds exactly what these builds fetched.
+      # The eager tree comes with `--fetch` (native and wasm can name different packages); a
+      # `.lazy = true` dependency only when a build asks for it, which `check`, `check-web` and
+      # the integration tests do between them.
+      - name: Fetch everything fizzy builds from
+        if: steps.manifest.outputs.current != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-global"
+          export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-local"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+          bash scripts/ci-retry.sh zig build --fetch
+          bash scripts/ci-retry.sh zig build --fetch -Dtarget=wasm32-freestanding
+          (cd sdk && bash ../scripts/ci-retry.sh zig build --fetch)
+          bash scripts/ci-retry.sh zig build check check-web
+          bash scripts/ci-retry.sh zig build test-integration
+
+      - name: Pack and publish
+        if: steps.manifest.outputs.current != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          p="$RUNNER_TEMP/zig-global/p"
+          echo "packages:"; ls "$p"
+          tar -C "$RUNNER_TEMP/zig-global" -cf - p | zstd -19 -T0 -q -o "$RUNNER_TEMP/$ASSET"
+          ls -l "$RUNNER_TEMP/$ASSET"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Zig dependency cache" --prerelease --latest=false \
+              --notes "Rolling. The Zig package cache fizzy builds from on Linux, and the script that unpacks it in a Claude Code cloud session (scripts/cloud-setup.sh). Replaced by .github/workflows/deps-cache.yml; not a fizzy release."
+          fi
+          # The manifest last: it says the asset is current, so it must not outrun the asset.
+          gh release upload "$TAG" "$RUNNER_TEMP/$ASSET" --clobber
+          gh release upload "$TAG" "$RUNNER_TEMP/$MANIFEST" --clobber
+
+      # Every push, current cache or not: the setup script is fetched from here.
+      - name: Publish the setup script
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" scripts/cloud-setup.sh --clobber
+          fi

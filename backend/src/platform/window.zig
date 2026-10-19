@@ -10,6 +10,7 @@ const titlebar = @import("titlebar.zig");
 const win32_titlebar = @import("win32_titlebar.zig");
 const linux_titlebar = @import("linux_titlebar.zig");
 const own_backend = @import("root.zig").own_backend;
+const quiet = @import("root.zig").quiet;
 
 const NSPoint = extern struct { x: f64, y: f64 };
 const NSSize = extern struct { width: f64, height: f64 };
@@ -155,8 +156,24 @@ fn cocoaWindowOf(window: *c.SDL_Window) ?*anyopaque {
 /// maximized when `maximized`.
 pub fn show(win: *dvui.Window, maximized: bool) void {
     if (comptime builtin.target.os.tag != .macos and builtin.target.os.tag != .windows and builtin.target.os.tag != .linux) return;
-    _ = c.SDL_ShowWindow(win.backend.impl.window);
-    if (maximized) _ = c.SDL_MaximizeWindow(win.backend.impl.window);
+    const window = win.backend.impl.window;
+    _ = c.SDL_ShowWindow(window);
+    // A quiet run's window opens behind the person's: shown without activating, SDL only makes it
+    // visible (macOS) or shows it where it was made, on top (Windows).
+    if (quiet()) switch (builtin.target.os.tag) {
+        .macos => if (cocoaWindowOf(window)) |ns| objc.Object.fromId(ns).msgSend(void, "orderBack:", .{@as(?*anyopaque, null)}),
+        .windows => if (win32_titlebar.getWin32Hwnd(win)) |hwnd| {
+            const HWND_BOTTOM: usize = 1;
+            const SWP_NOSIZE: u32 = 0x0001;
+            const SWP_NOMOVE: u32 = 0x0002;
+            const SWP_NOACTIVATE: u32 = 0x0010;
+            _ = @import("win32").ui.windows_and_messaging.SetWindowPos(@ptrCast(hwnd), @ptrFromInt(HWND_BOTTOM), 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE));
+        },
+        else => {},
+    };
+    // Not on Windows in a quiet run: SDL maximizes with `ShowWindow(SW_MAXIMIZE)`, which activates
+    // the window whatever its hints say. It opens at its restored size instead.
+    if (maximized and !(builtin.target.os.tag == .windows and quiet())) _ = c.SDL_MaximizeWindow(window);
 }
 
 /// Show the window without it being seen yet, so it can draw its first frame before anyone
@@ -599,7 +616,9 @@ pub fn toggleFullscreen() void {
     _ = c.SDL_SetWindowFullscreen(w, !on);
 }
 
+/// Not in a quiet run (`quiet`), which never comes forward.
 pub fn raise() void {
+    if (quiet()) return;
     if (main()) |w| _ = c.SDL_RaiseWindow(w);
     if (builtin.target.os.tag == .macos) activateApp();
 }

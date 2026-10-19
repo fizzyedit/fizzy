@@ -19,6 +19,8 @@ pub const InitOptions = struct {
     from: ?dvui.Point.Natural = null,
     /// Blur what is behind it, as a dialog does (`FloatingMenu.InitOptions.frost`).
     frost: ?BlurBackdrop.Pane = null,
+    /// The control it grows out of (`FloatingMenu.InitOptions.grow_from`).
+    grow_from: ?dvui.Rect.Natural = null,
 };
 
 init_opts: InitOptions,
@@ -46,6 +48,7 @@ pub fn active(self: *Popup, src: std.builtin.SourceLocation, init_opts: InitOpti
         .style = .popup,
         .from = if (init_opts.from) |f| .fromPoint(f) else null,
         .frost = init_opts.frost,
+        .grow_from = init_opts.grow_from,
     }, opts);
 
     return self;

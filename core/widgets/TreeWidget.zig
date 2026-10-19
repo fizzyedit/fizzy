@@ -426,6 +426,10 @@ pub const Branch = struct {
     /// inside it are carried with it.
     carried_source: bool = false,
     expanded: bool = false,
+    /// Left/Right pressed on this row this frame: `expander()` toggles the branch the way a
+    /// click does (animated, and before the caller reads `expanded` back), so a caller passing
+    /// last frame's open state cannot undo it.
+    key_toggle: bool = false,
     can_expand: bool = false,
     anim: ?*dvui.AnimateWidget = null,
     /// Populated while `expander_vbox` is active: clip children to `anim`'s content (animated height).
@@ -703,13 +707,13 @@ pub const Branch = struct {
                             if (self.expanded) {
                                 dvui.tabIndexNextEx(e.num, self.tree.group.tab_index_prev, self.tree.data().id, false);
                             } else {
-                                self.expanded = true;
+                                self.key_toggle = true;
                             }
                         },
                         .left => {
                             e.handle(@src(), self.button.data());
                             if (self.expanded) {
-                                self.expanded = false;
+                                self.key_toggle = true;
                             } else if (self.parent_focus_id) |pid| {
                                 dvui.focusWidget(pid, null, e.num);
                             } else {
@@ -767,7 +771,7 @@ pub const Branch = struct {
             default_opts.override(opts),
         );
 
-        if (clicked or self.init_options.expanded != self.expanded) {
+        if (clicked or self.key_toggle or self.init_options.expanded != self.expanded) {
             if (self.expanded) {
                 self.anim.?.init_opts.easing = motion.settle;
                 self.anim.?.init_opts.duration = motion.duration(@divTrunc(self.init_options.animation_duration, 2));

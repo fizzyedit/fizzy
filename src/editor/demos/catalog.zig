@@ -72,18 +72,18 @@ pub fn place(s: *Script, name: []const u8) ![]const u8 {
     return s.print("region:{s}", .{name});
 }
 
-/// Where a place's corner button is, `inset` points in from the top-right of the place's region:
-/// 26 for the sidebar, 34 for a card with padding round its contents (Main, the panel). The button
-/// shows only while the pointer is on the corner, so `cornerButton` comes at it from the corner.
-pub fn corner(s: *Script, name: []const u8, inset: f32) !Tape.Target {
-    return .{ .tag = try place(s, name), .x = 1, .y = 0, .dx = -inset, .dy = inset };
+/// Where a place's corner button is: its anchor (`region.arrange:<name>`), wherever it grows in the
+/// place's corner. The button shows only while the pointer is on the corner, so `cornerButton`
+/// comes at it from the corner.
+pub fn corner(s: *Script, name: []const u8) !Tape.Target {
+    return .{ .tag = try s.print("region.arrange:{s}", .{name}) };
 }
 
 /// Bring a place's corner button up and rest on it: from the very corner, where it starts to
 /// show, then in onto it.
-pub fn cornerButton(s: *Script, name: []const u8, inset: f32) !void {
+pub fn cornerButton(s: *Script, name: []const u8) !void {
     try s.moveTo(.{ .tag = try place(s, name), .x = 1, .y = 0, .dx = -3, .dy = 3 }, .{ .ms = 500 });
-    try s.moveTo(try corner(s, name, inset), .{ .ms = 200 });
+    try s.moveTo(try corner(s, name), .{ .ms = 200 });
 }
 
 /// The grip at the foot of `rel`'s pane, shown once it has history: holding on it grows the

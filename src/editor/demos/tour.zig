@@ -68,15 +68,15 @@ pub fn build(s: *Script) !void {
     try s.caption("Tabs go where you drag them.", .{ .near = try catalog.tab(s, "README.md") });
     try s.drag(.{ .tag = try catalog.tab(s, "README.md") }, .{ .tag = try catalog.tab(s, "src/main.zig"), .x = 0.2 }, .{});
     try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
-    try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = catalog.documents, .dx = 132 }, .{});
+    try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = "drop:right" }, .{ .via = .{ .tag = catalog.documents } });
     try s.waitFor(try catalog.editor(s, "src/main.zig"), .{});
     s.pause(900);
 
     try s.chapter("Places");
     try scene(s, .reset);
     try s.caption("Every place has a corner. Its button chooses what the place shows…", .{});
-    try catalog.cornerButton(s, "Sidebar", 26);
-    try s.click(try catalog.corner(s, "Sidebar", 26), .{ .move_ms = 0 });
+    try catalog.cornerButton(s, "Sidebar");
+    try s.click(try catalog.corner(s, "Sidebar"), .{ .move_ms = 0 });
     try s.waitFor("picker.action:split", .{});
     s.pause(1200);
     try s.caption("…and splits it, for two views side by side.", .{ .near = "picker.action:split" });
@@ -87,8 +87,8 @@ pub fn build(s: *Script) !void {
     try s.chapter("Floats");
     try scene(s, .reset);
     try s.caption("Carry a view from its corner and drop it on the middle of its own place: it floats.", .{});
-    try catalog.cornerButton(s, "Sidebar", 26);
-    try s.drag(try catalog.corner(s, "Sidebar", 26), .{ .tag = try catalog.place(s, "Sidebar") }, .{ .ms = 900 });
+    try catalog.cornerButton(s, "Sidebar");
+    try s.drag(try catalog.corner(s, "Sidebar"), .{ .tag = try catalog.place(s, "Sidebar") }, .{ .ms = 900 });
     try s.waitFor(try catalog.place(s, "Float 1"), .{});
     try s.caption("A float goes wherever you carry it by its header.", .{ .near = "float-header:Float 1" });
     try s.drag(.{ .tag = "float-header:Float 1" }, .{ .tag = catalog.documents, .x = 0.45, .y = 0.15 }, .{ .ms = 1000 });

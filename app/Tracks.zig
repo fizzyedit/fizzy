@@ -216,6 +216,14 @@ pub fn keepIn(self: *Tracks, dir: []const u8) !void {
     self.dir = try self.gpa.dupe(u8, dir);
 }
 
+/// Keep no tracks from now on: another instance has taken this one's documents up, and their kept
+/// tracks with them (a restart's handover), so a track written here would put back what it has
+/// moved on from.
+pub fn handOff(self: *Tracks) void {
+    if (self.dir) |d| self.gpa.free(d);
+    self.dir = null;
+}
+
 /// The app is quitting: keep every open document's track, while its document can still be read.
 pub fn keepOpen(self: *Tracks) void {
     for (self.open.values()) |t| self.keep(t);
