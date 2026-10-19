@@ -851,6 +851,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // control/json.zig, control/Server.zig); `control/routes.zig` answers over the Host,
         // covered by `tests/integration.zig`.
         .{ "fizzy-control-json-tests", "app/control/json.zig" },
+        // MCP tool names from command ids and back, and which id keeps a shared name. std-only
+        // (see mcp_names.zig); `mcp.zig` applies it to the registry.
+        .{ "fizzy-mcp-names-tests", "app/mcp_names.zig" },
         .{ "fizzy-control-server-tests", "app/control/Server.zig" },
         // The screen as changes on a base: keys that stay put, and what changed between two.
         .{ "fizzy-control-screen-diff-tests", "app/control/screen_diff.zig" },

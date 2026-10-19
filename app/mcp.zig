@@ -1,9 +1,14 @@
-//! MCP on the control socket: `POST /mcp` speaks the Model Context Protocol's Streamable HTTP
-//! transport, a JSON-RPC message per request answered as JSON, so an agent reaches the same
-//! commands curl does (plans/CONTROL_SERVER_PLAN.md, step 5). Its tools are the app's commands:
-//! `tools/list` from the registry, each tool's input schema the one `/openapi.json` gives the
-//! command's body (`openapi.bodySchema`), and `tools/call` through `Host.callCommandAwaiting`, so a
-//! command that answers in a later frame answers its call then.
+//! The Model Context Protocol's dispatch: one JSON-RPC message in, its answer out, so an agent
+//! reaches the same commands curl does (plans/CONTROL_SERVER_PLAN.md, step 5). Its tools are the
+//! app's commands: `tools/list` from the registry, each named as every client accepts
+//! (`mcp_names.zig`: `text.insert` is `text__insert`) with its id in its description, each tool's
+//! input schema the one `/openapi.json` gives the command's body (`openapi.bodySchema`), and
+//! `tools/call` through `Host.callCommandAwaiting`, so a command that answers in a later frame
+//! answers its call then.
+//!
+//! No transport: it holds no socket and names no `Server`, so it builds on every target, the web's
+//! too (plans/AGENTS_ANYWHERE_PLAN.md). The control server carries it as `POST /mcp`
+//! (`control/routes.zig`); the seam for the page's own MCP is `handle` with a `Context` of its own.
 //!
 //! Each client is a session (`Sessions`): `initialize` hands out an `Mcp-Session-Id`, and every
 //! `tools/call` made with it runs as that client's author (`Host.act`), so history, undo and the
@@ -14,9 +19,10 @@
 //! read when asked), resources and prompts.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
-const AppInfo = @import("../AppInfo.zig");
-const json = @import("json.zig");
-const openapi = @import("openapi.zig");
+const AppInfo = @import("AppInfo.zig");
+const json = @import("control/json.zig");
+const openapi = @import("control/openapi.zig");
+const names = @import("mcp_names.zig");
 
 const Stringify = std.json.Stringify;
 
@@ -263,40 +269,64 @@ fn instructions(host: *sdk.Host, arena: std.mem.Allocator) error{OutOfMemory}![]
     const w = &out.writer;
     w.writeAll("Each tool is one of " ++ AppInfo.current.display_name ++ "'s commands, the same ones its menus, " ++
         "keybindings and plugins run. A command acting on a document takes its path, or acts on the active one.") catch return error.OutOfMemory;
+    w.writeAll(" A tool's name is its command's id with each . as __ (text.insert is text__insert).") catch return error.OutOfMemory;
     for ([_][2][]const u8{
-        .{ "fizzy.screen", " fizzy.screen says what is on screen." },
-        .{ "fizzy.settled", " fizzy.settled waits until nothing is loading or animating." },
-    }) |t| if (host.command(t[0]) != null) w.writeAll(t[1]) catch return error.OutOfMemory;
+        .{ "fizzy.screen", "says what is on screen." },
+        .{ "fizzy.settled", "waits until nothing is loading or animating." },
+    }) |t| if (host.command(t[0]) != null) {
+        const name = names.plain(t[0]);
+        w.print(" {s} {s}", .{ name.slice(), t[1] }) catch return error.OutOfMemory;
+    };
     return out.written();
+}
+
+/// A command as a tool: the commands `tools/list` lists and `tools/call` finds, each named.
+const Tool = struct {
+    command: *const sdk.Command,
+    name: names.Name,
+};
+
+/// The runnable commands, one per id: the one `callCommand` runs (`Host.command`, an override
+/// over what it replaces), with their names. Built per request: a plugin's commands come and go
+/// as it loads and reloads.
+fn tools(host: *sdk.Host, arena: std.mem.Allocator) error{OutOfMemory}![]Tool {
+    var commands: std.ArrayListUnmanaged(*const sdk.Command) = .empty;
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (host.commands.items) |*c| {
+        if (c.owner == null or host.command(c.id) != c) continue;
+        try commands.append(arena, c);
+        try ids.append(arena, c.id);
+    }
+    const named = try names.assign(arena, ids.items);
+    const out = try arena.alloc(Tool, commands.items.len);
+    for (out, commands.items, named) |*t, c, n| t.* = .{ .command = c, .name = n };
+    return out;
 }
 
 fn listTools(host: *sdk.Host, arena: std.mem.Allocator, id: []const u8) error{OutOfMemory}![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     var s: Stringify = .{ .writer = &out.writer };
-    writeTools(&s, host, arena) catch return error.OutOfMemory;
+    writeTools(&s, try tools(host, arena), arena) catch return error.OutOfMemory;
     return result(arena, id, out.written());
 }
 
-fn writeTools(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) openapi.Error!void {
+fn writeTools(s: *Stringify, list: []const Tool, arena: std.mem.Allocator) openapi.Error!void {
     try s.beginObject();
     try s.objectField("tools");
     try s.beginArray();
-    for (host.commands.items, 0..) |*c, i| {
-        // Runnable, and the first of its id: the one `callCommand` runs.
-        if (c.owner == null) continue;
-        const first = for (host.commands.items[0..i]) |*o| {
-            if (std.mem.eql(u8, o.id, c.id)) break false;
-        } else true;
-        if (!first) continue;
+    for (list) |*t| {
+        const c = t.command;
         try s.beginObject();
         try s.objectField("name");
-        try s.write(c.id);
+        try s.write(t.name.slice());
         try s.objectField("title");
         try s.write(c.title);
         try s.objectField("description");
-        try s.write(try std.fmt.allocPrint(arena, "{s} ({s}'s command{s})", .{
+        // The id as the app names it: what history, keybindings and `POST /commands/{id}` say.
+        try s.write(try std.fmt.allocPrint(arena, "{s} ({s}'s command {s}{s})", .{
             c.title,
             c.owner.?.id,
+            c.id,
             if (c.visibility == .internal) ", for programs" else "",
         }));
         try s.objectField("inputSchema");
@@ -307,11 +337,25 @@ fn writeTools(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) openapi.
     try s.endObject();
 }
 
+/// The command a `tools/call` names: by its tool name, or by its id as a client written before the
+/// names were spelled (`fizzy.screen`) sends it, when no tool has that name.
+fn lookup(host: *sdk.Host, arena: std.mem.Allocator, name: []const u8) error{OutOfMemory}!?*const sdk.Command {
+    // Nearly every name spells its id back, and an id that does keeps its plain name: found
+    // without listing the rest.
+    var buf: [names.max_len]u8 = undefined;
+    if (name.len <= names.max_len) if (host.command(names.unspell(name, &buf))) |c| {
+        const plain = names.plain(c.id);
+        if (c.owner != null and names.reversible(c.id) and std.mem.eql(u8, plain.slice(), name)) return c;
+    };
+    for (try tools(host, arena)) |t| if (std.mem.eql(u8, t.name.slice(), name)) return t.command;
+    return host.command(name);
+}
+
 fn callTool(host: *sdk.Host, arena: std.mem.Allocator, id: []const u8, params: ?std.json.ObjectMap, sink: ?sdk.Host.CallSink) error{OutOfMemory}!Reply {
     const p = params orelse return .{ .now = try failure(arena, id, -32602, "tools/call takes .name and .arguments") };
     const name = if (p.get("name")) |n| if (n == .string) n.string else null else null;
     const tool = name orelse return .{ .now = try failure(arena, id, -32602, "tools/call needs a name") };
-    const c = host.command(tool) orelse return .{ .now = try failure(arena, id, -32602, try std.fmt.allocPrint(arena, "no tool {s}", .{tool})) };
+    const c = try lookup(host, arena, tool) orelse return .{ .now = try failure(arena, id, -32602, try std.fmt.allocPrint(arena, "no tool {s}", .{tool})) };
     // The arguments, through the same JSON-to-ZON edge as a REST call (`json.zig`).
     // Absent and null are none.
     const arguments = if (p.get("arguments")) |a| if (a == .null) "{}" else try Stringify.valueAlloc(arena, a, .{}) else "{}";

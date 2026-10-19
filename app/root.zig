@@ -109,6 +109,16 @@ pub const update = struct {
     pub const update_notify = @import("update/update_notify.zig");
 };
 
+/// The Model Context Protocol's dispatch: a JSON-RPC message in, its answer out, the app's commands
+/// its tools (named as every client accepts, `mcp_names.zig`), each client a session. No transport,
+/// so it builds on every target: the control server carries it as `POST /mcp`.
+pub const mcp = @import("mcp.zig");
+comptime {
+    // Built on every target, the web's too, though only the control server carries it yet: the
+    // page's own MCP (plans/AGENTS_ANYWHERE_PLAN.md) finds it whole.
+    _ = &mcp.handle;
+}
+
 /// The control server: HTTP on a Unix socket in the config folder, the app's commands as its API,
 /// so `curl --unix-socket` drives the app with no agent (plans/CONTROL_SERVER_PLAN.md). Native
 /// only. The app starts a `Server`, calls `routes.answerPending` each frame and stops it at quit.
@@ -118,7 +128,6 @@ pub const control = struct {
     pub const json = @import("control/json.zig");
     pub const screen_diff = @import("control/screen_diff.zig");
     pub const openapi = @import("control/openapi.zig");
-    pub const mcp = @import("control/mcp.zig");
     /// Where the server listens for an app whose config folder is `config_folder`
     /// (`Server.socketPath`), with this user's runtime folder for a config folder too deep.
     pub fn socketPath(gpa: @import("std").mem.Allocator, config_folder: []const u8) ![]u8 {

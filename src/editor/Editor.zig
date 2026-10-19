@@ -2228,7 +2228,7 @@ pub fn postInit(editor: *Editor) !void {
         .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
     }) catch {};
     // The control server's (native only): an MCP client's session ended.
-    if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").control.mcp.session_ended) catch {};
+    if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").mcp.session_ended) catch {};
     editor.app.host.declareEvent(.{
         .name = "fizzy.files.reveal",
         .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",

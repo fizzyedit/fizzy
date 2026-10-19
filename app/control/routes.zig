@@ -7,7 +7,7 @@
 //!   GET  /commands/{id}    one of them
 //!   POST /commands/{id}    run it: the body is its arguments, the response its result
 //!   GET  /openapi.json     all of this as OpenAPI 3.1, generated from what is registered now
-//!   POST /mcp              the Model Context Protocol, its tools the commands (`mcp.zig`)
+//!   POST /mcp              the Model Context Protocol, its tools the commands (`app/mcp.zig`)
 //!   GET  /events           the app's events as Server-Sent Events, `?topics=a,b` to choose
 //!                          (a name, or a prefix ending in `*`); every event when absent
 //!
@@ -20,7 +20,7 @@ const sdk = @import("fizzy_sdk");
 const AppInfo = @import("../AppInfo.zig");
 const json = @import("json.zig");
 const openapi = @import("openapi.zig");
-const mcp = @import("mcp.zig");
+const mcp = @import("../mcp.zig");
 const Server = @import("Server.zig");
 
 pub const Answer = struct {

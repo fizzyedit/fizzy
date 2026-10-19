@@ -7762,13 +7762,30 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     const tools = list.object.get("result").?.object.get("tools").?.array.items;
     try std.testing.expectEqual(@as(usize, 2), tools.len);
     const place = tools[1].object;
-    try std.testing.expectEqualStrings("t.place", place.get("name").?.string);
+    // Named as every client accepts, with the command's id in its description.
+    try std.testing.expectEqualStrings("t__place", place.get("name").?.string);
+    try std.testing.expect(std.mem.indexOf(u8, place.get("description").?.string, "t.place") != null);
     try std.testing.expectEqualStrings("integer", place.get("inputSchema").?.object.get("properties").?.object.get("line").?.object.get("type").?.string);
-    const called = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"line\":4,\"side\":\"right\"}}}", arena);
+    const called = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"t__place\",\"arguments\":{\"line\":4,\"side\":\"right\"}}}", arena);
     try std.testing.expect(std.mem.indexOf(u8, called.body, "\"isError\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, called.body, "\\\"note\\\":\\\"placed\\\"") != null);
-    const refused = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"side\":\"right\"}}}", arena);
+    const refused = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"t__place\",\"arguments\":{\"side\":\"right\"}}}", arena);
     try std.testing.expect(std.mem.indexOf(u8, refused.body, "\"isError\":true") != null);
+    // A client written before the names were spelled still reaches it by its id.
+    const by_id = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"line\":4,\"side\":\"right\"}}}", arena);
+    try std.testing.expect(std.mem.indexOf(u8, by_id.body, "\"isError\":false") != null);
+    // An id that shares t.place's name, but does not spell back as it does, gets a suffix; a call
+    // by that name runs it (it answers later), not t.place (which answers now).
+    try host.registerCommand(.{ .id = "t__place", .owner = &plugin, .title = "Twin", .runWith = SlowCommand.start });
+    const named = try std.json.parseFromSliceLeaky(std.json.Value, arena, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/list\"}", arena).body, .{});
+    const three = named.object.get("result").?.object.get("tools").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), three.len);
+    try std.testing.expectEqualStrings("t__place", three[1].object.get("name").?.string);
+    const twin = three[2].object.get("name").?.string;
+    try std.testing.expect(std.mem.startsWith(u8, twin, "t__place_") and twin.len == "t__place_".len + 6);
+    const twin_call = try std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{{\"name\":\"{s}\"}}}}", .{twin});
+    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, twin_call, arena).body, "answer comes later") != null);
+
     try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"nope\"}", arena).body, "-32601") != null);
     // A response from the client, as a notification is, is taken (202), not refused.
     try std.testing.expectEqual(std.http.Status.accepted, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}", arena).status);
@@ -7792,7 +7809,7 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     try server.start();
     var state: control.routes.State = .{};
     defer control.routes.stop(&server, &state, &host);
-    const body = "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"method\":\"tools/call\",\"params\":{\"name\":\"t.slow\"}}";
+    const body = "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"method\":\"tools/call\",\"params\":{\"name\":\"t__slow\"}}";
     const request = try std.fmt.allocPrint(arena, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
     var client: ControlOneShot = .{ .path = path, .request = request };
     const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&client});
@@ -7830,7 +7847,7 @@ const McpWho = struct {
 
 test "control: each MCP client is a session, its calls made as its own author" {
     const gpa = std.testing.allocator;
-    const mcp = @import("app").control.mcp;
+    const mcp = @import("app").mcp;
     var host: sdk.Host = .init(gpa);
     defer host.deinit();
     var who: McpWho = .{ .host = &host };
@@ -7854,7 +7871,7 @@ test "control: each MCP client is a session, its calls made as its own author" {
     try std.testing.expectEqual(@as(?u64, 0x2a), mcp.parseSession(header));
 
     // A call with the session is made as its author, labelled with the client's name.
-    const call = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"t.who\"}}";
+    const call = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"t__who\"}}";
     var with: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = header, .now = 1, .fresh_id = 0 };
     _ = try mcp.handle(&host, call, arena, null, &with);
     try std.testing.expect(who.who.same(.{ .kind = .agent, .plugin = "control", .session = 0x2a }));
@@ -7939,7 +7956,7 @@ test "control: an MCP session's id comes back as a header, and DELETE /mcp ends 
     const at = std.ascii.findIgnoreCase(reply, key) orelse return error.TestUnexpectedResult;
     const id = reply[at + key.len ..][0..16];
     try std.testing.expectEqual(@as(usize, 1), state.sessions.list.items.len);
-    try std.testing.expectEqual(control.mcp.parseSession(id), state.sessions.list.items[0].id);
+    try std.testing.expectEqual(@import("app").mcp.parseSession(id), state.sessions.list.items[0].id);
 
     var ending: ControlOneShot = .{ .path = path, .request = try std.fmt.allocPrint(arena, "DELETE /mcp HTTP/1.1\r\nHost: x\r\nMcp-Session-Id: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{id}) };
     try Exchange.run(&server, &state, &host, &ending);
