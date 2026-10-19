@@ -128,6 +128,13 @@ turns.
   only from files that module analyzes. `zig build check-tests-reached` (run in CI) fails when a
   `test` block is compiled into no test binary, naming it; a new test file needs a root in
   `build/app.zig` or a `test { _ = @import(...); }` from a file that has one.
+- **Cloud sessions run `scripts/cloud-setup.sh`.** A Claude Code cloud session's GitHub proxy
+  blocks every repo but `fizzyedit/fizzy`, so `zig build` cannot fetch fizzy's dependencies
+  there. `.github/workflows/deps-cache.yml` publishes the Zig package cache as the asset
+  `zig-deps-linux.tar.zst` of the rolling `deps-cache` release, and the script installs Zig 0.17
+  (`pip install ziglang`) and unpacks that cache into `~/.cache/zig/p`. The environment's setup
+  script is the one line `curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash`.
+  A dependency bump reaches cloud sessions when the workflow has run on the merge.
 - **A plugin's plain `zig build` also installs** into the real plugins directory. For a sandbox
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
