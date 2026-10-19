@@ -52,10 +52,15 @@ pub fn tears() bool {
     return builtin.target.os.tag == .macos and SDLBackend.floating_os_windows != .none;
 }
 
-/// Whether `vp`'s window lies wholly inside the main window, on the Space being shown
-/// (`os_windows`: a torn-off window let go there goes back in).
-pub fn mainHolds(vp: *const Viewport) bool {
-    return dvui.currentWindow().backend.impl.viewportMainHolds(vp);
+/// Whether the pointer is over the main window's content, on the Space being shown (`os_windows`:
+/// a torn-off window let go there goes back in; `SDLBackend.viewportPointerOverMainContent`).
+pub fn pointerOverMainContent() bool {
+    return dvui.currentWindow().backend.impl.viewportPointerOverMainContent();
+}
+
+/// Whether the OS is moving `vp`'s window under a held press (`osMoveEnded` says when it lets go).
+pub fn osMoving(vp: *const Viewport) bool {
+    return dvui.currentWindow().backend.impl.viewportOsMoving(vp);
 }
 
 /// Physical pixels from the frame's origin to the first viewport's band, and between bands.
@@ -80,6 +85,12 @@ pub fn pointerOverNoWindow() bool {
 /// The app's window the pointer is over (`SDLBackend.windowAtPointer`), or null.
 pub fn windowAtPointer() ?*anyopaque {
     return dvui.currentWindow().backend.impl.windowAtPointer();
+}
+
+/// The app's window whose content (below its title bar) the pointer is over, or null
+/// (`SDLBackend.windowContentAtPointer`).
+pub fn windowContentAtPointer() ?*anyopaque {
+    return dvui.currentWindow().backend.impl.windowContentAtPointer();
 }
 
 /// `window` (`windowAtPointer`'s) in front of the app's other windows, not made key.

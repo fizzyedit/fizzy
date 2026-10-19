@@ -156,6 +156,10 @@ zig fetch --save=fizzy \
   https://github.com/fizzyedit/fizzy/releases/download/sdk-v0.2.0/fizzy-sdk-v0.2.0.tar.gz
 ```
 
+On Zig 0.17, delete the tarball `zig fetch` just cached before your first `zig build`
+(`rm ~/.cache/zig/p/<the hash it printed>.tar.gz`): a build unpacks it with its top folder kept
+and reports a hash mismatch (`docs/PITFALLS.md`).
+
 which produces:
 
 ```zig

@@ -1221,6 +1221,23 @@ pub fn windowAtPointer(_: *SDLBackend) ?*anyopaque {
     return fizzy_macos_app_window_at_pointer();
 }
 
+/// The app's window whose content the pointer is over — below its title bar — or null: over a title
+/// bar (the main window's, a window of the OS's own frame's) it is over no window's content. A
+/// floating window dragged there took the window for the one to land in, and dvui held its top
+/// below the title bar, away from the pointer (the user).
+pub fn windowContentAtPointer(self: *SDLBackend) ?*anyopaque {
+    if (comptime builtin.target.os.tag != .macos) return null;
+    const window = fizzy_macos_app_window_at_pointer() orelse return null;
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    if (window == cocoaWindow(self.window)) return if (gy < self.mainOnScreen().y) null else window;
+    for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (cocoaWindow(vp.window) == window and vp.native) {
+        return if (gy < @as(f32, @floatFromInt(vp.screen.y))) null else window;
+    };
+    return window;
+}
+
 /// `window` (`windowAtPointer`'s) in front of the app's other windows, not made key.
 pub fn bringForward(_: *SDLBackend, window: *anyopaque) void {
     if (comptime builtin.target.os.tag != .macos) return;
@@ -2026,27 +2043,32 @@ pub fn viewportLiquidGlass(_: *SDLBackend, vp: *Viewport, look: platform.window.
     return platform.window.liquidGlassLook(vp.window, look);
 }
 
-/// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
-/// main window's top left, wherever either window has been moved since it opened.
-/// Whether `vp`'s window — its title bar's band too — lies wholly inside the main window, with the
-/// main window on the Space being shown (`viewports.mainHolds`).
-pub fn viewportMainHolds(self: *SDLBackend, vp: *const Viewport) bool {
+/// Whether the pointer is over the main window's content — below its title bar — on the Space being
+/// shown (`os_windows`: a torn-off window let go there goes back in). By where the main window is,
+/// whatever lies over it: the window being let go is.
+pub fn viewportPointerOverMainContent(self: *SDLBackend) bool {
     if (comptime builtin.target.os.tag == .macos) if (fizzy_macos_window_off_active_space(cocoaWindow(self.window)) != 0) return false;
-    var x: c_int = 0;
-    var y: c_int = 0;
-    var w: c_int = 0;
-    var h: c_int = 0;
-    _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
-    _ = c.SDL_GetWindowSize(vp.window, &w, &h);
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
     var mx: c_int = 0;
     var my: c_int = 0;
     var mw: c_int = 0;
     var mh: c_int = 0;
     _ = c.SDL_GetWindowPosition(self.window, &mx, &my);
     _ = c.SDL_GetWindowSize(self.window, &mw, &mh);
-    return x >= mx and y >= my and x + w <= mx + mw and y + h <= my + mh;
+    const top = self.mainOnScreen().y;
+    return gx >= @as(f32, @floatFromInt(mx)) and gx < @as(f32, @floatFromInt(mx + mw)) and gy >= top and gy < @as(f32, @floatFromInt(my + mh));
 }
 
+/// Whether the OS is moving `vp`'s window under a held press (`viewportOsMoveEnded` says when it
+/// lets go).
+pub fn viewportOsMoving(_: *SDLBackend, vp: *const Viewport) bool {
+    return vp.os_moving;
+}
+
+/// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
+/// main window's top left, wherever either window has been moved since it opened.
 pub fn viewportInMain(self: *SDLBackend, vp: *const Viewport) viewport_map.Rect {
     // Where it was last put, not SDL's idea of it: on Windows it may have been moved in one step
     // behind SDL's back (`viewportPlace`), and only the app moves it.
