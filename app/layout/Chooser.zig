@@ -1,6 +1,6 @@
 //! A **chooser**: the views of one place, laid out as something to pick from.
 //!
-//! The tab strip above a Multiple place and the icon rail beside the sidebar are the same
+//! The tab strip above a place holding several views and the icon rail beside the sidebar are the same
 //! control — a list of a place's views, where picking one selects it there — differing only in
 //! which way they run, where they sit, and what an item looks like. This is that control. What it
 //! does is the same everywhere; what it looks like is the caller's:

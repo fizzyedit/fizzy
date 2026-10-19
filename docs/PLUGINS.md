@@ -589,7 +589,7 @@ workbench's document panes work (`plugins/workbench/src/Workspace.zig`):
 var pane = host.region(.{
     .name = "Pane 1",                 // human-facing, and the key an assignment persists under
     .keywords = sdk.document.keywords, // unqualified: written "document", becomes "main.document"
-    .shows = .many,                    // how many accepted surfaces it shows at once (.one | .many)
+    .owns_selection = true,            // it draws its own tab strip, so the app draws none
     .key = grouping,                   // stable + unique per caller per parent: half of the widget id
 }) orelse return .ok;                  // null = the app declined; draw it yourself, plainly
 defer pane.deinit();
@@ -603,6 +603,8 @@ _ = try pane.drawContents();           // the accepted surfaces, where the plugi
 Keywords are qualified on the way in with the enclosing region's name, so a plugin cannot name
 a place outside the one it was given — `{"document"}` declared in Main accepts `main.document`
 and nothing else. `RegionSpec` also carries `dir`, `hide_when_empty`, `expand` and `min_extent`.
+A region that does not say `owns_selection` gets the app's tab strip from `drawContents` while
+it holds two or more surfaces, and none while it holds one: no region declares a mode for it.
 Outside a region's draw, `host.assignSurfaces(name, ids)` / `assignedSurfaces(name)` /
 `assignedRegionNames()` / `selectInRegion(name, id)` read and write the same assignment list
 the picker uses — a tab dragged to another pane is an assignment edit, and session restore is
@@ -635,8 +637,8 @@ if (!host.hideSurface(id)) _ = host.revealSurface(id);    // toggle it
 
 **A home page.** What the main area shows while nothing is open (the workbench's logo, New File,
 Open Folder) is a place too. While its one document pane is empty, the workbench declares a
-region named `Home` inside it with keywords `sdk.keywords.ide.home` (`{"home"}`) and
-`shows = .one`, and draws the surface that region accepts. With no such surface the region
+region named `Home` inside it with keywords `sdk.keywords.ide.home` (`{"home"}`), and draws
+the surface that region accepts (the app's tab strip above them, should two say they are home). With no such surface the region
 declines, and the workbench draws its own page. A start page is just a surface that says what it
 is:
 

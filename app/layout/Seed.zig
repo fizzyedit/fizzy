@@ -2,17 +2,14 @@
 //!
 //! Converted to a live `DockLayout` the first time `Layout.tree` runs (or after Reset Layout).
 //! After that the live tree is the truth and this seed is only consulted for a leaf's keywords
-//! / shows / pinned, and as the thing Reset Layout returns to.
+//! / pinned, and as the thing Reset Layout returns to.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const sdk = @import("fizzy_sdk");
 
 const DockLayout = core.widgets.DockLayout;
 
 const Seed = @This();
-
-pub const Shows = sdk.RegionSpec.Shows;
 
 /// A binary tree of splits with named leaves at the fringes — the same shape as
 /// `DockLayout.Snapshot.Tree`, with region spec on the leaves instead of tab slugs.
@@ -32,7 +29,6 @@ pub const Tree = union(enum) {
     pub const Leaf = struct {
         name: []const u8,
         keywords: []const []const u8 = &.{},
-        shows: Shows = .one,
         pinned: bool = false,
     };
 

@@ -10,9 +10,9 @@
 //! the static case — a fixed arrangement of named places — and says so rather than growing
 //! conditionals later. When an app needs a condition, it copies a shape file and writes one.
 //!
-//! **What it can say:** nesting and direction, a region's name and keywords, how many surfaces it
-//! shows, its starting extent, whether the user may drag it, whether it collapses. A split is
-//! implied between consecutive children, which is where a hand-written shape puts one.
+//! **What it can say:** nesting and direction, a region's name and keywords, its starting extent,
+//! whether the user may drag it, whether it collapses. A split is implied between consecutive
+//! children, which is where a hand-written shape puts one.
 //!
 //! **What it cannot:** `content` chrome (a function), anything conditional, anything that reads
 //! app state. A shape that needs those is a `.zig` file; that is the escape hatch, and it is the
@@ -21,7 +21,6 @@ const std = @import("std");
 const dvui = @import("dvui");
 
 const Layout = @import("Layout.zig");
-const Region = @import("Region.zig");
 
 const Shape = @This();
 
@@ -30,8 +29,6 @@ const Shape = @This();
 name: []const u8 = "",
 /// The kinds of surface this place accepts (`sdk.keywords`' vocabulary, spelled out).
 keywords: []const []const u8 = &.{},
-/// `.one` or `.many` — how many of the surfaces that fit here it shows at once.
-shows: Region.Shows = .one,
 /// The axis children are laid along.
 dir: dvui.enums.Direction = .vertical,
 /// How the box expands, as `dvui.Options.expand`.
@@ -68,7 +65,6 @@ fn place(node: Shape, f: *Layout, counter: *usize, along: dvui.enums.Direction) 
     var r = try f.region(@src(), .{
         .name = node.name,
         .keywords = node.keywords,
-        .shows = node.shows,
         .dir = node.dir,
         .resize = node.resize,
         .collapsible = node.collapsible,

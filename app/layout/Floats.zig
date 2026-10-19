@@ -505,7 +505,6 @@ fn drawOne(l: *Layout, i: usize) bool {
         state.registerRegion(l.gpa, .{
             .name = f.name,
             .keywords = Layout.slot_keywords,
-            .shows = .many,
             .by_name = true,
         });
         // Brought back, its window starts with its view, next frame. Landing, its window is the
@@ -702,7 +701,6 @@ fn drawOne(l: *Layout, i: usize) bool {
             .name = first.name,
             .keywords = Layout.slot_keywords,
             .by_name = true,
-            .shows = .many,
             .card = true,
             .pane_cards = true,
         }, .{ .expand = .both, .margin = .{ .x = inset, .w = inset, .h = inset } }) catch null;

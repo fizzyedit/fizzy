@@ -3,7 +3,7 @@
 //!
 //! The app declares the shape — rail, sidebar, main, panel — and until now that was the only way a
 //! region could exist, so everything the framework grew around regions (the corner button and its
-//! picker, `shows`, assignments persisted by name, the settings table, keyword claiming) stopped
+//! picker, its tab strip, assignments persisted by name, the settings table, keyword claiming) stopped
 //! at the surface a plugin draws. Inside it a plugin had to invent its own subdivision, which is
 //! exactly what the workbench did with workspaces and tab strips: a second implementation of the
 //! same idea, addressable by nothing.
@@ -18,7 +18,7 @@
 //! var pane = host.region(.{
 //!     .name = "Pane 1",
 //!     .keywords = &.{"document"},
-//!     .shows = .one,
+//!     .owns_selection = true, // it draws its own tab strip
 //!     .key = grouping,
 //! }) orelse return .ok;
 //! defer pane.deinit();
@@ -30,14 +30,6 @@ const std = @import("std");
 const dvui = @import("dvui");
 
 const RegionSpec = @This();
-
-/// How many accepted surfaces this region shows at once. The region telling the truth about how
-/// it draws, which is the one thing nothing else can work out — everything that offers the user a
-/// choice reads it (over `.one` the picker's cards swap, over `.many` they toggle).
-///
-/// Here rather than in the app's `Region` because a plugin declaring a region has to be able to
-/// say it, and there must be exactly one definition of what it means.
-pub const Shows = enum { one, many };
 
 /// A view dropped on this region: which surface, and on which of the region's drop zones (the
 /// middle, or an edge). See `on_drop`.
@@ -80,7 +72,12 @@ name: []const u8 = "",
 /// `{"main.document"}`. The enclosing region's name is prefixed for you, because a sub-region
 /// should not have to know — or repeat — what it is nested in.
 keywords: []const []const u8 = &.{},
-shows: Shows = .one,
+/// The region chooses among its surfaces itself — it draws its own chooser (a tab strip) from
+/// `Host.Region.matching` and writes back with `select` — so the app draws none. Otherwise a
+/// region holding two or more surfaces gets the app's tab strip above them in `drawContents`, and
+/// one holding a single surface shows just that surface: how many views a region holds decides
+/// whether it has tabs, not a mode it is declared in.
+owns_selection: bool = false,
 /// The axis this region lays its own children along, exactly as `dvui.box`'s `dir`.
 dir: dvui.enums.Direction = .vertical,
 /// Distinguishes regions declared from the same code path: a loop over three document panes

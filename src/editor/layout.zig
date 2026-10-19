@@ -50,7 +50,6 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
         var side = try f.region(@src(), .{
             .name = "Sidebar",
             .keywords = sidebar,
-            .shows = .many,
             .content = .{ .ctx = editor, .draw = explorerPane },
             .resize = true,
             .collapsible = true,
@@ -101,9 +100,9 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
         var panel = try f.region(@src(), .{
             .name = "Panel",
             .keywords = bottom,
-            // A Multiple place like any other: the generic strip, a tab dragged along it or off
-            // it carried in the view drag, and splitting it is the region Split every place has.
-            .shows = .many,
+            // A place like any other: the generic strip while it holds more than one view, a tab
+            // dragged along it or off it carried in the view drag, and splitting it is the region
+            // Split every place has.
             .resize = true,
             .collapsible = true,
             .hide_when_empty = true,

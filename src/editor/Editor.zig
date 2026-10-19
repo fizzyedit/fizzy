@@ -5049,7 +5049,7 @@ fn saveRegions(editor: *Editor) void {
 }
 
 /// Every place `layout.zon` should remember, as it stands: extents, assignments, splits,
-/// Single/Multiple, orders and floats, one entry per place. The slice is `gpa`'s; every string in
+/// orders and floats, one entry per place. The slice is `gpa`'s; every string in
 /// it is borrowed from the layout state, so use it before the layout changes again.
 pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.backend.SavedRegion {
     var by_name: std.StringArrayHashMapUnmanaged(fizzy.backend.SavedRegion) = .empty;
@@ -5078,17 +5078,6 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = l.name };
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
-        }
-    }
-    {
-        var it = editor.app.layout.shows.iterator();
-        while (it.next()) |e| {
-            const gop = by_name.getOrPut(gpa, e.key_ptr.*) catch continue;
-            if (!gop.found_existing) gop.value_ptr.* = .{ .name = e.key_ptr.* };
-            gop.value_ptr.shows = switch (e.value_ptr.*) {
-                .one => .one,
-                .many => .many,
-            };
         }
     }
     {
@@ -5123,7 +5112,7 @@ pub fn loadSavedLayout(editor: *Editor) void {
 }
 
 /// Put what `saved` remembers per place on top of the layout as it stands: extents, what the user
-/// put in each place, orders, Single/Multiple, the splits, and the floats — bottom to top, each
+/// put in each place, orders, the splits, and the floats — bottom to top, each
 /// held on screen when it first draws. A float with nothing left to show is not brought back.
 pub fn applySavedRegions(editor: *Editor, saved: []const fizzy.backend.SavedRegion) void {
     const gpa = editor.app.gpa;
@@ -5131,10 +5120,6 @@ pub fn applySavedRegions(editor: *Editor, saved: []const fizzy.backend.SavedRegi
         if (r.extent) |e| _ = editor.app.layout.setExtent(gpa, r.name, e);
         if (r.surfaces) |ids| editor.app.layout.assign(gpa, r.name, ids) catch continue;
         if (r.order) |ids| editor.app.layout.setOrder(gpa, r.name, ids) catch {};
-        if (r.shows) |s| editor.app.layout.setShows(gpa, r.name, switch (s) {
-            .one => .one,
-            .many => .many,
-        });
     }
     loadRuntimeSplits(&editor.app.layout, gpa, saved);
     loadFloats(&editor.app.layout, gpa, saved);

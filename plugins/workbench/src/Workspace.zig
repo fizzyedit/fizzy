@@ -3,7 +3,7 @@
 //!
 //! A pane used to be a private subdivision — its own list of documents by grouping, its own
 //! active index into the app's open-file array, its own drag/drop that rewrote both. Now the pane
-//! is a region (`host.region`, keywords `{"document"}`, `shows = .many`) and each open document
+//! is a region (`host.region`, keywords `{"document"}`, `owns_selection`) and each open document
 //! is a surface the app registers; the tabs are `region.matching()`, the active tab is the
 //! region's selection, and a tab moved to another pane is an assignment edit. Nothing here
 //! remembers which documents it holds: the app does, by the pane's name, which is also what makes
@@ -127,7 +127,8 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     var region = runtime.host().region(.{
         .name = name(&name_buf, self.grouping),
         .keywords = sdk.document.keywords,
-        .shows = .many,
+        // Its own tab strip chooses among the documents (`drawTabs`), not the app's.
+        .owns_selection = true,
         .key = self.grouping,
         .expand = .both,
         // The app draws a dragged tab's drop zones and preview over this pane, as over any
@@ -867,7 +868,6 @@ pub fn drawHome(host: *sdk.Host, grouping: u64) !bool {
     var home = host.region(.{
         .name = home_region,
         .keywords = sdk.keywords.ide.home,
-        .shows = .one,
         .key = grouping,
         .hide_when_empty = true,
     }) orelse return false;

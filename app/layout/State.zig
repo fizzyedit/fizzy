@@ -85,9 +85,6 @@ assignments: std.StringHashMapUnmanaged([]const []const u8) = .empty,
 /// order only sorts: views it names come first, in its order; the rest follow as they would
 /// have. Keys and ids gpa-owned, like `assignments`.
 orders: std.StringHashMapUnmanaged([]const []const u8) = .empty,
-/// User override of how many surfaces a place can show. Absent means the
-/// shape's `shows` (Sidebar/Panel are `.many`; a leftover leaf is `.one`).
-shows: std.StringHashMapUnmanaged(Region.Shows) = .empty,
 /// Surface id → its snapshot. Keys are gpa-owned copies: a surface can unregister (plugin
 /// unloaded) while the picker is open.
 snapshots: std.StringHashMapUnmanaged(Snapshot) = .empty,
@@ -358,7 +355,7 @@ pub fn canRemove(self: *const State, name: []const u8) bool {
 }
 
 /// The heir of a closed pinned place takes its name: whatever this state keyed by the heir's
-/// old name — its assignment, Single/Multiple, extent — is now the place's, and the closed
+/// old name — its assignment, order, extent — is now the place's, and the closed
 /// place's own entries go with it.
 pub fn renamePlace(self: *State, gpa: std.mem.Allocator, from: []const u8, to: []const u8) void {
     self.unassign(gpa, to);
@@ -376,12 +373,6 @@ pub fn renamePlace(self: *State, gpa: std.mem.Allocator, from: []const u8, to: [
         gpa.free(kv.key);
         self.setOrder(gpa, to, kv.value) catch {};
         freeIds(gpa, kv.value);
-    }
-    if (self.shows.fetchRemove(from)) |kv| {
-        gpa.free(kv.key);
-        self.setShows(gpa, to, kv.value);
-    } else {
-        if (self.shows.fetchRemove(to)) |kv| gpa.free(kv.key);
     }
     _ = self.clearExtent(gpa, to);
     if (self.extents.fetchRemove(from)) |kv| {
@@ -479,7 +470,6 @@ pub fn joinable(self: *const State, a: []const u8, b: []const u8) ?SplitTree.For
 pub fn registerRegion(self: *State, gpa: std.mem.Allocator, entry: Region) void {
     var r = entry;
     r.layer = self.layer_building;
-    if (r.name.len > 0) r.shows = self.showsOf(r.name, r.shows);
     self.regions_building.append(gpa, r) catch {};
 }
 
@@ -595,25 +585,6 @@ fn forgetOrders(self: *State, gpa: std.mem.Allocator) void {
     self.orders.clearRetainingCapacity();
 }
 
-/// How this place shows surfaces: the user's choice, else the shape's default.
-pub fn showsOf(self: *const State, name: []const u8, fallback: Region.Shows) Region.Shows {
-    return self.shows.get(name) orelse fallback;
-}
-
-/// Remember Single vs Multiple for `name`. Same name interned as assignments.
-pub fn setShows(self: *State, gpa: std.mem.Allocator, name: []const u8, value: Region.Shows) void {
-    const gop = self.shows.getOrPut(gpa, name) catch return;
-    if (gop.found_existing) {
-        gop.value_ptr.* = value;
-        return;
-    }
-    gop.key_ptr.* = gpa.dupe(u8, name) catch {
-        _ = self.shows.remove(name);
-        return;
-    };
-    gop.value_ptr.* = value;
-}
-
 /// Forget the user's choice for region `name`; its keywords decide again.
 pub fn unassign(self: *State, gpa: std.mem.Allocator, name: []const u8) void {
     const kv = self.assignments.fetchRemove(name) orelse return;
@@ -622,8 +593,8 @@ pub fn unassign(self: *State, gpa: std.mem.Allocator, name: []const u8) void {
     gpa.free(kv.value);
 }
 
-/// Forget everything kept under place `name` — what it holds, their order, Single/Multiple and
-/// its extent — because the place itself is gone for good: a float closed, whose number the next
+/// Forget everything kept under place `name` — what it holds, their order and its
+/// extent — because the place itself is gone for good: a float closed, whose number the next
 /// float may reuse. Returns true when an extent went, which the app may want to save.
 pub fn forgetPlace(self: *State, gpa: std.mem.Allocator, name: []const u8) bool {
     self.unassign(gpa, name);
@@ -631,7 +602,6 @@ pub fn forgetPlace(self: *State, gpa: std.mem.Allocator, name: []const u8) bool 
         gpa.free(kv.key);
         freeIds(gpa, kv.value);
     }
-    if (self.shows.fetchRemove(name)) |kv| gpa.free(kv.key);
     return self.clearExtent(gpa, name);
 }
 
@@ -853,7 +823,6 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
         gpa.free(e.value_ptr.*);
     }
     self.assignments.clearRetainingCapacity();
-    forgetShows(self, gpa);
     forgetOrders(self, gpa);
 
     self.splits.deinit(gpa);
@@ -925,22 +894,9 @@ pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {
     }
     self.assignments.deinit(gpa);
     self.assignments = .empty;
-    deinitShows(self, gpa);
-    self.shows = .empty;
     forgetOrders(self, gpa);
     self.orders.deinit(gpa);
     self.orders = .empty;
-}
-
-fn forgetShows(self: *State, gpa: std.mem.Allocator) void {
-    var it = self.shows.keyIterator();
-    while (it.next()) |k| gpa.free(k.*);
-    self.shows.clearRetainingCapacity();
-}
-
-fn deinitShows(self: *State, gpa: std.mem.Allocator) void {
-    forgetShows(self, gpa);
-    self.shows.deinit(gpa);
 }
 
 /// The extent a region should start at: what the user last left it, or the shape's default.

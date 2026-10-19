@@ -4,9 +4,8 @@
 //! `State.openPicker`, and drawn once per frame by the application through `draw` so it floats
 //! above whatever opened it. One at a time.
 //!
-//! **Single** is one surface, no chooser. **Multiple** is several, and the
-//! place grows a tab strip. The shape's default (Sidebar/Panel many, Main one)
-//! is the starting point; the user's choice is remembered with the layout.
+//! A place holding one view shows it alone; holding more, it grows a tab strip
+//! (`Layout.tabbedIn`). A card toggles its view in or out of the place.
 //!
 //! Cards assign a surface here. That is how a sidebar view stays in the
 //! sidebar, and how a plugin readme lands in the center — keywords are the
@@ -166,21 +165,15 @@ pub fn draw(self: *Picker, f: *Layout) void {
             const assigned = state.assignment(region.name);
             const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
 
-            // Every control on one row: how many surfaces it shows on the left; what to do with
-            // the place on the right. Clear and Defaults keep their places, dimmed when they do
-            // not apply — each turns the other on as often as not (clearing leaves an assignment
-            // to go back from), and coming and going they shoved the row around under the pointer.
+            // Every control on one row, what to do with the place on the right. Clear and
+            // Defaults keep their places, dimmed when they do not apply — each turns the other on
+            // as often as not (clearing leaves an assignment to go back from), and coming and
+            // going they shoved the row around under the pointer.
             var controls = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
                 .padding = .{ .y = 4 },
             });
             defer controls.deinit();
-            if (modeButton(@src(), "Single", "picker.mode:one", region.shows == .one, 1)) {
-                setShows(f, &region, .one);
-            }
-            if (modeButton(@src(), "Multiple", "picker.mode:many", region.shows == .many, 2)) {
-                setShows(f, &region, .many);
-            }
 
             var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
             defer actions.deinit();
@@ -322,13 +315,8 @@ pub fn draw(self: *Picker, f: *Layout) void {
         }
         col = (col + 1) % columns;
 
-        // Highlighted means "this is what you can see here", which over a `.one` region is the
-        // selected surface rather than every surface its keywords attract — several cards lit up
-        // in a region that draws one would be reporting a set that does not exist.
-        const on = switch (region.shows) {
-            .one => if (f.selectedIn(&region)) |sel| std.mem.eql(u8, sel.id, s.id) else false,
-            .many => contains(contents, s.id),
-        };
+        // Highlighted: the place holds it, as a tab or as the one view.
+        const on = contains(contents, s.id);
         switch (card(f, s, on, i)) {
             .none => continue,
             .lifted => |hit| {
@@ -340,36 +328,17 @@ pub fn draw(self: *Picker, f: *Layout) void {
             },
             .clicked => {},
         }
-        switch (region.shows) {
-            // A swap. The region draws one surface, so a set would be a lie: the second and
-            // third members would exist in the file and never appear on screen. Selecting as
-            // well as assigning is what makes the click land on this frame — the region reads
-            // its selection to decide what to draw, and a one-surface assignment it has never
-            // selected would otherwise wait for the fallback.
-            .one => {
-                state.assign(gpa, region.name, &.{s.id}) catch |err| {
-                    dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
-                };
-                f.host.setSelectionForKey(region.selectionKey(), s.id);
-                // One surface is the whole choice. Leave the popup so the
-                // corner control can hide on a filled place.
-                self.close(gpa);
-                state.discardSnapshots(gpa);
-                state.markDirty();
-                dvui.refresh(null, @src(), null);
-                return;
-            },
-            // A toggle: the region's contents, plus or minus this one, in the order they were
-            // already in.
-            .many => {
-                var ids = std.ArrayListUnmanaged([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
-                for (contents) |c| if (!std.mem.eql(u8, c.id, s.id)) ids.appendAssumeCapacity(c.id);
-                if (!on) ids.appendAssumeCapacity(s.id);
-                state.assign(gpa, region.name, ids.items) catch |err| {
-                    dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
-                };
-            },
-        }
+        // A toggle: the region's contents, plus or minus this one, in the order they were
+        // already in. Not the last view out of the place, though: a lit card that is all the
+        // place shows only says so (Clear empties a place on purpose).
+        if (on and contents.len == 1) continue;
+        var ids = std.ArrayListUnmanaged([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
+        for (contents) |c| if (!std.mem.eql(u8, c.id, s.id)) ids.appendAssumeCapacity(c.id);
+        if (!on) ids.appendAssumeCapacity(s.id);
+        state.assign(gpa, region.name, ids.items) catch |err| {
+            dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
+        };
+        if (!on) f.host.setSelectionForKey(region.selectionKey(), s.id);
         state.markDirty();
         dvui.refresh(null, @src(), null);
     };
@@ -754,33 +723,6 @@ fn drawLifted(self: *Picker, f: *Layout) void {
     ViewDrag.tick(f);
 }
 
-fn setShows(f: *Layout, region: *const Layout.Region, shows: Layout.Region.Shows) void {
-    f.state.setShows(f.gpa, region.name, shows);
-    if (shows == .one) {
-        const contents = f.matchingIn(region);
-        if (contents.len > 1) {
-            const keep = if (f.selectedIn(region)) |s| s.id else contents[0].id;
-            f.state.assign(f.gpa, region.name, &.{keep}) catch {};
-            f.host.setSelectionForKey(region.selectionKey(), keep);
-        }
-    }
-    f.state.markDirty();
-    dvui.refresh(null, @src(), null);
-}
-
-fn modeButton(src: std.builtin.SourceLocation, label: []const u8, name: []const u8, on: bool, id_extra: usize) bool {
-    const theme = dvui.themeGet();
-    return namedButton(src, label, name, .{
-        .font = actionFont(),
-        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-        .margin = .{ .x = 4 },
-        .gravity_y = 0.5,
-        .id_extra = id_extra,
-        .color_fill = if (on) .{ .color = theme.color(.highlight, .fill).opacity(0.25) } else null,
-        .color_border = if (on) .{ .color = theme.color(.highlight, .fill) } else null,
-    });
-}
-
 fn actionFont() dvui.Font {
     return dvui.Font.theme(.body).larger(-1);
 }
@@ -889,21 +831,25 @@ fn flushPendingStore(f: *Layout, region: *const Layout.Region) void {
     if (state.pending_store_plugin.len == 0) return;
     if (!std.mem.eql(u8, state.pending_store_region, region.name)) return;
 
+    // Beside what the place holds, as a card picked there goes.
+    const held = f.matchingIn(region);
     var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (held) |h| ids.append(f.arena, h.id) catch return;
+    var first: ?[]const u8 = null;
     for (f.host.surfaces.items) |*s| {
         const owner = s.owner orelse continue;
         if (s.hidden) continue;
-        if (std.mem.eql(u8, owner.id, state.pending_store_plugin)) {
-            ids.append(f.arena, s.id) catch return;
-        }
+        if (!std.mem.eql(u8, owner.id, state.pending_store_plugin)) continue;
+        if (first == null) first = s.id;
+        if (!contains(held, s.id)) ids.append(f.arena, s.id) catch return;
     }
-    if (ids.items.len == 0) return;
+    const shown = first orelse return;
 
     state.assign(f.gpa, region.name, ids.items) catch |err| {
         dvui.log.err("failed to assign store plugin to '{s}': {t}", .{ region.name, err });
         return;
     };
-    if (region.shows == .one) f.host.setSelectionForKey(region.selectionKey(), ids.items[0]);
+    f.host.setSelectionForKey(region.selectionKey(), shown);
     state.clearPendingStore(f.gpa);
     state.markDirty();
     dvui.refresh(null, @src(), null);

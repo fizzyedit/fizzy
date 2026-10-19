@@ -41,7 +41,9 @@ pub const SavedRegion = struct {
     /// Runtime split: this leaf was dragged out of `parent` from `from` (left/right/top/bottom).
     parent: ?[]const u8 = null,
     from: ?[]const u8 = null,
-    /// User override of Single vs Multiple. Null means the shape's default.
+    /// What a fizzy before tabs-when-many wrote: whether the place showed one view or several.
+    /// Read only to migrate (`loadRegions`), never written: a place now shows tabs exactly when
+    /// it holds more than one view.
     shows: ?SavedShows = null,
     /// The order the user dragged this place's views into. Sorts only — which views the place
     /// holds is `surfaces` (or its keywords); views not named here follow in their usual order.
@@ -184,7 +186,10 @@ pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
     for (f.regions) |r| {
         const name = gpa.dupe(u8, r.name) catch continue;
         var surfaces: ?[]const []const u8 = null;
-        if (r.surfaces) |ids| {
+        if (r.surfaces) |all| {
+            // A place that showed one view (`shows`, from an older fizzy) shows what it showed:
+            // holding several now means tabs, so it keeps only the first.
+            const ids = if (r.shows == .one and all.len > 1) all[0..1] else all;
             // Partial: drop the whole region rather than keep half a list.
             surfaces = dupeIds(gpa, ids) orelse {
                 gpa.free(name);
@@ -198,7 +203,7 @@ pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
         // A float whose home fails to copy floats still; closed, its view goes to its keywords.
         var floating = r.floating;
         if (floating) |*fl| fl.home = gpa.dupe(u8, fl.home) catch "";
-        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from, .shows = r.shows, .order = order, .floating = floating };
+        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from, .order = order, .floating = floating };
         n += 1;
     }
     return out[0..n];

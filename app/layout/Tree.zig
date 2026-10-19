@@ -7,7 +7,6 @@ const core = @import("core");
 
 const Layout = @import("Layout.zig");
 const Seed = @import("Seed.zig");
-const Region = @import("Region.zig");
 
 const Dockspace = core.widgets.DockingWidget;
 const DockLayout = core.widgets.DockLayout;
@@ -22,7 +21,6 @@ seed: *const Seed.Tree,
 pub const Leaf = struct {
     name: []const u8,
     keywords: []const []const u8 = &.{},
-    shows: Region.Shows = .one,
     pinned: bool = false,
     panel: Dockspace.Panel,
 
@@ -36,7 +34,6 @@ pub fn leaf(self: *Tree) ?Leaf {
     const spec = self.seed.findLeaf(p.id) orelse Seed.Leaf{
         .name = p.id,
         .keywords = Layout.slot_keywords,
-        .shows = .one,
         .pinned = false,
     };
     const pinned = if (self.layout.state.dock) |*d| blk: {
@@ -48,7 +45,6 @@ pub fn leaf(self: *Tree) ?Leaf {
     return .{
         .name = p.id,
         .keywords = spec.keywords,
-        .shows = spec.shows,
         .pinned = pinned,
         .panel = p,
     };

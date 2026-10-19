@@ -36,8 +36,8 @@ const Region = @This();
 name: []const u8 = "",
 /// What kinds of surface this region accepts, as its shape declared them.
 keywords: []const []const u8 = &.{},
-/// How many of them it can show at once. See `Shows`.
-shows: Shows = .one,
+/// It chooses among what it holds itself (`InitOptions.owns_selection`): no strip of the app's.
+owns_selection: bool = false,
 /// This region's widget id, stable across frames from the shape's `@src()`.
 id: dvui.Id = .zero,
 /// How far this region reaches along its parent's axis when it has never been dragged — the
@@ -225,7 +225,7 @@ pub fn isPeeking(self: Region) bool {
 /// values itself. As a function pointer it is just `explorerPane` in `src/editor/layout.zig` —
 /// app code, passed in, replaceable by the app's own loop over `matching` / `selected` / `draw`,
 /// which is the governing test for everything here. (The bottom panel had one too, until
-/// `shows = .many` drew the same strip generically: it is a plain Multiple place now.)
+/// a place's own strip, drawn whenever it holds more than one view, did the same job generically.)
 ///
 /// It also retired the two values nothing used (`.tabs`, `.icons`); `Layout.tabbed` is the
 /// first of those as a plain function, and the icon rail was never this shape to begin with —
@@ -240,25 +240,6 @@ pub const Content = struct {
     draw: *const fn (ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) anyerror!dvui.App.Result,
 };
 
-/// How many matching surfaces a region can show at once.
-///
-/// This is not a policy the framework enforces — it is the region *telling the truth about how it
-/// draws*, which is the one thing nothing else can work out. A region with no `content` falls
-/// through to `drawSelected`, so exactly one surface is ever on screen and a second assigned one
-/// would simply be invisible. A region whose chrome loops over `matching` — a tab strip, an icon
-/// rail — shows as many as it is given.
-///
-/// Everything that offers the user a choice reads this. The picker is the reason it exists: over
-/// a `.one` region its cards are a *swap* (choosing writes a single surface and selects it), and
-/// over a `.many` region they are toggles. Before, every region was a set, so assigning two
-/// surfaces to the main area silently hid one of them.
-///
-/// `.one` is the truthful default: a plain region shows one, and a shape that draws a chooser
-/// knows it did.
-/// The SDK's enum, not a copy of it: a plugin declaring a region has to be able to say how its
-/// region draws, and two definitions of `one` would eventually disagree.
-pub const Shows = sdk.RegionSpec.Shows;
-
 /// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
 pub const InitOptions = struct {
     /// Below this container extent, a `collapsible` region folds itself away — the width at
@@ -272,9 +253,12 @@ pub const InitOptions = struct {
     /// What kinds of surface this region accepts. Empty means it hosts nothing itself and is
     /// purely a container for other regions.
     keywords: []const []const u8 = &.{},
-    /// How many of them it shows at once — `.one` unless this region's `content` draws a chooser.
-    /// See `Shows`; the picker's behaviour follows it.
-    shows: Shows = .one,
+    /// The region chooses among what it holds itself — a plugin's own tab strip
+    /// (`sdk.RegionSpec.owns_selection`) — so the app draws no strip for it. Otherwise a region
+    /// holding two or more views gets the app's strip above them (`Layout.tabbedIn`), and one
+    /// holding one shows just that view. A region with `content` draws its own chrome, so the
+    /// strip is that function's to draw or not.
+    owns_selection: bool = false,
     /// The axis this region lays its children along, exactly as `dvui.box`'s `dir`.
     dir: dvui.enums.Direction = .vertical,
     /// Chrome drawn instead of the plain selected surface. See `Content`.
@@ -381,7 +365,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     const probe: Region = .{
         .name = init_opts.name,
         .keywords = keywords,
-        .shows = init_opts.shows,
+        .owns_selection = init_opts.owns_selection,
         .by_name = init_opts.by_name,
         .kind_slot = init_opts.kind_slot,
     };
@@ -405,7 +389,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         self.state.registerRegion(self.gpa, .{
             .name = init_opts.name,
             .keywords = keywords,
-            .shows = init_opts.shows,
+            .owns_selection = init_opts.owns_selection,
             .id = id,
             .by_name = init_opts.by_name,
             .kind_slot = init_opts.kind_slot,
@@ -551,7 +535,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     if (keywords.len > 0 and !tree_origin and !leftover_leaf) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
         .keywords = keywords,
-        .shows = init_opts.shows,
+        .owns_selection = init_opts.owns_selection,
         .id = id,
         .default_extent = default_extent,
         .by_name = init_opts.by_name,
@@ -636,7 +620,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     return .{
         .name = init_opts.name,
         .keywords = keywords,
-        .shows = init_opts.shows,
+        .owns_selection = init_opts.owns_selection,
         .id = id,
         .default_extent = default_extent,
         .box = box,
@@ -1265,18 +1249,19 @@ fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, sho
 /// everywhere in the app.
 fn drawContents(self: *Layout, opts: InitOptions, keywords: []const []const u8) !dvui.App.Result {
     if (opts.content) |content| return content.draw(content.ctx, self, keywords);
-    const shows = if (opts.name.len > 0) self.state.showsOf(opts.name, opts.shows) else opts.shows;
     const place: Region = .{
         .name = opts.name,
         .keywords = keywords,
         .by_name = opts.by_name,
-        .shows = shows,
+        .owns_selection = opts.owns_selection,
     };
-    // Multiple is a place setting: the chooser is the place's, not something
-    // each surface or the shape has to draw.
-    if (shows == .many) return self.tabbedIn(&place);
-    if (opts.by_name) return self.drawSelectedIn(&place);
-    return self.drawSelected(keywords);
+    if (opts.owns_selection) {
+        if (opts.by_name) return self.drawSelectedIn(&place);
+        return self.drawSelected(keywords);
+    }
+    // The chooser is the place's, not something each surface or the shape has to draw: a strip
+    // while it holds more than one view, none while it holds one.
+    return self.tabbedIn(&place);
 }
 
 fn nameExtra(name: []const u8) usize {
@@ -1376,7 +1361,7 @@ fn initTree(
     if (keywords.len > 0) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
         .keywords = keywords,
-        .shows = init_opts.shows,
+        .owns_selection = init_opts.owns_selection,
         .id = id,
         .default_extent = default_extent,
         .by_name = init_opts.by_name,
@@ -1396,7 +1381,7 @@ fn initTree(
     return .{
         .name = init_opts.name,
         .keywords = keywords,
-        .shows = init_opts.shows,
+        .owns_selection = init_opts.owns_selection,
         .id = id,
         .box = box,
         .layout = self,
@@ -1666,7 +1651,7 @@ pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !v
     if (keywords.len > 0) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
         .keywords = keywords,
-        .shows = init_opts.shows,
+        .owns_selection = init_opts.owns_selection,
         .id = box.data().id,
         .by_name = init_opts.by_name,
         .kind_slot = init_opts.kind_slot,

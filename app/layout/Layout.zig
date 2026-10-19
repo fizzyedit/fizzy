@@ -1111,7 +1111,6 @@ pub fn regionIn(self: *Layout, leaf: Tree.Leaf, init_opts: Region.InitOptions) !
     var opts = init_opts;
     if (opts.name.len == 0) opts.name = leaf.name;
     if (opts.keywords.len == 0) opts.keywords = leaf.keywords;
-    if (init_opts.name.len == 0) opts.shows = leaf.shows;
     opts.by_name = true;
     opts.forget_when_empty = !leaf.pinned;
     try Region.fillInBox(self, opts, box);
@@ -1157,7 +1156,7 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
         // A plugin formats its name per frame; everything that holds it holds it across frames.
         .name = self.state.internName(self.gpa, spec.name),
         .keywords = spec.keywords,
-        .shows = spec.shows,
+        .owns_selection = spec.owns_selection,
         .dir = spec.dir,
         .hide_when_empty = spec.hide_when_empty,
         // The plugin draws its own chrome around the contents, so it says where they go.
@@ -1181,6 +1180,15 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
 
 pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvui.App.Result {
     const r = self.pluginRegion(token) orelse return .ok;
+    // A region that does not choose among its views itself gets the app's strip while it holds
+    // more than one, and the view in a box of its own beneath it (`tabbedIn`'s reasons): the
+    // warm-up and the photograph below are the body's then, as the swap is.
+    const body: ?*dvui.BoxWidget = if (!r.owns_selection and self.tabsIn(r)) dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .background = false,
+        .id_extra = @truncate(r.selectionKey()),
+    }) else null;
+    defer if (body) |b| b.deinit();
     const s = self.selectedIn(r) orelse return .ok;
     // Blurs from one surface to the next like every other region: a tab switch, and a document
     // landing over its loading placeholder. Capturing the outgoing view means drawing it once
@@ -1196,7 +1204,7 @@ pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvu
             dvui.clipSet(.{});
             _ = surfaceDraw(w) catch {};
             dvui.clipSet(prev_clip);
-            self.resetInnermostPack();
+            if (body) |b| resetPack(b) else self.resetInnermostPack();
             // Another may be waiting; this one's work is done.
             dvui.refresh(null, @src(), null);
         };
@@ -1206,15 +1214,15 @@ pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvu
     // it, from this very draw and no other — as a region's card is (`Region.drawContentsPhotographed`).
     if (ViewDrag.previewWanted(self, s.id)) {
         const rect = dvui.parentGet().data().contentRectScale().r.intersect(dvui.clipGet());
-        if (ViewDrag.photographFromFrame(self, rect)) return self.drawSwapped(key, s, null, .none);
+        if (ViewDrag.photographFromFrame(self, rect)) return self.drawSwapped(key, s, body, .none);
         if (core.anim.CrossFade.beginCapture(rect)) |pic_in| {
             var pic = pic_in;
-            const res = self.drawSwapped(key, s, null, .none);
+            const res = self.drawSwapped(key, s, body, .none);
             ViewDrag.keepShot(self, .{ .card = true }, &pic);
             return res;
         }
     }
-    return self.drawSwapped(key, s, null, .none);
+    return self.drawSwapped(key, s, body, .none);
 }
 
 /// A plugin region's contents and selection, by token — what a plugin's own chooser (a tab
@@ -1387,7 +1395,7 @@ pub fn packSplitSized(
 /// tabs without splits uses it as-is instead of copying `Panel`.
 pub fn tabs(f: *Layout, keywords: []const []const u8) void {
     const place: Region = .{ .keywords = keywords };
-    tabsIn(f, &place);
+    _ = tabsIn(f, &place);
 }
 
 /// Carry surface `id` in the view drag, lifted from `from` (its tab, its card, its rail icon, its
@@ -1420,21 +1428,28 @@ pub fn beginViewDragMany(f: *Layout, items: []const sdk.EditorAPI.Carried, from:
 
 /// Tab strip for one place: a horizontal `Chooser` with the stock `label` look. `tabs` is this
 /// keyed by keywords; a by-name place (a minted split leaf) must not share another place's
-/// selection. Nothing is drawn for a place with one view or none — a single Output is just Output.
-pub fn tabsIn(f: *Layout, r: *const Region) void {
-    if (f.matchingIn(r).len <= 1) return;
+/// selection. Nothing is drawn for a place with one view or none — a single Output is just Output
+/// — nor while a takeover has annexed the place (`Surface.takeover_when`): it is the place, not a
+/// tab beside what it covers. True when the strip was drawn.
+pub fn tabsIn(f: *Layout, r: *const Region) bool {
+    const items = f.matchingIn(r);
+    if (items.len <= 1) return false;
+    for (items) |s| if (s.takeover_when != null) return false;
     // Across the whole place, not just its tabs: a view carried anywhere along it goes in among
     // them — past the last one, at the end.
     var strip = Chooser.init(@src(), f, r.*, .{ .outer = .{ .expand = .horizontal } });
     defer strip.deinit();
+    if (r.name.len > 0) core.anchor.mark(strip.strip.outer.data(), "tabs:{s}", .{r.name});
     for (strip.views()) |view| {
         var it = strip.item(@src(), view, .{});
         defer it.deinit();
         Chooser.label(view, it.selected, it.hovered());
     }
+    return true;
 }
 
-/// A Multiple place: its strip, then the selected view in a box of its own beneath it.
+/// A place's strip (none while it holds one view), then the selected view in a box of its own
+/// beneath it.
 ///
 /// The box is the point. The swap between views photographs and blurs *its parent*, and resets
 /// that parent's layout after the photograph as if the view were its only child. Drawn straight
@@ -1442,7 +1457,7 @@ pub fn tabsIn(f: *Layout, r: *const Region) void {
 /// though the strip were not there. In its own box the strip stays put and sharp, inside the
 /// place's card, and only what changed dissolves — the same as the bottom panel.
 pub fn tabbedIn(f: *Layout, r: *const Region) !dvui.App.Result {
-    f.tabsIn(r);
+    _ = f.tabsIn(r);
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,

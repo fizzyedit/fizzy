@@ -72,6 +72,9 @@ photo_last: ?dvui.Rect.Physical = null,
 start_ns: i128 = 0,
 /// Surface lifted from the source: what the card under the pointer shows, and what lands.
 moved_id: []const u8 = "",
+/// The place it was lifted from held other views beside it (`begin`): the trash takes just this
+/// one (`removable`), rather than leaving a place the shape declared empty.
+from_several: bool = false,
 /// Everything lifted together with it (`beginLooseMany`) — a selection out of a file tree — in the
 /// order it was, the one in hand first: carried in the one glass, which shows them all, and landing
 /// together (`sdk.RegionSpec.Drop.others`). Empty for one view carried alone. Ids and labels are
@@ -753,6 +756,7 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     // into it, which drew the view whole for a moment before it was carried.
     liftShape(d, grabbed);
     if (visibleId(l, name)) |id| d.moved_id = id;
+    d.from_several = holding(l, name).len > 1;
     mapTargets(l, d);
     // Carried out of a float, the float goes to a ghost of itself: photographed now, whole, before
     // anything of the drag is drawn over it.
@@ -998,12 +1002,12 @@ fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physic
     return if (touch) .{ .x = mouse.x - r, .y = mouse.y - r } else .{ .x = mouse.x + 0.55 * r, .y = mouse.y + 0.55 * r };
 }
 
-/// Whether the drop offers the trash: everywhere but where it would wipe out a place the shape
-/// declared. Out of one half of a split the user made (`State.userSplitPart`) the trash takes what
-/// is carried, and the half, emptied, closes into the other; out of a place that shows several
-/// (the sidebar, the bottom panel) it takes just that view, back to the picker. A place the shape
-/// declared to show one, never split, offers none — the trash would only leave it empty. A view
-/// carried out of the picker is in no place to leave.
+/// Whether the drop offers the trash. Out of one half of a split the user made
+/// (`State.userSplitPart`) the trash takes what is carried, and the half, emptied, closes into the
+/// other; out of a place holding others beside it (the sidebar, the bottom panel) it takes just
+/// that view, back to the picker. A place the shape declared, holding only the view carried and
+/// never split, offers none — the trash would only leave it empty. A view carried out of the
+/// picker is in no place to leave.
 pub fn removable(l: *Layout) bool {
     return removableIn(l.state);
 }
@@ -1015,8 +1019,7 @@ fn removableIn(state: *const Layout.State) bool {
     // view leaves closes — the view, claimed by no place then, back where its keywords put it.
     if (state.floatRoot(d.name) != null) return true;
     if (state.userSplitPart(d.name)) return true;
-    const r = regionNamed(state, d.name) orelse return false;
-    return r.shows == .many;
+    return d.from_several and regionNamed(state, d.name) != null;
 }
 
 /// The part of place `name` a carried view's zones cover: the place less its own chooser — a tab
@@ -1314,7 +1317,7 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
         .float
     else if (joins(l, d.name, name))
         .join
-    else if (regionNamed(l.state, name)) |r| (if (r.shows == .many) .add else .replace) else .replace;
+    else if (regionNamed(l.state, name) != null) .add else .replace;
     // The drop a release would land in, each bubble an anchor (`drop:<zone>`): one place at a time
     // is the target, so a demo aims at the bubble rather than an offset from the place's middle.
     // Marked only while a tape asks for anchors, and ahead of the offer queue's limit (which has
@@ -1850,8 +1853,8 @@ fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
 fn joins(l: *Layout, source: []const u8, dest: []const u8) bool {
     if (source.len == 0 or dest.len == 0) return false;
     if (l.state.joinable(source, dest) == null) return false;
-    const r = regionNamed(l.state, source) orelse return true;
-    return r.shows == .one or holding(l, source).len <= 1;
+    if (regionNamed(l.state, source) == null) return true;
+    return holding(l, source).len <= 1;
 }
 
 /// Whether `name` is somewhere the dragged view could land — one of the places mapped at lift
@@ -2235,9 +2238,11 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
 /// A release over a plugin region's own chooser: straight to the plugin's `on_drop`, as into the
 /// region with where along its strip — even for the region the view came out of, whose strip
 /// reorders it, which `place` would refuse as no move. False when `dest` is not a plugin region
-/// with a drop of its own, for `place` to handle.
+/// with a drop and a chooser of its own (`owns_selection`), for `place` to handle: the strip over
+/// a region that leaves choosing to the app is the app's (`insertInto`).
 fn dropOnPluginChooser(l: *Layout, source: []const u8, dest: []const u8, mouse: dvui.Point.Physical) bool {
     const r = regionNamed(l.state, dest) orelse return false;
+    if (!r.owns_selection) return false;
     const on_drop = r.on_drop orelse return false;
     const moved = ownId(l.arena, movedFrom(l, source) orelse return true) orelse return true;
     if (!accepts(r.*, keywordsOf(l, moved))) return true;
@@ -2253,9 +2258,7 @@ fn dropOnPluginChooser(l: *Layout, source: []const u8, dest: []const u8, mouse: 
 /// moves along the list: the place's order, kept as its assignment when it has one, else as an
 /// order (`State.setOrder`) — never as a new assignment, which would freeze a place its keywords
 /// fill against views registered later. Into another place, it leaves the one it was in, as any
-/// drop into a place's middle does, and the list it goes into is written down. A place that shows
-/// one view at a time has a list all the same — the one its chooser picks from — and shows the view
-/// that went in.
+/// drop into a place's middle does, and the list it goes into is written down.
 pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) void {
     const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
     const r = regionNamed(l.state, dest) orelse return;
@@ -2420,9 +2423,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
 /// A document carried onto a plain place, which only a slot made for it takes: it lands there
 /// inside a new view of the application's that holds it, and what was carried with it
 /// (`State.documents`), as a view carried there would land — an edge splits the place and the
-/// new half holds it; the middle adds it to a place of tabs, and takes a place of one, the view
-/// it replaces let go where its keywords show it (a document's slot is no place to send it back
-/// to). Where the document came from is the slot's plugin's to tidy: its tab moves, as a drop
+/// new half holds it; the middle adds it beside what the place holds. Where the document came from is the slot's plugin's to tidy: its tab moves, as a drop
 /// into another slot moves it.
 fn house(l: *Layout, dest: []const u8, plan: Drop.Plan, moved: []const u8) void {
     if (carriedView(l, moved)) |carried| return landView(l, carried.from, dest, plan, carried.view);
@@ -2435,8 +2436,7 @@ fn house(l: *Layout, dest: []const u8, plan: Drop.Plan, moved: []const u8) void 
         if (plan == .split) closeMinted(l, place_name);
         return;
     };
-    const many = if (regionNamed(l.state, place_name)) |r| l.state.showsOf(place_name, r.shows) == .many else false;
-    const list = if (many and plan != .split) idsWith(l.arena, holding(l, place_name), view) else l.arena.dupe([]const u8, &.{view}) catch return;
+    const list = if (regionNamed(l.state, place_name) != null and plan != .split) idsWith(l.arena, holding(l, place_name), view) else l.arena.dupe([]const u8, &.{view}) catch return;
     l.state.assign(l.gpa, place_name, list) catch return;
     selectNamed(l, place_name, view);
     l.state.markDirty();
@@ -2674,12 +2674,9 @@ pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
         switch (float_rules.goHome(.{
             .declared = r != null,
             .assigned = state.assignment(home) != null,
-            .shows_many = if (r) |x| x.shows == .many else false,
-            .empty = held.len == 0,
             .keywords_place = keywordsPlace(l, id),
         })) {
             .add => state.assign(l.gpa, home, idsWith(l.arena, held, id)) catch {},
-            .put => state.assign(l.gpa, home, &.{id}) catch {},
             .keywords => {},
             .elsewhere => {
                 landed = null;
@@ -2706,12 +2703,12 @@ fn keywordsPlace(l: *Layout, id: []const u8) bool {
 }
 
 /// Where a closing float's view goes that its home cannot take and its keywords show nowhere
-/// (`sendHome`): the first place of the main window's, in the shape's order, that shows several
-/// views and may show it.
+/// (`sendHome`): the first place of the main window's, in the shape's order, that may show it.
 fn mainPlaceFor(l: *Layout, id: []const u8) ?*const Region {
     const s = l.host.surfaceById(id) orelse return null;
     for (l.state.regions.items) |*r| {
-        if (r.shows != .many or l.state.floatRoot(r.name) != null) continue;
+        // Unnamed (a keyword place a shape drew with `Layout.tabbed`): no list to write it into.
+        if (r.name.len == 0 or l.state.floatRoot(r.name) != null) continue;
         if (l.offers(r, s)) return r;
     }
     return null;
@@ -2768,23 +2765,18 @@ fn movedFrom(l: *Layout, source: []const u8) ?[]const u8 {
     return visibleId(l, source);
 }
 
-/// Land the view. A place that shows many takes it; a place that shows one
-/// trades for it.
-///
-/// The difference is whether anything had to be displaced. A shelf has room,
-/// so the view joins what is already there and the source simply loses it. A
-/// slot has one view in it, and that view has to go somewhere — back where the
-/// new one came from, because nowhere else is anywhere: an unassigned surface
-/// whose place is now spoken for is a surface the user can no longer find.
+/// Land the view. A place takes it beside what it holds — as a tab, once it holds more than one
+/// — and the source simply loses it. Only a name no place answers to trades: the view there
+/// goes back where the new one came from, because nowhere else is anywhere.
 fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) void {
     const other_raw = visibleId(l, dest);
     const other = if (other_raw) |o| ownId(l.arena, o) else null;
 
-    // Dropped on a place that shows several and already holds it (a tab dropped back into its
-    // own strip's place): it is already there, so show it and leave the list alone — claiming
-    // it the way a one-view place does would shrink the place to it.
-    const dest_many = if (regionNamed(l.state, dest)) |r| r.shows == .many else false;
-    if (dest_many) {
+    // Dropped on a place that already holds it (a tab dropped back into its own strip's place):
+    // it is already there, so show it and leave the list alone — claiming it would shrink the
+    // place to it.
+    const declared = regionNamed(l.state, dest) != null;
+    if (declared) {
         for (holding(l, dest)) |id| if (std.mem.eql(u8, id, moved)) {
             selectNamed(l, dest, moved);
             if (!std.mem.eql(u8, source, dest)) takeOut(l, source, moved, null);
@@ -2792,8 +2784,15 @@ fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
         };
     }
 
-    // Dropping a view onto a place that is already showing it: claim it here
-    // and let the source go empty, rather than trading it with itself.
+    if (declared) {
+        l.state.assign(l.gpa, dest, idsWith(l.arena, holding(l, dest), moved)) catch {};
+        selectNamed(l, dest, moved);
+        takeOut(l, source, moved, null);
+        return;
+    }
+
+    // A name no place answers to. Already showing the view: claim it there and let the source go
+    // empty, rather than trading it with itself.
     if (other) |o| {
         if (std.mem.eql(u8, o, moved)) {
             l.state.assign(l.gpa, dest, &.{moved}) catch {};
@@ -2802,14 +2801,6 @@ fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
                 l.state.assign(l.gpa, source, &.{}) catch {};
             return;
         }
-    }
-
-    const dest_shows = if (regionNamed(l.state, dest)) |r| r.shows else .one;
-    if (dest_shows == .many) {
-        l.state.assign(l.gpa, dest, idsWith(l.arena, holding(l, dest), moved)) catch {};
-        selectNamed(l, dest, moved);
-        takeOut(l, source, moved, null);
-        return;
     }
 
     l.state.assign(l.gpa, dest, &.{moved}) catch {};
@@ -2826,30 +2817,16 @@ fn join(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
     const pair = l.state.joinable(source, dest) orelse return swap(l, source, dest, moved);
     var ids: std.ArrayListUnmanaged([]const u8) = .empty;
     for ([_][]const u8{ dest, source }) |name| {
-        for (shownIn(l, name)) |id| {
+        for (holding(l, name)) |id| {
             const own = ownId(l.arena, id) orelse continue;
             if (!containsId(ids.items, own)) ids.append(l.arena, own) catch {};
         }
     }
     if (!containsId(ids.items, moved)) ids.append(l.arena, moved) catch {};
-    // As tabs only for more than one: a view joined with an empty half is the one view.
-    if (ids.items.len > 1) l.state.setShows(l.gpa, pair.keep, .many);
     l.state.assign(l.gpa, pair.keep, ids.items) catch {};
     l.state.assign(l.gpa, pair.drop, &.{}) catch {};
     selectNamed(l, pair.keep, moved);
     shutIfEmptied(l, pair.drop);
-}
-
-/// What a place is showing, for a join to keep: every view a place of tabs holds, the one view
-/// a place of one does. A place of one matched by keywords "holds" every surface they match —
-/// the whole list it picks from — and joining must not turn that into a row of tabs.
-fn shownIn(l: *Layout, name: []const u8) []const []const u8 {
-    const many = if (regionNamed(l.state, name)) |r| r.shows == .many else false;
-    if (many) return holding(l, name);
-    const id = visibleId(l, name) orelse return &.{};
-    const out = l.arena.alloc([]const u8, 1) catch return &.{};
-    out[0] = id;
-    return out;
 }
 
 fn containsId(ids: []const []const u8, id: []const u8) bool {
@@ -2858,7 +2835,7 @@ fn containsId(ids: []const []const u8, id: []const u8) bool {
 }
 
 /// What a place is holding: the list it was given, or the one its keywords
-/// attract when it has never been given one. A `.many` place usually has no
+/// attract when it has never been given one. A place usually has no
 /// list of its own — the sidebar's tabs are every plugin that asked for the
 /// sidebar — and reading only the assignment there says "nothing", so a drop
 /// onto the rail would leave it holding one lone view.
@@ -2997,8 +2974,7 @@ pub fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
     if (!l.state.isMinted(sibling_raw)) return null;
     const sibling = ownId(l.arena, sibling_raw) orelse return null;
     const into = ownId(l.arena, name) orelse return null;
-    const views = shownIn(l, sibling);
-    if (views.len > 1) l.state.setShows(l.gpa, into, .many);
+    const views = holding(l, sibling);
     l.state.assign(l.gpa, into, views) catch {};
     if (views.len > 0) selectNamed(l, into, views[0]);
     l.state.assign(l.gpa, sibling, &.{}) catch {};
