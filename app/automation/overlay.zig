@@ -34,8 +34,6 @@ const Liquid = @import("../Liquid.zig");
 
 /// How long a key or command stays among the popups at home.
 const keys_ms: f64 = 2200;
-/// The height the transport bar takes along the bottom, over the window's corner.
-const slot_h: f32 = 56;
 /// How long the bar stays out of its corner, while playing, after the pointer was last on it or
 /// the corner brought it.
 const bar_linger_ns: i128 = 2500 * std.time.ns_per_ms;
@@ -712,7 +710,10 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     }
     st.at = played;
     st.chapter = chapter;
-    st.liquid.setLevel(fill);
+    // Out of the corner, the liquid has poured into the line: the corner's own drains as the bar
+    // comes out and fills again as it goes back, the one liquid all the way, so the corner at rest
+    // takes over from the bar with no change of surface.
+    st.liquid.setLevel(fill * (1 - dome.smooth(p / corner_drain)));
     st.liquid.step(wall_ns, corner.point());
     // A paused player asks for no frames of its own but while the corner lightens under a held
     // pointer, or its liquid moves.
@@ -799,7 +800,8 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     // The corner's contents change with it rather than fade: its liquid drains as it pours out into
     // the line and fills again as it pours back, its tape shrinking into the corner and growing back.
     if (!tr.closing) {
-        const look: dome.Look = .{ .fill = fill * (1 - dome.smooth(p / corner_drain)) };
+        // Its own liquid (drained by `setLevel` above), and its tape lit as at rest.
+        const look: dome.Look = .{ .fill = fill, .liquid = &st.liquid, .lit = on(hit, pointer), .held = st.dwell.held(wall_ns) };
         dome.paintCornerLiquid(corner, 1 - out, look);
         dome.cornerIcon(corner, 1 - out, look, fw.data().borderRectScale().r);
     }

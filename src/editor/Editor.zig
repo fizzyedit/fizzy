@@ -4304,7 +4304,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Its corner's curve, for what stands in the window's own corner (a playing tape's orb).
     {
         const win = dvui.currentWindow();
-        const square = fizzy.backend.isMaximized(win) or fizzy.backend.isFullscreenChromeHidden(win);
+        // Square in full screen; maximized, too, but on macOS, where a zoomed window keeps its curve.
+        const square = fizzy.backend.isFullscreenChromeHidden(win) or (builtin.target.os.tag != .macos and fizzy.backend.isMaximized(win));
         fizzy.core.screens.publishMainRadius(if (square) 0 else if (builtin.target.os.tag == .linux) Constants.linux_window_radius else fizzy.backend.viewports.windowRadius());
     }
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.get().kind == .liquid);

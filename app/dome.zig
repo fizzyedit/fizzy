@@ -579,27 +579,32 @@ fn pourStream(lip: [2]f32, end: [2]f32, tail: f32, head: f32, th: f32, color: dv
 // Each transport's bar that is out, and each corner vial at rest, says where it is (`publishBar`),
 // so a bar that would cover it can stand clear (`barsOut`): the tape's bar, out along the bottom
 // of the window, stacks above a pane's history vial or history bar under it. Per frame, kept in
-// dvui's data; a frame with none out costs nothing.
+// dvui's data, and only while something reads them (a tape is loaded): with no reader the last
+// frame, publishing does nothing, so an app with no tape playing does no work for it.
 
-const max_bars = 16;
+const max_bars = 32;
 const Bars = struct {
     /// The frame they were published in (`dvui.frameTimeNS`): an earlier frame's are gone.
     frame_ns: i128 = 0,
     n: usize = 0,
     rects: [max_bars]dvui.Rect.Physical = undefined,
+    /// Something read them this frame (`barsOut`), and the last frame: only then are they kept.
+    read: bool = false,
+    wanted: bool = false,
 };
 
 fn bars() *Bars {
     const b = dvui.dataGetPtrDefault(null, dvui.Id.update(.zero, "app.dome.bars"), "_bars", Bars, .{});
     const now = dvui.frameTimeNS();
-    if (b.frame_ns != now) b.* = .{ .frame_ns = now };
+    if (b.frame_ns != now) b.* = .{ .frame_ns = now, .wanted = b.read };
     return b;
 }
 
-/// A bar is out at `r` (physical, with its tab) this frame.
+/// A bar, or a vial at rest, is at `r` (physical, a bar with its tab) this frame. Nothing is kept
+/// unless something read the last frame's (`barsOut`).
 pub fn publishBar(r: dvui.Rect.Physical) void {
     const b = bars();
-    if (b.n == max_bars) return;
+    if (!b.wanted or b.n == max_bars) return;
     b.rects[b.n] = r;
     b.n += 1;
 }
@@ -608,6 +613,7 @@ pub fn publishBar(r: dvui.Rect.Physical) void {
 /// demo's overlay.
 pub fn barsOut() []const dvui.Rect.Physical {
     const b = bars();
+    b.read = true;
     return b.rects[0..b.n];
 }
 
