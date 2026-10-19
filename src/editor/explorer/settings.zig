@@ -258,6 +258,15 @@ pub const groups = [_]Group{
                 .keywords = "history kept disk space size cap limit forget clear delete privacy",
                 .draw = drawKeptHistory,
             },
+            .{
+                .label = "Undo steps per document",
+                .key = "history_limit",
+                .description = "The most steps one document's undo history keeps, in every " ++
+                    "editor. Going back and then editing keeps what was gone back over, so the " ++
+                    "history grows; past this the oldest steps go.",
+                .keywords = "history undo redo steps limit cap memory",
+                .draw = drawHistoryLimit,
+            },
         },
     },
     .{
@@ -286,6 +295,16 @@ pub const groups = [_]Group{
 /// The window's group: its glass — every glass the app draws is the window's — and, where there
 /// are OS windows to put things in, which things get one.
 const window_items = [_]Item{
+    .{
+        .label = "Window material",
+        .key = "window_material",
+        .description = "What the window is made of: opaque, clear, blurred, frosted or Liquid " ++
+            "Glass, and every dialog, menu and float with it. Each platform shows the best it " ++
+            "has at or below the one chosen: Liquid Glass on macOS 26 and on the web, frost on " ++
+            "Windows, blur where a Linux compositor blurs.",
+        .keywords = "glass material liquid frost blur transparent opaque translucent window background",
+        .draw = drawWindowMaterial,
+    },
     .{
         .label = "Window opacity",
         .key = "window_opacity_dark",
@@ -698,6 +717,21 @@ fn drawRecordHistory() void {
     drawToggle(&fizzy.editor().app.settings.record_history, "Record document history");
 }
 
+fn drawHistoryLimit() void {
+    const editor = fizzy.editor();
+    var steps: f32 = @floatFromInt(editor.app.settings.history_limit);
+    if (dvui.sliderEntry(@src(), "{d:0.0} steps", .{
+        .value = &steps,
+        .interval = 100,
+        .max = 100_000,
+        .min = 100,
+    }, .{ .expand = .horizontal })) {
+        editor.app.settings.history_limit = @intFromFloat(steps);
+        editor.markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
 fn drawKeptHistory() void {
     const editor = fizzy.editor();
     if (dvui.sliderEntry(@src(), "up to {d:0.1} GB", .{
@@ -757,6 +791,53 @@ fn drawToggle(value: *bool, name: []const u8) void {
 }
 
 // ---- Debugging --------------------------------------------------------------------------
+
+fn drawWindowMaterial() void {
+    const editor = fizzy.editor();
+    // `FIZZY_GLASS` overrides the setting for this run: say so, rather than offer a choice that
+    // does nothing.
+    if (fizzy.Entry.materialOverride()) |kind| {
+        dvui.label(@src(), "{s}, set by FIZZY_GLASS", .{materialName(kind)}, .{ .gravity_x = 1.0 });
+        return;
+    }
+    const asked = editor.app.settings.window_material;
+    const shown = fizzy.core.material.get().kind;
+    var dropdown: core.widgets.DropdownWidget = undefined;
+    dropdown.init(@src(), .{}, .{ .expand = .horizontal, .corners = dvui.CornerRect.all(1000) });
+    defer dropdown.deinit();
+    {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .vertical, .gravity_x = 1.0 });
+        defer hbox.deinit();
+        if (shown == asked) {
+            dvui.labelNoFmt(@src(), materialName(asked), .{}, .{ .margin = .all(0), .padding = .all(0) });
+        } else {
+            // What this platform draws instead: the best it has at or below the one asked.
+            dvui.label(@src(), "{s}, shown as {s}", .{ materialName(asked), materialName(shown) }, .{ .margin = .all(0), .padding = .all(0) });
+        }
+        core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+    }
+    if (dropdown.dropped()) {
+        for (std.enums.values(fizzy.core.material.Kind)) |kind| {
+            if (dropdown.addChoiceLabel(materialName(kind))) {
+                editor.app.settings.window_material = kind;
+                editor.markSettingsDirty();
+                dvui.refresh(null, @src(), null);
+                break;
+            }
+        }
+    }
+}
+
+/// A material kind as the settings name it.
+pub fn materialName(kind: fizzy.core.material.Kind) []const u8 {
+    return switch (kind) {
+        .none => "Opaque",
+        .transparent => "Clear",
+        .blur => "Blur",
+        .frost => "Frost",
+        .liquid => "Liquid Glass",
+    };
+}
 
 fn drawGlassShader() void {
     const editor = fizzy.editor();

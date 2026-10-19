@@ -256,6 +256,14 @@ pub fn deinit(self: *FrameTarget) void {
 /// still slide shut over the picture of it. Null before a frame has been drawn, off the window, or
 /// on a backend without targets.
 pub fn snapshot(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.Texture {
+    const out = snapshotTarget(rect, size) orelse return null;
+    return dvui.textureFromTarget(out) catch null;
+}
+
+/// `snapshot`, kept as the target it was drawn into (the caller's: `dvui.Texture.fromTarget` it,
+/// or `destroyLater`): for a caller that reads its pixels back (`dvui.Texture.readTarget`), which
+/// it can do from the next frame, once the copy has landed.
+pub fn snapshotTarget(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.TextureTarget {
     const self = current orelse return null;
     // The last frame shown: the other target while one is bound; in a frame nobody will see, the
     // one bound last (`begin` leaves the targets as they were).
@@ -293,5 +301,5 @@ pub fn snapshot(rect: dvui.Rect.Physical, size: ?[2]u32) ?dvui.Texture {
         dvui.renderTexture(src, .{ .r = dest, .s = 1 }, .{ .uv = .{ .x = r.x / sw, .y = r.y / sh, .w = r.w / sw, .h = r.h / sh } }) catch {};
     }
     _ = dvui.renderTarget(was);
-    return dvui.textureFromTarget(out) catch null;
+    return out;
 }

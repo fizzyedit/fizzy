@@ -5351,6 +5351,11 @@ const DemoStage = struct {
     /// Off, the player seeks from keyframes alone.
     snapshots: bool = true,
     restores: usize = 0,
+    /// On, every snapshot is refused when put back, as fizzy's are for a scene whose documents
+    /// moved pane: the seek cuts to the keyframe instead.
+    refuse_restores: bool = false,
+    /// Restores refused while `refuse_restores` was on.
+    refused: usize = 0,
 
     /// The whole of this app's model.
     const Snap = struct { text: []u8, clicks: usize, commands: usize };
@@ -5421,6 +5426,10 @@ const DemoStage = struct {
     }
     fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
         const snap: *Snap = @ptrCast(@alignCast(raw));
+        if (from(ctx).refuse_restores) {
+            from(ctx).refused += 1;
+            return false;
+        }
         from(ctx).restores += 1;
         demo_text.clearRetainingCapacity();
         demo_text.appendSlice(std.testing.allocator, snap.text) catch unreachable;
@@ -5659,6 +5668,50 @@ test "demo: a seek back goes to the nearest snapshot, not the keyframe, and land
     demo_player.seek(@floatFromInt(demo_player.duration()));
     try stepDemoUntil(.paused, 200);
     try std.testing.expectEqualStrings("> hello world", demo_text.items);
+    try std.testing.expectEqual(@as(u32, 0), demo_player.mismatches);
+}
+
+fn twoScenesTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "scenes", "Scenes");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://scenes", .files = &.{.{ .path = "field", .text = "> " }} });
+    try s.click(.{ .tag = "demo.field", .x = 0.9, .y = 0.5 }, .{});
+    try s.typeText("one", .{ .cps = 20 });
+    s.pause(4000);
+    try s.keyframe(.{ .root = "demo://scenes", .files = &.{.{ .path = "field", .text = "# " }} });
+    try s.chapter("Two");
+    try s.click(.{ .tag = "demo.field", .x = 0.9, .y = 0.5 }, .{});
+    try s.typeText("two", .{ .cps = 20 });
+    s.pause(1000);
+    return s.finish();
+}
+
+test "demo: a seek back to a keyframe does not check the scene before's last snapshot against it" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    // Two scenes, a pause before the second: the snapshot taken in that pause has the cursor of
+    // the second keyframe's op, which is where a rewind to that keyframe sits before it cuts.
+    demo_player.load(try twoScenesTape(), .{});
+    try stepDemoUntil(.ended, 600);
+    try std.testing.expectEqualStrings("# two", demo_text.items);
+    // The moment this is about: a snapshot of the first scene at the second keyframe's op.
+    const tape = demo_player.tape().?;
+    const second_kf = for (tape.ops, 0..) |op, i| {
+        if (i > 0 and op.do == .keyframe) break i;
+    } else return error.TestUnexpectedResult;
+    const before_cut = for (demo_player.snapshots.items) |s| {
+        if (s.cursor == second_kf) break s;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), before_cut.scene);
+
+    // From the end back into the second scene, every snapshot refused: a rewind to its keyframe.
+    demo_stage.refuse_restores = true;
+    const two: f64 = @floatFromInt(tape.chapters[0].at);
+    demo_player.seek(two + 100);
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expect(demo_stage.refused > 0);
+    try std.testing.expectEqualStrings("# ", demo_text.items);
     try std.testing.expectEqual(@as(u32, 0), demo_player.mismatches);
 }
 
@@ -7783,6 +7836,146 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     try std.testing.expect(std.mem.endsWith(u8, client.reply[0..client.len], "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"done\\\":true}\"}],\"isError\":false}}"));
 }
 
+/// A command that keeps who called it (`Host.author`), and the events the bus delivered.
+const McpWho = struct {
+    host: *sdk.Host,
+    who: sdk.Author = .unattributed,
+    label: [64]u8 = undefined,
+    label_len: usize = 0,
+    ended: [256]u8 = undefined,
+    ended_len: usize = 0,
+    fn record(state: *anyopaque) anyerror!void {
+        const self: *McpWho = @ptrCast(@alignCast(state));
+        self.who = self.host.author();
+        self.label_len = @min(self.who.label.len, self.label.len);
+        @memcpy(self.label[0..self.label_len], self.who.label[0..self.label_len]);
+    }
+    fn heard(state: *anyopaque, event: sdk.events.Event) void {
+        const self: *McpWho = @ptrCast(@alignCast(state));
+        self.ended_len = @min(event.payload.len, self.ended.len);
+        @memcpy(self.ended[0..self.ended_len], event.payload[0..self.ended_len]);
+    }
+};
+
+test "control: each MCP client is a session, its calls made as its own author" {
+    const gpa = std.testing.allocator;
+    const mcp = @import("app").control.mcp;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    var who: McpWho = .{ .host = &host };
+    const vtable = sdk.Plugin.VTable{};
+    var plugin = sdk.Plugin{ .state = &who, .vtable = &vtable, .id = "t", .display_name = "T" };
+    try host.registerCommand(.{ .id = "t.who", .owner = &plugin, .title = "Who", .run = McpWho.record });
+    try host.subscribe(.{ .event = mcp.session_ended.name, .owner = &plugin, .handler = McpWho.heard });
+    var sessions: mcp.Sessions = .{};
+    defer sessions.deinit(gpa);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // `initialize` opens a session named by the client, and says which.
+    var ctx: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = null, .now = 0, .fresh_id = 0x2a };
+    _ = try mcp.handle(&host, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"Claude Code\"}}}", arena, null, &ctx);
+    try std.testing.expectEqual(@as(?u64, 0x2a), ctx.opened);
+    var buf: [16]u8 = undefined;
+    const header = mcp.formatSession(0x2a, &buf);
+    try std.testing.expectEqualStrings("000000000000002a", header);
+    try std.testing.expectEqual(@as(?u64, 0x2a), mcp.parseSession(header));
+
+    // A call with the session is made as its author, labelled with the client's name.
+    const call = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"t.who\"}}";
+    var with: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = header, .now = 1, .fresh_id = 0 };
+    _ = try mcp.handle(&host, call, arena, null, &with);
+    try std.testing.expect(who.who.same(.{ .kind = .agent, .plugin = "control", .session = 0x2a }));
+    try std.testing.expectEqualStrings("Claude Code", who.label[0..who.label_len]);
+    // Without one, the shared author, as every call was before sessions.
+    var without: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = null, .now = 1, .fresh_id = 0 };
+    _ = try mcp.handle(&host, call, arena, null, &without);
+    try std.testing.expect(who.who.same(mcp.Sessions.shared));
+    // A session that is not open is refused, so the client initializes again.
+    var unknown: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = "00000000000000ff", .now = 1, .fresh_id = 0 };
+    try std.testing.expect(try mcp.handle(&host, call, arena, null, &unknown) == .unknown_session);
+    var garbled: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = "not hex", .now = 1, .fresh_id = 0 };
+    try std.testing.expect(try mcp.handle(&host, call, arena, null, &garbled) == .unknown_session);
+    // Only the header's own form names a session: no sign, no separators, no short forms.
+    try std.testing.expectEqual(@as(?u64, null), mcp.parseSession("2a"));
+    try std.testing.expectEqual(@as(?u64, null), mcp.parseSession("+00000000000002a"));
+    try std.testing.expectEqual(@as(?u64, null), mcp.parseSession("0000_0000000002a"));
+    // A notification naming a session that is not open is refused as well.
+    var late: mcp.Context = .{ .gpa = gpa, .sessions = &sessions, .header = "00000000000000ff", .now = 1, .fresh_id = 0 };
+    try std.testing.expect(try mcp.handle(&host, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", arena, null, &late) == .unknown_session);
+
+    // At the cap, opening one more ends the one idle longest.
+    var capped: mcp.Sessions = .{};
+    defer capped.deinit(gpa);
+    for (0..mcp.Sessions.max + 1) |i| {
+        var open: mcp.Context = .{ .gpa = gpa, .sessions = &capped, .header = null, .now = @intCast(i), .fresh_id = 100 + i };
+        _ = try mcp.handle(&host, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}", arena, null, &open);
+    }
+    try std.testing.expectEqual(@as(usize, mcp.Sessions.max), capped.list.items.len);
+    for (capped.list.items) |c| try std.testing.expect(c.id != 100);
+    host.deliverEvents();
+
+    // Idle past the limit, it ends, and the bus says whose it was.
+    sessions.expire(gpa, &host, 1 + mcp.Sessions.idle_ns - 1);
+    try std.testing.expectEqual(@as(usize, 1), sessions.list.items.len);
+    sessions.expire(gpa, &host, 1 + mcp.Sessions.idle_ns);
+    try std.testing.expectEqual(@as(usize, 0), sessions.list.items.len);
+    host.deliverEvents();
+    try std.testing.expectEqualStrings(".{.session=42,.label=\"Claude Code\",.plugin=\"control\"}", who.ended[0..who.ended_len]);
+}
+
+test "control: an MCP session's id comes back as a header, and DELETE /mcp ends it" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const control = @import("app").control;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+    const Wake = struct {
+        fn none() void {}
+    };
+    var server: control.Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = Wake.none };
+    try server.start();
+    var state: control.routes.State = .{};
+    defer control.routes.stop(&server, &state, &host);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const Exchange = struct {
+        fn run(server_: *control.Server, state_: *control.routes.State, host_: *sdk.Host, client: *ControlOneShot) !void {
+            const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{client});
+            var frames: usize = 0;
+            while (client.len == 0 and frames < 2000) : (frames += 1) {
+                control.routes.answerPending(server_, state_, host_);
+                std.testing.io.sleep(.fromMilliseconds(1), .awake) catch {};
+            }
+            thread.join();
+        }
+    };
+    const init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"probe\"}}}";
+    var opening: ControlOneShot = .{ .path = path, .request = try std.fmt.allocPrint(arena, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ init.len, init }) };
+    try Exchange.run(&server, &state, &host, &opening);
+    const reply = opening.reply[0..opening.len];
+    const key = "mcp-session-id: ";
+    const at = std.ascii.findIgnoreCase(reply, key) orelse return error.TestUnexpectedResult;
+    const id = reply[at + key.len ..][0..16];
+    try std.testing.expectEqual(@as(usize, 1), state.sessions.list.items.len);
+    try std.testing.expectEqual(control.mcp.parseSession(id), state.sessions.list.items[0].id);
+
+    var ending: ControlOneShot = .{ .path = path, .request = try std.fmt.allocPrint(arena, "DELETE /mcp HTTP/1.1\r\nHost: x\r\nMcp-Session-Id: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{id}) };
+    try Exchange.run(&server, &state, &host, &ending);
+    try std.testing.expect(std.mem.startsWith(u8, ending.reply[0..ending.len], "HTTP/1.1 200"));
+    try std.testing.expectEqual(@as(usize, 0), state.sessions.list.items.len);
+}
+
 const ControlStreamClient = struct {
     path: []const u8,
     reply: [4096]u8 = undefined,
@@ -8746,6 +8939,69 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(before, (try read(host, "")).text);
         }
 
+        // "Go back to before Claude's change": to just before the first step of Claude's last
+        // call, saying first when the person's steps are mixed in, and losing nothing.
+        {
+            const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            const claude: sdk.Author = .{ .kind = .agent, .plugin = "test", .session = 3, .label = "Claude" };
+            const before = try gpa.dupe(u8, (try read(host, "")).text);
+            defer gpa.free(before);
+            const writeAs = struct {
+                fn f(h: *sdk.Host, who: sdk.Author, path: []const u8, body: []const u8) !void {
+                    const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ path, body });
+                    const outer = h.act(who);
+                    defer h.endAct(outer);
+                    try std.testing.expect(h.callCommand("text.write", args, h.arena()) == .ok);
+                }
+            }.f;
+            try writeAs(host, .person, main_zig, "// mine\\n");
+            // One call of Claude's, two steps.
+            {
+                const outer = host.act(claude);
+                defer host.endAct(outer);
+                for ([_][]const u8{ "// claude one\\n", "// claude two\\n" }) |body| {
+                    const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ main_zig, body });
+                    try std.testing.expect(host.callCommand("text.write", args, host.arena()) == .ok);
+                }
+            }
+            // Its activity says whose, and its bubble offers to go back.
+            try std.testing.expect(host.activity.getLast().agent != null);
+            var feed: @import("app").ActivityFeed = .{ .seen = host.activity_seq - 1 };
+            feed.take(host, front.id, 0);
+            try std.testing.expectEqual(@as(usize, 1), feed.len);
+            const offered = feed.items[0].action orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@import("app").ActivityFeed.Act.go_back, offered.act);
+
+            const back = editor.backBefore(front, null, host.arena()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("Claude", back.by.label);
+            try std.testing.expectEqual(@as(usize, 0), back.yours);
+            // The person writes after Claude's call: going back would take that too, and says so.
+            try writeAs(host, .person, main_zig, "// mine again\\n");
+            const mixed = editor.backBefore(front, @intCast(offered.tag), host.arena()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), mixed.yours);
+            try std.testing.expectEqual(back.to, mixed.to);
+
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\" }}", .{main_zig});
+            const went = host.callCommand("fizzy.goBackBefore", args, host.arena());
+            try std.testing.expect(went == .ok);
+            try std.testing.expect(std.mem.indexOf(u8, went.ok.?, ".also_taken_back = 1") != null);
+            try std.testing.expectEqualStrings("// mine\n", (try read(host, "")).text);
+            // Nothing lost: Claude's call and the person's edit are still on the line ahead.
+            try std.testing.expect(front.owner.historyGoTo(front, mixed.from));
+            try std.testing.expectEqualStrings("// mine again\n", (try read(host, "")).text);
+            // Undone, a run is not offered.
+            try std.testing.expect(front.owner.historyGoTo(front, back.to));
+            try std.testing.expect(editor.backBefore(front, @intCast(offered.tag), host.arena()) == null);
+
+            // Back to the text as it was, for what follows.
+            const line = front.owner.historyLine(front, host.arena()) orelse return error.TestUnexpectedResult;
+            const first_mine = for (line.entries, 0..) |e, k| {
+                if (e.id == back.to) break k;
+            } else return error.TestUnexpectedResult;
+            try std.testing.expect(front.owner.historyGoTo(front, if (first_mine == 0) 0 else line.entries[first_mine - 1].id));
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+        }
+
         // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));
@@ -9204,13 +9460,20 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqual(la.entries.len, h.entries.len);
             try std.testing.expectEqual(la.at, h.applied);
             for (la.entries, h.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            // Typed, then inserted by command: not every entry reads alike.
+            try std.testing.expectEqualStrings("Typing", la.entries[0].title);
+            try std.testing.expectEqualStrings("Edit", la.entries[1].title);
             try tracks.replayInto(a.id, b, n);
             try dvui.testing.settle(headlessFrame);
             try std.testing.expectEqualStrings(want, try textOf(host, b));
             try std.testing.expect(b.owner.restoreHistory(b, h));
             const lb = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqual(la.at, lb.at);
-            for (la.entries, lb.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            // Each entry keeps its title, as the live line shows it.
+            for (la.entries, lb.entries) |x, y| {
+                try std.testing.expectEqual(x.id, y.id);
+                try std.testing.expectEqualStrings(x.title, y.title);
+            }
             try std.testing.expectEqualStrings(want, try textOf(host, b));
             try std.testing.expect(b.owner.historyGoTo(b, 0));
             try dvui.testing.settle(headlessFrame);

@@ -38,7 +38,12 @@ The open PR list is the board of who is working on what.
    it) instead of starting a parallel version.
 2. **Open a draft PR on your first push** (`gh pr create --draft --body-file <file>`), with the
    template filled in as far as you know it. A draft runs CI, so claim early.
-3. **Mark it ready when it is done and verified.** Merging is the maintainer's. Never push to
+3. **Take it to ready yourself; don't hand back a draft.** When the change is done and the gates
+   pass, review your own diff (in Claude Code, the `code-review` skill at `high` on the PR), fix
+   what holds up, push, and wait for CI to go green. Then `gh pr ready`, and end the session
+   with one question: merge it? Say what was reviewed and what was left, so the answer can be
+   yes without opening the PR.
+4. **Merging is the maintainer's.** On a yes, merge with `gh pr merge --squash`. Never push to
    `main`, and never merge a PR you opened unless asked to.
 
 ## jj
@@ -89,6 +94,27 @@ The open PR list is the board of who is working on what.
   Forget the workspace first: a change still checked out somewhere is kept. Never abandon a
   change that is some workspace's working copy (`jj workspace list`).
 
+## A session is one PR long
+
+Every turn re-sends the whole conversation, so a session costs its context size times its
+turns. In the week to 2026-10-19, three quarters of fizzy's input tokens went to turns already
+past 400k of context, mostly in a few sessions that ran one PR after another for thousands of
+turns.
+
+- **End the session when its PR is ready** and the merge question asked (above). The next step
+  starts fresh: its kickoff names the plan step, the PRs it builds on and the workspace, and
+  the PR body and `jj log` carry the rest.
+  `.claude/settings.json` sets `autoCompactWindow` to 300k as a backstop, not a budget.
+- **Read code through a subagent.** A sweep of `grep`/`sed`/`cat` lands in the main context and
+  is re-read every turn after it. Hand "how does X work" and "run the gates, report failures" to
+  an Explore or general-purpose agent and keep its conclusion; read a file yourself when you are
+  about to edit it.
+- **Look with text before pixels.** A screenshot stays in context for the rest of the session.
+  Ask `fizzy_screen`, `fizzy_profile` or a number first; when an image is the answer, crop it to
+  what changed.
+- **Don't reload what is loaded.** `AGENTS.md` and this file are already in a Claude Code
+  session's context through `CLAUDE.md`; a kickoff prompt need not say to read them.
+
 ## Verify, and say how
 
 - **Gates:** `scripts/check-fmt.sh` (`--fix` formats), `zig build`, `zig build test`,
@@ -106,6 +132,12 @@ The open PR list is the board of who is working on what.
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
   config, recents, lock and socket there too, apart from the person's own instance.
+- **A fizzy you launch takes the person's window focus.** macOS activates it, and a self-restart
+  into a rebuilt binary relaunches it, so never run a rebuild-and-relaunch loop, or a build that
+  triggers fizzy's self-restart, while a sandbox runs. Launch a sandbox fizzy only when a test or
+  the headless integration harness can't show the thing, at most a couple of times, and quit it
+  when done. On 2026-10-19 a worker's restart repro pulled the person out of their windows for an
+  hour.
 - **UI changes say how they were seen** (a test, a demo tape, a screenshot, a measurement) and
   on which platforms. CI's Windows cross-compile shows the app links, not that it works.
 

@@ -38,6 +38,12 @@ workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
 /// plugin's own directory whenever it changes (`workbench_layout.savePanes`).
 panes: Panes,
 panes_dirty: bool = false,
+/// A demo has the window (`holdPanes`): nothing is saved, and last session's panes wait.
+holding: bool = false,
+/// The person's arrangement while a demo has the window, a copy of its own (null where it could
+/// not be made, or before there was one), and the pane they were in.
+held_panes: ?Panes = null,
+held_open: u64 = 0,
 /// Where the panes are arranged when the app arranges them instead of `panes`: each pane a view
 /// of the app's, in a place of the app's, beside another by a split of the app's (fizzy's
 /// `Workspaces`, behind `FIZZY_WORKSPACES=1`). Null: the panes are this tree's leaves, as before.
@@ -385,6 +391,18 @@ pub fn removeTabEverywhere(self: *Workbench, id: []const u8) void {
 
 pub fn rebuildWorkspaces(self: *Workbench) !void {
     return workbench_layout.rebuildWorkspaces(self);
+}
+
+pub fn holdPanes(self: *Workbench) void {
+    workbench_layout.holdPanes(self);
+}
+
+pub fn onePane(self: *Workbench) void {
+    workbench_layout.onePane(self);
+}
+
+pub fn restorePanes(self: *Workbench) void {
+    workbench_layout.restorePanes(self);
 }
 
 pub fn forgetPanes(self: *Workbench) void {

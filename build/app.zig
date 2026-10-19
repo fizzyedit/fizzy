@@ -852,6 +852,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // covered by `tests/integration.zig`.
         .{ "fizzy-control-json-tests", "app/control/json.zig" },
         .{ "fizzy-control-server-tests", "app/control/Server.zig" },
+        // The screen as changes on a base: keys that stay put, and what changed between two.
+        .{ "fizzy-control-screen-diff-tests", "app/control/screen_diff.zig" },
         // One material on two sliders: what every glass is at the window's opacity and roughness,
         // the OS's form and the app's. std-only (see glass_look.zig); `LiquidField` and `Popout`
         // apply it.
