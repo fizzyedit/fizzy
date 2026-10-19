@@ -98,6 +98,9 @@ pub fn carryLens(_: *Viewport, _: bool) void {}
 pub fn windowGlass(_: *Viewport, _: anytype) bool {
     return false;
 }
+pub fn materialBase(_: *Viewport, _: dvui.Color, _: f32) ?dvui.Color {
+    return null;
+}
 pub fn underMain(_: *Viewport) bool {
     return false;
 }
@@ -169,7 +172,7 @@ pub fn dragMove(_: *Viewport) bool {
 pub fn minSize(_: *Viewport, _: f32, _: f32) void {}
 pub fn maxSize(_: *Viewport, _: f32, _: f32) void {}
 pub fn setTitle(_: *Viewport, _: []const u8) void {}
-pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
+pub fn glass(_: *Viewport, _: f32, _: bool) bool {
     return false;
 }
 pub fn placeMain(_: *Viewport, frame: Rect) Rect {

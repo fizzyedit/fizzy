@@ -5,7 +5,9 @@
 # for every app (fizzyedit/plans#27): fizzy must look the same after as before. This records the
 # look: fizzy launched in a profile of its own at each theme, material (`FIZZY_GLASS`) and window
 # opacity, its main window captured alone (`screencapture -l`), so what lies behind it on the
-# desktop never enters the picture. macOS.
+# desktop never enters the picture — and a float popped out into a window of its own beside it
+# (`<case>-float.png`: a `layout.zon` with the settings floating, which fizzy pops out as it starts
+# on macOS), captured alone too. macOS.
 #
 #   scripts/window-look.sh capture <fizzy binary> <out dir>
 #   scripts/window-look.sh compare <before dir> <after dir>
@@ -13,11 +15,13 @@
 # compare prints, per case, the mean difference of the two pictures' pixels (0–255, all
 # channels), and the largest, and exits 1 when any case's mean is over the tolerance
 # (`WINDOW_LOOK_TOLERANCE`, default 2): glass is drawn by the OS and moves a little between runs.
+# Each case launches fizzy, which takes the focus: `WINDOW_LOOK_THEMES` (comma-separated),
+# `WINDOW_LOOK_MATERIALS` and `WINDOW_LOOK_OPACITIES` (space-separated) capture fewer.
 set -euo pipefail
 
-themes=("Fizzy Dark" "Fizzy Light")
-materials=(liquid frost transparent none)
-opacities=(0.3 0.7 1.0)
+IFS=',' read -r -a themes <<<"${WINDOW_LOOK_THEMES:-Fizzy Dark,Fizzy Light}"
+read -r -a materials <<<"${WINDOW_LOOK_MATERIALS:-liquid frost transparent none}"
+read -r -a opacities <<<"${WINDOW_LOOK_OPACITIES:-0.3 0.7 1.0}"
 settle="${WINDOW_LOOK_SETTLE:-6}"
 
 slug() { echo "$1" | tr 'A-Z ' 'a-z-'; }
@@ -28,18 +32,34 @@ capture() {
   local work
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' RETURN
-  # The window, by the process that owns it: the largest on screen.
+  # The windows, by the process that owns them, largest first: the main window, then the float's.
   cat >"$work/window.swift" <<'EOF'
 import CoreGraphics
 let pid = Int(CommandLine.arguments[1])!
-var best: (Int, Int) = (0, 0)
+var found: [(Int, Int)] = []
 for w in CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]] {
   guard (w[kCGWindowOwnerPID as String] as? Int) == pid, (w[kCGWindowLayer as String] as? Int) == 0 else { continue }
   let b = w[kCGWindowBounds as String] as! [String: Any]
-  let area = (b["Width"] as! Int) * (b["Height"] as! Int)
-  if area > best.1 { best = (w[kCGWindowNumber as String] as! Int, area) }
+  found.append((w[kCGWindowNumber as String] as! Int, (b["Width"] as! Int) * (b["Height"] as! Int)))
 }
-print(best.0)
+found.sort { $0.1 > $1.1 }
+print(found.isEmpty ? "0" : found.prefix(2).map { String($0.0) }.joined(separator: " "))
+EOF
+  # The settings floating over the main window's right half, out in a window of their own.
+  cat >"$work/layout.zon" <<'EOF'
+.{
+    .x = 120,
+    .y = 120,
+    .w = 1000,
+    .h = 700,
+    .regions = .{
+        .{
+            .name = "Float 1",
+            .surfaces = .{"fizzy.settings"},
+            .floating = .{ .x = 560, .y = 160, .w = 480, .h = 420, .z = 0, .home = "Sidebar" },
+        },
+    },
+}
 EOF
   for theme in "${themes[@]}"; do
     for material in "${materials[@]}"; do
@@ -49,16 +69,23 @@ EOF
         profile="$work/profile-$name"
         mkdir -p "$profile"
         printf '.{\n    .theme = "%s",\n    .window_opacity_dark = %s,\n    .window_opacity_light = %s,\n}\n' "$theme" "$opacity" "$opacity" >"$profile/settings.zon"
+        cp "$work/layout.zon" "$profile/layout.zon"
         FIZZY_GLASS="$material" "$fizzy" --profile "$profile" >"$work/$name.log" 2>&1 &
         local pid=$!
         sleep "$settle"
-        local wid
-        wid="$(swift "$work/window.swift" "$pid")"
-        if [[ "$wid" != 0 ]]; then
-          screencapture -x -o -l "$wid" "$out/$name.png"
+        local wids
+        read -r -a wids <<<"$(swift "$work/window.swift" "$pid")"
+        if [[ "${wids[0]:-0}" != 0 ]]; then
+          screencapture -x -o -l "${wids[0]}" "$out/$name.png"
           echo "$name"
         else
           echo "$name: no window" >&2
+        fi
+        if [[ ${#wids[@]} -gt 1 ]]; then
+          screencapture -x -o -l "${wids[1]}" "$out/$name-float.png"
+          echo "$name-float"
+        else
+          echo "$name: no float window" >&2
         fi
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
@@ -107,5 +134,5 @@ EOF
 case "${1:-}" in
   capture) capture "$2" "$3" ;;
   compare) compare "$2" "$3" ;;
-  *) sed -n '2,16p' "$0"; exit 2 ;;
+  *) sed -n '2,21p' "$0"; exit 2 ;;
 esac

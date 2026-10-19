@@ -125,6 +125,7 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
  * which lets go of what AppKit autoreleases here (the subview arrays among it) as they return.
  */
 static NSImage *glassMask(double inset, double radius);
+static void windowGlassRemove(NSWindow *window);
 
 /*
  * A popped-out float's window dressed as the main window is, whatever it stands on — Liquid Glass
@@ -301,8 +302,9 @@ static NSImage *glassMask(double inset, double radius) {
 
 
 
-/* Undo `fizzy_macos_viewport_glass` before SDL destroys the window: the vibrancy view gone, and
- * its Window menu item (`fizzy_macos_viewport_windows_item`). */
+/* Undo `fizzy_macos_viewport_glass` and `fizzy_macos_window_material` before SDL destroys the
+ * window: the vibrancy, the window material's view and its Liquid Glass parts gone, and its Window
+ * menu item (`fizzy_macos_viewport_windows_item`). */
 void fizzy_macos_viewport_unglass(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -312,11 +314,12 @@ void fizzy_macos_viewport_unglass(void *nswindow) {
         if (frame == nil) return;
         NSArray *views = [[frame subviews] copy];
         for (NSView *v in views) {
-            if ([v isKindOfClass:[FizzyViewportGlassView class]]) [v removeFromSuperview];
+            if ([v isKindOfClass:[FizzyViewportGlassView class]] || [v isKindOfClass:[FizzyPlainMaterialView class]]) [v removeFromSuperview];
         }
 #if !__has_feature(objc_arc)
         [views release];
 #endif
+        windowGlassRemove(window);
     }
 }
 
