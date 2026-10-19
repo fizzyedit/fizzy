@@ -460,6 +460,8 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     editor.flushLayout();
     editor.flushSettings();
     self.saveSettings();
+    // The document panes too: kept in memory, and none of the demo's saved over them.
+    editor.workbench.holdPanes();
 
     const gpa = editor.app.gpa;
     var docs: std.ArrayList(Saved.Doc) = .empty;
@@ -497,11 +499,14 @@ fn end(ctx: *anyopaque) void {
     if (self.quitting) {
         self.freeSaved();
         self.freeSavedSettings();
+        editor.workbench.restorePanes();
         return;
     }
     self.restoreSettings();
     self.closeAllDocuments();
     self.unmountFiles();
+    // Before the person's documents reopen: into the pane they were in.
+    editor.workbench.restorePanes();
 
     // The layout as the user left it: `begin` flushed it, and nothing has been written since.
     editor.app.layout.resetLayout(gpa);
@@ -568,6 +573,8 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
 
     editor.command_palette.finishClose();
     self.closeAllDocuments();
+    // One pane: a split a later moment made is gone at a cut, as on the first pass.
+    editor.workbench.onePane();
     self.applySettings(kf.settings);
 
     // Fresh bytes every time: a replay must not see what the last pass typed or saved.

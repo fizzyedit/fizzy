@@ -4471,8 +4471,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
         const t = fizzy.core.hitch.begin(.rebuild_workspaces);
         defer t.end();
-        editor.rebuildWorkspaces() catch {
-            dvui.log.err("Failed to rebuild workspaces", .{});
+        editor.rebuildWorkspaces() catch |err| {
+            dvui.log.err("Failed to rebuild workspaces: {t}", .{err});
         };
         // The first rebuild reopened last session's tabs; what the session held beyond them is
         // kept in recovery files. A frame on, the panes have drawn, and each shows the tab it did.
