@@ -60,6 +60,10 @@ window_opacity_light: f32 = default_glass.opacity_light,
 
 /// Opacity of the content area (also drives plugin panes that match fizzy chrome).
 content_opacity: f32 = 0.7,
+/// The most steps a document's undo history keeps, in every editor (`Host.historyLimit`): going
+/// back and then editing keeps what was gone back over, so the line grows each time; past this the
+/// oldest steps go, as an undo history's limit does. Each plugin that owns a history trims its own.
+history_limit: u32 = 10_000,
 
 /// How much a modal dialog or the palette dims everything behind it, 0 (none) to 1.
 modal_dim: f32 = 0.0,
@@ -77,6 +81,12 @@ motion: f32 = 1,
 /// How fast the interface moves, 0 (slow) to 1 (fast): half as fast to twice as fast as written,
 /// 0.5 as written. Never stops motion — that is `motion` at 0.
 motion_speed: f32 = core.motion.default_speed,
+
+/// What the app's windows are made of (`core.material`): opaque (`none`), clear (`transparent`),
+/// blurred, frosted, or Liquid Glass. Each platform shows the best it has at or below the kind asked
+/// (`Material.effective`): Liquid Glass on macOS 26 and on the web (drawn in the page), frost on
+/// Windows, blur where a Linux compositor blurs. Applied at once; `FIZZY_GLASS` overrides it.
+window_material: core.material.Kind = .liquid,
 
 /// Whether glass is drawn by the glass program (`core.LiquidField`) where the backend has one —
 /// shapes that run together, in one pass a pixel — rather than by its meshes. On; a switch to

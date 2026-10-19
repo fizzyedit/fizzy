@@ -140,11 +140,20 @@ pub const macosLaunchComplete = platform.macos_monitor.launchComplete;
 /// A window's Liquid Glass this frame (`windowGlass`, `viewports.windowGlass`).
 pub const WindowGlassLook = platform.window.WindowGlassLook;
 
-/// The main window's Liquid Glass this frame, where it is a window of Liquid Glass (macOS 26):
-/// whether it is — its colour is then under the glass, and the frame draws no base of its own.
-pub fn windowGlass(win: *dvui.Window, look: WindowGlassLook) bool {
-    if (comptime builtin.target.os.tag != .macos) return false;
-    return platform.window.liquidGlassLook(win.backend.impl.window, look.native());
+/// The main window's colour over what it is made of this frame, where the backend dresses its
+/// material (macOS, fizzy's own backend: `SDLBackend.dressWindows`): handed the window's colour and
+/// its opacity as drawn, the colour the frame draws under everything (`SDLBackend.materialBase`) —
+/// clear on Liquid Glass, whose colour is the glass's. On dvui's own SDL3 backend, which dresses
+/// nothing (`platform.window.setBackground` installs the glass or vibrancy there): the glass's look
+/// this frame (`look`), and clear where it has it. Null where the app draws its own base
+/// (`Editor.windowBase`).
+pub fn windowMaterialBase(win: *dvui.Window, fill: dvui.Color, opacity: f32, look: WindowGlassLook) ?dvui.Color {
+    if (comptime builtin.target.os.tag != .macos) return null;
+    if (comptime !@hasDecl(dvui.backend, "setWindowLook")) {
+        return if (platform.window.liquidGlassLook(win.backend.impl.window, look.native())) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else null;
+    }
+    dvui.backend.setWindowLook(fill, opacity);
+    return dvui.backend.materialBase(win.backend.impl.effectiveMaterial(), fill);
 }
 
 /// OS windows besides the main one, each showing a part of the one frame — a float popped out

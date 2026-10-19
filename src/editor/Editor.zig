@@ -42,6 +42,7 @@ pub const FailedPlugin = App.FailedPlugin;
 pub const PendingReveal = App.PendingReveal;
 
 pub const Recents = @import("app").Recents;
+const Tracks = @import("app").Tracks;
 pub const Settings = @import("app").settings.Settings;
 
 pub const Dialogs = @import("dialogs/Dialogs.zig");
@@ -147,7 +148,29 @@ plugin_reloads: @import("PluginReloads.zig") = .{},
 /// The last minute of input, frame by frame, for a capture (`captures`, `fizzy.capture`).
 black_box: @import("app").automation.BlackBox = .{},
 /// `fizzy.screen` calls waiting for their snapshot (`answerLaterCommands`).
-later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, frames: u32 = 0 }) = .empty,
+later_screens: std.ArrayListUnmanaged(struct { ticket: u32, snapshot: sdk.services.automation.Api.SnapshotTicket, since: u32 = 0, frames: u32 = 0 }) = .empty,
+/// The last screens `fizzy.screen` answered, by number, oldest first (`gpa`): what a `since` is
+/// answered against (`screenAnswer`). Only those, not every frame taken nor a stream's sends: a
+/// `since` names a screen someone asked for, and an animation streamed must not push it out.
+screen_history: std.ArrayListUnmanaged(struct { seq: u32, text: []u8 }) = .empty,
+/// The screen last streamed, by number (`screen_streamed_seq`), `gpa`: what a change-taking
+/// stream's next change is on.
+screen_streamed_text: []u8 = &.{},
+/// Until when someone is watching the screen (`fizzy.screen`): every frame is taken until then
+/// (`Snapshot.keepTaking`), so the next asking is answered at once.
+screen_watched_until_ns: i96 = 0,
+/// `host.command_runs` as the last snapshot was written, at its frame's end: a command run since
+/// has not been drawn in it (`fizzy.screen`), whatever ran it.
+command_runs_at_snapshot: u64 = 0,
+/// How many event streams named `fizzy.screen` at the last frame's end (`streamScreen`): while any
+/// do, watching does not cool off.
+screen_streams: usize = 0,
+/// The screen last streamed, hashed: a frame that changed nothing sends nothing.
+screen_streamed_hash: u64 = 0,
+/// The last screen could not be streamed (said once, in the log).
+screen_stream_failed: bool = false,
+/// The snapshot last streamed, by number: what a change-taking stream's next change is on.
+screen_streamed_seq: u32 = 0,
 /// `fizzy.settled` calls waiting for nothing to be in flight, or their deadline.
 later_settles: std.ArrayListUnmanaged(struct { ticket: u32, deadline_ns: i96 }) = .empty,
 /// The control server would not start (`syncControlServer`): not retried until the setting goes
@@ -2204,6 +2227,8 @@ pub fn postInit(editor: *Editor) !void {
         .description = e[1],
         .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
     }) catch {};
+    // The control server's (native only): an MCP client's session ended.
+    if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").control.mcp.session_ended) catch {};
     editor.app.host.declareEvent(.{
         .name = "fizzy.files.reveal",
         .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",
@@ -2455,6 +2480,7 @@ pub const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
     .contentOpacity = fizzyContentOpacity,
+    .historyLimit = fizzyHistoryLimit,
     .dialogWindow = fizzyDialogWindow,
     .frostPane = fizzyFrostPane,
     .isMaximized = fizzyIsMaximized,
@@ -2647,6 +2673,10 @@ fn fizzyFrostPane(_: *anyopaque, id: dvui.Id, rect: dvui.Rect.Physical, corners:
 
 /// The cards' opacity: the setting while windowed, opaque while the window covers the desktop,
 /// eased between them with the window's own opacity (`easeWindowOpacity`).
+fn fizzyHistoryLimit(ctx: *anyopaque) u32 {
+    return fizzyCtx(ctx).app.settings.history_limit;
+}
+
 fn fizzyContentOpacity(ctx: *anyopaque) f32 {
     const editor = fizzyCtx(ctx);
     return std.math.lerp(editor.app.settings.content_opacity, 1.0, std.math.clamp(editor.window_opacity_anim.cover, 0, 1));
@@ -2873,6 +2903,11 @@ const DocSurface = struct {
     frames_steps: usize = 0,
     /// The document has history (its grip shows): once it has, it keeps it (`drawDocSurface`).
     has_history: bool = false,
+    /// How many steps its owner keeps of its history (`historyLine`'s entries), for the grip's fill
+    /// against the history limit, which counts the same: asked again only when its track moves.
+    kept_steps: usize = 0,
+    /// The track's step count `kept_steps` was asked at; null: never asked.
+    kept_at: ?usize = null,
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2899,6 +2934,18 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
     }
     // After `land`, which marks a document opened as a preview as one.
     if (editor.app.file_table.mountList().len > mounts_before) editor.setDocumentPreview(id, false);
+}
+
+/// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
+/// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
+/// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+    const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
+    if (ds.kept_at != track_steps) {
+        ds.kept_at = track_steps;
+        ds.kept_steps = if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| line.entries.len else track_steps;
+    }
+    return ds.kept_steps;
 }
 
 fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
@@ -3126,7 +3173,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
             area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
         };
-        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |step| editor.redoFromFeed(doc, step);
+        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |pressed| editor.actFromFeed(doc, ds, pressed);
     }
 
     // A menu inside the document only when its owner names one. The context is created *after*
@@ -3165,19 +3212,30 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         }
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
             .history = ds.has_history,
-            .steps = if (recorded) |tr| tr.steps.items.len else 0,
+            .steps = keptSteps(ds, doc, recorded),
+            .limit = editor.app.settings.history_limit,
             .edge = card_edge,
             .frames = if (recorded != null) &ds.frames else null,
             .export_from = if (track) |tr| tr.base_top else null,
             .window_summary = summary,
             .progress = editor.tape_tabs.progress(doc.owner.documentPath(doc)),
+            .tape_playing = editor.tape_tabs.landing(doc.owner.documentPath(doc)),
+            .pace = if (editor.app.tracks) |*t| .{ .ctx = t, .gapFn = trackPace } else null,
         });
         if (pressed.exported) |win| {
             editor.share_pending = .{ .doc_id = doc.id, .from = win.from, .to = win.to };
             dvui.refresh(null, @src(), null);
         }
+        if (pressed.tape) |on| editor.tape_tabs.setPaused(doc.owner.documentPath(doc), !on);
     }
     return .ok;
+}
+
+/// The transport's play goes at the pace `doc`'s track recorded (`HistoryTransport.Pace`).
+fn trackPace(ctx: *const anyopaque, doc: sdk.DocHandle, from: u64, to: u64) ?u32 {
+    const tracks: *Tracks = @ptrCast(@alignCast(@constCast(ctx)));
+    const t = tracks.trackOf(doc.id) orelse return null;
+    return Tracks.playGap(t, from, to);
 }
 
 /// What the export window from stop `from` to stop `to` of `doc`'s history holds, in words: "4
@@ -3558,7 +3616,11 @@ fn activelyDrawing(editor: *const Editor) bool {
 /// overlaid). External hand-edits are reconciled live by `SettingsWatcher` (R11/R12) before the
 /// next autosave can clobber them. Caller-owned; free with `gpa`.
 fn composeSettingsText(editor: *Editor, gpa: std.mem.Allocator, settings_path: []const u8, overlay: []const SettingsPluginsZon.Entry) ![]u8 {
-    const fizzy_text = try Settings.serialize(&editor.app.settings, gpa);
+    // The person's own values where a demo has changed one: whatever writes the file while a
+    // tape plays (a plugin's flags, a file type's owner) writes theirs, not the tape's.
+    var own = editor.app.settings;
+    editor.demo.personsSettings(&own);
+    const fizzy_text = try Settings.serialize(&own, gpa);
     defer gpa.free(fizzy_text);
 
     const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
@@ -3743,6 +3805,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.setThemeName(gpa, parsed.theme) catch |err|
         dvui.log.warn("settings watcher: failed to apply external theme change: {s}", .{@errorName(err)});
     editor.app.settings.hold_menu_duration_ms = parsed.hold_menu_duration_ms;
+    editor.app.settings.history_limit = parsed.history_limit;
     editor.app.settings.font_body_size = parsed.font_body_size;
     editor.app.settings.font_title_size = parsed.font_title_size;
     editor.app.settings.font_heading_size = parsed.font_heading_size;
@@ -3759,6 +3822,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_glass = parsed.native_glass;
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
+    editor.app.settings.window_material = parsed.window_material;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
     editor.app.settings.kept_history_gb = parsed.kept_history_gb;
@@ -4439,7 +4503,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             if (editor.app.control) |*c| @import("app").control.routes.answerPending(c, &editor.app.control_state, &editor.app.host);
         }
         // What fizzy's own commands answer a frame or more later (`fizzy.screen`, `fizzy.settled`).
-        editor.answerLaterCommands();
+        editor.answerLaterCommands(false);
         // A seek replays a tape's commands where nobody watches: not shown as activity.
         editor.app.host.activity_muted = editor.demo.player.state == .seeking;
         editor.showClaimed();
@@ -4465,8 +4529,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
         const t = fizzy.core.hitch.begin(.rebuild_workspaces);
         defer t.end();
-        editor.rebuildWorkspaces() catch {
-            dvui.log.err("Failed to rebuild workspaces", .{});
+        editor.rebuildWorkspaces() catch |err| {
+            dvui.log.err("Failed to rebuild workspaces: {t}", .{err});
         };
         // The first rebuild reopened last session's tabs; what the session held beyond them is
         // kept in recovery files. A frame on, the panes have drawn, and each shows the tab it did.
@@ -4526,11 +4590,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
 
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
-        // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
-        // (macOS 26, `backend.windowGlass`) the base is the glass's at that opacity
-        // (`core.glass_look.window`), and the frame draws none of its own.
-        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size()));
-        const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
+        // fullscreen transitions; at 1.0 the base is the opaque fill. Where the backend makes the
+        // window of the window material (macOS: Liquid Glass, vibrancy or none, as a plain dvui
+        // app's), the base is its colour over that material at this opacity (`materialBase`): clear
+        // on Liquid Glass, whose colour is the glass's. Elsewhere fizzy's own (`windowBase`).
+        const window_color = fizzy.backend.windowMaterialBase(dvui.currentWindow(), dvui.themeGet().color(.content, .fill), editor.window_opacity_anim.value, windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size())) orelse windowBase(editor.window_opacity_anim.value);
         // For glass that is the window's own material (`core.dialogs.windowBase`).
         fizzy.core.dialogs.publishWindowBase(window_color);
 
@@ -4759,6 +4823,17 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // out and removes itself when the timer expires.
     editor.drawSaveToasts();
 
+    // The app's OS windows over the main one: a demo's bar stays in the main window, under them,
+    // so a press on one is that window's, not the bar's (`replay.Player.Transport.covered`).
+    if (editor.demo.player.tape() != null) {
+        var buf: [8]Popout.Shown = undefined;
+        const tr = &editor.demo.player.transport;
+        tr.covered_n = 0;
+        for (Popout.windowsShown(&buf)) |w| {
+            tr.covered[tr.covered_n] = w.part;
+            tr.covered_n += 1;
+        }
+    }
     // Over everything the frame drew: a demo's pointer, keystrokes, captions and transport bar,
     // or a live tape's pointer.
     @import("app").automation.overlay.draw(&editor.demo.player);
@@ -5677,11 +5752,53 @@ pub const Placement = struct {
     in_place: bool = false,
 };
 
+/// How many answers `screen_history` keeps: a few agents, or one looking back a few steps.
+const screen_history_len = 8;
+
+/// `fizzy.screen` answered snapshot `seq`: kept to answer changes since it.
+fn noteScreen(editor: *Editor, seq: u32, text: []const u8) void {
+    for (editor.screen_history.items) |h| if (h.seq == seq) return;
+    const kept = editor.app.gpa.dupe(u8, text) catch return;
+    if (editor.screen_history.items.len == screen_history_len) editor.app.gpa.free(editor.screen_history.orderedRemove(0).text);
+    editor.screen_history.append(editor.app.gpa, .{ .seq = seq, .text = kept }) catch editor.app.gpa.free(kept);
+}
+
+/// What `fizzy.screen` answers, as ZON, in `arena`: snapshot `seq` (`text`) as keyed nodes,
+/// `.{ .seq, .nodes }`, or, with `since` a snapshot still kept, what changed since it,
+/// `.{ .seq, .since, .added, .removed, .changed }` (`control.screen_diff`). A `since` no longer
+/// kept (or none) is answered in full: the caller takes it as its new base.
+pub fn screenAnswer(editor: *Editor, arena: std.mem.Allocator, seq: u32, text: []const u8, since: u32) ![]const u8 {
+    const screen_diff = @import("app").control.screen_diff;
+    const nodes = try screen_diff.parse(arena, text);
+    // Kept once answered, after `since` is looked up: kept first, it could push that one out.
+    defer editor.noteScreen(seq, text);
+    const base: ?[]const u8 = if (since == 0) null else if (since == seq) text else if (since == editor.screen_streamed_seq and editor.screen_streamed_text.len > 0) editor.screen_streamed_text else for (editor.screen_history.items) |h| {
+        if (h.seq == since) break h.text;
+    } else null;
+    return screenZon(arena, seq, nodes, since, if (base) |b| try screen_diff.parse(arena, b) else null);
+}
+
+/// A screen as ZON: `.{ .seq, .nodes }`, or what changed since `base` (screen `since`).
+fn screenZon(arena: std.mem.Allocator, seq: u32, nodes: []const @import("app").control.screen_diff.Keyed, since: u32, base: ?[]const @import("app").control.screen_diff.Keyed) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const opts: std.zon.stringify.SerializeOptions = .{ .whitespace = false, .emit_default_optional_fields = false };
+    if (base) |b| {
+        const d = try @import("app").control.screen_diff.diff(arena, b, nodes);
+        try std.zon.stringify.serialize(.{ .seq = seq, .since = since, .added = d.added, .removed = d.removed, .changed = d.changed }, opts, &out.writer);
+    } else try std.zon.stringify.serialize(.{ .seq = seq, .nodes = nodes }, opts, &out.writer);
+    return out.written();
+}
+
 /// Answer fizzy's own commands that answer a frame or more later (`fizzy.screen`, `fizzy.settled`),
-/// once what they wait for has come; drop those nobody waits for any more. Once a frame.
-fn answerLaterCommands(editor: *Editor) void {
+/// once what they wait for has come; drop those nobody waits for any more. At a frame's start, and
+/// at its end once its snapshot is written (`Entry`), where only screens are answered: whether the
+/// app is settled is known only once the frame has ended, and a screen's frames are counted once.
+pub fn answerLaterCommands(editor: *Editor, at_frame_end: bool) void {
     const host = &editor.app.host;
     const api = editor.demo.service.api;
+    // Nobody has asked what is on screen for a while: stop taking every frame.
+    if (editor.demo.snapshot.continuous and editor.screen_streams == 0 and std.Io.Clock.awake.now(dvui.io).nanoseconds > editor.screen_watched_until_ns)
+        editor.demo.snapshot.keepTaking(false);
     var i: usize = 0;
     while (i < editor.later_screens.items.len) {
         const w = &editor.later_screens.items[i];
@@ -5691,25 +5808,32 @@ fn answerLaterCommands(editor: *Editor) void {
         }
         if (api.snapshotText(w.snapshot)) |text| {
             const ticket = w.ticket;
+            const answer = editor.screenAnswer(dvui.currentWindow().arena(), @backingInt(w.snapshot), text, w.since);
             _ = editor.later_screens.swapRemove(i);
-            host.finishCall(ticket, .{ .ok = text });
+            host.finishCall(ticket, if (answer) |a| .{ .ok = a } else |err| .{ .failed = @errorName(err) });
             continue;
         }
-        // Not taken yet. Asked again, should the last asking have come to nothing; a snapshot that never comes is given up on, not waited
-        // for frame after frame.
+        if (at_frame_end) {
+            i += 1;
+            continue;
+        }
+        // Not taken yet: a frame to take it in. Asked again only if it was missed, a later one taken
+        // in its place (asking each frame would chase a capture always under way to the next
+        // frame for good); one that never comes is given up on.
         w.frames += 1;
         if (w.frames > 120) {
             const ticket = w.ticket;
             _ = editor.later_screens.swapRemove(i);
+            // Whatever was armed came to nothing: the next asking starts afresh.
+            editor.demo.snapshot.reset();
             host.finishCall(ticket, .{ .failed = "no snapshot came in 120 frames" });
             continue;
         }
-        w.snapshot = api.snapshot();
-        // And a frame to take it in: asking again does not wake a sleeping app by itself.
+        if (editor.demo.snapshot.taken >= @backingInt(w.snapshot)) w.snapshot = api.snapshot();
         host.refresh();
         i += 1;
     }
-    if (editor.later_settles.items.len == 0) return;
+    if (at_frame_end or editor.later_settles.items.len == 0) return;
     const settled = api.settled();
     const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
     i = 0;
@@ -5726,6 +5850,71 @@ fn answerLaterCommands(editor: *Editor) void {
         _ = editor.later_settles.swapRemove(i);
         host.finishCall(w.ticket, .{ .ok = if (settled) "true" else "false" });
     }
+}
+
+/// The screen to the event streams that name `fizzy.screen` (`Server.publishNamed`), at a frame's end
+/// once its snapshot is written: the whole of it, as JSON, each frame it changed. While any stream
+/// names it every frame is taken, as for `fizzy.screen` (`Snapshot.keepTaking`); with none, this
+/// costs a lock and nothing is taken. Straight to the streams, not through the event bus, which
+/// would deliver it a frame later.
+pub fn streamScreen(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const server = if (editor.app.control) |*c| c else return;
+    // No stream at all: no lock either.
+    if (server.stream_count.load(.acquire) == 0) {
+        editor.screen_streams = 0;
+        return;
+    }
+    const streams = server.streamsNaming("fizzy.screen");
+    editor.screen_streams = streams.naming;
+    if (streams.naming == 0) return;
+    const snapshot = &editor.demo.snapshot;
+    snapshot.keepTaking(true);
+    const text = snapshot.latest() orelse {
+        // A stream just joined and nothing is taken yet: a frame to take it in, even from an app
+        // drawing nothing, so it is sent the screen as it is.
+        if (streams.new > 0) editor.app.host.refresh();
+        return;
+    };
+    const hash = std.hash.Wyhash.hash(0, text);
+    const changed = hash != editor.screen_streamed_hash;
+    if (!changed and streams.new == 0) return;
+    const arena = dvui.currentWindow().arena();
+    const json = @import("app").control.json;
+    // Unchanged (a stream joining): sent by the number the others already have, the screen being
+    // the same, so every stream's next change is on one number and the chain each sees holds.
+    const seq = if (!changed and editor.screen_streamed_seq != 0) editor.screen_streamed_seq else snapshot.taken;
+    // In full, keyed (`screenAnswer`); and, for the streams taking changes, what changed since the
+    // screen last streamed, while it is still kept.
+    // Keyed once, for the whole and the change alike.
+    const screen_diff = @import("app").control.screen_diff;
+    const nodes = screen_diff.parse(arena, text) catch |err| return editor.streamFailed(err);
+    const whole = json.jsonFromZon(arena, screenZon(arena, seq, nodes, 0, null) catch |err| return editor.streamFailed(err)) catch |err| return editor.streamFailed(err);
+    const delta: ?@import("app").control.Server.Delta = if (streams.diffing > 0 and editor.screen_streamed_text.len > 0) delta: {
+        const base = screen_diff.parse(arena, editor.screen_streamed_text) catch break :delta null;
+        const zon = screenZon(arena, seq, nodes, editor.screen_streamed_seq, base) catch break :delta null;
+        break :delta .{ .since = editor.screen_streamed_seq, .json = json.jsonFromZon(arena, zon) catch break :delta null };
+    } else null;
+    editor.screen_stream_failed = false;
+    // A change bigger than the screen is no change worth sending: the whole goes instead.
+    const worth = if (delta) |d| if (d.json.len < whole.len) d else null else null;
+    if (!changed) {
+        server.publishNamed("fizzy.screen", whole, seq, null, false);
+        return;
+    }
+    // The text and its number move together: a change on the wrong base would corrupt a stream.
+    const kept = editor.app.gpa.dupe(u8, text) catch return editor.streamFailed(error.OutOfMemory);
+    server.publishNamed("fizzy.screen", whole, seq, worth, true);
+    editor.screen_streamed_hash = hash;
+    editor.screen_streamed_seq = seq;
+    editor.app.gpa.free(editor.screen_streamed_text);
+    editor.screen_streamed_text = kept;
+}
+
+/// Kept unsent, so it is tried again next frame; said once.
+fn streamFailed(editor: *Editor, err: anyerror) void {
+    if (!editor.screen_stream_failed) dvui.log.warn("control: the screen could not be streamed: {t}", .{err});
+    editor.screen_stream_failed = true;
 }
 
 /// Run the control server while `control_server` is on, and stop it when it goes off. Once a frame;
@@ -6646,7 +6835,7 @@ fn historyStep(editor: *Editor, action: HistoryAction) !void {
         try editor.runActiveDocCommand(name);
         var buf: [96]u8 = undefined;
         const said = std.fmt.bufPrint(&buf, "Undid {s}'s {s}", .{ authorName(t.by), t.step.title }) catch "Undid a change";
-        if (editor.doc_surfaces.get(doc.id)) |d| d.feed.pushAction(said, "Redo", t.step.id, dvui.frameTimeNS());
+        if (editor.doc_surfaces.get(doc.id)) |d| d.feed.pushAction(said, "Redo", .redo, t.step.id, dvui.frameTimeNS());
     }
 }
 
@@ -6654,6 +6843,97 @@ fn historyStep(editor: *Editor, action: HistoryAction) !void {
 pub fn redoFromFeed(editor: *Editor, doc: sdk.DocHandle, id: u64) void {
     const t = editor.stepToTake(doc, .redo, editor.app.host.arena()) catch return;
     if (t.step.id == id) _ = doc.owner.historyGoTo(doc, t.to);
+}
+
+/// Carry out a button pressed on `doc`'s activity bubbles (`ActivityFeed.Act`).
+fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @import("app").ActivityFeed.Pressed) void {
+    const now = dvui.frameTimeNS();
+    var buf: [96]u8 = undefined;
+    switch (pressed.act) {
+        .redo => editor.redoFromFeed(doc, pressed.tag),
+        .forward => {
+            // Only while that step is still on the line: an edit since may have moved on.
+            const line = doc.owner.historyLine(doc, editor.app.host.arena()) orelse return;
+            for (line.entries) |e| if (e.id == pressed.tag) {
+                _ = doc.owner.historyGoTo(doc, pressed.tag);
+                return;
+            };
+        },
+        .go_back, .go_back_anyway => {
+            const who: u32 = @intCast(pressed.tag);
+            const back = editor.backBefore(doc, who, editor.app.host.arena()) orelse {
+                const said = std.fmt.bufPrint(&buf, "Nothing of {s}'s left to go back before", .{authorName(editor.app.host.authors.items[who])}) catch "Nothing to go back before";
+                ds.feed.push(said, now);
+                return;
+            };
+            // The person's own steps since the run began go back with it: say so first.
+            if (pressed.act == .go_back and back.yours > 0) {
+                const said = std.fmt.bufPrint(&buf, "Also takes back {d} of your edits", .{back.yours}) catch "Also takes back your edits";
+                ds.feed.pushAction(said, "Go back", .go_back_anyway, pressed.tag, now);
+                return;
+            }
+            if (!doc.owner.historyGoTo(doc, back.to)) return;
+            const said = std.fmt.bufPrint(&buf, "Back before {s}'s change", .{authorName(back.by)}) catch "Went back";
+            ds.feed.pushAction(said, "Forward", .forward, back.from, now);
+        },
+    }
+}
+
+/// Where "Go back to before Claude's change" goes (`plans/SHARED_HISTORY_PLAN.md`, step 6).
+pub const BackBefore = struct {
+    /// The step to go to: the one before the run's first, 0 before the first step.
+    to: u64,
+    /// The step on top now, to come forward to again.
+    from: u64,
+    /// Who made the run.
+    by: sdk.Author,
+    /// Steps since the run began that are not the run's: they go back with it, and stay on the line.
+    others: usize,
+    /// Of those, the person's own.
+    yours: usize,
+};
+
+/// The last run by author `who` (an index into the host's authors; null for whoever's is last,
+/// the person aside) on `doc`'s line, while it is still applied: where going back to before it
+/// goes, and what else that takes back. Null when there is none, it is already undone, or the
+/// history started over since (`Host.step_authors` forgets then).
+pub fn backBefore(editor: *Editor, doc: sdk.DocHandle, who: ?u32, arena: std.mem.Allocator) ?BackBefore {
+    const host = &editor.app.host;
+    const steps = &(host.step_authors.getPtr(doc.id) orelse return null).steps;
+    const line = doc.owner.historyLine(doc, arena) orelse return null;
+    // The last run on the line by `who`: its steps are stored; the person's never are.
+    var run: u64 = 0;
+    var author: u32 = 0;
+    var i = line.entries.len;
+    while (i > 0) {
+        i -= 1;
+        const made = steps.get(line.entries[i].id) orelse continue;
+        if (made.run == 0) continue;
+        if (who) |w| if (made.author != w) continue;
+        run = made.run;
+        author = made.author;
+        break;
+    }
+    if (run == 0) return null;
+    const first = for (line.entries, 0..) |e, k| {
+        if ((steps.get(e.id) orelse continue).run == run) break k;
+    } else return null;
+    if (first >= line.at) return null;
+    var others: usize = 0;
+    var yours: usize = 0;
+    for (line.entries[first..line.at]) |e| {
+        const made = steps.get(e.id);
+        if (made != null and made.?.run == run) continue;
+        others += 1;
+        if (made == null) yours += 1;
+    }
+    return .{
+        .to = if (first == 0) 0 else line.entries[first - 1].id,
+        .from = if (line.at == 0) 0 else line.entries[line.at - 1].id,
+        .by = host.authors.items[author],
+        .others = others,
+        .yours = yours,
+    };
 }
 
 pub const HistoryAction = enum { undo, redo };
@@ -6860,6 +7140,9 @@ pub fn deinit(editor: *Editor) !void {
         }
     }
     editor.later_screens.deinit(editor.app.gpa);
+    for (editor.screen_history.items) |h| editor.app.gpa.free(h.text);
+    editor.screen_history.deinit(editor.app.gpa);
+    editor.app.gpa.free(editor.screen_streamed_text);
     editor.later_settles.deinit(editor.app.gpa);
     if (editor.document_watcher) |*w| {
         w.stop();

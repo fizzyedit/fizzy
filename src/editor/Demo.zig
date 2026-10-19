@@ -74,6 +74,9 @@ quitting: bool = false,
 arrange: ?automation.Tape.Keyframe.Layout = null,
 /// Every plugin's settings as the demo found them, as ZON, to give back at the end.
 settings_saved: std.ArrayListUnmanaged(SavedSettings) = .empty,
+/// The app's own settings a tape can change, as the demo found them: only the window's material
+/// (`fizzy.windowMaterial`) so far. A copy of the whole would not do: some hold strings it owns.
+material_saved: ?core.material.Kind = null,
 /// Who a live tape plays for (`automation.Api.playAs`): an agent's pointer tape is the agent's.
 /// Strings owned here. Null: the live tape is its own author.
 live_author: ?sdk.Author = null,
@@ -104,6 +107,9 @@ const Saved = struct {
 
     const Doc = struct {
         path: []u8,
+        /// The pane it was in (`documentGrouping`): it opens there again, in the arrangement put
+        /// back (`Workbench.restorePanes`), rather than every document in the one pane.
+        grouping: u64,
         /// What it was opened from, when its path cannot open it again (`reopenable`): a file the
         /// web page fetched or the person uploaded, a zip whose folder is the project. Null: it
         /// reopens from its path.
@@ -136,6 +142,9 @@ pub fn attach(self: *Demo, editor: *Editor) void {
     };
     self.service.bind();
     self.snapshot.windows = .{ .ctx = self, .list = listWindows };
+    // Numbered from somewhere of this run's own, not 1: a screen's number (`fizzy.screen`'s `seq`)
+    // kept from an earlier run is then not some other screen of this one (`since`).
+    self.snapshot.taken = @as(u32, @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(dvui.io).nanoseconds)))) & 0x3fff_ffff;
     // A seek's catch-up frames draw nothing where the backend can drop them (the web's).
     self.player.set_unseen = core.FrameTarget.setUnseen;
 }
@@ -343,7 +352,12 @@ pub fn frameEnd(self: *Demo, main: ?Picture) void {
     self.windows = windows;
     defer self.windows = &.{};
     if (naming) for (windows) |w| core.anchor.markRect(w.subwindow orelse .zero, w.rect, true, "{s}", .{w.tag});
+    const taken = self.snapshot.taken;
     self.snapshot.endFrame();
+    // What the snapshot just written shows: every command run up to now (`fizzy.screen`).
+    if (self.snapshot.taken != taken) {
+        self.editor.command_runs_at_snapshot = self.editor.app.host.command_runs;
+    }
     if (main != null) self.picture.endFrame(sources);
 }
 
@@ -460,6 +474,8 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     editor.flushLayout();
     editor.flushSettings();
     self.saveSettings();
+    // The document panes too: kept in memory, and none of the demo's saved over them.
+    editor.workbench.holdPanes();
 
     const gpa = editor.app.gpa;
     var docs: std.ArrayList(Saved.Doc) = .empty;
@@ -471,7 +487,7 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
         // Never saved (`untitled-1`): no file, and clean, since `mayStart` refused unsaved work, so
         // nothing to give back. Opened from its bytes it would come back as a file of that name.
         if (!reopenable(editor, path) and !doc.owner.documentHasRecognizedSaveExtension(doc)) continue;
-        var saved: Saved.Doc = .{ .path = gpa.dupe(u8, path) catch continue };
+        var saved: Saved.Doc = .{ .path = gpa.dupe(u8, path) catch continue, .grouping = doc.owner.documentGrouping(doc) };
         if (!reopenable(editor, path)) {
             saved.bytes = doc.owner.documentBytes(doc, path, gpa) catch null;
             if (saved.bytes == null) dvui.log.warn("demo: {s} cannot be opened again after the demo: its owner gives no bytes for it", .{path});
@@ -497,11 +513,14 @@ fn end(ctx: *anyopaque) void {
     if (self.quitting) {
         self.freeSaved();
         self.freeSavedSettings();
+        editor.workbench.restorePanes();
         return;
     }
     self.restoreSettings();
     self.closeAllDocuments();
     self.unmountFiles();
+    // Before the person's documents reopen: into the pane they were in.
+    editor.workbench.restorePanes();
 
     // The layout as the user left it: `begin` flushed it, and nothing has been written since.
     editor.app.layout.resetLayout(gpa);
@@ -515,7 +534,7 @@ fn end(ctx: *anyopaque) void {
     for (saved.docs) |d| {
         const bytes = d.bytes orelse continue;
         const path = gpa.dupe(u8, d.path) catch continue;
-        _ = editor.openFileFromBytes(path, bytes, editor.workbench.currentGroupingID()) catch |err|
+        _ = editor.openFileFromBytes(path, bytes, d.grouping) catch |err|
             dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
     }
     if (saved.folder) |f| {
@@ -525,7 +544,7 @@ fn end(ctx: *anyopaque) void {
     }
     for (saved.docs) |d| {
         if (d.bytes != null) continue;
-        _ = editor.openFilePath(d.path, editor.workbench.currentGroupingID()) catch |err|
+        _ = editor.openFilePath(d.path, d.grouping) catch |err|
             dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
     }
     // The active one last, whichever way it came back.
@@ -568,7 +587,12 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
 
     editor.command_palette.finishClose();
     self.closeAllDocuments();
+    // One pane: a split a later moment made is gone at a cut, as on the first pass.
+    editor.workbench.onePane();
     self.applySettings(kf.settings);
+    // The app's settings a tape changes are the person's again at a cut: a keyframe declares its
+    // state outright, and declares none of them.
+    if (self.material_saved) |m| editor.app.settings.window_material = m;
 
     // Fresh bytes every time: a replay must not see what the last pass typed or saved.
     self.unmountFiles();
@@ -615,9 +639,16 @@ fn settingsBlob(gpa: std.mem.Allocator, arena: std.mem.Allocator, schema: *const
     return out.toOwnedSlice();
 }
 
+/// `s` with the person's own values where the demo has set them aside: what the settings file is
+/// written with while a demo plays (`Editor.composeSettingsText`).
+pub fn personsSettings(self: *const Demo, s: *Editor.Settings) void {
+    if (self.material_saved) |m| s.window_material = m;
+}
+
 fn saveSettings(self: *Demo) void {
     const editor = self.editor;
     const gpa = editor.app.gpa;
+    self.material_saved = editor.app.settings.window_material;
     for (editor.app.host.settings_schemas.items) |*schema| {
         const blob = settingsBlob(gpa, editor.app.arena.allocator(), schema) catch continue;
         const owner = gpa.dupe(u8, schema.owner.id) catch {
@@ -659,6 +690,8 @@ fn applySettings(self: *Demo, overrides: []const automation.Tape.Setting) void {
 fn restoreSettings(self: *Demo) void {
     const editor = self.editor;
     const gpa = editor.app.gpa;
+    if (self.material_saved) |m| editor.app.settings.window_material = m;
+    self.material_saved = null;
     for (self.settings_saved.items) |saved| {
         const schema = schemaFor(&editor.app.host, saved.owner) orelse continue;
         const now = settingsBlob(gpa, editor.app.arena.allocator(), schema) catch continue;
@@ -808,6 +841,7 @@ const Snapshot = struct {
     /// shut, the tree believing it had already opened it.
     root_opened: ?usize,
     settings: []const SavedSettings,
+    material: core.material.Kind,
     focus: dvui.Id,
     focus_subwindow: dvui.Id,
 
@@ -834,6 +868,7 @@ fn capture(ctx: *anyopaque) ?*anyopaque {
         .branches = &.{},
         .root_opened = editor.workbench.file_tree_root_opened,
         .settings = &.{},
+        .material = editor.app.settings.window_material,
         .focus = dvui.focusedWidgetId() orelse .zero,
         .focus_subwindow = dvui.focusedSubwindowId(),
     };
@@ -933,6 +968,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     editor.workbench.open_branches.clearRetainingCapacity();
     for (snap.branches) |id| editor.workbench.setBranchOpen(id, true);
     editor.workbench.file_tree_root_opened = snap.root_opened;
+    editor.app.settings.window_material = snap.material;
 
     for (snap.settings) |saved| {
         const schema = schemaFor(&editor.app.host, saved.owner) orelse continue;
@@ -967,6 +1003,7 @@ fn fingerprint(ctx: *anyopaque) u64 {
     }
     if (editor.activeDoc()) |d| h.update(d.owner.documentPath(d));
     h.update(std.mem.asBytes(&editor.explorer.closed));
+    h.update(std.mem.asBytes(&editor.app.settings.window_material));
     if (self.mem) |mem| {
         for (mem.nodes.keys(), mem.nodes.values()) |path, node| {
             h.update(path);

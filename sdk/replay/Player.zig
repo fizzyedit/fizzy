@@ -118,6 +118,10 @@ cut_waits: bool = false,
 settling: ?Settling = null,
 /// The op a snapshot's fingerprint was last compared at, so a moment is checked once a pass.
 checked_cursor: ?usize = null,
+/// The keyframe op the app's scene began with: set as each keyframe is cut to, and by a restore;
+/// null after a rewind, while the app is still wherever the seek began, until the cut. What a
+/// snapshot is taken in and checked in (`keepSnapshot`), by the ops applied rather than the time.
+scene: ?usize = null,
 /// Replays that did not reach the model a snapshot holds (`Stage.fingerprint`): the tape does
 /// not replay exactly. Logged as they happen; tests read it.
 mismatches: u32 = 0,
@@ -218,6 +222,11 @@ pub const Transport = struct {
     scrub: ?f64 = null,
     /// The real pointer, physical, as last seen.
     pointer: ?dvui.Point.Physical = null,
+    /// Where an app shows parts of its frame in OS windows of their own (a dialog's, a menu's) over
+    /// the window the bar is in, those windows' rects last frame, physical: the app's to set. The
+    /// bar is drawn under them, so a press there is theirs, not the bar's.
+    covered: [8]dvui.Rect.Physical = undefined,
+    covered_n: u8 = 0,
     /// When the real pointer was last on the bar, or the dome brought it (ns, `wallNs`): while
     /// playing, the bar shows for a while after, then goes back into its dome.
     stirred_ns: ?i128 = null,
@@ -309,6 +318,7 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     self.owned = owned;
     const t = &self.owned.?.tape;
     self.seq = .init(t);
+    self.scene = null;
     const win = dvui.windowRectPixels();
     self.seq.pointer = .{ .x = win.x + win.w / 2, .y = win.y + win.h / 2 };
     self.diverged = false;
@@ -340,6 +350,7 @@ pub fn unload(self: *Player) void {
     self.owned.?.deinit();
     self.owned = null;
     self.state = .idle;
+    self.scene = null;
     self.cut_waits = false;
     self.settling = null;
     self.live = false;
@@ -459,6 +470,7 @@ fn rewind(self: *Player, kf: usize) void {
     if (self.letGo()) self.cut_waits = true;
     self.settling = null;
     self.seq.rewind(kf);
+    self.scene = null;
     self.last_press = null;
     self.diverged = false;
     self.checked_cursor = null;
@@ -481,6 +493,7 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
     const s = self.snapshots.items[i];
     if (!self.stage.restore(s.state)) return false;
     self.seq.restoreTo(s.cursor, s.at, s.pointer);
+    self.scene = s.scene;
     // The pointer is kept in pixels, and they are only where the tape left it in the layout the
     // snapshot was taken in. The app put back takes a few runs to get there — a sidebar the
     // restore shut eases away, even with motion off, and the document beside it moves over — and
@@ -569,9 +582,14 @@ fn keepSnapshot(self: *Player) void {
     if (self.seq.cursor == 0 or !self.seq.calm() or self.input.held.count() > 0) return;
     if (!self.stage.idle()) return;
     const cursor = self.seq.cursor;
+    // After a rewind, until the keyframe is cut to, the app is in no scene of the tape: the last
+    // moment before the keyframe shares the keyframe op's cursor, and the app is still wherever
+    // the seek began, so nothing here is at that moment.
+    const scene = self.scene orelse return;
     var at: usize = self.snapshots.items.len;
     for (self.snapshots.items, 0..) |s, i| {
         if (s.cursor == cursor) {
+            if (s.scene != scene) return;
             if (self.checked_cursor != cursor) {
                 self.checked_cursor = cursor;
                 self.verify(s);
@@ -583,7 +601,6 @@ fn keepSnapshot(self: *Player) void {
             break;
         }
     }
-    const scene = t.keyframeBefore(self.seq.now);
     if (!self.snapshotDue(t, scene, at)) return;
     const state = self.stage.capture() orelse return;
     self.snapshots.insert(self.gpa, at, .{
@@ -868,6 +885,10 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         e.handle(@src(), wd);
         return true;
     }
+    for (tr.covered[0..tr.covered_n]) |r| if (r.contains(me.p)) {
+        tr.pointer = null;
+        return false;
+    };
     // A press on the dome brings the bar out of it at once, and is not the app's.
     if (tr.dome) |d| if (d.contains(me.p)) {
         if (me.action == .press and me.button.pointer() and !tr.closing) {
@@ -1000,6 +1021,8 @@ fn step(ctx: *anyopaque, st: Tape.Step, ms: u32) void {
 
 fn keyframe(ctx: *anyopaque, kf: *const Tape.Keyframe) void {
     const self = from(ctx);
+    // The op just applied: the sequencer moves its cursor on before it calls here.
+    self.scene = self.seq.cursor - 1;
     self.input.releaseHeld();
     self.last_press = null;
     self.stage.keyframe(kf);

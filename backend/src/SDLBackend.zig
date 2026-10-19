@@ -24,8 +24,9 @@ pub const viewports = @import("viewports.zig");
 pub const os_windows = @import("os_windows.zig");
 /// What this backend keeps count of as it runs (`health`).
 pub const Health = @import("Health.zig");
-/// Fizzy's in-app glass (`src/glass/`): here for `FrameTarget`, a plain dvui app's frame drawn
-/// into a texture (`plainFrameBegin`).
+/// Fizzy's in-app glass (`src/glass/`): a plain dvui app's frame drawn into a texture
+/// (`FrameTarget`, `plainFrameBegin`), and its floating windows made of the window material
+/// (`floatingWindowBackground`).
 pub const glass = @import("glass");
 
 /// What an app gets from its window beyond drawing into it: native dialogs, files the OS hands
@@ -1088,10 +1089,13 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 // ---------------------------------------------------------------------------------------------
 // dvui's OS windows
 
-/// The theme's window colours `dressPlainWindows` last gave the windows.
+/// The theme's window colours `dressWindows` last gave a plain dvui app's windows.
 var plain_dressed: ?[2]dvui.Color = null;
-/// The material `dressPlainWindows` last gave the windows.
+/// The material `dressWindows` last gave the windows — all of it for a plain app's, which it
+/// compares whole; its kind alone for an app-dressed one's, which only a new kind re-dresses — and
+/// the colour over it (`materialBase`, a plain app's backdrop).
 var plain_material: ?WindowMaterial = null;
+var plain_base: dvui.Color = .{};
 
 /// The kinds of window material, field for field with fizzy's `core.material.Kind`: from the
 /// plainest to the richest, what `effectiveMaterial` falls back through.
@@ -1099,60 +1103,118 @@ pub const MaterialKind = enum(u8) { none, transparent, blur, frost, liquid };
 
 pub const WindowMaterial = struct {
     kind: MaterialKind = .none,
-    /// How much of the theme's window colour covers what is behind, 0 (clear) to 1. Ignored by
-    /// `none`.
+    /// How much of the window's colour covers what is behind, 0 (clear) to 1. Ignored by `none`.
     opacity: f32 = 1,
+    /// The window's colour, where the app gives its own (`setWindowLook`: fizzy's content fill);
+    /// null, the theme's window colour.
+    color: ?dvui.Color = null,
 };
 
-/// What the windows this backend dresses itself are made of (`dressPlainWindows`: a plain dvui
-/// app's main window and its OS-framed floats): set by the app (`setWindowMaterial`), shown as the
-/// backend can (`effectiveMaterial`). Fizzy hands it `core.material`'s effective value each frame;
-/// fizzy's own windows, which it dresses itself (`platform.window.app_dresses_windows`), are not
-/// made of it yet.
+/// What the windows this backend dresses are made of (`dressWindows`): set by the app
+/// (`setWindowMaterial`, `setWindowLook`), shown as the backend can (`effectiveMaterial`). A plain
+/// dvui app's main window and its OS-framed floats, all of it; a window whose title and colour the
+/// app draws itself (fizzy's, `platform.window.app_dresses_windows`), its OS material — the colour
+/// over it the app draws by the same rule (`materialBase`).
 pub var window_material: WindowMaterial = .{};
 
 /// The windows' material from now on (`window_material`), applied as it changes.
 pub fn setWindowMaterial(material: MaterialKind, opacity: f32) void {
-    window_material = .{ .kind = material, .opacity = opacity };
+    window_material.kind = material;
+    window_material.opacity = opacity;
 }
 
-/// `window_material`, or the best kind below it this backend can show (`materialKinds`).
-fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
+/// The windows' colour and its opacity as the app draws them this frame (`WindowMaterial.color`):
+/// an app with a colour of its own, fizzy's, whose opacity is already the one it chose for the
+/// theme and eased through full screen.
+pub fn setWindowLook(color: dvui.Color, opacity: f32) void {
+    window_material.color = color;
+    window_material.opacity = opacity;
+}
+
+/// `window_material`, or the best kind below it this backend can show (`materialKinds`), its
+/// colour less opaque in a light theme (`light_tint`) where the app gave none of its own.
+pub fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
     const offered = self.materialKinds();
+    // In a light theme the window's colour is light over a desktop that is mostly darker, and at
+    // the opacity a dark theme reads well at, little showed through it (the user): a light theme's
+    // colour covers `light_tint` as much. Fizzy's own defaults are the same ratio (`app/settings`:
+    // 0.7 dark, 0.3 light), which fizzy's people set apart, and fizzy hands its own over with its
+    // colour; a plain app has the one value.
+    const opacity = if (window_material.color != null or dvui.themeGet().dark) window_material.opacity else window_material.opacity * light_tint;
     var k = @backingInt(window_material.kind);
     while (k > 0) : (k -= 1) {
         const material: MaterialKind = @fromBackingInt(k);
         const has = switch (material) {
             inline else => |t| @field(offered, @tagName(t)),
         };
-        if (has) return .{ .kind = material, .opacity = window_material.opacity };
+        // Glass keeps a little of the window's colour (`material_min_opacity`); a clear window may
+        // have none.
+        if (has) return .{ .kind = material, .opacity = if (material == .transparent) opacity else @max(opacity, material_min_opacity), .color = window_material.color };
     }
-    return .{ .kind = .none, .opacity = window_material.opacity };
+    return .{ .kind = .none, .opacity = opacity, .color = window_material.color };
 }
 
-/// The OS's own title bar on a plain dvui app's windows — the main one and each of the OS's own
-/// frame (`Viewport.native`) — in the theme's colour, made of the window material: set again only
-/// when the theme's colours or the material change. A window opening is dressed as it opens
-/// (`viewportOpen`). Liquid Glass is fizzy's own window glass, its look set each frame
-/// (`plainGlass`).
-fn dressPlainWindows(self: *SDLBackend) void {
+/// The least of the window's colour a material other than a clear window covers what is behind
+/// with: at none, glass is no glass — `glass_look`'s 0, a clear window — and the slider's last
+/// stretch went from a material to none of it (the user). Only `transparent` goes to 0. An app's
+/// own slider stops here (fizzy's does, at the same `glass_look.min_opacity`).
+pub const material_min_opacity: f32 = glass_look.min_opacity;
+
+/// How much of a light theme's window colour covers what is behind, beside a dark theme's at the
+/// same material opacity (`effectiveMaterial`).
+const light_tint: f32 = 0.3 / 0.7;
+
+/// The colour over a window made of `m`, the window's colour `fill` at what the material makes of
+/// its opacity: opaque for none; at the opacity over nothing for a clear window; over a blur or a
+/// frost, at the opacity and lightened as it thins, so the material behind reads as the same tone
+/// (`glass_look.base`); clear on Liquid Glass, whose colour is the glass's (`plainGlass`). The one
+/// rule for every window: a plain app's backdrop (`dressWindows`), and what fizzy draws under its
+/// frame.
+pub fn materialBase(m: WindowMaterial, fill: dvui.Color) dvui.Color {
+    return switch (m.kind) {
+        .none => fill.opacity(1),
+        .transparent => fill.opacity(std.math.clamp(m.opacity, 0, 1)),
+        .blur, .frost => blk: {
+            const b = glass_look.base(m.opacity, true);
+            break :blk fill.opacity(b.alpha).lighten(b.lighten);
+        },
+        .liquid => fill.opacity(0),
+    };
+}
+
+/// The windows this backend dresses, made of the window material (`window_material`), set again
+/// only as it or the theme's colours change; Liquid Glass's look each frame (`plainGlass`).
+/// - A plain dvui app's main window and each of the OS's own frame (`Viewport.native`): the OS's
+///   title bar in the theme's colour (`nativeTitleBar`), the material, and its colour over it in a
+///   backdrop (`materialBase`). A window opening is dressed as it opens (`viewportOpen`).
+/// - The main window of an app that draws its title and its colour itself (fizzy's,
+///   `platform.window.app_dresses_windows`): its OS material alone (`platform.window.appMaterial`).
+fn dressWindows(self: *SDLBackend) void {
     const theme = dvui.themeGet();
-    const colors: [2]dvui.Color = .{ theme.color(.window, .fill), theme.color(.window, .text) };
     const material = self.effectiveMaterial();
+    const fill = material.color orelse theme.color(.window, .fill);
+    if (platform.window.app_dresses_windows) {
+        if (plain_material == null or plain_material.?.kind != material.kind) platform.window.appMaterial(self.window, @backingInt(material.kind));
+        plain_material = material;
+        if (material.kind == .liquid) plainGlass(self.window, material.opacity, fill);
+        return;
+    }
+    const colors: [2]dvui.Color = .{ theme.color(.window, .fill), theme.color(.window, .text) };
     const same = if (plain_dressed) |d| if (plain_material) |m| std.meta.eql(d, colors) and std.meta.eql(m, material) else false else false;
     if (!same) {
         plain_dressed = colors;
         plain_material = material;
+        plain_base = materialBase(material, fill);
         platform.window.nativeTitleBar(self.window, colors[0], colors[1], theme.dark);
-        platform.window.plainMaterial(self.window, @backingInt(material.kind), material.opacity);
+        platform.window.plainMaterial(self.window, @backingInt(material.kind), plain_base);
         for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) {
             platform.window.nativeTitleBar(v.window, colors[0], colors[1], theme.dark);
-            platform.window.plainMaterial(v.window, @backingInt(material.kind), material.opacity);
+            platform.window.plainMaterial(v.window, @backingInt(material.kind), plain_base);
         };
     }
     if (material.kind != .liquid) return;
-    plainGlass(self.window, material.opacity, colors[0]);
-    for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) plainGlass(v.window, material.opacity, colors[0]);
+    plainGlass(self.window, material.opacity, fill);
+    for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.native) plainGlass(v.window, material.opacity, fill);
 }
 
 /// A plain dvui app's frame from here to `plainFrameEnd` draws into a texture the window's size
@@ -1236,6 +1298,51 @@ pub fn floatingWindowOs(_: *SDLBackend, id: dvui.Id, asked: bool, open_flag: ?*b
 /// of its own (`floatingWindowOs`).
 pub fn floatingWindowTitle(_: *SDLBackend, id: dvui.Id, header: []const u8) bool {
     return os_windows.titled(id, header);
+}
+
+/// A floating window of a plain dvui app's, drawn in the main window, made of the window material
+/// (`window_material`, as the backend can show it), as fizzy's own glass is at the same material
+/// (`Editor`'s dialog style): dvui asks where it would fill the window with the theme's colour
+/// (`dvui.Backend.floatingWindowBackground`), with the fill's `rect` and `corners`.
+/// - `none`: dvui's fill, opaque (false: dvui draws it).
+/// - `transparent`: the theme's window colour at the material's opacity over what is behind.
+/// - `frost`, `blur`: what is behind it in the app, frosted (`BlurBackdrop.frostPane`) under that
+///   colour — the frosted pane at the opacity (`glass_look.frosted`), half its blur for `blur`.
+/// - `liquid`: the same, its edge bending what is behind; on macOS with the glass program, Apple's
+///   lens, as the window's own Liquid Glass is beside it (`glass_look.inApp`).
+/// A window fizzy's own frame dresses (`platform.window.app_dresses_windows`) is fizzy's to draw:
+/// its floating windows are its own widget, which never asks.
+pub fn floatingWindowBackground(self: *SDLBackend, id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect.Physical) bool {
+    if (platform.window.app_dresses_windows) return false;
+    const m = self.effectiveMaterial();
+    const fill = dvui.themeGet().color(.window, .fill);
+    switch (m.kind) {
+        .none => return false,
+        .transparent => {
+            rect.fill(corners, .{ .color = .{ .color = fill.opacity(std.math.clamp(m.opacity, 0, 1)) }, .fade = 1 });
+            return true;
+        },
+        .blur, .frost, .liquid => {
+            const opacity = m.opacity;
+            const pane = glass_look.frosted(opacity);
+            const liquid = m.kind == .liquid;
+            // What the glass draws with, as fizzy publishes it each frame (`Editor`): the program
+            // API, and the lens's look while the window is Liquid Glass.
+            glass.programs.publishHost();
+            glass.LiquidField.publishEnabled(liquid);
+            const lens = builtin.target.os.tag == .macos and liquid and glass.LiquidField.ready();
+            glass.LiquidField.publishLook(if (lens) glass_look.inApp(opacity) else null);
+            const s = dvui.windowNaturalScale();
+            glass.BlurBackdrop.frostPane(id, rect, corners.scale(1 / s, dvui.CornerRect), s, .{
+                .radius = if (lens) glass_look.text_blur else if (m.kind == .blur) pane.blur / 2 else pane.blur,
+                .tint = fill,
+                .mix = pane.mix,
+                // Twice the setting, as fizzy's dialogs bend (`core.dialogs.refraction`).
+                .refraction = 2 * (if (lens) 1 else if (liquid) pane.refraction else 0),
+            });
+            return true;
+        },
+    }
 }
 
 /// The kinds of window material this backend can show (fizzy's `core.material`, field for field):
@@ -1638,8 +1745,8 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
         if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_still(cocoaWindow(window));
         const theme = dvui.themeGet();
         platform.window.nativeTitleBar(window, theme.color(.window, .fill), theme.color(.window, .text), theme.dark);
-        // Made of what the main window is (`dressPlainWindows`).
-        if (plain_material) |m| platform.window.plainMaterial(window, @backingInt(m.kind), m.opacity);
+        // Made of what the main window is (`dressWindows`).
+        if (plain_material) |m| platform.window.plainMaterial(window, @backingInt(m.kind), plain_base);
         // Through Spaces, zooms and live resizes as the main window goes.
         if (comptime builtin.target.os.tag == .macos) platform.macos_monitor.watch(window);
         // Its part of the frame below the title bar's band (`platform.macos_monitor.titlebarStrip`):
@@ -3887,7 +3994,7 @@ pub fn main(main_init: std.process.Init) !u8 {
         back.plainFrameBegin();
         const res = try app.frameFn();
         os_windows.afterFrame();
-        if (!platform.window.app_dresses_windows) back.dressPlainWindows();
+        back.dressWindows();
         back.plainFrameEnd();
 
         var end_micros = try win.end(.{});
@@ -4149,7 +4256,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     os_windows.afterFrame();
     // A plain dvui app's main window: the OS's own title bar, in the theme's colour. Fizzy's own
     // windows are dressed by fizzy (`platform.window.setStyle`), which says so.
-    if (!platform.window.app_dresses_windows) appState.back.dressPlainWindows();
+    appState.back.dressWindows();
 
     live_resize_trace.overlay();
     appState.back.plainFrameEnd();
