@@ -384,6 +384,8 @@ pub fn drawCorner(c: Corner, id_extra: usize, look: Look, comptime anchor_fmt: [
     var pressed = false;
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = float.data().id, .r = float.data().borderRectScale().r })) continue;
+        // A pointing hand over it, as over the place's arrange button: it is a button.
+        if (e.evt == .mouse and e.evt.mouse.action == .position) dvui.cursorSet(.hand);
         if (e.evt == .mouse and e.evt.mouse.action == .press and e.evt.mouse.button.pointer()) {
             e.handle(@src(), float.data());
             pressed = true;

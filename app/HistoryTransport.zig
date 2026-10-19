@@ -286,13 +286,18 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         if (self.grip_steps) |was| if (opts.steps > was) {
             self.stepped_at = now;
             self.slosh.knock(now, 0.35);
-            // Into a vial, the new step splashes the surface, as a drop landing would. Only into
-            // one: a liquid nothing steps would hold its splashes for when a vial came.
-            if (opts.corner != null) self.liquid.splashIn();
         };
+        const stepped = if (self.grip_steps) |was| opts.steps > was else false;
         self.grip_steps = opts.steps;
         self.liquid.setLevel(fill);
-        if (opts.corner) |c| self.liquid.step(now, c.point());
+        if (opts.corner) |c| {
+            self.liquid.step(now, c.point());
+            // Into a vial, the new step splashes the surface, as a drop landing would: after the
+            // step, so a step landing after an idle spell — when the liquid starts afresh, still —
+            // splashes all the same. Only into a vial: a liquid nothing steps would hold its
+            // splashes for when a vial came.
+            if (stepped) self.liquid.splashIn();
+        }
         const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
         if (glow == 0) self.stepped_at = null;
         const in_use = on_grip or self.stepped_at != null or !self.slosh.settled(now);
