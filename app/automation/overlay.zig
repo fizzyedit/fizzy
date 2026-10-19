@@ -19,7 +19,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const Player = @import("replay").Player;
-/// The pointer, and the layer every part of this overlay is drawn in.
+/// The pointer, and the layer every part of this overlay is drawn in (`layer`).
 const plain = @import("replay").overlay;
 const LiveDriver = @import("replay").LiveDriver;
 const Input = @import("replay").Input;
@@ -66,7 +66,16 @@ pub fn drawLive(driver: *LiveDriver) void {
 
 /// How long the tape's pointer takes to step aside when it types, and back when it moves.
 const plain_fade_ms = (plain.Options{}).fade_ms;
-const layer = plain.layer;
+
+/// A part of the overlay in a layer of its own (`replay.overlay.layer`), kept to the main window
+/// (`core.screens.markMain`): the captions, keys and bar are the stage's, and stay on it while a
+/// dialog or a menu is open in a window of its own over it. Only the pointer, and a callout beside
+/// what it acts on (`drawCallout`), go into those windows. Every part goes through this.
+fn layer(src: std.builtin.SourceLocation, opts: dvui.Options, init: dvui.FloatingWidget.InitOptions) *dvui.FloatingWidget {
+    const fw = plain.layer(src, opts, init);
+    core.screens.markMain(fw.data().id);
+    return fw;
+}
 
 fn theme() dvui.Theme {
     return dvui.themeGet();
@@ -337,7 +346,8 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     // Its size as last drawn, to keep the whole of it clear.
     const src = @src();
     const size: dvui.Size = dvui.minSizeGet(dvui.parentGet().extendId(src, index + 1)) orelse .{};
-    const spot = callout(player, tape, c, win, size, floor) orelse blk: {
+    const beside = callout(player, tape, c, win, size, floor);
+    const spot = beside orelse blk: {
         const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
         break :blk Spot{ .at = .{
             .x = home.x + home.w / 2 - size.w / 2,
@@ -348,12 +358,15 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     const w = @min(440, win.w - 32);
     // Where it belongs while it opens — it is placed by its size, which it only has once drawn —
     // and gliding after.
-    const fw = layer(src, .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h } }, .{
+    const fw = plain.layer(src, .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h } }, .{
         .from = dvui.windowRectScale().pointToPhysical(glide(c, spot.at, size.w == 0 or shown.alpha < 1)),
         .from_gravity_x = 1,
         .from_gravity_y = 1,
     });
     defer fw.deinit();
+    // Beside what the pointer acts on, it goes where that is, as the pointer does: over a dialog's
+    // button, into the dialog's window. At the foot of the home view it is the stage's (`layer`).
+    if (beside == null) core.screens.markMain(fw.data().id);
     // It opens out of the side nearest what it is beside, as a popover does from its anchor.
     captionCard(c, shown, spot.origin, w);
 }

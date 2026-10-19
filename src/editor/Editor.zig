@@ -4797,6 +4797,17 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // out and removes itself when the timer expires.
     editor.drawSaveToasts();
 
+    // The app's OS windows over the main one: a demo's bar stays in the main window, under them,
+    // so a press on one is that window's, not the bar's (`replay.Player.Transport.covered`).
+    if (editor.demo.player.tape() != null) {
+        var buf: [8]Popout.Shown = undefined;
+        const tr = &editor.demo.player.transport;
+        tr.covered_n = 0;
+        for (Popout.windowsShown(&buf)) |w| {
+            tr.covered[tr.covered_n] = w.part;
+            tr.covered_n += 1;
+        }
+    }
     // Over everything the frame drew: a demo's pointer, keystrokes, captions and transport bar,
     // or a live tape's pointer.
     @import("app").automation.overlay.draw(&editor.demo.player);
