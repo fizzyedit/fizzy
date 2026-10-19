@@ -648,6 +648,55 @@ pub fn applyStep(self: *Document, effect: []const u8) !void {
     sdk.host().documentEdited(self.id);
 }
 
+/// Put the history back as its track recorded it (`sdk.Plugin.VTable.restoreHistory`), in place
+/// of what it holds: each entry's parts (`step_format`, as `recordEdits` wrote them) joined into
+/// one transaction, its id kept. Checked against the text first, on a copy: undoing every applied
+/// entry, and redoing every one after them, must land, or `error.StepDoesNotApply` and nothing
+/// changes. The text is untouched, and a clean document stays clean.
+pub fn restoreHistory(self: *Document, history: sdk.Plugin.RestoredHistory) !void {
+    const gpa = sdk.allocator();
+    if (history.applied > history.entries.len) return error.BadStep;
+    const built = try gpa.alloc(tc.History.Restored, history.entries.len);
+    defer gpa.free(built);
+    var made: usize = 0;
+    var taken = false;
+    defer if (!taken) for (built[0..made]) |*b| b.txn.deinit(gpa);
+    for (history.entries, built) |e, *b| {
+        b.* = .{ .step = e.id, .txn = .{} };
+        made += 1;
+        var first = true;
+        for (e.parts) |part| {
+            const view = try tc.Transaction.StepView.init(part);
+            var it = view.iterator();
+            while (it.next()) |edit| {
+                if (first) b.txn.sel_before = .collapsed(edit.pos);
+                first = false;
+                try b.txn.append(gpa, edit.pos, edit.removed, edit.inserted);
+            }
+            b.txn.sel_after = view.sel;
+        }
+    }
+    // Back to where the history began, and forward through what redo brings back: each must fit.
+    {
+        var copy: std.ArrayList(u8) = .empty;
+        defer copy.deinit(gpa);
+        try copy.appendSlice(gpa, self.text.items);
+        var i = history.applied;
+        while (i > 0) {
+            i -= 1;
+            built[i].txn.applyInverse(gpa, &copy) catch return error.StepDoesNotApply;
+        }
+        copy.clearRetainingCapacity();
+        try copy.appendSlice(gpa, self.text.items);
+        for (built[history.applied..]) |b| b.txn.applyForward(gpa, &copy) catch return error.StepDoesNotApply;
+    }
+    const was_clean = !self.isDirty();
+    try self.history.restore(gpa, built, history.applied);
+    taken = true;
+    if (was_clean) self.clean_op_id = self.history.topOpId();
+    self.history.trim(gpa, @import("../plugin.zig").statePtr().settings.history_limit.get());
+}
+
 /// Undo or redo until history step `step` is the last applied; 0 goes back before the first.
 pub fn goToStep(self: *Document, step: u64) !void {
     const n = self.history.stepsTo(step) orelse return error.NoSuchStep;
