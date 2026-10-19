@@ -329,7 +329,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
 
         // Same fixed glyph slot as the file tree.
         const tab_doc_path = if (doc_opt) |doc| doc.owner.documentPath(doc) else loading.?.path;
-        const tab_icon_color = dvui.themeGet().color(.control, .text);
+        const tab_icon_color = core.widgets.treeGlyphColor(dvui.themeGet());
         {
             var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .x = 4, .w = 2 } });
             defer icon_slot.deinit();

@@ -2063,7 +2063,7 @@ fn drawTabFace(l: *Layout, d: ViewDrag, title: []const u8) void {
     // selected tab's — it is the tab in hand. The face drawn before the tab became glass is the
     // strip's own, so anything else here changed on the way back.
     const theme = dvui.themeGet();
-    const icon_color = theme.color(.control, .text);
+    const icon_color = core.widgets.treeGlyphColor(theme);
     const color = theme.color(.window, .text);
     if (asRows(d)) return drawRows(l, &d, icon_color, color);
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5, .gravity_y = 0.5 });

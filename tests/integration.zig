@@ -6991,6 +6991,39 @@ test "workbench: where a tab carried over a strip goes in is read as if its open
     try std.testing.expectEqual(@as(usize, 3), pane.insertIndexAt(500, 3));
 }
 
+fn glyphLuma(c: dvui.Color) f32 {
+    return 0.2126 * @as(f32, @floatFromInt(c.r)) + 0.7152 * @as(f32, @floatFromInt(c.g)) + 0.0722 * @as(f32, @floatFromInt(c.b));
+}
+
+test "workbench: a file tree's glyphs stand off the main window's base and a float's pane alike" {
+    // Fizzy Dark's colours, as `Editor` sets them up (no themes are loaded here).
+    var fizzy_dark = dvui.Theme.builtin.adwaita_dark;
+    fizzy_dark.window = .{ .fill = .{ .r = 28, .g = 29, .b = 36 }, .text = .{ .r = 206, .g = 163, .b = 127 } };
+    fizzy_dark.control = .{ .fill = .{ .r = 28, .g = 29, .b = 36 }, .text = .{ .r = 134, .g = 138, .b = 148 } };
+    fizzy_dark.fill = .{ .r = 42, .g = 44, .b = 54 };
+    // The report, measured in a popped-out float on Liquid Glass: its explorer's pane card, and the
+    // main window's sidebar beside it. The window's fill, which the glyphs rested in, was the
+    // sidebar's dark glyph and within a few steps of the float's card: invisible there.
+    const float_card: dvui.Color = .{ .r = 38, .g = 39, .b = 45 };
+    const main_base: dvui.Color = .{ .r = 65, .g = 67, .b = 74 };
+    try std.testing.expect(@abs(glyphLuma(fizzy_dark.color(.window, .fill)) - glyphLuma(float_card)) < 15);
+    const glyph = fizzy.core.widgets.treeGlyphColor(fizzy_dark);
+    try std.testing.expect(@abs(glyphLuma(glyph) - glyphLuma(float_card)) > 60);
+    try std.testing.expect(@abs(glyphLuma(glyph) - glyphLuma(main_base)) > 40);
+
+    // And in every theme fizzy ships with dvui's: off the window's fill and the content fill (a
+    // pane's card), whichever a tree is drawn on, in the main window or a float.
+    for (dvui.Theme.builtins) |theme| {
+        const g = fizzy.core.widgets.treeGlyphColor(theme);
+        for ([_]dvui.Color{ theme.color(.window, .fill), theme.color(.content, .fill) }) |base| {
+            std.testing.expect(@abs(glyphLuma(g) - glyphLuma(base)) > 40) catch |err| {
+                std.debug.print("{s}: glyph {f} on {f}\n", .{ theme.name, g, base });
+                return err;
+            };
+        }
+    }
+}
+
 // An app's home page in place of the workbench's: a surface keyworded `home`, shown in the `Home`
 // place the sole document pane declares while it is empty (`Workspace.drawHome`). The pane here is
 // declared as `Workspace.draw` declares it, through the plugin's `Host`, so the place is the one
