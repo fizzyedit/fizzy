@@ -756,6 +756,10 @@ pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
 /// `draw` without the fade-in: for a swap, whose overlay already carries the change.
 fn drawSolid(self: *Layout, s: *Surface) !dvui.App.Result {
     self.drawn.append(self.arena, s) catch {};
+    const watching = ScrollWatch.enabled and !s.scrolls_itself;
+    var watch: ScrollWatch = undefined;
+    if (watching) watch.begin();
+    defer if (watching) watch.end(self.state, s.id);
     if (self.state.snapshots_wanted and !self.state.capture_unavailable and self.state.snapshot(s.id) == null and !self.state.captureFailed(s.id)) {
         if (try self.drawCaptured(s)) |r| return r;
     }
@@ -1460,6 +1464,55 @@ pub fn tabbed(_: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.Ap
     const place: Region = .{ .keywords = keywords };
     return f.tabbedIn(&place);
 }
+
+/// Debug builds only: catches a surface that fills its place with a scroll area of its own but
+/// does not say `Surface.scrolls_itself`. In a place that scrolls what it shows (fizzy's
+/// explorer) that view grows wider without limit and never shrinks after a resize, and nothing
+/// on screen says why.
+///
+/// It stands in as the parent the surface draws into, passing everything through to the real
+/// one (whose data it hands out, so every id is unchanged) and noting the first child placed:
+/// a scroll area, when dvui has kept that id's `ScrollInfo`, which every scroll area does as it
+/// closes. Only the first child, which is what "the content is its own scroll area" means; one
+/// under a header is not seen.
+const ScrollWatch = struct {
+    const enabled = builtin.mode == .debug;
+
+    parent: dvui.Widget,
+    first: ?struct { id: dvui.Id, expand: dvui.Options.Expand } = null,
+
+    fn begin(self: *ScrollWatch) void {
+        self.* = .{ .parent = dvui.parentGet() };
+        dvui.parentSet(dvui.Widget.init(self, data, rectFor, screenRectScale, minSizeForChild));
+    }
+
+    fn end(self: *ScrollWatch, state: *State, id: []const u8) void {
+        dvui.parentSet(self.parent);
+        const first = self.first orelse return;
+        if (!first.expand.isHorizontal() and !first.expand.isVertical()) return;
+        if (dvui.dataGet(null, first.id, "_scroll_info", dvui.ScrollInfo) == null) return;
+        if (!state.noteUnmarkedScroller(id)) return;
+        // Not in tests, which check `State.unmarked_scrollers`: a logged warning fails the step.
+        if (!builtin.is_test) dvui.log.warn("surface \"{s}\" fills its place with its own scroll area but does not set `scrolls_itself`: in a place that scrolls (a sidebar) it grows wider without limit. Set `.scrolls_itself = true` on its `Surface`.", .{id});
+    }
+
+    fn data(self: *ScrollWatch) *dvui.WidgetData {
+        return self.parent.data();
+    }
+
+    fn rectFor(self: *ScrollWatch, id: dvui.Id, min_size: dvui.Size, e: dvui.Options.Expand, g: dvui.Options.Gravity) dvui.Rect {
+        if (self.first == null) self.first = .{ .id = id, .expand = e };
+        return self.parent.rectFor(id, min_size, e, g);
+    }
+
+    fn screenRectScale(self: *ScrollWatch, r: dvui.Rect) dvui.RectScale {
+        return self.parent.screenRectScale(r);
+    }
+
+    fn minSizeForChild(self: *ScrollWatch, s: dvui.Size) void {
+        self.parent.minSizeForChild(s);
+    }
+};
 
 /// A surface's draw, timed in the frame profiler under its owner (fizzy's own when it has none)
 /// and its id.

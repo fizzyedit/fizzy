@@ -197,6 +197,7 @@ const automation_commands = [_]FizzyCommand{
     .{ .id = "fizzy.demo.restart", .title = "Demo: Restart", .bind = null, .run = cmdDemoRestart, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
     .{ .id = "fizzy.demo.playTape", .title = "Demo: Play a Tape…", .bind = null, .run = cmdPlayTape, .params = TapePath.params, .runWith = TapePath.bind(cmdPlayTapePath), .icon = icons.tvg.lucide.@"circle-play" },
+    .{ .id = "fizzy.demo.play", .title = "Demo: Play by Name…", .bind = null, .params = DemoByName.params, .runWith = DemoByName.bind(cmdDemoPlayNamed), .icon = icons.tvg.lucide.@"circle-play" },
     .{ .id = "fizzy.demo.speed", .title = "Demo: Speed…", .bind = null, .run = cmdDemoSpeedStep, .isEnabled = demoLoaded, .params = DemoSpeed.params, .runWith = DemoSpeed.bind(cmdDemoSpeed), .icon = icons.tvg.lucide.gauge },
 } ++ demoCatalogCommands();
 
@@ -235,6 +236,23 @@ fn playTapeFile(editor: *Editor, path: []const u8) !void {
         error.BadTape => editor.demo.playTapeSoon(bytes),
         else => return err,
     };
+}
+
+const DemoByName = sdk.Command.Params(struct {
+    name: sdk.Command.Arg([]const u8, .{ .description = "The demo to play, by name: fizzy's own (\"tour\") or one a plugin registered. The `demos` service lists them." }) = .init(""),
+    at: sdk.Command.Arg(u32, .{ .description = "Where to start, in demo milliseconds: a chapter's start, say. 0 is the beginning." }) = .init(0),
+});
+
+/// Any demo the `demos` service lists (`Demos`), fizzy's or a plugin's.
+fn cmdDemoPlayNamed(state: *anyopaque, args: DemoByName.Args, call: *sdk.Command.Call) anyerror!void {
+    if (args.name.len == 0) return call.fail("name the demo to play: the `demos` service lists them", .{});
+    const api = editorFromState(state).demos.api;
+    switch (api.play(args.name, args.at)) {
+        .started => {},
+        .unknown => return call.fail("no demo named '{s}'", .{args.name}),
+        .busy => return call.fail("something else is driving fizzy: a demo can start once it has finished", .{}),
+        .unsaved => return call.fail("there is unsaved work open, which a demo would set aside", .{}),
+    }
 }
 
 const DemoSpeed = sdk.Command.Params(struct {
