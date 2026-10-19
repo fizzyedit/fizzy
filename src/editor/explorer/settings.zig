@@ -235,6 +235,41 @@ pub const groups = [_]Group{
         },
     },
     .{
+        .title = "History",
+        .icon = icons.tvg.lucide.history,
+        .items = &.{
+            .{
+                .label = "Record document history",
+                .key = "record_history",
+                .description = "Keep how each document is made, step by step: what lets undo scrub " ++
+                    "through pictures of it and export share it as a tape. Kept in your profile " ++
+                    "once a document closes, so it opens again with its history. Off, documents " ++
+                    "keep only their undo history, and what was recorded is forgotten.",
+                .keywords = "history record recording track tape undo scrub export share privacy",
+                .draw = drawRecordHistory,
+                .inline_control = true,
+            },
+            .{
+                .label = "Kept history",
+                .key = "kept_history_gb",
+                .description = "How much of your profile closed documents' history may take. Past " ++
+                    "it, the oldest goes first; an open document's never does. Forget it all here, " ++
+                    "or one document's with \"Forget This Document's History\".",
+                .keywords = "history kept disk space size cap limit forget clear delete privacy",
+                .draw = drawKeptHistory,
+            },
+            .{
+                .label = "Undo steps per document",
+                .key = "history_limit",
+                .description = "The most steps one document's undo history keeps, in every " ++
+                    "editor. Going back and then editing keeps what was gone back over, so the " ++
+                    "history grows; past this the oldest steps go.",
+                .keywords = "history undo redo steps limit cap memory",
+                .draw = drawHistoryLimit,
+            },
+        },
+    },
+    .{
         .title = "Debugging",
         .icon = icons.tvg.lucide.bug,
         .items = &.{
@@ -665,6 +700,48 @@ fn drawFloatWindows() void {
         if (dvui.button(@src(), "Restart", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 6 }, .padding = .{ .x = 8, .w = 8, .y = 2, .h = 2 } })) {
             restart.request();
         }
+    }
+}
+
+fn drawRecordHistory() void {
+    drawToggle(&fizzy.editor().app.settings.record_history, "Record document history");
+}
+
+fn drawHistoryLimit() void {
+    const editor = fizzy.editor();
+    var steps: f32 = @floatFromInt(editor.app.settings.history_limit);
+    if (dvui.sliderEntry(@src(), "{d:0.0} steps", .{
+        .value = &steps,
+        .interval = 100,
+        .max = 100_000,
+        .min = 100,
+    }, .{ .expand = .horizontal })) {
+        editor.app.settings.history_limit = @intFromFloat(steps);
+        editor.markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawKeptHistory() void {
+    const editor = fizzy.editor();
+    if (dvui.sliderEntry(@src(), "up to {d:0.1} GB", .{
+        .value = &editor.app.settings.kept_history_gb,
+        .interval = 0.5,
+        .max = 20,
+        .min = 0.5,
+    }, .{ .expand = .horizontal })) {
+        editor.markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+    const t = &(editor.app.tracks orelse return);
+    // What it takes now, read only while this row is shown.
+    const size = t.keptSize();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 4 } });
+    defer row.deinit();
+    dvui.label(@src(), "{d} documents, {d:.1} MB", .{ size.files, @as(f64, @floatFromInt(size.bytes)) / (1 << 20) }, .{ .gravity_y = 0.5, .color_text = .{ .color = dvui.themeGet().color(.control, .text) } });
+    if (size.files > 0 and dvui.button(@src(), "Forget kept history", .{}, .{ .gravity_x = 1, .gravity_y = 0.5 })) {
+        _ = t.forgetKept();
+        dvui.refresh(null, @src(), null);
     }
 }
 

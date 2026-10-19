@@ -98,8 +98,16 @@ sign_app="${FIZZY_MACOS_SIGN_APP:-}"
 sign_install="${FIZZY_MACOS_SIGN_INSTALLER:-}"
 notary_profile="${FIZZY_MACOS_NOTARY_PROFILE:-}"
 
+# As build options, not the environment: zig build caches its configuration without regard to
+# the environment, so a FIZZY_MACOS_* variable read by build.zig would be seen once and then ignored.
+sign_args=()
 if [[ -n "$sign_app" && -n "$sign_install" && -n "$notary_profile" ]]; then
     echo "==> macOS signing: enabled (app=${sign_app}, installer=${sign_install}, notary=${notary_profile})"
+    sign_args=(
+        "-Dmacos-sign-app=$sign_app"
+        "-Dmacos-sign-installer=$sign_install"
+        "-Dmacos-notary-profile=$notary_profile"
+    )
 else
     echo "==> macOS signing: DISABLED (set FIZZY_MACOS_SIGN_APP, FIZZY_MACOS_SIGN_INSTALLER, FIZZY_MACOS_NOTARY_PROFILE to enable)"
     if [[ -n "$sign_app" || -n "$sign_install" || -n "$notary_profile" ]]; then
@@ -143,7 +151,7 @@ if [[ "${FIZZY_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
     fi
 
     echo "==> Building all targets (zig build packageall -Doptimize=ReleaseFast)"
-    zig build packageall -Doptimize=ReleaseFast
+    zig build packageall -Doptimize=ReleaseFast ${sign_args[@]+"${sign_args[@]}"}
 else
     echo "==> FIZZY_RELEASE_SKIP_BUILD=1, reusing existing zig-out/"
 fi

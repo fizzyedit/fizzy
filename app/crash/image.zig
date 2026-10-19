@@ -42,10 +42,14 @@ pub fn containing(address: usize) ?Image {
 }
 
 fn macho(address: usize) ?Image {
-    const macho_ = std.macho;
-    const header: *const macho_.mach_header_64 = @ptrCast(@alignCast(
+    return machoAt(@ptrCast(@alignCast(
         std.c._dyld_get_image_header_containing_address(@ptrFromInt(address)) orelse return null,
-    ));
+    )));
+}
+
+/// The Mach-O image whose header is mapped at `header`: its `__TEXT` and its UUID.
+pub fn machoAt(header: *const std.macho.mach_header_64) ?Image {
+    const macho_ = std.macho;
     var image: Image = .{ .base = @intFromPtr(header), .end = 0 };
     var at: usize = @intFromPtr(header) + @sizeOf(macho_.mach_header_64);
     for (0..header.ncmds) |_| {
@@ -172,7 +176,7 @@ test "a GNU build-id note is found among others" {
             return std.mem.toBytes(v);
         }
     }.u;
-    const other = w(4) ++ w(8) ++ w(1) ++ "GNU\x00".* ++ [_]u8{0} ** 8;
+    const other = w(4) ++ w(8) ++ w(1) ++ "GNU\x00".* ++ @as([8]u8, @splat(0));
     const build_id = w(4) ++ w(5) ++ w(std.elf.NT_GNU_BUILD_ID) ++ "GNU\x00".* ++ "\xde\xad\xbe\xef\x01\x00\x00\x00".*;
     try std.testing.expectEqualSlices(u8, "\xde\xad\xbe\xef\x01", gnuBuildId(&(other ++ build_id)).?);
     try std.testing.expectEqual(null, gnuBuildId(&other));

@@ -57,6 +57,10 @@ params: []const Param = &.{},
 /// `Params(…).bind`, which parses the arguments into the plugin's own struct and reports a
 /// mismatch as `call.bad_args`. Absent = the command takes no arguments.
 runWith: ?*const fn (state: *anyopaque, call: *Call) anyerror!void = null,
+/// Take over a command already registered with this id (fizzy's `fizzy.about`, say) rather
+/// than be dropped as a duplicate. The replaced command comes back when this one's plugin is
+/// unregistered (`Host.registerCommand`).
+replaces: bool = false,
 
 /// Who sees a command.
 pub const Visibility = enum(u8) {
@@ -216,13 +220,13 @@ pub fn Params(comptime T: type) type {
         /// naming where, and returns `error.BadArguments`.
         pub fn parse(call: *Call) error{ BadArguments, OutOfMemory }!Args {
             const text = std.mem.trim(u8, call.args, " \t\r\n");
-            const source = try call.arena.dupeZ(u8, if (text.len == 0) ".{}" else text);
-            var diag: std.zon.parse.Diagnostics = .{};
-            return std.zon.parse.fromSliceAlloc(Args, call.arena, source, &diag, .{}) catch |err| switch (err) {
+            const source = try call.arena.dupeSentinel(u8, if (text.len == 0) ".{}" else text, 0);
+            var diag: std.zon.parse.Diagnostics = undefined;
+            return std.zon.parse.fromSlice(Args, .{ .gpa = call.arena, .arena = call.arena, .source = source, .diagnostics = &diag }) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ParseZon => {
                     call.bad_args = true;
-                    const msg = std.fmt.allocPrint(call.arena, "{f}", .{&diag}) catch "the arguments do not fit";
+                    const msg = std.fmt.allocPrint(call.arena, "{f}", .{diag.fmt("args")}) catch "the arguments do not fit";
                     call.message = std.mem.trimEnd(u8, msg, "\n");
                     return error.BadArguments;
                 },
@@ -242,24 +246,24 @@ pub fn Params(comptime T: type) type {
     };
 }
 
-fn buildParams(comptime T: type) [std.meta.fields(T).len]Param {
-    const fields = std.meta.fields(T);
-    var out: [fields.len]Param = undefined;
-    for (fields, 0..) |f, i| {
-        if (!settings.isCell(f.type)) @compileError(
-            "sdk.Command.Params: field '" ++ f.name ++ "' of " ++ @typeName(T) ++
-                " must be an argument cell — `" ++ f.name ++ ": sdk.Command.Arg(" ++
-                @typeName(f.type) ++ ", .{ .description = \"…\" })`. Every parameter needs a description.",
+fn buildParams(comptime T: type) [@typeInfo(T).@"struct".field_names.len]Param {
+    const info = @typeInfo(T).@"struct";
+    var out: [info.field_names.len]Param = undefined;
+    for (info.field_names, info.field_types, info.field_attrs, 0..) |f_name, Cell, cell_attrs, i| {
+        if (!settings.isCell(Cell)) @compileError(
+            "sdk.Command.Params: field '" ++ f_name ++ "' of " ++ @typeName(T) ++
+                " must be an argument cell — `" ++ f_name ++ ": sdk.Command.Arg(" ++
+                @typeName(Cell) ++ ", .{ .description = \"…\" })`. Every parameter needs a description.",
         );
-        const opts = f.type.setting_options;
-        const default: ?f.type.Payload = if (f.defaultValue()) |cell| cell.v else null;
+        const opts = Cell.setting_options;
+        const default: ?Cell.Payload = if (cell_attrs.defaultValue(Cell)) |cell| cell.v else null;
         out[i] = .{
-            .key = f.name,
-            .label = opts.name orelse settings.deriveLabel(f.name),
+            .key = f_name,
+            .label = opts.name orelse settings.deriveLabel(f_name),
             .description = opts.description,
-            .kind = settings.kindFor(f.type.Payload, opts),
+            .kind = settings.kindFor(Cell.Payload, opts),
             .required = default == null,
-            .default = if (default) |d| defaultZon(f.type.Payload, d) else null,
+            .default = if (default) |d| defaultZon(Cell.Payload, d) else null,
         };
     }
     return out;
@@ -281,23 +285,20 @@ fn defaultZon(comptime P: type, comptime value: P) ?[]const u8 {
 
 /// `T`'s fields with bare payload types, each keeping its cell's default if it has one.
 fn Plain(comptime T: type) type {
-    const fields = std.meta.fields(T);
-    var names: [fields.len][:0]const u8 = undefined;
-    var types: [fields.len]type = undefined;
-    var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
-    for (fields, 0..) |f, i| {
-        const P = f.type.Payload;
-        names[i] = f.name;
+    const info = @typeInfo(T).@"struct";
+    var types: [info.field_names.len]type = undefined;
+    var attrs: [info.field_names.len]std.lang.Type.Struct.FieldAttributes = undefined;
+    for (info.field_types, info.field_attrs, 0..) |Cell, cell_attrs, i| {
+        const P = Cell.Payload;
         types[i] = P;
-        attrs[i] = if (f.defaultValue()) |cell| blk: {
+        attrs[i] = if (cell_attrs.defaultValue(Cell)) |cell| blk: {
             const payload_default: P = cell.v;
             break :blk .{ .default_value_ptr = @ptrCast(&payload_default) };
         } else .{};
     }
-    const frozen_names = names;
     const frozen_types = types;
     const frozen_attrs = attrs;
-    return @Struct(.auto, null, &frozen_names, &frozen_types, &frozen_attrs);
+    return @Struct(.auto, null, info.field_names, &frozen_types, &frozen_attrs);
 }
 
 test "Params: descriptors, defaults and parsing" {

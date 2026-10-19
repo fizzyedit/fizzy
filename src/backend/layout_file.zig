@@ -89,17 +89,16 @@ const legacy_window_file = "window.zon";
 fn windowFilePath(buf: []u8, dir: []const u8, name: []const u8) ?[:0]const u8 {
     const sep = std.fs.path.sep_str;
     if (std.mem.endsWith(u8, dir, sep)) {
-        return std.fmt.bufPrintZ(buf, "{s}{s}", .{ dir, name }) catch null;
+        return std.fmt.bufPrintSentinel(buf, "{s}{s}", .{ dir, name }, 0) catch null;
     }
-    return std.fmt.bufPrintZ(buf, "{s}{s}{s}", .{ dir, sep, name }) catch null;
+    return std.fmt.bufPrintSentinel(buf, "{s}{s}{s}", .{ dir, sep, name }, 0) catch null;
 }
 
 /// Reads every field of `window.zon`, falling back to `SavedFrame`'s own defaults for whatever
 /// is missing or unparseable (never null — simplifies every caller, which only cares about the
 /// subset of fields it owns).
-/// Reads `window.zon` into `gpa`-owned memory. Free with `std.zon.parse.free(gpa, frame)` — the
-/// region list holds allocated names now, so the old return-by-value-and-forget will not do.
-pub fn loadWindowFile(gpa: std.mem.Allocator, dir: []const u8) SavedFrame {
+/// Reads `window.zon` into `arena` (the region list holds allocated names); `gpa` is scratch.
+pub fn loadWindowFile(gpa: std.mem.Allocator, arena: std.mem.Allocator, dir: []const u8) SavedFrame {
     var path_buf: [1024]u8 = undefined;
     const path = windowFilePath(&path_buf, dir, layout_file) orelse return .{};
     const data = readCapped(gpa, path) catch blk: {
@@ -109,17 +108,16 @@ pub fn loadWindowFile(gpa: std.mem.Allocator, dir: []const u8) SavedFrame {
         break :blk readCapped(gpa, legacy) catch return .{};
     };
     defer gpa.free(data);
-    const data_z = gpa.dupeZ(u8, data) catch return .{};
+    const data_z = gpa.dupeSentinel(u8, data, 0) catch return .{};
     defer gpa.free(data_z);
-    // `fromSliceAlloc`, not `fromSlice`: the region list holds allocated names, and `fromSlice`
-    // asserts at comptime that the result contains no pointers.
-    return std.zon.parse.fromSliceAlloc(
-        SavedFrame,
-        gpa,
-        data_z,
-        null,
-        .{ .ignore_unknown_fields = true },
-    ) catch .{};
+    var diag: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSlice(SavedFrame, .{
+        .gpa = gpa,
+        .arena = arena,
+        .source = data_z,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    }) catch .{};
 }
 
 pub fn writeWindowFile(dir: []const u8, f: SavedFrame) void {
@@ -140,8 +138,9 @@ pub fn writeWindowFile(dir: []const u8, f: SavedFrame) void {
 /// Read-modify-write: keeps whatever frame geometry is on disk, replaces the region list.
 pub fn saveRegions(dir: []const u8, regions: []const SavedRegion) void {
     const gpa = std.heap.page_allocator;
-    var f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var f = loadWindowFile(gpa, arena.allocator(), dir);
     const keep = f.regions;
     f.regions = regions;
     writeWindowFile(dir, f);
@@ -153,8 +152,9 @@ pub fn saveRegions(dir: []const u8, regions: []const SavedRegion) void {
 /// this, so an existing tree on disk is left alone.
 pub fn saveTree(dir: []const u8, tree: ?core.widgets.DockLayout.Snapshot) void {
     const gpa = std.heap.page_allocator;
-    var f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var f = loadWindowFile(gpa, arena.allocator(), dir);
     const keep = f.tree;
     f.tree = tree;
     writeWindowFile(dir, f);
@@ -164,8 +164,9 @@ pub fn saveTree(dir: []const u8, tree: ?core.widgets.DockLayout.Snapshot) void {
 /// The saved seed-tree, rebuilt as a live `DockLayout`, or null when the file has none.
 /// Caller owns the result (`DockLayout.deinit`).
 pub fn loadTree(gpa: std.mem.Allocator, dir: []const u8) ?core.widgets.DockLayout {
-    const f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const f = loadWindowFile(gpa, arena.allocator(), dir);
     const snap = f.tree orelse return null;
     var dock = core.widgets.DockLayout.fromSnapshot(gpa, snap) catch return null;
     dock.animated = true;
@@ -175,8 +176,9 @@ pub fn loadTree(gpa: std.mem.Allocator, dir: []const u8) ?core.widgets.DockLayou
 /// Every region `layout.zon` remembers, in `gpa`-owned memory. Call once at startup; free with
 /// `freeRegions`.
 pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
-    const f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const f = loadWindowFile(gpa, arena.allocator(), dir);
     const out = gpa.alloc(SavedRegion, f.regions.len) catch return &.{};
     var n: usize = 0;
     for (f.regions) |r| {

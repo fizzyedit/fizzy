@@ -111,7 +111,7 @@ pub const File = struct {
 const Parsed = struct { ast: std.zig.Ast, zoir: std.zig.Zoir };
 
 fn parseZon(gpa: Allocator, source: [:0]const u8) ?Parsed {
-    var ast = std.zig.Ast.parse(gpa, source, .zon) catch return null;
+    var ast = std.zig.Ast.parse(gpa, source, .{ .mode = .zon }) catch return null;
     errdefer ast.deinit(gpa);
     var zoir = std.zig.ZonGen.generate(gpa, ast, .{ .parse_str_lits = true }) catch {
         ast.deinit(gpa);
@@ -130,12 +130,12 @@ fn findField(
     container: std.zig.Zoir.Node.Index,
     name: []const u8,
 ) ?std.zig.Zoir.Node.Index {
-    const s = switch (container.get(zoir)) {
+    const s = switch (container.get(&zoir)) {
         .struct_literal => |sl| sl,
         else => return null,
     };
     for (s.names, 0..) |field_name, i| {
-        if (std.mem.eql(u8, field_name.get(zoir), name)) return s.vals.at(@intCast(i));
+        if (std.mem.eql(u8, field_name.get(&zoir), name)) return s.vals.at(@intCast(i));
     }
     return null;
 }
@@ -146,7 +146,7 @@ fn stringField(
     name: []const u8,
 ) ?[]const u8 {
     const node = findField(zoir, container, name) orelse return null;
-    return switch (node.get(zoir)) {
+    return switch (node.get(&zoir)) {
         .string_literal => |s| s,
         else => null,
     };
@@ -154,7 +154,7 @@ fn stringField(
 
 /// 1-based line/column of a node's first token.
 fn locationOf(ast: std.zig.Ast, zoir: std.zig.Zoir, node: std.zig.Zoir.Node.Index) struct { line: u32, column: u32 } {
-    const tok = ast.firstToken(node.getAstNode(zoir));
+    const tok = ast.firstToken(node.getAstNode(&zoir));
     const start = ast.tokenStart(tok);
     var line: u32 = 1;
     var col: u32 = 1;
@@ -188,7 +188,7 @@ fn collectBlock(
     owner_id: ?[]const u8,
     platform: Platform,
 ) Allocator.Error!void {
-    const range = switch (block.get(zoir)) {
+    const range = switch (block.get(&zoir)) {
         .array_literal => |r| r,
         .empty_literal => return,
         else => {
@@ -203,7 +203,7 @@ fn collectBlock(
         const entry = range.at(i);
         const loc = locationOf(ast, zoir, entry);
 
-        switch (entry.get(zoir)) {
+        switch (entry.get(&zoir)) {
             .struct_literal => {},
             else => {
                 c.diag(loc.line, loc.column, "binding must be a struct, e.g. .{{ .keys = \"ctrl+s\", .command = \"fizzy.save\" }}", .{});
@@ -226,7 +226,7 @@ fn collectBlock(
             c.diag(loc.line, loc.column, "binding is missing `.command` (use `.command = null` to unbind)", .{});
             continue;
         };
-        const command: ?[]const u8 = switch (command_node.get(zoir)) {
+        const command: ?[]const u8 = switch (command_node.get(&zoir)) {
             .string_literal => |s| s,
             .null => null,
             else => {
@@ -244,8 +244,8 @@ fn collectBlock(
         // `.args`, when given, is a struct literal of the command's arguments, kept as written.
         var args_text: ?[]const u8 = null;
         if (findField(zoir, entry, "args")) |args_node| {
-            switch (args_node.get(zoir)) {
-                .struct_literal => args_text = ast.getNodeSource(args_node.getAstNode(zoir)),
+            switch (args_node.get(&zoir)) {
+                .struct_literal => args_text = ast.getNodeSource(args_node.getAstNode(&zoir)),
                 .empty_literal => {},
                 else => {
                     c.diag(loc.line, loc.column, "`.args` must be a struct of the command's arguments, e.g. .{{ .line = 1 }}", .{});
@@ -262,7 +262,7 @@ fn collectBlock(
         var when_text: ?[]u8 = null;
         errdefer if (when_text) |w| c.gpa.free(w);
         if (findField(zoir, entry, "when")) |when_node| {
-            switch (when_node.get(zoir)) {
+            switch (when_node.get(&zoir)) {
                 .string_literal => |s| {
                     var unknown: std.ArrayList([]const u8) = .empty;
                     defer unknown.deinit(c.gpa);
@@ -332,10 +332,10 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, platform: Platform) Allocator
     }
 
     if (findField(parsed.zoir, .root, "plugins")) |plugins_node| {
-        switch (plugins_node.get(parsed.zoir)) {
+        switch (plugins_node.get(&parsed.zoir)) {
             .struct_literal => |sl| {
                 for (sl.names, 0..) |id_str, i| {
-                    const id = id_str.get(parsed.zoir);
+                    const id = id_str.get(&parsed.zoir);
                     try collectBlock(&c, parsed.ast, parsed.zoir, sl.vals.at(@intCast(i)), id, platform);
                 }
             },
@@ -577,7 +577,7 @@ test "format round-trips through parse" {
 
     const written = try format(a, first.bindings);
     defer a.free(written);
-    const written_z = try a.dupeZ(u8, written);
+    const written_z = try a.dupeSentinel(u8, written, 0);
     defer a.free(written_z);
 
     var second = try parse(a, written_z, .other);
@@ -631,7 +631,7 @@ test "backslash keys survive a write/read cycle" {
 
     const written = try format(a, f.bindings);
     defer a.free(written);
-    const written_z = try a.dupeZ(u8, written);
+    const written_z = try a.dupeSentinel(u8, written, 0);
     defer a.free(written_z);
     var again = try parse(a, written_z, .other);
     defer again.deinit(a);

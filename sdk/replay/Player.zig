@@ -203,6 +203,14 @@ pub const Transport = struct {
     next: dvui.Rect.Physical = .{},
     track: dvui.Rect.Physical = .{},
     close: dvui.Rect.Physical = .{},
+    /// The tab over the bar that sends it into its dome (`tucked`).
+    tab: dvui.Rect.Physical = .{},
+    /// Where the bar's dome was drawn last frame, physical, as far round it as the pointer is on
+    /// it: what the bar hides into, and a press there brings it back. Null when it was not drawn.
+    dome: ?dvui.Rect.Physical = null,
+    /// Sent into its dome (its tab): the bar stays there, playing or not, until the dome brings it
+    /// back (a press here, the pointer held on it in the overlay).
+    tucked: bool = false,
     /// The speed on the track (`rate`), which a press steps through `speeds`.
     speed: dvui.Rect.Physical = .{},
     /// The demo time the scrubber is held at while a viewer drags it; the player seeks there as
@@ -210,8 +218,8 @@ pub const Transport = struct {
     scrub: ?f64 = null,
     /// The real pointer, physical, as last seen.
     pointer: ?dvui.Point.Physical = null,
-    /// When the real pointer last moved over the app (ns, `wallNs`): the bar shows for a while
-    /// after, then gets out of the demo's way.
+    /// When the real pointer was last on the bar, or the dome brought it (ns, `wallNs`): while
+    /// playing, the bar shows for a while after, then goes back into its dome.
     stirred_ns: ?i128 = null,
     /// The bar opening (`wanted`) or closing, since `since_ns` (`wallNs`), and how open it was
     /// last frame — kept by the overlay, which opens and closes it as a floating surface does.
@@ -845,12 +853,7 @@ fn takeRealInput(self: *Player) void {
 fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     const wd = dvui.currentWindow().data();
     const tr = &self.transport;
-    if (me.action == .motion or me.action == .press) {
-        tr.pointer = me.p;
-        // Stirring near the bottom of the window brings the bar back while playing.
-        const win = dvui.windowRectPixels();
-        if (me.p.y > win.y + win.h * 0.7) tr.stirred_ns = self.wallNs();
-    }
+    if (me.action == .motion or me.action == .press) tr.pointer = me.p;
     if (tr.scrub != null) {
         switch (me.action) {
             .motion => tr.scrub = tr.timeAt(me.p.x, self.duration()),
@@ -865,16 +868,33 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         e.handle(@src(), wd);
         return true;
     }
+    // A press on the dome brings the bar out of it at once, and is not the app's.
+    if (tr.dome) |d| if (d.contains(me.p)) {
+        if (me.action == .press and me.button.pointer() and !tr.closing) {
+            tr.tucked = false;
+            tr.stirred_ns = self.wallNs();
+            dvui.refresh(null, @src(), null);
+        }
+        // Its motion goes on to the app (the dome only sits on it); the rest is the dome's.
+        if (me.action == .motion) return false;
+        e.handle(@src(), wd);
+        return true;
+    };
     const bar = tr.bar orelse return false;
-    if (!bar.contains(me.p)) return false;
-    tr.stirred_ns = self.wallNs();
+    const on_tab = tr.tab.contains(me.p);
+    if (!bar.contains(me.p) and !on_tab) return false;
+    if (!tr.tucked) tr.stirred_ns = self.wallNs();
     // Closing, the bar is on its way out: what is pressed on it on the way does nothing.
     if (tr.closing) {
         e.handle(@src(), wd);
         return true;
     }
     if (me.action == .press and me.button.pointer()) {
-        if (tr.play.contains(me.p)) {
+        if (on_tab) {
+            tr.tucked = true;
+            tr.stirred_ns = null;
+            dvui.refresh(null, @src(), null);
+        } else if (tr.play.contains(me.p)) {
             self.toggle();
         } else if (tr.speed.contains(me.p)) {
             self.stepRate();
@@ -904,6 +924,8 @@ fn claimCursor(self: *Player) void {
     const tr = &self.transport;
     if (tr.scrub != null) return dvui.cursorSet(.hand);
     if (tr.pointer) |p| {
+        if (tr.tab.contains(p)) return dvui.cursorSet(.hand);
+        if (tr.dome) |d| if (d.contains(p)) return dvui.cursorSet(.hand);
         if (tr.bar) |bar| {
             if (bar.contains(p)) {
                 for ([_]dvui.Rect.Physical{ tr.play, tr.prev, tr.next, tr.track, tr.close }) |r| {

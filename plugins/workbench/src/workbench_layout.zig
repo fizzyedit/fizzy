@@ -180,13 +180,15 @@ fn loadPanes(wb: *Workbench) void {
     defer wb.allocator.free(path);
     const data = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, wb.allocator, .limited(1 << 20)) catch return;
     defer wb.allocator.free(data);
-    const bytes = wb.allocator.dupeZ(u8, data) catch return;
+    const bytes = wb.allocator.dupeSentinel(u8, data, 0) catch return;
     defer wb.allocator.free(bytes);
-    const snap = std.zon.parse.fromSliceAlloc(Panes.Snapshot, wb.allocator, bytes, null, .{ .ignore_unknown_fields = true }) catch |err| {
+    var snap_arena: std.heap.ArenaAllocator = .init(wb.allocator);
+    defer snap_arena.deinit();
+    var snap_diag: std.zon.parse.Diagnostics = undefined;
+    const snap = std.zon.parse.fromSlice(Panes.Snapshot, .{ .gpa = wb.allocator, .arena = snap_arena.allocator(), .source = bytes, .diagnostics = &snap_diag, .ignore_unknown_fields = true }) catch |err| {
         dvui.log.warn("workbench: ignoring {s}: {s}", .{ path, @errorName(err) });
         return;
     };
-    defer std.zon.parse.free(wb.allocator, snap);
 
     var loaded = Panes.fromSnapshot(wb.allocator, snap) catch return;
     loaded.animated = true;

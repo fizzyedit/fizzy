@@ -40,7 +40,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ZIG_VERSION: "0.16.0"
+  ZIG_VERSION: "0.17.0"
 
 jobs:
   # Linux + Windows: no fizzy_release environment (no signing secrets needed).
@@ -114,7 +114,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0"
+          dotnet-version: "10.0"  # vpk 1.2 targets .NET 10
 
       # Prefetch before msvcup/package so lazy deps (e.g. zigwin32 from GitHub) get retry
       # backoff; zig build msvcup-setup alone can hit HttpConnectionClosing with no retries.
@@ -278,7 +278,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0"
+          dotnet-version: "10.0"  # vpk 1.2 targets .NET 10
 
       - name: Fetch deps with retries
         shell: bash
@@ -349,7 +349,13 @@ jobs:
           log="$RUNNER_TEMP/package-${{ matrix.channel }}.log"
           n=0
           until [ "$n" -ge 3 ]; do
-            if zig build package -Doptimize=ReleaseFast "-Dtarget=${{ matrix.target }}" 2>&1 | tee "$log"; then
+            # Signing as build options: zig build caches its configuration without regard to the
+            # environment, so build.zig does not read the FIZZY_MACOS_* variables itself.
+            sign=()
+            [ -n "${FIZZY_MACOS_SIGN_APP:-}" ] && sign+=("-Dmacos-sign-app=$FIZZY_MACOS_SIGN_APP")
+            [ -n "${FIZZY_MACOS_SIGN_INSTALLER:-}" ] && sign+=("-Dmacos-sign-installer=$FIZZY_MACOS_SIGN_INSTALLER")
+            [ -n "${FIZZY_MACOS_NOTARY_PROFILE:-}" ] && sign+=("-Dmacos-notary-profile=$FIZZY_MACOS_NOTARY_PROFILE")
+            if zig build package -Doptimize=ReleaseFast "-Dtarget=${{ matrix.target }}" ${sign[@]+"${sign[@]}"} 2>&1 | tee "$log"; then
               exit 0
             fi
             if ! grep -Eq 'HttpConnectionClosing|invalid HTTP response|TlsInitializationFailed|ConnectionResetByPeer|TemporaryNameServerFailure|unable to fetch|connection reset' "$log"; then

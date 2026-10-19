@@ -141,6 +141,24 @@ pub fn isCell(comptime T: type) bool {
 
 /// Compile error for a settings struct field that isn't a `Value(...)` cell. Bare fields used to
 /// be the whole API, so this names the fix rather than just the rule.
+/// True when a value of `T` holds a pointer anywhere in it. A settings payload may hold one only
+/// when it is a string itself: the schema copies strings out of a parse and frees them, and owns
+/// nothing else, so any other pointer would point into a parse's arena after it is freed.
+fn holdsPointers(comptime T: type) bool {
+    return comptime switch (@typeInfo(T)) {
+        .pointer => true,
+        .optional => |o| holdsPointers(o.child),
+        .array => |a| holdsPointers(a.child),
+        .@"struct" => |st| for (st.field_types) |F| {
+            if (holdsPointers(F)) break true;
+        } else false,
+        .@"union" => |u| for (u.field_types) |F| {
+            if (holdsPointers(F)) break true;
+        } else false,
+        else => false,
+    };
+}
+
 fn requireCell(comptime T: type, comptime field_name: []const u8, comptime owner: type) void {
     if (!isCell(T)) @compileError(
         "sdk.settings.Schema: field '" ++ field_name ++ "' of " ++ @typeName(owner) ++
@@ -185,10 +203,10 @@ fn intBounds(comptime IntT: type) struct { min: i64, max: i64 } {
 }
 
 fn enumChoices(comptime EnumT: type) []const []const u8 {
-    const enum_fields = std.meta.fields(EnumT);
-    comptime var names: [enum_fields.len][]const u8 = undefined;
-    inline for (enum_fields, 0..) |f, i| names[i] = f.name;
-    const frozen = names;
+    const names = @typeInfo(EnumT).@"enum".field_names;
+    comptime var out: [names.len][]const u8 = undefined;
+    inline for (names, 0..) |name, i| out[i] = name;
+    const frozen = out;
     return &frozen;
 }
 
@@ -219,17 +237,17 @@ pub fn kindFor(comptime T: type, comptime opts: Options) Kind {
     };
 }
 
-fn buildSettings(comptime T: type) [std.meta.fields(T).len]Setting {
-    const struct_fields = std.meta.fields(T);
-    var out: [struct_fields.len]Setting = undefined;
-    inline for (struct_fields, 0..) |f, i| {
-        requireCell(f.type, f.name, T);
-        const opts = f.type.setting_options;
+fn buildSettings(comptime T: type) [@typeInfo(T).@"struct".field_names.len]Setting {
+    const info = @typeInfo(T).@"struct";
+    var out: [info.field_names.len]Setting = undefined;
+    inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
+        requireCell(Cell, f_name, T);
+        const opts = Cell.setting_options;
         out[i] = .{
-            .key = f.name,
-            .label = opts.name orelse deriveLabel(f.name),
+            .key = f_name,
+            .label = opts.name orelse deriveLabel(f_name),
             .description = opts.description,
-            .kind = kindFor(f.type.Payload, opts),
+            .kind = kindFor(Cell.Payload, opts),
             .secret = opts.secret,
         };
     }
@@ -241,27 +259,29 @@ fn buildSettings(comptime T: type) [std.meta.fields(T).len]Setting {
 /// diff against defaults — works on this, which is why the on-disk format never learned that
 /// cells exist.
 fn Plain(comptime T: type) type {
-    const cell_fields = std.meta.fields(T);
-    var names: [cell_fields.len][:0]const u8 = undefined;
-    var types: [cell_fields.len]type = undefined;
-    var attrs: [cell_fields.len]std.builtin.Type.StructField.Attributes = undefined;
-    inline for (cell_fields, 0..) |f, i| {
-        requireCell(f.type, f.name, T);
-        const P = f.type.Payload;
-        const cell_default = f.defaultValue() orelse @compileError(
-            "sdk.settings.Schema: field '" ++ f.name ++ "' of " ++ @typeName(T) ++
+    const info = @typeInfo(T).@"struct";
+    var types: [info.field_names.len]type = undefined;
+    var attrs: [info.field_names.len]std.lang.Type.Struct.FieldAttributes = undefined;
+    inline for (info.field_names, info.field_types, info.field_attrs, 0..) |f_name, Cell, cell_attrs, i| {
+        requireCell(Cell, f_name, T);
+        const P = Cell.Payload;
+        if (typeTagFor(P) != .string and holdsPointers(P)) @compileError(
+            "sdk.settings.Schema: field '" ++ f_name ++ "' of " ++ @typeName(T) ++ " is a " ++
+                @typeName(P) ++ ", which holds pointers. A setting owns strings and plain values " ++
+                "only; keep a list as a string, or as several settings.",
+        );
+        const cell_default = cell_attrs.defaultValue(Cell) orelse @compileError(
+            "sdk.settings.Schema: field '" ++ f_name ++ "' of " ++ @typeName(T) ++
                 " needs a default value (`= .init(<default>)`) — required so settings.zon only " ++
                 "has to record what differs from it",
         );
         const payload_default: P = cell_default.v;
-        names[i] = f.name;
         types[i] = P;
         attrs[i] = .{ .default_value_ptr = @ptrCast(&payload_default) };
     }
-    const frozen_names = names;
     const frozen_types = types;
     const frozen_attrs = attrs;
-    return @Struct(.auto, null, &frozen_names, &frozen_types, &frozen_attrs);
+    return @Struct(.auto, null, info.field_names, &frozen_types, &frozen_attrs);
 }
 
 /// Type-erased read/write of a `Schema(T).Value` for fizzy's generic settings UI.
@@ -312,7 +332,7 @@ pub const SettingsSchema = struct {
 /// non-default-only persistence (see `diffSerialize`, R12 in plans/PLUGIN_MANIFEST_PLAN.md) diffs
 /// every value against.
 pub fn Schema(comptime T: type) type {
-    const struct_fields = std.meta.fields(T);
+    const info = @typeInfo(T).@"struct";
     const built_settings = buildSettings(T);
 
     return struct {
@@ -327,7 +347,7 @@ pub fn Schema(comptime T: type) type {
 
         /// Payload type of field `i`.
         fn PayloadOf(comptime i: usize) type {
-            return struct_fields[i].type.Payload;
+            return info.field_types[i].Payload;
         }
 
         /// Live payload of a field, by name — cells are transparent to everything in here.
@@ -337,12 +357,12 @@ pub fn Schema(comptime T: type) type {
 
         fn toPayloads(v: T) Payloads {
             var out: Payloads = undefined;
-            inline for (struct_fields) |f| @field(out, f.name) = @field(v, f.name).v;
+            inline for (info.field_names) |f_name| @field(out, f_name) = @field(v, f_name).v;
             return out;
         }
 
         fn fromPayloads(out: *T, p: Payloads) void {
-            inline for (struct_fields) |f| @field(out.*, f.name).v = @field(p, f.name);
+            inline for (info.field_names) |f_name| @field(out.*, f_name).v = @field(p, f_name);
         }
 
         pub fn load(host: anytype, id: []const u8, out: *T) void {
@@ -373,9 +393,9 @@ pub fn Schema(comptime T: type) type {
 
         fn isAllDefault(value: T) bool {
             const p = toPayloads(value);
-            inline for (struct_fields) |f| {
-                const P = f.type.Payload;
-                if (!fieldEqual(P, @field(p, f.name), @field(default_payloads, f.name))) return false;
+            inline for (info.field_names, info.field_types) |f_name, Cell| {
+                const P = Cell.Payload;
+                if (!fieldEqual(P, @field(p, f_name), @field(default_payloads, f_name))) return false;
             }
             return true;
         }
@@ -390,11 +410,11 @@ pub fn Schema(comptime T: type) type {
             var aw: std.Io.Writer.Allocating = .init(gpa);
             errdefer aw.deinit();
             try aw.writer.writeAll(".{\n");
-            inline for (struct_fields) |f| {
-                const P = f.type.Payload;
-                if (!fieldEqual(P, @field(p, f.name), @field(default_payloads, f.name))) {
-                    try aw.writer.print("    .{f} = ", .{std.zig.fmtId(f.name)});
-                    try std.zon.stringify.serialize(@field(p, f.name), .{}, &aw.writer);
+            inline for (info.field_names, info.field_types) |f_name, Cell| {
+                const P = Cell.Payload;
+                if (!fieldEqual(P, @field(p, f_name), @field(default_payloads, f_name))) {
+                    try aw.writer.print("    .{f} = ", .{std.zig.fmtId(f_name)});
+                    try std.zon.stringify.serialize(@field(p, f_name), .{}, &aw.writer);
                     try aw.writer.writeAll(",\n");
                 }
             }
@@ -440,9 +460,9 @@ pub fn Schema(comptime T: type) type {
         /// wholesale would hand a string literal to the allocator. Payloads that aren't strings
         /// or don't contain any need no release at all.
         fn freeOwned(gpa: std.mem.Allocator, value: T) void {
-            inline for (struct_fields) |f| {
-                if (comptime typeTagFor(f.type.Payload) == .string) {
-                    if (fieldIsOwned(f.name, value)) gpa.free(@field(value, f.name).v);
+            inline for (info.field_names, info.field_types) |f_name, Cell| {
+                if (comptime typeTagFor(Cell.Payload) == .string) {
+                    if (fieldIsOwned(f_name, value)) gpa.free(@field(value, f_name).v);
                 }
             }
         }
@@ -458,18 +478,50 @@ pub fn Schema(comptime T: type) type {
 
         pub fn applyZon(out: *T, blob: []const u8) void {
             const gpa = runtime.allocator();
-            const blob_z = gpa.dupeZ(u8, blob) catch |err| {
+            const blob_z = gpa.dupeSentinel(u8, blob, 0) catch |err| {
                 dvui.log.warn("sdk.settings: out of memory parsing settings: {s}", .{@errorName(err)});
                 return;
             };
             defer gpa.free(blob_z);
 
-            const parsed = std.zon.parse.fromSliceAlloc(Payloads, gpa, blob_z, null, .{
+            var arena: std.heap.ArenaAllocator = .init(gpa);
+            defer arena.deinit();
+            var diag: std.zon.parse.Diagnostics = undefined;
+            var parsed = std.zon.parse.fromSlice(Payloads, .{
+                .gpa = gpa,
+                .arena = arena.allocator(),
+                .source = blob_z,
+                .diagnostics = &diag,
                 .ignore_unknown_fields = true,
             }) catch |err| {
                 dvui.log.warn("sdk.settings: failed to parse settings: {s}", .{@errorName(err)});
                 return;
             };
+            // The parse's strings are in `arena`. One that is not the declared default is copied
+            // out, so it is this schema's to free (`freeOwned`); a default stays the default. A
+            // copy that fails frees the ones before it, and the live value is left as it was.
+            var copied: usize = 0;
+            const all_copied = copy: {
+                inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
+                    if (comptime typeTagFor(Cell.Payload) == .string) {
+                        const parsed_str = @field(parsed, f_name);
+                        if (parsed_str.ptr != @field(default_payloads, f_name).ptr) {
+                            @field(parsed, f_name) = gpa.dupe(u8, parsed_str) catch break :copy false;
+                        }
+                    }
+                    copied = i + 1;
+                }
+                break :copy true;
+            };
+            if (!all_copied) {
+                inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
+                    if (comptime typeTagFor(Cell.Payload) == .string) {
+                        if (i < copied and @field(parsed, f_name).ptr != @field(default_payloads, f_name).ptr) gpa.free(@field(parsed, f_name));
+                    }
+                }
+                dvui.log.warn("sdk.settings: out of memory keeping settings", .{});
+                return;
+            }
             freeOwned(gpa, out.*);
             fromPayloads(out, parsed);
         }
@@ -480,10 +532,10 @@ pub fn Schema(comptime T: type) type {
 
         fn getBool(ptr: *anyopaque, field_index: usize) bool {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (@typeInfo(f.type.Payload) != .bool) return false;
-                    return payloadPtr(v, f.name).*;
+                    if (@typeInfo(Cell.Payload) != .bool) return false;
+                    return payloadPtr(v, f_name).*;
                 }
             }
             return false;
@@ -491,9 +543,9 @@ pub fn Schema(comptime T: type) type {
 
         fn setBool(ptr: *anyopaque, field_index: usize, b: bool) void {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (@typeInfo(f.type.Payload) == .bool) payloadPtr(v, f.name).* = b;
+                    if (@typeInfo(Cell.Payload) == .bool) payloadPtr(v, f_name).* = b;
                     return;
                 }
             }
@@ -501,10 +553,10 @@ pub fn Schema(comptime T: type) type {
 
         fn getInt(ptr: *anyopaque, field_index: usize) i64 {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (@typeInfo(f.type.Payload) != .int) return 0;
-                    return @intCast(payloadPtr(v, f.name).*);
+                    if (@typeInfo(Cell.Payload) != .int) return 0;
+                    return @intCast(payloadPtr(v, f_name).*);
                 }
             }
             return 0;
@@ -512,11 +564,11 @@ pub fn Schema(comptime T: type) type {
 
         fn setInt(ptr: *anyopaque, field_index: usize, n: i64) void {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (@typeInfo(f.type.Payload) == .int) {
-                        const p = payloadPtr(v, f.name);
-                        p.* = std.math.cast(f.type.Payload, n) orelse p.*;
+                    if (@typeInfo(Cell.Payload) == .int) {
+                        const p = payloadPtr(v, f_name);
+                        p.* = std.math.cast(Cell.Payload, n) orelse p.*;
                     }
                     return;
                 }
@@ -525,10 +577,10 @@ pub fn Schema(comptime T: type) type {
 
         fn getFloat(ptr: *anyopaque, field_index: usize) f64 {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (@typeInfo(f.type.Payload) != .float) return 0;
-                    return @floatCast(payloadPtr(v, f.name).*);
+                    if (@typeInfo(Cell.Payload) != .float) return 0;
+                    return @floatCast(payloadPtr(v, f_name).*);
                 }
             }
             return 0;
@@ -536,9 +588,9 @@ pub fn Schema(comptime T: type) type {
 
         fn setFloat(ptr: *anyopaque, field_index: usize, n: f64) void {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (@typeInfo(f.type.Payload) == .float) payloadPtr(v, f.name).* = @floatCast(n);
+                    if (@typeInfo(Cell.Payload) == .float) payloadPtr(v, f_name).* = @floatCast(n);
                     return;
                 }
             }
@@ -546,15 +598,15 @@ pub fn Schema(comptime T: type) type {
 
         fn getEnumIndex(ptr: *anyopaque, field_index: usize) usize {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    const P = f.type.Payload;
+                    const P = Cell.Payload;
                     if (@typeInfo(P) != .@"enum") return 0;
                     // Declaration-order position, matching `enumChoices`' `choices` list and
                     // `setEnumIndex`'s `std.meta.tags(P)[choice_index]` — not the enum's raw
                     // backing integer, which for an explicit-value enum like `TabSize`
                     // (`@"2" = 2, @"4" = 4, @"8" = 8`) is out of range for `choices.len`.
-                    const current = payloadPtr(v, f.name).*;
+                    const current = payloadPtr(v, f_name).*;
                     const tags = std.meta.tags(P);
                     inline for (tags, 0..) |t, ti| {
                         if (t == current) return ti;
@@ -567,12 +619,12 @@ pub fn Schema(comptime T: type) type {
 
         fn setEnumIndex(ptr: *anyopaque, field_index: usize, choice_index: usize) void {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    const P = f.type.Payload;
+                    const P = Cell.Payload;
                     if (@typeInfo(P) == .@"enum") {
                         const tags = std.meta.tags(P);
-                        if (choice_index < tags.len) payloadPtr(v, f.name).* = tags[choice_index];
+                        if (choice_index < tags.len) payloadPtr(v, f_name).* = tags[choice_index];
                     }
                     return;
                 }
@@ -581,9 +633,9 @@ pub fn Schema(comptime T: type) type {
 
         fn getString(ptr: *anyopaque, field_index: usize) []const u8 {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (comptime typeTagFor(f.type.Payload) == .string) return payloadPtr(v, f.name).*;
+                    if (comptime typeTagFor(Cell.Payload) == .string) return payloadPtr(v, f_name).*;
                     return "";
                 }
             }
@@ -596,15 +648,15 @@ pub fn Schema(comptime T: type) type {
         fn setString(ptr: *anyopaque, field_index: usize, s: []const u8) void {
             const v = asValue(ptr);
             const gpa = runtime.allocator();
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    if (comptime typeTagFor(f.type.Payload) == .string) {
+                    if (comptime typeTagFor(Cell.Payload) == .string) {
                         const copy = gpa.dupe(u8, s) catch |err| {
-                            dvui.log.warn("sdk.settings: failed to set '{s}': {s}", .{ f.name, @errorName(err) });
+                            dvui.log.warn("sdk.settings: failed to set '{s}': {s}", .{ f_name, @errorName(err) });
                             return;
                         };
-                        if (fieldIsOwned(f.name, v.*)) gpa.free(@field(v.*, f.name).v);
-                        payloadPtr(v, f.name).* = copy;
+                        if (fieldIsOwned(f_name, v.*)) gpa.free(@field(v.*, f_name).v);
+                        payloadPtr(v, f_name).* = copy;
                     }
                     return;
                 }
@@ -613,10 +665,10 @@ pub fn Schema(comptime T: type) type {
 
         fn getZonText(ptr: *anyopaque, field_index: usize, arena: std.mem.Allocator) []const u8 {
             const v = asValue(ptr);
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, 0..) |f_name, i| {
                 if (i == field_index) {
                     var aw: std.Io.Writer.Allocating = .init(arena);
-                    std.zon.stringify.serialize(payloadPtr(v, f.name).*, .{}, &aw.writer) catch {
+                    std.zon.stringify.serialize(payloadPtr(v, f_name).*, .{}, &aw.writer) catch {
                         aw.deinit();
                         return "";
                     };
@@ -632,18 +684,22 @@ pub fn Schema(comptime T: type) type {
         fn setZonText(ptr: *anyopaque, field_index: usize, text: []const u8) bool {
             const v = asValue(ptr);
             const gpa = runtime.allocator();
-            inline for (struct_fields, 0..) |f, i| {
+            inline for (info.field_names, info.field_types, 0..) |f_name, Cell, i| {
                 if (i == field_index) {
-                    const P = f.type.Payload;
-                    const text_z = gpa.dupeZ(u8, text) catch return false;
+                    const P = Cell.Payload;
+                    const text_z = gpa.dupeSentinel(u8, text, 0) catch return false;
                     defer gpa.free(text_z);
-                    const parsed = std.zon.parse.fromSliceAlloc(P, gpa, text_z, null, .{}) catch return false;
-                    // Strings follow the same ownership rule as `setString`; other payloads are
-                    // plain values the parse allocated nothing for.
+                    var arena: std.heap.ArenaAllocator = .init(gpa);
+                    defer arena.deinit();
+                    var diag: std.zon.parse.Diagnostics = undefined;
+                    var parsed = std.zon.parse.fromSlice(P, .{ .gpa = gpa, .arena = arena.allocator(), .source = text_z, .diagnostics = &diag }) catch return false;
+                    // Strings follow the same ownership rule as `setString`: copied out of the
+                    // parse's arena, the schema's to free. Other payloads are plain values.
                     if (comptime typeTagFor(P) == .string) {
-                        if (fieldIsOwned(f.name, v.*)) gpa.free(@field(v.*, f.name).v);
+                        parsed = gpa.dupe(u8, parsed) catch return false;
+                        if (fieldIsOwned(f_name, v.*)) gpa.free(@field(v.*, f_name).v);
                     }
-                    payloadPtr(v, f.name).* = parsed;
+                    payloadPtr(v, f_name).* = parsed;
                     return true;
                 }
             }
@@ -999,4 +1055,14 @@ test "a type with no dedicated control is still a legal setting, edited as zon t
 
     // `.other` payloads take part in diff-vs-default like anything else.
     try testing.expect(try S.diffSerialize(testing.allocator, .{}) == null);
+}
+
+test "a settings payload holds pointers only as a string" {
+    try std.testing.expect(!holdsPointers(u32));
+    try std.testing.expect(!holdsPointers(?[4]f32));
+    try std.testing.expect(!holdsPointers(enum { a, b }));
+    try std.testing.expect(holdsPointers([]const u8));
+    try std.testing.expect(holdsPointers([]const []const u8));
+    try std.testing.expect(holdsPointers(struct { n: u8, name: []const u8 }));
+    try std.testing.expect(holdsPointers(?struct { inner: [2]?*const u8 }));
 }

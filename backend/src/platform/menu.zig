@@ -115,13 +115,13 @@ pub export fn FizzyMenuEnabled(section: c_int, tag: c_int) callconv(.c) bool {
     const h = hooks orelse return true;
     if (h.input_blocked(h.ctx)) return false;
     if (section < 0 or section > 2 or tag < 0) return true;
-    return h.enabled(h.ctx, .{ .section = @enumFromInt(section), .tag = @intCast(tag) });
+    return h.enabled(h.ctx, .{ .section = @fromBackingInt(@intCast(section)), .tag = @intCast(tag) });
 }
 
 pub export fn FizzyMenuTitle(section: c_int, tag: c_int) callconv(.c) ?[*:0]const u8 {
     const h = hooks orelse return null;
     if (section < 0 or section > 2 or tag < 0) return null;
-    return h.title(h.ctx, .{ .section = @enumFromInt(section), .tag = @intCast(tag) });
+    return h.title(h.ctx, .{ .section = @fromBackingInt(@intCast(section)), .tag = @intCast(tag) });
 }
 
 pub export fn FizzyMenuInputBlocked() callconv(.c) bool {
@@ -142,7 +142,7 @@ fn nsString(text: [*:0]const u8) objc.Object {
 
 /// A sentinel copy of `text` for AppKit, from the platform allocator; free with `freeZ`.
 fn dupeZ(text: []const u8) ?[:0]u8 {
-    return dialogs.allocator().dupeZ(u8, text) catch null;
+    return dialogs.allocator().dupeSentinel(u8, text, 0) catch null;
 }
 
 fn setImage(item: objc.Object, symbol: [*:0]const u8, description: [*:0]const u8) void {
@@ -398,7 +398,7 @@ fn applyKey(item: objc.Object, key: ?[]const u8, modifiers: c_ulong) void {
 
 /// The item chosen in `section` since the last call, if one was. Call once a frame, inside it.
 pub fn pollActivation(section: Section) ?Activation {
-    const tag = pending_tag[@intFromEnum(section)].swap(-1, .acq_rel);
+    const tag = pending_tag[@backingInt(section)].swap(-1, .acq_rel);
     if (tag < 0) return null;
     return .{
         .ref = .{ .section = section, .tag = @intCast(tag) },

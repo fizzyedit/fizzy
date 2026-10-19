@@ -60,6 +60,10 @@ window_opacity_light: f32 = default_glass.opacity_light,
 
 /// Opacity of the content area (also drives plugin panes that match fizzy chrome).
 content_opacity: f32 = 0.7,
+/// The most steps a document's undo history keeps, in every editor (`Host.historyLimit`): going
+/// back and then editing keeps what was gone back over, so the line grows each time; past this the
+/// oldest steps go, as an undo history's limit does. Each plugin that owns a history trims its own.
+history_limit: u32 = 10_000,
 
 /// How much a modal dialog or the palette dims everything behind it, 0 (none) to 1.
 modal_dim: f32 = 0.0,
@@ -107,6 +111,16 @@ native_dialogs: bool = true,
 /// that replays exactly (`fizzy.capture`). Nothing of it is written except a capture someone asks
 /// for. A copy of each frame's events: nanoseconds.
 black_box: bool = true,
+
+/// Whether each open document's history is recorded as it is made (`app.Tracks`): what lets the
+/// transport's strip show it and its export share it as a tape. Kept in memory while the document
+/// is open, and in the profile (`<config>/tracks`) once it closes, so it opens again with its
+/// history. Off, documents keep only their undo history, and what was recorded is forgotten.
+record_history: bool = true,
+
+/// How much of the profile kept history may take, all told, in GB (`Tracks.kept_cap`): past it,
+/// the oldest closed documents' history goes first.
+kept_history_gb: f32 = 2,
 
 /// Whether a rebuild of the app's own executable restarts the app into it, keeping every open
 /// document (`ExecutableWatcher`). On in a source build, which is what rebuilds; off in a release
@@ -180,29 +194,17 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]cons
     const data = core.fs.readZ(allocator, dvui.io, path) catch return default(allocator);
     defer allocator.free(data);
 
-    const parsed = parseOnly(allocator, data) catch |err| {
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const parsed = parseOnly(allocator, arena.allocator(), data) catch |err| {
         dvui.log.warn("Could not parse settings.zon ({s}); using defaults.", .{@errorName(err)});
         return default(allocator);
     };
-
-    defer freeParsed(allocator, parsed);
 
     var result = parsed;
     // Own `theme` for the process lifetime (freed in `deinit`); every other field is scalar.
     result.theme = try allocator.dupe(u8, parsed.theme);
     return result;
-}
-
-/// Frees a `parseOnly`/`load` result. Not `std.zon.parse.free` directly: since R12 the file only
-/// records non-default fields, so a missing `theme` is filled by `std.zon.parse` with *this
-/// struct's declared default* — a comptime string literal, not an allocation — and handing that
-/// pointer to the allocator would be an invalid free. Zeroing it first makes the whole-struct
-/// free a no-op for that field (`Allocator.free` returns early on an empty slice) while still
-/// covering any other allocated field.
-pub fn freeParsed(allocator: std.mem.Allocator, parsed: Settings) void {
-    var value = parsed;
-    if (value.theme.ptr == default_theme.ptr) value.theme = "";
-    std.zon.parse.free(allocator, value);
 }
 
 /// Parses `data` (already-read `settings.zon` bytes) into a `Settings` value, ignoring unknown
@@ -211,11 +213,18 @@ pub fn freeParsed(allocator: std.mem.Allocator, parsed: Settings) void {
 /// defaults — defaulting is only correct when there's no existing live state to fall back *to*
 /// (startup); `Editor.reconcileExternalSettingsChange` (external hand-edit reconciliation, R11)
 /// has existing state and must not let a transient torn-write read reset every fizzy field and
-/// every plugin's settings. Caller frees the result with `freeParsed` (not `Settings.deinit`,
-/// which owns the live value's long-lived `theme`).
-pub fn parseOnly(allocator: std.mem.Allocator, data: [:0]const u8) !Settings {
+/// every plugin's settings. The result's strings live in `arena` (`allocator` is the parse's
+/// scratch); `load` copies out the one it keeps.
+pub fn parseOnly(allocator: std.mem.Allocator, arena: std.mem.Allocator, data: [:0]const u8) !Settings {
     @setEvalBranchQuota(10_000);
-    var parsed = try std.zon.parse.fromSliceAlloc(Settings, allocator, data, null, .{ .ignore_unknown_fields = true });
+    var diag: std.zon.parse.Diagnostics = undefined;
+    var parsed = try std.zon.parse.fromSlice(Settings, .{
+        .gpa = allocator,
+        .arena = arena,
+        .source = data,
+        .diagnostics = &diag,
+        .ignore_unknown_fields = true,
+    });
     SettingsMigration.windowGlass(allocator, data, &parsed);
     return parsed;
 }
@@ -237,7 +246,7 @@ fn fieldEqual(comptime FT: type, a: FT, b: FT) bool {
 /// halves of `settings.zon` record just what the user actually changed. An untouched fizzy
 /// serializes to `.{}`; a field hand-written back at its default drops out on the next write.
 /// Reading back is unaffected: `load`/`parseOnly` fill every missing field from these same
-/// defaults (see `freeParsed` for the one ownership wrinkle that creates).
+/// defaults (they are the declared defaults themselves: `load` copies `theme` before keeping it).
 ///
 /// This is *not* the whole `settings.zon` file — plugin settings are a separate
 /// `.plugins = .{ .<id> = .{...}, ... }` field spliced on afterward by
@@ -251,12 +260,12 @@ pub fn serialize(settings: *const Settings, allocator: std.mem.Allocator) ![]u8 
     defer aw.deinit();
 
     var any = false;
-    inline for (std.meta.fields(Settings)) |f| {
-        if (!fieldEqual(f.type, @field(settings, f.name), @field(default_value, f.name))) {
+    inline for (@typeInfo(Settings).@"struct".field_names, @typeInfo(Settings).@"struct".field_types, @typeInfo(Settings).@"struct".field_attrs) |f_name, f_type, _| {
+        if (!fieldEqual(f_type, @field(settings, f_name), @field(default_value, f_name))) {
             if (!any) try aw.writer.writeAll(".{\n");
             any = true;
-            try aw.writer.print("    .{f} = ", .{std.zig.fmtId(f.name)});
-            try std.zon.stringify.serialize(@field(settings, f.name), .{}, &aw.writer);
+            try aw.writer.print("    .{f} = ", .{std.zig.fmtId(f_name)});
+            try std.zon.stringify.serialize(@field(settings, f_name), .{}, &aw.writer);
             try aw.writer.writeAll(",\n");
         }
     }

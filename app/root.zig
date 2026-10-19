@@ -44,8 +44,12 @@ pub const ActivityFeed = @import("ActivityFeed.zig");
 pub const Tracks = @import("Tracks.zig");
 /// A document's transport: its history as a line at the bottom of its pane, undo and redo as seeks.
 pub const HistoryTransport = @import("HistoryTransport.zig");
-pub const TrimBar = @import("TrimBar.zig");
+pub const HistoryFrames = @import("HistoryFrames.zig");
 pub const history_transport = @import("history_transport.zig");
+/// A transport's dome: the glass on an edge its bar hides into and grows out of, its liquid how
+/// far along. The history transport and the demo's tape player share it.
+pub const dome = @import("dome.zig");
+pub const dome_rules = @import("dome_rules.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {
@@ -117,7 +121,7 @@ pub const control = struct {
     /// (`Server.socketPath`), with this user's runtime folder for a config folder too deep.
     pub fn socketPath(gpa: @import("std").mem.Allocator, config_folder: []const u8) ![]u8 {
         const std = @import("std");
-        const runtime: ?[]const u8 = if (@import("builtin").os.tag == .windows) null else for ([_][*:0]const u8{ "TMPDIR", "XDG_RUNTIME_DIR" }) |name| {
+        const runtime: ?[]const u8 = if (@import("builtin").target.os.tag == .windows) null else for ([_][*:0]const u8{ "TMPDIR", "XDG_RUNTIME_DIR" }) |name| {
             if (std.c.getenv(name)) |v| if (std.mem.len(v) > 0) break std.mem.span(v);
         } else null;
         return Server.socketPath(gpa, config_folder, runtime);
@@ -178,6 +182,8 @@ pub const store = struct {
     else
         @import("store/PluginLoader.zig");
     pub const registry = @import("store/registry/store.zig");
+    /// The folders in `plugins/` and what a plugin id may do among them.
+    pub const folders = @import("store/plugin_folders.zig");
 };
 
 // The root of `zig build test-integration`'s `fizzy-app-tests` (`build/app.zig`): the files here
@@ -192,6 +198,8 @@ test {
     _ = store.Loader;
     _ = Tracks;
     _ = HistoryTransport;
+    _ = dome;
     _ = control.routes;
-    _ = TrimBar;
+    _ = HistoryFrames;
+    _ = Recents;
 }

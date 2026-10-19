@@ -151,6 +151,17 @@ pub const VTable = struct {
     folder: *const fn (ctx: *anyopaque) ?[]const u8,
     /// The user palettes folder (config), or null on platforms without one (web).
     paletteFolder: *const fn (ctx: *anyopaque) ?[]const u8,
+    /// The folder kept for the registered plugin `id`'s own files — see `Host.pluginDataFolder`.
+    /// Called from any thread; reads only what `pluginRegistered` made ready. Null for an id no
+    /// registered plugin has, or when it can't be made.
+    pluginDataFolder: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
+    /// A plugin registered, on the main thread (`Host.registerPlugin`): what the app keeps per
+    /// plugin is made ready here, so asks from other threads never walk the host's plugin list.
+    /// Null where the app keeps nothing per plugin.
+    pluginRegistered: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
+    /// A plugin was taken out for good (`Host.retirePlugin`): unregistered, and its `deinit` has
+    /// run, so what the app kept for it goes now. Null where the app keeps nothing per plugin.
+    pluginRetired: ?*const fn (ctx: *anyopaque, id: []const u8) void = null,
     /// Mark fizzy's settings dirty so the debounced autosave persists them.
     markSettingsDirty: *const fn (ctx: *anyopaque) void,
     /// A credential kept for a plugin, by key (`<plugin>.<what>`), outside `settings.zon` —
@@ -161,6 +172,8 @@ pub const VTable = struct {
     /// Fizzy-owned content-area opacity (also drives fizzy's own panes); plugins
     /// read it to match fizzy's own chrome.
     contentOpacity: *const fn (ctx: *anyopaque) f32,
+    /// The most steps a document's history keeps (fizzy's setting); 0 keeps every one.
+    historyLimit: *const fn (ctx: *anyopaque) u32,
     /// The host's dialog frame: the function `core.dialogs.dialog` registers with dvui so
     /// the host draws the window (frost, header, footer, modal dim) around a plugin's body.
     /// Installed into the dylib's `core.dialogs.host_chrome` at load.
@@ -319,6 +332,9 @@ pub const VTable = struct {
     /// Bring the surface `id` into sight wherever it lives: selected in the region showing it,
     /// that region opened if it was shut. False when no region shows it.
     revealSurface: *const fn (ctx: *anyopaque, id: []const u8) bool,
+    /// Put the surface `id` away: shut the open tray showing it, or close the float it is alone
+    /// in. False, changing nothing, otherwise. During a frame it acts once the frame has drawn.
+    hideSurface: *const fn (ctx: *anyopaque, id: []const u8) bool,
     /// Draw the app's glyph for a declared file kind ("image", "source", …), or return false if
     /// this app has no glyph for it.
     ///
@@ -336,6 +352,9 @@ pub const VTable = struct {
     /// Recent project folders (most recent last).
     recentFolderCount: *const fn (ctx: *anyopaque) usize,
     recentFolderAt: *const fn (ctx: *anyopaque, index: usize) ?[]const u8,
+    /// When the recent folder at `index` was last opened, in seconds since the Unix epoch; null
+    /// when not known (a folder remembered before fizzy kept times) or past the end.
+    recentFolderOpened: *const fn (ctx: *anyopaque, index: usize) ?i64,
     /// Reveal `path` in the OS file browser.
     openInFileBrowser: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
     /// True when `abs_path` is ignored by `.fizignore`/`.gitignore` at `project_root`.
@@ -462,6 +481,10 @@ pub fn paletteFolder(self: EditorAPI) ?[]const u8 {
     return self.vtable.paletteFolder(self.ctx);
 }
 
+pub fn pluginDataFolder(self: EditorAPI, id: []const u8) ?[]const u8 {
+    return self.vtable.pluginDataFolder(self.ctx, id);
+}
+
 pub fn markSettingsDirty(self: EditorAPI) void {
     self.vtable.markSettingsDirty(self.ctx);
 }
@@ -484,6 +507,10 @@ pub fn frostPane(self: EditorAPI, id: dvui.Id, rect: dvui.Rect.Physical, corners
 
 pub fn contentOpacity(self: EditorAPI) f32 {
     return self.vtable.contentOpacity(self.ctx);
+}
+
+pub fn historyLimit(self: EditorAPI) u32 {
+    return self.vtable.historyLimit(self.ctx);
 }
 
 pub fn isMaximized(self: EditorAPI) bool {
@@ -640,6 +667,10 @@ pub fn revealSurface(self: EditorAPI, id: []const u8) bool {
     return self.vtable.revealSurface(self.ctx, id);
 }
 
+pub fn hideSurface(self: EditorAPI, id: []const u8) bool {
+    return self.vtable.hideSurface(self.ctx, id);
+}
+
 pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) bool {
     return self.vtable.drawFileKindGlyph(self.ctx, kind, color);
 }
@@ -662,6 +693,10 @@ pub fn recentFolderCount(self: EditorAPI) usize {
 
 pub fn recentFolderAt(self: EditorAPI, index: usize) ?[]const u8 {
     return self.vtable.recentFolderAt(self.ctx, index);
+}
+
+pub fn recentFolderOpened(self: EditorAPI, index: usize) ?i64 {
+    return self.vtable.recentFolderOpened(self.ctx, index);
 }
 
 pub fn openInFileBrowser(self: EditorAPI, path: []const u8) !void {

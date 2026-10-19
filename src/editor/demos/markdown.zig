@@ -1,5 +1,5 @@
 //! Markdown, previewed as you type: a page written from nothing, its preview following along.
-const Script = @import("app").automation.Script;
+const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
 
 const start =

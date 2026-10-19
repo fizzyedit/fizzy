@@ -156,6 +156,10 @@ zig fetch --save=fizzy \
   https://github.com/fizzyedit/fizzy/releases/download/sdk-v0.2.0/fizzy-sdk-v0.2.0.tar.gz
 ```
 
+On Zig 0.17, delete the tarball `zig fetch` just cached before your first `zig build`
+(`rm ~/.cache/zig/p/<the hash it printed>.tar.gz`): a build unpacks it with its top folder kept
+and reports a hash mismatch (`docs/PITFALLS.md`).
+
 which produces:
 
 ```zig
@@ -163,7 +167,7 @@ which produces:
 .{
     .name = .my_plugin,
     .version = "0.1.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{ "build.zig", "build.zig.zon", "plugin.zig", "plugin.zig.zon", "src" },
     .fingerprint = 0x0000000000000000, // zig fills this in on first `zig build`
     .dependencies = .{
@@ -222,6 +226,11 @@ straight from `plugin.zig.zon` (§2.2), so there is exactly one source of truth.
 libraries (vendored C, packed assets). See `fizzy.plugin.addCModule` and
 [pixi's `build.zig`](https://github.com/fizzyedit/pixi/blob/main/build.zig) for a worked example
 with vendored C deps.
+
+A plugin that ships a program of its own (a helper it starts, as the agent plugin starts
+`fizzy-mcp`) builds it as usual and passes it to `fizzy.plugin.installBeside(b, exe, .{ .plugin =
+"<id>" })`: `zig build install` then copies it into the plugin's own directory, beside the
+library and still executable, where the plugin finds it at run time.
 
 Under `create`, the dylib's C-ABI entry point (the five symbols the host looks up at `dlopen`
 time — ABI fingerprint check, the `register` entry, and injection hooks for the
@@ -541,6 +550,7 @@ inventing a kind of panel never touches the ABI. Fizzy's shipped shapes accept t
 | `sdk.keywords.ide.sidebar` | `sidebar`, `explorer` | things you pick *from* — file trees, outlines |
 | `sdk.keywords.ide.panel` | `bottom`, `panel`, `output` | things a task *produces* — logs, diagnostics |
 | `sdk.keywords.ide.main` | `main`, `center`, `workspace` | the thing being worked on |
+| `sdk.keywords.ide.home` | `home` | what the main area shows while nothing is open (below) |
 | `sdk.document.keywords` | `document` | one open document (the app registers these, see below) |
 
 A keyword may name a place *inside* another, dot-separated (`main.document`). `keywords.Fit`
@@ -597,6 +607,52 @@ Outside a region's draw, `host.assignSurfaces(name, ids)` / `assignedSurfaces(na
 `assignedRegionNames()` / `selectInRegion(name, id)` read and write the same assignment list
 the picker uses — a tab dragged to another pane is an assignment edit, and session restore is
 the assignment list read back.
+
+**Showing and putting away a view.** A plugin names its view, never a place, so a "Show X"
+command works wherever the user moved it, in any app's shape:
+
+```zig
+_ = host.revealSurface(id);                               // show it
+if (!host.hideSurface(id)) _ = host.revealSurface(id);    // toggle it
+```
+
+- `revealSurface(id)` selects `id` in the region that shows it (where the user moved it, floats
+  included) and opens that region if it was shut or folded away. False when no region shows it.
+- `hideSurface(id)` puts it away as the user would, in two cases only:
+  - **It is what a tray shows.** A tray is a place the shape declared resizable and the user did
+    not make by splitting (fizzy's sidebar and bottom panel). If it is open and showing `id`, it
+    shuts, with whatever else it holds, as its own close does. `revealSurface` opens it again at
+    the size the user left it.
+  - **It is alone in a float.** The float closes as its close button does, and the view goes back
+    to the place it floated out of. There it may well be in sight again.
+
+  Anything else returns false and changes nothing: a view in Main, in a place a split made (of
+  a tray too), in a plugin's pane, behind another view, in a float with others, or already out
+  of sight (its tray shut or folded).
+- **Asked from a draw.** Mid-frame, `hideSurface` answers at once and acts when the frame has
+  drawn, since the places it changes are being drawn. `revealSurface` acts at once, so a hide
+  asked first in a frame still lands after a reveal asked later in it: make one call a frame.
+
+**A home page.** What the main area shows while nothing is open (the workbench's logo, New File,
+Open Folder) is a place too. While its one document pane is empty, the workbench declares a
+region named `Home` inside it with keywords `sdk.keywords.ide.home` (`{"home"}`) and
+`shows = .one`, and draws the surface that region accepts. With no such surface the region
+declines, and the workbench draws its own page. A start page is just a surface that says what it
+is:
+
+```zig
+try host.registerSurface(.{ .id = "graphl.start", .title = "Start",
+    .keywords = sdk.keywords.ide.home, .draw = drawStart });
+```
+
+It needs no startup code. The place exists only while nothing is open, so a document opening
+puts the home page away, and so does a restored session landing a few frames after startup. The
+last document closing brings it back. None of the shape's own regions accept a `home` surface,
+so it never shows up as a tab in Main. When two plugins offer a home page, the first one
+registered shows until someone chooses. An app chooses with
+`host.assignSurfaces("Home", &.{"graphl.start"})`, the same list the picker writes, and a user
+chooses in Settings › Layout. A shape without the workbench has no `Home` place unless it
+declares a region that takes `home` itself.
 
 **Dragging a view onto a region is the app's gesture, everywhere.** While a view is dragged,
 the region under the pointer shows its drop (`core.widgets.DropZones`): a cluster of glass
@@ -679,6 +735,11 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   holds, leaving it as it was. Nobody recording, nothing is encoded. `text` implements both:
   each step is a transaction's edits, removed and inserted bytes, and the selection after. Fill
   `top` (the entry on top once the step is done) so Undo can say whose step it takes back.
+  `restoreHistory(doc, history)` puts a document's history back as its track recorded it
+  (`sdk.Plugin.RestoredHistory`: each entry's id and parts, its `added` effect and every `joined`
+  one, and how many are applied), the document already standing where they leave it: a document
+  opened again picks up the history it had. Keep each entry's id; refuse a history that does not
+  undo to a document, leaving the history as it was. `text` implements it.
 - **Authors** — who made each step (`sdk.Author`: the person, an agent, a tape;
   `plans/SHARED_HISTORY_PLAN.md`). The host keeps it by step id; owners never store one. A plugin
   changing a document on someone's behalf acts as them around the commands it runs
@@ -695,7 +756,9 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   fires).
 - **Saving** — `documentSnapshot` / `encodeSnapshot` / `releaseSnapshot` (a snapshot on the UI
   thread, encoded on Fizzy's worker), `documentWritten`, and `saveQuestion` (asked before a save,
-  e.g. "flatten layers?"). Fizzy runs every save itself.
+  e.g. "flatten layers?"). Fizzy runs every save itself. `documentBytes` is the same bytes for a
+  copy that is not a save (a crash checkpoint, a restart, a tape's file), taken with none of a
+  save's bookkeeping; without it Fizzy takes a snapshot and encodes it.
 - Folder and file changes are **events**, not hooks (§3.10a): `fizzy.folder.opened` / `.closed`,
   `fizzy.files.changed`, `fizzy.document.changed`.
 - **Contributions** — `contributeMenu`, `contributeKeybinds`.
@@ -757,9 +820,9 @@ A path can be on the disk, inside a zip the user opened, or on a cloud drive a p
 the same code for all three. For *documents* the same is true once an owner implements the
 storage-agnostic pair:
 
-- `documentBytes(doc, allocator) → []u8` — the saved form. The host writes it wherever the
-  path's filesystem is, with a modified-time precondition so an edit made elsewhere is a
-  conflict rather than an overwrite.
+- `documentSnapshot` / `encodeSnapshot` — the saved form, taken as the save starts and encoded
+  on a worker. The host writes it wherever the path's filesystem is, with a modified-time
+  precondition so an edit made elsewhere is a conflict rather than an overwrite.
 - `documentWritten(doc, path)` — the write landed; clear dirty state, and adopt `path` if it
   is not the document's own (Save As).
 
@@ -876,6 +939,35 @@ Your own state is just a variable you own — a module-level `var`, adopted into
 during `register` and read back via `@ptrCast` in your vtable functions. There is no separate
 `Globals`/storage file to write.
 
+What a plugin keeps **between runs** that is not a setting — its recents, an index, a cache —
+goes in **`host.pluginDataFolder(&plugin)`**: `<config>/plugin-data/<id>`, the id in lowercase.
+Plugin ids are unique ignoring case (`host.registerPlugin` refuses `Graphl` beside `graphl`, and
+a loader asks `host.pluginByIdIgnoringCase` before it opens a build), so the folder is the
+plugin's alone on every filesystem. It follows the app's config folder, so a `FIZZY_PROFILE`
+sandbox gets its own, and it is not `plugins/<id>`, the folder the plugin is installed in, which
+an update replaces and an uninstall deletes. It is always local, whether or not the open folder
+is on a mount (§3.12).
+
+- The path is borrowed for the life of the app. The folder is made on the first call and made
+  sure of again on a call a second or more after the last, so a plugin whose write into a kept
+  path fails with `FileNotFound` calls again (a second later, if it called just now). Safe from
+  any thread (an indexer, an LSP client): the app sets each plugin's entry up as it registers.
+- It is yours from `register` through your `deinit`: an app unloads a plugin with
+  `host.retirePlugin` (your registrations go, then your `deinit`, then the app is told), so
+  writing your state out in `deinit` works, and from then on the path is not handed out until
+  you are back. `host.unregisterPlugin` alone releases it at once.
+- Null when no app is installed (a unit test's bare `Host`), when the plugin is not registered,
+  when its id is not a plain identifier (letters, digits, `-`, `_`), or when the folder could not
+  be made: logged once, and tried again on a call a few seconds later.
+- **On the web**, as with `paletteFolder`, the path names no directory: it is the prefix under
+  which `core.fs.read`, `readZ`, `write` and `remove` keep files in the page's storage. Those
+  four calls do the same on the desktop, so a plugin that uses them needs no web case;
+  `std.Io.Dir` calls on the path fail there.
+- **Uninstall leaves it**, as it leaves the plugin's settings, so a reinstall picks up where it
+  was. Removing it too would be an option of the app's uninstall (fizzy's
+  `Editor.uninstallPlugin`), not built yet.
+- A credential goes in `host.setSecret` instead, never in a file here.
+
 ### 3.4 Commands — how a plugin contributes its *own* features
 
 Anything a plugin **invokes** rather than implements as a Fizzy callback — plugin-specific
@@ -966,6 +1058,30 @@ fn goToLine(state: *anyopaque, args: GoToLine.Args, call: *sdk.Command.Call) any
 - **`run` and `runWith`.** A command needs at least one; `registerCommand` refuses one with
   neither. Keep `run` alongside `runWith` only if invoking with no arguments should do something
   of its own (open your own dialog, say) rather than ask.
+- **One registration per id, unless you override.** An id has one registration of its own,
+  its *base*. **A second registration of an id without `replaces` is ignored** while the first
+  stands: `registerCommand` logs a warning naming both plugins and returns without an error, so
+  check the log if your command never runs. It is kept in reserve, and takes the first's place
+  if that one's plugin is unloaded. Registering your *own* command again (same id, same plugin)
+  updates it in place, with no warning.
+- **Overriding one.** To take a command over on purpose (an app's plugin replacing `fizzy.about`
+  or `fizzy.reportBug`), register it with `.replaces = true`, an *override*. The newest override
+  is the command everyone runs (menus, keys, the palette); registering your override again
+  replaces your earlier one and makes it the newest. An override may come before its base, and
+  a base that registers later, or again after its plugin reloads, waits beneath it. When your
+  plugin is unloaded, the next override down, or the base, is the command again.
+  - To add to a command rather than replace it, call through to what you replaced with
+    `host.callReplaced(&plugin, id, args, arena)`: the next older override, else the base.
+    While your override is running (or what it reached through `callReplaced`), running `id` by
+    id from inside would run your override again: `callCommand` refuses it (`.failed`) and
+    `runCommand` returns `error.CommandRanItself`. A command with no override running its own id
+    is not stopped.
+  - A claim on a document holds the commands its owner registered, and any command named for
+    it: the plugin whose id is the longest prefix of the command id before a `.` (`pixi.undo`,
+    `acme.paint.undo` for a plugin `acme.paint`). So another plugin's override of `pixi.undo` is
+    held on a claimed pixi document, even registered before pixi's own.
+  - New File commands (`<id>.new`, `<id>.new.<kind>`) cannot be overridden yet: such an
+    override is ignored with a warning.
 - **Who can call it.** Any plugin can run any command with arguments, as it already could without
   them. Treat arguments as input from outside: check them as you would a user's.
 - **Listing.** `host.commandCount()` / `host.commandAt(i)` walk the registry, `params` included,
@@ -1208,10 +1324,17 @@ The SDK ships definitions for the services in this ecosystem, in
 | `"markdown"` | `markdown` | Render a markdown byte slice into the current dvui parent (native only — absent on web) |
 | `"wikilink"` | any indexer (e.g. `brain`) | Resolve `[[Note]]` to a file, plus completion candidates and index state |
 | `"automation"` | the application (fizzy: `app/automation/Service.zig`, over its live driver) | `play` a live tape — input on the app as it is, built with the `tape` module and handed over as ZON or binary bytes — and get a ticket to ask its `outcome` (finished, or interrupted / timed out / stopped before which op); `stop` your own tape; `settled` when nothing is in flight; `snapshot` / `snapshotText` for what is on screen as ZON, a line per widget a person acts on or a tape aims at (role, name, tag, rect, parent — `replay.Snapshot`). One tape at a time, refused while a demo plays; a person's input stops it. For plugin tests, macros, tutorials |
+| `"demos"` | the application (fizzy: `src/editor/Demos.zig`, over its demo player) | `list` every demo the app can play — its own, and each one a plugin registered with `host.registerDemo` (a name, a title, the tape as ZON or binary bytes, copied by the host and dropped when the plugin goes) — with each one's length, chapters and where it came from; `play` one by name, from a chapter if asked; `current` names the one playing; `generation` moves when the list does. A demo opens on a keyframe and sets the person's session aside while it plays; refused over unsaved work or while a live tape drives. For a guides browser, a plugin's own demos, an agent |
 
 Everything a plugin might reasonably ask *fizzy* for lives on `Host` instead — `openFile`,
 `closeDocById`, `docFromPath`, `revealPosition`, `setProjectFolder`, `isPathIgnored`, … — where it
 degrades to a no-op in an app that ships no workbench rather than being unreachable.
+
+The app's recent folders are `host.recentFolderCount()` and `host.recentFolderAt(i)`, oldest
+first: the last is the folder opened most recently. `host.recentFolderOpened(i)` says when it was
+last opened, in seconds since the Unix epoch, which is what a home page groups recents by
+("today", "this week"). It is null for a folder remembered before fizzy kept times (a
+`recents.zon` an older fizzy wrote), so order by the index and put those under "earlier".
 
 **Every lookup must tolerate absence.** A service's provider may be uninstalled, disabled, or
 simply not built for this target — `files` and `markdown` are missing on web, and `wikilink` is
@@ -1628,7 +1751,7 @@ jobs:
     permissions:
       contents: write
     with:
-      zig-version: "0.16.0"
+      zig-version: "0.17.0"
 ```
 
 Bump the `sdk-v*` tag your `build.zig.zon` pins when you want a new SDK; the next tag's manifest picks up

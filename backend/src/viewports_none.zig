@@ -4,9 +4,12 @@
 //! null, so an app's floats, menus and dialogs stay in the main window.
 //!
 //! An app that builds on either kind of backend imports this beside it and takes the backend's
-//! own where it has one:
+//! own where its build linked the backend package (fizzy passes that as a build option):
 //!
-//!     const viewports = if (@hasDecl(backend, "viewports")) backend.viewports else @import("viewports_none");
+//!     const viewports = if (linked_fizzy_backend) backend.viewports else @import("viewports_none");
+//!
+//! Not `@hasDecl(backend, "viewports")`: a declaration that loses its `pub` is invisible to it,
+//! and the app would quietly keep every float in its main window.
 const dvui = @import("dvui");
 
 /// A window's Liquid Glass this frame, as the backend package's (`platform.window.WindowGlassLook`):
@@ -60,12 +63,20 @@ pub const Picture = struct {
 pub fn sizedTarget(_: *?dvui.Texture.Target, _: u32, _: u32) ?dvui.Texture.Target {
     return null;
 }
+pub fn keptTarget(_: *const Viewport, _: *?dvui.Texture.Target, _: u32, _: u32) ?dvui.Texture.Target {
+    return null;
+}
+/// No windows besides the main one: dvui's own screen only.
+pub fn publishScreens(_: ?dvui.Rect.Natural) void {
+    dvui.screensSet(&.{});
+}
 pub fn inMain(_: *const Viewport) Rect {
     return .{};
 }
 pub const os_frame = false;
 pub const os_buttons = false;
 pub const carries = false;
+pub const carry_material = false;
 pub fn seeThrough(_: *Viewport, _: bool) void {}
 pub fn fade(_: *Viewport, _: f32) void {}
 pub fn maximized(_: *const Viewport) bool {
@@ -156,6 +167,7 @@ pub fn dragMove(_: *Viewport) bool {
     return false;
 }
 pub fn minSize(_: *Viewport, _: f32, _: f32) void {}
+pub fn maxSize(_: *Viewport, _: f32, _: f32) void {}
 pub fn setTitle(_: *Viewport, _: []const u8) void {}
 pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
     return false;

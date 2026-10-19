@@ -2,15 +2,15 @@
     .name = .fizzy_backend,
     .version = "0.1.0",
     .fingerprint = 0x2bf08855a368b9a8,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         // SDL3 for the window, its events and the GPU: upstream SDL, patched at build time with
         // `patches/sdl` (marler8997/zig-patch), built by fizzyedit/sdl_zig's `fizzy` branch, which
         // takes the patched tree (`-Dsdl_source`). How the patches are made and how SDL is updated:
         // fizzy's docs/DEPENDENCIES.md. Pinned here, by the package that uses them, and nowhere else.
         .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/a99807da9b6217422449a824cb24de4d97f482a3.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0f8KqgC0YeoFofQA7ZnPQWkyEVe2MJ-jhVnFqYk9",
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/ef7eb36b0b28aeac933d1bcdc152c56654891780.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0fEMqgARU41cFUViN07xvtpE9OeVQ6bDHadi1OfP",
             .lazy = true,
         },
         // The release sdl_zig's own `.sdl` pins: the same tarball, fetched once.
@@ -26,8 +26,8 @@
         },
         // AppKit from Zig, for the macOS platform pieces (and an app's own, `objcModule`).
         .zig_objc = .{
-            .url = "https://github.com/foxnne/zig-objc/archive/c8de82ff80281215ad92900866dab7103a8efa8b.tar.gz",
-            .hash = "zig_objc-0.0.0-Ir_Sp9gsAQCPAJc0oF5xoWePHWP6Y6tCphDeyNUThJoi",
+            .url = "https://github.com/foxnne/zig-objc/archive/f90394bce753153e387117cff6bf5536cd08f0c5.tar.gz",
+            .hash = "zig_objc-0.0.0-Ir_Sp1orAQDJQI7i3urWjRRHXVlB7ZG4pbKY3H8hX1AU",
             .lazy = true,
         },
         // Win32 from Zig, for the Windows platform pieces (and an app's own, `win32Module`).

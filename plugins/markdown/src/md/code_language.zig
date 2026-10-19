@@ -121,6 +121,6 @@ test "an empty or unknown tag has no extension" {
 }
 
 test "an absurdly long tag is rejected rather than overflowing the buffer" {
-    const long = "a" ** (max_tag_len + 40);
-    try testing.expect(extensionForTag(long) == null);
+    const long: [max_tag_len + 40]u8 = @splat('a');
+    try testing.expect(extensionForTag(&long) == null);
 }

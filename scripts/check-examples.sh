@@ -55,11 +55,18 @@ for repo in example-app example-plugin; do
 done
 
 (cd "$work/example-plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+# example-app bundles example-plugin (`hello`), pinned by URL: the copy here, on this tree's SDK.
+pack "$work/example-plugin" | gzip > "$work/example-plugin.tar.gz"
 (
   cd "$work/example-app"
+  zig fetch --save=hello "$work/example-plugin.tar.gz" >/dev/null
   zig fetch --save=fizzy "$work/fizzy.tar.gz" >/dev/null
   # Its replay app depends on the plugin SDK alone: this tree's, packed as a release would be.
   zig fetch --save=fizzy_sdk "$sdk_tarball" >/dev/null
+  # So do the plugins it carries, each pinning a released SDK of its own.
+  for plugin in plugins/*/; do
+    (cd "$plugin" && zig fetch --save=fizzy "$sdk_tarball" >/dev/null)
+  done
 )
 
 # The plugin build installs the plugin: into a profile of its own, not this machine's fizzy.

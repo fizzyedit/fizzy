@@ -683,7 +683,7 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
         const me = e.evt.mouse;
         if (!me.button.touch()) continue;
 
-        const slot_signed = @intFromEnum(me.button) - @intFromEnum(dvui.enums.Button.touch0);
+        const slot_signed = @backingInt(me.button) - @backingInt(dvui.enums.Button.touch0);
         if (slot_signed < 0 or slot_signed >= self.touches.len) continue;
         const slot: usize = @intCast(slot_signed);
 
@@ -1224,7 +1224,7 @@ pub fn processEvents(self: *CanvasWidget) void {
                     self.pan_fling_x.begin();
                     self.pan_fling_y.begin();
                     if (me.button.touch()) {
-                        const slot_signed = @intFromEnum(me.button) - @intFromEnum(dvui.enums.Button.touch0);
+                        const slot_signed = @backingInt(me.button) - @backingInt(dvui.enums.Button.touch0);
                         if (slot_signed >= 0 and slot_signed < self.touches.len) {
                             self.scroll_pan_touch_slot = @intCast(slot_signed);
                         }
@@ -1238,7 +1238,7 @@ pub fn processEvents(self: *CanvasWidget) void {
                         self.empty = .pending;
                         self.empty_is_touch = me.button.touch();
                         self.empty_slot = if (me.button.touch()) slot: {
-                            const s = @intFromEnum(me.button) - @intFromEnum(dvui.enums.Button.touch0);
+                            const s = @backingInt(me.button) - @backingInt(dvui.enums.Button.touch0);
                             break :slot if (s >= 0 and s < self.touches.len) @intCast(s) else 0;
                         } else 0;
                         self.empty_down = true;
