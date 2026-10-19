@@ -405,6 +405,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // once they are most of the way out. Without a grip, it fades.
     const from: ?dvui.Rect.Physical = if (!opts.history or p >= 1) null else if (opts.corner) |c| c.box(s) else if (gripRect(area, dome.radius, opts.edge)) |g| wrs.rectToPhysical(g) else null;
     const out = dome.smooth(p);
+    const home: ?dvui.Rect.Physical = if (opts.corner) |c| c.home(s) else null;
     // Out of a corner vial, which is whole at rest, the glass is whole throughout: eased toward a
     // dome's quiet presence, it was glass at partial alpha — a hole — and the vial at full alpha
     // the frame it went back in, a flash.
@@ -417,7 +418,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // strip grows, so the pictures sit inside them.
     const line_radius = std.math.lerp(phys[1].h / 2, core.corners.scaled(core.corners.card) * s, @min(1, grown * 1.5));
     for (phys, bubbles[0..4], 0..) |r, *b, i| b.* = .{
-        .rect = if (from) |f| dome.pull(f, r, p, bud_delays[i], bud_arcs[i]) else r,
+        .rect = if (from) |f| budded(f, home, r, p, i) else r,
         .radius = if (i == 1 and grown > 0) line_radius else null,
         // Lit under the pointer only once the bar is out: moving, a lit bubble was a lighter drop
         // among the rest, its light running across the necks as they joined.
@@ -434,7 +435,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (self.tab) {
         tab_index = count;
         bubbles[count] = .{
-            .rect = if (from) |f| dome.pull(f, tab_p, p, bud_delays[4], bud_arcs[4]) else tab_p,
+            .rect = if (from) |f| budded(f, home, tab_p, p, 4) else tab_p,
             .light = if (p >= 1 and tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
         };
         count += 1;
@@ -455,8 +456,17 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         // (the tab into the bar). The one soft shadow of the merged shape is the orb's
         // (`plans/LIQUID_EDGE_PLAN.md`); the rim and lens are what set the glass off meanwhile.
         // Out of a corner vial, cut by the card's outline, curve and all, as the vial is at rest.
-        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = dome.merge(p, 14), .shadow = 0, .edge = if (opts.corner) |c| c.place() else null });
+        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = if (opts.corner != null) dome.cornerMerge(p, 14) else dome.merge(p, 14), .shadow = 0, .edge = if (opts.corner) |c| c.place() else null });
     }
+    // A corner vial's contents change with it rather than fade: its liquid drains as the stream
+    // pours out into the line and fills again as it pours back, and its icon shrinks into the
+    // corner with the vial and grows back with it, so the vial the bar ends as is the vial at rest.
+    if (opts.corner) |c| if (from != null) {
+        const t = 1 - dome.smooth(p);
+        const look: dome.Look = .{ .fill = fill * (1 - dome.smooth(p / vial_drain)), .tilt = tilt };
+        dome.paintCornerLiquid(c, t, look);
+        dome.cornerIcon(c, t, look, float.data().borderRectScale().r);
+    };
     // What is on the bubbles comes once they are most of the way out; the liquid comes with them.
     const shape_alpha = dvui.alpha(1);
     if (from != null) {
@@ -514,6 +524,18 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
 /// stacked on another; and how high each arcs, so their paths fan out.
 const bud_delays = [5]f32{ 0.27, 0, 0.18, 0.09, 0.34 };
 const bud_arcs = [5]f32{ 1.25, 0.6, 1.0, 0.8, 1.6 };
+
+/// How far out of a corner vial the bar is when the vial's liquid has all poured out into the line
+/// (and, coming back, when it starts to fill again).
+const vial_drain: f32 = 0.45;
+
+/// Bubble `i` of the bar, its place `to`, `p` of the way out of the grip at `from`: pulled out of
+/// a dome's bud, or out of a corner vial's home on its centre (`dome.Corner.home`), into which it
+/// sinks going back.
+fn budded(from: dvui.Rect.Physical, home: ?dvui.Rect.Physical, to: dvui.Rect.Physical, p: f32, i: usize) dvui.Rect.Physical {
+    const h = home orelse return dome.pull(from, to, p, bud_delays[i], bud_arcs[i]);
+    return dome.pullFrom(h, dome.bud(from).h, to, p, bud_delays[i], bud_arcs[i]);
+}
 
 /// macOS's trim yellow.
 const yellow: dvui.Color = .{ .r = 0xF5, .g = 0xC0, .b = 0x2E };

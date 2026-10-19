@@ -76,10 +76,20 @@ pub fn emerge(p: f32, delay: f32) f32 {
 /// rather than travel stacked); on one smooth curve (`smooth`) both ways, so going back is coming
 /// played backwards — in the reverse order, as the later a bubble buds, the sooner it is in.
 pub fn pull(from: dvui.Rect.Physical, to: dvui.Rect.Physical, p: f32, delay: f32, arc: f32) dvui.Rect.Physical {
+    const a = bud(from);
+    return pullFrom(a, a.h, to, p, delay, arc);
+}
+
+/// `pull` from `home` (physical) rather than a dome's bud, travelling as a drop up to `size`
+/// across (physical): a bubble leaving `home` changes from `home`'s shape to its drop's as it sets
+/// off, and one coming back changes into `home` as it arrives. A corner vial's home is the vial's
+/// own circle (`Corner.home`), so the bubbles going back become the vial rather than sinking into
+/// it, and the glass the bar ends as is the vial at rest.
+pub fn pullFrom(home: dvui.Rect.Physical, size: f32, to: dvui.Rect.Physical, p: f32, delay: f32, arc: f32) dvui.Rect.Physical {
     const k = std.math.clamp((p - delay) / (1 - delay), 0, 1);
     const t = smooth(k);
-    if (t <= 0) return bud(from);
-    const a = bud(from);
+    if (t <= 0) return home;
+    const a = home;
     const ac: [2]f32 = .{ a.x + a.w / 2, a.y + a.h / 2 };
     const bc: [2]f32 = .{ to.x + to.w / 2, to.y + to.h / 2 };
     // Up off the straight line, most of the way out at the middle of the way.
@@ -87,7 +97,9 @@ pub fn pull(from: dvui.Rect.Physical, to: dvui.Rect.Physical, p: f32, delay: f32
     const lift = dist * pull_arc * arc * @sin(std.math.pi * std.math.clamp(t, 0, 1));
     const c: [2]f32 = .{ std.math.lerp(ac[0], bc[0], t), std.math.lerp(ac[1], bc[1], t) - lift };
     // A drop while it travels, as big as the grip's bud at most; its place's size once near it.
-    const drop = @min(a.h, @min(to.w, to.h) * pull_drop);
+    // Leaving home it goes from home's size to the drop's, so one arriving takes home's.
+    const sink = std.math.clamp(t / pull_sink, 0, 1);
+    const drop = std.math.lerp(a.h, @min(size, @min(to.w, to.h) * pull_drop), sink * sink * (3 - 2 * sink));
     const grow = std.math.clamp((t - pull_inflate) / (1 - pull_inflate), 0, 1);
     const g = grow * grow * (3 - 2 * grow);
     const w = std.math.lerp(drop, to.w, g);
@@ -103,6 +115,8 @@ const pull_arc: f32 = 0.14;
 // smallest shape, and a tiny drop is all rim — a darker drop among the rest.
 const pull_drop: f32 = 0.7;
 const pull_inflate: f32 = 0.55;
+/// How far along a bubble has gone from its home's size to its drop's.
+const pull_sink: f32 = 0.3;
 
 /// The dome at `from` itself in the bar's glass while the bar is `p` of the way out, shrinking into
 /// its edge as the bubbles leave it. Clip the glass to the edge (`aboveEdge`).
@@ -117,6 +131,15 @@ pub fn shrinking(from: dvui.Rect.Physical, p: f32) core.dialogs.Bubble {
 pub fn merge(p: f32, settled: f32) f32 {
     return std.math.lerp(28, settled, smooth((p - 0.3) / 0.6));
 }
+
+/// `merge` for a bar growing out of a corner vial: none at all at the very start and end, so the
+/// glass the bar goes back into is the vial's own outline, not the vial swollen by the drops
+/// sinking into it, and the vial at rest takes over from it without a step.
+pub fn cornerMerge(p: f32, settled: f32) f32 {
+    return merge(p, settled) * smooth(p / corner_merge_in);
+}
+/// How far along the growing a corner vial's glass reaches out to the drops leaving it in full.
+const corner_merge_in: f32 = 0.25;
 
 /// The clip that keeps the glass growing out of the dome at `from` from reaching past the edge it
 /// stands on; set it round the glass, and put the previous one back after.
@@ -343,6 +366,14 @@ pub const Corner = struct {
         return .{ .x = p[0] - r, .y = p[1] - r, .w = r, .h = r };
     }
 
+    /// What the bar's bubbles bud out of and change back into (`pullFrom`): the vial's own circle
+    /// on the corner point, so a bubble arriving is the vial.
+    pub fn home(self: Corner, s: f32) dvui.Rect.Physical {
+        const r = self.radiusPx(s);
+        const p = self.point();
+        return .{ .x = p[0] - r, .y = p[1] - r, .w = 2 * r, .h = 2 * r };
+    }
+
     /// The orb, `t` of its size (1 whole, 0 nothing), on the corner point.
     pub fn shape(self: Corner, s: f32, t: f32) core.widgets.orb.Shape {
         return .circle(self.point(), self.radiusPx(s) * @max(0, t));
@@ -388,21 +419,32 @@ pub fn drawCorner(c: Corner, id_extra: usize, look: Look, comptime anchor_fmt: [
         }
     }
     paintCorner(float.data().id, c, 1, look);
-    // The history icon over the liquid: grey at rest, the text colour while it is in use.
+    cornerIcon(c, 1, look, float.data().borderRectScale().r);
+    return pressed;
+}
+
+/// The history icon over the vial's liquid at `c`, the vial `t` of its size (1 whole), in the
+/// widget whose border rect is `bounds` (physical): grey at rest, the text colour while it is in
+/// use. It shrinks into the corner with the vial as the bar grows out of it, and grows back with
+/// it (`HistoryTransport`), rather than fading.
+pub fn cornerIcon(c: Corner, t: f32, look: Look, bounds: dvui.Rect.Physical) void {
+    const s = dvui.windowRectScale().s;
+    const k = std.math.clamp(t, 0, 1);
+    if (k * corner_icon < 1) return;
     const theme = dvui.themeGet();
     const grey = theme.color(.window, .fill).lerp(if (theme.dark) dvui.Color.white else dvui.Color.black, 0.3).opacity(1);
     const lit: f32 = if (look.lit) 1 else std.math.clamp(@max(look.glow, look.held), 0, 1);
-    const ic = c.iconCenter(s);
-    const d = corner_icon * s;
-    const bounds = float.data().borderRectScale().r;
+    const p = c.point();
+    const full = c.iconCenter(s);
+    const ic: [2]f32 = .{ std.math.lerp(p[0], full[0], k), std.math.lerp(p[1], full[1], k) };
+    const d = corner_icon * k * s;
     core.icon.icon(@src(), "history_grip", icons.tvg.lucide.history, .{
         .stroke_color = .white,
         .fill_color = .white,
     }, .{
-        .rect = .{ .x = (ic[0] - d / 2 - bounds.x) / s, .y = (ic[1] - d / 2 - bounds.y) / s, .w = corner_icon, .h = corner_icon },
+        .rect = .{ .x = (ic[0] - d / 2 - bounds.x) / s, .y = (ic[1] - d / 2 - bounds.y) / s, .w = corner_icon * k, .h = corner_icon * k },
         .color_text = .{ .color = grey.lerp(theme.color(.content, .text), lit) },
     });
-    return pressed;
 }
 
 /// The vial's pixels at `c`, `t` of its size (1 whole; less while the bar grows out of it): its
@@ -418,6 +460,17 @@ pub fn paintCorner(id: dvui.Id, c: Corner, t: f32, look: Look) void {
         // Lit under the pointer, lighter still as the wait before the bar runs.
         .light = if (look.lit) std.math.lerp(core.dialogs.bubble_hover, core.dialogs.bubble_press, look.held) else 0,
     });
+    paintCornerLiquid(c, t, look);
+}
+
+/// The liquid in the vial at `c`, `t` of its size, up to its level and tipped by its slosh, without
+/// its glass: the vial's own, and the bar going back draws it fading in over the bar's glass.
+pub fn paintCornerLiquid(c: Corner, t: f32, look: Look) void {
+    const s = dvui.windowRectScale().s;
+    const prev = dvui.clip(c.card);
+    defer dvui.clipSet(prev);
+    const shape = c.shape(s, t);
+    if (shape.half[0] < 1) return;
     if (look.fill <= 0) return;
     // The vessel: the glass a little in from its rim, cut by the card a little in from its edge.
     const inset = liquid_inset * s;
