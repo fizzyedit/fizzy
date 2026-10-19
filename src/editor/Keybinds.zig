@@ -253,8 +253,8 @@ fn cmdDemoPlayNamed(state: *anyopaque, args: DemoByName.Args, call: *sdk.Command
     switch (api.play(args.name, args.at)) {
         .started => {},
         .unknown => return call.fail("no demo named '{s}'", .{args.name}),
-        .busy => return call.fail("something else is driving fizzy: a demo can start once it has finished", .{}),
-        .unsaved => return call.fail("there is unsaved work open, which a demo would set aside", .{}),
+        // `unsaved` is never answered (`Demo.startable`).
+        .busy, .unsaved => return call.fail("something else is driving fizzy: a demo can start once it has finished", .{}),
     }
 }
 

@@ -1,7 +1,7 @@
 //! fizzy's stage for demo automation (`app.automation`), and how a demo gets started.
 //!
 //! The player delivers a tape's input; this decides what fizzy's state *is* to a demo. A keyframe
-//! closes every document without saving, mounts the keyframe's files in memory at its root
+//! closes every document of the demo's without saving, mounts the keyframe's files in memory at its root
 //! (`demo://<name>`, a `core.vfs.Mem`, so nothing touches disk and every replay starts from the
 //! same bytes), makes that the project folder on the explorer's Files view, resets the layout, and
 //! opens the files the keyframe names. Seeking back is that, then a replay.
@@ -10,15 +10,18 @@
 //! explorer put away — and a demo opens the explorer from the rail when it is about to use it and
 //! puts it away after (`catalog.openFile`), as a person short of room would.
 //!
-//! A demo plays inside the user's own copy of fizzy, so it must not cost them anything: `begin`
-//! sets their session aside (project folder, open documents) and flushes any pending layout and
-//! settings writes, nothing is persisted while the demo is loaded (`active`), and `end` closes the
-//! demo's documents, reloads the layout from `layout.zon` and reopens what the user had: from its
-//! path, or from the bytes `begin` kept of one its path cannot open again (a file the web page
-//! fetched, a zip whose folder is the project). A demo will not start over unsaved changes.
+//! A demo plays inside the person's own copy of fizzy, on a stage of its own, so it costs them
+//! nothing and waits for nothing: `begin` sets their session aside — their panes, which the
+//! workbench holds whole (`Workbench.holdPanes`), the documents in them, which stay open behind
+//! them untouched (hidden, never closed, saved, reloaded or put back by a snapshot), the project
+//! folder, the explorer's open folders and the keyboard focus — and flushes any pending layout and
+//! settings writes. Nothing is persisted while the demo is loaded (`active`). The demo's documents
+//! are only its own: its mounted files (`demo://…`) and any it makes. `end` closes those, reloads
+//! the layout from `layout.zon`, and gives the person back their panes, their documents as they
+//! left them (unsaved edits and history with them), their folder and their focus.
 //!
 //! **Snapshots** (`automation.Stage.capture`) hold what a scene changes as it plays: the mounted
-//! files as saved, each open document's state from its owner (`captureDocumentState` — contents,
+//! files as saved, each of the demo's open documents' state from its owner (`captureDocumentState` — contents,
 //! caret, scroll), which is active, the explorer open or shut and its open folders, every plugin's
 //! settings, and keyboard focus. Restoring one puts them back in place — documents opened since
 //! are closed, the rest restored where they sit — so a seek back within a scene costs no reload.
@@ -30,7 +33,6 @@
 const Demo = @This();
 
 const std = @import("std");
-const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 const core = fizzy.core;
@@ -102,19 +104,16 @@ const Pending = union(enum) {
 
 const Saved = struct {
     folder: ?[]u8,
-    /// Open documents, the active one last so it is focused again.
-    docs: []Doc,
-
-    const Doc = struct {
-        path: []u8,
-        /// The pane it was in (`documentGrouping`): it opens there again, in the arrangement put
-        /// back (`Workbench.restorePanes`), rather than every document in the one pane.
-        grouping: u64,
-        /// What it was opened from, when its path cannot open it again (`reopenable`): a file the
-        /// web page fetched or the person uploaded, a zip whose folder is the project. Null: it
-        /// reopens from its path.
-        bytes: ?[]u8 = null,
-    };
+    /// The person's open documents, by id: set aside, open all along. Every other document is the
+    /// demo's (`ownsDocument`).
+    docs: []const u64,
+    /// The one they were in.
+    active: ?u64,
+    /// The explorer's open folders, and whether its root had opened (`Workbench.file_tree_root_opened`).
+    branches: []const dvui.Id,
+    root_opened: ?usize,
+    focus: dvui.Id,
+    focus_subwindow: dvui.Id,
 };
 
 /// Inert until `attach`: nothing loaded, so nothing in `tick` acts on it.
@@ -256,8 +255,8 @@ fn queue(self: *Demo, p: Pending) void {
     self.pending = p;
 }
 
-/// A demo replaces the open documents, so it waits for unsaved work to be saved or closed. A
-/// demo's own documents are not anyone's work: one demo may replace another.
+/// A demo plays on a stage of its own (`begin`), so the person's work, saved or not, never stops
+/// one: only another tape driving the app does.
 fn mayStart(self: *Demo) bool {
     return self.startable() == .started;
 }
@@ -267,12 +266,6 @@ pub fn startable(self: *Demo) sdk.services.demos.Api.Play {
     if (self.live.playing()) {
         core.dialogs.toast(@src(), .{ .message = "Something is driving fizzy right now — the demo can start once it has finished." });
         return .busy;
-    }
-    for (self.editor.app.open_files.values()) |doc| {
-        if (!doc.owner.isDirty(doc)) continue;
-        if (std.mem.startsWith(u8, doc.owner.documentPath(doc), "demo://")) continue;
-        core.dialogs.toast(@src(), .{ .message = "Save or close your changes first — a demo replaces the open files while it plays." });
-        return .unsaved;
     }
     return .started;
 }
@@ -474,35 +467,56 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     editor.flushLayout();
     editor.flushSettings();
     self.saveSettings();
-    // The document panes too: kept in memory, and none of the demo's saved over them.
+    // The one they are in, before their panes go: the demo's has none.
+    const in_front = if (editor.activeDoc()) |d| d.id else null;
+    // Their panes go aside whole, the demo playing in one of its own.
     editor.workbench.holdPanes();
 
+    // Their documents stay open behind them, hidden: no place shows them while the demo has the
+    // window, and nothing of the demo's closes, saves or restores them (`ownsDocument`). A demo's
+    // left open by the last (one whose close failed) is not theirs.
     const gpa = editor.app.gpa;
-    var docs: std.ArrayList(Saved.Doc) = .empty;
-    const active_id = if (editor.activeDoc()) |d| d.id else null;
-    var active_doc: ?Saved.Doc = null;
+    var docs: std.ArrayList(u64) = .empty;
     for (editor.app.open_files.values()) |doc| {
-        const path = doc.owner.documentPath(doc);
-        if (path.len == 0 or std.mem.startsWith(u8, path, "demo://")) continue;
-        // Never saved (`untitled-1`): no file, and clean, since `mayStart` refused unsaved work, so
-        // nothing to give back. Opened from its bytes it would come back as a file of that name.
-        if (!reopenable(editor, path) and !doc.owner.documentHasRecognizedSaveExtension(doc)) continue;
-        var saved: Saved.Doc = .{ .path = gpa.dupe(u8, path) catch continue, .grouping = doc.owner.documentGrouping(doc) };
-        if (!reopenable(editor, path)) {
-            saved.bytes = doc.owner.documentBytes(doc, path, gpa) catch null;
-            if (saved.bytes == null) dvui.log.warn("demo: {s} cannot be opened again after the demo: its owner gives no bytes for it", .{path});
-        }
-        if (active_id == doc.id) active_doc = saved else docs.append(gpa, saved) catch freeSavedDoc(gpa, saved);
+        if (std.mem.startsWith(u8, doc.owner.documentPath(doc), "demo://")) continue;
+        docs.append(gpa, doc.id) catch continue;
     }
-    if (active_doc) |d| docs.append(gpa, d) catch freeSavedDoc(gpa, d);
+    const held = docs.toOwnedSlice(gpa) catch &.{};
+    const branches: []const dvui.Id = if (gpa.alloc(dvui.Id, editor.workbench.open_branches.count())) |out| blk: {
+        var it = editor.workbench.open_branches.keyIterator();
+        for (out) |*b| b.* = it.next().?.*;
+        break :blk out;
+    } else |_| &.{};
     // Nor is a demo's folder: one demo straight after another finds the last one's folder still
     // open — giving the user theirs back by closing it is deferred to the next frame
     // (`App.closeProjectFolder`) — and must not give it to them at its end.
     const folder = editor.app.folder orelse "";
     self.saved = .{
         .folder = if (folder.len > 0 and !std.mem.startsWith(u8, folder, "demo://")) gpa.dupe(u8, folder) catch null else null,
-        .docs = docs.toOwnedSlice(gpa) catch &.{},
+        .docs = held,
+        .active = in_front,
+        .branches = branches,
+        .root_opened = editor.workbench.file_tree_root_opened,
+        .focus = dvui.focusedWidgetId() orelse .zero,
+        .focus_subwindow = dvui.focusedSubwindowId(),
     };
+    for (held) |id| self.hideDocument(id, true);
+}
+
+/// Whether `doc` is the demo's: one it opened or made, not one of the person's — open at `begin`,
+/// or landing since in a pane of theirs (an open on its way as the demo started, a document their
+/// plugin's reload brought back), which the workbench holds (`Workbench.holdsDocument`).
+pub fn ownsDocument(self: *const Demo, doc: sdk.DocHandle) bool {
+    const saved = self.saved orelse return true;
+    if (std.mem.indexOfScalar(u64, saved.docs, doc.id) != null) return false;
+    return !self.editor.workbench.holdsDocument(doc);
+}
+
+/// Hide the person's document `id` from every place while the demo has the window, or show it.
+/// One whose surface is made again meanwhile (a rename) is hidden by `Editor.registerDocSurface`.
+fn hideDocument(self: *Demo, id: u64, hidden: bool) void {
+    const ds = self.editor.doc_surfaces.get(id) orelse return;
+    self.editor.app.host.setSurfaceHidden(ds.id, hidden);
 }
 
 fn end(ctx: *anyopaque) void {
@@ -511,46 +525,40 @@ fn end(ctx: *anyopaque) void {
     const gpa = editor.app.gpa;
     self.fast = false;
     if (self.quitting) {
+        for (editor.app.open_files.keys()) |id| self.hideDocument(id, false);
         self.freeSaved();
         self.freeSavedSettings();
         editor.workbench.restorePanes();
         return;
     }
     self.restoreSettings();
-    self.closeAllDocuments();
+    self.closeDemoDocuments();
     self.unmountFiles();
-    // Before the person's documents reopen: into the pane they were in.
-    editor.workbench.restorePanes();
 
     // The layout as the user left it: `begin` flushed it, and nothing has been written since.
     editor.app.layout.resetLayout(gpa);
     editor.loadSavedLayout();
     editor.app.layout.dirty = false;
     editor.command_palette.finishClose();
+    // Their panes, each holding what it held: after the layout's reload, which would otherwise
+    // put back only what the file had of them.
+    editor.workbench.restorePanes();
 
     const saved = self.saved orelse return;
-    // What was opened from bytes first: a zip among them mounts again, so the folder and the
-    // files opened from inside it can be opened after it.
-    for (saved.docs) |d| {
-        const bytes = d.bytes orelse continue;
-        const path = gpa.dupe(u8, d.path) catch continue;
-        _ = editor.openFileFromBytes(path, bytes, d.grouping) catch |err|
-            dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
-    }
+    // What is open now is all theirs: the demo's have closed.
+    for (editor.app.open_files.keys()) |id| self.hideDocument(id, false);
     if (saved.folder) |f| {
         editor.setProjectFolder(f) catch |err| dvui.log.warn("demo: could not reopen {s}: {t}", .{ f, err });
     } else {
         editor.app.host.closeProjectFolder();
     }
-    for (saved.docs) |d| {
-        if (d.bytes != null) continue;
-        _ = editor.openFilePath(d.path, d.grouping) catch |err|
-            dvui.log.warn("demo: could not reopen {s}: {t}", .{ d.path, err });
+    editor.workbench.open_branches.clearRetainingCapacity();
+    for (saved.branches) |id| editor.workbench.setBranchOpen(id, true);
+    editor.workbench.file_tree_root_opened = saved.root_opened;
+    if (saved.active) |id| {
+        if (editor.app.open_files.getIndex(id)) |index| editor.workbench.setActiveDocIndex(index);
     }
-    // The active one last, whichever way it came back.
-    if (saved.docs.len > 0) {
-        if (openIndex(editor, saved.docs[saved.docs.len - 1].path)) |index| editor.workbench.setActiveDocIndex(index);
-    }
+    if (saved.focus != .zero) dvui.focusWidget(saved.focus, saved.focus_subwindow, null);
     self.freeSaved();
     dvui.refresh(null, @src(), null);
 }
@@ -559,24 +567,9 @@ fn freeSaved(self: *Demo) void {
     const gpa = self.editor.app.gpa;
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    for (saved.docs) |d| freeSavedDoc(gpa, d);
     gpa.free(saved.docs);
+    gpa.free(saved.branches);
     self.saved = null;
-}
-
-fn freeSavedDoc(gpa: std.mem.Allocator, d: Saved.Doc) void {
-    gpa.free(d.path);
-    if (d.bytes) |b| gpa.free(b);
-}
-
-/// Whether `path` opens again from where it is: a file on a mount (one the demo closes comes back
-/// when what mounted it does), or on disk. The web has no disk: what is not on a mount there was
-/// fetched or uploaded.
-fn reopenable(editor: *Editor, path: []const u8) bool {
-    if (editor.app.file_table.isMounted(path)) return true;
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    std.Io.Dir.cwd().access(dvui.io, path, .{}) catch return false;
-    return true;
 }
 
 /// Put fizzy into `kf` outright: nothing the demo did before survives.
@@ -586,7 +579,7 @@ fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
     const gpa = editor.app.gpa;
 
     editor.command_palette.finishClose();
-    self.closeAllDocuments();
+    self.closeDemoDocuments();
     // One pane: a split a later moment made is gone at a cut, as on the first pass.
     editor.workbench.onePane();
     self.applySettings(kf.settings);
@@ -761,16 +754,22 @@ fn unmountFiles(self: *Demo) void {
     }
 }
 
-/// Close every document, discarding changes — they are the demo's, or `mayStart` refused.
-/// Loads still on their way are dropped too, or they would land in the next keyframe.
-fn closeAllDocuments(self: *Demo) void {
+/// Close every document of the demo's, discarding changes: none is the person's, whose are set
+/// aside (`ownsDocument`). Loads still on their way are dropped too, or they would land in the
+/// next keyframe.
+fn closeDemoDocuments(self: *Demo) void {
     const editor = self.editor;
     editor.cancelAllLoadingJobs();
     while (editor.doc_io.loads.count() > 0) editor.doc_io.cancel(editor.doc_io.loads.keys()[0]);
     while (editor.openings.entries.count() > 0) editor.openings.drop(editor, editor.openings.entries.keys()[0]);
-    while (editor.app.open_files.count() > 0) {
-        const id = editor.app.open_files.keys()[editor.app.open_files.count() - 1];
-        editor.rawCloseFileID(id) catch break;
+    var i = editor.app.open_files.count();
+    while (i > 0) {
+        i -= 1;
+        // A close can take others with it (an archive's, its mount's files).
+        if (i >= editor.app.open_files.count()) continue;
+        const doc = editor.app.open_files.values()[i];
+        if (!self.ownsDocument(doc)) continue;
+        editor.rawCloseFileID(doc.id) catch |err| dvui.log.warn("demo: could not close a document of its own: {t}", .{err});
     }
 }
 
@@ -895,6 +894,7 @@ fn fill(self: *Demo, snap: *Snapshot, root: []const u8, mem: *core.vfs.Mem) !boo
     const active_id = if (editor.activeDoc()) |d| d.id else null;
     var docs: std.ArrayList(Snapshot.Doc) = .empty;
     for (editor.app.open_files.values()) |doc| {
+        if (!self.ownsDocument(doc)) continue;
         const state = doc.owner.captureDocumentState(doc, a) orelse return false;
         if (active_id == doc.id) snap.active = docs.items.len;
         try docs.append(a, .{
@@ -944,6 +944,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     while (i > 0) {
         i -= 1;
         const doc = editor.app.open_files.values()[i];
+        if (!self.ownsDocument(doc)) continue;
         const path = doc.owner.documentPath(doc);
         const kept = for (snap.docs) |d| {
             if (std.mem.eql(u8, d.path, path)) break true;
@@ -988,7 +989,7 @@ fn release(ctx: *anyopaque, raw: *anyopaque) void {
     from(ctx).editor.app.gpa.destroy(snap);
 }
 
-/// The model a snapshot holds, less what may differ between passes — scroll, focus, and which
+/// The model a snapshot holds (the demo's own documents, never the person's), less what may differ between passes — scroll, focus, and which
 /// folders the explorer shows open, whose root opens on its own when its listing lands:
 /// documents' fingerprints from their owners, which is active, the explorer shut or not, and the
 /// files as saved.
@@ -997,6 +998,7 @@ fn fingerprint(ctx: *anyopaque) u64 {
     const editor = self.editor;
     var h = std.hash.Wyhash.init(0xde40);
     for (editor.app.open_files.values()) |doc| {
+        if (!self.ownsDocument(doc)) continue;
         h.update(doc.owner.documentPath(doc));
         const print: u64 = doc.owner.documentFingerprint(doc) orelse 0;
         h.update(std.mem.asBytes(&print));

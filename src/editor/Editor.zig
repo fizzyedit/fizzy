@@ -2975,6 +2975,9 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     });
     // The owner's own name for it, when it has one, copied in (`Host.documentTitleChanged`).
     editor.app.host.documentTitleChanged(doc);
+    // One of the person's, set aside while a demo plays (made again by a rename, or landing in a
+    // pane of theirs): hidden too.
+    if (!editor.demo.ownsDocument(doc)) editor.app.host.setSurfaceHidden(ds.id, true);
 }
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
@@ -5323,9 +5326,7 @@ fn fizzyAssignedSurfaces(ctx: *anyopaque, region: []const u8) ?[]const []const u
 
 fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void {
     const editor = fizzyCtx(ctx);
-    // Either list: this frame's if the shape has declared it already, else last frame's. A
-    // region that exists in neither has not been drawn yet, and its first draw selects the
-    // first thing it shows — which for a pane just created around one document is that one.
+    // Either list: this frame's if the shape has declared it already, else last frame's.
     for (editor.app.layout.regions_building.items) |r| if (std.mem.eql(u8, r.name, region)) {
         editor.app.host.setSelectionForKey(r.selectionKey(), id);
         return;
@@ -5334,6 +5335,11 @@ fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void
         editor.app.host.setSelectionForKey(r.selectionKey(), id);
         return;
     };
+    // Not drawn yet — a pane just made, which a place is named for — so kept under that name, for
+    // its first draw to show. Dropped, the first draw showed the first thing the pane held: a
+    // demo's pane, new when it starts, came up on its first document there and on its last after
+    // a seek back.
+    editor.app.host.setSelectionForKey(Region.namedSelectionKey(region), id);
 }
 
 fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {

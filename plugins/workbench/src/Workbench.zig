@@ -25,6 +25,9 @@ pub const Workbench = @This();
 /// The split tree the panes live in. `core.widgets.DockLayout`, one panel per leaf.
 pub const Panes = core.widgets.DockLayout;
 
+/// A held pane's tabs (`held_tabs`): its grouping, and the surface ids it held, owned.
+pub const HeldTabs = struct { grouping: u64, ids: [][]u8 };
+
 allocator: std.mem.Allocator,
 decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
 
@@ -44,6 +47,11 @@ holding: bool = false,
 /// not be made, or before there was one), and the pane they were in.
 held_panes: ?Panes = null,
 held_open: u64 = 0,
+/// The person's panes themselves while a demo has the window, and what each held (its
+/// assignment, copied): set aside whole, with their documents, which stay open and are never
+/// seated in the demo's panes (`workbench_layout.holdPanes`).
+held_workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
+held_tabs: std.ArrayListUnmanaged(HeldTabs) = .empty,
 /// Where the panes are arranged when the app arranges them instead of `panes`: each pane a view
 /// of the app's, in a place of the app's, beside another by a split of the app's (fizzy's
 /// `Workspaces`, behind `FIZZY_WORKSPACES=1`). Null: the panes are this tree's leaves, as before.
@@ -293,6 +301,35 @@ pub fn documentClosed(self: *Workbench, doc: sdk.DocHandle) void {
             if (active.id == doc.id) ws.active = null;
         }
     }
+    // One of the person's, closed while a demo has the window: gone from their held panes too.
+    self.forgetHeld(doc, id);
+}
+
+/// `doc`, whose tab is `id`, from the person's held panes (`holdPanes`): its tab, where `id` is
+/// given, and any pane's cached handle of it.
+fn forgetHeld(self: *Workbench, doc: sdk.DocHandle, id: ?[]const u8) void {
+    for (self.held_workspaces.values()) |*ws| {
+        if (ws.active) |active| {
+            if (active.id == doc.id) ws.active = null;
+        }
+    }
+    const gone = id orelse return;
+    for (self.held_tabs.items) |*t| {
+        const k = for (t.ids, 0..) |held, k| {
+            if (std.mem.eql(u8, held, gone)) break k;
+        } else continue;
+        self.allocator.free(t.ids[k]);
+        std.mem.copyForwards([]u8, t.ids[k..], t.ids[k + 1 ..]);
+        t.ids = self.allocator.realloc(t.ids, t.ids.len - 1) catch t.ids[0 .. t.ids.len - 1];
+    }
+}
+
+/// Whether `doc` is one of the person's, set aside with their panes while a demo has the window
+/// (`holdPanes`).
+pub fn holdsDocument(self: *const Workbench, doc: sdk.DocHandle) bool {
+    if (!self.holding) return false;
+    const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return false;
+    return workbench_layout.heldDocument(self, doc, id);
 }
 
 /// The tab naming surface `id` goes from whichever pane holds it: a document that will not come
@@ -309,6 +346,7 @@ pub fn documentDetached(self: *Workbench, doc: sdk.DocHandle) void {
             if (active.id == doc.id) ws.active = null;
         }
     }
+    self.forgetHeld(doc, null);
 }
 
 /// A document's path changed under it (an explorer rename, a Save As): its tab is keyed by
@@ -318,6 +356,13 @@ pub fn documentDetached(self: *Workbench, doc: sdk.DocHandle) void {
 /// starts from `activeDoc()` — Save first among them — quietly does nothing.
 pub fn documentRenamed(self: *Workbench, doc: sdk.DocHandle, old_id: []const u8) void {
     const new_id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
+    // One of the person's, renamed while a demo has the window: its held tab follows.
+    for (self.held_tabs.items) |t| for (t.ids, 0..) |held, k| {
+        if (!std.mem.eql(u8, held, old_id)) continue;
+        const copy = self.allocator.dupe(u8, new_id) catch break;
+        self.allocator.free(held);
+        t.ids[k] = copy;
+    };
     const ws = self.swapTabId(old_id, new_id) orelse return;
     // Selection is by id too. Only the pane showing this document re-selects, and only
     // within itself — this is not a focus change, so `open_workspace_grouping` stays.

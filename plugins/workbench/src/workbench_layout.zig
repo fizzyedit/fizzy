@@ -68,6 +68,9 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
             }
         }
         if (held) continue;
+        // One of the person's, set aside with its pane while a demo has the window: it waits
+        // there for them, never seated in the demo's panes.
+        if (wb.holding and heldDocument(wb, doc, id)) continue;
         // The same file under another owner's id (a plugin installed since last session) would
         // otherwise sit beside it as a tab that never opens.
         const path = doc.owner.documentPath(doc);
@@ -239,29 +242,74 @@ fn adoptPanes(wb: *Workbench, loaded: Panes) void {
     }
 }
 
-/// Keep the person's arrangement while a demo has the window, and save nothing until it is put
-/// back (`restorePanes`): the demo's splits are not theirs. A second hold keeps the first.
+/// Set the person's panes aside while a demo has the window, and save nothing until they are put
+/// back (`restorePanes`): the demo plays in a pane of its own, and its splits are not theirs. A
+/// second hold keeps the first.
 ///
-/// Nothing is saved while holding, whatever else happens, so the arrangement on disk stays the
-/// person's: a copy that could not be made is read back from there instead. Before the first
-/// rebuild has restored last session's panes there is nothing of theirs here to copy; that
-/// restore waits for the demo to end.
+/// Their panes go aside whole — the workspaces, what each holds, and the tree they sit in — and
+/// their documents stay open behind them, untouched: a document of a held pane is never seated in
+/// the demo's (`rebuildWorkspaces`). Nothing is saved while holding, so the arrangement on disk
+/// stays theirs: a tree that could not be copied is read back from there. Before the first rebuild
+/// has restored last session's panes there is no tree of theirs to copy; that restore waits for
+/// the demo to end.
 pub fn holdPanes(wb: *Workbench) void {
     if (wb.holding) return;
     wb.holding = true;
     wb.held_open = wb.open_workspace_grouping;
-    if (!wb.restored) return;
-    // A copy through a snapshot: a snapshot borrows the pane names from the live tree, which the
-    // demo's first cut replaces (`onePane`).
-    const snap = wb.panes.snapshot(wb.allocator) catch |err| {
-        dvui.log.err("workbench: could not set the panes aside ({t}); they come back from disk", .{err});
-        return;
-    };
-    defer snap.deinit(wb.allocator);
-    wb.held_panes = Panes.fromSnapshot(wb.allocator, snap) catch |err| blk: {
-        dvui.log.err("workbench: could not set the panes aside ({t}); they come back from disk", .{err});
-        break :blk null;
-    };
+    if (wb.restored) {
+        // A copy through a snapshot: a snapshot borrows the pane names from the live tree, which
+        // the demo's own pane replaces below.
+        if (wb.panes.snapshot(wb.allocator)) |snap| {
+            defer snap.deinit(wb.allocator);
+            wb.held_panes = Panes.fromSnapshot(wb.allocator, snap) catch |err| blk: {
+                dvui.log.err("workbench: could not set the panes aside ({t}); they come back from disk", .{err});
+                break :blk null;
+            };
+        } else |err| dvui.log.err("workbench: could not set the panes aside ({t}); they come back from disk", .{err});
+    }
+    const host = runtime.host();
+    for (wb.workspaces.values()) |*ws| {
+        var buf: [32]u8 = undefined;
+        const ids = host.assignedSurfaces(Workspace.name(&buf, ws.grouping)) orelse continue;
+        const copy = dupeIds(wb.allocator, ids) catch |err| {
+            dvui.log.err("workbench: could not set pane {d}'s tabs aside ({t}); they come back from disk", .{ ws.grouping, err });
+            continue;
+        };
+        wb.held_tabs.append(wb.allocator, .{ .grouping = ws.grouping, .ids = copy }) catch |err| {
+            dvui.log.err("workbench: could not set pane {d}'s tabs aside ({t}); they come back from disk", .{ ws.grouping, err });
+            freeIds(wb.allocator, copy);
+        };
+    }
+    wb.held_workspaces = wb.workspaces;
+    wb.workspaces = .empty;
+    // The demo's pane: a grouping no pane of theirs has.
+    const stage = wb.newGroupingID();
+    wb.workspaces.put(wb.allocator, stage, Workspace.init(stage)) catch {};
+    wb.open_workspace_grouping = stage;
+    onePane(wb);
+}
+
+/// Whether `doc` (its tab `id`) is one of the person's, set aside with their panes.
+pub fn heldDocument(wb: *const Workbench, doc: sdk.DocHandle, id: []const u8) bool {
+    if (wb.held_workspaces.contains(doc.owner.documentGrouping(doc))) return true;
+    for (wb.held_tabs.items) |t| for (t.ids) |held| if (std.mem.eql(u8, held, id)) return true;
+    return false;
+}
+
+fn dupeIds(gpa: std.mem.Allocator, ids: []const []const u8) ![][]u8 {
+    const out = try gpa.alloc([]u8, ids.len);
+    var n: usize = 0;
+    errdefer freeIds(gpa, out[0..n]);
+    for (ids, out) |id, *o| {
+        o.* = try gpa.dupe(u8, id);
+        n += 1;
+    }
+    return out;
+}
+
+fn freeIds(gpa: std.mem.Allocator, ids: [][]u8) void {
+    for (ids) |id| gpa.free(id);
+    gpa.free(ids);
 }
 
 /// One pane, as a demo's keyframe declares the window: the open one, the others closing with
@@ -279,12 +327,30 @@ pub fn onePane(wb: *Workbench) void {
     adoptPanes(wb, one);
 }
 
-/// The person's arrangement again (`holdPanes`), and saving with it: the copy, or what is on disk
-/// where there is none. Before last session's panes were ever restored, one pane, for the next
-/// rebuild to restore them into.
+/// The person's panes again (`holdPanes`), and saving with them: the demo's go, theirs come back
+/// holding what they held, in their tree — the copy, or what is on disk where there is none.
+/// Before last session's panes were ever restored, one pane, for the next rebuild to restore
+/// them into.
 pub fn restorePanes(wb: *Workbench) void {
     if (!wb.holding) return;
     wb.holding = false;
+    const host = runtime.host();
+    for (wb.workspaces.values()) |*ws| {
+        var buf: [32]u8 = undefined;
+        host.assignSurfaces(Workspace.name(&buf, ws.grouping), null) catch {};
+        ws.deinit();
+    }
+    wb.workspaces.deinit(wb.allocator);
+    wb.workspaces = wb.held_workspaces;
+    wb.held_workspaces = .empty;
+    for (wb.held_tabs.items) |t| {
+        var buf: [32]u8 = undefined;
+        const ids: []const []const u8 = t.ids;
+        host.assignSurfaces(Workspace.name(&buf, t.grouping), ids) catch |err|
+            dvui.log.err("workbench: pane {d}'s tabs did not come back ({t})", .{ t.grouping, err });
+        freeIds(wb.allocator, t.ids);
+    }
+    wb.held_tabs.clearAndFree(wb.allocator);
     if (wb.held_panes) |held| {
         wb.held_panes = null;
         adoptPanes(wb, held);
