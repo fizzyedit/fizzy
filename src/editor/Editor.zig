@@ -6018,7 +6018,10 @@ fn driveHandover(editor: *Editor) void {
         dvui.log.info("restart: handing the window over to the new instance", .{});
     }
     switch (restart.pollHandover(dvui.io)) {
-        .none, .ready => {},
+        .none => {},
+        // The new instance has the documents, and their kept tracks: this one writes no more of
+        // them on its way out, which would put back what the new one has moved on from.
+        .ready => if (editor.app.tracks) |*t| t.handOff(),
         .waiting => {
             // The session is saved: anything typed now would be lost.
             for (dvui.events()) |*e| e.handled = true;
@@ -6034,10 +6037,12 @@ fn driveHandover(editor: *Editor) void {
     }
 }
 
-/// Write every open document to the session a restart reopens (`KeptDocuments`). False when one
-/// has unsaved changes its owner cannot keep, or the session could not be written: then the quit
-/// asks, as any quit does.
-fn keepSessionForRestart(editor: *Editor) bool {
+/// Write every open document to the session a restart reopens (`KeptDocuments`), and its history
+/// to its kept track (`Tracks.keepOpen`): the new instance opens the documents, and takes their
+/// tracks up, before this one quits, so a track kept only at the quit would come too late, and an
+/// unsaved document would come back with nothing to undo. False when one has unsaved changes its
+/// owner cannot keep, or the session could not be written: then the quit asks, as any quit does.
+pub fn keepSessionForRestart(editor: *Editor) bool {
     var kept = KeptDocuments.capture(editor, null) catch |err| {
         dvui.log.warn("restart: open documents not kept ({t}); asking about unsaved changes", .{err});
         return false;
@@ -6050,6 +6055,7 @@ fn keepSessionForRestart(editor: *Editor) bool {
         SettingsWatcher.emptyStateFolder(dvui.io, dir);
         return false;
     };
+    if (editor.app.tracks) |*t| t.keepOpen();
     return true;
 }
 

@@ -9620,6 +9620,80 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // A restart keeps each open document's history with the session (`keepSessionForRestart`):
+    // the new instance opens them, and takes their tracks up, while the old one is still running,
+    // so a track kept only as the old one quits comes too late. An unsaved document comes back
+    // dirty with its steps, and undo takes them back, by the person's Undo and by the command.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+        const path = try std.fs.path.join(gpa, &.{ root, "restart-history.txt" });
+        defer gpa.free(path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "restart-history.txt", .data = "" });
+        _ = try editor.openFilePath(path, editor.workbench.currentGroupingID());
+        var doc = for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (std.mem.eql(u8, d.owner.documentPath(d), path)) break d;
+        } else return error.TestUnexpectedResult;
+        try dvui.testing.settle(headlessFrame);
+        // An agent's edits, through the text plugin's commands: unsaved.
+        for ([_][]const u8{ "a", "b", "c" }) |letter| {
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+            try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+        }
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.isDirty(doc));
+        const grouping = doc.owner.documentGrouping(doc);
+        const dir = try fizzy.Editor.KeptDocuments.sessionDir(gpa, editor.app.config_folder);
+        defer gpa.free(dir);
+        try std.testing.expect(editor.keepSessionForRestart());
+        // The old instance keeps nothing more: its quit comes after the new one is up.
+        {
+            const keep_dir = tracks.dir;
+            tracks.dir = null;
+            defer tracks.dir = keep_dir;
+            editor.detachFileID(doc.id);
+        }
+
+        editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
+        defer {
+            if (editor.session) |*kept| kept.deinit();
+            editor.session = null;
+        }
+        _ = try host.openFile(.{ .path = path, .grouping = grouping });
+        doc = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.isDirty(doc));
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        const line = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 3), line.entries.len);
+        try std.testing.expectEqual(@as(usize, 3), line.at);
+        const read = struct {
+            fn read(h: *sdk.Host) ![]const u8 {
+                return switch (h.callCommand("text.read", "", h.arena())) {
+                    .ok => |r| r orelse error.TestUnexpectedResult,
+                    else => error.TestUnexpectedResult,
+                };
+            }
+        }.read;
+        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"cba\"") != null);
+        // The person's Undo (what mod+z runs), then the command, as an agent calls it.
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"ba\"") != null);
+        try std.testing.expect(host.callCommand("fizzy.undo", "", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"a\"") != null);
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // Kept history keeps to its cap, takes the files of documents gone from disk, and a document's
     // can be forgotten outright (`Tracks.sweep`, `forget`, `fizzy.tracks.forget`).
     {
