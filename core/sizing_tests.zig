@@ -27,4 +27,6 @@ test {
     _ = @import("gfx/image.zig");
     // A toast's surface follows the window's material, as every floating surface's does.
     _ = @import("dialogs.zig");
+    // A control's raised or inset edge: the mesh `drawEdge` lays round an outline.
+    _ = @import("draw.zig");
 }

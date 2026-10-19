@@ -172,7 +172,7 @@ const line_width: f32 = 0.8;
 /// edge's own anti-aliasing spreads over, so no corner reads as a polygon at any size. A segment
 /// per few pixels of curve, the rule before, was twice the vertices on a large circle for nothing
 /// the eye could see, and every vertex is work each frame the glass is drawn.
-fn arcSteps(radii: Radii) usize {
+pub fn arcSteps(radii: Radii) usize {
     var r: f32 = 0;
     for (radii) |v| r = @max(r, v);
     if (r <= arc_tolerance) return 3;
@@ -487,7 +487,7 @@ pub fn drawShadow(r: dvui.Rect.Physical, radii: Radii, fade_px: f32, offset: dvu
 
 /// Quads between `count` neighbouring rings of `per_ring` vertices each, laid down one after
 /// another from the outermost, wound the way dvui winds a path's fill.
-fn appendRingStrips(b: *dvui.Triangles.Builder, per_ring: usize, count: usize) void {
+pub fn appendRingStrips(b: *dvui.Triangles.Builder, per_ring: usize, count: usize) void {
     const n: dvui.Vertex.Index = @intCast(per_ring);
     var k: usize = 0;
     while (k + 1 < count) : (k += 1) {

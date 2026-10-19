@@ -1,7 +1,8 @@
 //! `core.draw` — drawing with no widget of its own.
 //!
 //! Highlighted labels for filter results, the fixed icon slot a menu row reserves, keybind
-//! labels, edge shadows for scrolled content, the active-tab indicator. Each is a few `pathFill`
+//! labels, edge shadows for scrolled content, the active-tab indicator, a control's raised or inset
+//! edge. Each is a few `pathFill`
 //! calls a caller makes *inside* someone else's widget, which is why none of them is a type.
 //!
 //! `core` and not the app, because a plugin's list should shade its edges the same way fizzy's
@@ -15,6 +16,8 @@ const icons = @import("icons");
 const platform = @import("platform.zig");
 const fuzzy = @import("fuzzy.zig");
 const widgets = @import("widgets.zig");
+const edge = @import("edge.zig");
+const liquid_glass = @import("glass").liquid_glass;
 
 /// Draw `text` as a single-line label, tinting the bytes `query` matched with the theme
 /// highlight colour — same treatment as the file-tree filter, settings search, and plugin store.
@@ -317,4 +320,141 @@ pub fn drawScrollEdgeShadows(
             }
         }
     }
+}
+
+/// Which edge a control has: standing off its background, or sunk into it.
+pub const EdgeKind = edge.Kind;
+
+/// A control's raised or inset edge (`edge.zig`): how far it reaches and what it is made of.
+pub const Edge = struct {
+    /// Points from the outline to where the edge has faded out.
+    depth: f32 = 4,
+    shade: dvui.Color = .black,
+    shade_alpha: f32 = 0.2,
+    light: dvui.Color = .white,
+    light_alpha: f32 = 0.9,
+
+    /// The edge for `theme`. Light only reads where there is room above the background, so a
+    /// dark theme gets a faint one and more shade.
+    pub fn forTheme(theme: *const dvui.Theme) Edge {
+        return if (theme.dark) .{ .shade_alpha = 0.45, .light_alpha = 0.06 } else .{};
+    }
+};
+
+/// Draw a raised or inset edge round the outline `rs` with `corners`, lit from the top left. A
+/// raised edge lies outside the outline, so it may go before or after the control's fill, and
+/// the control needs `depth` of room round it (a margin) or its parent's clip cuts the edge off;
+/// an inset one lies inside, so it goes after the fill and before the contents. Nothing is drawn
+/// where the control is, so it suits a translucent control too. One mesh, one draw.
+pub fn drawEdge(rs: dvui.RectScale, corners: dvui.CornerRect, kind: EdgeKind, e: Edge) void {
+    const theme = dvui.themeGet();
+    const c = corners.finalize(&theme);
+    const radii: liquid_glass.Radii = .{ c.tl.radius() * rs.s, c.bl.radius() * rs.s, c.br.radius() * rs.s, c.tr.radius() * rs.s };
+    const arena = dvui.currentWindow().arena();
+    var tris = edgeMesh(arena, rs.r, radii, e.depth * rs.s, kind, e) catch return orelse return;
+    defer tris.deinit(arena);
+    dvui.renderTriangles(tris, null) catch {};
+}
+
+/// `drawEdge`'s mesh, in physical pixels: `radii` in `liquid_glass.ringPoints`' order, `depth`
+/// how far the edge reaches. Null when there is nothing to draw.
+fn edgeMesh(gpa: std.mem.Allocator, r: dvui.Rect.Physical, radii: liquid_glass.Radii, depth_px: f32, kind: EdgeKind, e: Edge) !?dvui.Triangles {
+    if (r.w < 1 or r.h < 1) return null;
+    // An inset edge can reach no further than the middle of the well.
+    const depth = if (kind == .inset) @min(depth_px, @min(r.w, r.h) / 2) else depth_px;
+    if (depth < 0.5) return null;
+    const sign: f32 = if (kind == .raised) 1 else -1;
+    // The widest ring's corners, so no ring's arc is coarser than it should be.
+    const grow = if (kind == .raised) depth else 0;
+    const arc_steps = liquid_glass.arcSteps(.{ radii[0] + grow, radii[1] + grow, radii[2] + grow, radii[3] + grow });
+    const per_ring = 4 * (arc_steps + 1);
+    const steps = edge.ring_steps;
+    var b = try dvui.Triangles.Builder.init(gpa, per_ring * steps.len, per_ring * 6 * (steps.len - 1));
+    errdefer b.deinit(gpa);
+    const pts = try gpa.alloc(dvui.Point.Physical, per_ring);
+    defer gpa.free(pts);
+    const normals = try gpa.alloc(dvui.Point.Physical, per_ring);
+    defer gpa.free(normals);
+    // The outline's normals, for every ring: a point keeps the weight of the outline it is off.
+    liquid_glass.ringPoints(pts, normals, r, radii, 0, arc_steps, 1, 1);
+    for (steps) |x| {
+        const d = sign * x * depth;
+        const ring_radii: liquid_glass.Radii = .{ radii[0] + d, radii[1] + d, radii[2] + d, radii[3] + d };
+        liquid_glass.ringPoints(pts, null, r, ring_radii, -d, arc_steps, 1, 1);
+        const f = edge.fall(x);
+        for (pts, normals) |p, n| {
+            const w = edge.weights(kind, .{ n.x, n.y });
+            const col: dvui.Color.PMA = if (w.shade > 0)
+                .fromColor(e.shade.opacity(e.shade_alpha * w.shade * f))
+            else
+                .fromColor(e.light.opacity(e.light_alpha * w.light * f));
+            b.appendVertex(.{ .pos = p, .col = col });
+        }
+    }
+    liquid_glass.appendRingStrips(&b, per_ring, steps.len);
+    return b.build();
+}
+
+/// The vertex of `tris` nearest `p`.
+fn nearestVertex(tris: dvui.Triangles, p: dvui.Point.Physical) dvui.Vertex {
+    var best = tris.vertexes[0];
+    var best_d: f32 = std.math.inf(f32);
+    for (tris.vertexes) |v| {
+        const d = (v.pos.x - p.x) * (v.pos.x - p.x) + (v.pos.y - p.y) * (v.pos.y - p.y);
+        if (d < best_d) {
+            best_d = d;
+            best = v;
+        }
+    }
+    return best;
+}
+
+test "an inset edge lies inside its outline, shaded on the top and lit on the bottom" {
+    const gpa = std.testing.allocator;
+    const r: dvui.Rect.Physical = .{ .x = 10, .y = 10, .w = 100, .h = 40 };
+    const e: Edge = .{ .shade = .black, .light = .white };
+    var tris = (try edgeMesh(gpa, r, @splat(8), 6, .inset, e)).?;
+    defer tris.deinit(gpa);
+    for (tris.vertexes) |v| {
+        try std.testing.expect(v.pos.x >= r.x - 0.01 and v.pos.x <= r.x + r.w + 0.01);
+        try std.testing.expect(v.pos.y >= r.y - 0.01 and v.pos.y <= r.y + r.h + 0.01);
+    }
+    const top = nearestVertex(tris, .{ .x = 60, .y = 10 });
+    const bottom = nearestVertex(tris, .{ .x = 60, .y = 50 });
+    try std.testing.expect(top.col.a > 0 and top.col.r == 0);
+    try std.testing.expect(bottom.col.a > 0 and bottom.col.r == bottom.col.a);
+}
+
+test "a raised edge lies outside its outline, lit on the left and shaded on the right" {
+    const gpa = std.testing.allocator;
+    const r: dvui.Rect.Physical = .{ .x = 10, .y = 10, .w = 100, .h = 40 };
+    const e: Edge = .{ .shade = .black, .light = .white };
+    var tris = (try edgeMesh(gpa, r, @splat(8), 6, .raised, e)).?;
+    defer tris.deinit(gpa);
+    // Signed distance to the rounded outline (radius 8): no vertex inside it, corners included.
+    for (tris.vertexes) |v| {
+        const qx = @abs(v.pos.x - (r.x + r.w / 2)) - (r.w / 2 - 8);
+        const qy = @abs(v.pos.y - (r.y + r.h / 2)) - (r.h / 2 - 8);
+        const sdf = std.math.hypot(@max(qx, 0), @max(qy, 0)) + @min(@max(qx, qy), 0) - 8;
+        try std.testing.expect(sdf >= -0.01);
+    }
+    const left = nearestVertex(tris, .{ .x = 10, .y = 30 });
+    const right = nearestVertex(tris, .{ .x = 110, .y = 30 });
+    try std.testing.expect(left.col.a > 0 and left.col.r == left.col.a);
+    try std.testing.expect(right.col.a > 0 and right.col.r == 0);
+}
+
+test "a well too small for its edge, or no edge, draws nothing broken" {
+    const gpa = std.testing.allocator;
+    try std.testing.expect(try edgeMesh(gpa, .{ .w = 0.5, .h = 10 }, @splat(0), 4, .inset, .{}) == null);
+    try std.testing.expect(try edgeMesh(gpa, .{ .w = 10, .h = 10 }, @splat(0), 0, .raised, .{}) == null);
+    // An inset edge deeper than half the well stops at its middle.
+    var tris = (try edgeMesh(gpa, .{ .w = 10, .h = 6 }, @splat(2), 20, .inset, .{})).?;
+    defer tris.deinit(gpa);
+    for (tris.vertexes) |v| try std.testing.expect(v.pos.y >= -0.01 and v.pos.y <= 6.01);
+}
+
+test {
+    // Compiled even before a control draws one.
+    _ = &drawEdge;
 }
