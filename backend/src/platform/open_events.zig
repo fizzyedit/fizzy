@@ -5,6 +5,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const c = @import("backend").c;
 const window = @import("window.zig");
+const quiet = @import("root.zig").quiet;
 
 /// What the app does with a file the OS hands it (`install`).
 var sink: ?*const fn (path: []const u8) void = null;
@@ -26,8 +27,10 @@ fn handleSdlFileEvent(event: ?*c.SDL_Event) void {
     const data_ptr = e.drop.data orelse return;
     const path = std.mem.span(data_ptr);
     if (sink) |f| f(path);
-    // Best-effort: raise the window.
-    if (window.main()) |w| _ = c.SDL_RaiseWindow(w);
+    // Best-effort: raise the window. Not in a quiet run, which never comes forward.
+    if (!quiet()) if (window.main()) |w| {
+        _ = c.SDL_RaiseWindow(w);
+    };
 }
 
 fn sdlFileOpenEventWatch(_: ?*anyopaque, event: ?*c.SDL_Event) callconv(.c) bool {

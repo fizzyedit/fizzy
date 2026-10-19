@@ -28,9 +28,14 @@ the path either way and exits (1, saying why, when it cannot), whether a fizzy r
 Windows release has no console to print to: capture it, `$sock = fizzy --control-path`.
 
 **A fizzy started beside the person** (an agent's build, a sandbox) takes `--quiet`, or
-`FIZZY_QUIET=1`, beside its `--profile`: a quiet run is meant never to take the person's focus.
-Like `--profile` it is never forwarded to another instance, and a restart into a rebuilt binary
-keeps it. For now it is only carried; what it changes comes with `fizzyedit/plans#35`.
+`FIZZY_QUIET=1`, beside its `--profile`: a quiet run never takes the person's focus. Its windows
+are never made active, on any OS, and open behind the person's on macOS and Windows (on Linux
+where the window manager puts them); nothing in fizzy raises them (the focus-window command, a
+dropped file); on macOS it has no Dock icon, and on Windows it opens at its restored size, not
+maximized (maximizing activates there). Drive it through this socket:
+its keyboard is the commands', not the OS's, so it acts as the active app (its native menus stay
+open). Like `--profile` it is never forwarded to another instance, and a restart into a rebuilt
+binary keeps it.
 
 **Who can use it:** only you. The socket's folder is `0700` and the socket `0600`, so nobody else
 on the machine can connect; there is no token. A link in the folder's place is refused rather than
