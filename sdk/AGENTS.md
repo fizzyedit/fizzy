@@ -16,7 +16,7 @@ file is the rules for changing it.
   re-adding it to the root zon breaks the fingerprint.
 - **One module per file.** Nothing outside reaches in by relative path; the app and build scripts
   go through `@import("fizzy_sdk")`. Nothing here imports `app/` or `src/`.
-- **`tape/` is std-only, `replay/` is dvui and `tape` only.** A reach into `core` or `app` from
+- **`tape/` and `remote/` are std-only, `replay/` is dvui and `tape` only.** A reach into `core` or `app` from
   either fails to compile on purpose: they are libraries any dvui app can take.
 - **Tests** in `src/` run in `fizzy-sdk-tests` (`zig build test-integration`), rooted at
   `src/sdk.zig`. A file reached only through a `pub const x = @import(…)` nothing uses is never

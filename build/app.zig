@@ -879,6 +879,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // dvui half (`sdk/replay/`) compiles on its own below, and is covered by
         // `tests/integration.zig`.
         .{ "fizzy-tape-tests", "sdk/tape/root.zig" },
+        // The remote-view protocol (`sdk/remote/`, plans/EMBEDDED_EDITOR_PLAN.md step 2): messages,
+        // framing, the connection rules and a loopback pair. std-only, so a host's adapter can link it.
+        .{ "fizzy-remote-tests", "sdk/remote/root.zig" },
         // Where Report a Bug goes when the build isn't told. std-only (see issues_url.zig); the
         // build is its only user.
         .{ "fizzy-issues-url-tests", "build/issues_url.zig" },

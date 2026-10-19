@@ -19,6 +19,7 @@
         "paths.zig",
         "src",
         "tape",
+        "remote",
         "replay",
     },
     .dependencies = .{
