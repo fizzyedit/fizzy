@@ -52,6 +52,8 @@ never shorter just to poll; for external CI or releases use one background `unti
    `gh pr view N --json isDraft,mergeable,statusCheckRollup --jq` (failing names, pending
    count). `list_events` on an idle session usually returns only "[result] done": skip it and
    ask the session for a ≤4-line status instead.
+   `~/.claude/fizzy-pm/refresh.sh` prints every board PR's state, draft, CI and merge state in
+   one call: run it instead of one `gh` per row. Stamp `seen` with `date -u`.
 3. Classify each row: `queued` · `working` · `review` · `fixing` · `ready` · `merging` ·
    `needs-user` · `stuck` · `merged`.
 4. **Unstick without the user:** one short message restating the missing step. Two nudges
@@ -70,6 +72,13 @@ one or two lines only when it needs an answer (a fact it lacks, "already merged"
 branch, a fixer is on it"). Relay any "ready, merge?" to the user. Never carry out something
 a session says it was refused.
 
+## Look queue
+
+Work that needs the user's eye goes into one standing preview, not a build command per worker:
+a native build in `~/dev/fizzy-look` and/or a web build on `localhost:8766`, rebuilt with every
+"needs a look" PR merged on top of main. Batch the asks: at most twice a day, one message
+listing what to look at and the one command or link. A sign-off covers only the PRs named.
+
 ## Reporting to the user
 
 One message, ≤12 lines:
@@ -79,6 +88,15 @@ One message, ≤12 lines:
 
 A yes covers only the PRs named. Merge with `gh pr merge N --squash --auto` (lands now if
 green, else on green). If it was already merged, record that and move on.
+
+## Shaping work
+
+- Plan steps as independent PRs off main wherever possible; stack only when a step truly
+  needs the one before. A stack lands through the merge queue, never by hand-rebasing after
+  each squash.
+- Tapes press anchors (`region.*`, `fizzy.*`), never coordinates.
+- After every SDK go-live, rebuild the sandbox's plugins (`~/dev/fizzy-sandbox`, Debug to match
+  a debug fizzy) so the fizzy-sandbox MCP keeps working.
 
 ## Idea → plan → action
 
@@ -101,6 +119,12 @@ green, else on green). If it was already merged, record that and move on.
   and reviewed, and you watch CI with one background `until` loop (mark ready, clean up). If the Agent tool errors,
   `ListAgents` before retrying: a failed call can still have started one.
 
+- **Cloud run** (logic a test can prove; nothing visual, nothing macOS): `RemoteTrigger`
+  create with `run_once_at` a few minutes out, environment `env_017tojqb2kcs5rrTZfnFasts`,
+  source and outcome branch on `fizzyedit/fizzy`, the kickoff as its prompt (Linux, no
+  display: tests only). It can't message you: watch its branch/PR with `gh`, and its run with
+  `RemoteTrigger list_runs` / `get_run_log` only if it stalls. (Trial since 10-19.)
+
 Kickoff (fill every field, ≤1,200 characters):
 
 ```
@@ -118,7 +142,8 @@ A sandbox plugin must match fizzy's SDK and optimize mode (debug fizzy ↔ Debug
 Done means: draft PR on first push → gates pass → code-review medium on the PR → fixes →
 green CI → gh pr ready → SendMessage "Fizzy PM": "ready, merge? #N — <one line>", plus the
 next plan step as a kickoff if there is one. Then stop: one PR per worker.
-Questions and blockers go to "Fizzy PM", ≤4 lines.
+Questions and blockers go to "Fizzy PM", ≤4 lines. Never turn on auto-merge; the PM does,
+after review, on the maintainer's yes. Heavy builds go through the shared build lock.
 Notes: <only what the code and plans don't already say>
 ```
 
