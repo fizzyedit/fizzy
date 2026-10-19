@@ -451,8 +451,13 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     var buf: [96]u8 = undefined;
     const title = if (at == 0) "Before any change" else line.entries[at - 1].title;
     const label = if (trimming and opts.window_summary.len > 0) opts.window_summary else std.fmt.bufPrint(&buf, "{s}   {d} / {d}", .{ title, at, n }) catch title;
-    const film: dvui.Rect.Physical = .{ .x = x0, .y = phys[1].y + 8 * s, .w = x1 - x0, .h = strip_h * grown * s - 6 * s };
-    if (grown > 0) if (opts.frames) |frames| paintStrip(film, frames, line, at, s, grown);
+    // The strip of pictures, inset from the bar's top far enough that the trim's bracket round it
+    // stays inside the glass, its corners the bar's own curve less that inset, so it never runs
+    // into it.
+    const film_top = strip_top * s;
+    const film: dvui.Rect.Physical = .{ .x = x0, .y = phys[1].y + film_top, .w = x1 - x0, .h = @max(0, strip_h * grown * s - film_top - 2 * s) };
+    const film_radius = @max(strip_radius * s, line_radius - film_top);
+    if (grown > 0) if (opts.frames) |frames| paintStrip(film, film_radius, frames, line, at, s, grown);
     dvui.labelNoFmt(@src(), label, .{}, .{
         .rect = .{ .x = track.x + pad - bounds.x, .y = track.y + track.h - bar_h + 4 - bounds.y, .w = track.w - 2 * pad, .h = font.lineHeight() },
         .padding = .{},
@@ -466,10 +471,10 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     paintLine(line_r, at, n, ink, s, .{ .tilt = tilt, .from = if (from) |f| dome.pool(f, fill) else null, .out = out, .alpha = shape_alpha });
     if (self.window) |win| {
         // Round the strip of pictures alone, as a recorder's trim wraps its strip, not the bar.
-        paintWindow(film.outsetAll(trim_inset * s + trim_edge * s), strip_radius * s + trim_inset * s + trim_edge * s, x0, x1, win, s);
+        paintWindow(film.outsetAll(trim_inset * s + trim_edge * s), film_radius + trim_inset * s + trim_edge * s, x0, x1, win, s);
         // Its sides are what drag: the pointer over one, or dragging it, shows they move sideways.
-        const xf = rules.stopX(win.from, x0, x1, win.n);
-        const xt = rules.stopX(win.to, x0, x1, win.n);
+        const xf = rules.cellStart(win.from, x0, x1, win.n);
+        const xt = rules.cellEnd(win.to, x0, x1, win.n);
         const over_side = film.outsetAll(8 * s).contains(pt) and (@abs(pt.x - xf) <= trim_reach * s or @abs(pt.x - xt) <= trim_reach * s);
         if (over_side or self.grip != null) dvui.cursorSet(.arrow_w_e);
     }
@@ -506,8 +511,9 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
     const ro = @max(2 * s, radius - inset);
     const ri: dvui.Corner.Physical = .round(1.5 * s);
     const outer: dvui.Corner.Physical = .round(ro);
-    const xf = rules.stopX(win.from, x0, x1, win.n);
-    const xt = rules.stopX(win.to, x0, x1, win.n);
+    // On the edges of the first and last stops' slices, so the bracket holds whole slices.
+    const xf = rules.cellStart(win.from, x0, x1, win.n);
+    const xt = rules.cellEnd(win.to, x0, x1, win.n);
     const handle_w = 8 * s;
     const edge = trim_edge * s;
     const dim: dvui.Color = dvui.Color.black.opacity(0.6);
@@ -534,13 +540,12 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
 /// shape (`history_transport.frameContent`), so a few words at the top of a wide pane fill it
 /// rather than empty pane. A stop with no picture shows the nearest that has one; none at all,
 /// the stretch stays glass. The stop at `at` is lit and outlined; the rest a little dimmer.
-fn paintStrip(r: dvui.Rect.Physical, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
+fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
     const n = line.entries.len;
     var buf: [256]rules.Column = undefined;
     const columns = rules.stripColumns(n, r.x, r.x + r.w, 2 * s, &buf);
     const ink = dvui.themeGet().color(.window, .text);
-    const radius = strip_radius * s;
     var lit_x0: ?f32 = null;
     var lit_x1: f32 = 0;
     // Round what the pictures shown hold, in fractions of a picture (they share the pane's shape).
@@ -598,6 +603,8 @@ const content_closest: f32 = 0.15;
 const trim_inset: f32 = 5;
 const trim_edge: f32 = 2.5;
 const strip_radius: f32 = 4;
+/// The strip's inset from the top of the bar, in points: room for the trim's bracket round it.
+const strip_top: f32 = 12;
 const trim_reach: f32 = 12;
 
 /// The picture of stop `stop`, or of the nearest stop to it that has one.
