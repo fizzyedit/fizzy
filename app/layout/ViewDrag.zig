@@ -1310,6 +1310,8 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     const d = &l.state.view_drag;
     const center: DropZones.Center = if (std.mem.eql(u8, d.name, name))
         (if (canFloat(l, name)) .float else .none)
+    else if (floatsDocument(l, name))
+        .float
     else if (joins(l, d.name, name))
         .join
     else if (regionNamed(l.state, name)) |r| (if (r.shows == .many) .add else .replace) else .replace;
@@ -2330,6 +2332,9 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // opened empty on the far side — a tab dragged to the top of its own strip's place moved the
     // tabs left behind to the bottom, as though another view had been carried.
     const same = std.mem.eql(u8, source, dest);
+    // A document dropped on its own slot's middle floats, in a view holding it (`floatsDocument`).
+    if (kind == .swap and std.mem.eql(u8, source, loose_source) and floatsDocument(l, dest))
+        return floatDocument(l, ownId(l.arena, l.state.view_drag.moved_id) orelse return, null);
     // An empty place carried: it is the place that moves, not a view (`placeEmpty`).
     if (!std.mem.eql(u8, source, loose_source) and movedFrom(l, source) == null) return placeEmpty(l, source, dest, kind);
     const stays = same and (kind != .split or holding(l, source).len <= 1);
@@ -2493,6 +2498,8 @@ fn floatAway(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
     const carried = if (from_picker) l.state.view_drag.moved_id else movedFrom(l, source) orelse return;
     const moved = ownId(l.arena, carried) orelse return;
     const s = l.host.surfaceById(moved) orelse return;
+    // A document: in a view holding it, where the application gives it one (`floatDocument`).
+    if (from_picker and l.slotted(s)) return floatDocument(l, moved, mouse);
     if (!float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = false })) return;
     const left = if (from_picker) holderOf(l, moved) else source;
     floatOut(l, source, moved, mouse);
@@ -2509,6 +2516,36 @@ fn canFloat(l: *Layout, source: []const u8) bool {
     return float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = alone });
 }
 
+/// Whether the document carried loose floats when it is dropped on the middle of `dest`: the
+/// slot it is a tab of — its own workspace's, in fizzy — where the application gives documents
+/// views of their own (`State.documents`), as a view dropped on its own place's middle floats.
+/// Not when the view it would float in is already alone in a float nobody split.
+fn floatsDocument(l: *Layout, dest: []const u8) bool {
+    if (l.state.documents == null) return false;
+    const d = &l.state.view_drag;
+    if (!d.active() or !d.loose() or d.with_n > 1) return false;
+    const r = regionNamed(l.state, dest) orelse return false;
+    if (!r.kind_slot or !containsId(holding(l, dest), d.moved_id)) return false;
+    const c = carriedView(l, d.moved_id) orelse return true;
+    return !(l.state.floats.find(c.from) != null and l.state.splits.root(c.from) == null and holding(l, c.from).len <= 1);
+}
+
+/// Float the document `moved`, carried loose, in a view of the application's holding it
+/// (`State.documents`): the view it carries alone (`carriedView`) out of the place showing that,
+/// or a new one holding just it (`houseView`), out of the tab strip it leaves. Let go at `at`
+/// (over no window of the app's), the float opens there; else over the pane it came out of.
+fn floatDocument(l: *Layout, moved: []const u8, at: ?dvui.Point.Physical) void {
+    if (l.state.documents == null) return;
+    if (carriedView(l, moved)) |c| {
+        floatOut(l, c.from, c.view, at);
+        shutIfEmptied(l, c.from);
+    } else {
+        floatOut(l, loose_source, houseView(l, moved) orelse return, at);
+    }
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
 /// Float `moved` out of `source`: a new float (`Floats`) holding just it, where `float_rules`
 /// opens one — out of another float, a step down and right of that one — growing out of the glass
 /// it was carried in, with the photograph the drag took of it. The source loses the view; a place
@@ -2523,16 +2560,20 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.P
     // Carried out of the picker (a loose drag), it floats out of whichever place holds it now —
     // its home when the float closes — or, held nowhere, out of none: its keywords take it home.
     const holder: ?[]const u8 = if (std.mem.eql(u8, source, loose_source)) holderOf(l, moved) else source;
-    const src = (if (holder) |h| placeBounds(state, h) else null) orelse dvui.windowRectPixels();
+    const d = &state.view_drag;
+    // Held nowhere — a document's new view (`floatDocument`) — it comes out of the pane its
+    // photograph was taken in.
+    const photo_rect: ?dvui.Rect.Physical = if (d.active() and d.texture != null) d.texture_rect else null;
+    const src = (if (holder) |h| placeBounds(state, h) else null) orelse photo_rect orelse dvui.windowRectPixels();
     const out_of: ?usize = if (holder) |h| (if (state.floats.rootOf(h)) |root| state.floats.find(root) else null) else null;
     var rect = if (out_of) |i|
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
         float_rules.initialRect(Floats.toRules(src.toNatural()), window);
-    // The glass it was carried in, when a drag let go of it here; the place itself, when nothing
-    // was carried (the picker, a test).
-    const d = &state.view_drag;
-    const carried = d.active() and std.mem.eql(u8, d.name, source) and d.shape_rect.w > 0;
+    // The glass it was carried in, when a drag let go of it here — a loose one too, the document
+    // in it floating in a view it carried (`floatDocument`); the place itself, when nothing was
+    // carried (the picker, a test).
+    const carried = d.active() and (std.mem.eql(u8, d.name, source) or d.loose()) and d.shape_rect.w > 0;
     // Carried with its picture, it opens as its place was, there (`float_rules.asTaken`): the
     // picture growing with it out of the drop lands on the view as the float shows it.
     // The window the place's size, its view inside it below its header (the user: a window no
@@ -2613,6 +2654,8 @@ pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
         state.unassign(l.gpa, leaf);
     }
     for (ids.items) |id| {
+        // A view of the application's holding documents gives them to the main window's own.
+        if (state.documents) |docs| if (docs.fold(docs.ctx, id)) continue;
         const held = holding(l, home);
         var landed: ?[]const u8 = if (r != null) home else null;
         switch (float_rules.goHome(.{

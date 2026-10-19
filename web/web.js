@@ -540,6 +540,29 @@ export class Dvui {
         }
     }
 
+    /**
+     * An Apple Pencil on iPad Safari arrives as a TouchEvent whose touch has `touchType`
+     * "stylus" (a finger's is "direct"). It is a pen, not a finger, so it goes in as the mouse:
+     * motion to where it is, then the left button pressed or released. dvui then counts it as
+     * `.mouse` (`dvui.pointerKind()`), so what it last touched stays hovered after a lift and a
+     * canvas treats it as a pointer, not a pan; native excludes SDL's pen touches the same way.
+     * The touch handlers' `preventDefault` stops the browser's own mouse events following it.
+     *
+     * @param {TouchEvent} ev
+     * @param {Touch} touch
+     * @param {1 | 2 | 3} which  1 motion only, 2 press, 3 release (`add_event`'s mouse codes)
+     */
+    stylusEvent(ev, touch, which) {
+        const rect = this.gl.canvas.getBoundingClientRect();
+        const x = (touch.clientX - rect.left) / (rect.right - rect.left) *
+            this.gl.drawingBufferWidth;
+        const y = (touch.clientY - rect.top) / (rect.bottom - rect.top) *
+            this.gl.drawingBufferHeight;
+        const mods = this.modCode(ev);
+        this.instance.exports.add_event(1, mods, 0, x, y);
+        if (which !== 1) this.instance.exports.add_event(which, 0, mods, 0, 0);
+    }
+
     touchIndex(pointerId) {
         let idx = this.touches.findIndex((e) => e[0] === pointerId);
         if (idx < 0) {
@@ -1706,6 +1729,10 @@ export class Dvui {
             let rect = this.gl.canvas.getBoundingClientRect();
             for (let i = 0; i < ev.changedTouches.length; i++) {
                 let touch = ev.changedTouches[i];
+                if (touch.touchType === "stylus") {
+                    this.stylusEvent(ev, touch, 2);
+                    continue;
+                }
                 let x = (touch.clientX - rect.left) /
                     (rect.right - rect.left);
                 let y = (touch.clientY - rect.top) /
@@ -1721,12 +1748,16 @@ export class Dvui {
             }
             this.requestRender();
         });
-        this.gl.canvas.addEventListener("touchend", (ev) => {
+        const touchEnd = (ev) => {
             if (this.stopped) return;
             ev.preventDefault();
             let rect = this.gl.canvas.getBoundingClientRect();
             for (let i = 0; i < ev.changedTouches.length; i++) {
                 let touch = ev.changedTouches[i];
+                if (touch.touchType === "stylus") {
+                    this.stylusEvent(ev, touch, 3);
+                    continue;
+                }
                 let x = (touch.clientX - rect.left) /
                     (rect.right - rect.left);
                 let y = (touch.clientY - rect.top) /
@@ -1746,13 +1777,21 @@ export class Dvui {
             // https://stackoverflow.com/a/6837575
             this.oskCheck();
             this.requestRender();
-        });
+        };
+        this.gl.canvas.addEventListener("touchend", touchEnd);
+        // A cancelled touch (the system took it: a gesture, an alert) ends like a lifted one,
+        // or its button, or the pencil's mouse button, would stay held.
+        this.gl.canvas.addEventListener("touchcancel", touchEnd);
         this.gl.canvas.addEventListener("touchmove", (ev) => {
             if (this.stopped) return;
             ev.preventDefault();
             let rect = this.gl.canvas.getBoundingClientRect();
             for (let i = 0; i < ev.changedTouches.length; i++) {
                 let touch = ev.changedTouches[i];
+                if (touch.touchType === "stylus") {
+                    this.stylusEvent(ev, touch, 1);
+                    continue;
+                }
                 let x = (touch.clientX - rect.left) /
                     (rect.right - rect.left);
                 let y = (touch.clientY - rect.top) /
@@ -1768,11 +1807,6 @@ export class Dvui {
             }
             this.requestRender();
         });
-        //canvas.addEventListener("touchcancel", (ev) => {
-        //    console.log(ev);
-        //    this.requestRender();
-        //});
-
         // start the first update
         this.requestRender();
     }

@@ -8,6 +8,7 @@
 //! is framework, and the chrome beside it (explorer, sidebar, panes) is fizzy's own. Seventy-five
 //! flat fields made that invisible.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
@@ -48,6 +49,10 @@ pub const Documents = struct {
     /// The view holding document `id` and nothing else, if one does: carried alone, the
     /// document carries that view, which lands as itself rather than inside a new one.
     alone: *const fn (ctx: *anyopaque, id: []const u8) ?[]const u8,
+    /// View `id`, out of a float that is closing, going back into the main window: a view holding
+    /// documents gives them to the one the main window shows, and goes as an emptied one does.
+    /// True when it did; false for any other view, or with none in the main window to take them.
+    fold: *const fn (ctx: *anyopaque, id: []const u8) bool,
 };
 
 pub const StoreCatalog = struct {
@@ -105,6 +110,10 @@ offscreen_unstarted: u8 = 0,
 /// The views (id hashes) whose capture failed since the picker opened, gpa-owned: not tried again
 /// until it reopens (`captureFailed`, `recordCaptureFailed`).
 capture_failed: std.AutoHashMapUnmanaged(u64, void) = .empty,
+/// Debug builds only: the views (id hashes) already warned about filling their place with a
+/// scroll area of their own without saying `Surface.scrolls_itself` (`noteUnmarkedScroller`), so
+/// each is named once rather than every frame. Nothing in a release build.
+unmarked_scrollers: if (builtin.mode == .debug) UnmarkedScrollers else void = if (builtin.mode == .debug) .{} else {},
 /// The one surface picker, if open. On the state rather than in whichever pane opened it so the
 /// settings table and a region's corner button open the same thing, and the app draws it in
 /// one place above everything else (`Picker.draw`).
@@ -696,6 +705,29 @@ pub fn captureFailed(self: *const State, id: []const u8) bool {
 /// tried again until the picker reopens. Nothing else is affected.
 pub fn recordCaptureFailed(self: *State, gpa: std.mem.Allocator, id: []const u8) void {
     self.capture_failed.put(gpa, std.hash.Wyhash.hash(0, id), {}) catch {};
+}
+
+/// What `unmarked_scrollers` holds: a fixed list, so a debugging aid allocates nothing. Past
+/// `ids.len` views, the rest go unnamed.
+pub const UnmarkedScrollers = struct {
+    ids: [16]u64 = undefined,
+    len: u8 = 0,
+
+    pub fn contains(self: *const UnmarkedScrollers, id: []const u8) bool {
+        const h = std.hash.Wyhash.hash(0, id);
+        return std.mem.indexOfScalar(u64, self.ids[0..self.len], h) != null;
+    }
+};
+
+/// Surface `id` filled its place with an unmarked scroll area (Debug builds; `Layout.drawSolid`).
+/// True the first time, which is when to say so.
+pub fn noteUnmarkedScroller(self: *State, id: []const u8) bool {
+    if (builtin.mode != .debug) return false;
+    const list = &self.unmarked_scrollers;
+    if (list.contains(id) or list.len == list.ids.len) return false;
+    list.ids[list.len] = std.hash.Wyhash.hash(0, id);
+    list.len += 1;
+    return true;
 }
 
 /// How many offscreen captures in a row may fail to start, each a different view, before capture

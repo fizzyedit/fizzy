@@ -350,6 +350,9 @@ pub const VTable = struct {
     /// Recent project folders (most recent last).
     recentFolderCount: *const fn (ctx: *anyopaque) usize,
     recentFolderAt: *const fn (ctx: *anyopaque, index: usize) ?[]const u8,
+    /// When the recent folder at `index` was last opened, in seconds since the Unix epoch; null
+    /// when not known (a folder remembered before fizzy kept times) or past the end.
+    recentFolderOpened: *const fn (ctx: *anyopaque, index: usize) ?i64,
     /// Reveal `path` in the OS file browser.
     openInFileBrowser: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
     /// True when `abs_path` is ignored by `.fizignore`/`.gitignore` at `project_root`.
@@ -684,6 +687,10 @@ pub fn recentFolderCount(self: EditorAPI) usize {
 
 pub fn recentFolderAt(self: EditorAPI, index: usize) ?[]const u8 {
     return self.vtable.recentFolderAt(self.ctx, index);
+}
+
+pub fn recentFolderOpened(self: EditorAPI, index: usize) ?i64 {
+    return self.vtable.recentFolderOpened(self.ctx, index);
 }
 
 pub fn openInFileBrowser(self: EditorAPI, path: []const u8) !void {

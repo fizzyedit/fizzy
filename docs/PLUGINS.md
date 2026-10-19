@@ -550,6 +550,7 @@ inventing a kind of panel never touches the ABI. Fizzy's shipped shapes accept t
 | `sdk.keywords.ide.sidebar` | `sidebar`, `explorer` | things you pick *from* — file trees, outlines |
 | `sdk.keywords.ide.panel` | `bottom`, `panel`, `output` | things a task *produces* — logs, diagnostics |
 | `sdk.keywords.ide.main` | `main`, `center`, `workspace` | the thing being worked on |
+| `sdk.keywords.ide.home` | `home` | what the main area shows while nothing is open (below) |
 | `sdk.document.keywords` | `document` | one open document (the app registers these, see below) |
 
 A keyword may name a place *inside* another, dot-separated (`main.document`). `keywords.Fit`
@@ -631,6 +632,27 @@ if (!host.hideSurface(id)) _ = host.revealSurface(id);    // toggle it
 - **Asked from a draw.** Mid-frame, `hideSurface` answers at once and acts when the frame has
   drawn, since the places it changes are being drawn. `revealSurface` acts at once, so a hide
   asked first in a frame still lands after a reveal asked later in it: make one call a frame.
+
+**A home page.** What the main area shows while nothing is open (the workbench's logo, New File,
+Open Folder) is a place too. While its one document pane is empty, the workbench declares a
+region named `Home` inside it with keywords `sdk.keywords.ide.home` (`{"home"}`) and
+`shows = .one`, and draws the surface that region accepts. With no such surface the region
+declines, and the workbench draws its own page. A start page is just a surface that says what it
+is:
+
+```zig
+try host.registerSurface(.{ .id = "graphl.start", .title = "Start",
+    .keywords = sdk.keywords.ide.home, .draw = drawStart });
+```
+
+It needs no startup code. The place exists only while nothing is open, so a document opening
+puts the home page away, and so does a restored session landing a few frames after startup. The
+last document closing brings it back. None of the shape's own regions accept a `home` surface,
+so it never shows up as a tab in Main. When two plugins offer a home page, the first one
+registered shows until someone chooses. An app chooses with
+`host.assignSurfaces("Home", &.{"graphl.start"})`, the same list the picker writes, and a user
+chooses in Settings › Layout. A shape without the workbench has no `Home` place unless it
+declares a region that takes `home` itself.
 
 **Dragging a view onto a region is the app's gesture, everywhere.** While a view is dragged,
 the region under the pointer shows its drop (`core.widgets.DropZones`): a cluster of glass
@@ -1300,6 +1322,12 @@ The SDK ships definitions for the services in this ecosystem, in
 Everything a plugin might reasonably ask *fizzy* for lives on `Host` instead — `openFile`,
 `closeDocById`, `docFromPath`, `revealPosition`, `setProjectFolder`, `isPathIgnored`, … — where it
 degrades to a no-op in an app that ships no workbench rather than being unreachable.
+
+The app's recent folders are `host.recentFolderCount()` and `host.recentFolderAt(i)`, oldest
+first: the last is the folder opened most recently. `host.recentFolderOpened(i)` says when it was
+last opened, in seconds since the Unix epoch, which is what a home page groups recents by
+("today", "this week"). It is null for a folder remembered before fizzy kept times (a
+`recents.zon` an older fizzy wrote), so order by the index and put those under "earlier".
 
 **Every lookup must tolerate absence.** A service's provider may be uninstalled, disabled, or
 simply not built for this target — `files` and `markdown` are missing on web, and `wikilink` is
