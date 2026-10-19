@@ -841,6 +841,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
+        // Line diff of two texts (histogram, Myers fallback), hunks and unified output. std-only
+        // (see core/diff.zig); `plans/DIFF_PLAN.md` step 1.
+        .{ "fizzy-diff-tests", "core/diff.zig" },
         // When a document's transport shows and for how long, how far a held undo goes, which
         // step a point on its line is. std-only (see history_transport.zig); `HistoryTransport`
         // draws it.
@@ -1516,6 +1519,28 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
         const bench_step = b.step("bench-tape", "Benchmark saving and loading demo tapes, ZON against binary (prints timings)");
         const run_bench = b.addRunArtifact(bench_tape);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
+    // `zig build bench-diff` — `core.diff` text against the plan's budget (`plans/DIFF_PLAN.md`
+    // section 3): 1 MB identical, one edit, scattered edits, every line changed, and a reused
+    // scratch. Same rules as `bench-text`; std-only, so it needs no window.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_diff.zig"),
+        });
+        bench_module.addImport("diff", b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("core/diff.zig"),
+        }));
+        const bench_diff = b.addTest(.{ .name = "fizzy-bench-diff", .root_module = bench_module });
+
+        const bench_step = b.step("bench-diff", "Benchmark core.diff text on 1 MB inputs against the plan's budget (prints timings)");
+        const run_bench = b.addRunArtifact(bench_diff);
         run_bench.has_side_effects = true;
         bench_step.dependOn(&run_bench.step);
     }
