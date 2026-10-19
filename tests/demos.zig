@@ -271,6 +271,79 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try dvui.testing.settle(headlessFrame);
     }
 
+    // A demo plays on a stage of its own: unsaved work of the person's never stops one, and is
+    // there after it exactly as it was — still open, still unsaved, its history and its pane
+    // theirs — through a play, a seek back and an end, with settings.zon never written.
+    {
+        const wb = &app.editor.workbench;
+        const draft = try std.fmt.allocPrint(gpa, "{s}/draft.md", .{app.root_buf[0 .. std.mem.indexOfScalar(u8, &app.root_buf, 0) orelse 0]});
+        defer gpa.free(draft);
+        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = draft, .data = "# Draft\n" });
+        _ = try app.editor.openFilePath(draft, wb.currentGroupingID());
+        frames = 0;
+        while (host.docFromPath(draft) == null and frames < 200) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try dvui.testing.settle(headlessFrame);
+        const doc = host.docFromPath(draft) orelse return error.TestUnexpectedResult;
+        const write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"# Draft, not saved\\n\" }}", .{draft});
+        defer gpa.free(write);
+        try std.testing.expect(host.callCommand("text.write", write, host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.isDirty(doc));
+        const line_before = doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult;
+        const steps_before = line_before.entries.len;
+        const at_before = line_before.at;
+        const grouping = doc.owner.documentGrouping(doc);
+        const panes_before = wb.workspaces.count();
+        const docs_open = app.editor.app.open_files.count();
+        try std.testing.expectEqual(doc.id, app.editor.activeDoc().?.id);
+        app.editor.flushSettings();
+        const settings_path = try std.fs.path.join(gpa, &.{ app.editor.app.config_folder, "settings.zon" });
+        defer gpa.free(settings_path);
+        const settings_before = try std.Io.Dir.cwd().statFile(dvui.io, settings_path, .{});
+
+        try app.editor.demo.playTape(glassy);
+        try std.testing.expect(app.editor.demo.active());
+        frames = 0;
+        while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqual(automation.Player.State.ended, p.state);
+        // On the stage, only the demo's: its pane, its document in front, the draft nowhere.
+        try std.testing.expectEqual(@as(usize, 1), wb.workspaces.count());
+        try std.testing.expect(std.mem.startsWith(u8, activePath(app.editor), "demo://"));
+        try std.testing.expect(!wb.workspaces.contains(grouping));
+        p.seek(0);
+        frames = 0;
+        while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        p.seek(@floatFromInt(p.duration()));
+        frames = 0;
+        while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        p.unload();
+        try dvui.testing.settle(headlessFrame);
+
+        // The same document, never closed: unsaved, its text and history as they were, in its pane
+        // and in front.
+        const back = host.docFromPath(draft) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(doc.id, back.id);
+        try std.testing.expect(back.owner.isDirty(back));
+        const read_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{draft});
+        defer gpa.free(read_args);
+        const out = host.callCommand("text.read", read_args, host.arena()).ok orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.indexOf(u8, out, "# Draft, not saved") != null);
+        const line_after = back.owner.historyLine(back, host.arena()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(steps_before, line_after.entries.len);
+        try std.testing.expectEqual(at_before, line_after.at);
+        try std.testing.expectEqual(grouping, back.owner.documentGrouping(back));
+        try std.testing.expectEqual(panes_before, wb.workspaces.count());
+        try std.testing.expectEqual(docs_open, app.editor.app.open_files.count());
+        try std.testing.expectEqual(doc.id, app.editor.activeDoc().?.id);
+        try std.testing.expect(wb.held_tabs.items.len == 0 and wb.held_workspaces.count() == 0);
+        // Not written while the demo played, nor by its end.
+        const settings_after = try std.Io.Dir.cwd().statFile(dvui.io, settings_path, .{});
+        try std.testing.expectEqual(settings_before.mtime, settings_after.mtime);
+        try std.testing.expectEqual(settings_before.size, settings_after.size);
+        try app.editor.rawCloseFileID(back.id);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // A tape loaded some other way is not the one the service started.
     try app.editor.demo.play("markdown");
     try std.testing.expectEqual(@as(?[]const u8, null), api.current());

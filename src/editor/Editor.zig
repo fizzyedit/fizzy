@@ -2227,6 +2227,11 @@ pub fn postInit(editor: *Editor) !void {
         .description = e[1],
         .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
     }) catch {};
+    editor.app.host.declareEvent(.{
+        .name = "fizzy.claim.stopped",
+        .description = "The person took a held document back: Stop, or their undo, redo or go back on it. The holder's claim is gone.",
+        .payload = ".{ .path = \"/absolute/path\", .holder = \"agent\", .label = \"Claude\" }",
+    }) catch {};
     // The control server's (native only): an MCP client's session ended.
     if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").mcp.session_ended) catch {};
     editor.app.host.declareEvent(.{
@@ -2975,6 +2980,9 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     });
     // The owner's own name for it, when it has one, copied in (`Host.documentTitleChanged`).
     editor.app.host.documentTitleChanged(doc);
+    // One of the person's, set aside while a demo plays (made again by a rename, or landing in a
+    // pane of theirs): hidden too.
+    if (!editor.demo.ownsDocument(doc)) editor.app.host.setSurfaceHidden(ds.id, true);
 }
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
@@ -3087,7 +3095,19 @@ fn drawClaim(editor: *Editor, claim: sdk.Claim, pill: ClaimPill, path: []const u
         .color_fill = .{ .color = color },
     });
     glyph.deinit();
-    if (stop.clicked()) editor.app.host.releaseClaim(claim.id);
+    if (stop.clicked()) editor.stopClaim(claim);
+}
+
+/// The person takes a document back from whoever holds it (`sdk.Claim`): Stop on its pill, or their
+/// Undo, Redo or Go back on it, which always run. The claim goes, so its holder, finding it gone,
+/// knows it was stopped (`Host.claimHolds`), and `fizzy.claim.stopped` says so to whoever listens.
+/// Another agent's claim still refuses it while one holds: only the person overrides one.
+pub fn stopClaim(editor: *Editor, claim: sdk.Claim) void {
+    const host = &editor.app.host;
+    const path = if (editor.app.docById(claim.doc_id)) |d| d.owner.documentPath(d) else "";
+    // Before the release, which frees the label.
+    host.emitZon("fizzy.claim.stopped", .{ .path = path, .holder = claim.owner.id, .label = claim.label });
+    host.releaseClaim(claim.id);
 }
 
 /// A document a plugin has just taken (`sdk.Claim`) shows beside the person, so they watch the
@@ -3184,18 +3204,30 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     if (editor.app.host.activity_muted) ds.feed.clear() else {
         const now = dvui.frameTimeNS();
         ds.feed.take(&editor.app.host, doc.id, now);
-        // Above the pill while someone holds the document, and above the transport while it shows.
-        var area = canvas.data().borderRectScale().r;
-        if (claim_pill) |pill| area.h = pill.physical.y - area.y + 6 * dvui.windowRectScale().s;
-        if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
-            area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
-        };
-        // And above the history's vial in the card's corner, which the feed's newest would sit on.
-        if (claim_pill == null and ds.has_history) if (card_corner) |c| {
-            const s = dvui.windowRectScale().s;
-            area.h = @max(0, @min(area.h, c.point()[1] - c.radiusPx(s) - area.y + 6 * s));
-        };
-        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |pressed| editor.actFromFeed(doc, ds, pressed);
+        // Above the pill while someone holds the document, above the transport while it shows,
+        // and above the history's vial in the card's corner, which the feed's newest would sit on;
+        // `under` names which it stands on, and the feed eases there when that changes.
+        const pane = canvas.data().borderRectScale().r;
+        const s = dvui.windowRectScale().s;
+        var top = pane.y + pane.h;
+        var under: u32 = 0;
+        if (claim_pill) |pill| {
+            top = pill.physical.y + 6 * s;
+            under = 1;
+        } else {
+            if (ds.transport.place(pane, now)) |bar| if (bar.y + 6 * s < top) {
+                top = bar.y + 6 * s;
+                under = 2;
+            };
+            if (ds.has_history) if (card_corner) |c| {
+                const vial = c.point()[1] - c.radiusPx(s) + 6 * s;
+                if (vial < top) {
+                    top = vial;
+                    under = 3;
+                }
+            };
+        }
+        if (ds.feed.draw(pane, @max(0, pane.y + pane.h - top), under, @truncate(ds.doc_id), now)) |pressed| editor.actFromFeed(doc, ds, pressed);
     }
 
     // A menu inside the document only when its owner names one. The context is created *after*
@@ -4330,13 +4362,21 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
-    // A demo replaying to a seek wants every frame to land where it is going: no motion.
+    // A demo replaying to a seek wants every frame to land where it is going: no motion — but the
+    // glass keeps its edge, the transport's among it, scrubbed or not.
     const playback: f32 = if (editor.demo.player.state == .playing) editor.demo.player.rate else 1;
-    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast, playback);
+    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion(), editor.demo.fast, playback);
     fizzy.core.programs.publishHost();
     // Where the main window's title bar takes presses, not the app (macOS): floating windows,
     // menus and tooltips are kept below it (`core.screens.mainScreen`).
     fizzy.core.screens.publishMainTop(if (builtin.target.os.tag == .macos) fizzy.backend.titlebarStripHeight(dvui.currentWindow()) else 0);
+    // Its corner's curve, for what stands in the window's own corner (a playing tape's orb).
+    {
+        const win = dvui.currentWindow();
+        // Square in full screen; maximized, too, but on macOS, where a zoomed window keeps its curve.
+        const square = fizzy.backend.isFullscreenChromeHidden(win) or (builtin.target.os.tag != .macos and fizzy.backend.isMaximized(win));
+        fizzy.core.screens.publishMainRadius(if (square) 0 else if (builtin.target.os.tag == .linux) Constants.linux_window_radius else fizzy.backend.viewports.windowRadius());
+    }
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.get().kind == .liquid);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
@@ -4569,7 +4609,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 editor.session_frames += 1;
                 dvui.refresh(null, @src(), null);
                 if (KeptDocuments.recoveredFromCheckpoint())
-                    dvui.toast(@src(), .{ .message = "fizzy did not quit cleanly last time. Its unsaved changes are back." });
+                    core.dialogs.toast(@src(), .{ .message = "fizzy did not quit cleanly last time. Its unsaved changes are back." });
             }
         }
     }
@@ -4939,6 +4979,10 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
         return;
     };
     const id = item.id;
+    // The person's hand on the menu bar, as at the keys (`Host.setInputAuthor`).
+    const outer = editor.app.host.input_author;
+    defer editor.app.host.input_author = outer;
+    editor.app.host.setInputAuthor(editor.demo.author() orelse .person);
     // A key equivalent's keystroke is still on its way through SDL to the focused widget;
     // tell the command so it doesn't synthesize a second one (a pasted-twice text field).
     const run = if (action.from_key) Keybinds.runCommandWithKeyEventInFlight(editor, id) else editor.app.host.runCommand(id);
@@ -5323,9 +5367,7 @@ fn fizzyAssignedSurfaces(ctx: *anyopaque, region: []const u8) ?[]const []const u
 
 fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void {
     const editor = fizzyCtx(ctx);
-    // Either list: this frame's if the shape has declared it already, else last frame's. A
-    // region that exists in neither has not been drawn yet, and its first draw selects the
-    // first thing it shows — which for a pane just created around one document is that one.
+    // Either list: this frame's if the shape has declared it already, else last frame's.
     for (editor.app.layout.regions_building.items) |r| if (std.mem.eql(u8, r.name, region)) {
         editor.app.host.setSelectionForKey(r.selectionKey(), id);
         return;
@@ -5334,6 +5376,11 @@ fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void
         editor.app.host.setSelectionForKey(r.selectionKey(), id);
         return;
     };
+    // Not drawn yet — a pane just made, which a place is named for — so kept under that name, for
+    // its first draw to show. Dropped, the first draw showed the first thing the pane held: a
+    // demo's pane, new when it starts, came up on its first document there and on its last after
+    // a seek back.
+    editor.app.host.setSelectionForKey(Region.namedSelectionKey(region), id);
 }
 
 fn fizzyRevealSurface(ctx: *anyopaque, id: []const u8) bool {
@@ -5556,7 +5603,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     // Recents after a sign-out, it does not.
     const on_mount = fizzy.core.paths.isMountPath(path);
     if (on_mount and !editor.app.file_table.isMounted(path)) {
-        dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+        core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
             editor.app.arena.allocator(),
             "{s} is not connected. Sign in or open it first.",
             .{path[0..(fizzy.core.paths.mountPrefixLen(path) orelse path.len)]},
@@ -5569,14 +5616,14 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) if (!on_mount) {
         const arena = editor.app.arena.allocator();
         const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch |err| {
-            dvui.toast(@src(), .{ .message = if (err == error.FileNotFound)
+            core.dialogs.toast(@src(), .{ .message = if (err == error.FileNotFound)
                 std.fmt.allocPrint(arena, "{s} can't be found.", .{path}) catch "That folder can't be found."
             else
                 std.fmt.allocPrint(arena, "{s} can't be opened ({t}).", .{ path, err }) catch "That folder can't be opened." });
             return err;
         };
         if (st.kind != .directory) {
-            dvui.toast(@src(), .{ .message = std.fmt.allocPrint(arena, "{s} is not a folder.", .{path}) catch "That is not a folder." });
+            core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(arena, "{s} is not a folder.", .{path}) catch "That is not a folder." });
             return error.NotADirectory;
         }
     };
@@ -6055,7 +6102,7 @@ fn driveHandover(editor: *Editor) void {
                 defer editor.app.gpa.free(dir);
                 SettingsWatcher.emptyStateFolder(dvui.io, dir);
             } else |_| {}
-            dvui.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
+            core.dialogs.toast(@src(), .{ .message = "The new build did not start. Still running this one." });
         },
     }
 }
@@ -6359,7 +6406,7 @@ pub fn processLoadingJobs(editor: *Editor) void {
                 dvui.log.err("Failed to open file: {s}", .{job.path});
                 // Its placeholder says so; only an open with none (a plugin's, say) needs a toast.
                 if (!editor.openings.fail(editor, job.path, "Its plugin could not read it. See the Output panel.")) {
-                    dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+                    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
                         editor.app.arena.allocator(),
                         "Could not open {s}.",
                         .{std.fs.path.basename(job.path)},
@@ -6631,7 +6678,7 @@ fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
         error.SaveInProgress => {},
         error.OwnerCannotSaveToMount => {
             dvui.log.err("{s} cannot be saved to a mounted drive by its editor", .{doc.owner.documentPath(doc)});
-            dvui.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." });
+            core.dialogs.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." });
         },
         else => return err,
     };
@@ -6819,7 +6866,7 @@ pub fn processPendingSaveAs(editor: *Editor) void {
     // untitled document) closes once it has landed clean.
     editor.doc_io.save(doc, path) catch |err| {
         switch (err) {
-            error.OwnerCannotSaveToMount => dvui.toast(@src(), .{ .message = "This editor cannot save to another file." }),
+            error.OwnerCannotSaveToMount => core.dialogs.toast(@src(), .{ .message = "This editor cannot save to another file." }),
             else => dvui.log.err("Save As: {any}", .{err}),
         }
         return;
@@ -6842,13 +6889,17 @@ pub fn redo(editor: *Editor) !void {
 
 /// An undo or a redo of the active document, through its owner's command: its transport shows,
 /// and a key held down goes further each press (`HistoryTransport.press`), the command run that
-/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar. An undo of
+/// many times. Nothing to undo: the command as ever, and no bar. On a claimed document, the
+/// person's stops its holder first (`stopClaim`); anyone else's is refused, as ever. An undo of
 /// a step someone else made says so on the document, with a Redo (`ActivityFeed.pushAction`), in
 /// place of the plain "Undo" its run would show.
 fn historyStep(editor: *Editor, action: HistoryAction) !void {
     const doc = editor.activeDoc() orelse return;
     const name = @tagName(action);
     const host = &editor.app.host;
+    // The person's history always runs: on a held document, theirs stops its holder first, when
+    // there is something to take. An agent's or a tape's waits for the holder, as ever.
+    if (host.documentClaim(doc.id)) |c| if (host.author().kind == .person and editor.activeDocCommandEnabled(name)) editor.stopClaim(c);
     const shows = host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
     const ds = if (shows) editor.doc_surfaces.get(doc.id) else null;
     const by = if (ds) |d| d.transport.press(dvui.frameTimeNS(), action == .redo) else 1;
@@ -6878,7 +6929,10 @@ fn historyStep(editor: *Editor, action: HistoryAction) !void {
 /// Redo `doc`'s step `id` from its bubble's Redo: only while it is still the next one to redo.
 pub fn redoFromFeed(editor: *Editor, doc: sdk.DocHandle, id: u64) void {
     const t = editor.stepToTake(doc, .redo, editor.app.host.arena()) catch return;
-    if (t.step.id == id) _ = doc.owner.historyGoTo(doc, t.to);
+    if (t.step.id != id) return;
+    // The person's history, always theirs to move: whoever holds it is stopped first.
+    if (editor.app.host.documentClaim(doc.id)) |c| editor.stopClaim(c);
+    _ = doc.owner.historyGoTo(doc, t.to);
 }
 
 /// Carry out a button pressed on `doc`'s activity bubbles (`ActivityFeed.Act`).
@@ -6891,6 +6945,7 @@ fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @i
             // Only while that step is still on the line: an edit since may have moved on.
             const line = doc.owner.historyLine(doc, editor.app.host.arena()) orelse return;
             for (line.entries) |e| if (e.id == pressed.tag) {
+                if (editor.app.host.documentClaim(doc.id)) |c| editor.stopClaim(c);
                 _ = doc.owner.historyGoTo(doc, pressed.tag);
                 return;
             };
@@ -6908,6 +6963,7 @@ fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @i
                 ds.feed.pushAction(said, "Go back", .go_back_anyway, pressed.tag, now);
                 return;
             }
+            if (editor.app.host.documentClaim(doc.id)) |c| editor.stopClaim(c);
             if (!doc.owner.historyGoTo(doc, back.to)) return;
             const said = std.fmt.bufPrint(&buf, "Back before {s}'s change", .{authorName(back.by)}) catch "Went back";
             ds.feed.pushAction(said, "Forward", .forward, back.from, now);

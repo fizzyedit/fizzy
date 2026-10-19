@@ -319,6 +319,16 @@ pub fn treeRowGlyphSize() dvui.Size {
     return .{ .w = h, .h = h };
 }
 
+/// The colour a file's glyph rests in — a file tree's rows (lit toward their accent as the pointer
+/// nears), a document tab's, a row or tab carried in glass — so a file looks the same wherever it
+/// is shown: the theme's control text, as the tree's labels. Not the window's fill, the theme's
+/// darkest, which the tree's glyphs once rested in: that read only on the main window's own base,
+/// and on a pane's card (a popped-out float's, under any window material) it was the colour
+/// under them.
+pub fn treeGlyphColor(theme: dvui.Theme) dvui.Color {
+    return theme.color(.control, .text);
+}
+
 /// A tree row's expand caret, in its own glyph slot: down when `expanded`, right when not.
 ///
 /// The two arrows are different shapes (the down one wide, the right one tall) and the icon fits

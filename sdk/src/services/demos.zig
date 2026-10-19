@@ -50,7 +50,9 @@ pub const Api = struct {
         unknown,
         /// Something else is driving the app (a live tape): try again once it is done.
         busy,
-        /// The person has unsaved work open, which a demo would set aside: they are told so.
+        /// Never answered: a demo plays on a stage of its own, the person's work, saved or not,
+        /// set aside untouched. Kept so a plugin switching on it still builds; it goes at the
+        /// next SDK release that moves the boundary for another reason.
         unsaved,
     };
 

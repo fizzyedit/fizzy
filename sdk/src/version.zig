@@ -75,7 +75,7 @@ pub const sdk_version = @import("sdk_version").sdk_version;
 /// why it is a single target/mode-invariant literal rather than a per-target table. Update this
 /// value from the `@compileError` it triggers whenever it changes; leave `sdk_version` to the
 /// next SDK release.
-pub const recorded_sdk_shape_fingerprint: u64 = 0x3d7fca8d3d211e73;
+pub const recorded_sdk_shape_fingerprint: u64 = 0x8e5b6c53cdb5e572;
 
 comptime {
     if (dylib.sdk_shape_fingerprint != recorded_sdk_shape_fingerprint) {

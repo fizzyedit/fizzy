@@ -289,7 +289,10 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         };
         const stepped = if (self.grip_steps) |was| opts.steps > was else false;
         self.grip_steps = opts.steps;
-        self.liquid.setLevel(fill);
+        // Out of a corner vial, the liquid has poured into the line: the vial's own drains as the
+        // bar comes out and fills again as it goes back, the one liquid all the way, so the vial at
+        // rest takes over from the bar with no change of surface.
+        self.liquid.setLevel(if (opts.corner != null) fill * (1 - dome.smooth(p / vial_drain)) else fill);
         if (opts.corner) |c| {
             self.liquid.step(now, c.point());
             // Into a vial, the new step splashes the surface, as a drop landing would: after the
@@ -298,7 +301,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
             // splashes for when a vial came.
             if (stepped) self.liquid.splashIn();
         }
-        const glow: f32 = if (self.stepped_at) |t| (if (now - t < step_glow_ns) 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns)))) else 0) else 0;
+        const glow = self.stepGlow(now);
         if (glow == 0) self.stepped_at = null;
         const in_use = on_grip or self.stepped_at != null or !self.slosh.settled(now);
         const alpha = self.presence.ease(in_use, now);
@@ -313,12 +316,16 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
             .liquid = if (opts.corner != null) &self.liquid else null,
         };
         if (p <= 0) if (opts.corner) |c| {
+            // Where it is, for a bar that would cover it to stand clear (`dome.barsOut`).
+            dome.publishBar(c.box(dvui.windowRectScale().s));
             if (dome.drawCorner(c, id_extra, grip_look, "history.grip:{s}", .{doc.owner.documentPath(doc)})) self.stir(now);
         } else if (gripRect(area, dome.radius, opts.edge)) |g| if (dome.draw(g, id_extra, grip_look, "history.grip:{s}", .{doc.owner.documentPath(doc)})) self.stir(now);
         if (self.dwell.since != null or self.stepped_at != null or !self.slosh.settled(now) or self.presence.moving(in_use) or
             (opts.corner != null and !self.liquid.settled())) dvui.refresh(null, @src(), null);
     }
     if (p <= 0) return pressed;
+    // Out: where, for a bar that would cover it to stand clear (`dome.barsOut`).
+    if (self.place(area, now)) |pl| dome.publishBar(pl);
     const arena = dvui.currentWindow().arena();
     const line = doc.owner.historyLine(doc, arena) orelse return pressed;
     const n = line.entries.len;
@@ -497,6 +504,9 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // once they are most of the way out. Without a grip, it fades.
     const from: ?dvui.Rect.Physical = if (!opts.history or p >= 1) null else if (opts.corner) |c| c.box(s) else if (gripRect(area, dome.radius, opts.edge)) |g| wrs.rectToPhysical(g) else null;
     const out = dome.smooth(p);
+    // What the bubbles bud out of and change back into: a dome's bud, or a corner vial's own circle.
+    const home: ?dvui.Rect.Physical = if (from) |f| if (opts.corner) |c| c.home(s) else dome.bud(f) else null;
+    const travel: f32 = if (from) |f| dome.bud(f).h else 0;
     // Out of a corner vial, which is whole at rest, the glass is whole throughout: eased toward a
     // dome's quiet presence, it was glass at partial alpha — a hole — and the vial at full alpha
     // the frame it went back in, a flash.
@@ -509,7 +519,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // strip grows, so the pictures sit inside them.
     const line_radius = std.math.lerp(phys[1].h / 2, core.corners.scaled(core.corners.card) * s, @min(1, grown * 1.5));
     for (phys, bubbles[0..5], 0..) |r, *b, i| b.* = .{
-        .rect = if (from) |f| dome.pull(f, r, p, bud_delays[i], bud_arcs[i]) else r,
+        .rect = if (home) |h| dome.pullFrom(h, travel, r, p, bud_delays[i], bud_arcs[i]) else r,
         .radius = if (i == 1 and grown > 0) line_radius else null,
         // Lit under the pointer only once the bar is out: moving, a lit bubble was a lighter drop
         // among the rest, its light running across the necks as they joined.
@@ -528,7 +538,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     if (self.tab) {
         tab_index = count;
         bubbles[count] = .{
-            .rect = if (from) |f| dome.pull(f, tab_p, p, bud_delays[5], bud_arcs[5]) else tab_p,
+            .rect = if (home) |h| dome.pullFrom(h, travel, tab_p, p, bud_delays[5], bud_arcs[5]) else tab_p,
             .light = if (p >= 1 and tab_p.contains(pt)) core.dialogs.bubble_hover else 0,
         };
         count += 1;
@@ -549,8 +559,18 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         // (the tab into the bar). The one soft shadow of the merged shape is the orb's
         // (`plans/LIQUID_EDGE_PLAN.md`); the rim and lens are what set the glass off meanwhile.
         // Out of a corner vial, cut by the card's outline, curve and all, as the vial is at rest.
-        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = dome.merge(p, 14), .shadow = 0, .edge = if (opts.corner) |c| c.place() else null });
+        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = if (opts.corner != null) dome.homeMerge(p, 14) else dome.merge(p, 14), .shadow = 0, .edge = if (opts.corner) |c| c.place() else null });
     }
+    // A corner vial's contents change with it rather than fade: its liquid drains as the stream
+    // pours out into the line and fills again as it pours back, and its icon shrinks into the
+    // corner with the vial and grows back with it, so the vial the bar ends as is the vial at rest.
+    if (opts.corner) |c| if (from != null) {
+        const t = 1 - dome.smooth(p);
+        // The vial's own liquid (drained by `setLevel` above) and its icon lit as at rest.
+        const look: dome.Look = .{ .fill = fill, .tilt = tilt, .liquid = &self.liquid, .lit = on_grip, .glow = self.stepGlow(now) };
+        dome.paintCornerLiquid(c, t, look);
+        dome.cornerIcon(c, t, look, float.data().borderRectScale().r);
+    };
     // What is on the bubbles comes once they are most of the way out; the liquid comes with them.
     const shape_alpha = dvui.alpha(1);
     if (from != null) {
@@ -626,6 +646,17 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
 /// line, redo, export, play; then the tab.
 const bud_delays = [6]f32{ 0.3, 0, 0.16, 0.08, 0.23, 0.36 };
 const bud_arcs = [6]f32{ 1.3, 0.6, 1.0, 0.8, 1.15, 1.6 };
+
+/// How far out of a corner vial the bar is when the vial's liquid has all poured out into the line
+/// (and, coming back, when it starts to fill again).
+const vial_drain: f32 = 0.45;
+
+/// How bright the grip is from the step it took last, 1 as it lands to 0 after `step_glow_ns`.
+fn stepGlow(self: *const HistoryTransport, now: i128) f32 {
+    const t = self.stepped_at orelse return 0;
+    if (now - t >= step_glow_ns) return 0;
+    return 1 - @as(f32, @floatCast(@as(f64, @floatFromInt(now - t)) / @as(f64, @floatFromInt(step_glow_ns))));
+}
 
 /// macOS's trim yellow.
 const yellow: dvui.Color = .{ .r = 0xF5, .g = 0xC0, .b = 0x2E };

@@ -51,13 +51,18 @@ While a demo plays:
   behind.
 - **The transport bar** (bottom) has chapter back / play-pause / chapter forward, the time, a
   scrubber with chapter ticks, and close. Scrubbing backwards rewinds; forwards fast-forwards.
-  While the demo plays it hides into a dome on the window's bottom edge (`app/dome.zig`, the
-  same one a document's history transport hides into), filling with the demo's progress. The
-  pointer held on the dome (or a press on it) grows the bar back out; it goes back soon after
+  While the demo plays it rests in the window's own bottom-right corner, in the corner glass a
+  document's history rests in (`app/dome.zig`, `Corner`), cut by the window's outline and marked
+  with a tape, filling with liquid as the demo plays: a new chapter splashes it, a seek knocks it.
+  The pointer held on the corner (or a press on it) grows the bar out of it to the middle of the
+  window's bottom, above any pane's history vial or bar it would cover; it goes back soon after
   the pointer leaves it. Paused or ended it stays out, unless its chevron tab sent it in.
-- **Nothing is persisted.** The stage sets the user's session aside when a demo loads (project
-  folder, open documents, layout as on disk, plugin settings) and gives it back when it is
-  stopped. A demo refuses to start over unsaved changes. Its files live in memory
+- **Nothing is persisted, and nothing of the person's is touched.** A demo plays on a stage of
+  its own: when it loads, the person's panes are set aside whole and their documents stay open
+  behind them, hidden — never closed, saved, reloaded or put back by a snapshot, unsaved edits and
+  history and all — with their project folder, layout as on disk, settings and focus. The demo
+  opens its own documents in panes of its own, and when it is stopped the person gets back
+  exactly what they left. So a demo starts over unsaved work. Its files live in memory
   (`demo://<name>`), so it never touches disk, and its folder never enters Recents.
 
 ## How it works

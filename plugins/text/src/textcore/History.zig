@@ -31,6 +31,9 @@ pub const EditKind = enum(u8) {
     typing_other = 3,
     typing_first_space = 4,
     typing_consecutive_space = 5,
+    /// Unsaved changes come back over the file without the history that made them
+    /// (`Document.recoverState`): one step that undo takes back to the file.
+    recovered = 6,
 
     fn isTyping(self: EditKind) bool {
         return switch (self) {

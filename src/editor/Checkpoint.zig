@@ -4,7 +4,8 @@
 //! something and at least every half minute regardless (an agent's edits come with no input). A
 //! clean quit empties it, so one found at launch means the last run ended without one: a crash, a
 //! kill, a power cut. Its documents then open from it, unsaved changes and all, the way a restart's
-//! session opens (`Editor.session`).
+//! session opens (`Editor.session`), their histories with them: the tracks of unsaved documents
+//! that moved are written with each checkpoint (`Tracks.takeChanged`).
 //!
 //! The state is captured on the UI thread, since only the owners can capture it, and written on a
 //! thread of its own, so a large document never costs a frame its write. Each checkpoint is a new
@@ -20,6 +21,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const Editor = @import("Editor.zig");
 const KeptDocuments = @import("KeptDocuments.zig");
+const Tracks = @import("app").Tracks;
 const core = @import("core");
 const emptyStateFolder = @import("app").watch.SettingsWatcher.emptyStateFolder;
 
@@ -51,6 +53,10 @@ generation: u32 = 0,
 
 const Job = struct {
     kept: KeptDocuments,
+    /// The tracks of its unsaved documents that moved (`Tracks.takeChanged`).
+    tracks: []Tracks.KeptFile,
+    /// Told when they are written (`Tracks.doneWriting`), when there are any.
+    owner: ?*Tracks = null,
     dir: []u8,
     generation: u32,
     thread: std.Thread = undefined,
@@ -162,8 +168,18 @@ fn start(self: *Checkpoint, editor: *Editor) !void {
     const job = try gpa.create(Job);
     errdefer gpa.destroy(job);
     self.generation += 1;
-    job.* = .{ .kept = kept, .dir = path, .generation = self.generation };
-    job.thread = try std.Thread.spawn(.{}, write, .{job});
+    // Their histories too, ending where the states just captured do: a document the checkpoint
+    // brings back picks its history up (`Tracks.pickUp`), rather than coming back with only its
+    // unsaved changes to undo.
+    const tracks: []Tracks.KeptFile = if (editor.app.tracks) |*t| t.takeChanged() else &.{};
+    const owner: ?*Tracks = if (tracks.len > 0) &editor.app.tracks.? else null;
+    job.* = .{ .kept = kept, .tracks = tracks, .owner = owner, .dir = path, .generation = self.generation };
+    job.thread = std.Thread.spawn(.{}, write, .{job}) catch |err| {
+        if (owner) |t| t.doneWriting();
+        for (tracks) |k| k.deinit(gpa);
+        gpa.free(tracks);
+        return err;
+    };
     self.job = job;
 }
 
@@ -172,12 +188,18 @@ fn write(job: *Job) void {
     defer job.done.store(true, .release);
     const timed = core.profile.span("checkpoint write");
     defer timed.end();
+    // The histories first: a crash between the two leaves them ahead of the documents, which then
+    // open without them (`Tracks.pickUp` finds them ending elsewhere), never the reverse.
+    for (job.tracks) |k| _ = Tracks.writeKept(k, "checkpoint");
+    if (job.owner) |t| t.doneWriting();
     job.kept.saveGeneration(job.dir, job.generation) catch return;
     job.ok = true;
 }
 
 fn freeJob(self: *Checkpoint, editor: *Editor, job: *Job) void {
     job.kept.deinit();
+    for (job.tracks) |k| k.deinit(editor.app.gpa);
+    editor.app.gpa.free(job.tracks);
     editor.app.gpa.free(job.dir);
     editor.app.gpa.destroy(job);
     self.job = null;

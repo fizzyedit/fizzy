@@ -841,13 +841,16 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
-        // Line diff of two texts (histogram, Myers fallback), hunks and unified output. std-only
-        // (see core/diff.zig); `plans/DIFF_PLAN.md` step 1.
+        // Image diff (RGBA8 to rects) and text diff (histogram lines, unified output). std-only (see
+        // core/diff.zig); `bench-diff` measures it.
         .{ "fizzy-diff-tests", "core/diff.zig" },
         // When a document's transport shows and for how long, how far a held undo goes, which
         // step a point on its line is. std-only (see history_transport.zig); `HistoryTransport`
         // draws it.
         .{ "fizzy-history-transport-tests", "app/history_transport.zig" },
+        // How high the activity feed stands as what is under it comes and goes: eased on a change,
+        // following its target otherwise. std-only (see feed_lift.zig); `ActivityFeed` draws it.
+        .{ "fizzy-feed-lift-tests", "app/feed_lift.zig" },
         // A transport's dome: how long the pointer is held before its bar grows, how full it
         // is, its liquid's swing and shapes. std-only (see dome_rules.zig); `dome.zig` draws it.
         .{ "fizzy-dome-tests", "app/dome_rules.zig" },
@@ -882,6 +885,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // dvui half (`sdk/replay/`) compiles on its own below, and is covered by
         // `tests/integration.zig`.
         .{ "fizzy-tape-tests", "sdk/tape/root.zig" },
+        // The remote-view protocol (`sdk/remote/`, plans/EMBEDDED_EDITOR_PLAN.md step 2): messages,
+        // framing, the connection rules and a loopback pair. std-only, so a host's adapter can link it.
+        .{ "fizzy-remote-tests", "sdk/remote/root.zig" },
         // Where Report a Bug goes when the build isn't told. std-only (see issues_url.zig); the
         // build is its only user.
         .{ "fizzy-issues-url-tests", "build/issues_url.zig" },
@@ -1501,6 +1507,27 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         bench_step.dependOn(&run_bench.step);
     }
 
+    // `zig build bench-diff` — core.diff on a 4K image, a 2048x2048 sprite of 50 layers and 1 MB of text (prints
+    // timings). Same rules as `bench-tape`; std-only, so it needs no window.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_diff.zig"),
+        });
+        bench_module.addImport("diff", b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("core/diff.zig"),
+        }));
+        const bench_diff = b.addTest(.{ .name = "fizzy-bench-diff", .root_module = bench_module });
+
+        const bench_step = b.step("bench-diff", "Benchmark core.diff: a 4K image, a 50-layer sprite, 1 MB of text (prints timings)");
+        const run_bench = b.addRunArtifact(bench_diff);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
     // `zig build bench-tape` — saving and loading a tape, ZON against the binary form, at the
     // sizes of a demo, a recording and a long session. Same rules as `bench-text`; std-only, so
     // it needs no window and builds in seconds.
@@ -1519,28 +1546,6 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
         const bench_step = b.step("bench-tape", "Benchmark saving and loading demo tapes, ZON against binary (prints timings)");
         const run_bench = b.addRunArtifact(bench_tape);
-        run_bench.has_side_effects = true;
-        bench_step.dependOn(&run_bench.step);
-    }
-
-    // `zig build bench-diff` — `core.diff` text against the plan's budget (`plans/DIFF_PLAN.md`
-    // section 3): 1 MB identical, one edit, scattered edits, every line changed, and a reused
-    // scratch. Same rules as `bench-text`; std-only, so it needs no window.
-    {
-        const bench_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .root_source_file = b.path("tests/bench/bench_diff.zig"),
-        });
-        bench_module.addImport("diff", b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .root_source_file = b.path("core/diff.zig"),
-        }));
-        const bench_diff = b.addTest(.{ .name = "fizzy-bench-diff", .root_module = bench_module });
-
-        const bench_step = b.step("bench-diff", "Benchmark core.diff text on 1 MB inputs against the plan's budget (prints timings)");
-        const run_bench = b.addRunArtifact(bench_diff);
         run_bench.has_side_effects = true;
         bench_step.dependOn(&run_bench.step);
     }

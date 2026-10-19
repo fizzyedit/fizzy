@@ -18,6 +18,12 @@
 //!   file changed since (an agent's edit, a pull) opens from disk instead; a dirty one always
 //!   comes back as it was, since those edits are the person's.
 //!
+//! A dirty document comes back with something to undo, always. Its history comes with it through
+//! its kept track (`Tracks`: written as it detaches, as a restart hands over, and with each crash
+//! checkpoint), which the next frame picks up. Under that, a document with a file opens from it and
+//! its state comes back over it as one step, Recovered (`Plugin.recoverDocumentState`): when no track
+//! fits, undo still goes back to what is on disk.
+//!
 //! A document never saved (`untitled-1`) has no file to fall back on, so its unsaved contents are
 //! kept as its owner would save them (`Plugin.bytesPath`: under the name Save As offers), and it
 //! comes back from them, untitled, through its owner (`Plugin.loadUntitledDocument`), its state
@@ -33,6 +39,7 @@ const KeptDocuments = @This();
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const core = @import("core");
 const Editor = @import("Editor.zig");
 const sdk = Editor.sdk;
 const emptyStateFolder = @import("app").watch.SettingsWatcher.emptyStateFolder;
@@ -163,7 +170,7 @@ pub fn reattach(self: *KeptDocuments, editor: *Editor, plugin: *sdk.Plugin) void
             continue;
         };
         const doc = loaded.doc;
-        const restored = if (d.state) |s| plugin.restoreDocumentState(doc, s) or loaded.whole else true;
+        const restored = restore(plugin, loaded, d);
         if (!restored) {
             // The new build does not read the old one's state: the document is as on disk.
             dvui.log.warn("reload: {s} reopened as saved; the new build could not read its state", .{d.path});
@@ -209,14 +216,26 @@ const Loaded = struct {
     /// is restored: a state the owner refuses costs only what the bytes do not hold (the caret,
     /// the scroll).
     whole: bool,
+    /// Opened from its file, for its unsaved changes to come back over it as a step undo takes
+    /// back (`Plugin.recoverDocumentState`).
+    from_file: bool = false,
 };
 
 /// Open `d.path` through `plugin`, now, in its pane. One never saved opens from its unsaved bytes
-/// when its owner can (`loadUntitledDocument`). Otherwise one with state to restore starts empty,
-/// since the state fills it (and an untitled one has nothing on disk to read); only one without is
-/// read from disk.
+/// when its owner can (`loadUntitledDocument`). A dirty one whose owner can recover its state over
+/// its file is read from disk (`recovers`). Otherwise one with state to restore starts empty, since
+/// the state fills it (and an untitled one has nothing on disk to read); only one without is read
+/// from disk.
 fn load(editor: *Editor, plugin: *sdk.Plugin, d: Kept) !Loaded {
     return loadInto(editor, plugin, d, d.grouping);
+}
+
+/// Whether `d` comes back over its file: dirty, with a file, and an owner that can make its
+/// unsaved changes one step of its history (`Plugin.recoverDocumentState`). Then it is never dirty
+/// with nothing to undo, whatever became of the history that made them; a kept track still puts
+/// that history back over it (`Tracks.pickUp`).
+fn recovers(plugin: *const sdk.Plugin, d: Kept) bool {
+    return d.dirty and d.state != null and d.save_as == null and plugin.vtable.recoverDocumentState != null;
 }
 
 fn loadInto(editor: *Editor, plugin: *sdk.Plugin, d: Kept, grouping: u64) !Loaded {
@@ -224,13 +243,24 @@ fn loadInto(editor: *Editor, plugin: *sdk.Plugin, d: Kept, grouping: u64) !Loade
     const staging = try sdk.document.allocStaging(plugin, gpa);
     defer staging.deinit(gpa);
     const whole = if (d.save_as) |as| if (d.unsaved) |u| try plugin.loadUntitledDocument(d.path, as, u, staging.buf.ptr) else false else false;
+    var from_file = false;
     if (whole) {} else if (d.state != null) {
-        try sdk.document.loadBytesIntoStaging(plugin, d.path, "", staging);
+        // A file gone or unreadable since: the state fills an empty document, as before.
+        from_file = recovers(plugin, d) and if (sdk.document.loadIntoStaging(plugin, d.path, staging)) true else |_| false;
+        if (!from_file) try sdk.document.loadBytesIntoStaging(plugin, d.path, "", staging);
     } else try sdk.document.loadIntoStaging(plugin, d.path, staging);
     const id = plugin.documentIdFromBuffer(staging.buf.ptr);
     plugin.setDocumentGroupingOnBuffer(staging.buf.ptr, grouping);
     try editor.insertOpenDoc(staging.buf.ptr, plugin, id);
-    return .{ .doc = editor.app.docById(id) orelse return error.DocumentNotFound, .whole = whole };
+    return .{ .doc = editor.app.docById(id) orelse return error.DocumentNotFound, .whole = whole, .from_file = from_file };
+}
+
+/// Put `d`'s state into the document `loaded` opened: over its file as a step undo takes back when
+/// it was read from one, else in place. Whether it took.
+fn restore(plugin: *sdk.Plugin, loaded: Loaded, d: Kept) bool {
+    const s = d.state orelse return true;
+    if (loaded.from_file) return plugin.recoverDocumentState(loaded.doc, s);
+    return plugin.restoreDocumentState(loaded.doc, s) or loaded.whole;
 }
 
 /// What `save` writes as `session.zon`, beside a file per document's state and unsaved contents
@@ -469,7 +499,7 @@ pub fn openKept(self: *KeptDocuments, editor: *Editor, path: []const u8, groupin
         return instead;
     };
     const doc = loaded.doc;
-    const restored = if (d.state) |s| plugin.restoreDocumentState(doc, s) or loaded.whole else true;
+    const restored = restore(plugin, loaded, d);
     if (!restored) {
         dvui.log.warn("restart: {s} reopened as saved; this build could not read its state", .{d.path});
         recover(editor, d);
@@ -536,5 +566,5 @@ fn recover(editor: *Editor, d: Kept) void {
         return;
     };
     dvui.log.warn("reload: the unsaved contents of {s} are in {s}", .{ path, out });
-    dvui.toast(@src(), .{ .message = std.fmt.allocPrint(editor.app.arena.allocator(), "Unsaved changes to {s} were kept in {s}", .{ std.fs.path.basename(path), out }) catch "Unsaved changes were kept in fizzy's recovered folder." });
+    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(editor.app.arena.allocator(), "Unsaved changes to {s} were kept in {s}", .{ std.fs.path.basename(path), out }) catch "Unsaved changes were kept in fizzy's recovered folder." });
 }

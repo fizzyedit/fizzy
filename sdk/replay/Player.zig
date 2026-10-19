@@ -207,12 +207,13 @@ pub const Transport = struct {
     next: dvui.Rect.Physical = .{},
     track: dvui.Rect.Physical = .{},
     close: dvui.Rect.Physical = .{},
-    /// The tab over the bar that sends it into its dome (`tucked`).
+    /// The tab on the bar that sends it into where it rests (`tucked`).
     tab: dvui.Rect.Physical = .{},
-    /// Where the bar's dome was drawn last frame, physical, as far round it as the pointer is on
-    /// it: what the bar hides into, and a press there brings it back. Null when it was not drawn.
-    dome: ?dvui.Rect.Physical = null,
-    /// Sent into its dome (its tab): the bar stays there, playing or not, until the dome brings it
+    /// Where the bar rests was drawn last frame (fizzy: corner glass in the window's own corner),
+    /// physical, as far round it as the pointer is on it: what the bar hides into, and a press
+    /// there brings it back. Null when it was not drawn.
+    rest: ?dvui.Rect.Physical = null,
+    /// Sent into where it rests (its tab): the bar stays there, playing or not, until that brings it
     /// back (a press here, the pointer held on it in the overlay).
     tucked: bool = false,
     /// The speed on the track (`rate`), which a press steps through `speeds`.
@@ -227,8 +228,8 @@ pub const Transport = struct {
     /// bar is drawn under them, so a press there is theirs, not the bar's.
     covered: [8]dvui.Rect.Physical = undefined,
     covered_n: u8 = 0,
-    /// When the real pointer was last on the bar, or the dome brought it (ns, `wallNs`): while
-    /// playing, the bar shows for a while after, then goes back into its dome.
+    /// When the real pointer was last on the bar, or its rest brought it (ns, `wallNs`): while
+    /// playing, the bar shows for a while after, then goes back to rest.
     stirred_ns: ?i128 = null,
     /// The bar opening (`wanted`) or closing, since `since_ns` (`wallNs`), and how open it was
     /// last frame — kept by the overlay, which opens and closes it as a floating surface does.
@@ -889,14 +890,14 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         tr.pointer = null;
         return false;
     };
-    // A press on the dome brings the bar out of it at once, and is not the app's.
-    if (tr.dome) |d| if (d.contains(me.p)) {
+    // A press where the bar rests brings it out at once, and is not the app's.
+    if (tr.rest) |d| if (d.contains(me.p)) {
         if (me.action == .press and me.button.pointer() and !tr.closing) {
             tr.tucked = false;
             tr.stirred_ns = self.wallNs();
             dvui.refresh(null, @src(), null);
         }
-        // Its motion goes on to the app (the dome only sits on it); the rest is the dome's.
+        // Its motion goes on to the app (the rest only sits on it); the rest is the bar's.
         if (me.action == .motion) return false;
         e.handle(@src(), wd);
         return true;
@@ -946,7 +947,7 @@ fn claimCursor(self: *Player) void {
     if (tr.scrub != null) return dvui.cursorSet(.hand);
     if (tr.pointer) |p| {
         if (tr.tab.contains(p)) return dvui.cursorSet(.hand);
-        if (tr.dome) |d| if (d.contains(p)) return dvui.cursorSet(.hand);
+        if (tr.rest) |d| if (d.contains(p)) return dvui.cursorSet(.hand);
         if (tr.bar) |bar| {
             if (bar.contains(p)) {
                 for ([_]dvui.Rect.Physical{ tr.play, tr.prev, tr.next, tr.track, tr.close }) |r| {

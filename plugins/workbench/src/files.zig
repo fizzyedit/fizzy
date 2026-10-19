@@ -959,7 +959,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
 
                 const t = 1.0 - (distance / max_distance);
 
-                color = dvui.themeGet().color(.window, .fill).lerp(color, t);
+                color = core.widgets.treeGlyphColor(dvui.themeGet()).lerp(color, t);
 
                 if (branch.floating()) {
                     if (dvui.dataGetSlice(null, inner_unique_id, "removed_path", []u8) == null)

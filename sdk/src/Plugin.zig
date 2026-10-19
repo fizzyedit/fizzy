@@ -252,6 +252,13 @@ pub const VTable = struct {
     /// never misread it. The app then opens the document as saved and keeps its unsaved
     /// contents in a recovery file.
     restoreDocumentState: ?*const fn (state: *anyopaque, doc: DocHandle, bytes: []const u8) anyerror!void = null,
+    /// `restoreDocumentState`, as one step of `doc`'s history that undo takes back: `doc` was just
+    /// opened from its file, and `bytes` are its unsaved changes coming back without the history
+    /// that made them (after a crash, or a reload or restart whose history could not be kept). The
+    /// step goes back to the file, so the person can always return to what is on disk, and the
+    /// document is never dirty with nothing to undo. Fails as `restoreDocumentState` does, leaving
+    /// `doc` as opened. Absent = the state is restored as `restoreDocumentState` does it.
+    recoverDocumentState: ?*const fn (state: *anyopaque, doc: DocHandle, bytes: []const u8) anyerror!void = null,
     /// A hash of what in `doc` decides what happens next — its contents and caret, not its
     /// scroll — with no side effects. A demo compares it when a replay reaches a moment it
     /// snapshotted before, to catch a tape that does not replay exactly.
@@ -729,6 +736,19 @@ pub fn restoreDocumentState(self: Plugin, doc: DocHandle, bytes: []const u8) boo
     const f = self.vtable.restoreDocumentState orelse return false;
     f(self.state, doc, bytes) catch |err| {
         std.log.err("{s}: restoreDocumentState failed: {s}", .{ self.id, self.errorName(err) });
+        return false;
+    };
+    return true;
+}
+
+/// Bring `doc`, opened from its file, to the state `bytes` as one step undo takes back
+/// (`recoverDocumentState`). False when the owner has no hook, or it failed: `doc` is as opened.
+pub fn recoverDocumentState(self: Plugin, doc: DocHandle, bytes: []const u8) bool {
+    const prof = core.profile.begin(self.id, "recoverDocumentState");
+    defer prof.end();
+    const f = self.vtable.recoverDocumentState orelse return false;
+    f(self.state, doc, bytes) catch |err| {
+        std.log.err("{s}: recoverDocumentState failed: {s}", .{ self.id, self.errorName(err) });
         return false;
     };
     return true;

@@ -15,6 +15,8 @@ items: [max]Item = undefined,
 len: usize = 0,
 /// The last `Host.Activity.seq` taken.
 seen: u64 = 0,
+/// How far above its pane's bottom the feed stands, eased as what is under it comes and goes.
+lift: @import("feed_lift.zig") = .{},
 
 const max = 5;
 const life_ns: i128 = 2400 * std.time.ns_per_ms;
@@ -77,6 +79,7 @@ pub fn take(self: *ActivityFeed, host: *const sdk.Host, doc_id: u64, now: i128) 
 
 pub fn clear(self: *ActivityFeed) void {
     self.len = 0;
+    self.lift = .{};
 }
 
 /// Show `title` as though a command of that name had just run: how the app says something
@@ -100,9 +103,12 @@ pub fn pushAction(self: *ActivityFeed, title: []const u8, label: []const u8, act
     self.items[self.len - 1].action = action;
 }
 
-/// Draw the feed in the bottom right of `area` (physical), newest lowest. Answers the action
-/// pressed this frame, if one was.
-pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now: i128) ?Pressed {
+/// Draw the feed in the bottom right of `pane` (physical), newest lowest, standing `lift`
+/// physical pixels above its bottom: over what the caller has there, which it names `under` (a
+/// bar, a pill, a vial; 0 for nothing). When that changes the feed eases to its new height, rising
+/// as a thing comes and settling as it goes (`feed_lift.zig`). Answers the action pressed this
+/// frame, if one was.
+pub fn draw(self: *ActivityFeed, pane: dvui.Rect.Physical, lift: f32, under: u32, id_extra: usize, now: i128) ?Pressed {
     // Those whose time is up go.
     var kept: usize = 0;
     for (self.items[0..self.len]) |item| {
@@ -111,9 +117,23 @@ pub fn draw(self: *ActivityFeed, area: dvui.Rect.Physical, id_extra: usize, now:
         kept += 1;
     }
     self.len = kept;
-    if (self.len == 0) return null;
+    // Nothing shows, so nothing to ease: the next to come starts where it stands.
+    if (self.len == 0) {
+        self.lift = .{};
+        return null;
+    }
+    // Drawn every frame while any shows (their fades), which keeps the lift's frames coming too.
     dvui.refresh(null, @src(), null);
 
+    var area = pane;
+    const slide = core.anim.slide;
+    area.h = @max(0, pane.h - self.lift.at(lift, under, now, .{
+        .ms = core.motion.durationMs(slide.out_ms),
+        .curve = slide.easing(true),
+    }, .{
+        .ms = core.motion.durationMs(slide.in_ms),
+        .curve = slide.easing(false),
+    }));
     const r = area.toNatural();
     var layer: dvui.FloatingWidget = undefined;
     layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h }, .id_extra = id_extra });
