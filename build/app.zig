@@ -794,6 +794,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // Profiles: taking `--profile` out of argv, and each profile's own lock name. std-only;
         // where a profile's folders go is `single_instance` and the editor's, run by hand.
         .{ "fizzy-profile-tests", "app/profile.zig" },
+        // `FIZZY_QUIET`: read from the environment (the flag is `single_instance.resolveArgs`). std-only.
+        .{ "fizzy-quiet-tests", "app/quiet.zig" },
         // `<img>` scanning for the markdown preview's raw-HTML blocks. Under plugins/
         // but std-only by design (see html_images.zig), so it tests from the app build.
         .{ "fizzy-md-html-images-tests", "plugins/markdown/src/md/html_images.zig" },

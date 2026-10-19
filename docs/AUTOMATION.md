@@ -438,7 +438,8 @@ the end, quits, and exits 1 when anything went wrong (`src/editor/verdict.zig`):
 The verdict, with the counters as the tape began and as it ended, goes to the `FIZZY_VERDICT` path as
 ZON for CI to keep. Relative paths are taken from where fizzy was launched. A verdict run needs a
 profile of its own (`--profile` or `FIZZY_PROFILE`) and refuses to start without one (exit 2): it
-quits by itself, and must never touch a person's settings, plugins, lock or socket.
+quits by itself, and must never touch a person's settings, plugins, lock or socket. Started beside
+the person rather than in CI, give it `--quiet` (or `FIZZY_QUIET=1`) as well (`docs/CONTROL.md`).
 
 `tests/tapes/soak.zon` is the first soak tape: a view floated out of the main window (an OS window
 where floats are: macOS, or `FIZZY_POPOUT=1`) and put back three times, full screen in and out

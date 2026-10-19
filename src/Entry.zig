@@ -234,6 +234,8 @@ pub fn main(main_init: std.process.Init) !u8 {
         if (printControlPath(appAllocator(), main_init)) |code| return code;
         try singleton.earlyStartup(appAllocator(), main_init);
         fizzy.core.profile.phase(main_init.io, if (restart.startedByHandover()) "lock deferred (handover)" else "lock");
+        // Parsed with the lock's arguments; the backend reads it once its window is made.
+        if (comptime @hasDecl(dvui.backend, "quiet")) dvui.backend.quiet = @import("app").quiet.on;
 
         // Both read relative to where fizzy was launched, before `AppInit` moves to its own directory.
         Editor.Demo.readEnvTape(appAllocator(), main_init.io);

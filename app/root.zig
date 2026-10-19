@@ -171,6 +171,8 @@ pub const single_instance = @import("single_instance/singleton.zig");
 /// `--profile <dir>` / `FIZZY_PROFILE`: one root for the config folder, the plugins, the lock and
 /// the runtime directory. Read by `single_instance` at startup; the app asks it where to live.
 pub const profile = @import("profile.zig");
+/// `--quiet` / `FIZZY_QUIET=1`: a run started beside the person that never takes their focus.
+pub const quiet = @import("quiet.zig");
 
 pub const store = struct {
     pub const Store = @import("store/PluginStore.zig");

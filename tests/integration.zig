@@ -8217,6 +8217,15 @@ test "profile: argv names one, made absolute and taken out of what is opened" {
     const none = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "a.md" }, null);
     defer si.freeResolvedArgv(gpa, none.argv);
     try std.testing.expectEqual(@as(?[]u8, null), none.profile);
+    try std.testing.expect(!none.quiet);
+
+    // `--quiet` comes out with it, wherever it is, and is never a path to open.
+    const quiet = try si.resolveArgs(gpa, "/work", &.{ "fizzy", "--quiet", "a.md", "--profile", "p", "--quiet" }, null);
+    defer si.freeResolvedArgv(gpa, quiet.argv);
+    defer gpa.free(quiet.profile.?);
+    try std.testing.expect(quiet.quiet);
+    try std.testing.expectEqual(@as(usize, 2), quiet.argv.len);
+    try std.testing.expectEqualStrings("/work/a.md", quiet.argv[1]);
 
     // Taking the lock with a profile is native startup, not something a test process can do
     // twice; it is compiled here, so a mistake in it fails this build rather than only the app's.

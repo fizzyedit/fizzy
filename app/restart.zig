@@ -27,6 +27,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const update_install = @import("update/update_install.zig");
 const profile = @import("profile.zig");
+const quiet = @import("quiet.zig");
 const emptyStateFolder = @import("watch/SettingsWatcher.zig").emptyStateFolder;
 
 /// A browser tab has nothing to start again.
@@ -147,10 +148,12 @@ fn relaunchSelf(io: std.Io, gpa: std.mem.Allocator) void {
 fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8, log: ?std.Io.File) !std.process.Child {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = try std.process.executablePath(io, &buf);
-    var argv_buf: [5][]const u8 = undefined;
+    var argv_buf: [6][]const u8 = undefined;
     var argv: std.ArrayListUnmanaged([]const u8) = .initBuffer(&argv_buf);
     argv.appendAssumeCapacity(buf[0..n]);
     if (profile_dir) |dir| argv.appendSliceAssumeCapacity(&.{ profile.flag, dir });
+    // A flag, not `FIZZY_QUIET`: on macOS the new instance gets a fixed environment.
+    if (quiet.on) argv.appendAssumeCapacity(quiet.flag);
     if (handover_to) |dir| argv.appendSliceAssumeCapacity(&.{ handover_flag, dir });
     // Out of reach of whatever started this instance: a terminal (a build task's `zig build run`)
     // closes once this one quits, and its hangup would take the new one with it. macOS: a session

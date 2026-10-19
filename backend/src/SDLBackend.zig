@@ -389,6 +389,10 @@ pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
 /// before the first frame.
 pub var floating_os_windows: enum { asked, all, none } = .asked;
 
+/// A quiet run (`--quiet`, `FIZZY_QUIET=1`): never to take the person's focus. Set by the app
+/// before the window exists; nothing reads it yet (fizzyedit/plans#35 steps 2 and 3).
+pub var quiet: bool = false;
+
 /// The backend's health counters now (`Health`): frames, presents, swapchain resizes, the OS
 /// windows alive, what SDL logged, frame-time percentiles and each frame's GPU work. Kept current
 /// whether or not anyone reads them; reading them sorts the frame times and asks SDL (and AppKit)
