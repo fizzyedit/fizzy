@@ -56,6 +56,8 @@ pub const PopupWidget = @import("widgets/menu/Popup.zig");
 pub const round_button_size: f32 = 32;
 /// Round buttons in liquid glass, and the viewport bubbles that float over a document.
 pub const glass_button = @import("widgets/glass_button.zig");
+/// A control of glass that lies in a place, drawn one way wherever it is (`plans/LIQUID_EDGE_PLAN.md`).
+pub const orb = @import("widgets/orb.zig");
 /// A dropdown whose list is the menus' frosted surface — use this, not `dvui.DropdownWidget`.
 pub const DropdownWidget = @import("widgets/Dropdown.zig");
 
