@@ -11,7 +11,18 @@ const core = @import("core");
 
 const Api = sdk.services.demos.Api;
 
-pub fn draw(service: ?*Api) void {
+/// Which guides are unfolded, by a hash of the name: a branch is drawn as it is asked to be each
+/// frame, and toggles itself to match, so the tree remembers what the person left it as. A guide
+/// never folded or unfolded is open if it is the first.
+var unfolded: std.AutoHashMapUnmanaged(u64, bool) = .empty;
+
+/// Forgets what was folded; the plugin's `deinit` calls it with the allocator `draw` was given.
+pub fn deinit(gpa: std.mem.Allocator) void {
+    unfolded.deinit(gpa);
+    unfolded = .empty;
+}
+
+pub fn draw(gpa: std.mem.Allocator, service: ?*Api) void {
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical_bar = .auto_overlay }, .{ .expand = .both, .background = false });
     defer scroll.deinit();
 
@@ -29,13 +40,16 @@ pub fn draw(service: ?*Api) void {
             if (row(tree, i, d.title, d.ms, current, .guide_leaf)) _ = api.play(d.name, 0);
             continue;
         }
-        const b = branch(tree, i, d, current);
+        const key = std.hash.Wyhash.hash(0, d.name);
+        const open = unfolded.get(key) orelse (i == 0);
+        const b = branch(tree, i, d, current, open);
         defer b.deinit();
         if (b.expander(@src(), .{ .indent = 14 }, .{ .expand = .horizontal })) {
             for (d.chapters, 0..) |c, j| {
                 if (row(tree, i * 1000 + j + 1, c.title, c.at, false, .chapter)) _ = api.play(d.name, c.at);
             }
         }
+        if (b.expanded != open) unfolded.put(gpa, key, b.expanded) catch {};
     }
 }
 
@@ -43,11 +57,10 @@ fn note(text: []const u8) void {
     dvui.labelNoFmt(@src(), text, .{}, .{ .color_text = .{ .color = dim() }, .padding = .all(6) });
 }
 
-/// A demo with chapters: its caret folds them. The first demo starts open, so the view shows how
-/// it is used; after that each keeps what the person left it as.
-fn branch(tree: *core.widgets.TreeWidget, i: usize, d: Api.Info, current: bool) *core.widgets.TreeWidget.Branch {
+/// A demo with chapters: its caret folds them, `open` as the person left it (`unfolded`).
+fn branch(tree: *core.widgets.TreeWidget, i: usize, d: Api.Info, current: bool, open: bool) *core.widgets.TreeWidget.Branch {
     const theme = dvui.themeGet();
-    const b = tree.branch(@src(), .{ .expanded = i == 0, .draggable = false }, rowOptions(i));
+    const b = tree.branch(@src(), .{ .expanded = open, .draggable = false }, rowOptions(i));
     core.widgets.treeCaret(@src(), b.expanded, theme.color(.control, .fill));
     glyph(current);
     label(d.title, d.ms, theme.color(.control, .text));

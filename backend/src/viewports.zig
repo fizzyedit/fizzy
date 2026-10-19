@@ -289,8 +289,15 @@ pub fn buttonsWidth(vp: *Viewport) f32 {
     return dvui.currentWindow().backend.impl.viewportButtonsWidth(vp);
 }
 
+/// The colour `vp`'s float draws under everything this frame (`glass`): its window's colour `fill`
+/// at `opacity` over the window material, by the main window's rule — clear on Liquid Glass, whose
+/// look this sets. Null where the material does not dress the window: the float draws its own.
+pub fn materialBase(vp: *Viewport, fill: dvui.Color, opacity: f32) ?dvui.Color {
+    return dvui.currentWindow().backend.impl.viewportMaterialBase(vp, fill, opacity);
+}
+
 /// `vp`'s window's Liquid Glass this frame, as the main window's (`windowGlass`). Whether it
-/// has any: its float then draws no base of its own.
+/// has any: a menu's then draws no base of its own.
 pub fn windowGlass(vp: *Viewport, look: WindowGlassLook) bool {
     return dvui.currentWindow().backend.impl.viewportLiquidGlass(vp, look.native());
 }
@@ -505,12 +512,12 @@ pub const os_frame = builtin.target.os.tag == .windows or builtin.target.os.tag 
 /// One opened `.app` has none anywhere.
 pub const os_buttons = builtin.target.os.tag == .macos;
 
-/// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
-/// pixels in from the window's edge, `radius` its corners — for the float's frost to read the
-/// desktop through, in the app's light or dark (`dark`). False where the platform has none
-/// (yet).
-pub fn glass(vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
-    return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
+/// A material behind the float's glass in `vp`'s window — all of the window the OS frames
+/// (`os_frame`), `radius` its corners — for the float's frost to read the desktop through, in the
+/// app's light or dark (`dark`): on macOS the window material, as the main window's
+/// (`materialBase`). False where the platform has none (yet).
+pub fn glass(vp: *Viewport, radius: f32, dark: bool) bool {
+    return dvui.currentWindow().backend.impl.viewportGlass(vp, radius, dark);
 }
 
 /// Whether `vp`'s window has the keyboard: it is the OS's key window.

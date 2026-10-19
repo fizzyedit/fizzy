@@ -101,8 +101,9 @@ const Kind = enum { binary, ignored, other };
 fn classify(config_folder: []const u8, path: []const u8) Kind {
     if (std.mem.indexOf(u8, path, ".load-copy") != null or std.mem.indexOf(u8, path, ".load-tmp") != null) return .ignored;
     // The app's own state beside its settings, written while it runs: a crash checkpoint every few
-    // seconds while something is unsaved, a restart's session, a handover's signals. None of it is
-    // settings or a plugin, and reconciling on each write would re-read `settings.zon` for nothing.
+    // seconds while something is unsaved, a restart's session, a handover's signals and its log.
+    // None of it is settings or a plugin, and reconciling on each write would re-read
+    // `settings.zon` for nothing.
     if (std.mem.startsWith(u8, path, config_folder) and path.len > config_folder.len and std.fs.path.isSep(path[config_folder.len])) {
         const rest = path[config_folder.len + 1 ..];
         const top = rest[0 .. std.mem.indexOfAny(u8, rest, "/\\") orelse rest.len];
@@ -120,7 +121,7 @@ fn classify(config_folder: []const u8, path: []const u8) Kind {
 
 /// Top-level folders of the config folder that hold the app's running state, not settings.
 /// Cleared with `emptyStateFolder`, never removed.
-const state_folders = [_][]const u8{ "checkpoint", "checkpoint.new", "session", "handover" };
+const state_folders = [_][]const u8{ "checkpoint", "checkpoint.new", "session", "handover", "logs" };
 
 /// Clear one of the app's state folders: what is in it goes, the folder stays. On Linux nightwatch
 /// watches a tree by adding a watch for each folder it sees appear, on its own thread, and logs an
@@ -156,6 +157,7 @@ test classify {
     try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/checkpoint.new/session.zon"));
     try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/session/session.zon"));
     try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/handover/ready"));
+    try std.testing.expectEqual(Kind.ignored, classify("/cfg", "/cfg/logs/handover.log"));
     // A plugin that happens to share a name is still a plugin.
     try std.testing.expectEqual(Kind.binary, classify("/cfg", "/cfg/plugins/checkpoint/checkpoint" ++ ext));
 }

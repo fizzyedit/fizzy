@@ -71,6 +71,35 @@ const Everywhere = struct {
     ids: [8]dvui.Id = undefined,
 };
 
+/// A floating thing that belongs to the main window this frame — a demo's captions, its keys and
+/// its bar, which are the stage's: drawn in the main window and nowhere else. Without it, a layer
+/// that takes no input goes into whichever of the app's OS windows (a menu's, a dialog's, a
+/// float's) its middle is over, as the demo's pointer does, and a caption at the foot of the main
+/// window was drawn inside a dialog over it, cut at that window's edge (`isMain`).
+pub fn markMain(id: dvui.Id) void {
+    const now = dvui.currentWindow().frame_time_ns;
+    const m = dvui.dataGetPtrDefault(null, key_id, "_main", Main, .{});
+    if (m.frame != now) m.* = .{ .frame = now };
+    if (m.n < m.ids.len) {
+        m.ids[m.n] = id;
+        m.n += 1;
+    }
+}
+
+/// Whether `id` was marked as the main window's this frame (`markMain`).
+pub fn isMain(id: dvui.Id) bool {
+    const m = dvui.dataGetPtr(null, key_id, "_main", Main) orelse return false;
+    if (m.frame != dvui.currentWindow().frame_time_ns) return false;
+    for (m.ids[0..m.n]) |i| if (i == id) return true;
+    return false;
+}
+
+const Main = struct {
+    frame: i128 = 0,
+    n: u8 = 0,
+    ids: [64]dvui.Id = undefined,
+};
+
 /// What is carried, in a layer of its own this frame, where the app shows it in a window of its
 /// own over every other (fizzy's carry window): that window takes the layer's drawing whole, and
 /// the app's own windows draw none of it. A copy left in them, under the carry window, was drawn

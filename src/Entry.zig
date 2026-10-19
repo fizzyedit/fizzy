@@ -143,6 +143,8 @@ pub const dvui_app: dvui.App = .{
 pub fn main(main_init: std.process.Init) !u8 {
     // Time zero for the app's start (`core.profile.phase`).
     fizzy.core.profile.phase(main_init.io, "main");
+    // What a rebuild is measured against: the executable as this process started from it.
+    if (comptime builtin.target.cpu.arch != .wasm32) @import("app").watch.ExecutableWatcher.noteLaunch(main_init.io);
     crash.init(.{ .app = AppInfo.current.name, .version = AppInfo.current.version, .sdk = sdk_version });
     std.log.info("{s} version {s} ({s})", .{ AppInfo.current.display_name, AppInfo.current.version, @tagName(@import("builtin").mode) });
 
@@ -232,6 +234,8 @@ pub fn main(main_init: std.process.Init) !u8 {
         if (printControlPath(appAllocator(), main_init)) |code| return code;
         try singleton.earlyStartup(appAllocator(), main_init);
         fizzy.core.profile.phase(main_init.io, if (restart.startedByHandover()) "lock deferred (handover)" else "lock");
+        // Parsed with the lock's arguments; the backend reads it once its window is made.
+        if (comptime @hasDecl(dvui.backend, "quiet")) dvui.backend.quiet = @import("app").quiet.on;
 
         // Both read relative to where fizzy was launched, before `AppInit` moves to its own directory.
         Editor.Demo.readEnvTape(appAllocator(), main_init.io);
@@ -523,16 +527,24 @@ fn materialOffered() fizzy.core.material.Kinds {
     return k;
 }
 
-/// The kind of window material asked for: `FIZZY_GLASS` where it names one, else `liquid`.
+/// The kind of window material asked for: `FIZZY_GLASS` where it names one, else the setting
+/// (`Settings.window_material`).
 fn materialAsked() fizzy.core.material.Kind {
-    const Cache = struct {
+    return materialOverride() orelse fizzy.editor().app.settings.window_material;
+}
+
+/// The kind `FIZZY_GLASS` names, which overrides the setting; null where it names none.
+pub fn materialOverride() ?fizzy.core.material.Kind {
+    const Env = struct {
+        var read = false;
         var kind: ?fizzy.core.material.Kind = null;
     };
-    if (Cache.kind) |k| return k;
-    const env = if (comptime builtin.target.cpu.arch == .wasm32) null else std.c.getenv("FIZZY_GLASS");
-    const k = if (env) |v| std.meta.stringToEnum(fizzy.core.material.Kind, std.mem.span(v)) orelse .liquid else .liquid;
-    Cache.kind = k;
-    return k;
+    if (!Env.read) {
+        Env.read = true;
+        const env = if (comptime builtin.target.cpu.arch == .wasm32) null else std.c.getenv("FIZZY_GLASS");
+        if (env) |v| Env.kind = std.meta.stringToEnum(fizzy.core.material.Kind, std.mem.span(v));
+    }
+    return Env.kind;
 }
 
 /// One run of the app's frame.
@@ -549,17 +561,19 @@ fn frameOnce() !dvui.App.Result {
         editor.black_box.record(editor.app.gpa);
     }
     // What the app's windows are made of, as the backend can show it, for every glass drawn this
-    // frame (`core.material`): before `Popout`, whose OS glass is offered only for `liquid`. Liquid
-    // asked for until the app has a setting for it, so each platform shows the best it can;
-    // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`) asks for less, to see each.
+    // frame (`core.material`): before `Popout`, whose OS glass is offered only for `liquid`. The
+    // setting asks (Liquid Glass by default, so each platform shows the best it can);
+    // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`, `liquid`) overrides it.
     fizzy.core.material.publish((fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered()));
     // And the backend, which makes the windows it dresses itself of it: the one decision, one
     // applier (`SDLBackend.window_material`).
     if (comptime @hasDecl(dvui.backend, "setWindowMaterial")) {
         const m = fizzy.core.material.get();
+        // Its kind; the opacity is the one fizzy draws, handed over with its colour as the editor
+        // eases it (`Editor`, `backend.windowMaterialBase`), kept as it was here.
         dvui.backend.setWindowMaterial(switch (m.kind) {
             inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
-        }, m.opacity);
+        }, dvui.backend.window_material.opacity);
     }
     // A float asked out of the main window, or back into it, goes before anything is drawn
     // (`Editor.Popout`: on by default on macOS, `FIZZY_POPOUT` elsewhere).
