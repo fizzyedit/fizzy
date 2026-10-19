@@ -353,11 +353,13 @@ pub const Corner = struct {
         return .{ .rect = self.card, .radii = self.radii, .cut = true };
     }
 
-    /// How far down from the vessel's top the liquid's level is at `level` (0 to 1), physical:
-    /// where a drop falling from the top meets it (`Liquid.step`).
-    pub fn liquidDepth(self: Corner, s: f32, level: f32) f32 {
-        const deep = self.radiusPx(s) - 2 * liquid_inset * s;
-        return deep * (1 - rules.fill_top * level);
+    /// Where the pointer is on it: the square from the corner that lies inside the quarter drawn
+    /// (its far corner on the circle), so nothing past the glass — the document's last columns,
+    /// a scroll bar's end — is taken for the grip's.
+    pub fn hit(self: Corner, s: f32) dvui.Rect.Physical {
+        const d = self.radiusPx(s) * std.math.sqrt1_2;
+        const p = self.point();
+        return .{ .x = p[0] - d, .y = p[1] - d, .w = d, .h = d };
     }
 
     /// Where the icon is centred: on the diagonal, in the middle of what of the quarter shows.
@@ -374,7 +376,7 @@ pub const Corner = struct {
 pub fn drawCorner(c: Corner, id_extra: usize, look: Look, comptime anchor_fmt: []const u8, anchor_args: anytype) bool {
     const wrs = dvui.windowRectScale();
     const s = wrs.s;
-    const pr = c.box(s);
+    const pr = c.hit(s);
     var float: dvui.FloatingWidget = undefined;
     float.init(@src(), .{}, .{ .rect = wrs.rectFromPhysical(pr), .id_extra = id_extra });
     defer float.deinit();
@@ -443,8 +445,6 @@ pub fn paintCorner(id: dvui.Id, c: Corner, t: f32, look: Look) void {
 
 /// How far in from the glass and the card's edge the liquid keeps, points.
 const liquid_inset: f32 = 2.5;
-/// A drop's radius, points.
-const drop_r: f32 = 2.4;
 
 /// The liquid `liq` in `vessel` (physical, convex), its top `top` and its bottom `bottom` (y): the
 /// surface drawn column to column in strips, each cut by the vessel, with a lighter line along
@@ -458,7 +458,7 @@ fn pourLiquid(vessel: []const rules.Pt, liq: *const Liquid, top: f32, bottom: f3
         minx = @min(minx, q[0]);
         maxx = @max(maxx, q[0]);
     }
-    const level_y = std.math.lerp(bottom, top, rules.fill_top * liq.shownLevel());
+    const level_y = std.math.lerp(bottom, top, rules.fill_top * liq.level);
     const dx = (maxx - minx) / @as(f32, Liquid.columns - 1);
     const shine = color.lerp(.white, 0.35);
     var out: [256]geometry.Pt = undefined;
@@ -473,11 +473,6 @@ fn pourLiquid(vessel: []const rules.Pt, liq: *const Liquid, top: f32, bottom: f3
         pour(geometry.cut(&strip, vessel, &out, &scratch), color);
         const line = [_]geometry.Pt{ .{ x0, y0 - 0.5 * s }, .{ x1, y1 - 0.5 * s }, .{ x1, y1 + 0.9 * s }, .{ x0, y0 + 0.9 * s } };
         pour(geometry.cut(&line, vessel, &out, &scratch), shine);
-    }
-    var circle: [48]geometry.Pt = undefined;
-    for (liq.drops[0..liq.drop_n]) |d| {
-        const c: geometry.Shape = .circle(.{ minx + d.x * (maxx - minx), top + d.y }, drop_r * s);
-        pour(geometry.cut(c.outline(12, &circle), vessel, &out, &scratch), color);
     }
 }
 
