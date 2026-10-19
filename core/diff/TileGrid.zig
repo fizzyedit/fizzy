@@ -22,16 +22,19 @@ pub fn deinit(self: *TileGrid, gpa: std.mem.Allocator) void {
 
 /// Hash `src` into the grid, reusing its storage. Each tile is hashed row by row (Wyhash chained over its
 /// row slices), never per pixel.
-pub fn compute(self: *TileGrid, gpa: std.mem.Allocator, src: Image.Source, tile: Image.TileSize) !void {
+pub fn compute(self: *TileGrid, gpa: std.mem.Allocator, src: Image.Source, tile: Image.TileSize) std.mem.Allocator.Error!void {
     std.debug.assert(src.valid());
     const shift: u5 = @backingInt(tile);
     const size = @as(u32, 1) << shift;
+    const w_tiles = (src.width + size - 1) >> shift;
+    const h_tiles = (src.height + size - 1) >> shift;
+    // Resize first: a failure leaves the grid as it was, still matching its hashes.
+    try self.hashes.resize(gpa, @as(usize, w_tiles) * h_tiles);
     self.tile = tile;
     self.width = src.width;
     self.height = src.height;
-    self.w_tiles = (src.width + size - 1) >> shift;
-    self.h_tiles = (src.height + size - 1) >> shift;
-    try self.hashes.resize(gpa, @as(usize, self.w_tiles) * self.h_tiles);
+    self.w_tiles = w_tiles;
+    self.h_tiles = h_tiles;
     for (0..self.h_tiles) |ty| {
         const y0: u32 = @intCast(ty << shift);
         const y1 = @min(y0 + size, src.height);
@@ -49,6 +52,7 @@ pub fn compute(self: *TileGrid, gpa: std.mem.Allocator, src: Image.Source, tile:
 /// The tiles that differ between this grid (earlier) and `later`, as rects in `img`. Tiles are
 /// compared where both images are whole there: with different sizes, a tile cut short in either
 /// is not compared, and `size_changed` says the rest was not looked at.
+/// (A dimension that matches keeps its edge tiles.)
 pub fn diff(self: *const TileGrid, later: *const TileGrid, img: *Image, gpa: std.mem.Allocator, max_rects: u32) Error!Image.Result {
     if (self.tile != later.tile) return error.TileSizeMismatch;
     const shift: u5 = @backingInt(self.tile);
@@ -56,8 +60,9 @@ pub fn diff(self: *const TileGrid, later: *const TileGrid, img: *Image, gpa: std
     const same_size = self.width == later.width and self.height == later.height;
     const w = @min(self.width, later.width);
     const h = @min(self.height, later.height);
-    const w_tiles = if (same_size) self.w_tiles else w >> shift;
-    const h_tiles = if (same_size) self.h_tiles else h >> shift;
+    // An edge tile is cut the same in both only along a dimension that matches.
+    const w_tiles = if (self.width == later.width) self.w_tiles else w >> shift;
+    const h_tiles = if (self.height == later.height) self.h_tiles else h >> shift;
 
     var result: Image.Result = .{ .rects = &.{}, .size_changed = !same_size };
     try img.boxes.resize(gpa, @as(usize, w_tiles) * h_tiles);

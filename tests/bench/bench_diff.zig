@@ -81,10 +81,13 @@ test "bench: 4K image" {
     var gb: diff.TileGrid = .{};
     defer gb.deinit(gpa);
     try ga.compute(gpa, .tight(a, w, h), .@"32");
-    try gb.compute(gpa, .tight(b, w, h), .@"32");
-    const t0 = nowNs();
-    try ga.compute(gpa, .tight(a, w, h), .@"32");
-    const grid_ns = nowNs() - t0;
+    try gb.compute(gpa, .tight(c, w, h), .@"32"); // every tile changed: the merge's worst case
+    var grid_ns: i96 = std.math.maxInt(i96);
+    for (0..5) |_| {
+        const t0 = nowNs();
+        try ga.compute(gpa, .tight(a, w, h), .@"32");
+        grid_ns = @min(grid_ns, nowNs() - t0);
+    }
     var best: i96 = std.math.maxInt(i96);
     for (0..5) |_| {
         const t1 = nowNs();
@@ -93,7 +96,7 @@ test "bench: 4K image" {
         best = @min(best, nowNs() - t1);
     }
     std.debug.print("grid compute (hash 4K)    {d:8.3} ms  ({d} KB kept)\n", .{ ms(grid_ns), ga.hashes.items.len * 8 >> 10 });
-    std.debug.print("grid vs kept grid         {d:8.3} ms  (target < 1)\n", .{ms(best)});
+    std.debug.print("grid vs kept grid         {d:8.3} ms  (target < 1; every tile changed)\n", .{ms(best)});
 }
 
 test "bench: 50-layer 2048x2048 sprite, one layer touched" {
