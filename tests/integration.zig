@@ -7242,20 +7242,20 @@ test "tree: a drag put down is not dropped where the pointer last was" {
     try std.testing.expect(CarriedTree.landed == null);
 }
 
-// A key fold sticks. The caller below passes the same `.expanded = true` every frame, as a list
-// whose open state lives elsewhere does until it reads `branch.expanded` back: Left must still
-// leave the branch folded next frame, and Right open it again.
+// A key fold sticks. The caller below keeps its own open state and passes it back each frame, as
+// the settings, file and guides trees do, reading `branch.expanded` after `expander()`: Left must
+// fold the branch (animated, as a click does) and leave it folded, and Right open it again.
 const KeyFoldTree = struct {
     const TW = fizzy.core.widgets.TreeWidget;
 
     var focus = false;
-    var expanded = false;
+    var open = true;
     var body_drawn = false;
 
     fn frame() anyerror!dvui.App.Result {
         var tree = TW.tree(@src(), .{}, .{ .expand = .both });
         defer tree.deinit();
-        const branch = tree.branch(@src(), .{ .expanded = true, .animation_duration = 0 }, .{ .expand = .horizontal });
+        const branch = tree.branch(@src(), .{ .expanded = open }, .{ .expand = .horizontal });
         defer branch.deinit();
         if (focus) {
             focus = false;
@@ -7267,29 +7267,33 @@ const KeyFoldTree = struct {
             body_drawn = true;
             dvui.labelNoFmt(@src(), "child", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
         }
-        expanded = branch.expanded;
+        open = branch.expanded;
         return .ok;
     }
 };
 
-test "tree: a key fold stays folded when the caller keeps passing the same open state" {
+test "tree: a key fold stays folded when the caller passes its open state back" {
     var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
     defer t.deinit();
     KeyFoldTree.focus = true;
+    KeyFoldTree.open = true;
     try dvui.testing.settle(KeyFoldTree.frame);
-    try std.testing.expect(KeyFoldTree.expanded and KeyFoldTree.body_drawn);
+    try std.testing.expect(KeyFoldTree.open and KeyFoldTree.body_drawn);
 
     try dvui.testing.pressKey(.left, .none);
-    try dvui.testing.settle(KeyFoldTree.frame);
-    try std.testing.expect(!KeyFoldTree.expanded and !KeyFoldTree.body_drawn);
+    // The fold animates: the body is still drawn the frame after the key, closing.
     _ = try dvui.testing.step(KeyFoldTree.frame);
-    try std.testing.expect(!KeyFoldTree.expanded);
+    try std.testing.expect(KeyFoldTree.body_drawn);
+    try dvui.testing.settle(KeyFoldTree.frame);
+    try std.testing.expect(!KeyFoldTree.open and !KeyFoldTree.body_drawn);
+    _ = try dvui.testing.step(KeyFoldTree.frame);
+    try std.testing.expect(!KeyFoldTree.open);
 
     try dvui.testing.pressKey(.right, .none);
     try dvui.testing.settle(KeyFoldTree.frame);
-    try std.testing.expect(KeyFoldTree.expanded and KeyFoldTree.body_drawn);
+    try std.testing.expect(KeyFoldTree.open and KeyFoldTree.body_drawn);
     _ = try dvui.testing.step(KeyFoldTree.frame);
-    try std.testing.expect(KeyFoldTree.expanded);
+    try std.testing.expect(KeyFoldTree.open);
 }
 
 test "a frost never captures more than the picture it reads" {
