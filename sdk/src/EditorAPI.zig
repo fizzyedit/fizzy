@@ -172,6 +172,8 @@ pub const VTable = struct {
     /// Fizzy-owned content-area opacity (also drives fizzy's own panes); plugins
     /// read it to match fizzy's own chrome.
     contentOpacity: *const fn (ctx: *anyopaque) f32,
+    /// The most steps a document's history keeps (fizzy's setting); 0 keeps every one.
+    historyLimit: *const fn (ctx: *anyopaque) u32,
     /// The host's dialog frame: the function `core.dialogs.dialog` registers with dvui so
     /// the host draws the window (frost, header, footer, modal dim) around a plugin's body.
     /// Installed into the dylib's `core.dialogs.host_chrome` at load.
@@ -505,6 +507,10 @@ pub fn frostPane(self: EditorAPI, id: dvui.Id, rect: dvui.Rect.Physical, corners
 
 pub fn contentOpacity(self: EditorAPI) f32 {
     return self.vtable.contentOpacity(self.ctx);
+}
+
+pub fn historyLimit(self: EditorAPI) u32 {
+    return self.vtable.historyLimit(self.ctx);
 }
 
 pub fn isMaximized(self: EditorAPI) bool {
