@@ -46,6 +46,9 @@ is_open: bool = false,
 region: []const u8 = "",
 /// Where to put the popup; centred on the window when null.
 anchor: ?dvui.Point.Natural = null,
+/// The control it was opened from, which it grows out of (`core.widgets.popup`'s `grow_from`): the
+/// corner's button turning into the picker. Set after `open` by whoever opened it.
+grow_from: ?dvui.Rect.Natural = null,
 /// A card was dragged out of the popup and is riding the pointer as a loose
 /// `ViewDrag`. The popup is closed; `draw` drives the drag instead until the
 /// button comes up.
@@ -67,6 +70,7 @@ pub fn open(self: *Picker, gpa: std.mem.Allocator, region: []const u8, anchor: ?
     self.close(gpa);
     self.region = gpa.dupe(u8, region) catch return;
     self.anchor = anchor;
+    self.grow_from = null;
     self.is_open = true;
 }
 
@@ -117,6 +121,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
         .open_flag = &self.is_open,
         .from = self.anchor,
         .frost = core.widgets.menuFrost(),
+        .grow_from = self.grow_from,
     }, core.widgets.menuSurfaceOptions().override(.{
         .padding = dvui.Rect.all(8),
     })) orelse {

@@ -112,6 +112,11 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         // Seeks to random moments, and the first of each chapter, in an order that goes back and
         // forth: from snapshots, from the keyframe, and forward on the tape's own state.
         const tape = p.tape().?;
+        // A button aimed at an anchor, never a coordinate (docs/AUTOMATION.md).
+        if (tape.firstButtonOffAnchor()) |i| {
+            std.log.err("demo '{s}': op {d} presses or releases off an anchor; aim at one (docs/AUTOMATION.md)", .{ tape.name, i });
+            return error.ButtonOffAnchor;
+        }
         var picks: std.ArrayList(usize) = .empty;
         defer picks.deinit(gpa);
         for (0..bundled_random_seeks) |_| try picks.append(gpa, random.uintLessThan(usize, moments.items.len));

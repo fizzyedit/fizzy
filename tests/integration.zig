@@ -5995,6 +5995,8 @@ test "verdict: the soak tape is a demo, and its expectations read" {
     try std.testing.expectEqualStrings("soak", owned.tape.name);
     // It ends on a wait, so what closed last has time to close before the windows are counted.
     try std.testing.expect(owned.tape.ops[owned.tape.ops.len - 1].do == .wait);
+    // Every button on an anchor (docs/AUTOMATION.md), as every bundled demo's is (`tests/demos.zig`).
+    try std.testing.expectEqual(@as(?usize, null), owned.tape.firstButtonOffAnchor());
 
     var expect_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer expect_arena.deinit();
@@ -7298,6 +7300,60 @@ test "tree: a drag put down is not dropped where the pointer last was" {
     _ = try cw.addEventMouseButton(.left, .release);
     try dvui.testing.settle(CarriedTree.frame);
     try std.testing.expect(CarriedTree.landed == null);
+}
+
+// A key fold sticks. The caller below keeps its own open state and passes it back each frame, as
+// the settings, file and guides trees do, reading `branch.expanded` after `expander()`: Left must
+// fold the branch (animated, as a click does) and leave it folded, and Right open it again.
+const KeyFoldTree = struct {
+    const TW = fizzy.core.widgets.TreeWidget;
+
+    var focus = false;
+    var open = true;
+    var body_drawn = false;
+
+    fn frame() anyerror!dvui.App.Result {
+        var tree = TW.tree(@src(), .{}, .{ .expand = .both });
+        defer tree.deinit();
+        const branch = tree.branch(@src(), .{ .expanded = open }, .{ .expand = .horizontal });
+        defer branch.deinit();
+        if (focus) {
+            focus = false;
+            dvui.focusWidget(branch.button.data().id, null, null);
+        }
+        dvui.labelNoFmt(@src(), "row", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        body_drawn = false;
+        if (branch.expander(@src(), .{}, .{ .expand = .horizontal })) {
+            body_drawn = true;
+            dvui.labelNoFmt(@src(), "child", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        }
+        open = branch.expanded;
+        return .ok;
+    }
+};
+
+test "tree: a key fold stays folded when the caller passes its open state back" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    KeyFoldTree.focus = true;
+    KeyFoldTree.open = true;
+    try dvui.testing.settle(KeyFoldTree.frame);
+    try std.testing.expect(KeyFoldTree.open and KeyFoldTree.body_drawn);
+
+    try dvui.testing.pressKey(.left, .none);
+    // The fold animates: the body is still drawn the frame after the key, closing.
+    _ = try dvui.testing.step(KeyFoldTree.frame);
+    try std.testing.expect(KeyFoldTree.body_drawn);
+    try dvui.testing.settle(KeyFoldTree.frame);
+    try std.testing.expect(!KeyFoldTree.open and !KeyFoldTree.body_drawn);
+    _ = try dvui.testing.step(KeyFoldTree.frame);
+    try std.testing.expect(!KeyFoldTree.open);
+
+    try dvui.testing.pressKey(.right, .none);
+    try dvui.testing.settle(KeyFoldTree.frame);
+    try std.testing.expect(KeyFoldTree.open and KeyFoldTree.body_drawn);
+    _ = try dvui.testing.step(KeyFoldTree.frame);
+    try std.testing.expect(KeyFoldTree.open);
 }
 
 test "a frost never captures more than the picture it reads" {
@@ -9644,6 +9700,80 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const fresh = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(usize, 0), fresh.entries.len);
         try std.testing.expectEqual(@as(usize, 0), (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len);
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // A restart keeps each open document's history with the session (`keepSessionForRestart`):
+    // the new instance opens them, and takes their tracks up, while the old one is still running,
+    // so a track kept only as the old one quits comes too late. An unsaved document comes back
+    // dirty with its steps, and undo takes them back, by the person's Undo and by the command.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+        const path = try std.fs.path.join(gpa, &.{ root, "restart-history.txt" });
+        defer gpa.free(path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "restart-history.txt", .data = "" });
+        _ = try editor.openFilePath(path, editor.workbench.currentGroupingID());
+        var doc = for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (std.mem.eql(u8, d.owner.documentPath(d), path)) break d;
+        } else return error.TestUnexpectedResult;
+        try dvui.testing.settle(headlessFrame);
+        // An agent's edits, through the text plugin's commands: unsaved.
+        for ([_][]const u8{ "a", "b", "c" }) |letter| {
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+            try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+        }
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.isDirty(doc));
+        const grouping = doc.owner.documentGrouping(doc);
+        const dir = try fizzy.Editor.KeptDocuments.sessionDir(gpa, editor.app.config_folder);
+        defer gpa.free(dir);
+        try std.testing.expect(editor.keepSessionForRestart());
+        // The old instance keeps nothing more: its quit comes after the new one is up.
+        {
+            const keep_dir = tracks.dir;
+            tracks.dir = null;
+            defer tracks.dir = keep_dir;
+            editor.detachFileID(doc.id);
+        }
+
+        editor.session = fizzy.Editor.KeptDocuments.loadSession(gpa, dir) orelse return error.TestUnexpectedResult;
+        defer {
+            if (editor.session) |*kept| kept.deinit();
+            editor.session = null;
+        }
+        _ = try host.openFile(.{ .path = path, .grouping = grouping });
+        doc = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.isDirty(doc));
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        const line = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 3), line.entries.len);
+        try std.testing.expectEqual(@as(usize, 3), line.at);
+        const read = struct {
+            fn read(h: *sdk.Host) ![]const u8 {
+                return switch (h.callCommand("text.read", "", h.arena())) {
+                    .ok => |r| r orelse error.TestUnexpectedResult,
+                    else => error.TestUnexpectedResult,
+                };
+            }
+        }.read;
+        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"cba\"") != null);
+        // The person's Undo (what mod+z runs), then the command, as an agent calls it.
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"ba\"") != null);
+        try std.testing.expect(host.callCommand("fizzy.undo", "", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"a\"") != null);
         try editor.rawCloseFileID(doc.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);

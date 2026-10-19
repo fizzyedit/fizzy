@@ -23,6 +23,12 @@ pub const menu = @import("menu.zig");
 /// a `@hasField` per field: a field renamed on this backend then fails its build, not goes quiet.
 pub const own_backend = @hasDecl(@import("backend"), "platform");
 
+/// Whether this is a quiet run, never to take the person's focus (`SDLBackend.quiet`). Never on
+/// dvui's own backend, which has no such run.
+pub fn quiet() bool {
+    return if (comptime own_backend) @import("backend").quiet else false;
+}
+
 comptime {
     // The menu bar's Objective-C (`macos/menu_target.m`) calls these back, and it is compiled into
     // every app on macOS (`addPlatformObjC`), so they are kept whether or not the app ever reaches

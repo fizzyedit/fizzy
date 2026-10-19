@@ -91,6 +91,10 @@ pub const InitOptions = struct {
     /// Blur what is behind the panel, as a dialog does. The tint *is* the fill, so a frosted
     /// menu paints no background of its own. Null draws `opts.color_fill` the ordinary way.
     frost: ?BlurBackdrop.Pane = null,
+    /// The control it grows out of (`reveal`): it opens as that rect and its round corners, and
+    /// they become its own — the button turning into the menu rather than opening one — its rows
+    /// coming in once there is room for them. Null slides open from the edge nearest `from`.
+    grow_from: ?Rect.Natural = null,
 };
 
 render_ftb: dvui.RenderFrontToBack,
@@ -108,6 +112,11 @@ prevClip: Rect.Physical,
 scale_val: f32,
 /// Sliding open this frame (`reveal`), so its scroll area shows no bar.
 revealing: bool = false,
+/// Growing out of `InitOptions.grow_from` this frame: how far, 0…1 (past 1 in the swing), and
+/// the corner it started from, natural. Null once it is whole.
+grown: ?struct { k: f32, r0: f32 } = null,
+/// The alpha its rows were drawn at while it grows, to put back (`deinit`).
+prev_alpha: ?f32 = null,
 menu: Menu,
 style: Style,
 scaler: dvui.ScaleWidget,
@@ -172,13 +181,25 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
         self.wd.rect = .cast(dvui.placeOnScreen(screens.menuScreenFor(centering).insetAll(screen_margin), .{}, .none, .cast(self.data().rect)));
     }
 
+    if (init_opts.grow_from) |g| {
+        // Growing out of a control, it opens in place: sharing the control's corner nearest the
+        // middle of its screen's far side — the top right of a place's corner button — so it
+        // grows out of the control the way it is going, never toward a spot beside it.
+        const scr = screens.menuScreenFor(g).insetAll(screen_margin);
+        const right = g.x + g.w / 2 > scr.x + scr.w / 2;
+        const bottom = g.y + g.h / 2 > scr.y + scr.h / 2;
+        self.wd.rect.x = if (right) g.x + g.w - self.wd.rect.w else g.x;
+        self.wd.rect.y = if (bottom) g.y + g.h - self.wd.rect.h else g.y;
+        self.wd.rect = .cast(dvui.placeOnScreen(scr, .{}, .none, .cast(self.data().rect)));
+    }
+
     if (dvui.snapToPixels()) {
         const s = dvui.windowNaturalScale();
         self.wd.rect.x = @round(self.wd.rect.x * s) / s;
         self.wd.rect.y = @round(self.wd.rect.y * s) / s;
     }
 
-    self.reveal(init_opts.from);
+    self.reveal(init_opts.from, init_opts.grow_from);
 
     self.data().register();
     dvui.parentSet(self.widget());
@@ -234,7 +255,9 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
         // and `WidgetData.init` is what normally resolves it. An unresolved corner draws square
         // whatever radius it names — which is exactly how a rounded palette ended up beside a
         // square menu built from the same constant.
-        const corners = options.cornersGet().finalize(options.themeGet());
+        var corners = options.cornersGet().finalize(options.themeGet());
+        // Growing out of a control: its round corners carried into the menu's.
+        if (self.grown) |g| corners = .round(std.math.lerp(g.r0, corners.tl.radius(), std.math.clamp(g.k, 0, 1)));
         BlurBackdrop.frostPane(self.data().id, brs.r, corners, brs.s, frost);
         // The shadow as a ring round the glass, after it, so the glass never blurs it in
         // (`core.dialogs.glassShadow`).
@@ -249,6 +272,13 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
         scroll_opts.box_shadow = null;
     }
     if (native) scroll_opts.background = false;
+    // Growing out of a control: its rows come in over the second half, once there is room for
+    // them, so the button reads as becoming the menu rather than as a menu squeezed small.
+    if (self.grown) |g| {
+        const prev = dvui.currentWindow().alpha;
+        self.prev_alpha = prev;
+        dvui.alphaSet(prev * std.math.clamp((g.k - 0.5) / 0.5, 0, 1));
+    }
     // No scrollbar while it slides open: shorter than its rows for those frames, it would show
     // one for a list that fits. A menu too long for the window still gets one once it is open.
     self.scroll.init(@src(), .{ .horizontal = .none, .vertical_bar = if (self.revealing) .hide else .auto }, scroll_opts);
@@ -265,7 +295,10 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
 /// playful — as a dialog and the palette open. It grows from the edge nearest where it was
 /// opened: down from a menu placed below its anchor, up from one placed above it. Only once its
 /// size is known (its second frame); a menu that comes back slides open anew.
-fn reveal(self: *FloatingMenu, from: ?Rect.Natural) void {
+///
+/// Given `grow_from`, it grows out of that control instead: its rect carried from the control's
+/// to its own on the same curve, and its corners with it (`grown`).
+fn reveal(self: *FloatingMenu, from: ?Rect.Natural, grow_from: ?Rect.Natural) void {
     const id = self.data().id;
     if (dvui.minSizeGet(id) == null) return;
     const full = self.wd.rect;
@@ -282,6 +315,17 @@ fn reveal(self: *FloatingMenu, from: ?Rect.Natural) void {
     const a = dvui.animationGet(id, "_reveal") orelse return;
     self.revealing = true;
     const k = @max(0, a.value());
+    if (grow_from) |g| {
+        self.wd.rect = .{
+            .x = std.math.lerp(g.x, full.x, k),
+            .y = std.math.lerp(g.y, full.y, k),
+            .w = @max(1, std.math.lerp(g.w, full.w, k)),
+            .h = @max(1, std.math.lerp(g.h, full.h, k)),
+        };
+        self.grown = .{ .k = k, .r0 = @min(g.w, g.h) / 2 };
+        dvui.refresh(null, @src(), id);
+        return;
+    }
     self.wd.rect.h = full.h * k;
     // Placed above what opened it: grow up, from its bottom edge.
     const above = if (from) |fr| full.y + full.h <= fr.y + 1 else false;
@@ -349,6 +393,7 @@ pub fn chainFocused(self: *FloatingMenu, self_call: bool) bool {
 pub fn deinit(self: *FloatingMenu) void {
     defer if (dvui.widgetIsAllocated(self)) dvui.widgetFree(self);
     defer self.* = undefined;
+    if (self.prev_alpha) |a| dvui.alphaSet(a);
 
     const evts = dvui.events();
     const rs = self.data().rectScale();

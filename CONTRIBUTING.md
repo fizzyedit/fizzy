@@ -45,6 +45,10 @@ The open PR list is the board of who is working on what.
    yes without opening the PR.
 4. **Merging is the maintainer's.** On a yes, merge with `gh pr merge --squash`. Never push to
    `main`, and never merge a PR you opened unless asked to.
+5. **Auto-merge comes after review and a yes.** It merges, so it is the maintainer's, or whoever
+   merges on their yes: on only once the PR's code review is done and the maintainer said yes,
+   never by the session that opened the PR. On 2026-10-19 #623 and #624 merged before their
+   review landed, and the findings became follow-ups #639 and #640.
 
 ## jj
 
@@ -134,6 +138,13 @@ turns.
   only from files that module analyzes. `zig build check-tests-reached` (run in CI) fails when a
   `test` block is compiled into no test binary, naming it; a new test file needs a root in
   `build/app.zig` or a `test { _ = @import(...); }` from a file that has one.
+- **Cloud sessions run `scripts/cloud-setup.sh`.** A Claude Code cloud session's GitHub proxy
+  blocks every repo but `fizzyedit/fizzy`, so `zig build` cannot fetch fizzy's dependencies
+  there. `.github/workflows/deps-cache.yml` publishes the Zig package cache as the asset
+  `zig-deps-linux.tar.zst` of the rolling `deps-cache` release, and the script installs Zig 0.17
+  (`pip install ziglang`) and unpacks that cache into `~/.cache/zig/p`. The environment's setup
+  script is the one line `curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash`.
+  A dependency bump reaches cloud sessions when the workflow has run on the merge.
 - **A plugin's plain `zig build` also installs** into the real plugins directory. For a sandbox
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
@@ -223,5 +234,6 @@ as well as a PR. Admins can merge a PR past a failing check in an emergency, nev
 `main` directly.
 
 `ci-ok` passes when every other CI job passed or was skipped: a PR changing only Markdown skips
-the builds and still gets its check. CI also runs for a merge queue (`merge_group`), so turning
-the queue on needs no workflow change.
+the builds and still gets its check. `main` merges through the merge
+queue (squash, up to 4 PRs a batch, `ci-ok` rerun on the `merge_group` ref): `gh pr merge N --auto`
+queues a PR once its checks pass, and the queue lands it.

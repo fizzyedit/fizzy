@@ -1,48 +1,121 @@
-//! A document's history as pictures: a small copy of its pane at each step it has stood at, for
-//! the transport's strip (`HistoryTransport`), as a video's scrubber shows frames.
+//! A document's history as pictures: a crop of its pane at each step it has stood at, for the
+//! transport's strip (`HistoryTransport`), as a video's scrubber shows frames.
 //!
 //! Owner-agnostic: a picture is what the pane drew, read from the frame the app already keeps in
-//! a texture (`core.FrameTarget.snapshot`, scaled down on the GPU), so any document has frames
-//! without its owner knowing. Taken only after the document's history moved (`moved`): the frame
-//! after an edit lands, an undo, a redo, a scrub's jump. Each is the pane above the bar, keyed by
-//! the history entry on top then (0 before any). A step the document never stood at while open
-//! here has no picture: the strip shows it plain until a scrub passes over it.
+//! a texture (`core.FrameTarget.snapshot`), so any document has frames without its owner knowing.
+//! Taken only after the document's history moved (`moved`): the frame after an edit lands, an
+//! undo, a redo, a scrub's jump. Each is the pane above the bar, keyed by the history entry on top
+//! then (0 before any). A step's picture is taken once, as the step is made, and kept: going back,
+//! forward or scrubbing over it only ever fills in one it lacks (a step the document never stood
+//! at while open here), compared with the step truly before it, never the last one visited. Only
+//! the step changing (a keystroke joining a run of typing, `Change.made`) takes it again, and a
+//! history that started over (`Change.restarted`) lets go of them all.
 //!
-//! Costs nothing on a frame the history did not move; on one it did, a copy of the pane into a
-//! texture the strip's size. At most `cap` pictures a document, the oldest taken going first.
+//! A picture is the strip's size, cut from the frame at its own pixels round where its step changed
+//! the document (`Picture.change`), so the strip draws it one pixel for one and it reads as
+//! crisply as the pane. Where it changed is found on a small copy of the pane, compared with the
+//! step before's column by column and row by row (`prints`), once, as it lands.
+//!
+//! Costs nothing on a frame the history did not move; on one it did, two copies of the pane on the
+//! GPU (the whole one into a target kept while the history keeps moving, `whole`), and the next
+//! frame a read of the small one and a crop of the other. At most `cap` pictures
+//! a document, the oldest taken going first.
 const HistoryFrames = @This();
 
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const rules = @import("history_transport.zig");
+const Tracks = @import("Tracks.zig");
 
 /// Each picture, by the history entry on top when it was taken; oldest taken first.
 frames: std.AutoArrayHashMapUnmanaged(u64, Picture) = .empty,
 /// The entry on top the frame just drawn shows, to be taken from it at the next (`take`).
-due: ?u64 = null,
+due: ?Step = null,
 /// A picture taken last frame, still the target it was drawn into: read the frame after, once
-/// its copy has landed, for where its content is (`land`).
-unread: ?struct { top: u64, target: dvui.TextureTarget } = null,
+/// its copy has landed, for where it changed, and cropped from `whole` (`land`).
+unread: ?Unread = null,
+/// The pane at its own pixels, as the last picture taken saw it: what its crop is cut from. Kept
+/// while the history moves frame after frame (a held undo, a scrub), so each step is a copy into
+/// it rather than a new pane-sized target; let go of the first frame no picture is asked for.
+whole: ?dvui.TextureTarget = null,
+/// The size of the pane's part a picture is taken from as the pane stands (`take`, each frame): a
+/// step's picture from another size (the window resized since) is of another view of it, and a
+/// visit takes it again.
+pane_source: [2]u32 = .{ 0, 0 },
 
-/// A picture of the document, and where in it the content is (`content`): what differs from its
-/// background, as fractions of it; null where nothing does (an empty document).
-pub const Picture = struct { tex: dvui.Texture, content: ?rules.Frac };
+const Unread = struct {
+    step: Step,
+    /// The pane, small (`height` high): read back for where its step changed.
+    small: dvui.TextureTarget,
+    /// The size of `whole` when it was taken, in pixels.
+    source: [2]u32,
+    /// The crop's size: the strip's, in pixels.
+    crop: [2]u32,
+};
 
-/// At most this many pictures a document: 48 of 384 by 192 is about 14 MB.
+/// A step's picture to take: the entry on top, and the one under it (null before any), whose
+/// picture it is compared with for what the step changed; `made` when the step itself was just
+/// made or changed, so a picture it already has is out of date.
+const Step = struct { top: u64, below: ?u64, made: bool = false };
+
+/// What a move of the history did to its entry on top (`changeOf`).
+pub const Change = enum {
+    /// Only moved to it (undone or redone to, gone to, scrubbed over): its picture, if it has one,
+    /// still shows it.
+    visited,
+    /// Made or changed (added, joined): a picture it has is of what it was.
+    made,
+    /// The history started over: no picture taken before is of this history.
+    restarted,
+};
+
+/// What the track's records since the last move (`recs`) did to the entry now on top (`top`): made
+/// it, or only moved to it. A restart is never among them: it begins a new track (`Tracks.step`),
+/// which the app tells by the track itself changing.
+pub fn changeOf(recs: []const Tracks.Track.Rec, top: u64) Change {
+    for (recs) |r| switch (r.kind) {
+        .added, .joined => if (r.id == top) return .made,
+        .undone, .redone, .restarted => {},
+    };
+    return .visited;
+}
+
+/// A crop of the document's pane at a step, the strip's size at its own pixels, and where the step
+/// changed it.
+pub const Picture = struct {
+    tex: dvui.Texture,
+    /// The small copy's prints (`prints`): each column's, then each row's; owned, empty when it
+    /// could not be read.
+    prints: []u32 = &.{},
+    /// The size of the pane's part it was taken from, in physical pixels: two pictures are
+    /// compared only when taken from the same, or the scaling alone would differ everywhere.
+    source: [2]u32 = .{ 0, 0 },
+    /// What this step changed from the one before, as fractions of the pane; null when nothing
+    /// visibly did, or the step before has no picture to compare with.
+    change: ?rules.Frac = null,
+};
+
+/// At most this many pictures a document: each the strip's size, 4 bytes a pixel (a 600 by 104
+/// strip on a Retina screen is 250 KB, so 48 are about 12 MB).
 pub const cap = 48;
-/// A picture's height in pixels; its width keeps the pane's shape, up to `max_w`. Fine enough for
-/// the strip to frame a few lines of a document close (`paintStrip`) and still read them.
+/// The small copy's height in pixels, only for where a step changed; its width keeps the pane's
+/// shape, up to `max_w`.
 pub const height: u32 = 192;
 pub const max_w: u32 = 384;
 
-/// The document's history moved and now has `top` (its entry on top, 0 for none) on top, and the
-/// frame the app is drawing shows it: the next frame takes the picture from it. The app asks after
+/// The document's history moved and now has `top` (its entry on top, 0 for none) on top, `below`
+/// the one under it (0 for none, null when `top` is 0), and the frame the app is drawing shows it:
+/// the next frame takes the picture from it, unless `top` already has one and `change` says it
+/// still shows it (a step's picture is never retaken for a visit). The app asks after
 /// the document draws, and sees a move once its owner has reported it: an edit made in the
 /// document's own draw or before it is in the frame, and the transport's jumps (made after the
 /// document drew) are seen the frame after, which draws them.
-pub fn moved(self: *HistoryFrames, top: u64) void {
-    self.due = top;
+pub fn moved(self: *HistoryFrames, gpa: std.mem.Allocator, top: u64, below: ?u64, change: Change) void {
+    if (change == .restarted) self.forget(gpa);
+    // Only visited, and it has its picture of the pane as it stands: kept as it was taken.
+    if (change == .visited) if (self.frames.get(top)) |pic| if (std.mem.eql(u32, &pic.source, &self.pane_source)) return;
+    self.due = .{ .top = top, .below = below, .made = change != .visited };
     // Keep the frame in a texture to read from, on a backend that would draw it straight to the
     // window (the web).
     core.FrameTarget.want();
@@ -52,47 +125,140 @@ pub fn moved(self: *HistoryFrames, top: u64) void {
 /// Before the document draws: take the picture asked for (`moved`) from what the last frame drew of
 /// `pane` (physical), above `bar_h` (physical) of its bottom, where the transport and the feed
 /// are drawn over it: the bar's height as it stands, its strip included, so a picture never holds
-/// the strip itself.
-pub fn take(self: *HistoryFrames, gpa: std.mem.Allocator, pane: dvui.Rect.Physical, bar_h: f32) void {
+/// the strip itself. `strip` is the strip's size in physical pixels (`HistoryTransport.stripPixels`):
+/// the crop's; null where the pane has no room for the bar, and no picture is taken.
+pub fn take(self: *HistoryFrames, gpa: std.mem.Allocator, pane: dvui.Rect.Physical, bar_h: f32, strip: ?[2]u32) void {
     self.land(gpa);
-    const top = self.due orelse return;
+    // On whole pixels, so the copy at its own size is the pane's pixels, not a blend of two.
+    var r: dvui.Rect.Physical = .{ .x = @round(pane.x), .y = @round(pane.y), .w = @round(pane.w), .h = @round(pane.h - bar_h) };
+    r = r.intersect(dvui.windowRectPixels());
+    self.pane_source = .{ @intFromFloat(@max(r.w, 0)), @intFromFloat(@max(r.h, 0)) };
+    const step = self.due orelse {
+        self.dropWhole();
+        return;
+    };
     self.due = null;
-    var r = pane;
-    r.h -= bar_h;
-    if (r.w < 8 or r.h < 8) return;
+    const crop = strip orelse return self.dropWhole();
+    if (r.w < 8 or r.h < 8 or crop[0] == 0 or crop[1] == 0) return self.dropWhole();
     const prof = core.profile.begin("fizzy", "history.frame");
     defer prof.end();
+    const source = self.pane_source;
+    if (self.whole) |t| if (t.width != source[0] or t.height != source[1]) self.dropWhole();
+    const whole = self.whole orelse (dvui.textureCreateTarget(.{ .width = source[0], .height = source[1], .interpolation = .linear }) catch return);
+    self.whole = whole;
     const h: f32 = @floatFromInt(height);
     const w: u32 = @intFromFloat(@min(@as(f32, @floatFromInt(max_w)), @round(h * r.w / r.h)));
-    const target = core.FrameTarget.snapshotTarget(r, .{ @max(w, 1), height }) orelse return;
-    self.unread = .{ .top = top, .target = target };
+    if (!core.FrameTarget.snapshotInto(r, whole)) return;
+    const small = core.FrameTarget.snapshotTarget(r, .{ @max(w, 1), height }) orelse return;
+    self.unread = .{ .step = step, .small = small, .source = source, .crop = crop };
     // The frame that reads it back.
     dvui.refresh(null, @src(), null);
 }
 
-/// The picture taken last frame (`unread`), its copy landed: read back for where its content is
-/// (`contentOf`), then kept as a texture. A read of one small picture, once per move.
+fn dropWhole(self: *HistoryFrames) void {
+    if (self.whole) |t| t.destroyLater();
+    self.whole = null;
+}
+
+/// The picture taken last frame (`unread`), its copies landed: the small one read back for where
+/// it changed from the step before (`prints`) and let go of, and the crop round that cut from
+/// `whole` at its own pixels (`history_transport.cropAt`). A read of one small picture and a copy
+/// the strip's size, once per move.
 fn land(self: *HistoryFrames, gpa: std.mem.Allocator) void {
     const u = self.unread orelse return;
     self.unread = null;
-    const prof = core.profile.begin("fizzy", "history.frame.content");
+    defer u.small.destroyLater();
+    const whole_target = self.whole orelse return;
+    const prof = core.profile.begin("fizzy", "history.frame.crop");
     defer prof.end();
-    const content = if (dvui.Texture.readTarget(dvui.currentWindow().arena(), u.target)) |px| contentOf(px, u.target.width, u.target.height) else |_| null;
-    const tex = dvui.Texture.fromTarget(u.target) catch return;
-    const pic: Picture = .{ .tex = tex, .content = content };
-    const gop = self.frames.getOrPut(gpa, u.top) catch {
-        dvui.textureDestroyLater(tex);
+    const w = u.small.width;
+    const h = u.small.height;
+    var pic: Picture = .{ .tex = undefined, .source = u.source };
+    var content: ?rules.Frac = null;
+    if (dvui.Texture.readTarget(dvui.currentWindow().arena(), u.small)) |px| {
+        content = contentOf(px, w, h);
+        if (gpa.alloc(u32, w + h)) |p| {
+            prints(px, w, h, p);
+            pic.prints = p;
+            if (u.step.below) |b| if (self.frames.get(b)) |before| if (before.prints.len == p.len and std.mem.eql(u32, &before.source, &pic.source)) {
+                const cols = rules.changedSpan(before.prints[0..w], p[0..w]);
+                const rows = rules.changedSpan(before.prints[w..], p[w..]);
+                if (cols) |c| if (rows) |r| {
+                    pic.change = .{ .x = c.lo, .w = c.hi - c.lo, .y = r.lo, .h = r.hi - r.lo };
+                };
+            };
+        } else |_| {}
+    } else |_| {}
+    const top = u.step.top;
+    // A visit's picture of a step that has one of this view by now (made since it was asked for)
+    // is not the step's: it keeps its own.
+    if (!u.step.made) if (self.frames.get(top)) |old| if (std.mem.eql(u32, &old.source, &pic.source)) {
+        gpa.free(pic.prints);
         return;
     };
-    if (gop.found_existing) {
-        // Taken again: the newest, so the last to go.
-        dvui.textureDestroyLater(gop.value_ptr.tex);
-        _ = self.frames.orderedRemove(u.top);
-        self.frames.put(gpa, u.top, pic) catch dvui.textureDestroyLater(tex);
-    } else gop.value_ptr.* = pic;
+    // Round what the step changed; one that changed nothing visible, round the document's content,
+    // or the pane's middle.
+    const round = pic.change orelse content orelse rules.Frac{};
+    const sw: f32 = @floatFromInt(u.source[0]);
+    const sh: f32 = @floatFromInt(u.source[1]);
+    const c = rules.cropAt(.{ (round.x + round.w / 2) * sw, (round.y + round.h / 2) * sh }, u.crop, u.source);
+    const whole = dvui.Texture.fromTargetTemp(whole_target) catch {
+        gpa.free(pic.prints);
+        return;
+    };
+    const rect: dvui.Rect.Physical = .{ .x = @floatFromInt(c.x), .y = @floatFromInt(c.y), .w = @floatFromInt(c.w), .h = @floatFromInt(c.h) };
+    const cropped = core.FrameTarget.copyRect(whole, rect, .{ c.w, c.h }, .nearest) orelse {
+        gpa.free(pic.prints);
+        return;
+    };
+    pic.tex = dvui.Texture.fromTarget(cropped) catch {
+        cropped.destroyLater();
+        gpa.free(pic.prints);
+        return;
+    };
+    // Taken again: the newest, so the last to go.
+    if (self.frames.fetchOrderedRemove(top)) |kv| release(gpa, kv.value);
+    self.frames.put(gpa, top, pic) catch release(gpa, pic);
     while (self.frames.count() > cap) {
-        dvui.textureDestroyLater(self.frames.values()[0].tex);
+        release(gpa, self.frames.values()[0]);
         self.frames.orderedRemoveAt(0);
+    }
+}
+
+/// Let go of every picture: the history they were of started over.
+fn forget(self: *HistoryFrames, gpa: std.mem.Allocator) void {
+    for (self.frames.values()) |p| release(gpa, p);
+    self.frames.clearRetainingCapacity();
+}
+
+fn release(gpa: std.mem.Allocator, pic: Picture) void {
+    dvui.textureDestroyLater(pic.tex);
+    gpa.free(pic.prints);
+}
+
+/// A print of each column of a picture of `w` by `h` pixels, then of each row, into `out` (`w + h`
+/// long): a hash of their pixels, so two pictures of the same size differ in a column or a row
+/// exactly where their prints do (`history_transport.changedSpan`). The bands along the bottom and
+/// right edges are left out, as for the content (`contentOf`): a scrollbar moving is not the step's
+/// change.
+pub fn prints(px: []const dvui.Color.PMA, w: u32, h: u32, out: []u32) void {
+    @memset(out, 2166136261);
+    if (w == 0 or h == 0 or px.len < @as(usize, w) * h or out.len < w + h) return;
+    const scan_w = w -| @as(u32, @intFromFloat(@ceil(@as(f32, @floatFromInt(w)) * edge_band)));
+    const scan_h = h -| @as(u32, @intFromFloat(@ceil(@as(f32, @floatFromInt(h)) * edge_band)));
+    const cols = out[0..w];
+    const rows = out[w..][0..h];
+    // Row by row, each column's print taking its pixel in turn, and the row's each of its pixels:
+    // in memory order.
+    for (0..scan_h) |y| {
+        const row = px[y * w ..][0..scan_w];
+        var r = rows[y];
+        for (row, cols[0..scan_w]) |p, *o| {
+            const v = @as(u32, p.r) | @as(u32, p.g) << 8 | @as(u32, p.b) << 16 | @as(u32, p.a) << 24;
+            o.* = (o.* ^ v) *% 16777619;
+            r = (r ^ v) *% 16777619;
+        }
+        rows[y] = r;
     }
 }
 
@@ -143,8 +309,10 @@ pub fn deinit(self: *HistoryFrames, gpa: std.mem.Allocator) void {
     // no window, and the GPU goes with the process.
     if (dvui.current_window != null) {
         for (self.frames.values()) |p| dvui.textureDestroyLater(p.tex);
-        if (self.unread) |u| u.target.destroyLater();
+        if (self.unread) |u| u.small.destroyLater();
+        if (self.whole) |t| t.destroyLater();
     }
+    for (self.frames.values()) |p| gpa.free(p.prints);
     self.frames.deinit(gpa);
 }
 
@@ -163,4 +331,83 @@ test "a picture's content is the box round what differs from its background" {
     // A shade within the noise is not content.
     px[3 * 8 + 0] = .{ .r = 40, .g = 36, .b = 34, .a = 255 };
     try std.testing.expectEqual(c.x, contentOf(&px, 8, 4).?.x);
+}
+
+test "a step's change is the box of columns and rows where its picture differs from the one before" {
+    const bg: dvui.Color.PMA = .{ .r = 30, .g = 30, .b = 34, .a = 255 };
+    const ink: dvui.Color.PMA = .{ .r = 220, .g = 180, .b = 120, .a = 255 };
+    const w = 40;
+    const h = 20;
+    var before: [w * h]dvui.Color.PMA = @splat(bg);
+    // A mark already there, at the left.
+    for (2..6) |y| before[y * w + 3] = ink;
+    var after = before;
+    // The step draws a stroke across columns 20 to 25, on rows 8 and 9.
+    for (20..26) |x| for (8..10) |y| {
+        after[y * w + x] = ink;
+    };
+    var pa: [w + h]u32 = undefined;
+    var pb: [w + h]u32 = undefined;
+    prints(&before, w, h, &pa);
+    prints(&after, w, h, &pb);
+    const cols = rules.changedSpan(pa[0..w], pb[0..w]).?;
+    try std.testing.expectEqual(@as(f32, 20.0 / 40.0), cols.lo);
+    try std.testing.expectEqual(@as(f32, 26.0 / 40.0), cols.hi);
+    const rows = rules.changedSpan(pa[w..], pb[w..]).?;
+    try std.testing.expectEqual(@as(f32, 8.0 / 20.0), rows.lo);
+    try std.testing.expectEqual(@as(f32, 10.0 / 20.0), rows.hi);
+    // Nothing visible changed: no span either way.
+    try std.testing.expectEqual(@as(?rules.Span, null), rules.changedSpan(pa[0..w], pa[0..w]));
+    try std.testing.expectEqual(@as(?rules.Span, null), rules.changedSpan(pa[w..], pa[w..]));
+    // A change only in the right-hand band (a scrollbar) is not the step's.
+    var bar = before;
+    for (0..h) |y| bar[y * w + w - 1] = ink;
+    prints(&bar, w, h, &pb);
+    try std.testing.expectEqual(@as(?rules.Span, null), rules.changedSpan(pa[0..w], pb[0..w]));
+    try std.testing.expectEqual(@as(?rules.Span, null), rules.changedSpan(pa[w..], pb[w..]));
+}
+
+test "scrubbing across the steps leaves each step's picture as it was taken" {
+    const gpa = std.testing.allocator;
+    var hf: HistoryFrames = .{ .pane_source = .{ 100, 80 } };
+    defer hf.deinit(gpa);
+    // Five steps, each with the picture taken as it was made: its own prints and change.
+    for (0..5) |i| {
+        const p = try gpa.alloc(u32, 4);
+        @memset(p, @intCast(i));
+        try hf.frames.put(gpa, i, .{ .tex = undefined, .prints = p, .source = .{ 100, 80 }, .change = .{ .x = @floatFromInt(i), .w = 1, .h = 1 } });
+    }
+    // Back to the start and forward again, then to and fro: undo, redo, a scrub's jumps.
+    const stops = [_]u64{ 4, 3, 2, 1, 0, 1, 2, 3, 4, 0, 4, 2 };
+    for (stops) |top| {
+        hf.moved(gpa, top, if (top == 0) null else top - 1, changeOf(&.{}, top));
+        try std.testing.expectEqual(@as(?Step, null), hf.due);
+    }
+    try std.testing.expectEqual(@as(usize, 5), hf.frames.count());
+    for (hf.frames.keys(), hf.frames.values()) |k, pic| {
+        try std.testing.expectEqual(@as(f32, @floatFromInt(k)), pic.change.?.x);
+        for (pic.prints) |v| try std.testing.expectEqual(@as(u32, @intCast(k)), v);
+        try std.testing.expectEqual([2]u32{ 100, 80 }, pic.source);
+    }
+}
+
+test "only a step being made or joined takes its picture again" {
+    const R = Tracks.Track.Rec;
+    const at: R = .{ .kind = .added, .id = 0, .at = 0, .ms = 0, .effect = .{ .start = 0, .len = 0 }, .motion = .{ .start = 0, .len = 0 } };
+    var recs = [_]R{ at, at, at };
+    recs[0].kind = .undone;
+    recs[0].id = 7;
+    recs[1].kind = .redone;
+    recs[1].id = 7;
+    recs[2].kind = .redone;
+    recs[2].id = 8;
+    // Undone and redone over: only visited.
+    try std.testing.expectEqual(Change.visited, changeOf(&recs, 8));
+    try std.testing.expectEqual(Change.visited, changeOf(&.{}, 8));
+    // A keystroke joining the run on top changes it; one joining another entry does not.
+    recs[2].kind = .joined;
+    try std.testing.expectEqual(Change.made, changeOf(&recs, 8));
+    try std.testing.expectEqual(Change.visited, changeOf(&recs, 9));
+    recs[2].kind = .added;
+    try std.testing.expectEqual(Change.made, changeOf(&recs, 8));
 }

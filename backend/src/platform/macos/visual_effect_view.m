@@ -419,6 +419,14 @@ void fizzy_macos_window_counts(unsigned *all, unsigned *visible) {
     }
 }
 
+/* A quiet run's app (`SDLBackend.quiet`): an accessory, with no Dock icon, never made active by
+ * launching. Right after `SDL_Init`, which left the policy alone (`SDL_HINT_MAC_BACKGROUND_APP`). */
+void fizzy_macos_app_accessory(void) {
+    @autoreleasepool {
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    }
+}
+
 /*
  * A popped-out float's window in the Window menu — and so in the Dock's menu for the app —
  * called `title`, as a titled window is listed by itself: AppKit lists no borderless window

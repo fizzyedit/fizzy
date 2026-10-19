@@ -1315,6 +1315,19 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     else if (joins(l, d.name, name))
         .join
     else if (regionNamed(l.state, name)) |r| (if (r.shows == .many) .add else .replace) else .replace;
+    // The drop a release would land in, each bubble an anchor (`drop:<zone>`): one place at a time
+    // is the target, so a demo aims at the bubble rather than an offset from the place's middle.
+    // Marked only while a tape asks for anchors, and ahead of the offer queue's limit (which has
+    // nothing to do with the bubble being there).
+    if (target and !covered and core.anchor.wanted()) for (DropZones.all) |z| {
+        if (z == .remove and !zones.remove) continue;
+        const b = zones.bubble(z);
+        const r: dvui.Rect.Physical = .{ .x = b.c.x - b.r, .y = b.c.y - b.r, .w = 2 * b.r, .h = 2 * b.r };
+        switch (z) {
+            .edge => |side| core.anchor.markRect(key, r, true, "drop:{t}", .{side}),
+            else => core.anchor.markRect(key, r, true, "drop:{t}", .{z}),
+        }
+    };
     // Queued, not drawn: over everything, once every place has drawn (`drawOverlay`).
     const now = dvui.currentWindow().frame_time_ns;
     if (d.pending_frame != now) {
