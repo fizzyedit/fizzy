@@ -859,6 +859,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // What the app's windows are made of, and the fallback to what the backend can show.
         // std-only but for `publish`/`get`, which reach dvui and are not under test here.
         .{ "fizzy-material-tests", "core/material.zig" },
+        // An orb's geometry: shapes, how one becomes another, the polygons the no-glass path fills
+        // (plans/LIQUID_EDGE_PLAN.md, "The orb system"). std-only.
+        .{ "fizzy-orb-geometry-tests", "core/orb_geometry.zig" },
         // The in-app menu bar's order: fizzy's menus, then plugins', then Help. std-only (see
         // menu_order.zig); `Menu.draw` walks it.
         .{ "fizzy-menu-order-tests", "src/editor/menu_order.zig" },
