@@ -2227,6 +2227,11 @@ pub fn postInit(editor: *Editor) !void {
         .description = e[1],
         .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
     }) catch {};
+    editor.app.host.declareEvent(.{
+        .name = "fizzy.claim.stopped",
+        .description = "The person took a held document back: Stop, or their undo, redo or go back on it. The holder's claim is gone.",
+        .payload = ".{ .path = \"/absolute/path\", .holder = \"agent\", .label = \"Claude\" }",
+    }) catch {};
     // The control server's (native only): an MCP client's session ended.
     if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").mcp.session_ended) catch {};
     editor.app.host.declareEvent(.{
@@ -3087,7 +3092,19 @@ fn drawClaim(editor: *Editor, claim: sdk.Claim, pill: ClaimPill, path: []const u
         .color_fill = .{ .color = color },
     });
     glyph.deinit();
-    if (stop.clicked()) editor.app.host.releaseClaim(claim.id);
+    if (stop.clicked()) editor.stopClaim(claim);
+}
+
+/// The person takes a document back from whoever holds it (`sdk.Claim`): Stop on its pill, or their
+/// Undo, Redo or Go back on it, which always run. The claim goes, so its holder, finding it gone,
+/// knows it was stopped (`Host.claimHolds`), and `fizzy.claim.stopped` says so to whoever listens.
+/// Another agent's claim still refuses it while one holds: only the person overrides one.
+pub fn stopClaim(editor: *Editor, claim: sdk.Claim) void {
+    const host = &editor.app.host;
+    const path = if (editor.app.docById(claim.doc_id)) |d| d.owner.documentPath(d) else "";
+    // Before the release, which frees the label.
+    host.emitZon("fizzy.claim.stopped", .{ .path = path, .holder = claim.owner.id, .label = claim.label });
+    host.releaseClaim(claim.id);
 }
 
 /// A document a plugin has just taken (`sdk.Claim`) shows beside the person, so they watch the
@@ -4939,6 +4956,10 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
         return;
     };
     const id = item.id;
+    // The person's hand on the menu bar, as at the keys (`Host.setInputAuthor`).
+    const outer = editor.app.host.input_author;
+    defer editor.app.host.input_author = outer;
+    editor.app.host.setInputAuthor(editor.demo.author() orelse .person);
     // A key equivalent's keystroke is still on its way through SDL to the focused widget;
     // tell the command so it doesn't synthesize a second one (a pasted-twice text field).
     const run = if (action.from_key) Keybinds.runCommandWithKeyEventInFlight(editor, id) else editor.app.host.runCommand(id);
@@ -6842,13 +6863,17 @@ pub fn redo(editor: *Editor) !void {
 
 /// An undo or a redo of the active document, through its owner's command: its transport shows,
 /// and a key held down goes further each press (`HistoryTransport.press`), the command run that
-/// many times. Nothing to undo, or a claimed document: the command as ever, and no bar. An undo of
+/// many times. Nothing to undo: the command as ever, and no bar. On a claimed document, the
+/// person's stops its holder first (`stopClaim`); anyone else's is refused, as ever. An undo of
 /// a step someone else made says so on the document, with a Redo (`ActivityFeed.pushAction`), in
 /// place of the plain "Undo" its run would show.
 fn historyStep(editor: *Editor, action: HistoryAction) !void {
     const doc = editor.activeDoc() orelse return;
     const name = @tagName(action);
     const host = &editor.app.host;
+    // The person's history always runs: on a held document, theirs stops its holder first, when
+    // there is something to take. An agent's or a tape's waits for the holder, as ever.
+    if (host.documentClaim(doc.id)) |c| if (host.author().kind == .person and editor.activeDocCommandEnabled(name)) editor.stopClaim(c);
     const shows = host.documentClaim(doc.id) == null and editor.activeDocCommandEnabled(name);
     const ds = if (shows) editor.doc_surfaces.get(doc.id) else null;
     const by = if (ds) |d| d.transport.press(dvui.frameTimeNS(), action == .redo) else 1;
@@ -6878,7 +6903,10 @@ fn historyStep(editor: *Editor, action: HistoryAction) !void {
 /// Redo `doc`'s step `id` from its bubble's Redo: only while it is still the next one to redo.
 pub fn redoFromFeed(editor: *Editor, doc: sdk.DocHandle, id: u64) void {
     const t = editor.stepToTake(doc, .redo, editor.app.host.arena()) catch return;
-    if (t.step.id == id) _ = doc.owner.historyGoTo(doc, t.to);
+    if (t.step.id != id) return;
+    // The person's history, always theirs to move: whoever holds it is stopped first.
+    if (editor.app.host.documentClaim(doc.id)) |c| editor.stopClaim(c);
+    _ = doc.owner.historyGoTo(doc, t.to);
 }
 
 /// Carry out a button pressed on `doc`'s activity bubbles (`ActivityFeed.Act`).
@@ -6891,6 +6919,7 @@ fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @i
             // Only while that step is still on the line: an edit since may have moved on.
             const line = doc.owner.historyLine(doc, editor.app.host.arena()) orelse return;
             for (line.entries) |e| if (e.id == pressed.tag) {
+                if (editor.app.host.documentClaim(doc.id)) |c| editor.stopClaim(c);
                 _ = doc.owner.historyGoTo(doc, pressed.tag);
                 return;
             };
@@ -6908,6 +6937,7 @@ fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @i
                 ds.feed.pushAction(said, "Go back", .go_back_anyway, pressed.tag, now);
                 return;
             }
+            if (editor.app.host.documentClaim(doc.id)) |c| editor.stopClaim(c);
             if (!doc.owner.historyGoTo(doc, back.to)) return;
             const said = std.fmt.bufPrint(&buf, "Back before {s}'s change", .{authorName(back.by)}) catch "Went back";
             ds.feed.pushAction(said, "Forward", .forward, back.from, now);

@@ -9177,7 +9177,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.writeText("held");
         try dvui.testing.settle(headlessFrame);
         try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
-        try std.testing.expectError(error.DocumentClaimed, editor.undo());
+        // Its history aside: the person's undo always runs, and stops the holder (below).
+        try std.testing.expectError(error.DocumentClaimed, editor.runActiveDocCommand("paste"));
         try editor.closeFileID(doc.id);
         try std.testing.expect(editor.docFromPath(path) != null);
 
@@ -9745,6 +9746,163 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(host.callCommand("fizzy.undo", "", host.arena()) == .ok);
         try dvui.testing.settle(headlessFrame);
         try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"a\"") != null);
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // A document never comes back dirty with nothing to undo. After a crash (`Checkpoint`), whose
+    // checkpoint writes the tracks of unsaved documents with their states (`Tracks.takeChanged`),
+    // and across a plugin's reload (`KeptDocuments.reattach`), it picks its history up as a
+    // restart's does; with no track to pick up (history not recorded), its unsaved changes come
+    // back as one step over its file (`Plugin.recoverDocumentState`), which undo takes back to it.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const text_plugin = host.pluginById("text") orelse return error.TestUnexpectedResult;
+        // By path: a reload brings it back under a new id.
+        const was_path = try gpa.dupe(u8, was.owner.documentPath(was));
+        defer gpa.free(was_path);
+        defer editor.setTracking(false);
+        const path = try std.fs.path.join(gpa, &.{ root, "comes-back.txt" });
+        defer gpa.free(path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "comes-back.txt", .data = "disk" });
+        const read = struct {
+            fn read(h: *sdk.Host) ![]const u8 {
+                return switch (h.callCommand("text.read", "", h.arena())) {
+                    .ok => |r| r orelse error.TestUnexpectedResult,
+                    else => error.TestUnexpectedResult,
+                };
+            }
+        }.read;
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        for ([_]enum { crash, reload }{ .crash, .reload }) |how| for ([_]bool{ true, false }) |recorded| {
+            editor.setTracking(recorded);
+            _ = try editor.openFilePath(path, editor.workbench.currentGroupingID());
+            var doc = for (0..200) |_| {
+                _ = try dvui.testing.step(headlessFrame);
+                const d = editor.activeDoc() orelse continue;
+                if (std.mem.eql(u8, d.owner.documentPath(d), path)) break d;
+            } else return error.TestUnexpectedResult;
+            try dvui.testing.settle(headlessFrame);
+            for ([_][]const u8{ "a", "b", "c" }) |letter| {
+                const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+                try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+            }
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expect(doc.owner.isDirty(doc));
+            const grouping = doc.owner.documentGrouping(doc);
+            const tracks = &editor.app.tracks.?;
+            const keep_dir = tracks.dir;
+            switch (how) {
+                .crash => {
+                    // A checkpoint, as the frame takes one (`Checkpoint.tick`): due now.
+                    const cp = &editor.checkpoint;
+                    const generation = cp.generation;
+                    cp.last_ns = 0;
+                    cp.looked_ns = 0;
+                    for (0..400) |_| {
+                        _ = try dvui.testing.step(headlessFrame);
+                        if (cp.generation > generation and cp.job == null) break;
+                    } else return error.TestUnexpectedResult;
+                    // The crash: nothing more is kept as it goes.
+                    tracks.dir = null;
+                    editor.detachFileID(doc.id);
+                    tracks.dir = keep_dir;
+                    editor.session = fizzy.Editor.Checkpoint.recover(gpa, editor.app.config_folder, false) orelse return error.TestUnexpectedResult;
+                    defer {
+                        if (editor.session) |*kept| kept.deinit();
+                        editor.session = null;
+                    }
+                    _ = try host.openFile(.{ .path = path, .grouping = grouping });
+                },
+                .reload => {
+                    // All of a reload but the swap, as the reload test above does it.
+                    var kept = try fizzy.Editor.KeptDocuments.capture(editor, text_plugin);
+                    defer kept.deinit();
+                    var owned: std.ArrayListUnmanaged(u64) = .empty;
+                    defer owned.deinit(gpa);
+                    for (editor.app.open_files.values()) |d| if (d.owner == text_plugin) try owned.append(gpa, d.id);
+                    for (owned.items) |id| editor.detachFileID(id);
+                    kept.reattach(editor, text_plugin);
+                },
+            }
+            doc = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
+            editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(doc.id) orelse return error.TestUnexpectedResult);
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expect(doc.owner.isDirty(doc));
+            try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"cbadisk\"") != null);
+            const line = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+            if (recorded) {
+                // Its history, picked up: each letter undoes on its own.
+                try std.testing.expectEqual(@as(usize, 3), line.entries.len);
+                try std.testing.expectEqual(@as(usize, 3), line.at);
+                try editor.undo();
+                try dvui.testing.settle(headlessFrame);
+                try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"badisk\"") != null);
+            } else {
+                // One step over its file, and undo goes back to it: saved, nothing changed.
+                try std.testing.expectEqual(@as(usize, 1), line.entries.len);
+                try std.testing.expectEqualStrings("Recovered", line.entries[0].title);
+                try editor.undo();
+                try dvui.testing.settle(headlessFrame);
+                try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"disk\"") != null);
+                try std.testing.expect(!doc.owner.isDirty(doc));
+            }
+            try editor.rawCloseFileID(doc.id);
+            const back = editor.docFromPath(was_path) orelse return error.TestUnexpectedResult;
+            editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(back.id) orelse return error.TestUnexpectedResult);
+            try dvui.testing.settle(headlessFrame);
+        };
+    }
+
+    // The person always wins: their Undo runs on a document an agent holds (`sdk.Claim`), and stops
+    // the agent first (`Editor.stopClaim`), as Stop on its pill does. Another agent's undo there
+    // is still refused while the claim holds.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        const holder = host.pluginById("devtools") orelse return error.TestUnexpectedResult;
+        const path = try std.fs.path.join(gpa, &.{ root, "held.txt" });
+        defer gpa.free(path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "held.txt", .data = "" });
+        _ = try editor.openFilePath(path, editor.workbench.currentGroupingID());
+        const doc = for (0..200) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            const d = editor.activeDoc() orelse continue;
+            if (std.mem.eql(u8, d.owner.documentPath(d), path)) break d;
+        } else return error.TestUnexpectedResult;
+        try dvui.testing.settle(headlessFrame);
+        const claude: sdk.Author = .{ .kind = .agent, .plugin = "agent", .session = 1, .label = "Claude" };
+        const claim = try host.claimDocument(holder, doc.id, "Claude");
+        {
+            const outer = host.act(claude);
+            defer host.endAct(outer);
+            try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"drawn\", .line = 1 }", host.arena()) == .ok);
+        }
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.isDirty(doc));
+        // A held document shows beside the person (`showClaimed`): they go to it there.
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(doc.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+        // Another agent's undo waits for the holder, as every command of theirs does.
+        {
+            const outer = host.act(.{ .kind = .agent, .plugin = "agent", .session = 2, .label = "Other" });
+            defer host.endAct(outer);
+            editor.undo() catch {};
+        }
+        try std.testing.expect(host.claimHolds(claim));
+        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.read", "", host.arena()).ok.?, ".text = \"drawn\"") != null);
+        // The person's mod+z.
+        host.setInputAuthor(.person);
+        try editor.undo();
+        host.setInputAuthor(null);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!host.claimHolds(claim));
+        try std.testing.expect(!doc.owner.isDirty(doc));
+        const out = host.callCommand("text.read", "", host.arena());
+        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"\"") != null);
         try editor.rawCloseFileID(doc.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);

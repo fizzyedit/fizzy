@@ -23,9 +23,10 @@
 //! a step, a checkpoint and a replay cost.
 //!
 //! **A track outlives its document** (plan step 10). Where there is a profile to keep them in
-//! (`dir`), a document's track is written there as it closes, and every open one as the app quits
-//! (`keep`, `track_file`), one file per document, named by its path. Opened again, a document
-//! picks its track up at the next frame's top, in place of a new base (`pickUp`), when the same
+//! (`dir`), a document's track is written there as it closes, every open one as the app quits,
+//! and each unsaved one that moved with every crash checkpoint (`keep`, `takeChanged`,
+//! `track_file`), one file per document, named by its path. Opened again, a document picks its
+//! track up at the next frame's top, in place of a new base (`pickUp`), when the same
 //! owner recorded it in the same format and the document is where the track ended
 //! (`track_file.End`: its file, as it closed saved, or its exact state, as a restart brings an
 //! unsaved one back): its steps and checkpoints come back, re-timed to end now, and its owner takes the
@@ -78,6 +79,9 @@ dir: ?[]u8 = null,
 kept_cap: u64 = default_kept_cap,
 /// The files of documents gone from disk have been looked for this session (`sweep`).
 swept_gone: bool = false,
+/// Checkpoint writes of kept tracks in flight on another thread (`takeChanged`, `doneWriting`):
+/// `keep` waits them out, so an older history is never renamed over a newer one.
+writing: std.atomic.Value(u32) = .init(0),
 
 pub const default_cap = 256 << 20;
 pub const default_kept_cap: u64 = 2 << 30;
@@ -124,6 +128,8 @@ pub const Track = struct {
     /// Steps, and their bytes, since the last state taken.
     since_steps: u32 = 0,
     since_bytes: usize = 0,
+    /// How many steps its kept file holds (`keep`, `pickUp`): one written since, it moved on from.
+    kept_steps: usize = 0,
 
     pub const Rec = struct {
         kind: sdk.Step.Kind,
@@ -230,6 +236,37 @@ pub fn keepOpen(self: *Tracks) void {
     self.sweep();
 }
 
+/// A crash checkpoint is being taken (`Checkpoint`): each open track of an unsaved document that
+/// moved since it was last kept, as its file holds it, for the checkpoint's thread to write
+/// (`writeKept`), so a document the checkpoint brings back after a crash picks its history up, as
+/// a restart's does. Taken on the frame the documents' states are, so each ends where its state
+/// does. A saved document opens from its file after a crash, with nothing to recover. Owned.
+pub fn takeChanged(self: *Tracks) []KeptFile {
+    var out: std.ArrayListUnmanaged(KeptFile) = .empty;
+    for (self.open.values()) |t| {
+        if (t.steps.items.len == t.kept_steps or !t.owner.isDirty(t.doc)) continue;
+        const k = self.encodeKept(t) orelse continue;
+        out.append(self.gpa, k) catch {
+            k.deinit(self.gpa);
+            break;
+        };
+        // Written on another thread: one that fails is kept again only once it moves again.
+        t.kept_steps = t.steps.items.len;
+    }
+    const taken = out.toOwnedSlice(self.gpa) catch {
+        for (out.items) |k| k.deinit(self.gpa);
+        out.deinit(self.gpa);
+        return &.{};
+    };
+    if (taken.len > 0) _ = self.writing.fetchAdd(1, .acq_rel);
+    return taken;
+}
+
+/// The thread writing what `takeChanged` took is done with it (non-empty only).
+pub fn doneWriting(self: *Tracks) void {
+    _ = self.writing.fetchSub(1, .acq_rel);
+}
+
 pub fn deinit(self: *Tracks) void {
     const dir = self.dir;
     defer self.dir = dir;
@@ -313,7 +350,13 @@ pub fn sweep(self: *Tracks) void {
     var total: u64 = 0;
     var it = dir.iterate();
     while (it.next(dvui.io) catch null) |e| {
-        if (e.kind != .file or !std.mem.endsWith(u8, e.name, ".track")) continue;
+        if (e.kind != .file) continue;
+        // Cut off before its rename (a crash mid-write), unless a checkpoint's thread is writing.
+        if (std.mem.endsWith(u8, e.name, ".track.part") or std.mem.endsWith(u8, e.name, ".track.checkpoint")) {
+            if (self.writing.load(.acquire) == 0) dir.deleteFile(dvui.io, e.name) catch {};
+            continue;
+        }
+        if (!std.mem.endsWith(u8, e.name, ".track")) continue;
         const st = dir.statFile(dvui.io, e.name, .{}) catch continue;
         // Gone from disk: its document will not open again to pick it up.
         if (!self.swept_gone) gone: {
@@ -432,29 +475,63 @@ fn keepable(path: []const u8) bool {
 /// saved). A track with no steps keeps nothing, and
 /// leaves an older file for that document as it was. Written beside, then renamed over, so a crash
 /// leaves the old one or the new one, never half of either.
-fn keep(self: *Tracks, t: *const Track) void {
-    // The web has no profile folder to keep them in.
+fn keep(self: *Tracks, t: *Track) void {
+    // The web has no profile folder to keep them in (nor threads to wait out).
     if (comptime !can_keep) return;
-    if (t.base == null or t.steps.items.len == 0) return;
+    const k = self.encodeKept(t) orelse return;
+    defer k.deinit(self.gpa);
+    // A checkpoint's older copy, still being written, would land over this one.
+    while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
+    if (writeKept(k, "part")) t.kept_steps = t.steps.items.len;
+}
+
+/// A track as its kept file holds it, to write (`writeKept`): owned.
+pub const KeptFile = struct {
+    file: []u8,
+    bytes: []u8,
+
+    pub fn deinit(k: KeptFile, gpa: std.mem.Allocator) void {
+        gpa.free(k.file);
+        gpa.free(k.bytes);
+    }
+};
+
+/// `t` as `keep` writes it, while its document can still be read; null when it keeps nothing.
+fn encodeKept(self: *Tracks, t: *const Track) ?KeptFile {
+    // The web has no profile folder to keep them in.
+    if (comptime !can_keep) return null;
+    if (t.base == null or t.steps.items.len == 0) return null;
     const path = t.owner.documentPath(t.doc);
-    if (!keepable(path)) return;
-    const fingerprint = t.owner.documentFingerprint(t.doc) orelse return;
+    if (!keepable(path)) return null;
+    const fingerprint = t.owner.documentFingerprint(t.doc) orelse return null;
     const prof = core.profile.begin("fizzy", "tracks.keep");
     defer prof.end();
-    const file = self.keptFile(self.gpa, path) orelse return;
-    defer self.gpa.free(file);
+    const file = self.keptFile(self.gpa, path) orelse return null;
     const ends: track_file.End = .{ .fingerprint = fingerprint, .file_hash = if (t.owner.isDirty(t.doc)) null else fileHashOf(self.gpa, path) };
-    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends) catch return;
-    defer self.gpa.free(bytes);
-    const part = std.fmt.allocPrint(self.gpa, "{s}.part", .{file}) catch return;
-    defer self.gpa.free(part);
-    const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(dvui.io, std.fs.path.dirname(file).?) catch {};
-    cwd.writeFile(dvui.io, .{ .sub_path = part, .data = bytes }) catch |err| {
-        dvui.log.warn("tracks: could not keep {s}'s history: {t}", .{ path, err });
-        return;
+    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends) catch {
+        self.gpa.free(file);
+        return null;
     };
-    std.Io.Dir.renameAbsolute(part, file, dvui.io) catch |err| dvui.log.warn("tracks: could not keep {s}'s history: {t}", .{ path, err });
+    return .{ .file = file, .bytes = bytes };
+}
+
+/// Write `k` beside its file as `<file>.<part>`, then rename it over: any thread. Each writer names
+/// its own `part`, so two never write into one.
+pub fn writeKept(k: KeptFile, part: []const u8) bool {
+    if (comptime !can_keep) return false;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const beside = std.fmt.bufPrint(&buf, "{s}.{s}", .{ k.file, part }) catch return false;
+    const cwd = std.Io.Dir.cwd();
+    cwd.createDirPath(dvui.io, std.fs.path.dirname(k.file).?) catch {};
+    cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = k.bytes }) catch |err| {
+        dvui.log.warn("tracks: could not keep {s}: {t}", .{ k.file, err });
+        return false;
+    };
+    std.Io.Dir.renameAbsolute(beside, k.file, dvui.io) catch |err| {
+        dvui.log.warn("tracks: could not keep {s}: {t}", .{ k.file, err });
+        return false;
+    };
+    return true;
 }
 
 /// `t`'s document has just opened: take up its kept track, if it has one that fits (the same
@@ -510,6 +587,7 @@ fn pickUp(self: *Tracks, t: *Track) bool {
     self.gpa.free(kept.owner);
     self.gpa.free(kept.path);
     held.checkpoint_due = false;
+    held.kept_steps = held.steps.items.len;
     // What the new track held (steps reported before its base, cleared) goes for the kept one.
     t.steps.deinit(self.gpa);
     t.bytes.deinit(self.gpa);

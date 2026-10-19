@@ -67,6 +67,7 @@ const vtable: sdk.Plugin.VTable = .{
     .reloadDocument = reloadDocument,
     .captureDocumentState = captureDocumentState,
     .restoreDocumentState = restoreDocumentState,
+    .recoverDocumentState = recoverDocumentState,
     .historyLine = historyLine,
     .historyGoTo = historyGoTo,
     .restoreHistory = restoreHistory,
@@ -401,6 +402,10 @@ fn restoreDocumentState(_: *anyopaque, handle: DocHandle, bytes: []const u8) any
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     try doc.restoreState(bytes);
 }
+fn recoverDocumentState(_: *anyopaque, handle: DocHandle, bytes: []const u8) anyerror!void {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    try doc.recoverState(bytes);
+}
 fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyerror!sdk.Plugin.HistoryLine {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     const steps = try doc.history.line(arena);
@@ -421,6 +426,7 @@ fn kindTitle(kind: @import("src/textcore/textcore.zig").History.EditKind) []cons
         .typing_other, .typing_first_space, .typing_consecutive_space => "Typing",
         .deleting_left, .deleting_right => "Delete",
         .other => "Edit",
+        .recovered => "Recovered",
     };
 }
 fn restoreHistory(_: *anyopaque, handle: DocHandle, history: sdk.Plugin.RestoredHistory) anyerror!void {

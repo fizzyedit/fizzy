@@ -504,6 +504,47 @@ pub fn restoreState(self: *Document, bytes: []const u8) !void {
     // Clean is a history at its saved id; dirty is anything else.
     self.clean_op_id = if (st.dirty) std.math.maxInt(u64) else self.history.topOpId();
     self.refreshLineCount();
+    self.restoreView(st, mode);
+}
+
+/// `restoreState` over the document as opened from its file, as one step of its history that undo
+/// takes back to the file (`sdk.Plugin.VTable.recoverDocumentState`): what differs between the two,
+/// replaced, titled Recovered. Its contents, caret and dirtiness then stand as `restoreState` leaves
+/// them, so the document's fingerprint is the one captured, and a kept track still picks up over it.
+pub fn recoverState(self: *Document, bytes: []const u8) !void {
+    const st = try doc_state.decode(bytes);
+    const mode = std.enums.fromInt(PreviewMode, st.preview_mode) orelse return error.BadState;
+
+    const gpa = sdk.allocator();
+    const now = self.text.items;
+    const head = std.mem.indexOfDiff(u8, now, st.text) orelse now.len;
+    var tail: usize = 0;
+    while (tail < now.len - head and tail < st.text.len - head and now[now.len - 1 - tail] == st.text[st.text.len - 1 - tail]) tail += 1;
+    const removed = now[head .. now.len - tail];
+    const inserted = st.text[head .. st.text.len - tail];
+    if (removed.len > 0 or inserted.len > 0) {
+        var txn: tc.Transaction = .{ .sel_before = .collapsed(head), .sel_after = .init(st.anchor, st.head) };
+        errdefer txn.deinit(gpa);
+        try txn.append(gpa, head, removed, inserted);
+        try self.text.replaceRange(gpa, head, removed.len, inserted);
+        const committed = self.history.push(gpa, txn, .recovered) catch |err| {
+            txn.applyInverse(gpa, &self.text) catch {};
+            return err;
+        };
+        // The person's: what they had unsaved, back. Undoing it is not taking back someone's work.
+        const host = sdk.host();
+        const outer = host.act(.person);
+        defer host.endAct(outer);
+        self.recordCommitted(committed);
+    }
+    // Opened from the file, it was clean: dirty now by the step, or clean still when they match.
+    self.refreshLineCount();
+    self.restoreView(st, mode);
+}
+
+/// What `captureState` keeps besides the contents and the history: the caret, the scroll, the
+/// preview, focus, whether it was ever saved.
+fn restoreView(self: *Document, st: doc_state.State, mode: PreviewMode) void {
     const sel: tc.Range = .init(st.anchor, st.head);
     self.sel_start = sel.start();
     self.sel_end = sel.end();
@@ -705,7 +746,8 @@ pub fn restoreHistory(self: *Document, history: sdk.Plugin.RestoredHistory) !voi
     const was_clean = !self.isDirty();
     try self.history.restore(gpa, built, history.applied);
     taken = true;
-    if (was_clean) self.clean_op_id = self.history.topOpId();
+    // Dirty, no entry of it is known to be the file (a recovered step's start was, until now).
+    self.clean_op_id = if (was_clean) self.history.topOpId() else std.math.maxInt(u64);
     self.history.trim(gpa, sdk.host().historyLimit());
 }
 
