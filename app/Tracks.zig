@@ -32,6 +32,11 @@
 //! history they hold back (`historyOf`, `Plugin.restoreHistory`). A document changed outside
 //! fizzy since, or an owner that cannot take its history back, starts a new track, which takes the
 //! old one's place when it is kept.
+//!
+//! **What is kept, all told, keeps to a cap** (`kept_cap`, a setting): after a track is written,
+//! the oldest kept files go until the rest fit, never one of a document still open (`sweep`). The
+//! first sweep of a session also takes the files of documents gone from disk. A document's
+//! history can be forgotten outright (`forget`): its kept file, its track, and its owner's undo.
 const Tracks = @This();
 
 const std = @import("std");
@@ -69,8 +74,13 @@ worked: u64 = 0,
 /// Where tracks are kept when their documents close (`<config>/tracks`), owned; null keeps none
 /// (the web, a test).
 dir: ?[]u8 = null,
+/// What the kept tracks may come to on disk, all told (`sweep`).
+kept_cap: u64 = default_kept_cap,
+/// The files of documents gone from disk have been looked for this session (`sweep`).
+swept_gone: bool = false,
 
 pub const default_cap = 256 << 20;
+pub const default_kept_cap: u64 = 2 << 30;
 /// Checkpoints older than this are thinned to one per `sparse_steps` steps.
 pub const dense_ms = 60 * std.time.ms_per_min;
 pub const sparse_steps = 4096;
@@ -209,6 +219,7 @@ pub fn keepIn(self: *Tracks, dir: []const u8) !void {
 /// The app is quitting: keep every open document's track, while its document can still be read.
 pub fn keepOpen(self: *Tracks) void {
     for (self.open.values()) |t| self.keep(t);
+    self.sweep();
 }
 
 pub fn deinit(self: *Tracks) void {
@@ -254,6 +265,7 @@ pub fn closed(self: *Tracks, doc_id: u64) void {
     const kv = self.open.fetchSwapRemove(doc_id) orelse return;
     self.keep(kv.value);
     self.end(kv.value);
+    self.sweep();
 }
 
 /// The file `path`'s document's track is kept in, under `dir`: named by a hash of the path, so any
@@ -271,6 +283,132 @@ fn fileHashOf(gpa: std.mem.Allocator, path: []const u8) ?u64 {
     const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .unlimited) catch return null;
     defer gpa.free(bytes);
     return track_file.fileHash(bytes);
+}
+
+/// Keep the kept tracks to `kept_cap`: the oldest files go (by when each was written) until the rest
+/// fit, never the file of a document still open. The first sweep of a session also takes the files
+/// of documents no longer on disk, reading only each file's head for its path. Costs a listing of
+/// the folder, run after a track is written, never on a timer.
+pub fn sweep(self: *Tracks) void {
+    if (comptime !can_keep) return;
+    const dir_path = self.dir orelse return;
+    const prof = core.profile.begin("fizzy", "tracks.sweep");
+    defer prof.end();
+    const gpa = self.gpa;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(dvui.io);
+    const Kept = struct { name: []const u8, size: u64, written: i96 };
+    var files: std.ArrayListUnmanaged(Kept) = .empty;
+    var total: u64 = 0;
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |e| {
+        if (e.kind != .file or !std.mem.endsWith(u8, e.name, ".track")) continue;
+        const st = dir.statFile(dvui.io, e.name, .{}) catch continue;
+        // Gone from disk: its document will not open again to pick it up.
+        if (!self.swept_gone) gone: {
+            const kept_path = keptPathOf(dir, e.name) orelse break :gone;
+            _ = std.Io.Dir.cwd().statFile(dvui.io, kept_path, .{}) catch |err| if (err == error.FileNotFound) {
+                dir.deleteFile(dvui.io, e.name) catch {};
+                continue;
+            };
+        }
+        const name = arena.dupe(u8, e.name) catch return;
+        files.append(arena, .{ .name = name, .size = st.size, .written = st.mtime.nanoseconds }) catch return;
+        total += st.size;
+    }
+    self.swept_gone = true;
+    if (total <= self.kept_cap) return;
+    // The open documents' files stay, whatever the cap.
+    var open_names: std.StringHashMapUnmanaged(void) = .empty;
+    for (self.open.values()) |t| {
+        const file = self.keptFile(arena, t.owner.documentPath(t.doc)) orelse continue;
+        open_names.put(arena, std.fs.path.basename(file), {}) catch return;
+    }
+    std.mem.sort(Kept, files.items, {}, struct {
+        fn older(_: void, a: Kept, b: Kept) bool {
+            return a.written < b.written;
+        }
+    }.older);
+    for (files.items) |f| {
+        if (total <= self.kept_cap) break;
+        if (open_names.contains(f.name)) continue;
+        dir.deleteFile(dvui.io, f.name) catch continue;
+        total -= f.size;
+    }
+}
+
+/// The path the kept file `name` in `dir` is for, from its head; null when it cannot be read.
+fn keptPathOf(dir: std.Io.Dir, name: []const u8) ?[]const u8 {
+    const S = struct {
+        var head: [track_file.head_len]u8 = undefined;
+    };
+    var f = dir.openFile(dvui.io, name, .{}) catch return null;
+    defer f.close(dvui.io);
+    const n = f.readPositionalAll(dvui.io, &S.head, 0) catch return null;
+    return track_file.headPath(S.head[0..n]);
+}
+
+/// Forget `doc`'s history outright: its kept file, its track (which starts again from the document
+/// as it is), and what its owner keeps to undo. Returns whether its owner let its undo go too.
+pub fn forget(self: *Tracks, doc: sdk.DocHandle) bool {
+    if (comptime can_keep) if (self.keptFile(self.gpa, doc.owner.documentPath(doc))) |file| {
+        defer self.gpa.free(file);
+        std.Io.Dir.cwd().deleteFile(dvui.io, file) catch {};
+    };
+    if (self.open.get(doc.id)) |t| {
+        self.held -|= t.size();
+        if (t.base) |b| self.gpa.free(b.bytes);
+        t.base = null;
+        for (t.checkpoints.items) |c| self.gpa.free(c.bytes);
+        t.checkpoints.clearRetainingCapacity();
+        t.steps.clearRetainingCapacity();
+        t.bytes.clearRetainingCapacity();
+        t.checkpoint_due = false;
+        t.since_steps = 0;
+        t.since_bytes = 0;
+        t.state_len = 0;
+        self.due = true;
+    }
+    // An empty history in place of what it held: nothing to undo or redo.
+    return doc.owner.restoreHistory(doc, .{ .entries = &.{}, .applied = 0 });
+}
+
+/// Forget every kept file: the history of every document not open now. Open documents keep theirs
+/// until they close. Returns how many files went.
+pub fn forgetKept(self: *Tracks) usize {
+    if (comptime !can_keep) return 0;
+    const dir_path = self.dir orelse return 0;
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return 0;
+    defer dir.close(dvui.io);
+    var gone: usize = 0;
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |e| {
+        if (e.kind != .file or !std.mem.endsWith(u8, e.name, ".track")) continue;
+        dir.deleteFile(dvui.io, e.name) catch continue;
+        gone += 1;
+    }
+    return gone;
+}
+
+/// The kept tracks' size on disk, all told, and how many files.
+pub fn keptSize(self: *const Tracks) struct { bytes: u64, files: usize } {
+    if (comptime !can_keep) return .{ .bytes = 0, .files = 0 };
+    const dir_path = self.dir orelse return .{ .bytes = 0, .files = 0 };
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return .{ .bytes = 0, .files = 0 };
+    defer dir.close(dvui.io);
+    var bytes: u64 = 0;
+    var files: usize = 0;
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |e| {
+        if (e.kind != .file or !std.mem.endsWith(u8, e.name, ".track")) continue;
+        const st = dir.statFile(dvui.io, e.name, .{}) catch continue;
+        bytes += st.size;
+        files += 1;
+    }
+    return .{ .bytes = bytes, .files = files };
 }
 
 /// Whether this target keeps tracks on disk at all: not the web, which has no profile folder.

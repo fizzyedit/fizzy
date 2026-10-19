@@ -109,10 +109,14 @@ native_dialogs: bool = true,
 black_box: bool = true,
 
 /// Whether each open document's history is recorded as it is made (`app.Tracks`): what lets the
-/// transport's strip show it and its export share it as a tape. Kept in memory with the
-/// document; nothing is written unless the person exports. Off, documents keep only their undo
-/// history, and what was recorded is forgotten.
+/// transport's strip show it and its export share it as a tape. Kept in memory while the document
+/// is open, and in the profile (`<config>/tracks`) once it closes, so it opens again with its
+/// history. Off, documents keep only their undo history, and what was recorded is forgotten.
 record_history: bool = true,
+
+/// How much of the profile kept history may take, all told, in GB (`Tracks.kept_cap`): past it,
+/// the oldest closed documents' history goes first.
+kept_history_gb: f32 = 2,
 
 /// Whether a rebuild of the app's own executable restarts the app into it, keeping every open
 /// document (`ExecutableWatcher`). On in a source build, which is what rebuilds; off in a release

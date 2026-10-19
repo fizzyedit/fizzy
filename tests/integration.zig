@@ -9224,6 +9224,99 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
     }
 
+    // Kept history keeps to its cap, takes the files of documents gone from disk, and a document's
+    // can be forgotten outright (`Tracks.sweep`, `forget`, `fizzy.tracks.forget`).
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+        const open = struct {
+            fn open(ed: *fizzy.Editor, path: []const u8) !sdk.DocHandle {
+                _ = try ed.openFilePath(path, ed.workbench.currentGroupingID());
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (std.mem.eql(u8, d.owner.documentPath(d), path)) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.open;
+        // Edited, saved and closed: kept.
+        const editSaveClose = struct {
+            fn run(ed: *fizzy.Editor, h: *sdk.Host, path: []const u8, o: *const fn (*fizzy.Editor, []const u8) anyerror!sdk.DocHandle) !void {
+                const d = try o(ed, path);
+                try dvui.testing.settle(headlessFrame);
+                try std.testing.expect(h.callCommand("text.insert", ".{ .text = \"kept\", .line = 1 }", h.arena()) == .ok);
+                try ed.save();
+                for (0..100) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    if (!ed.docSaving(d)) break;
+                }
+                try ed.rawCloseFileID(d.id);
+                try dvui.testing.settle(headlessFrame);
+            }
+        }.run;
+        _ = tracks.forgetKept();
+        try std.testing.expectEqual(@as(usize, 0), tracks.keptSize().files);
+
+        // Forgotten: no history now, none kept, none when it opens again.
+        const forget_path = try std.fs.path.join(gpa, &.{ root, "forget-me.txt" });
+        defer gpa.free(forget_path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "forget-me.txt", .data = "" });
+        try editSaveClose(editor, host, forget_path, open);
+        try std.testing.expectEqual(@as(usize, 1), tracks.keptSize().files);
+        var doc = try open(editor, forget_path);
+        try dvui.testing.settle(headlessFrame);
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        try std.testing.expectEqual(@as(usize, 1), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try std.testing.expect(host.callCommand("fizzy.tracks.forget", "", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 0), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try std.testing.expectEqual(@as(usize, 0), (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len);
+        try std.testing.expectEqual(@as(usize, 0), tracks.keptSize().files);
+        try std.testing.expect(!doc.owner.isDirty(doc));
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+        doc = try open(editor, forget_path);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 0), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Past the cap, the oldest kept file goes; the newest stays.
+        const older_path = try std.fs.path.join(gpa, &.{ root, "kept-older.txt" });
+        defer gpa.free(older_path);
+        const newer_path = try std.fs.path.join(gpa, &.{ root, "kept-newer.txt" });
+        defer gpa.free(newer_path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-older.txt", .data = "" });
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-newer.txt", .data = "" });
+        try editSaveClose(editor, host, older_path, open);
+        const one = tracks.keptSize().bytes;
+        try std.testing.expect(one > 0);
+        try std.Io.sleep(dvui.io, .fromMilliseconds(20), .awake);
+        const cap_was = editor.app.settings.kept_history_gb;
+        editor.app.settings.kept_history_gb = @as(f32, @floatFromInt(one + one / 2)) / (1 << 30);
+        try editSaveClose(editor, host, newer_path, open);
+        editor.app.settings.kept_history_gb = cap_was;
+        try std.testing.expectEqual(@as(usize, 1), tracks.keptSize().files);
+        doc = try open(editor, newer_path);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 1), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Its document gone from disk, the first sweep of a session takes its file.
+        try tmp.dir.deleteFile(dvui.io, "kept-newer.txt");
+        tracks.swept_gone = false;
+        tracks.sweep();
+        try std.testing.expectEqual(@as(usize, 0), tracks.keptSize().files);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // A document's transport (`app.HistoryTransport`): undo shows it over the document's pane; a
     // press on its line goes to that step, its buttons step, a drag along it follows; and an undo
     // held down goes further each press.

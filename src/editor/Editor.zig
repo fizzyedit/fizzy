@@ -3754,6 +3754,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
+    editor.app.settings.kept_history_gb = parsed.kept_history_gb;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
@@ -4265,8 +4266,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.setTracking(want);
         }
     }
-    // The document states tracks asked for since last frame, before anything draws.
-    if (editor.app.tracks) |*t| t.tick();
+    // The document states tracks asked for since last frame, before anything draws; and what
+    // kept history may take, as the setting says.
+    if (editor.app.tracks) |*t| {
+        t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
+        t.tick();
+    }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
         if (editor.app.open_files.get(p.doc_id)) |doc| editor.exportDocument(doc, p.from, p.to);

@@ -182,6 +182,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.tracks.record", .title = "Tracks: Record…", .bind = null, .run = cmdTracks, .params = TracksRecord.params, .runWith = TracksRecord.bind(cmdTracksRecord), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.replay", .title = "Tracks: Replay…", .bind = null, .run = cmdTracks, .params = TracksReplay.params, .runWith = TracksReplay.bind(cmdTracksReplay), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.tracks.export", .title = "Tracks: Export as a Tape…", .bind = null, .run = cmdTracks, .params = TracksExport.params, .runWith = TracksExport.bind(cmdTracksExport), .icon = icons.tvg.lucide.gauge },
+    .{ .id = "fizzy.tracks.forget", .title = "Forget This Document's History", .bind = null, .run = cmdTracksForget, .params = TracksForget.params, .runWith = TracksForget.bind(cmdTracksForgetWith), .icon = icons.tvg.lucide.history },
     .{ .id = "fizzy.tracks", .title = "Tracks: Report", .bind = null, .run = cmdTracks, .params = TracksArgs.params, .runWith = TracksArgs.bind(cmdTracksWith), .icon = icons.tvg.lucide.gauge },
     .{ .id = "fizzy.writeTrace", .title = "Write Trace", .bind = null, .run = cmdWriteTrace, .params = TraceArgs.params, .runWith = TraceArgs.bind(cmdWriteTraceTo), .icon = icons.tvg.lucide.gauge },
     // For programs, answered a frame or more later (`Command.Call.later`): a test or a script on the
@@ -704,6 +705,29 @@ const TracksExport = sdk.Command.Params(struct {
     from: sdk.Command.Arg(u32, .{ .description = "Start after this many of the track's steps: the tape opens on the document as it was then. 0: where the track began." }) = .init(0),
     to: sdk.Command.Arg(u32, .{ .description = "End after this many of the track's steps. 0: the last." }) = .init(0),
 });
+
+const TracksForget = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document whose history to forget, by its path. Empty: the active one." }) = .init(""),
+    all: sdk.Command.Arg(bool, .{ .description = "Forget the history kept for every document not open now instead." }) = .init(false),
+});
+
+fn cmdTracksForget(state: *anyopaque) anyerror!void {
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return);
+    const doc = editor.activeDoc() orelse return;
+    _ = t.forget(doc);
+}
+
+/// Forget a document's history outright (`Tracks.forget`): what was kept of it, its track, and its
+/// undo. Or, with `all`, the history kept for every document not open now (`Tracks.forgetKept`).
+fn cmdTracksForgetWith(state: *anyopaque, args: TracksForget.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const t = &(editor.app.tracks orelse return call.fail("no tracks in this app", .{}));
+    if (args.all) return call.returns(.{ .forgotten = t.forgetKept() });
+    const doc = (if (args.path.len == 0) editor.activeDoc() else editor.docFromPath(args.path)) orelse
+        return call.fail("no open document at {s}", .{if (args.path.len == 0) "(active)" else args.path});
+    try call.returns(.{ .path = doc.owner.documentPath(doc), .undo = t.forget(doc) });
+}
 
 /// A document's track as a tape (`Tracks.exportTape`): how it was made, from where its track
 /// began, to play anywhere (`fizzy.demo.playTape`). Returns where it went and what it holds.

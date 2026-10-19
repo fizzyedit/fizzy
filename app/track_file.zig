@@ -154,6 +154,21 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8) !Read {
     };
 }
 
+/// The path a track file is for, from its first bytes alone (`head_len` of them is enough for any
+/// path), without reading the rest: what finding the files of documents gone from disk reads.
+/// Null for anything that is not a track file.
+pub fn headPath(head: []const u8) ?[]const u8 {
+    var r: std.Io.Reader = .fixed(head);
+    const m = r.take(magic.len) catch return null;
+    if (!std.mem.eql(u8, m, magic)) return null;
+    if ((r.takeInt(u32, .little) catch return null) != version) return null;
+    _ = takeBytes(&r) catch return null;
+    return takeBytes(&r) catch null;
+}
+
+/// How much of a track file `headPath` needs: its magic, version, owner id and a path.
+pub const head_len = 8192;
+
 fn writeBytes(w: *std.Io.Writer, bytes: []const u8) !void {
     try w.writeUleb128(bytes.len);
     try w.writeAll(bytes);
@@ -231,6 +246,10 @@ test "a track written to a file reads back as it was" {
     try testing.expect(!back.checkpoints.items[0].whole);
     try testing.expectEqual(@as(?u64, null), back.checkpoints.items[0].fingerprint);
     try testing.expectEqualStrings("delta", back.checkpoints.items[0].bytes);
+
+    // Its path, from its head alone.
+    try testing.expectEqualStrings("/a/b.txt", headPath(bytes[0..@min(bytes.len, head_len)]).?);
+    try testing.expectEqual(@as(?[]const u8, null), headPath("not a track"));
 
     // Anything else is not read: another version, or cut short anywhere.
     var other = try gpa.dupe(u8, bytes);
