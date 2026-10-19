@@ -26,7 +26,8 @@
 //! settings, and keyboard focus. Restoring one puts them back in place — documents opened since
 //! are closed, the rest restored where they sit — so a seek back within a scene costs no reload.
 //! One is taken only while nothing is loading and the palette is shut, and restored only into the
-//! scene it came from with its documents still open; otherwise the seek cuts to the keyframe.
+//! scene it came from with its documents still open and the window arranged as it was
+//! (`layoutPrint`); otherwise the seek cuts to the keyframe.
 //!
 //! Demos start from the command palette ("Demo: …"), the Help menu, `FIZZY_DEMO=<name>` natively,
 //! or `?demo=<name>` / `?demo=<url of a .zon or .tape>` on the web — see `docs/AUTOMATION.md`.
@@ -843,6 +844,9 @@ const Snapshot = struct {
     material: core.material.Kind,
     focus: dvui.Id,
     focus_subwindow: dvui.Id,
+    /// How the window was arranged (`layoutPrint`): what a restore cannot put back, so it puts
+    /// back only into the arrangement it was taken in.
+    layout: u64,
 
     const Node = struct { path: []const u8, kind: @FieldType(core.vfs.Mem.Node, "kind"), bytes: []const u8 };
     const Doc = struct { path: []const u8, grouping: u64, state: []const u8 };
@@ -870,6 +874,7 @@ fn capture(ctx: *anyopaque) ?*anyopaque {
         .material = editor.app.settings.window_material,
         .focus = dvui.focusedWidgetId() orelse .zero,
         .focus_subwindow = dvui.focusedSubwindowId(),
+        .layout = layoutPrint(editor),
     };
     const ok = fill(self, snap, root, mem) catch false;
     if (!ok) {
@@ -929,6 +934,10 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     const root = self.mount orelse return false;
     const mem = self.mem orelse return false;
     if (!std.mem.eql(u8, root, snap.root)) return false;
+    // The window arranged as it was: a demo keeps one arrangement from chapter to chapter rather
+    // than cutting to a fresh one at each, and a split, a float or a place opened later is not
+    // something a restore takes away. Arranged otherwise, the seek replays from further back.
+    if (layoutPrint(editor) != snap.layout) return false;
     // Every document it held still open, in its pane.
     for (snap.docs) |d| {
         const doc = openDoc(editor, d.path) orelse return false;
@@ -1012,6 +1021,30 @@ fn fingerprint(ctx: *anyopaque) u64 {
             h.update(node.bytes);
         }
     }
+    return h.final();
+}
+
+/// How the window is arranged, as far as a restore cannot put it back: each of the app's places by
+/// name, shut or not and what it shows, how many panes the documents have, and the floats. The explorer's own place opening and
+/// shutting is left out: a restore opens or shuts the explorer (`Snapshot.explorer_closed`).
+/// Places are taken in any order: the same arrangement drawn in another order is the same.
+pub fn layoutPrint(editor: *Editor) u64 {
+    const state = &editor.app.layout;
+    const explorer = if (editor.regionFor(sdk.keywords.ide.sidebar)) |r| r.name else "";
+    var print: u64 = 0;
+    for (state.regions.items) |r| {
+        // A plugin's own places — the documents' panes — are its to arrange, and named afresh
+        // each time one opens: counted below, and their documents' panes checked on restore.
+        if (r.by_name) continue;
+        var h = std.hash.Wyhash.init(0x1a70);
+        h.update(r.name);
+        if (!std.mem.eql(u8, r.name, explorer)) h.update(std.mem.asBytes(&r.isClosed()));
+        h.update(editor.app.host.selectionForKey(r.selectionKey()) orelse "");
+        print +%= h.final();
+    }
+    var h = std.hash.Wyhash.init(print);
+    h.update(std.mem.asBytes(&editor.workbench.workspaces.count()));
+    h.update(std.mem.asBytes(&state.floats.items.items.len));
     return h.final();
 }
 

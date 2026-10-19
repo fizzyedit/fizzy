@@ -43,6 +43,11 @@ typing: ?Typing = null,
 /// The op at `cursor` is a wait that has not held yet; `held_ms` of wall time spent on it.
 holding: bool = false,
 held_ms: f64 = 0,
+/// Buttons the tape holds down: a glide while one is carries something (`Glide.carried`).
+pressed: u8 = 0,
+/// Set by whoever plays the tape while it replays to a moment rather than plays live (a seek):
+/// a carried glide then takes a frame per step of its path (`path_step_ms`).
+replaying: bool = false,
 
 pub const Point = struct {
     x: f32 = 0,
@@ -56,6 +61,14 @@ const Glide = struct {
     to: ?Point = null,
     /// Demo time the pointer was last put down along the path.
     at: f64,
+    /// Begun with a button held: carrying something, the pointer goes where the target was seen
+    /// to settle, and does not follow it after (`locked`). What it is carried over moves for it — a tab strip
+    /// makes room for the tab, a drop opens under it — and chasing that moved the room it made:
+    /// the tab carried at a tab went back and forth between two places every other frame. A person
+    /// aims where they saw it, too.
+    carried: bool = false,
+    /// Carried, and the target seen in the same place on two frames: `to` is where it goes.
+    locked: bool = false,
 };
 
 /// Demo time between the points of a glide that one call covers more of than a frame (a replay,
@@ -93,6 +106,12 @@ pub const Sink = struct {
         /// Apply a step to its file, shown being made over `ms` (the op's). Null for a sink that
         /// plays only live tapes, which have none (`Tape.validate`).
         step: ?*const fn (ctx: *anyopaque, step: Tape.Step, ms: u32) void = null,
+        /// Whether `target` has stopped moving, asked as a glide onto it is about to begin: false
+        /// holds the glide for a frame, and it is asked again. A replay covers a glide in one
+        /// call and finds its target once, where live play follows it for the glide's whole
+        /// length, so a place still sliding open when the glide began sends a replay's pointer
+        /// where the place was. Null, or always true: glides begin at once (live play).
+        still: ?*const fn (ctx: *anyopaque, target: Tape.Target) bool = null,
     };
 };
 
@@ -108,7 +127,11 @@ pub fn nextAt(self: Sequencer) f64 {
     const ops = self.tape.ops;
     var t: f64 = if (self.cursor < ops.len) @floatFromInt(ops[self.cursor].at) else std.math.inf(f64);
     if (self.holding) t = self.now;
-    if (self.glide) |g| t = @min(t, @as(f64, @floatFromInt(ops[g.op].end())));
+    if (self.glide) |g| {
+        t = @min(t, @as(f64, @floatFromInt(ops[g.op].end())));
+        // Replayed a step a frame (`advanceSpans`), each frame begins at its own step.
+        if (self.replaying and g.carried and ops[g.op].do == .move) t = @min(t, g.at + path_step_ms);
+    }
     if (self.typing) |ty| t = @min(t, @as(f64, @floatFromInt(ops[ty.op].end())));
     return @max(t, self.now);
 }
@@ -129,6 +152,8 @@ pub fn restoreTo(self: *Sequencer, cursor: usize, now: f64, pointer: Point) void
     self.typing = null;
     self.holding = false;
     self.held_ms = 0;
+    // A moment is calm with no button held (`Player.keepSnapshot`).
+    self.pressed = 0;
 }
 
 /// Every op has been applied and nothing is in flight.
@@ -145,6 +170,7 @@ pub fn rewind(self: *Sequencer, op_index: usize) void {
     self.typing = null;
     self.holding = false;
     self.held_ms = 0;
+    self.pressed = 0;
 }
 
 pub const Progress = enum {
@@ -199,8 +225,11 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 }
                 self.cursor += 1;
             },
-            .move, .trace => {
-                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now };
+            .move, .trace => |target| {
+                // A move only: a stroke's points are on a canvas that is not going anywhere, and a
+                // drawing has hundreds of them.
+                if (op.do == .move) if (sink.vtable.still) |still| if (!still(sink.ctx, target)) return .holding;
+                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now, .carried = self.pressed > 0 };
                 self.cursor += 1;
             },
             .type => {
@@ -218,11 +247,13 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
             },
             .press => |b| {
                 self.cursor += 1;
+                self.pressed +|= 1;
                 sink.vtable.button(sink.ctx, b, true);
                 return .yielded;
             },
             .release => |b| {
                 self.cursor += 1;
+                self.pressed -|= 1;
                 sink.vtable.button(sink.ctx, b, false);
                 return .yielded;
             },
@@ -251,7 +282,12 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
     if (self.glide) |*g| {
         const op = self.tape.ops[g.op];
         const f = fraction(op, to);
-        if (sink.vtable.locate(sink.ctx, op.do.target().?)) |pt| g.to = pt;
+        if (!g.locked) if (sink.vtable.locate(sink.ctx, op.do.target().?)) |pt| {
+            // Carried, it locks on once the target is seen in the same place twice: still
+            // easing in, it is followed there.
+            if (g.carried and g.to != null and g.to.?.x == pt.x and g.to.?.y == pt.y) g.locked = true;
+            g.to = pt;
+        };
         // A target never seen leaves the pointer where it is rather than flying to the corner.
         const dest = g.to orelse g.from;
         // The frames live play would have drawn between, each a point along the way.
@@ -262,6 +298,14 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
             if (pt.x == self.pointer.x and pt.y == self.pointer.y) continue;
             self.pointer = pt;
             sink.vtable.moveTo(sink.ctx, pt);
+            // Replaying, a step of a carried glide is a frame of its own, as it was live: what
+            // is carried moves with the frames it is drawn in (a float by its header), and the
+            // rest of a glide landed in one frame was lost to it. Not a trace: a stroke's points
+            // are the canvas's to take as they come, and a drawing has hundreds of them.
+            if (g.carried and op.do == .move and self.replaying) {
+                g.at = t;
+                return .yielded;
+            }
         }
         g.at = @max(g.at, to);
         self.pointer = pathPoint(op, g.from, dest, f);
@@ -290,7 +334,8 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
 /// Land whatever is still in flight, as if its time had come.
 fn finishSpans(self: *Sequencer, sink: Sink) void {
     if (self.glide) |g| {
-        if (sink.vtable.locate(sink.ctx, self.tape.ops[g.op].do.target().?)) |pt| {
+        const to = if (g.locked) g.to else sink.vtable.locate(sink.ctx, self.tape.ops[g.op].do.target().?);
+        if (to) |pt| {
             self.pointer = pt;
             sink.vtable.moveTo(sink.ctx, pt);
         }
@@ -786,6 +831,53 @@ test "rewinding to a keyframe and replaying fast lands where live play did" {
     try testing.expectEqual(@as(usize, 5), frames);
     try testing.expectEqual(@as(f64, 1100), seq.now);
     try testing.expectEqual(@as(f32, 50), seq.pointer.x);
+}
+
+test "carrying something, the pointer goes where the target settled; with nothing held, it follows" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .ms = 300, .do = .{ .move = .{ .tag = "slot" } } },
+        .{ .at = 300, .do = .{ .press = .left } },
+        .{ .at = 320, .ms = 300, .do = .{ .move = .{ .tag = "slot" } } },
+        .{ .at = 620, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+    try log.tags.put(testing.allocator, "slot", .{ .x = 100, .y = 10 });
+    var seq: Sequencer = .init(&tape);
+    // Free, the glide follows the slot where it moves to.
+    playTo(&seq, 100, 16, log.sink());
+    try log.tags.put(testing.allocator, "slot", .{ .x = 400, .y = 10 });
+    playTo(&seq, 310, 16, log.sink());
+    try testing.expectEqual(@as(f32, 400), seq.pointer.x);
+    // Carried, the slot moving out from under the pointer (room made for what it carries) leaves
+    // the glide going where it first saw it.
+    try log.tags.put(testing.allocator, "slot", .{ .x = 700, .y = 10 });
+    playTo(&seq, 400, 16, log.sink());
+    try log.tags.put(testing.allocator, "slot", .{ .x = 100, .y = 10 });
+    playTo(&seq, 700, 16, log.sink());
+    try testing.expectEqual(@as(f32, 700), seq.pointer.x);
+    try testing.expectEqual(@as(u8, 0), seq.pressed);
+}
+
+test "replaying, a carried glide takes a frame per step of its path" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .press = .left } },
+        .{ .at = 0, .ms = 160, .do = .{ .move = .{ .x = 1, .y = 0 } } },
+        .{ .at = 160, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    seq.replaying = true;
+    var frames: usize = 0;
+    while (seq.advance(1000, 16, log.sink()) != .reached) frames += 1;
+    // The keyframe, the press, a frame per 16 ms step of the glide, its end, the release.
+    try testing.expect(frames >= 160 / 16);
+    try testing.expectEqual(@as(f32, 1000), seq.pointer.x);
 }
 
 test "a seek into the middle of a span leaves it part done, to finish live" {

@@ -552,6 +552,10 @@ pub fn setTabs(self: *Workspace, ids: []const []const u8, focus: ?[]const u8) vo
     if (focus) |id| {
         runtime.host().selectInRegion(region_name, id);
         runtime.workbench().open_workspace_grouping = self.grouping;
+        // In front now, not when the pane next draws (`draw` sets it from the region's selection):
+        // a pane a drop just opened has not drawn, and until it had there was no active document.
+        const path = sdk.document.pathOfSurfaceId(id);
+        self.active = if (path) |p| runtime.host().docFromPath(p) else null;
     }
 }
 

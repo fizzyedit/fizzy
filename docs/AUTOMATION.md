@@ -94,8 +94,10 @@ goes to the nearest one before the moment and replays only from there, the app p
 rather than cut to its keyframe and reloaded. Fizzy's snapshot holds the demo's files as saved,
 each open document's state from its owner (`captureDocumentState`: contents, caret, scroll),
 which is active, the explorer and its open folders, every plugin's settings, and focus; restoring
-one closes what was opened since and puts the rest back where it sits. It is restored only into
-the scene it came from with its documents still open — otherwise the player tries the snapshot
+one closes what was opened since and puts the rest back where it sits. It does not hold the
+layout, so it is restored only into the scene it came from, with its documents still open and the
+window arranged as it was then (`Demo.layoutPrint`: the places, shut or not and what each shows,
+the panes, the floats) — otherwise the player tries the snapshot
 before it, and a seek forward simply carries on — and taken only while nothing is loading and the
 palette is shut. **The scrubber seeks as it is dragged**, not only when let go: with a snapshot
 every few seconds, each move replays a second or two of demo and lands in the frame it was made.
@@ -264,6 +266,18 @@ card ends the captions still showing, so they close as it opens rather than comp
 A keyframe starts with the explorer put away (`.layout = .focused`), so the editor has the room;
 a demo opens it from the rail when it is about to use it and puts it away after —
 `catalog.openFile(s, "README.md")` does all three.
+
+**One keyframe, then carry on.** A keyframe is a cut, and a cut mid-demo snaps the window back to
+a fresh layout in front of the viewer. Chapters continue in the window the last one left; one that
+needs the window otherwise gets there the way a person would (the rail, a corner button, a close),
+animated. A seek back across a split or a float replays from the keyframe, as it must.
+`tests/demos.zig` fails a chapter that opens on another layout than the last one left.
+
+**A carried glide goes where its target settled.** With a button held, what is under the pointer
+moves for what it carries (a tab strip makes room for the tab), so once the target has been seen
+in one place on two frames the pointer stops following it; with nothing held it follows it all
+the way, as a place still easing open moves it. A seek's replay waits for a glide's target to stop
+moving before it starts, and plays a carried glide a frame per step, as it was drawn live.
 
 Things that bite:
 

@@ -2,9 +2,10 @@
 //! the window's materials, the plugins everything is made of, and the history kept of every change
 //! — about a minute, in chapters a viewer can jump between (the guides view lists them).
 //!
-//! Each chapter that rearranges the window opens on a keyframe of its own: a snapshot holds the
-//! documents and settings but not the layout, so a seek back across a split or a float lands on a
-//! cut rather than on a window still arranged the later way.
+//! One keyframe, at the start: each chapter carries on in the window the last one left, a split, a
+//! float and all, rather than cutting it back to a fresh one. A snapshot puts back only into the
+//! arrangement it was taken in (`Demo.layoutPrint`), so a seek back across a split or a float
+//! replays from further back rather than landing on a window still arranged the later way.
 const Tape = @import("tape").Tape;
 const Script = @import("tape").Script;
 const catalog = @import("catalog.zig");
@@ -40,13 +41,12 @@ const files = [_]Tape.File{
     .{ .path = "notes/ideas.md", .text = ideas },
 };
 
-/// The tour's folder, cut to: its three files open as tabs, README in front.
-fn scene(s: *Script, layout: Tape.Keyframe.Layout) !void {
+/// The tour's folder, cut to: its three files open as tabs, README in front, nothing else showing.
+fn scene(s: *Script) !void {
     try s.keyframe(.{
         .root = "demo://tour",
         .files = &files,
         .open = &.{ "src/main.zig", "notes/ideas.md", "README.md" },
-        .layout = layout,
         // A preview beside the markdown rather than over it.
         .settings = &.{.{ .owner = "markdown", .key = "default_md_view", .value = ".split" }},
     });
@@ -54,7 +54,7 @@ fn scene(s: *Script, layout: Tape.Keyframe.Layout) !void {
 }
 
 pub fn build(s: *Script) !void {
-    try scene(s, .focused);
+    try scene(s);
 
     try s.chapter("Welcome");
     try s.caption("This is fizzy itself, played by a tape. Click anywhere to take over, and press play to carry on.", .{
@@ -73,7 +73,10 @@ pub fn build(s: *Script) !void {
     s.pause(900);
 
     try s.chapter("Places");
-    try scene(s, .reset);
+    try s.caption("The rail opens the explorer, in a place of its own beside the documents.", .{ .near = catalog.files_icon });
+    try s.click(.{ .tag = catalog.files_icon }, .{});
+    try s.waitFor(try catalog.file(s, "README.md"), .{});
+    s.pause(900);
     try s.caption("Every place has a corner. Its button chooses what the place shows…", .{});
     try catalog.cornerButton(s, "Sidebar");
     try s.click(try catalog.corner(s, "Sidebar"), .{ .move_ms = 0 });
@@ -85,7 +88,6 @@ pub fn build(s: *Script) !void {
     s.pause(1200);
 
     try s.chapter("Floats");
-    try scene(s, .reset);
     try s.caption("Carry a view from its corner and drop it on the middle of its own place: it floats.", .{});
     try catalog.cornerButton(s, "Sidebar");
     try s.drag(try catalog.corner(s, "Sidebar"), .{ .tag = try catalog.place(s, "Sidebar") }, .{ .ms = 900 });
@@ -121,7 +123,9 @@ pub fn build(s: *Script) !void {
     s.pause(2600);
 
     try s.chapter("History");
-    try scene(s, .focused);
+    // The store left open beside it: shutting it would slide the page over just as the pointer
+    // went for it.
+    try s.click(.{ .tag = try catalog.tab(s, "README.md") }, .{});
     try s.caption("Every change is kept, a step at a time.", try catalog.aboutWriting(s, "README.md"));
     try s.click(.{ .tag = try catalog.end(s, "README.md") }, .{});
     try s.typeText("\n## History\n\nEvery keystroke is a step you can go back to.\n", .{ .cps = 20 });

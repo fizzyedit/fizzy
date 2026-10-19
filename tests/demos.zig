@@ -95,11 +95,18 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         // Straight through, on the testing backend's clock (100 ms a step), keeping every moment
         // a seek could be asked to reproduce.
         moments.clearRetainingCapacity();
+        var steady: Steady = .{};
+        defer steady.deinit(gpa);
         var frames: usize = 0;
         while (p.state != .ended and frames < 20_000) : (frames += 1) {
             _ = try dvui.testing.step(headlessFrame);
+            try steady.frame(gpa, app.editor, e.name);
             if (p.state != .playing or p.seq.cursor == 0) continue;
             if (p.seq.nextAt() <= p.seq.now or !p.stage.idle()) continue;
+            // Not mid-drag: a seek there lands with the button held, and one on from it lets go
+            // first and replays from the keyframe (`Player.letGo`), which replays a drag cut short
+            // no better than it did — a moment the player takes no snapshot at either.
+            if (p.input.held.count() > 0) continue;
             try moments.append(gpa, .{ .now = p.seq.now, .cursor = p.seq.cursor, .print = p.stage.fingerprint().? });
         }
         errdefer std.debug.print("demo '{s}': {t} after {d} frames at {d:.0} of {d} ms\n", .{ e.name, p.state, frames, p.seq.now, p.duration() });
@@ -108,6 +115,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try std.testing.expectEqual(@as(u32, 0), p.timeouts);
         try std.testing.expectEqual(@as(u32, 0), p.mismatches);
         try std.testing.expect(moments.items.len > bundled_random_seeks);
+        try steady.landed(e.name);
 
         // Seeks to random moments, and the first of each chapter, in an order that goes back and
         // forth: from snapshots, from the keyframe, and forward on the tape's own state.
@@ -357,6 +365,102 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     try std.testing.expect(app.editor.app.host.files.?.isMounted(site));
     try std.testing.expectEqualStrings(active_before, activePath(app.editor));
 }
+
+/// What straight play of a demo must keep steady, watched a frame at a time:
+///
+/// - **The layout carries over from chapter to chapter.** A chapter starts in the window the last
+///   one left; no cut puts it back to a fresh arrangement (`Demo.layoutPrint`).
+/// - **Carrying something, the pointer goes straight to where it is going.** Its distance to where
+///   the glide lands never grows: chasing a target that moves for what it carries (a tab strip
+///   making room) sent it back and forth every other frame (`Sequencer.Glide.carried`).
+/// - **A drop's lit bubble does not flicker.** Over one drag, a bubble once left is not lit again.
+const Steady = struct {
+    chapter: ?usize = null,
+    print: u64 = 0,
+    /// The carried glide in flight, by op, and the pointer at each of its frames.
+    glide: ?usize = null,
+    path: std.ArrayList(dvui.Point.Physical) = .empty,
+    /// The bubbles lit over the drag in flight, each once, and those lit the frame before.
+    lit: std.ArrayList(u64) = .empty,
+    was_lit: std.ArrayList(u64) = .empty,
+    dragging: bool = false,
+
+    fn deinit(self: *Steady, gpa: std.mem.Allocator) void {
+        self.path.deinit(gpa);
+        self.lit.deinit(gpa);
+        self.was_lit.deinit(gpa);
+    }
+
+    fn frame(self: *Steady, gpa: std.mem.Allocator, editor: *fizzy.Editor, name: []const u8) !void {
+        const p = &editor.demo.player;
+        if (p.state != .playing) return;
+        const tape = p.tape().?;
+
+        const print = fizzy.Editor.Demo.layoutPrint(editor);
+        const chapter = tape.chapterAt(p.seq.now);
+        if (self.chapter != null and chapter != self.chapter and print != self.print) {
+            std.debug.print("demo '{s}': chapter '{s}' opens on another layout than '{s}' left\n", .{ name, tape.chapters[chapter.?].title, tape.chapters[self.chapter.?].title });
+            return error.LayoutCut;
+        }
+        self.chapter = chapter;
+        self.print = print;
+
+        const g: ?usize = if (p.seq.glide) |g| (if (g.carried) g.op else null) else null;
+        if (g != self.glide) try self.landed(name);
+        self.glide = g;
+        if (g != null) try self.path.append(gpa, dvui.currentWindow().mouse_pt);
+
+        const d = &editor.app.layout.view_drag;
+        if (!d.active()) {
+            self.dragging = false;
+            return;
+        }
+        if (!self.dragging) {
+            self.lit.clearRetainingCapacity();
+            self.was_lit.clearRetainingCapacity();
+        }
+        self.dragging = true;
+        var now_lit: std.ArrayList(u64) = .empty;
+        defer now_lit.deinit(gpa);
+        for (d.pending[0..d.pending_count]) |q| {
+            if (!q.look.target) continue;
+            const zone = q.look.hovered orelse continue;
+            var h = std.hash.Wyhash.init(@backingInt(q.key));
+            h.update(std.mem.asBytes(&zone));
+            try now_lit.append(gpa, h.final());
+        }
+        // Lit now, not lit the frame before, and lit at some time before that: it went out and
+        // came back.
+        for (now_lit.items) |lit| {
+            const before = std.mem.indexOfScalar(u64, self.was_lit.items, lit) != null;
+            const ever = std.mem.indexOfScalar(u64, self.lit.items, lit) != null;
+            if (ever and !before) {
+                std.debug.print("demo '{s}': a drop's bubble lit again at {d:.0} ms after another was\n", .{ name, p.seq.now });
+                return error.DropFlickers;
+            }
+            if (!ever) try self.lit.append(gpa, lit);
+        }
+        self.was_lit.clearRetainingCapacity();
+        try self.was_lit.appendSlice(gpa, now_lit.items);
+    }
+
+    /// The carried glide in flight has ended: its pointer never got further from where it landed.
+    fn landed(self: *Steady, name: []const u8) !void {
+        defer self.path.clearRetainingCapacity();
+        const pts = self.path.items;
+        if (pts.len < 2) return;
+        const end = pts[pts.len - 1];
+        var was = std.math.floatMax(f32);
+        for (pts) |pt| {
+            const dist = @sqrt((pt.x - end.x) * (pt.x - end.x) + (pt.y - end.y) * (pt.y - end.y));
+            if (dist > was + 2) {
+                std.debug.print("demo '{s}': a carried pointer turned back, {d:.0} px from where it landed after {d:.0}\n", .{ name, dist, was });
+                return error.PointerTurnedBack;
+            }
+            was = @min(was, dist);
+        }
+    }
+};
 
 fn activePath(editor: *fizzy.Editor) []const u8 {
     const doc = editor.activeDoc() orelse return "";

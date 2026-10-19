@@ -116,6 +116,11 @@ restore_forward: bool = false,
 cut_waits: bool = false,
 /// Put back from a snapshot, the app is still settling and no op lands yet (`restoreSnapshot`).
 settling: ?Settling = null,
+/// A seek's glide held until its target stops moving (`Sequencer.Sink.VTable.still`): the op, and
+/// where its target was the run before.
+/// This seek let go of a drag the tape held (`letGo`): forward, it cannot carry on from there.
+let_go: bool = false,
+aiming: ?struct { op: usize, last: Sequencer.Point, runs: u8 = 0 } = null,
 /// The op a snapshot's fingerprint was last compared at, so a moment is checked once a pass.
 checked_cursor: ?usize = null,
 /// The keyframe op the app's scene began with: set as each keyframe is cut to, and by a restore;
@@ -427,6 +432,8 @@ fn seekTo(self: *Player, t_in: f64, after: After) void {
     // cutting to it beats replaying everything up to it. Anything else goes back.
     const forward = !self.diverged and t >= self.seq.now and kf < self.seq.cursor;
     self.restore_pending = null;
+    self.aiming = null;
+    self.let_go = false;
     // Back to the nearest snapshot before the moment, in its scene — or, forward, to one further
     // on than here. Put back at the start of the next frame (`restore_pending`).
     const snap = self.nearestSnapshot(t, kf);
@@ -470,6 +477,7 @@ fn arrive(self: *Player) void {
 fn rewind(self: *Player, kf: usize) void {
     if (self.letGo()) self.cut_waits = true;
     self.settling = null;
+    self.aiming = null;
     self.seq.rewind(kf);
     self.scene = null;
     self.last_press = null;
@@ -485,6 +493,9 @@ fn rewind(self: *Player, kf: usize) void {
 fn letGo(self: *Player) bool {
     if (self.input.held.count() == 0) return false;
     self.input.releaseHeld();
+    // A drag the tape had under way is dropped where it is: the app is not where the tape is
+    // until a cut puts it somewhere the tape has been (`goBack`).
+    self.let_go = true;
     return true;
 }
 
@@ -494,6 +505,7 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
     const s = self.snapshots.items[i];
     if (!self.stage.restore(s.state)) return false;
     self.seq.restoreTo(s.cursor, s.at, s.pointer);
+    self.aiming = null;
     self.scene = s.scene;
     // The pointer is kept in pixels, and they are only where the tape left it in the layout the
     // snapshot was taken in. The app put back takes a few runs to get there — a sidebar the
@@ -557,7 +569,9 @@ fn goBack(self: *Player, first: usize) bool {
         if (self.restore_forward and s.at <= self.seq.now) break;
         if (self.restoreSnapshot(i)) return true;
     }
-    if (!self.restore_forward) {
+    // Forward, it carries on from where the tape is, unless the app has left it: let go of mid-drag
+    // ahead of a restore that then could not be made, say.
+    if (!self.restore_forward or self.let_go) {
         self.rewind(self.tape().?.keyframeBefore(self.seek_target));
         self.seek_from = self.seq.now;
     }
@@ -705,11 +719,13 @@ pub fn frame(self: *Player) void {
     switch (self.state) {
         .playing => {
             Input.holdPointer(self.seq.pointer);
+            self.seq.replaying = false;
             _ = self.seq.advance(self.seq.now + wall_ms * self.rate, wall_ms, self.sink());
             if (self.seq.done() and self.seq.now >= @as(f64, @floatFromInt(self.duration()))) self.state = .ended;
         },
         .seeking => {
             Input.holdPointer(self.seq.pointer);
+            self.seq.replaying = true;
             if (!cut and self.seq.advance(self.seek_target, wall_ms, self.sink()) == .reached) self.arrive();
         },
         .paused, .ended, .idle => return,
@@ -785,7 +801,10 @@ pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!
 /// When the next run of a displayed frame begins on the app's clock: at the demo moment of what it
 /// is about to do while a seek is in flight (see the file comment), else just after the last.
 fn runAt(self: *const Player, win: *dvui.Window, clock: ?*i128, base_ns: i128, base_ms: f64) i128 {
-    const soonest = win.frame_time_ns + std.time.ns_per_us;
+    // Waiting on a glide's target to stop moving (`targetStill`), a run is a frame of motion where
+    // the backend's clock can be moved on: on a microsecond's clock, a place sliding open would
+    // never move between runs, and look still.
+    const soonest = win.frame_time_ns + if (self.aiming != null and clock != null) msToNs(Sequencer.path_step_ms) else std.time.ns_per_us;
     if (clock == null or self.state != .seeking) return soonest;
     return @max(soonest, base_ns + msToNs(self.nextMoment() - base_ms));
 }
@@ -978,7 +997,32 @@ const sink_vtable: Sequencer.Sink.VTable = .{
     .holds = holds,
     .timedOut = timedOut,
     .step = step,
+    .still = targetStill,
 };
+
+/// Live, a glide follows its target as it goes; a seek's replay finds it once, so it waits for the
+/// target to stop moving first — two runs seeing it in the same place, or `Settling.max_runs`.
+fn targetStill(ctx: *anyopaque, target: Tape.Target) bool {
+    const self = from(ctx);
+    // Untagged, it is the window's own coordinates, which go nowhere.
+    if (self.state != .seeking or target.tag.len == 0) return true;
+    const pt = Input.targetPoint(target) orelse {
+        self.aiming = null;
+        return true;
+    };
+    const op = self.seq.cursor;
+    if (self.aiming) |*a| if (a.op == op) {
+        a.runs += 1;
+        if ((a.last.x == pt.x and a.last.y == pt.y) or a.runs >= Settling.max_runs) {
+            self.aiming = null;
+            return true;
+        }
+        a.last = pt;
+        return false;
+    };
+    self.aiming = .{ .op = op, .last = pt };
+    return false;
+}
 
 fn from(ctx: *anyopaque) *Player {
     return @ptrCast(@alignCast(ctx));
