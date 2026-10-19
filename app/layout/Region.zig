@@ -799,6 +799,9 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // (`cornerShape`) on the drop zones' curve: springing out of the corner into the button and
     // drawn back into it. Under the place's rect, past the content clip: it lies in the padding and
     // the curve, cut by the place's outline.
+    // Where its button is, grown, for a demo or an agent to aim a press at (`core.anchor`): the
+    // pointer at the corner brings it up, and this is where it is then, wherever the corner puts it.
+    core.anchor.markRect(id.update("arrange"), piece.button, true, "region.arrange:{s}", .{opts.name});
     if (resting) {
         // While the picker is open here the orb is the picker (it grew out of it): none in the
         // corner, and the glass comes out of the glyph anew when it closes.
