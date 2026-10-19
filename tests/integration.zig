@@ -8834,6 +8834,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     }
     // The tour leaves the explorer, the panel and the rest of the window open: their buttons too.
     try expectButtonsNamed(headlessFrame);
+    {
+        // Scrubbed across the Materials chapter, back and forth: every frame of the seek skips the
+        // app's motion, but the glass — the transport's among it — keeps the edge it has in
+        // straight playback (`motion.liquid`), and each landing is the model live play reached.
+        // A budget of nothing: one run a frame, so every frame shown is one of the seek's.
+        const player = &editor.demo.player;
+        const budget = player.budget_ns;
+        player.budget_ns = 0;
+        defer player.budget_ns = budget;
+        const tape = player.tape().?;
+        const materials = for (tape.chapters, 0..) |ch, i| {
+            if (std.mem.eql(u8, ch.title, "Materials")) break i;
+        } else return error.TestUnexpectedResult;
+        const start: f64 = @floatFromInt(tape.chapters[materials].at);
+        const after: f64 = @floatFromInt(if (materials + 1 < tape.chapters.len) tape.chapters[materials + 1].at else tape.duration());
+        const edge = fizzy.core.motion.liquid();
+        try std.testing.expect(edge > 0);
+        var seeking_frames: usize = 0;
+        for ([_]f64{ @max(0, start - 500), (start + after) / 2, after + 200, start + 2500, @max(0, start - 500), after - 300 }) |to| {
+            player.seek(to);
+            var n: usize = 0;
+            while (player.state == .seeking and n < 400) : (n += 1) {
+                _ = try dvui.testing.step(headlessFrame);
+                if (player.state != .seeking) break;
+                seeking_frames += 1;
+                try std.testing.expect(fizzy.core.motion.off());
+                try std.testing.expectEqual(edge, fizzy.core.motion.liquid());
+            }
+            try std.testing.expect(player.state != .seeking);
+            _ = try dvui.testing.step(headlessFrame);
+            try std.testing.expect(!fizzy.core.motion.off());
+            try std.testing.expectEqual(edge, fizzy.core.motion.liquid());
+        }
+        try std.testing.expect(seeking_frames > 0);
+        try std.testing.expectEqual(@as(u32, 0), player.mismatches);
+    }
     editor.demo.player.unload();
     try dvui.testing.settle(headlessFrame);
 

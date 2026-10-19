@@ -56,11 +56,18 @@ const Published = struct {
 /// `level` and `speed` are the settings, each 0 to 1. A system that asks for reduced motion gets
 /// off, whatever the setting says. `playback` multiplies the speed while a tape plays at other than
 /// its own pace, so what the app animates keeps time with it.
-pub fn publish(level_setting: f32, speed_setting: f32, system_prefers_reduced: bool, playback: f32) void {
+/// `skipping`: the app is jumping ahead of what anyone sees (a tape seeking, replaying to the moment
+/// asked for): everything lands where it is going, as at off, while what things look like —
+/// glass's edge (`liquid`) — stays the person's. A seek is not the person asking for less.
+pub fn publish(level_setting: f32, speed_setting: f32, system_prefers_reduced: bool, skipping: bool, playback: f32) void {
     const v: f32 = if (system_prefers_reduced) 0 else std.math.clamp(level_setting, 0, 1);
-    dvui.dataSet(null, publish_id, publish_key, Published{ .level = v, .rate = rateFor(speed_setting) * playback });
+    dvui.dataSet(null, publish_id, publish_key, Published{ .level = if (skipping) 0 else v, .rate = rateFor(speed_setting) * playback });
+    dvui.dataSet(null, publish_id, liquid_key, liquidAt(v));
     apply();
 }
+
+/// Where `liquid` is published, apart from `Published`: a plugin built before it reads the level.
+const liquid_key = "_motion_liquid";
 
 /// The speed setting (0 slow, 0.5 as written, 1 fast) as a rate: evenly spaced in doublings, so
 /// the middle of the slider is the middle of how it feels.
@@ -97,8 +104,14 @@ pub fn off() bool {
 
 /// How much frosted glass's bevelled edge refracts, clears and catches the light
 /// (`core.liquid_glass`): none at off, rising to all of it by minimal, and no more past it.
+/// Published with the level, but the person's even while the app skips its motion (`publish`).
 pub fn liquid() f32 {
-    return std.math.clamp(level() * 2, 0, 1);
+    if (dvui.current_window == null) return liquidAt(default_level);
+    return dvui.dataGet(null, publish_id, liquid_key, f32) orelse liquidAt(level());
+}
+
+fn liquidAt(lvl: f32) f32 {
+    return std.math.clamp(lvl * 2, 0, 1);
 }
 
 /// A duration in microseconds as the user wants it: at their speed, and a single microsecond
