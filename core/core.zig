@@ -79,6 +79,9 @@ pub const native_glass = @import("native_glass.zig");
 /// What the app's windows are made of, as the backend can show it: the one material every glass
 /// in the app and every OS window follows.
 pub const material = @import("material.zig");
+/// An orb's geometry: the shapes a control of glass is made of, cut by its place and carried from
+/// one state to the next (`plans/LIQUID_EDGE_PLAN.md`, "The orb system").
+pub const orb_geometry = @import("orb_geometry.zig");
 
 /// Generic momentum/fling helper (pan, scrub, cover-flow).
 pub const Fling = @import("Fling.zig");
