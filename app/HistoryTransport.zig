@@ -456,7 +456,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         // (the tab into the bar). The one soft shadow of the merged shape is the orb's
         // (`plans/LIQUID_EDGE_PLAN.md`); the rim and lens are what set the glass off meanwhile.
         // Out of a corner vial, cut by the card's outline, curve and all, as the vial is at rest.
-        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = if (opts.corner != null) dome.cornerMerge(p, 14) else dome.merge(p, 14), .shadow = 0, .edge = if (opts.corner) |c| c.place() else null });
+        core.dialogs.glassBubbles(fid, shapes[0..count], s, .{ .merge = if (opts.corner != null) dome.homeMerge(p, 14) else dome.merge(p, 14), .shadow = 0, .edge = if (opts.corner) |c| c.place() else null });
     }
     // A corner vial's contents change with it rather than fade: its liquid drains as the stream
     // pours out into the line and fills again as it pours back, and its icon shrinks into the
