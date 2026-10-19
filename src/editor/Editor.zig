@@ -3177,6 +3177,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
             .history = ds.has_history,
             .steps = if (recorded) |tr| tr.steps.items.len else 0,
+            .limit = editor.app.settings.history_limit,
             .edge = card_edge,
             .frames = if (recorded != null) &ds.frames else null,
             .export_from = if (track) |tr| tr.base_top else null,

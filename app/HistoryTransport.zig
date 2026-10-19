@@ -12,8 +12,9 @@
 //! it a moment (`dome_rules.Dwell`) grows the bar out of it, the grip lightening as the moment
 //! runs, so passing over it on the way somewhere never does; a press brings the bar at once. The
 //! grip gives way to the bar while it shows. It fills with the document's history
-//! (`DrawOptions.steps`) slowly, an hour or so of editing most of the way
-//! (`dome_rules.stepsFill`), or with a tape playing into it as it plays (`DrawOptions.progress`),
+//! (`DrawOptions.steps`) toward the most a history keeps (`DrawOptions.limit`), full where its
+//! oldest steps start to go (`dome_rules.stepsFill`), or with a tape playing into it as it plays
+//! (`DrawOptions.progress`),
 //! and brightens a moment at each new step: it is recording, and there is more to scrub.
 //!
 //! **Going.** It goes a few seconds after the pointer was last on it, and soon after the pointer
@@ -156,6 +157,9 @@ pub const DrawOptions = struct {
     /// How many steps of it the app has kept (fizzy: its track's), for the grip's fill; 0: none
     /// shows, the grip is plain.
     steps: usize = 0,
+    /// The most steps a history keeps (fizzy: `Settings.history_limit`): the grip is full at it,
+    /// where the oldest start to go. 0: no limit.
+    limit: usize = 0,
     /// Where the pane's own bottom edge is (physical y), when its card reaches lower than `area`:
     /// the grip stands on it. Null: `area`'s.
     edge: ?f32 = null,
@@ -216,7 +220,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     }
     const p = self.shown.openness(now);
     // A tape playing into the document fills it as it plays; else its history does.
-    const fill = if (opts.progress) |f| dome_rules.progressFill(f) else dome_rules.stepsFill(opts.steps);
+    const fill = if (opts.progress) |f| dome_rules.progressFill(f) else dome_rules.stepsFill(opts.steps, opts.limit);
     // The grip, giving way to the bar as it comes in, quiet at rest and coming up while in use: a
     // frame each while it changes, and none while it only sits there.
     if (opts.history and p < 1) {
