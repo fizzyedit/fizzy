@@ -223,6 +223,34 @@ pub fn stripColumns(n: usize, x0: f32, x1: f32, min_w: f32, out: []Column) []Col
     return out[0..count];
 }
 
+/// A stretch across a picture, as fractions of its width: from `lo` to `hi`.
+pub const Span = struct { lo: f32, hi: f32 };
+
+/// Where two pictures of the same width differ, given each column's print (`HistoryFrames.columnPrints`):
+/// from the first column whose prints differ to past the last. Null when none do, or they are not
+/// the same width.
+pub fn changedSpan(before: []const u32, after: []const u32) ?Span {
+    if (before.len != after.len or after.len == 0) return null;
+    var lo: usize = after.len;
+    var hi: usize = 0;
+    for (before, after, 0..) |b, a, i| if (a != b) {
+        lo = @min(lo, i);
+        hi = i + 1;
+    };
+    if (hi <= lo) return null;
+    const n: f32 = @floatFromInt(after.len);
+    return .{ .lo = @as(f32, @floatFromInt(lo)) / n, .hi = @as(f32, @floatFromInt(hi)) / n };
+}
+
+/// Where a stop's slice of its picture starts, as a fraction across it, the slice `w` of it wide:
+/// at `x`, its place in the strip, for a step with no `change` (`HistoryFrames.Picture.change`);
+/// else round the middle of what the step changed, so the strip shows each step's own action.
+/// Kept inside the picture either way.
+pub fn sliceAt(x: f32, w: f32, change: ?f32) f32 {
+    const c = change orelse return x;
+    return std.math.clamp(c - w / 2, 0, @max(0, 1 - w));
+}
+
 /// A part of a picture, as fractions of it: 0 to 1 across and down.
 pub const Frac = struct { x: f32 = 0, y: f32 = 0, w: f32 = 1, h: f32 = 1 };
 
@@ -423,4 +451,23 @@ test "the strip's content leaves out a picture of something passing over the pan
     var big = [_]Frac{ .{ .w = 0.8, .h = 0.9 }, .{ .w = 0.9, .h = 0.9 } };
     try testing.expectApproxEqAbs(@as(f32, 0.9), contentUnion(&big).?.w, 1e-5);
     try testing.expectEqual(@as(?Frac, null), contentUnion(&.{}));
+}
+
+test "a step's slice stands round what it changed, inside the picture" {
+    // No change: where the strip puts it.
+    try testing.expectEqual(@as(f32, 0.3), sliceAt(0.3, 0.1, null));
+    // Round the change's middle.
+    try testing.expectApproxEqAbs(@as(f32, 0.65), sliceAt(0.3, 0.1, 0.7), 1e-6);
+    // Near an edge: held inside the picture.
+    try testing.expectEqual(@as(f32, 0), sliceAt(0.3, 0.1, 0.02));
+    try testing.expectApproxEqAbs(@as(f32, 0.9), sliceAt(0.3, 0.1, 0.99), 1e-6);
+    // A change wider than a slice: its middle (from `changedSpan`).
+    const before = [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    const after = [_]u32{ 1, 2, 2, 2, 2, 2, 2, 1, 1, 1 };
+    const span = changedSpan(&before, &after).?;
+    try testing.expectApproxEqAbs(@as(f32, 0.1), span.lo, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 0.7), span.hi, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 0.35), sliceAt(0.8, 0.1, (span.lo + span.hi) / 2), 1e-6);
+    // Pictures of different widths are not compared.
+    try testing.expectEqual(@as(?Span, null), changedSpan(&before, after[0..9]));
 }

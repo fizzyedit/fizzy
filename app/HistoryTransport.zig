@@ -611,9 +611,10 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
 }
 
 /// The strip `r` (physical), its ends where the line's are: one picture of the history, each stop
-/// a slice of it (`history_transport.stripColumns`). A stop takes the stretch round where its knob
-/// sits and shows that stretch of the document as it was then, so across the strip the document is
-/// read building up from left to right, and a slice is under the knob that goes to it. The strip
+/// a slice of it (`history_transport.stripColumns`), under the knob that goes to it. A stop shows
+/// its slice's width of the document as it was then, round where that step changed it
+/// (`history_transport.sliceAt`), so across the strip the steps read as the actions themselves; a
+/// step that changed nothing visible shows the stretch round where its knob sits. The strip
 /// frames the document's content, as a recorder's strip frames what changed: the part of the
 /// pictures round everything any of them holds (`HistoryFrames.Picture.content`), at the strip's
 /// shape (`history_transport.frameContent`), so a few words at the top of a wide pane fill it
@@ -660,7 +661,12 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
         const cover = rules.frameContent(content, ta, want, content_pad, content_closest);
         const fa = (cx0 - r.x) / r.w;
         const fb = (cx1 - r.x) / r.w;
-        const uv: dvui.Rect = .{ .x = cover.x + fa * cover.w, .y = cover.y, .w = (fb - fa) * cover.w, .h = cover.h };
+        // Where the step changed something, when it did (`HistoryFrames.Picture.change`): the
+        // strip reads as the steps themselves, each slice its own action.
+        const sw = (fb - fa) * cover.w;
+        // Only its own picture's change: a stop borrowing a neighbour's shows its stretch of it.
+        const change = if (frames.get(stopId(line, c.stop))) |_| pic.change else null;
+        const uv: dvui.Rect = .{ .x = rules.sliceAt(cover.x + fa * cover.w, sw, change), .y = cover.y, .w = sw, .h = cover.h };
         dvui.renderTexture(tex, .{ .r = col, .s = s }, .{ .uv = uv, .corners = corners.scale(1 / s, dvui.CornerRect), .colormod = dvui.Color.white.opacity(grown) }) catch {};
     }
     // The playhead, standing a little past the strip's top and bottom, with a dark edge so it reads

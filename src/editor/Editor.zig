@@ -3160,7 +3160,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     if (recorded) |tr| if (@intFromPtr(tr) != ds.frames_track or tr.steps.items.len != ds.frames_steps) {
         ds.frames_track = @intFromPtr(tr);
         ds.frames_steps = tr.steps.items.len;
-        if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| ds.frames.moved(if (line.at == 0) 0 else line.entries[line.at - 1].id);
+        if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| ds.frames.moved(if (line.at == 0) 0 else line.entries[line.at - 1].id, if (line.at == 0) null else if (line.at == 1) 0 else line.entries[line.at - 2].id);
     };
 
     // The commands run on it, as they run; none while a tape seeks, which replays them unseen.
