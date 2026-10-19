@@ -5961,13 +5961,14 @@ fn syncExecutableWatcher(editor: *Editor) void {
         return;
     }
     if (editor.executable_watch_failed) return;
+    // As the process started (`noteLaunch`): asked now, a replaced executable can go by another name.
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe = std.process.executablePath(dvui.io, &buf) catch |err| {
+    const exe = ExecutableWatcher.launchPath() orelse buf[0 .. std.process.executablePath(dvui.io, &buf) catch |err| {
         dvui.log.warn("restart: cannot find this executable ({t}); a rebuild will not restart fizzy", .{err});
         editor.executable_watch_failed = true;
         return;
-    };
-    editor.app.executable_watcher = ExecutableWatcher.init(editor.app.gpa, buf[0..exe]) catch |err| {
+    }];
+    editor.app.executable_watcher = ExecutableWatcher.init(editor.app.gpa, exe) catch |err| {
         dvui.log.warn("restart: cannot watch this executable ({t}); a rebuild will not restart fizzy", .{err});
         editor.executable_watch_failed = true;
         return;
@@ -5987,9 +5988,13 @@ fn syncExecutableWatcher(editor: *Editor) void {
 fn driveHandover(editor: *Editor) void {
     // The new instance's side: the lock, once the old instance has let go of it.
     if (restart.startedByHandover()) {
-        if (restart.pollReleased(dvui.io, editor.app.gpa)) {
-            @import("app").single_instance.acquireLock(editor.app.gpa, &.{}) catch |err| dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
-            fizzy.core.profile.phase(dvui.io, "handover lock");
+        if (restart.pollReleased(dvui.io)) {
+            const taken = @import("app").single_instance.tryAcquireLock(editor.app.gpa, &.{}) catch |err| blk: {
+                dvui.log.warn("restart: could not take the single-instance lock: {t}", .{err});
+                break :blk false;
+            };
+            restart.tookLock(dvui.io, editor.app.gpa, taken);
+            if (taken) fizzy.core.profile.phase(dvui.io, "handover lock");
         }
         return;
     }

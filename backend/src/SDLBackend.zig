@@ -389,6 +389,10 @@ pub var frame_ended_hook: ?*const fn (end_micros: ?u32) bool = null;
 /// before the first frame.
 pub var floating_os_windows: enum { asked, all, none } = .asked;
 
+/// A quiet run (`--quiet`, `FIZZY_QUIET=1`): never to take the person's focus. Set by the app
+/// before the window exists; nothing reads it yet (fizzyedit/plans#35 steps 2 and 3).
+pub var quiet: bool = false;
+
 /// The backend's health counters now (`Health`): frames, presents, swapchain resizes, the OS
 /// windows alive, what SDL logged, frame-time percentiles and each frame's GPU work. Kept current
 /// whether or not anyone reads them; reading them sorts the frame times and asks SDL (and AppKit)
@@ -502,7 +506,7 @@ const quit_signals = struct {
         for (signals, chained) |s, old| if (s == sig) {
             if (old) |o| o.handler.handler.?(sig);
         };
-        const byte: u8 = 0;
+        const byte: u8 = @intCast(@backingInt(sig));
         _ = std.c.write(wake_fd, @ptrCast(&byte), 1);
     }
 
@@ -515,6 +519,9 @@ const quit_signals = struct {
                 if (std.c._errno().* == @backingInt(posix.E.INTR)) continue;
                 return;
             }
+            // A quit no one asked for in the app says where it came from: a process that dies
+            // this way leaves no crash report.
+            log.info("quit signals: {s} received; quitting", .{if (buf[0] == @backingInt(posix.SIG.INT)) "SIGINT" else "SIGTERM"});
             const pool = if (comptime has_objc) objc_autoreleasePoolPush() else null;
             defer if (comptime has_objc) objc_autoreleasePoolPop(pool);
             var ue = std.mem.zeroes(c.SDL_Event);
