@@ -170,11 +170,11 @@ pub const DrawOptions = struct {
     /// The document has history to show: its pane has a grip. The app says, as it knows cheaply,
     /// so a pane asks its owner for nothing while the bar is hidden.
     history: bool = false,
-    /// How many steps of it the app has kept (fizzy: its track's), for the grip's fill; 0: none
-    /// shows, the grip is plain.
+    /// How many steps of it are kept, in the units `limit` counts (fizzy: its owner's history
+    /// entries), for the grip's fill; 0: none shows, the grip is plain.
     steps: usize = 0,
-    /// The most steps a history keeps (fizzy: `Settings.history_limit`): the grip is full at it,
-    /// where the oldest start to go. 0: no limit.
+    /// The most steps a history keeps (fizzy: `Settings.history_limit`, which each owner trims
+    /// its own history to): the grip is full at it, where the oldest start to go. 0: kept whole.
     limit: usize = 0,
     /// Where the pane's own bottom edge is (physical y), when its card reaches lower than `area`:
     /// the grip stands on it. Null: `area`'s.

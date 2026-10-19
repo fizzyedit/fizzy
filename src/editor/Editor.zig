@@ -2901,6 +2901,11 @@ const DocSurface = struct {
     frames_steps: usize = 0,
     /// The document has history (its grip shows): once it has, it keeps it (`drawDocSurface`).
     has_history: bool = false,
+    /// How many steps its owner keeps of its history (`historyLine`'s entries), for the grip's fill
+    /// against the history limit, which counts the same: asked again only when its track moves.
+    kept_steps: usize = 0,
+    /// The track's step count `kept_steps` was asked at; null: never asked.
+    kept_at: ?usize = null,
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2927,6 +2932,18 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
     }
     // After `land`, which marks a document opened as a preview as one.
     if (editor.app.file_table.mountList().len > mounts_before) editor.setDocumentPreview(id, false);
+}
+
+/// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
+/// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
+/// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+    const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
+    if (ds.kept_at != track_steps) {
+        ds.kept_at = track_steps;
+        ds.kept_steps = if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| line.entries.len else track_steps;
+    }
+    return ds.kept_steps;
 }
 
 fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
@@ -3193,7 +3210,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         }
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
             .history = ds.has_history,
-            .steps = if (recorded) |tr| tr.steps.items.len else 0,
+            .steps = keptSteps(ds, doc, recorded),
             .limit = editor.app.settings.history_limit,
             .edge = card_edge,
             .frames = if (recorded != null) &ds.frames else null,
