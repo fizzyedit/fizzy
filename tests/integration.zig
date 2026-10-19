@@ -8691,7 +8691,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const c = try newDoc(editor, host, b.id);
         try dvui.testing.writeText("a");
         try dvui.testing.settle(headlessFrame);
-        const bytes = (try c.owner.documentBytes(c, c.owner.documentPath(c), gpa)) orelse return error.TestUnexpectedResult;
+        const bytes = (try c.owner.saveBytes(c, c.owner.documentPath(c), gpa)) orelse return error.TestUnexpectedResult;
         gpa.free(bytes);
         try c.owner.documentWritten(c, c.owner.documentPath(c));
         try std.testing.expect(!c.owner.isDirty(c));
@@ -8702,6 +8702,61 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("a", try textOf(host, c));
         try std.testing.expect(!c.owner.isDirty(c));
 
+        // A checkpoint is no save (`Plugin.documentBytes`): with format on save on, it keeps the
+        // text as typed and leaves the document alone; the save itself formats.
+        const d = try newDoc(editor, host, c.id);
+        {
+            const Formatter = struct {
+                fn supports(_: *anyopaque, _: []const u8) bool {
+                    return true;
+                }
+                fn format(_: *anyopaque, _: []const u8, _: []const u8, _: []const u8) ?[]const u8 {
+                    return "formatted";
+                }
+                const vtable: sdk.LanguageSupport.VTable = .{ .supportsFormat = supports, .format = format };
+            };
+            try host.registerLanguageSupport(.{ .id = "test-format", .vtable = &Formatter.vtable, .owner = &md_zig_plugin });
+            defer _ = host.language_support.pop();
+            const text_settings = &@import("text").statePtr().settings;
+            text_settings.format_on_save.set(true);
+            defer text_settings.format_on_save.set(false);
+            try dvui.testing.writeText("as typed");
+            try dvui.testing.settle(headlessFrame);
+            {
+                var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+                defer kept.deinit();
+                const unsaved = for (kept.docs.items) |k| {
+                    if (std.mem.eql(u8, k.path, d.owner.documentPath(d))) break k.unsaved orelse return error.TestUnexpectedResult;
+                } else return error.TestUnexpectedResult;
+                try std.testing.expectEqualStrings("as typed", unsaved);
+            }
+            try std.testing.expectEqualStrings("as typed", try textOf(host, d));
+            const formatted = (try d.owner.saveBytes(d, d.owner.documentPath(d), gpa)) orelse return error.TestUnexpectedResult;
+            defer gpa.free(formatted);
+            try std.testing.expectEqualStrings("formatted", formatted);
+            try d.owner.documentWritten(d, d.owner.documentPath(d));
+            try dvui.testing.settle(headlessFrame);
+        }
+
+        // A checkpoint while a save's write is in flight leaves the save's edit as it was: the
+        // write lands, and the keystroke typed after its snapshot is still unsaved.
+        const e = try newDoc(editor, host, d.id);
+        try dvui.testing.writeText("a");
+        try dvui.testing.settle(headlessFrame);
+        const in_flight = (try e.owner.saveBytes(e, e.owner.documentPath(e), gpa)) orelse return error.TestUnexpectedResult;
+        defer gpa.free(in_flight);
+        try dvui.testing.writeText("b");
+        try dvui.testing.settle(headlessFrame);
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            kept.deinit();
+        }
+        try e.owner.documentWritten(e, e.owner.documentPath(e));
+        try std.testing.expectEqualStrings("a", in_flight);
+        try std.testing.expect(e.owner.isDirty(e));
+
+        try editor.rawCloseFileID(e.id);
+        try editor.rawCloseFileID(d.id);
         try editor.rawCloseFileID(c.id);
         try editor.rawCloseFileID(b.id);
         try editor.rawCloseFileID(a.id);
