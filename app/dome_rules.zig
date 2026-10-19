@@ -16,9 +16,7 @@ pub const dwell_ns: i128 = 900 * std.time.ns_per_ms;
 pub const leave_ns: i128 = 700 * std.time.ns_per_ms;
 /// How high the liquid reaches at its fullest: three quarters, room left to slosh.
 pub const fill_top: f32 = 0.75;
-/// How a dome fills with steps: `1 - e^(-steps / fill_steps)`, so some 1200 steps (an hour or so
-/// of editing) fill it most of the way, and the first few show as a sliver (`min_fill`).
-pub const fill_steps: f32 = 600;
+/// The least a dome with any steps shows: the first few are a sliver, not nothing.
 pub const min_fill: f32 = 0.08;
 /// How much of a dome shows at rest; in use (the pointer on it, a step, a slosh) all of it.
 pub const rest_presence: f32 = 0.4;
@@ -61,9 +59,13 @@ pub const Dwell = struct {
 };
 
 /// How full a dome is of a history of `steps`, 0 to 1 (its liquid at `fill_top` of that).
-pub fn stepsFill(steps: usize) f32 {
+/// How full a dome of `steps` is, of the most a history keeps (`limit`, the app's history limit):
+/// full is where its oldest steps start to go. A sliver at the least (`min_fill`); no limit, full.
+pub fn stepsFill(steps: usize, limit: usize) f32 {
     if (steps == 0) return 0;
-    return @max(min_fill, 1 - @exp(-@as(f32, @floatFromInt(steps)) / fill_steps));
+    if (limit == 0) return 1;
+    const share = @as(f32, @floatFromInt(steps)) / @as(f32, @floatFromInt(limit));
+    return std.math.clamp(share, min_fill, 1);
 }
 
 /// How much of a dome shows: quiet at rest, mostly see-through (`rest_presence`), and all of it
@@ -254,10 +256,12 @@ test "a dome is quiet at rest and comes up in use" {
 }
 
 test "a dome fills slowly with history, and with play as it plays" {
-    try testing.expectEqual(@as(f32, 0), stepsFill(0));
-    try testing.expectEqual(min_fill, stepsFill(1));
-    try testing.expect(stepsFill(1200) > 0.85);
-    try testing.expect(stepsFill(100_000) <= 1);
+    try testing.expectEqual(@as(f32, 0), stepsFill(0, 10_000));
+    try testing.expectEqual(min_fill, stepsFill(1, 10_000));
+    try testing.expectEqual(@as(f32, 0.5), stepsFill(5_000, 10_000));
+    try testing.expectEqual(@as(f32, 1), stepsFill(10_000, 10_000));
+    try testing.expectEqual(@as(f32, 1), stepsFill(100_000, 10_000));
+    try testing.expectEqual(@as(f32, 1), stepsFill(3, 0));
     try testing.expectEqual(@as(f32, 0.25), progressFill(0.25));
     try testing.expectEqual(@as(f32, 1), progressFill(1.5));
     try testing.expectEqual(@as(f32, 0.8), knockFor(1));

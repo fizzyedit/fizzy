@@ -1,7 +1,9 @@
-//! The guides view's one list: a row per demo (its title and length), and under it a row per
-//! chapter (its title and where it starts). A row plays from where it says; the demo playing is
-//! drawn as selected. The service refuses a demo over unsaved work or while a live tape drives,
-//! and tells the person why itself.
+//! The guides view's one tree, drawn as the app's other trees are (the file tree, settings): a
+//! branch per demo, with its title and length, and folded under it a row per chapter, with its
+//! title and where it starts. A chapter row plays the demo from there, the first chapter from the
+//! start; a demo with no chapters is a row of its own that plays it. The demo playing has its
+//! glyph lit. The service refuses a demo over unsaved work or while a live tape drives, and tells
+//! the person why itself.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
@@ -12,59 +14,100 @@ const Api = sdk.services.demos.Api;
 pub fn draw(service: ?*Api) void {
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical_bar = .auto_overlay }, .{ .expand = .both, .background = false });
     defer scroll.deinit();
-    var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .all(6) });
-    defer body.deinit();
 
-    const api = service orelse {
-        dvui.labelNoFmt(@src(), "This app plays no demos.", .{}, .{ .color_text = .{ .color = dim() } });
-        return;
-    };
+    const api = service orelse return note("This app plays no demos.");
     const demos = api.list();
-    if (demos.len == 0) {
-        dvui.labelNoFmt(@src(), "No guides yet.", .{}, .{ .color_text = .{ .color = dim() } });
-        return;
-    }
+    if (demos.len == 0) return note("No guides yet.");
+
+    var tree = core.widgets.TreeWidget.tree(@src(), .{ .enable_reordering = false }, .{ .expand = .horizontal, .background = false });
+    defer tree.deinit();
+
     const playing = api.current();
     for (demos, 0..) |d, i| {
         const current = if (playing) |p| std.mem.eql(u8, p, d.name) else false;
-        if (row(i * 1000, d.title, d.ms, current, .guide)) _ = api.play(d.name, 0);
-        for (d.chapters, 0..) |c, j| {
-            // The first chapter is where the guide starts: its row would say the same as the guide's.
-            if (c.at == 0) continue;
-            if (row(i * 1000 + j + 1, c.title, c.at, false, .chapter)) _ = api.play(d.name, c.at);
+        if (d.chapters.len == 0) {
+            if (row(tree, i, d.title, d.ms, current, .guide_leaf)) _ = api.play(d.name, 0);
+            continue;
+        }
+        const b = branch(tree, i, d, current);
+        defer b.deinit();
+        if (b.expander(@src(), .{ .indent = 14 }, .{ .expand = .horizontal })) {
+            for (d.chapters, 0..) |c, j| {
+                if (row(tree, i * 1000 + j + 1, c.title, c.at, false, .chapter)) _ = api.play(d.name, c.at);
+            }
         }
     }
 }
 
-const Kind = enum { guide, chapter };
+fn note(text: []const u8) void {
+    dvui.labelNoFmt(@src(), text, .{}, .{ .color_text = .{ .color = dim() }, .padding = .all(6) });
+}
 
-/// A row the width of the view, `title` on the left and `ms` as a time on the right: a guide's
-/// length, or where a chapter starts. True when clicked.
-fn row(id_extra: usize, title: []const u8, ms: u32, selected: bool, kind: Kind) bool {
+/// A demo with chapters: its caret folds them. The first demo starts open, so the view shows how
+/// it is used; after that each keeps what the person left it as.
+fn branch(tree: *core.widgets.TreeWidget, i: usize, d: Api.Info, current: bool) *core.widgets.TreeWidget.Branch {
     const theme = dvui.themeGet();
-    var button: dvui.ButtonWidget = undefined;
-    button.init(@src(), .{ .draw_focus = true }, .{
+    const b = tree.branch(@src(), .{ .expanded = i == 0, .draggable = false }, rowOptions(i));
+    core.widgets.treeCaret(@src(), b.expanded, theme.color(.control, .fill));
+    glyph(current);
+    label(d.title, d.ms, theme.color(.control, .text));
+    return b;
+}
+
+const Kind = enum { guide_leaf, chapter };
+
+/// A row with no branch under it: a chapter, or a demo with no chapters. True when clicked.
+fn row(tree: *core.widgets.TreeWidget, id_extra: usize, title: []const u8, ms: u32, current: bool, kind: Kind) bool {
+    const theme = dvui.themeGet();
+    const b = tree.branch(@src(), .{ .draggable = false }, rowOptions(id_extra));
+    defer b.deinit();
+    switch (kind) {
+        .guide_leaf => glyph(current),
+        .chapter => {
+            var slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
+            defer slot.deinit();
+            const color = theme.color(.control, .fill);
+            _ = core.icon.icon(@src(), "GuideChapter", dvui.entypo.controller_play, .{ .fill_color = .{ .color = color }, .stroke_color = .{ .color = color } }, core.widgets.treeRowIconOptions(.{}));
+        },
+    }
+    label(title, ms, if (kind == .chapter) dim() else theme.color(.control, .text));
+    return b.button.clicked();
+}
+
+fn rowOptions(id_extra: usize) dvui.Options {
+    const theme = dvui.themeGet();
+    return .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .margin = .{ .x = if (kind == .chapter) 14 else 0, .y = if (kind == .guide) 4 else 0 },
-        .padding = .{ .x = 6, .w = 6, .y = 3, .h = 3 },
-        .color_fill = .{ .color = if (selected) theme.color(.highlight, .fill) else core.widgets.hoverRestFill(theme.color(.window, .fill_hover)) },
-        .color_fill_hover = .{ .color = theme.color(.window, .fill_hover) },
-        .color_fill_press = .{ .color = theme.color(.window, .fill_press) },
-    });
-    defer button.deinit();
-    button.processEvents();
-    button.drawBackground();
+        .color_fill_hover = .{ .color = theme.color(.control, .fill).opacity(0.5) },
+        .color_fill_press = .{ .color = theme.color(.control, .fill_press) },
+        .color_fill = .{ .color = core.widgets.hoverRestFill(theme.color(.control, .fill)) },
+        .padding = .all(1),
+    };
+}
 
-    var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-    defer line.deinit();
-    const text_color: dvui.Color = if (selected) theme.color(.highlight, .text) else if (kind == .chapter) dim() else theme.color(.window, .text);
-    // The time first: a box gives its children room in order, so it always fits and a long title
-    // is the one cut short.
+/// The demo's glyph, lit while it plays.
+fn glyph(current: bool) void {
+    const theme = dvui.themeGet();
+    var slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
+    defer slot.deinit();
+    const color = if (current) theme.color(.highlight, .fill) else theme.color(.control, .fill);
+    _ = core.icon.icon(@src(), "GuideIcon", dvui.entypo.graduation_cap, .{ .fill_color = .{ .color = color }, .stroke_color = .{ .color = color } }, core.widgets.treeRowIconOptions(.{}));
+}
+
+/// `title` on the left, `ms` as m:ss on the right: a demo's length, or where a chapter starts. The
+/// time first: a box gives its children room in order, so it always fits and a long title is the
+/// one cut short.
+fn label(title: []const u8, ms: u32, color: dvui.Color) void {
     var buf: [16]u8 = undefined;
-    dvui.labelNoFmt(@src(), clock(&buf, ms), .{}, .{ .gravity_x = 1, .gravity_y = 0.5, .margin = .{ .x = 8 }, .color_text = .{ .color = if (selected) text_color else dim() } });
-    dvui.labelNoFmt(@src(), title, .{}, .{ .color_text = .{ .color = text_color }, .gravity_y = 0.5 });
-    return button.clicked();
+    dvui.labelNoFmt(@src(), clock(&buf, ms), .{}, .{ .gravity_x = 1, .gravity_y = 0.5, .margin = .{ .x = 8, .w = 4 }, .color_text = .{ .color = dim() } });
+    dvui.labelNoFmt(@src(), title, .{}, .{
+        .gravity_y = 0.5,
+        .expand = .horizontal,
+        .margin = .all(0),
+        .padding = .all(3),
+        .color_text = .{ .color = color },
+    });
 }
 
 /// `ms` as m:ss.
@@ -74,5 +117,5 @@ fn clock(buf: []u8, ms: u32) []const u8 {
 }
 
 fn dim() dvui.Color {
-    return dvui.themeGet().color(.window, .text).opacity(0.6);
+    return dvui.themeGet().color(.control, .text).opacity(0.6);
 }

@@ -258,6 +258,15 @@ pub const groups = [_]Group{
                 .keywords = "history kept disk space size cap limit forget clear delete privacy",
                 .draw = drawKeptHistory,
             },
+            .{
+                .label = "Undo steps per document",
+                .key = "history_limit",
+                .description = "The most steps one document's undo history keeps, in every " ++
+                    "editor. Going back and then editing keeps what was gone back over, so the " ++
+                    "history grows; past this the oldest steps go.",
+                .keywords = "history undo redo steps limit cap memory",
+                .draw = drawHistoryLimit,
+            },
         },
     },
     .{
@@ -696,6 +705,21 @@ fn drawFloatWindows() void {
 
 fn drawRecordHistory() void {
     drawToggle(&fizzy.editor().app.settings.record_history, "Record document history");
+}
+
+fn drawHistoryLimit() void {
+    const editor = fizzy.editor();
+    var steps: f32 = @floatFromInt(editor.app.settings.history_limit);
+    if (dvui.sliderEntry(@src(), "{d:0.0} steps", .{
+        .value = &steps,
+        .interval = 100,
+        .max = 100_000,
+        .min = 100,
+    }, .{ .expand = .horizontal })) {
+        editor.app.settings.history_limit = @intFromFloat(steps);
+        editor.markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
 }
 
 fn drawKeptHistory() void {

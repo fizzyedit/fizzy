@@ -156,6 +156,8 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
 /// no plugin directory to offer.
 fn savePanes(wb: *Workbench) void {
     wb.panes_dirty = false;
+    // A demo has the window: what it arranges is not the person's (`holdPanes`).
+    if (wb.held_panes != null) return;
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const path = panesPath(wb) orelse return;
     defer wb.allocator.free(path);
@@ -214,7 +216,11 @@ fn loadPanes(wb: *Workbench) void {
         loaded.deinit();
         return;
     }
+    adoptPanes(wb, loaded);
+}
 
+/// Make `loaded` the arrangement, every pane in it a workspace.
+fn adoptPanes(wb: *Workbench, loaded: Panes) void {
     wb.panes.deinit();
     wb.panes = loaded;
     for (wb.panes.nodes.items) |n| {
@@ -229,6 +235,41 @@ fn loadPanes(wb: *Workbench) void {
     if (wb.workspaces.count() > 0 and wb.paneLeaf(wb.open_workspace_grouping) == null) {
         wb.open_workspace_grouping = wb.workspaces.keys()[0];
     }
+}
+
+/// Keep the person's arrangement while a demo has the window, and save nothing until it is put
+/// back (`restorePanes`): the demo's splits are not theirs. A second hold keeps the first.
+pub fn holdPanes(wb: *Workbench) void {
+    if (wb.held_panes != null) return;
+    // A copy through a snapshot: a snapshot borrows the pane names from the live tree, which the
+    // demo's first cut replaces (`onePane`).
+    const snap = wb.panes.snapshot(wb.allocator) catch return;
+    defer snap.deinit(wb.allocator);
+    wb.held_panes = Panes.fromSnapshot(wb.allocator, snap) catch return;
+    wb.held_open = wb.open_workspace_grouping;
+}
+
+/// One pane, as a demo's keyframe declares the window: the open one, the others closing with
+/// their leaves (`rebuildWorkspaces`). Its documents are the keyframe's to open.
+pub fn onePane(wb: *Workbench) void {
+    var one = Panes.init(wb.allocator);
+    one.owns_panel_ids = true;
+    one.animated = true;
+    const root = one.allocNodeForRoot() catch return;
+    var buf: [32]u8 = undefined;
+    one.insertTabOwned(root, 0, Workspace.name(&buf, wb.open_workspace_grouping)) catch {
+        one.deinit();
+        return;
+    };
+    adoptPanes(wb, one);
+}
+
+/// The person's arrangement again (`holdPanes`), and saving with it.
+pub fn restorePanes(wb: *Workbench) void {
+    const held = wb.held_panes orelse return;
+    wb.held_panes = null;
+    adoptPanes(wb, held);
+    if (wb.workspaces.contains(wb.held_open)) wb.open_workspace_grouping = wb.held_open;
 }
 
 /// Delete the saved arrangement: the app has taken it over (`Workbench.places`).

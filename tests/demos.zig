@@ -185,6 +185,29 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
     try std.testing.expect(p.seq.now >= @as(f64, @floatFromInt(second)));
 
+    // A demo's panes are its own: a cut is one pane again, and the end gives back the person's.
+    {
+        const wb = &app.editor.workbench;
+        p.unload();
+        try dvui.testing.settle(headlessFrame);
+        const panes_before = wb.workspaces.count();
+        const split = try splitDemo();
+        defer gpa.free(split);
+        try app.editor.demo.playTape(split);
+        frames = 0;
+        while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+        try std.testing.expectEqual(@as(usize, 2), wb.workspaces.count());
+        p.seek(0);
+        frames = 0;
+        while ((p.state == .seeking or wb.workspaces.count() != 1) and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 1), wb.workspaces.count());
+        p.unload();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(panes_before, wb.workspaces.count());
+        try std.testing.expect(wb.held_panes == null);
+    }
+
     // A tape loaded some other way is not the one the service started.
     try app.editor.demo.play("markdown");
     try std.testing.expectEqual(@as(?[]const u8, null), api.current());
@@ -218,6 +241,23 @@ fn openZipFromBytes(editor: *fizzy.Editor, name: []const u8, files: []const stru
     const folder = editor.app.folder orelse return error.NotMounted;
     try std.testing.expect(std.mem.startsWith(u8, folder, "zip://"));
     return gpa.dupe(u8, folder);
+}
+
+/// A demo that drags its second tab onto the editor's right edge, opening a pane beside, encoded.
+fn splitDemo() ![]u8 {
+    const gpa = std.testing.allocator;
+    var s: automation.Script = .init(gpa, "split", "Split");
+    errdefer s.deinit();
+    try s.keyframe(.{
+        .root = "demo://split",
+        .files = &.{ .{ .path = "a.md", .text = "# A\n" }, .{ .path = "b.md", .text = "# B\n" } },
+        .open = &.{ "a.md", "b.md" },
+    });
+    try s.drag(.{ .tag = "workbench.tab:demo://split/b.md" }, .{ .tag = "region:Main", .dx = 132 }, .{});
+    s.pause(600);
+    var owned = try s.finish();
+    defer owned.deinit();
+    return automation.binary.encode(gpa, owned.tape, .{});
 }
 
 /// A tape a plugin might register, encoded: a demo opening on a keyframe of one file, in two

@@ -154,6 +154,12 @@ as `git+https`: the eight above rebased onto upstream `main` (`41f6703`), then:
 13. **The pointer and its cursor** (`48496b7`, `186a87f`, `1b29a16`): `Window` knows the pointer's
    kind and a lifted finger hovers nothing; `cursorSet` takes a priority, so a resize handle's
    cursor wins, and a floating window's edges ask at normal priority.
+14. **floatingWindow: the backend may draw a floating window's background** (`3d90fdd`):
+   `Backend.floatingWindowBackground(id, rect, corners)`, asked where `FloatingWindowWidget` would
+   fill its background (after its shadow and border, its subwindow current, before its content).
+   True: the backend drew it, and dvui draws no fill. Fizzy's backend draws a plain app's floating
+   windows in the window's material there: a frosted backdrop of what is under them needs the
+   backend's render targets at that point of the replay, which a theme fill cannot express.
 
 Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
 builds); `fizzy-sdk-0.2.16` → `4428108` (SDK 0.2.16 to 0.2.18); `fizzy-sdk-0.2.19` →
@@ -165,8 +171,8 @@ moves, so the second pin of one version takes a suffix, as the SDL fork's tags d
 `fizzy-sdk-0.2.30-3` → `cc60612` (never
 pinned); `fizzy-sdk-0.2.30-4` → `44010a3`; `fizzy-sdk-0.2.30-5` →
 `20e56f1` (never pinned on `main`); `fizzy-sdk-0.2.30-6` → `40e664c`, the last pin on Zig 0.16;
-`fizzy-sdk-0.2.30-7` → `1b29a16` on `zig-0.17`, what `sdk/build.zig.zon` pins now (SDK 0.2.30, the
-first on Zig 0.17).
+`fizzy-sdk-0.2.30-7` → `1b29a16` on `zig-0.17` (SDK 0.2.30, the first on Zig 0.17);
+`fizzy-sdk-0.2.30-8` → `3d90fdd` (item 14), what `sdk/build.zig.zon` pins now.
 
 Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
 (`backend/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`

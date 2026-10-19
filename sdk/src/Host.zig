@@ -499,6 +499,13 @@ pub fn contentOpacity(self: *Host) f32 {
     return if (self.fizzy_api) |a| a.contentOpacity() else 1.0;
 }
 
+/// The most steps a document's undo history keeps: fizzy's setting, the same in every editor, so a
+/// plugin that owns a history trims its own past it, oldest first. 0 keeps every one, as without
+/// fizzy (headless, a test).
+pub fn historyLimit(self: *Host) u32 {
+    return if (self.fizzy_api) |a| a.historyLimit() else 0;
+}
+
 /// Whether the OS window is currently maximized. False if fizzy isn't installed (headless/web).
 pub fn isMaximized(self: *Host) bool {
     return if (self.fizzy_api) |a| a.isMaximized() else false;
@@ -2090,6 +2097,9 @@ pub const Activity = struct {
     doc_id: u64,
     /// The command's title, as a person reads it: `Draw`, `Undo`. Owned by the host.
     title: []const u8,
+    /// The agent that made the edit, as an index into `authors`: what the bubble offers to go
+    /// back before ("Go back to before Claude's change"). Null for the person's own.
+    agent: ?u32 = null,
 };
 
 const activity_cap = 32;
@@ -2117,7 +2127,8 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
     }
     self.activity_seq += 1;
     self.activity_run = self.command_runs;
-    self.activity.append(self.allocator, .{ .seq = self.activity_seq, .doc_id = doc_id, .title = title }) catch {
+    const agent: ?u32 = if (who.kind == .agent) self.acting.author orelse self.input_author else null;
+    self.activity.append(self.allocator, .{ .seq = self.activity_seq, .doc_id = doc_id, .title = title, .agent = agent }) catch {
         self.allocator.free(title);
         return;
     };
