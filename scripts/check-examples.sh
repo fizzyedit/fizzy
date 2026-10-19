@@ -50,9 +50,14 @@ for repo in example-app example-plugin; do
     mkdir -p "$work/$repo"
     pack "$EXAMPLES_DIR/$repo" | tar -x -C "$work/$repo"
   else
-    # ZIG017: the examples' zig-0.17 branches until their 0.17 PRs land (just after fizzy's
-    # switch to 0.17), then `main` again in a PR of its own.
-    git clone --quiet --depth 1 --branch "${EXAMPLES_REF:-zig-0.17}" "https://github.com/fizzyedit/$repo" "$work/$repo"
+    # ZIG017: each example's zig-0.17 branch while it has one, `main` once its 0.17 PR has landed
+    # and the branch is gone (example-plugin's did first, and the clone of a branch no longer
+    # there failed every fizzy pull request). When both have landed, `main` alone, in a PR of
+    # its own.
+    url="https://github.com/fizzyedit/$repo"
+    ref="${EXAMPLES_REF:-zig-0.17}"
+    if ! git ls-remote --exit-code --heads "$url" "$ref" >/dev/null; then ref=main; fi
+    git clone --quiet --depth 1 --branch "$ref" "$url" "$work/$repo"
   fi
 done
 
