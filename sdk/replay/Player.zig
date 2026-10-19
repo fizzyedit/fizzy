@@ -569,9 +569,14 @@ fn keepSnapshot(self: *Player) void {
     if (self.seq.cursor == 0 or !self.seq.calm() or self.input.held.count() > 0) return;
     if (!self.stage.idle()) return;
     const cursor = self.seq.cursor;
+    const scene = t.keyframeBefore(self.seq.now);
     var at: usize = self.snapshots.items.len;
     for (self.snapshots.items, 0..) |s, i| {
         if (s.cursor == cursor) {
+            // The last moment before a keyframe shares the keyframe op's cursor: a rewind to the
+            // keyframe sits on it with the app not yet cut, still wherever the seek began. That
+            // snapshot is the scene before's, and nothing here is at its moment.
+            if (s.scene != scene) return;
             if (self.checked_cursor != cursor) {
                 self.checked_cursor = cursor;
                 self.verify(s);
@@ -583,7 +588,6 @@ fn keepSnapshot(self: *Player) void {
             break;
         }
     }
-    const scene = t.keyframeBefore(self.seq.now);
     if (!self.snapshotDue(t, scene, at)) return;
     const state = self.stage.capture() orelse return;
     self.snapshots.insert(self.gpa, at, .{

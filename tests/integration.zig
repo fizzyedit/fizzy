@@ -5322,6 +5322,9 @@ const DemoStage = struct {
     /// Off, the player seeks from keyframes alone.
     snapshots: bool = true,
     restores: usize = 0,
+    /// On, every snapshot is refused when put back, as fizzy's are for a scene whose documents
+    /// moved pane: the seek cuts to the keyframe instead.
+    refuse_restores: bool = false,
 
     /// The whole of this app's model.
     const Snap = struct { text: []u8, clicks: usize, commands: usize };
@@ -5392,6 +5395,7 @@ const DemoStage = struct {
     }
     fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
         const snap: *Snap = @ptrCast(@alignCast(raw));
+        if (from(ctx).refuse_restores) return false;
         from(ctx).restores += 1;
         demo_text.clearRetainingCapacity();
         demo_text.appendSlice(std.testing.allocator, snap.text) catch unreachable;
@@ -5630,6 +5634,40 @@ test "demo: a seek back goes to the nearest snapshot, not the keyframe, and land
     demo_player.seek(@floatFromInt(demo_player.duration()));
     try stepDemoUntil(.paused, 200);
     try std.testing.expectEqualStrings("> hello world", demo_text.items);
+    try std.testing.expectEqual(@as(u32, 0), demo_player.mismatches);
+}
+
+fn twoScenesTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "scenes", "Scenes");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://scenes", .files = &.{.{ .path = "field", .text = "> " }} });
+    try s.click(.{ .tag = "demo.field", .x = 0.9, .y = 0.5 }, .{});
+    try s.typeText("one", .{ .cps = 20 });
+    s.pause(4000);
+    try s.keyframe(.{ .root = "demo://scenes", .files = &.{.{ .path = "field", .text = "# " }} });
+    try s.chapter("Two");
+    try s.click(.{ .tag = "demo.field", .x = 0.9, .y = 0.5 }, .{});
+    try s.typeText("two", .{ .cps = 20 });
+    s.pause(1000);
+    return s.finish();
+}
+
+test "demo: a seek back to a keyframe does not check the scene before's last snapshot against it" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    // Two scenes, a pause before the second: the snapshot taken in that pause has the cursor of
+    // the second keyframe's op, which is where a rewind to that keyframe sits before it cuts.
+    demo_player.load(try twoScenesTape(), .{});
+    try stepDemoUntil(.ended, 600);
+    try std.testing.expectEqualStrings("# two", demo_text.items);
+
+    // From the end back into the second scene, every snapshot refused: a rewind to its keyframe.
+    demo_stage.refuse_restores = true;
+    const two: f64 = @floatFromInt(demo_player.tape().?.chapters[0].at);
+    demo_player.seek(two + 100);
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqualStrings("# ", demo_text.items);
     try std.testing.expectEqual(@as(u32, 0), demo_player.mismatches);
 }
 
