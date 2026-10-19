@@ -7,15 +7,14 @@ name = "fizzy-plugin-dl"
 main = "dl-worker.js"
 compatibility_date = "2026-09-01"
 
-# Served from `<name>.<subdomain>.workers.dev`, because the `fizzyed.it` zone is not on the
-# account this deploys from — `wrangler deploy` fails the route with "Could not find zone" and
-# uploads the script with nothing pointing at it. The hostname is Cloudflare's rather than ours,
-# which costs nothing here: the page checks the sha256 the registry published before it compiles
-# anything, so the proxy is never trusted either way.
-workers_dev = true
+# Served from the custom domain `dl.fizzyed.it`. The `fizzyed.it` zone's other records are
+# DNS-only (not proxied), so a route on `fizzyed.it/dl/*` would never fire; a Workers Custom
+# Domain makes Cloudflare create the proxied record for this one hostname. The page checks the
+# sha256 the registry published before it compiles anything, so the proxy is never trusted.
+routes = [
+  { pattern = "dl.fizzyed.it", custom_domain = true },
+]
 
-# When the zone does land on this account, delete `workers_dev` above, uncomment this, redeploy,
-# and put `https://fizzyed.it/dl/` back in `pluginProxy` (web/index.html). Nothing else moves.
-# routes = [
-#   { pattern = "fizzyed.it/dl/*", zone_name = "fizzyed.it" },
-# ]
+# Kept on for now: pages cached before the move still point at the workers.dev URL, and turning
+# it off would break their plugin installs. Set it to false (and redeploy) once they have aged out.
+workers_dev = true

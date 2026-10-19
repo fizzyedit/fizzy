@@ -100,8 +100,8 @@ function render() {
     if (dvuiApp) dvuiApp.requestRender();
 }
 
-const imageProxy = "https://fizzy-plugin-dl.foxnne.workers.dev/img/";
-const pluginProxy = "https://fizzy-plugin-dl.foxnne.workers.dev/dl/";
+const imageProxy = "https://dl.fizzyed.it/img/";
+const pluginProxy = "https://dl.fizzyed.it/dl/";
 let pluginFingerprint = "";
 
 // Pixels of an image, as an `<img>` would decode it: here when the worker can (PNG/JPEG), on the
