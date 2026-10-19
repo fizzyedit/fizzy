@@ -3163,11 +3163,21 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     ds.focus_inside = dvui.lastFocusedIdInFrameSince(focus_before) != null;
 
     // Its history moved (a step recorded, undone, redone, scrubbed to): a picture of it as it
-    // stands, a frame from now. The first frame it draws is one too.
+    // stands, a frame from now, for a step being made, or one with none yet; a step's picture is
+    // kept once taken (`HistoryFrames.changeOf`). The first frame it draws is a move too.
     if (recorded) |tr| if (@intFromPtr(tr) != ds.frames_track or tr.steps.items.len != ds.frames_steps) {
+        const new_track = ds.frames_track != 0 and @intFromPtr(tr) != ds.frames_track;
+        // The records since the last move; all of them where the track has fewer than then (it
+        // dropped steps taken before its base).
+        const since: []const @import("app").Tracks.Track.Rec = if (new_track) &.{} else tr.steps.items[if (tr.steps.items.len >= ds.frames_steps) ds.frames_steps else 0..];
         ds.frames_track = @intFromPtr(tr);
         ds.frames_steps = tr.steps.items.len;
-        if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| ds.frames.moved(if (line.at == 0) 0 else line.entries[line.at - 1].id, if (line.at == 0) null else if (line.at == 1) 0 else line.entries[line.at - 2].id);
+        if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| {
+            const top = if (line.at == 0) 0 else line.entries[line.at - 1].id;
+            // A new track for a document that had one: its history started over (`Tracks.step`).
+            const change: @import("app").HistoryFrames.Change = if (new_track) .restarted else @import("app").HistoryFrames.changeOf(since, top);
+            ds.frames.moved(editor.app.gpa, top, if (line.at == 0) null else if (line.at == 1) 0 else line.entries[line.at - 2].id, change);
+        }
     };
 
     // The commands run on it, as they run; none while a tape seeks, which replays them unseen.
