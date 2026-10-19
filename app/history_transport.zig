@@ -109,18 +109,25 @@ pub const Trim = struct {
         return .{ .from = 0, .to = n, .n = n };
     }
 
-    /// What a press at `x` takes hold of on a line from `x0` to `x1`: the nearer handle within
-    /// `slop` of the press, else the playhead. A handle stands on the outer edge of its stop's cell
-    /// (`cellStart`, `cellEnd`), where the window's bracket is drawn.
-    pub fn grab(self: Trim, x: f32, x0: f32, x1: f32, slop: f32) Grip {
+    /// What a press at `x` takes hold of on a line from `x0` to `x1`: a handle when the press is on
+    /// it, up to `out` outside the window's side (where the bracket's handle is drawn) or `in`
+    /// inside it, else the playhead. A handle stands on the outer edge of its stop's cell
+    /// (`cellStart`, `cellEnd`); a press on a picture inside the window, however near its side, is
+    /// a seek, as a recorder's trim takes a press on its strip.
+    pub fn grab(self: Trim, x: f32, x0: f32, x1: f32, out: f32, in: f32) Grip {
         const xf = cellStart(self.from, x0, x1, self.n);
         const xt = cellEnd(self.to, x0, x1, self.n);
-        const df = @abs(x - xf);
-        const dt = @abs(x - xt);
-        if (@min(df, dt) > slop) return .head;
-        // Both as close (a range of one step on a long line): the side the press is on.
-        if (df == dt) return if (x < xf) .from else .to;
-        return if (df < dt) .from else .to;
+        const on_from = x >= xf - out and x <= xf + in;
+        const on_to = x >= xt - in and x <= xt + out;
+        if (on_from and on_to) {
+            // Both (a range of one step on a long line): the side the press is on, else the nearer.
+            if (x < xf) return .from;
+            if (x > xt) return .to;
+            return if (x - xf <= xt - x) .from else .to;
+        }
+        if (on_from) return .from;
+        if (on_to) return .to;
+        return .head;
     }
 
     /// Move what `grip` holds to `stop`, kept inside the history and at least one step apart.
@@ -153,14 +160,18 @@ test "a trim keeps one step at least, its handles inside the history" {
     try std.testing.expectEqual(@as(usize, 3), t.drag(.head, 0));
 }
 
-test "a press takes the nearer handle, else the playhead" {
+test "a press takes a handle it is on, else the playhead" {
     const t: Trim = .{ .from = 2, .to = 8, .n = 10 };
-    // Stops 10 apart over 0..100.
-    try std.testing.expectEqual(Trim.Grip.from, t.grab(22, 0, 100, 5));
-    try std.testing.expectEqual(Trim.Grip.to, t.grab(79, 0, 100, 5));
-    try std.testing.expectEqual(Trim.Grip.head, t.grab(50, 0, 100, 5));
+    // 11 cells over 0..110: the window from 20 to 90.
+    try std.testing.expectEqual(Trim.Grip.from, t.grab(12, 0, 110, 10, 3));
+    try std.testing.expectEqual(Trim.Grip.from, t.grab(22, 0, 110, 10, 3));
+    try std.testing.expectEqual(Trim.Grip.to, t.grab(98, 0, 110, 10, 3));
+    try std.testing.expectEqual(Trim.Grip.head, t.grab(50, 0, 110, 10, 3));
+    // A picture just inside a side is a seek.
+    try std.testing.expectEqual(Trim.Grip.head, t.grab(25, 0, 110, 10, 3));
+    try std.testing.expectEqual(Trim.Grip.head, t.grab(85, 0, 110, 10, 3));
     const one: Trim = .{ .from = 5, .to = 6, .n = 1000 };
-    try std.testing.expectEqual(Trim.Grip.from, one.grab(0.4, 0, 100, 5));
+    try std.testing.expectEqual(Trim.Grip.from, one.grab(0.4, 0, 100, 5, 3));
 }
 
 /// The step a point `x` on a line from `x0` to `x1` means, in a history of `n` steps: how many

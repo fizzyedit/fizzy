@@ -337,7 +337,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
                     dvui.captureMouse(float.data(), e.num);
                     const stop = rules.stopAt(me.p.x, x0, x1, n);
                     if (self.window) |*win| {
-                        const grip = win.grab(me.p.x, x0, x1, trim_reach * s);
+                        const grip = win.grab(me.p.x, x0, x1, (handle_w + trim_reach) * s, trim_reach * s);
                         self.grip = grip;
                         go = dragWindow(win, grip, stop, min_from.?);
                     } else self.drag = stop;
@@ -473,9 +473,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
         // Round the strip of pictures alone, as a recorder's trim wraps its strip, not the bar.
         paintWindow(film.outsetAll(trim_inset * s + trim_edge * s), film_radius + trim_inset * s + trim_edge * s, x0, x1, win, s);
         // Its sides are what drag: the pointer over one, or dragging it, shows they move sideways.
-        const xf = rules.cellStart(win.from, x0, x1, win.n);
-        const xt = rules.cellEnd(win.to, x0, x1, win.n);
-        const over_side = film.outsetAll(8 * s).contains(pt) and (@abs(pt.x - xf) <= trim_reach * s or @abs(pt.x - xt) <= trim_reach * s);
+        const over_side = film.outsetAll(8 * s).contains(pt) and win.grab(pt.x, x0, x1, (handle_w + trim_reach) * s, trim_reach * s) != .head;
         if (over_side or self.grip != null) dvui.cursorSet(.arrow_w_e);
     }
 
@@ -514,19 +512,18 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
     // On the edges of the first and last stops' slices, so the bracket holds whole slices.
     const xf = rules.cellStart(win.from, x0, x1, win.n);
     const xt = rules.cellEnd(win.to, x0, x1, win.n);
-    const handle_w = 8 * s;
     const edge = trim_edge * s;
     const dim: dvui.Color = dvui.Color.black.opacity(0.6);
-    const left = xf - handle_w;
-    const right = xt + handle_w;
+    const left = xf - handle_w * s;
+    const right = xt + handle_w * s;
     if (left > r.x) (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = left - r.x, .h = r.h }).fill(.{ .tl = outer, .bl = outer, .tr = ri, .br = ri }, .{ .color = .{ .color = dim }, .fade = 1 });
     if (right < r.x + r.w) (dvui.Rect.Physical{ .x = right, .y = r.y, .w = r.x + r.w - right, .h = r.h }).fill(.{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = dim }, .fade = 1 });
     (dvui.Rect.Physical{ .x = xf, .y = r.y, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
     (dvui.Rect.Physical{ .x = xf, .y = r.y + r.h - edge, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
     for ([_]f32{ left, xt }, [_]bool{ true, false }) |x, is_left| {
-        const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y, .w = handle_w, .h = r.h };
+        const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y, .w = handle_w * s, .h = r.h };
         hr.fill(if (is_left) .{ .tl = outer, .bl = outer, .tr = ri, .br = ri } else .{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = yellow }, .fade = 1 });
-        const notch: dvui.Rect.Physical = .{ .x = x + handle_w / 2 - 0.75 * s, .y = r.y + r.h / 2 - 6 * s, .w = 1.5 * s, .h = 12 * s };
+        const notch: dvui.Rect.Physical = .{ .x = x + handle_w * s / 2 - 0.75 * s, .y = r.y + r.h / 2 - 6 * s, .w = 1.5 * s, .h = 12 * s };
         notch.fill(.round(0.75 * s), .{ .color = .{ .color = .black } });
     }
 }
@@ -539,15 +536,14 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
 /// pictures round everything any of them holds (`HistoryFrames.Picture.content`), at the strip's
 /// shape (`history_transport.frameContent`), so a few words at the top of a wide pane fill it
 /// rather than empty pane. A stop with no picture shows the nearest that has one; none at all,
-/// the stretch stays glass. The stop at `at` is lit and outlined; the rest a little dimmer.
+/// the stretch stays glass. Where the document is, `at`, a line across the strip says, as a
+/// recorder's playhead does, over the middle of its stop's slice where the knob below it is.
 fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
     const n = line.entries.len;
     var buf: [256]rules.Column = undefined;
     const columns = rules.stripColumns(n, r.x, r.x + r.w, 2 * s, &buf);
     const ink = dvui.themeGet().color(.window, .text);
-    var lit_x0: ?f32 = null;
-    var lit_x1: f32 = 0;
     // Round what the pictures shown hold, in fractions of a picture (they share the pane's shape).
     var boxes: [256]rules.Frac = undefined;
     var nb: usize = 0;
@@ -558,7 +554,11 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
     const content = rules.contentUnion(boxes[0..nb]);
     const want = r.w / r.h;
     for (columns, 0..) |c, i| {
-        const col: dvui.Rect.Physical = .{ .x = c.x0, .y = r.y, .w = c.x1 - c.x0, .h = r.h };
+        // On whole pixels, so neighbouring slices meet edge to edge: a fractional edge is half
+        // covered on both sides, and the glass shows through the join as a seam.
+        const cx0 = @round(c.x0);
+        const cx1 = @round(c.x1);
+        const col: dvui.Rect.Physical = .{ .x = cx0, .y = r.y, .w = cx1 - cx0, .h = r.h };
         // The strip's own corners on its two end columns, square between them.
         const end: dvui.Corner.Physical = .round(radius);
         const square: dvui.Corner.Physical = .{ .kind = .square };
@@ -568,11 +568,6 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
             .tr = if (i == columns.len - 1) end else square,
             .br = if (i == columns.len - 1) end else square,
         };
-        const lit = c.stop == at;
-        if (lit) {
-            if (lit_x0 == null) lit_x0 = c.x0;
-            lit_x1 = c.x1;
-        }
         const pic = nearestPicture(frames, line, c.stop) orelse {
             col.fill(corners, .{ .color = .{ .color = ink.opacity(0.06 * grown) } });
             continue;
@@ -581,16 +576,18 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
         // The part of the picture the strip frames, round the content; this column's stretch of it.
         const ta = @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(@max(1, tex.height)));
         const cover = rules.frameContent(content, ta, want, content_pad, content_closest);
-        const fa = (c.x0 - r.x) / r.w;
-        const fb = (c.x1 - r.x) / r.w;
+        const fa = (cx0 - r.x) / r.w;
+        const fb = (cx1 - r.x) / r.w;
         const uv: dvui.Rect = .{ .x = cover.x + fa * cover.w, .y = cover.y, .w = (fb - fa) * cover.w, .h = cover.h };
-        dvui.renderTexture(tex, .{ .r = col, .s = s }, .{ .uv = uv, .corners = corners.scale(1 / s, dvui.CornerRect), .colormod = dvui.Color.white.opacity(if (lit) grown else 0.7 * grown) }) catch {};
-        // A hairline between stops wide enough to tell apart.
-        if (i > 0 and columns[i - 1].stop != c.stop and col.w >= 6 * s) {
-            (dvui.Rect.Physical{ .x = c.x0 - 0.5 * s, .y = r.y, .w = 1 * s, .h = r.h }).fill(.{}, .{ .color = .{ .color = dvui.Color.black.opacity(0.35 * grown) } });
-        }
+        dvui.renderTexture(tex, .{ .r = col, .s = s }, .{ .uv = uv, .corners = corners.scale(1 / s, dvui.CornerRect), .colormod = dvui.Color.white.opacity(grown) }) catch {};
     }
-    if (lit_x0) |x0| (dvui.Rect.Physical{ .x = x0, .y = r.y, .w = lit_x1 - x0, .h = r.h }).stroke(.round(radius), .{ .thickness = 1.5 * s, .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
+    // The playhead, standing a little past the strip's top and bottom, with a dark edge so it reads
+    // over any picture.
+    const hx = rules.stopX(at, r.x, r.x + r.w, n);
+    const over = 3 * s;
+    const head: dvui.Rect.Physical = .{ .x = hx - 1 * s, .y = r.y - over, .w = 2 * s, .h = r.h + 2 * over };
+    head.outsetAll(0.75 * s).fill(.round(1.75 * s), .{ .color = .{ .color = dvui.Color.black.opacity(0.4 * grown) } });
+    head.fill(.round(1 * s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
 }
 
 /// How much room the strip leaves round the content, as a share of it each side; and how close it
@@ -598,14 +595,16 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
 const content_pad: f32 = 0.12;
 const content_closest: f32 = 0.15;
 
-/// The trim bracket's gap to what it holds and the width of its yellow, in points; the strip's own
-/// corner radius; and how near a side of the bracket the pointer grabs it (`Trim.grab`).
+/// The trim bracket's gap to what it holds, the width of its yellow and of its handles, in points;
+/// the strip's own corner radius; and how far past a handle, either way, a press still takes it
+/// (`Trim.grab`): inside that, a press on the strip is a seek.
 const trim_inset: f32 = 5;
 const trim_edge: f32 = 2.5;
+const handle_w: f32 = 8;
 const strip_radius: f32 = 4;
 /// The strip's inset from the top of the bar, in points: room for the trim's bracket round it.
 const strip_top: f32 = 12;
-const trim_reach: f32 = 12;
+const trim_reach: f32 = 3;
 
 /// The picture of stop `stop`, or of the nearest stop to it that has one.
 fn nearestPicture(frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, stop: usize) ?HistoryFrames.Picture {
