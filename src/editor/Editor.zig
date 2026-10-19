@@ -2455,6 +2455,7 @@ pub const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
     .contentOpacity = fizzyContentOpacity,
+    .historyLimit = fizzyHistoryLimit,
     .dialogWindow = fizzyDialogWindow,
     .frostPane = fizzyFrostPane,
     .isMaximized = fizzyIsMaximized,
@@ -2647,6 +2648,10 @@ fn fizzyFrostPane(_: *anyopaque, id: dvui.Id, rect: dvui.Rect.Physical, corners:
 
 /// The cards' opacity: the setting while windowed, opaque while the window covers the desktop,
 /// eased between them with the window's own opacity (`easeWindowOpacity`).
+fn fizzyHistoryLimit(ctx: *anyopaque) u32 {
+    return fizzyCtx(ctx).app.settings.history_limit;
+}
+
 fn fizzyContentOpacity(ctx: *anyopaque) f32 {
     const editor = fizzyCtx(ctx);
     return std.math.lerp(editor.app.settings.content_opacity, 1.0, std.math.clamp(editor.window_opacity_anim.cover, 0, 1));
@@ -3743,6 +3748,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.setThemeName(gpa, parsed.theme) catch |err|
         dvui.log.warn("settings watcher: failed to apply external theme change: {s}", .{@errorName(err)});
     editor.app.settings.hold_menu_duration_ms = parsed.hold_menu_duration_ms;
+    editor.app.settings.history_limit = parsed.history_limit;
     editor.app.settings.font_body_size = parsed.font_body_size;
     editor.app.settings.font_title_size = parsed.font_title_size;
     editor.app.settings.font_heading_size = parsed.font_heading_size;

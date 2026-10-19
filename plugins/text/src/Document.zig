@@ -595,7 +595,7 @@ pub fn recordCommitted(self: *Document, c: tc.History.Committed) void {
     if (c.back > 0) self.recordGoneBack(c.back);
     self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false, null);
     // Last: the steps reported above are read from the history.
-    if (!c.joined) self.history.trim(sdk.allocator(), @import("../plugin.zig").statePtr().settings.history_limit.get());
+    if (!c.joined) self.history.trim(sdk.allocator(), sdk.host().historyLimit());
 }
 
 /// The steps an edit after going back put on the line below it (`tc.History.keepGoneBack`): the
@@ -699,7 +699,7 @@ pub fn restoreHistory(self: *Document, history: sdk.Plugin.RestoredHistory) !voi
     try self.history.restore(gpa, built, history.applied);
     taken = true;
     if (was_clean) self.clean_op_id = self.history.topOpId();
-    self.history.trim(gpa, @import("../plugin.zig").statePtr().settings.history_limit.get());
+    self.history.trim(gpa, sdk.host().historyLimit());
 }
 
 /// Undo or redo until history step `step` is the last applied; 0 goes back before the first.
