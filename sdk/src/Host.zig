@@ -1937,14 +1937,15 @@ pub const StepAuthor = struct {
 };
 
 /// Act as `author` until `endAct` with what this returns: the steps recorded meanwhile are
-/// theirs. The outermost `act` starts a run; one inside it keeps it. Innermost wins. UI thread
-/// only.
+/// theirs. The outermost `act` starts a run; one inside it keeps it. Innermost wins. Inside an
+/// `actAgain` of the frame's input author (`acted` with nobody acting, run 0) it starts one too,
+/// rather than joining every such call into run 0. UI thread only.
 pub fn act(self: *Host, who: Author) Acting {
     const outer = self.acting;
     const index = self.intern(who);
     self.acting = .{
         .author = index,
-        .run = if (outer.author == null) run: {
+        .run = if (outer.author == null or outer.run == 0) run: {
             self.runs += 1;
             break :run self.runs;
         } else outer.run,
@@ -2207,8 +2208,10 @@ pub const PendingCall = struct {
     owner: *Plugin,
     /// Who waits. Kept only while someone does (a call nobody waits for keeps nothing).
     sink: CallSink,
-    /// Who called, as `acted` said when the command deferred: `finishCall` acts as them while the
-    /// waiter hears the answer, so a deferred command keeps its caller's author unasked.
+    /// Who called, as `acted` said when the command deferred: the waiter hears the answer as them
+    /// (`finishCall`, `failCallsOf`). Only the answer: what the command does in later frames before
+    /// it finishes is not run by the host, so a command that records steps then still stores
+    /// `acted()` when it defers and `actAgain`s it around that work.
     acting: Acting = .{},
 };
 
@@ -2474,7 +2477,11 @@ fn failCallsOf(self: *Host, plugin: *Plugin) void {
             continue;
         }
         _ = self.calls_pending.swapRemove(i);
-        if (p.sink.owner != plugin) p.sink.done(p.sink.ctx, .{ .failed = "the plugin that was answering went away" });
+        if (p.sink.owner != plugin) {
+            const outer = self.actAgain(p.acting);
+            defer self.endAct(outer);
+            p.sink.done(p.sink.ctx, .{ .failed = "the plugin that was answering went away" });
+        }
     }
 }
 
@@ -3935,10 +3942,14 @@ const LaterFixture = struct {
         failed: ?[]const u8 = null,
         host: ?*Host = null,
         who: ?Author = null,
+        run: u64 = 0,
         fn done(ctx: *anyopaque, outcome: CommandOutcome) void {
             const self: *Heard = @ptrCast(@alignCast(ctx));
             self.count += 1;
-            if (self.host) |h| self.who = h.author();
+            if (self.host) |h| {
+                self.who = h.author();
+                self.run = h.acting.run;
+            }
             switch (outcome) {
                 .ok => |r| self.result = r,
                 .failed => |m| self.failed = m,
@@ -4005,6 +4016,7 @@ test "a command answering later is finished as the author who called it" {
 
     var heard: LaterFixture.Heard = .{ .host = &host };
     const outer = host.act(.{ .kind = .agent, .plugin = "agent", .session = 7, .label = "Claude" });
+    const run = host.acting.run;
     _ = host.callCommandAwaiting("t.slow", "", results.allocator(), .{ .ctx = &heard, .done = LaterFixture.Heard.done });
     host.endAct(outer);
 
@@ -4014,7 +4026,23 @@ test "a command answering later is finished as the author who called it" {
     try testing.expectEqual(@as(u32, 1), heard.count);
     try testing.expectEqual(Author.Kind.agent, heard.who.?.kind);
     try testing.expectEqual(@as(u32, 7), heard.who.?.session);
+    try testing.expectEqual(run, heard.run);
     try testing.expectEqual(Author.Kind.unattributed, host.author().kind);
+}
+
+test "acting again as the frame's input author starts a run for an act inside it" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+    host.setInputAuthor(.{ .kind = .person, .label = "me" });
+    const stored = host.acted();
+    try testing.expectEqual(@as(u64, 0), stored.run);
+    host.setInputAuthor(null);
+
+    const outer = host.actAgain(stored);
+    const inner = host.act(.{ .kind = .agent, .plugin = "agent", .session = 1, .label = "Claude" });
+    try testing.expect(host.acting.run != 0);
+    host.endAct(inner);
+    host.endAct(outer);
 }
 
 const NestedFixture = struct {
