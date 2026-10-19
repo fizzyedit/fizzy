@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const Range = @import("Range.zig");
+const EditKind = @import("History.zig").EditKind;
 
 const Transaction = @This();
 
@@ -132,17 +133,19 @@ pub fn applyInverse(self: Transaction, gpa: Allocator, text: *std.ArrayList(u8))
 
 // -- as a step --------------------------------------------------------------------------------
 
-/// Edits as a recorded step's effect (`sdk.Step`, the text plugin's step format 1): what fizzy
+/// Edits as a recorded step's effect (`sdk.Step`, the text plugin's step format 2): what fizzy
 /// keeps of a change to replay it. Every count and offset LEB128, then the bytes:
 ///
 ///   edits · per edit: pos, removed length, removed, inserted length, inserted · selection after:
-///   anchor, head
+///   anchor, head · label: kind, back_to + 1 (0: none)
 ///
 /// `removed` is kept although a forward replay only needs its length: it is what makes a step
 /// checkable (`applyStepTo` refuses one whose removed bytes are not there), and what lets a step
 /// be reversed. `reverse` writes the edits' undo as a forward step: inverses, newest first, the
-/// selection the undo restores in `sel`.
-pub fn encodeStep(w: *std.Io.Writer, edits: []const Edit, sel: Range, reverse: bool) std.Io.Writer.Error!void {
+/// selection the undo restores in `sel`. The label is what the history entry was when the step
+/// was reported (`History.EditKind`, and the step a jump went back to), so a history put back from
+/// a track reads as it did (`Document.restoreHistory`). Format 1 was the same without it.
+pub fn encodeStep(w: *std.Io.Writer, edits: []const Edit, sel: Range, reverse: bool, label: Label) std.Io.Writer.Error!void {
     try w.writeUleb128(edits.len);
     for (0..edits.len) |i| {
         const e = edits[if (reverse) edits.len - 1 - i else i];
@@ -156,13 +159,24 @@ pub fn encodeStep(w: *std.Io.Writer, edits: []const Edit, sel: Range, reverse: b
     }
     try w.writeUleb128(sel.anchor);
     try w.writeUleb128(sel.head);
+    try w.writeUleb128(@backingInt(label.kind));
+    try w.writeUleb128(if (label.back_to) |b| b + 1 else 0);
 }
+
+/// What a step's history entry was, carried with its edits (`encodeStep`): how it reads on the
+/// history line.
+pub const Label = struct {
+    kind: EditKind = .other,
+    /// The step a jump went back to (`History` `back_to`), 0 before the first.
+    back_to: ?u64 = null,
+};
 
 /// A step `encodeStep` wrote, read back without copying: slices of `bytes`.
 pub const StepView = struct {
     bytes: []const u8,
     edits: usize,
     sel: Range,
+    label: Label,
 
     pub const Error = error{BadStep};
 
@@ -179,8 +193,10 @@ pub const StepView = struct {
         }
         const anchor = take(&r) catch return error.BadStep;
         const head = take(&r) catch return error.BadStep;
+        const kind = std.enums.fromInt(EditKind, take(&r) catch return error.BadStep) orelse return error.BadStep;
+        const back = r.takeLeb128(u64) catch return error.BadStep;
         if (r.seek != bytes.len) return error.BadStep;
-        return .{ .bytes = bytes, .edits = n, .sel = .init(anchor, head) };
+        return .{ .bytes = bytes, .edits = n, .sel = .init(anchor, head), .label = .{ .kind = kind, .back_to = if (back == 0) null else back - 1 } };
     }
 
     /// Each edit in order: `{ pos, removed, inserted }`, slices of the step's bytes.
@@ -390,7 +406,7 @@ test "random edit sequences round-trip" {
 fn stepBytes(gpa: Allocator, edits: []const Edit, sel: Range, reverse: bool) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    try encodeStep(&out.writer, edits, sel, reverse);
+    try encodeStep(&out.writer, edits, sel, reverse, .{ .kind = .deleting_left, .back_to = 0 });
     return out.toOwnedSlice();
 }
 

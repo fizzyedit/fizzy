@@ -118,6 +118,7 @@ pub const control = struct {
     pub const json = @import("control/json.zig");
     pub const screen_diff = @import("control/screen_diff.zig");
     pub const openapi = @import("control/openapi.zig");
+    pub const mcp = @import("control/mcp.zig");
     /// Where the server listens for an app whose config folder is `config_folder`
     /// (`Server.socketPath`), with this user's runtime folder for a config folder too deep.
     pub fn socketPath(gpa: @import("std").mem.Allocator, config_folder: []const u8) ![]u8 {

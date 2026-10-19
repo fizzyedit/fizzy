@@ -2227,6 +2227,8 @@ pub fn postInit(editor: *Editor) !void {
         .description = e[1],
         .payload = ".{ .path = \"/absolute/path\", .step = 41, .made_by = .{ .kind = .agent, .plugin = \"agent\", .session = 3, .label = \"Claude\" }, .by = .{ .kind = .person } }",
     }) catch {};
+    // The control server's (native only): an MCP client's session ended.
+    if (comptime builtin.target.cpu.arch != .wasm32) editor.app.host.declareEvent(@import("app").control.mcp.session_ended) catch {};
     editor.app.host.declareEvent(.{
         .name = "fizzy.files.reveal",
         .description = "A path was just made: show it as a new file, revealed and selected with its name open for editing.",
@@ -2901,6 +2903,11 @@ const DocSurface = struct {
     frames_steps: usize = 0,
     /// The document has history (its grip shows): once it has, it keeps it (`drawDocSurface`).
     has_history: bool = false,
+    /// How many steps its owner keeps of its history (`historyLine`'s entries), for the grip's fill
+    /// against the history limit, which counts the same: asked again only when its track moves.
+    kept_steps: usize = 0,
+    /// The track's step count `kept_steps` was asked at; null: never asked.
+    kept_at: ?usize = null,
 };
 
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
@@ -2927,6 +2934,18 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
     }
     // After `land`, which marks a document opened as a preview as one.
     if (editor.app.file_table.mountList().len > mounts_before) editor.setDocumentPreview(id, false);
+}
+
+/// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
+/// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
+/// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+    const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
+    if (ds.kept_at != track_steps) {
+        ds.kept_at = track_steps;
+        ds.kept_steps = if (doc.owner.historyLine(doc, dvui.currentWindow().arena())) |line| line.entries.len else track_steps;
+    }
+    return ds.kept_steps;
 }
 
 fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
@@ -3205,7 +3224,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         }
         const pressed = ds.transport.draw(doc, canvas.data().borderRectScale().r, @truncate(ds.doc_id), .{
             .history = ds.has_history,
-            .steps = if (recorded) |tr| tr.steps.items.len else 0,
+            .steps = keptSteps(ds, doc, recorded),
             .limit = editor.app.settings.history_limit,
             .edge = card_edge,
             .corner = card_corner,
@@ -3610,7 +3629,11 @@ fn activelyDrawing(editor: *const Editor) bool {
 /// overlaid). External hand-edits are reconciled live by `SettingsWatcher` (R11/R12) before the
 /// next autosave can clobber them. Caller-owned; free with `gpa`.
 fn composeSettingsText(editor: *Editor, gpa: std.mem.Allocator, settings_path: []const u8, overlay: []const SettingsPluginsZon.Entry) ![]u8 {
-    const fizzy_text = try Settings.serialize(&editor.app.settings, gpa);
+    // The person's own values where a demo has changed one: whatever writes the file while a
+    // tape plays (a plugin's flags, a file type's owner) writes theirs, not the tape's.
+    var own = editor.app.settings;
+    editor.demo.personsSettings(&own);
+    const fizzy_text = try Settings.serialize(&own, gpa);
     defer gpa.free(fizzy_text);
 
     const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
@@ -3812,6 +3835,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_glass = parsed.native_glass;
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
+    editor.app.settings.window_material = parsed.window_material;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
     editor.app.settings.kept_history_gb = parsed.kept_history_gb;
@@ -4579,11 +4603,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
 
         // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
-        // fullscreen transitions; at 1.0 the base is the opaque fill. On a window of Liquid Glass
-        // (macOS 26, `backend.windowGlass`) the base is the glass's at that opacity
-        // (`core.glass_look.window`), and the frame draws none of its own.
-        const glass_window = fizzy.backend.windowGlass(dvui.currentWindow(), windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size()));
-        const window_color = if (glass_window) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } else windowBase(editor.window_opacity_anim.value);
+        // fullscreen transitions; at 1.0 the base is the opaque fill. Where the backend makes the
+        // window of the window material (macOS: Liquid Glass, vibrancy or none, as a plain dvui
+        // app's), the base is its colour over that material at this opacity (`materialBase`): clear
+        // on Liquid Glass, whose colour is the glass's. Elsewhere fizzy's own (`windowBase`).
+        const window_color = fizzy.backend.windowMaterialBase(dvui.currentWindow(), dvui.themeGet().color(.content, .fill), editor.window_opacity_anim.value, windowGlassLook(editor.window_opacity_anim.value, dvui.windowRect().size())) orelse windowBase(editor.window_opacity_anim.value);
         // For glass that is the window's own material (`core.dialogs.windowBase`).
         fizzy.core.dialogs.publishWindowBase(window_color);
 
@@ -4812,6 +4836,17 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // out and removes itself when the timer expires.
     editor.drawSaveToasts();
 
+    // The app's OS windows over the main one: a demo's bar stays in the main window, under them,
+    // so a press on one is that window's, not the bar's (`replay.Player.Transport.covered`).
+    if (editor.demo.player.tape() != null) {
+        var buf: [8]Popout.Shown = undefined;
+        const tr = &editor.demo.player.transport;
+        tr.covered_n = 0;
+        for (Popout.windowsShown(&buf)) |w| {
+            tr.covered[tr.covered_n] = w.part;
+            tr.covered_n += 1;
+        }
+    }
     // Over everything the frame drew: a demo's pointer, keystrokes, captions and transport bar,
     // or a live tape's pointer.
     @import("app").automation.overlay.draw(&editor.demo.player);
