@@ -53,7 +53,10 @@ pub fn draw(id: dvui.Id, shape: Shape, scale: f32, opts: Options) void {
         // A round shape (a circle, a capsule) goes as a drop does, its edge bending along its own
         // outline: the drop zones' bright rim. Given its corners it would be a box's, flat to its
         // sides, and no rim shows round a circle.
-        const round = shape.radius(0) >= @min(shape.half[0], shape.half[1]) - 0.5 and shape.radius(1) >= @min(shape.half[0], shape.half[1]) - 0.5;
+        const full = @min(shape.half[0], shape.half[1]) - 0.5;
+        const round = for (0..4) |i| {
+            if (shape.radius(i) < full) break false;
+        } else true;
         dialogs.glassBubbles(id, &.{.{ .rect = r, .radii = if (round) null else shape.radii, .lens = opts.lens, .blur = opts.frost, .light = opts.light }}, scale, .{
             .shadow = 0,
             .edge = opts.place,
@@ -97,10 +100,12 @@ pub fn witness(shape: Shape) u64 {
 /// The orb's shadow: a soft radial falloff from its outline outward, `strength` at the outline and
 /// nothing `reach` points beyond it, drawn on what it lies over, under the glass, which covers what
 /// is inside. Round shapes take it round; a box takes its largest inscribed circle's, which a panel
-/// growing out of a round button keeps continuous.
-fn drawShadow(shape: Shape, scale: f32, strength: f32, reach_pt: f32) void {
+/// growing out of a round button keeps continuous — but which falls short of a long panel's sides:
+/// an orb that becomes a panel (the picker, `plans/LIQUID_EDGE_PLAN.md`) wants a box's shadow here.
+fn drawShadow(shape: Shape, scale: f32, strength_in: f32, reach_pt: f32) void {
     const r = @min(shape.half[0], shape.half[1]);
-    if (r <= 0) return;
+    if (r <= 0 or reach_pt <= 0) return;
+    const strength = std.math.clamp(strength_in, 0, 1);
     const reach = reach_pt * scale;
     const outer = r + reach;
     const at = r / outer;

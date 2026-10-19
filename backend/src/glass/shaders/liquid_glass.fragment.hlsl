@@ -95,7 +95,7 @@ float4 main(PSInput input) : SV_Target0
     float4 g3 = uData[3];
     float4 g4 = uData[4];
     float4 g5 = uData[5]; // dither; the lens: its band's share of the shape, its bend, its shade
-    float4 g6 = uData[6]; // opaque window; the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
+    float4 g6 = uData[6]; // opaque window (+1) and the light turned to the top right (+2); the lens: dispersion, a drop's diagonal light (0: a window's hairline), the band's cap
     // Apple's lens (`glass_look.inApp`): the picture pulled inward from a band near the rim,
     // magnified and, past a bend of 1, folded there. Off, the earlier glass: pulled from outside.
     bool inward = g5.y > 0.0;
@@ -216,7 +216,7 @@ float4 main(PSInput input) : SV_Target0
     // the tint, in place of what is behind it, as see-through as that colour is, so the desktop's
     // material shows through it as it does through the window round a card.
     bool window = g4.x > 1.5;
-    float under = window ? g3.a : (uData[6].x > 0.5 ? 1.0 : frost.a);
+    float under = window ? g3.a : (fmod(uData[6].x, 2.0) > 0.5 ? 1.0 : frost.a);
     frost = float4(frost.rgb / max(frost.a, 1e-4), 1.0);
     sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
@@ -243,10 +243,10 @@ float4 main(PSInput input) : SV_Target0
         c += frost * (1.0 - c.a);
     }
     // The way the edge faces, against a light from the top left.
-    // From the top left, or turned a quarter to the top right where the diagonal is given negative
-    // (`LiquidField.light_across`).
-    float2 lightDir = g6.z < 0.0 ? float2(0.70710678, -0.70710678) : float2(-0.70710678, -0.70710678);
-    float dg = abs(g6.z);
+    // From the top left, or turned a quarter to the top right (`LiquidField.light_across`, +2 on the
+    // opaque window's flag): on every look, a window's hairline as much as a drop's diagonal.
+    float2 lightDir = g6.x > 1.5 ? float2(0.70710678, -0.70710678) : float2(-0.70710678, -0.70710678);
+    float dg = g6.z;
     float facing = dot(outv, lightDir);
     float toward = max(facing, 0.0);
     float away = max(-facing, 0.0);
