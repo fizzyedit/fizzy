@@ -142,9 +142,8 @@ window or an offset from an anchor: the `move` or `trace` before a `press` or `r
 and nudges nothing (`dx`, `dy` stay 0), because a nudge is a coordinate that goes stale when the
 layout shifts. The offset is for a pointer that only points, or glides past. If no anchor names
 what you need, publish one (`core.anchor.mark`). `Tape.firstButtonOffAnchor` finds a button aimed
-any other way, and `tests/demos.zig` fails a bundled demo that has one. The soak tape still presses
-an offset from the sidebar's corner, where the arrange button was; fizzyedit/fizzy#634 aims it at
-the button's own anchor (`region.arrange:<name>`).
+any other way: `tests/demos.zig` fails a bundled demo that has one, and the soak tape's test fails
+it too.
 
 **The overlay is a function of time.** The synthetic pointer and its click ripple (none until the
 tape first uses it after a keyframe; it goes away while the tape types, as a desktop's does, and
@@ -180,6 +179,7 @@ user's motion settings, timed in demo time.
 | `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
 | `region:<name>` | a layout region (`Main`, `Panel`, …) |
 | `region.arrange:<name>` | a region's arrange button, where it grows in the region's corner (move to the corner first to bring it up) |
+| `drop:center`, `drop:left`, `:right`, `:top`, `:bottom`, `:remove` | a bubble of the drop a carried view would land in, while it is carried over a place: only once the drag is under way, so `drag` carries it there `via` the place first |
 | `float-header:<place>`, `float-close:<place>` | a float's header, to carry it by, and its close button: `float-close:Float 1` |
 | `picker:<view id>` | a view's card in a place's picker |
 | `picker.mode:one`, `picker.mode:many` | the picker's Single / Multiple |

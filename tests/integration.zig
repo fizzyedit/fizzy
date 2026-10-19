@@ -5966,10 +5966,8 @@ test "verdict: the soak tape is a demo, and its expectations read" {
     try std.testing.expectEqualStrings("soak", owned.tape.name);
     // It ends on a wait, so what closed last has time to close before the windows are counted.
     try std.testing.expect(owned.tape.ops[owned.tape.ops.len - 1].do == .wait);
-    // The one tape still pressing off an anchor (docs/AUTOMATION.md): an offset from the sidebar's
-    // corner, where the arrange button was. fizzyedit/fizzy#634 aims it at `region.arrange:Sidebar`
-    // and turns this into `== null`, as every bundled demo's is (`tests/demos.zig`).
-    try std.testing.expect(owned.tape.firstButtonOffAnchor() != null);
+    // Every button on an anchor (docs/AUTOMATION.md), as every bundled demo's is (`tests/demos.zig`).
+    try std.testing.expectEqual(@as(?usize, null), owned.tape.firstButtonOffAnchor());
 
     var expect_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer expect_arena.deinit();

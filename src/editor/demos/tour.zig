@@ -68,7 +68,7 @@ pub fn build(s: *Script) !void {
     try s.caption("Tabs go where you drag them.", .{ .near = try catalog.tab(s, "README.md") });
     try s.drag(.{ .tag = try catalog.tab(s, "README.md") }, .{ .tag = try catalog.tab(s, "src/main.zig"), .x = 0.2 }, .{});
     try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
-    try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = catalog.documents, .dx = 132 }, .{});
+    try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = "drop:right" }, .{ .via = .{ .tag = catalog.documents } });
     try s.waitFor(try catalog.editor(s, "src/main.zig"), .{});
     s.pause(900);
 

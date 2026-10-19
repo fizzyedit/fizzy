@@ -252,6 +252,9 @@ pub const DragOptions = struct {
     button: Tape.Button = .left,
     /// The carry from `from` to `to`; null is half again `Pace.move_ms`, a drag being slower.
     ms: ?u32 = null,
+    /// Carried through here first: for a `to` that shows only once the drag is under way (a
+    /// place's drop, `drop:<zone>`), which a drag that has not moved yet would wait on forever.
+    via: ?Tape.Target = null,
 };
 
 /// Press on one target, carry to another, release.
@@ -260,6 +263,7 @@ pub fn drag(self: *Script, from: Tape.Target, to: Tape.Target, opts: DragOptions
     self.t += self.pace.hover_ms;
     try self.push(.{ .at = self.t, .do = .{ .press = opts.button } });
     self.t += self.pace.hover_ms;
+    if (opts.via) |v| try self.moveTo(v, .{});
     try self.moveTo(to, .{ .ms = opts.ms orelse self.pace.move_ms * 3 / 2 });
     self.t += self.pace.hover_ms;
     try self.push(.{ .at = self.t, .do = .{ .release = opts.button } });
