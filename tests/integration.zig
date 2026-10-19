@@ -9238,13 +9238,20 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqual(la.entries.len, h.entries.len);
             try std.testing.expectEqual(la.at, h.applied);
             for (la.entries, h.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            // Typed, then inserted by command: not every entry reads alike.
+            try std.testing.expectEqualStrings("Typing", la.entries[0].title);
+            try std.testing.expectEqualStrings("Edit", la.entries[1].title);
             try tracks.replayInto(a.id, b, n);
             try dvui.testing.settle(headlessFrame);
             try std.testing.expectEqualStrings(want, try textOf(host, b));
             try std.testing.expect(b.owner.restoreHistory(b, h));
             const lb = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqual(la.at, lb.at);
-            for (la.entries, lb.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            // Each entry keeps its title, as the live line shows it.
+            for (la.entries, lb.entries) |x, y| {
+                try std.testing.expectEqual(x.id, y.id);
+                try std.testing.expectEqualStrings(x.title, y.title);
+            }
             try std.testing.expectEqualStrings(want, try textOf(host, b));
             try std.testing.expect(b.owner.historyGoTo(b, 0));
             try dvui.testing.settle(headlessFrame);
