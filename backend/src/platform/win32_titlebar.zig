@@ -554,11 +554,11 @@ pub fn viewportCarryChrome(hwnd: *anyopaque) void {
     const dwm = win32.graphics.dwm;
     const wm = win32.ui.windows_and_messaging;
     const corner: u32 = DWMWCP_DONOTROUND;
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_WINDOW_CORNER_PREFERENCE)), &corner, @sizeOf(u32));
     const none: u32 = dwm.DWMWA_COLOR_NONE;
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
     const no_transitions: u32 = 1;
-    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_TRANSITIONS_FORCEDISABLED), &no_transitions, @sizeOf(u32));
+    _ = dwm.DwmSetWindowAttribute(h, @fromBackingInt(@intCast(DWMWA_TRANSITIONS_FORCEDISABLED)), &no_transitions, @sizeOf(u32));
     _ = win32.ui.shell.SetWindowSubclass(h, carrySubclassProc, carry_subclass_id, 0);
     const style = wm.GetWindowLongPtrW(h, wm.GWL_STYLE);
     _ = wm.SetWindowLongPtrW(h, wm.GWL_STYLE, style & ~carry_ws_frame);
@@ -595,7 +595,7 @@ fn carrySubclassProc(
     if (uMsg == WM_NCHITTEST) return HTTRANSPARENT;
     if (uMsg == wm.WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     // SDL sets the window's style again as it likes: never a frame.
-    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @backingInt(wm.GWL_STYLE)) {
         const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
         ss.styleNew &= ~@as(u32, @intCast(carry_ws_frame));
     }
