@@ -1132,10 +1132,18 @@ fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
         const has = switch (material) {
             inline else => |t| @field(offered, @tagName(t)),
         };
-        if (has) return .{ .kind = material, .opacity = opacity };
+        // Glass keeps a little of the window's colour (`material_min_opacity`); a clear window may
+        // have none.
+        if (has) return .{ .kind = material, .opacity = if (material == .transparent) opacity else @max(opacity, material_min_opacity) };
     }
     return .{ .kind = .none, .opacity = opacity };
 }
+
+/// The least of the window's colour a material other than a clear window covers what is behind
+/// with: at none, glass is no glass — `glass_look`'s 0, a clear window — and the slider's last
+/// stretch went from a material to none of it (the user). Only `transparent` goes to 0. An app's
+/// own slider stops here (fizzy's does, at the same `glass_look.min_opacity`).
+pub const material_min_opacity: f32 = glass_look.min_opacity;
 
 /// How much of a light theme's window colour covers what is behind, beside a dark theme's at the
 /// same material opacity (`effectiveMaterial`).
@@ -1272,7 +1280,7 @@ pub fn floatingWindowBackground(self: *SDLBackend, id: dvui.Id, rect: dvui.Rect.
             return true;
         },
         .blur, .frost, .liquid => {
-            const opacity = @max(m.opacity, glass_look.min_opacity);
+            const opacity = m.opacity;
             const pane = glass_look.frosted(opacity);
             const liquid = m.kind == .liquid;
             // What the glass draws with, as fizzy publishes it each frame (`Editor`): the program
