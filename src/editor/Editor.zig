@@ -3126,7 +3126,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         if (claim_pill == null) if (ds.transport.place(area, now)) |bar| {
             area.h = @min(area.h, bar.y - area.y + 6 * dvui.windowRectScale().s);
         };
-        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |step| editor.redoFromFeed(doc, step);
+        if (ds.feed.draw(area, @truncate(ds.doc_id), now)) |pressed| editor.actFromFeed(doc, ds, pressed);
     }
 
     // A menu inside the document only when its owner names one. The context is created *after*
@@ -6644,7 +6644,7 @@ fn historyStep(editor: *Editor, action: HistoryAction) !void {
         try editor.runActiveDocCommand(name);
         var buf: [96]u8 = undefined;
         const said = std.fmt.bufPrint(&buf, "Undid {s}'s {s}", .{ authorName(t.by), t.step.title }) catch "Undid a change";
-        if (editor.doc_surfaces.get(doc.id)) |d| d.feed.pushAction(said, "Redo", t.step.id, dvui.frameTimeNS());
+        if (editor.doc_surfaces.get(doc.id)) |d| d.feed.pushAction(said, "Redo", .redo, t.step.id, dvui.frameTimeNS());
     }
 }
 
@@ -6652,6 +6652,97 @@ fn historyStep(editor: *Editor, action: HistoryAction) !void {
 pub fn redoFromFeed(editor: *Editor, doc: sdk.DocHandle, id: u64) void {
     const t = editor.stepToTake(doc, .redo, editor.app.host.arena()) catch return;
     if (t.step.id == id) _ = doc.owner.historyGoTo(doc, t.to);
+}
+
+/// Carry out a button pressed on `doc`'s activity bubbles (`ActivityFeed.Act`).
+fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @import("app").ActivityFeed.Pressed) void {
+    const now = dvui.frameTimeNS();
+    var buf: [96]u8 = undefined;
+    switch (pressed.act) {
+        .redo => editor.redoFromFeed(doc, pressed.tag),
+        .forward => {
+            // Only while that step is still on the line: an edit since may have moved on.
+            const line = doc.owner.historyLine(doc, editor.app.host.arena()) orelse return;
+            for (line.entries) |e| if (e.id == pressed.tag) {
+                _ = doc.owner.historyGoTo(doc, pressed.tag);
+                return;
+            };
+        },
+        .go_back, .go_back_anyway => {
+            const who: u32 = @intCast(pressed.tag);
+            const back = editor.backBefore(doc, who, editor.app.host.arena()) orelse {
+                const said = std.fmt.bufPrint(&buf, "Nothing of {s}'s left to go back before", .{authorName(editor.app.host.authors.items[who])}) catch "Nothing to go back before";
+                ds.feed.push(said, now);
+                return;
+            };
+            // The person's own steps since the run began go back with it: say so first.
+            if (pressed.act == .go_back and back.yours > 0) {
+                const said = std.fmt.bufPrint(&buf, "Also takes back {d} of your edits", .{back.yours}) catch "Also takes back your edits";
+                ds.feed.pushAction(said, "Go back", .go_back_anyway, pressed.tag, now);
+                return;
+            }
+            if (!doc.owner.historyGoTo(doc, back.to)) return;
+            const said = std.fmt.bufPrint(&buf, "Back before {s}'s change", .{authorName(back.by)}) catch "Went back";
+            ds.feed.pushAction(said, "Forward", .forward, back.from, now);
+        },
+    }
+}
+
+/// Where "Go back to before Claude's change" goes (`plans/SHARED_HISTORY_PLAN.md`, step 6).
+pub const BackBefore = struct {
+    /// The step to go to: the one before the run's first, 0 before the first step.
+    to: u64,
+    /// The step on top now, to come forward to again.
+    from: u64,
+    /// Who made the run.
+    by: sdk.Author,
+    /// Steps since the run began that are not the run's: they go back with it, and stay on the line.
+    others: usize,
+    /// Of those, the person's own.
+    yours: usize,
+};
+
+/// The last run by author `who` (an index into the host's authors; null for whoever's is last,
+/// the person aside) on `doc`'s line, while it is still applied: where going back to before it
+/// goes, and what else that takes back. Null when there is none, it is already undone, or the
+/// history started over since (`Host.step_authors` forgets then).
+pub fn backBefore(editor: *Editor, doc: sdk.DocHandle, who: ?u32, arena: std.mem.Allocator) ?BackBefore {
+    const host = &editor.app.host;
+    const steps = &(host.step_authors.getPtr(doc.id) orelse return null).steps;
+    const line = doc.owner.historyLine(doc, arena) orelse return null;
+    // The last run on the line by `who`: its steps are stored; the person's never are.
+    var run: u64 = 0;
+    var author: u32 = 0;
+    var i = line.entries.len;
+    while (i > 0) {
+        i -= 1;
+        const made = steps.get(line.entries[i].id) orelse continue;
+        if (made.run == 0) continue;
+        if (who) |w| if (made.author != w) continue;
+        run = made.run;
+        author = made.author;
+        break;
+    }
+    if (run == 0) return null;
+    const first = for (line.entries, 0..) |e, k| {
+        if ((steps.get(e.id) orelse continue).run == run) break k;
+    } else return null;
+    if (first >= line.at) return null;
+    var others: usize = 0;
+    var yours: usize = 0;
+    for (line.entries[first..line.at]) |e| {
+        const made = steps.get(e.id);
+        if (made != null and made.?.run == run) continue;
+        others += 1;
+        if (made == null) yours += 1;
+    }
+    return .{
+        .to = if (first == 0) 0 else line.entries[first - 1].id,
+        .from = if (line.at == 0) 0 else line.entries[line.at - 1].id,
+        .by = host.authors.items[author],
+        .others = others,
+        .yours = yours,
+    };
 }
 
 pub const HistoryAction = enum { undo, redo };

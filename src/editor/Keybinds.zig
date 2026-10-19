@@ -159,6 +159,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.close", .title = "Close", .bind = null, .run = cmdClose, .isEnabled = anyDocOpen, .params = ClosePath.params, .runWith = ClosePath.bind(cmdClosePath), .icon = icons.tvg.lucide.x },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll, .icon = icons.tvg.lucide.@"save-all" },
     .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdUndoWith), .icon = icons.tvg.lucide.undo },
+    .{ .id = "fizzy.goBackBefore", .title = "Go Back to Before the Last Agent's Change", .bind = null, .run = cmdGoBackBefore, .isEnabled = anyDocOpen, .params = GoBackBefore.params, .runWith = GoBackBefore.bind(cmdGoBackBeforeWith), .icon = icons.tvg.lucide.history },
     .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = anyDocOpen, .params = HistoryStep.params, .runWith = HistoryStep.bind(cmdRedoWith), .icon = icons.tvg.lucide.redo },
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
@@ -456,6 +457,33 @@ const HistoryStep = sdk.Command.Params(struct {
 /// the active document's own (`menu_model.canUndo`). An enabled check that sees the call's target
 /// is the control server's to decide (`plans/CONTROL_SERVER_PLAN.md`, "Commands that take a
 /// document").
+const GoBackBefore = sdk.Command.Params(struct {
+    path: sdk.Command.Arg([]const u8, .{ .description = "The open document, by its path. Empty: the active one." }) = .init(""),
+});
+
+fn cmdGoBackBefore(state: *anyopaque) anyerror!void {
+    const editor = editorFromState(state);
+    const doc = editor.activeDoc() orelse return;
+    const back = editor.backBefore(doc, null, editor.app.host.arena()) orelse return;
+    _ = doc.owner.historyGoTo(doc, back.to);
+}
+
+/// Go back to just before the last run an agent made on a document (one call of its, all its steps):
+/// "no, not like that". Its steps, and any of the person's since, stay on the line, so going
+/// forward brings them back (`plans/SHARED_HISTORY_PLAN.md`, step 6). Answers where it went, whose
+/// change it was, and how many steps that are not the run's went back with it.
+fn cmdGoBackBeforeWith(state: *anyopaque, args: GoBackBefore.Args, call: *sdk.Command.Call) anyerror!void {
+    const editor = editorFromState(state);
+    const doc = if (args.path.len == 0)
+        editor.activeDoc() orelse return call.fail("no document is active", .{})
+    else
+        editor.docFromPath(args.path) orelse return call.fail("no open document at {s}", .{args.path});
+    const back = editor.backBefore(doc, null, call.arena) orelse
+        return call.fail("nothing an agent did on {s} is left to go back before", .{doc.owner.documentPath(doc)});
+    if (doc.owner.historyGoToWhy(doc, back.to)) |why| return call.fail("{s} could not go back: {s}", .{ doc.owner.id, why });
+    try call.returns(.{ .to = back.to, .by = Editor.authorName(back.by), .also_taken_back = back.others });
+}
+
 fn cmdUndoWith(state: *anyopaque, args: HistoryStep.Args, call: *sdk.Command.Call) anyerror!void {
     try historyStepWith(editorFromState(state), args, call, .undo);
 }

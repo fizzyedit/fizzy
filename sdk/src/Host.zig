@@ -2090,6 +2090,9 @@ pub const Activity = struct {
     doc_id: u64,
     /// The command's title, as a person reads it: `Draw`, `Undo`. Owned by the host.
     title: []const u8,
+    /// The agent that made the edit, as an index into `authors`: what the bubble offers to go
+    /// back before ("Go back to before Claude's change"). Null for the person's own.
+    agent: ?u32 = null,
 };
 
 const activity_cap = 32;
@@ -2117,7 +2120,8 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
     }
     self.activity_seq += 1;
     self.activity_run = self.command_runs;
-    self.activity.append(self.allocator, .{ .seq = self.activity_seq, .doc_id = doc_id, .title = title }) catch {
+    const agent: ?u32 = if (who.kind == .agent) self.acting.author orelse self.input_author else null;
+    self.activity.append(self.allocator, .{ .seq = self.activity_seq, .doc_id = doc_id, .title = title, .agent = agent }) catch {
         self.allocator.free(title);
         return;
     };

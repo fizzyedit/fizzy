@@ -8717,6 +8717,69 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqualStrings(before, (try read(host, "")).text);
         }
 
+        // "Go back to before Claude's change": to just before the first step of Claude's last
+        // call, saying first when the person's steps are mixed in, and losing nothing.
+        {
+            const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
+            const claude: sdk.Author = .{ .kind = .agent, .plugin = "test", .session = 3, .label = "Claude" };
+            const before = try gpa.dupe(u8, (try read(host, "")).text);
+            defer gpa.free(before);
+            const writeAs = struct {
+                fn f(h: *sdk.Host, who: sdk.Author, path: []const u8, body: []const u8) !void {
+                    const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ path, body });
+                    const outer = h.act(who);
+                    defer h.endAct(outer);
+                    try std.testing.expect(h.callCommand("text.write", args, h.arena()) == .ok);
+                }
+            }.f;
+            try writeAs(host, .person, main_zig, "// mine\\n");
+            // One call of Claude's, two steps.
+            {
+                const outer = host.act(claude);
+                defer host.endAct(outer);
+                for ([_][]const u8{ "// claude one\\n", "// claude two\\n" }) |body| {
+                    const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ main_zig, body });
+                    try std.testing.expect(host.callCommand("text.write", args, host.arena()) == .ok);
+                }
+            }
+            // Its activity says whose, and its bubble offers to go back.
+            try std.testing.expect(host.activity.getLast().agent != null);
+            var feed: @import("app").ActivityFeed = .{ .seen = host.activity_seq - 1 };
+            feed.take(host, front.id, 0);
+            try std.testing.expectEqual(@as(usize, 1), feed.len);
+            const offered = feed.items[0].action orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@import("app").ActivityFeed.Act.go_back, offered.act);
+
+            const back = editor.backBefore(front, null, host.arena()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("Claude", back.by.label);
+            try std.testing.expectEqual(@as(usize, 0), back.yours);
+            // The person writes after Claude's call: going back would take that too, and says so.
+            try writeAs(host, .person, main_zig, "// mine again\\n");
+            const mixed = editor.backBefore(front, @intCast(offered.tag), host.arena()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), mixed.yours);
+            try std.testing.expectEqual(back.to, mixed.to);
+
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\" }}", .{main_zig});
+            const went = host.callCommand("fizzy.goBackBefore", args, host.arena());
+            try std.testing.expect(went == .ok);
+            try std.testing.expect(std.mem.indexOf(u8, went.ok.?, ".also_taken_back = 1") != null);
+            try std.testing.expectEqualStrings("// mine\n", (try read(host, "")).text);
+            // Nothing lost: Claude's call and the person's edit are still on the line ahead.
+            try std.testing.expect(front.owner.historyGoTo(front, mixed.from));
+            try std.testing.expectEqualStrings("// mine again\n", (try read(host, "")).text);
+            // Undone, a run is not offered.
+            try std.testing.expect(front.owner.historyGoTo(front, back.to));
+            try std.testing.expect(editor.backBefore(front, @intCast(offered.tag), host.arena()) == null);
+
+            // Back to the text as it was, for what follows.
+            const line = front.owner.historyLine(front, host.arena()) orelse return error.TestUnexpectedResult;
+            const first_mine = for (line.entries, 0..) |e, k| {
+                if (e.id == back.to) break k;
+            } else return error.TestUnexpectedResult;
+            try std.testing.expect(front.owner.historyGoTo(front, if (first_mine == 0) 0 else line.entries[first_mine - 1].id));
+            try std.testing.expectEqualStrings(before, (try read(host, "")).text);
+        }
+
         // Save and Close, the unsaved-changes dialog's: the same write Save makes, then the tab
         // closes once it lands.
         try std.testing.expect(doc.owner.isDirty(doc));
