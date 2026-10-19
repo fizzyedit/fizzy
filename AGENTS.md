@@ -39,6 +39,7 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 - **`markdown`** — `.md` preview utility plugin.
 - **`archive`** — opens a `.zip` as a mounted folder (the web's "open a vault" path, too).
 - **`devtools`** — the dashboard: where the app's time goes, from `core.profile`, for a person and an agent alike.
+- **`guides`** — every demo the app can play, on the rail: fizzy's tour and each plugin's own, by chapter, through the `demos` service.
 - `shared` — build helpers used across plugins' `static/integration.zig` (not a plugin itself).
 
 **Pixi (pixel-art editor) and Drive (Google Drive as a mount) live outside this repo** as third-party-style plugins ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), [`fizzyedit/drive`](https://github.com/fizzyedit/drive)) — they ship and update purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. **Trust `ls plugins/` and `jj log` over any doc's plugin list.**

@@ -9017,7 +9017,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const c = try newDoc(editor, host, b.id);
         try dvui.testing.writeText("a");
         try dvui.testing.settle(headlessFrame);
-        const bytes = (try c.owner.documentBytes(c, c.owner.documentPath(c), gpa)) orelse return error.TestUnexpectedResult;
+        const bytes = (try c.owner.saveBytes(c, c.owner.documentPath(c), gpa)) orelse return error.TestUnexpectedResult;
         gpa.free(bytes);
         try c.owner.documentWritten(c, c.owner.documentPath(c));
         try std.testing.expect(!c.owner.isDirty(c));
@@ -9028,6 +9028,61 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("a", try textOf(host, c));
         try std.testing.expect(!c.owner.isDirty(c));
 
+        // A checkpoint is no save (`Plugin.documentBytes`): with format on save on, it keeps the
+        // text as typed and leaves the document alone; the save itself formats.
+        const d = try newDoc(editor, host, c.id);
+        {
+            const Formatter = struct {
+                fn supports(_: *anyopaque, _: []const u8) bool {
+                    return true;
+                }
+                fn format(_: *anyopaque, _: []const u8, _: []const u8, _: []const u8) ?[]const u8 {
+                    return "formatted";
+                }
+                const vtable: sdk.LanguageSupport.VTable = .{ .supportsFormat = supports, .format = format };
+            };
+            try host.registerLanguageSupport(.{ .id = "test-format", .vtable = &Formatter.vtable, .owner = &md_zig_plugin });
+            defer _ = host.language_support.pop();
+            const text_settings = &@import("text").statePtr().settings;
+            text_settings.format_on_save.set(true);
+            defer text_settings.format_on_save.set(false);
+            try dvui.testing.writeText("as typed");
+            try dvui.testing.settle(headlessFrame);
+            {
+                var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+                defer kept.deinit();
+                const unsaved = for (kept.docs.items) |k| {
+                    if (std.mem.eql(u8, k.path, d.owner.documentPath(d))) break k.unsaved orelse return error.TestUnexpectedResult;
+                } else return error.TestUnexpectedResult;
+                try std.testing.expectEqualStrings("as typed", unsaved);
+            }
+            try std.testing.expectEqualStrings("as typed", try textOf(host, d));
+            const formatted = (try d.owner.saveBytes(d, d.owner.documentPath(d), gpa)) orelse return error.TestUnexpectedResult;
+            defer gpa.free(formatted);
+            try std.testing.expectEqualStrings("formatted", formatted);
+            try d.owner.documentWritten(d, d.owner.documentPath(d));
+            try dvui.testing.settle(headlessFrame);
+        }
+
+        // A checkpoint while a save's write is in flight leaves the save's edit as it was: the
+        // write lands, and the keystroke typed after its snapshot is still unsaved.
+        const e = try newDoc(editor, host, d.id);
+        try dvui.testing.writeText("a");
+        try dvui.testing.settle(headlessFrame);
+        const in_flight = (try e.owner.saveBytes(e, e.owner.documentPath(e), gpa)) orelse return error.TestUnexpectedResult;
+        defer gpa.free(in_flight);
+        try dvui.testing.writeText("b");
+        try dvui.testing.settle(headlessFrame);
+        {
+            var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+            kept.deinit();
+        }
+        try e.owner.documentWritten(e, e.owner.documentPath(e));
+        try std.testing.expectEqualStrings("a", in_flight);
+        try std.testing.expect(e.owner.isDirty(e));
+
+        try editor.rawCloseFileID(e.id);
+        try editor.rawCloseFileID(d.id);
         try editor.rawCloseFileID(c.id);
         try editor.rawCloseFileID(b.id);
         try editor.rawCloseFileID(a.id);
@@ -10216,6 +10271,64 @@ test "settings watcher: the app's state folders come and go under it without an 
         loaded.deinit();
         try expectEmptyFolder(session);
     }
+}
+
+// The watcher's callback runs on nightwatch's own thread, and calls through a pointer to the
+// watcher. So `stop` must not return while a callback is still running: the watcher is freed (or,
+// in a test, its stack frame reused) straight after. On macOS that thread is FSEvents' dispatch
+// queue, and stopping the stream does not wait for a callback already on it. Under load, the one
+// the test above leaves running reached the next test's frame and aborted it.
+test "settings watcher: stop waits for a callback already running" {
+    if (comptime !SettingsWatcher.have_impl) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const config = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+
+    var w = try SettingsWatcher.init(gpa, config);
+    const Handler = @TypeOf(w.impl.handler);
+    const change_params = @typeInfo(@typeInfo(@FieldType(Handler.VTable, "change")).pointer.child).@"fn".param_types;
+    const EventType = change_params[2].?;
+    const ObjectType = change_params[3].?;
+    // The first callback holds on long enough for `stop` to be called while it runs.
+    const Slow = struct {
+        var entered: std.atomic.Value(bool) = .init(false);
+        var stopped: std.atomic.Value(bool) = .init(false);
+        var left: std.atomic.Value(bool) = .init(false);
+        var outlived_stop: std.atomic.Value(bool) = .init(false);
+
+        fn change(_: *Handler, _: []const u8, _: EventType, _: ObjectType) error{HandlerFailed}!void {
+            if (entered.swap(true, .acq_rel)) return;
+            std.testing.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            outlived_stop.store(stopped.load(.acquire), .release);
+            left.store(true, .release);
+        }
+
+        fn rename(h: *Handler, _: []const u8, dst: []const u8, o: ObjectType) error{HandlerFailed}!void {
+            return change(h, dst, .modified, o);
+        }
+    };
+    const vtable: Handler.VTable = .{ .change = Slow.change, .rename = Slow.rename };
+    w.impl.handler = .{ .vtable = &vtable };
+    try w.start();
+
+    try tmp.dir.writeFile(dvui.io, .{ .sub_path = "settings.zon", .data = ".{}" });
+    for (0..5000) |_| {
+        if (Slow.entered.load(.acquire)) break;
+        try std.testing.io.sleep(.fromMilliseconds(1), .awake);
+    } else return error.TestUnexpectedResult;
+    w.stop();
+    Slow.stopped.store(true, .release);
+    for (0..2000) |_| {
+        if (Slow.left.load(.acquire)) break;
+        try std.testing.io.sleep(.fromMilliseconds(1), .awake);
+    }
+    try std.testing.expect(Slow.left.load(.acquire));
+    try std.testing.expect(!Slow.outlived_stop.load(.acquire));
 }
 
 // ── The automation service ──────────────────────────────────────────────────────────────────────

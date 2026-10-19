@@ -747,7 +747,8 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         defer dvui.clipSet(prev_clip);
         const prev_alpha = dvui.alpha(dome.glassAlpha(presence, p));
         defer dvui.alphaSet(prev_alpha);
-        core.dialogs.glassBubbles(fw.data().id, bubbles[0..count], s, .{ .merge = dome.merge(p, bar_merge), .shadow = 1 });
+        // No shadow ring, as the history bar has none: each bubble's own lay dark across the necks.
+        core.dialogs.glassBubbles(fw.data().id, bubbles[0..count], s, .{ .merge = dome.merge(p, bar_merge), .shadow = 0 });
     }
 
     const ink = theme().color(.content, .text);

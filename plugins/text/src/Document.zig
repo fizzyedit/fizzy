@@ -397,13 +397,11 @@ pub fn save(self: *Document) !void {
     self.notifyContentChanged();
 }
 
-/// The bytes `save` would write, for a host that does the writing itself (a mounted drive).
-/// Remembers which edit those bytes stand for: the write lands later, and edits typed in the
-/// meantime must still count as unsaved when it does.
-///
-/// Not a save in itself, so the run of typing stays open: the host takes these bytes for a crash
-/// checkpoint too (`KeptDocuments`), every few seconds while someone types, and never writes them
-/// over the file. The save's undo stop is made when its write lands (`written`).
+/// The bytes `save` would write, for a host that does the writing itself (a mounted drive), as a
+/// save starts. Remembers which edit those bytes stand for: the write lands later, and edits typed
+/// in the meantime must still count as unsaved when it does. The run of typing stays open until
+/// then: the save's undo stop is made when its write lands (`written`). A copy that is no save (a
+/// crash checkpoint) takes `text` instead (the plugin's `documentBytes`), remembering nothing.
 pub fn savedBytes(self: *Document, allocator: std.mem.Allocator) ![]u8 {
     self.serialized_op_id = self.history.topOpId();
     return allocator.dupe(u8, self.text.items);

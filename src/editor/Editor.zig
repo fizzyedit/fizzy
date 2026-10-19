@@ -6388,7 +6388,7 @@ pub fn documentSaved(editor: *Editor, doc: sdk.DocHandle) void {
 }
 
 /// Whether the host writes this document (`DocumentIo`) rather than its owner: always on a
-/// mount, and on the disk whenever the owner can serialize. An owner without `documentBytes`
+/// mount, and on the disk whenever the owner can serialize. An owner without `documentSnapshot`
 /// writes its own files — and can only ever reach the disk.
 pub fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
     if (editor.doc_io.owns(doc.owner.documentPath(doc))) return true;
@@ -6397,7 +6397,7 @@ pub fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
 }
 
 /// Save through the host: its owner serializes, the path's filesystem writes, and the owner
-/// hears back when the write lands. An owner without `documentBytes` cannot save to a mount
+/// hears back when the write lands. An owner without `documentSnapshot` cannot save to a mount
 /// at all, which is said once rather than failing silently.
 fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
     editor.doc_io.save(doc, doc.owner.documentPath(doc)) catch |err| switch (err) {
@@ -6414,7 +6414,7 @@ fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
 /// then tell the owner it was written under that name.
 fn downloadDocument(editor: *Editor, doc: sdk.DocHandle, path: []const u8) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) return error.Unsupported;
-    const bytes = (try doc.owner.documentBytes(doc, path, editor.app.gpa)) orelse return error.Unsupported;
+    const bytes = (try doc.owner.saveBytes(doc, path, editor.app.gpa)) orelse return error.Unsupported;
     defer editor.app.gpa.free(bytes);
     try dvui.backend.downloadData(std.fs.path.basename(path), bytes);
     try doc.owner.documentWritten(doc, path);

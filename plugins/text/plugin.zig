@@ -78,6 +78,7 @@ const vtable: sdk.Plugin.VTable = .{
     .encodeSnapshot = encodeSnapshot,
     .releaseSnapshot = releaseSnapshot,
     .documentWritten = documentWritten,
+    .documentBytes = documentBytes,
     .documentDefaultSaveAsFilename = documentDefaultSaveAsFilename,
 };
 
@@ -486,6 +487,12 @@ fn releaseSnapshot(_: *anyopaque, snapshot: *anyopaque) void {
 fn documentWritten(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     try doc.written(path);
+}
+/// The text as it stands, for a copy that is not a save (a crash checkpoint, a restart): not
+/// formatted, and with no edit remembered, so a save in flight still cleans up to its own.
+fn documentBytes(_: *anyopaque, handle: DocHandle, _: []const u8, allocator: std.mem.Allocator) anyerror![]u8 {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    return allocator.dupe(u8, doc.text.items);
 }
 fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;

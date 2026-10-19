@@ -10,6 +10,7 @@ bump it; keep it current whenever a pin or a patch moves.
 | [`foxnne/dvui-dev`](https://github.com/foxnne/dvui-dev) | [`david-vanderson/dvui`](https://github.com/david-vanderson/dvui) | branch `zig-0.17` (on 0.16, `fizzy-dev`) | `sdk/build.zig.zon` | dvui changes fizzy needs |
 | SDL | [`libsdl-org/SDL`](https://github.com/libsdl-org/SDL) `release-3.4.16` | `backend/patches/sdl` | `backend/build.zig.zon` (`.sdl_source`) | SDL C patches, applied by [zig-patch](https://github.com/marler8997/zig-patch) (below) |
 | [`fizzyedit/sdl_zig`](https://github.com/fizzyedit/sdl_zig) | [`Games-By-Mason/sdl_zig`](https://github.com/Games-By-Mason/sdl_zig) | branch `fizzy` | `backend/build.zig.zon` (`.sdl`) | the Zig build of SDL, taking the patched tree |
+| [`fizzyedit/nightwatch`](https://github.com/fizzyedit/nightwatch) | [`neurocyte/nightwatch`](https://github.com/neurocyte/nightwatch) | branch `fizzy` | `build.zig.zon` | a fix to its macOS FSEvents backend |
 
 SDL is fizzy's own dependency, not dvui's: fizzy's native backend (the `backend/` package) pins it
 in `backend/build.zig.zon` and translates its own `sdl3-c.h`. dvui's SDL pin is used only by the
@@ -260,6 +261,23 @@ the stack as it was before it moved here, which older fizzy commits still build.
 
 Tags: `fizzy-1.0.3+3.4.16-1` to `-11` (`d0c70fe`) are the stack that built `fizzyedit/SDL`, kept
 for older fizzy commits; `fizzy-1.0.3+3.4.16-12` → `a99807d`, what fizzy pins now.
+
+## fizzyedit/nightwatch
+
+The file watcher behind `app/watch/` (settings, open folders, documents). `fizzy` = upstream
+`master` (`023e79f`) plus:
+
+1. **fsevents: wait for a running callback before freeing its context** (`10c0207`): stopping the
+   stream schedules no further callbacks but does not wait for one already running on its
+   dispatch queue, and `stop_stream` freed that callback's context straight after (on each stop,
+   and each watch added or removed). A watcher stopped while events were arriving
+   (`SettingsWatcher.stop`, a folder's `FolderWatcher` closed) could leave a callback reading
+   freed memory and calling a handler its owner had let go of; under load it crashed
+   `zig build test-integration` (the test after the settings watcher's, with SIGABRT). Regression
+   test: "settings watcher: stop waits for a callback already running"
+   (`tests/integration.zig`). Upstream: not proposed yet; once it is merged there, the fork goes.
+
+Tags: `fizzy-1.0.0-1` → `10c0207`, what fizzy pins now.
 
 ## zig-patch
 

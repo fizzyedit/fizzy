@@ -756,7 +756,9 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   fires).
 - **Saving** — `documentSnapshot` / `encodeSnapshot` / `releaseSnapshot` (a snapshot on the UI
   thread, encoded on Fizzy's worker), `documentWritten`, and `saveQuestion` (asked before a save,
-  e.g. "flatten layers?"). Fizzy runs every save itself.
+  e.g. "flatten layers?"). Fizzy runs every save itself. `documentBytes` is the same bytes for a
+  copy that is not a save (a crash checkpoint, a restart, a tape's file), taken with none of a
+  save's bookkeeping; without it Fizzy takes a snapshot and encodes it.
 - Folder and file changes are **events**, not hooks (§3.10a): `fizzy.folder.opened` / `.closed`,
   `fizzy.files.changed`, `fizzy.document.changed`.
 - **Contributions** — `contributeMenu`, `contributeKeybinds`.
@@ -818,9 +820,9 @@ A path can be on the disk, inside a zip the user opened, or on a cloud drive a p
 the same code for all three. For *documents* the same is true once an owner implements the
 storage-agnostic pair:
 
-- `documentBytes(doc, allocator) → []u8` — the saved form. The host writes it wherever the
-  path's filesystem is, with a modified-time precondition so an edit made elsewhere is a
-  conflict rather than an overwrite.
+- `documentSnapshot` / `encodeSnapshot` — the saved form, taken as the save starts and encoded
+  on a worker. The host writes it wherever the path's filesystem is, with a modified-time
+  precondition so an edit made elsewhere is a conflict rather than an overwrite.
 - `documentWritten(doc, path)` — the write landed; clear dirty state, and adopt `path` if it
   is not the document's own (Save As).
 
