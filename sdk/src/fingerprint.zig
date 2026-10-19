@@ -266,6 +266,146 @@ fn hashTypeShape(h_in: u64, comptime T: type, comptime depth: comptime_int) u64 
     }
 }
 
+/// A struct, union or enum reached from a root only through a data pointer, and missing from the
+/// list that is meant to cover it.
+pub const Reach = struct {
+    pointee: type,
+    /// How it was reached, from the root: `Host.surfaces.items[]`.
+    path: []const u8,
+};
+
+/// Every type `roots` reach through a data pointer (`*T`, `[]T`, `[*]T`) that is not in `covered`,
+/// walking what `hashTypeShape` walks — fields, optionals, arrays and function signatures, to any
+/// depth — and stopping at each data pointer, as it does. Those pointers are where the shape hash
+/// goes blind: a type behind one is hashed only if it is listed in its own right, and this is the
+/// list of the ones that are not. A type is reported once, by the first path that reaches it.
+pub fn unlistedReach(comptime roots: anytype, comptime covered: anytype) []const Reach {
+    comptime {
+        var walk: ReachWalk = .{};
+        for (covered) |T| walk.covered = walk.covered ++ &[_]type{T};
+        for (roots) |T| walk.visit(T, @typeName(T));
+        return walk.found;
+    }
+}
+
+const ReachWalk = struct {
+    covered: []const type = &.{},
+    seen: []const type = &.{},
+    found: []const Reach = &.{},
+
+    fn has(comptime list: []const type, comptime T: type) bool {
+        for (list) |L| if (L == T) return true;
+        return false;
+    }
+
+    fn visit(comptime self: *ReachWalk, comptime T: type, comptime path: []const u8) void {
+        switch (@typeInfo(T)) {
+            .@"struct", .@"union", .@"fn" => {
+                if (has(self.seen, T)) return;
+                self.seen = self.seen ++ &[_]type{T};
+            },
+            else => {},
+        }
+        switch (@typeInfo(T)) {
+            .@"struct" => |s| {
+                // std's hash maps keep their keys and values in one allocation behind a pointer
+                // whose type names neither (`metadata: ?[*]Metadata`, a `MultiArrayList`'s
+                // `[*]u8`), so their fields hide what they hold: take the key and value from the
+                // map's `KV` as what is behind it, and leave its bookkeeping, which the pinned
+                // Zig fixes. A `std.HashMap` reaches this through its `unmanaged` field.
+                if (@hasDecl(T, "KV") and @hasField(T, "pointer_stability")) {
+                    const kv = @typeInfo(T.KV).@"struct";
+                    for (kv.field_names, kv.field_types) |name, F| self.behind(F, path ++ "{" ++ name ++ "}");
+                    return;
+                }
+                // A `MultiArrayList` hides its element the same way, behind `bytes: [*]u8`; its
+                // `get` names it.
+                if (@hasDecl(T, "Field") and @hasDecl(T, "Slice") and @hasField(T, "bytes")) {
+                    self.behind(@typeInfo(@TypeOf(T.get)).@"fn".return_type.?, path ++ "{elem}");
+                    return;
+                }
+                for (s.field_names, s.field_types) |name, F| {
+                    // A debug-only assertion helper; see `hashFieldTypeShape`.
+                    if (F != std.debug.SafetyLock) self.visit(F, path ++ "." ++ name);
+                }
+            },
+            .@"union" => |u| for (u.field_names, u.field_types) |name, F| self.visit(F, path ++ "." ++ name),
+            .optional => |o| self.visit(o.child, path ++ ".?"),
+            .array => |a| self.visit(a.child, path ++ "[_]"),
+            .pointer => |p| self.behind(p.child, path ++ if (p.size == .one) ".*" else "[]"),
+            .@"fn" => |f| {
+                for (f.param_types, 0..) |param, i| {
+                    if (param) |P| self.visit(P, std.fmt.comptimePrint("{s}(arg {d})", .{ path, i }));
+                }
+                if (f.return_type) |R| self.visit(R, path ++ "()");
+            },
+            else => {},
+        }
+    }
+
+    /// `T` is behind a pointer: a function's signature is walked on, as the hash does; anything
+    /// else is where the hash stops, so an aggregate here must be covered. One that is not is
+    /// reported and walked on, so what it reaches in turn is reported by the same build.
+    fn behind(comptime self: *ReachWalk, comptime T: type, comptime path: []const u8) void {
+        switch (@typeInfo(T)) {
+            .@"fn" => self.visit(T, path),
+            .@"struct", .@"union", .@"enum" => {
+                if (has(self.covered, T)) return;
+                for (self.found) |r| if (r.pointee == T) return;
+                self.found = self.found ++ &[_]Reach{.{ .pointee = T, .path = path }};
+                self.visit(T, path);
+            },
+            .optional => |o| self.behind(o.child, path ++ ".?"),
+            .array => |a| self.behind(a.child, path ++ "[_]"),
+            .pointer => |p| self.behind(p.child, path ++ if (p.size == .one) ".*" else "[]"),
+            else => {},
+        }
+    }
+};
+
+test "unlistedReach finds an aggregate behind a slice, and only an unlisted one" {
+    const Item = struct { x: u32 };
+    const Other = struct { y: u32 };
+    const Root = struct {
+        items: []const Item,
+        other: ?*Other,
+        hook: *const fn (*const Item) void,
+        name: []const u8,
+        ctx: *anyopaque,
+    };
+    const all = comptime unlistedReach(.{Root}, .{});
+    try std.testing.expectEqual(2, all.len);
+    try std.testing.expect(all[0].pointee == Item);
+    try std.testing.expect(std.mem.endsWith(u8, all[0].path, "Root.items[]"));
+    try std.testing.expect(all[1].pointee == Other);
+    const rest = comptime unlistedReach(.{Root}, .{ Item, Other });
+    try std.testing.expectEqual(0, rest.len);
+}
+
+test "unlistedReach sees the values a std hash map or MultiArrayList hides" {
+    const Value = struct { x: u32 };
+    const Elem = struct { y: u32 };
+    const Root = struct {
+        by_name: std.StringHashMapUnmanaged(Value),
+        by_id: std.AutoArrayHashMapUnmanaged(u32, Value),
+        columns: std.MultiArrayList(Elem),
+    };
+    const all = comptime unlistedReach(.{Root}, .{});
+    try std.testing.expectEqual(2, all.len);
+    try std.testing.expect(all[0].pointee == Value);
+    try std.testing.expect(all[1].pointee == Elem);
+}
+
+test "unlistedReach reports what an unlisted type reaches in the same pass" {
+    const Inner = struct { z: u32 };
+    const Outer = struct { inner: *const Inner };
+    const Root = struct { outers: []const Outer };
+    const all = comptime unlistedReach(.{Root}, .{});
+    try std.testing.expectEqual(2, all.len);
+    try std.testing.expect(all[0].pointee == Outer);
+    try std.testing.expect(all[1].pointee == Inner);
+}
+
 test "shape fingerprint is stable and order-sensitive" {
     const A = struct { x: u32, y: u64 };
     const B = struct { y: u64, x: u32 };

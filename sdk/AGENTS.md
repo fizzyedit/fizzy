@@ -8,7 +8,10 @@ file is the rules for changing it.
   `recorded_sdk_shape_fingerprint` in `src/version.zig` and label the PR `sdk`. Never touch
   `sdk_version.zig` outside a release PR (`CONTRIBUTING.md`, "Changing the SDK").
 - **A new boundary type goes in `sdk_boundary_types`** (`src/dylib.zig`), or the fingerprint never
-  sees it change.
+  sees it change. The hash never follows a data pointer, so a type reached only through one
+  (a `Host` list's items, a slice argument, a hash map's values) must be listed in its own
+  right; the build fails naming each one that isn't (`fingerprint.unlistedReach`). A dvui type
+  goes in `dvui_shared_state_types`, a std one in `pinned_by_zig_types`.
 - **This directory ships on its own** as `fizzy-sdk-v*.tar.gz` (`scripts/pack-sdk.sh`), holding
   only what `build.zig.zon`'s `.paths` lists. A new top-level file here goes in that list too;
   `scripts/check-examples.sh` builds the example plugin from the packed tarball and catches it.

@@ -44,7 +44,7 @@ const SpinLock = struct {
     }
 };
 
-const ReadJob = struct {
+pub const ReadJob = struct {
     owner: *LocalFs,
     id: u64,
     allocator: std.mem.Allocator,
@@ -61,7 +61,7 @@ const ReadJob = struct {
     }
 };
 
-const Completion = union(enum) {
+pub const Completion = union(enum) {
     list: struct { allocator: std.mem.Allocator, cb: vfs.ListDirFn, ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry },
     stat: struct { cb: vfs.StatFn, ctx: ?*anyopaque, result: vfs.Error!vfs.Stat },
     read: struct { allocator: std.mem.Allocator, cb: vfs.ReadFn, ctx: ?*anyopaque, result: vfs.Error!vfs.Read },

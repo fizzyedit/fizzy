@@ -432,7 +432,7 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
 }
 
 /// One directory asked of a filesystem. Owns the path (which is also the `pending` key).
-const ListJob = struct {
+pub const ListJob = struct {
     table: *FileTable,
     directory: []u8,
     fs: vfs.Fs = undefined,
@@ -637,7 +637,7 @@ fn ensureIndex(self: *FileTable, root: []const u8) void {
 /// Written as a chain of `listDir` completions rather than a walker because a mount cannot be
 /// walked synchronously; pruning happens where a directory is *asked for*, so `node_modules` is
 /// never listed at all — the slow thing the old walker replaced.
-const IndexJob = struct {
+pub const IndexJob = struct {
     table: *FileTable,
     /// Directories asked and not yet answered.
     in_flight: std.ArrayListUnmanaged(*DirReq) = .empty,
@@ -645,7 +645,7 @@ const IndexJob = struct {
     /// answering inline.
     answered: usize = 0,
 
-    const DirReq = struct {
+    pub const DirReq = struct {
         job: *IndexJob,
         directory: []u8,
         depth: usize,

@@ -187,6 +187,49 @@ const sdk_boundary_types = .{
     core.vfs.Fs,
     core.vfs.Fs.VTable,
     VersionTriplet,
+    // Everything below is reached from a type above only through a pointer, a slice or a hash
+    // map's values, and was missing until `sdk_shape_fingerprint` began failing the build over
+    // each one (`fingerprint.unlistedReach`). Most are the items of a `Host` list both sides read.
+    Host.FileRowDecorator,
+    Host.Activity,
+    Host.PendingCall,
+    Host.Recorder.VTable,
+    Host.CommandSlot,
+    Host.Demo,
+    Host.Claim,
+    Host.Author,
+    Host.DocAuthors,
+    Host.StepAuthor,
+    Host.accounts.Provider,
+    Host.accounts.Provider.VTable,
+    Host.accounts.Account,
+    Host.events.Subscription,
+    Host.events.Declaration,
+    Host.events.Queued,
+    menus.RailItemContribution,
+    menus.OpenAction,
+    Plugin.RestoredHistory.Entry,
+    EditorAPI.SaveDialogFilter,
+    EditorAPI.Carried,
+    core.vfs.Entry,
+    // `FileTable`'s jobs: plugin code can queue one through the table's methods and fizzy's pump
+    // finishes it, so each side reads the other's.
+    core.FileTable.Mount,
+    core.FileTable.ListJob,
+    core.FileTable.IndexJob,
+    core.FileTable.IndexJob.DirReq,
+    core.LocalFs,
+    core.LocalFs.ReadJob,
+    core.LocalFs.Completion,
+    @FieldType(core.LocalFs, "ready").Item,
+};
+
+/// std types the boundary reaches through a pointer. The pinned Zig fixes their layout, and a Zig
+/// bump is a coordinated re-release anyway, so they are not hashed; listing them here only tells
+/// `fingerprint.unlistedReach` they were looked at.
+const pinned_by_zig_types = .{
+    std.mem.Allocator.VTable,
+    std.Io.VTable,
 };
 
 const entry_symbol_types = .{
@@ -225,6 +268,16 @@ const entry_symbol_types = .{
 const dvui_shared_state_types = .{
     dvui.Window,
     dvui.Debug,
+    // Reached from fizzy's own boundary types only through a pointer or slice (`HighlightStyle`'s
+    // `dvui.Options`, the render bridge's draw call), so hashed here for the same reason.
+    dvui.WidgetData,
+    dvui.Gradient.Stop,
+    dvui.Gradient.ScatterStop,
+    dvui.Ninepatch,
+    dvui.Theme,
+    dvui.Vertex,
+    dvui.Color.PMA,
+    proxy_bridge.TextureDesc,
 };
 
 /// Optimize-mode layout class. `Debug`/`ReleaseSafe` embed a `std.debug.SafetyLock` inside every
@@ -275,7 +328,21 @@ pub const abi_fingerprint: u64 = blk: {
 /// fn-pointer param, so a breaking dvui restructure moves this too; a cosmetic dvui bump that
 /// leaves the boundary shape untouched does not (see `docs/PLUGINS.md` § Compatibility).
 pub const sdk_shape_fingerprint: u64 = blk: {
-    @setEvalBranchQuota(1_000_000);
+    @setEvalBranchQuota(4_000_000);
+    // A type the walk below reaches only through a pointer is invisible to it, so every one must
+    // be listed to be hashed at all. dvui's own types are not walked from: `Window` reaches most
+    // of dvui, and the pin moves them all together.
+    const unlisted = fingerprint.unlistedReach(
+        sdk_boundary_types ++ entry_symbol_types,
+        sdk_boundary_types ++ dvui_shared_state_types ++ pinned_by_zig_types,
+    );
+    if (unlisted.len != 0) {
+        var msg: []const u8 = "the plugin boundary reaches these types only through a pointer, which " ++
+            "the fingerprint does not follow; add each to `sdk_boundary_types` in sdk/src/dylib.zig " ++
+            "(a dvui type to `dvui_shared_state_types`, a std one to `pinned_by_zig_types`):";
+        for (unlisted) |r| msg = msg ++ "\n    " ++ @typeName(r.pointee) ++ ", by " ++ r.path;
+        @compileError(msg);
+    }
     var h = fingerprint.seed;
     h = fingerprint.hashAllShape(h, sdk_boundary_types, 6);
     h = fingerprint.hashAllShape(h, entry_symbol_types, 3);

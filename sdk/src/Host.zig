@@ -1678,7 +1678,7 @@ pub fn registerNativeMenuItem(self: *Host, item: NativeMenuItem) !void {
 /// (at most one); the **overrides** are those with it, oldest first, at most one per owner. The
 /// active command, the one `commands` holds and `command(id)` returns, is the newest override, else
 /// the base.
-const CommandSlot = struct {
+pub const CommandSlot = struct {
     /// Where the active command sits in `commands`.
     index: usize,
     /// The base first; the later registrations without `replaces`, ignored while it stands, in
