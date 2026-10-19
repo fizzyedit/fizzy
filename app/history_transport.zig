@@ -226,9 +226,9 @@ pub fn stripColumns(n: usize, x0: f32, x1: f32, min_w: f32, out: []Column) []Col
 /// A stretch across a picture, as fractions of its width: from `lo` to `hi`.
 pub const Span = struct { lo: f32, hi: f32 };
 
-/// Where two pictures of the same width differ, given each column's print (`HistoryFrames.columnPrints`):
-/// from the first column whose prints differ to past the last. Null when none do, or they are not
-/// the same width.
+/// Where two pictures of the same size differ, given each column's print, or each row's
+/// (`HistoryFrames.prints`): from the first whose prints differ to past the last. Null when none
+/// do, or they are not the same size.
 pub fn changedSpan(before: []const u32, after: []const u32) ?Span {
     if (before.len != after.len or after.len == 0) return null;
     var lo: usize = after.len;
@@ -242,69 +242,42 @@ pub fn changedSpan(before: []const u32, after: []const u32) ?Span {
     return .{ .lo = @as(f32, @floatFromInt(lo)) / n, .hi = @as(f32, @floatFromInt(hi)) / n };
 }
 
-/// Where a stop's slice of its picture starts, as a fraction across it, the slice `w` of it wide:
-/// at `x`, its place in the strip, for a step with no `change` (`HistoryFrames.Picture.change`);
-/// else round the middle of what the step changed, so the strip shows each step's own action.
-/// Kept inside the picture either way.
-pub fn sliceAt(x: f32, w: f32, change: ?f32) f32 {
-    const c = change orelse return x;
-    return std.math.clamp(c - w / 2, 0, @max(0, 1 - w));
-}
-
 /// A part of a picture, as fractions of it: 0 to 1 across and down.
 pub const Frac = struct { x: f32 = 0, y: f32 = 0, w: f32 = 1, h: f32 = 1 };
 
-/// The part of a picture `pic_aspect` wide for each high that a strip `want` wide for each high
-/// shows (`paintStrip`): round `content` (the whole picture without one), padded by `pad` of its
-/// size each side, grown to the strip's shape, and never closer in than `min` of the picture's
-/// height. Kept inside the picture, its middle where the content's is as far as that allows. A
-/// picture of another shape than the strip, its content all of it, is covered round its middle.
-pub fn frameContent(content: ?Frac, pic_aspect: f32, want: f32, pad: f32, min: f32) Frac {
-    const a = @max(pic_aspect, 1e-3);
-    const c = content orelse Frac{};
-    // In the picture's own units: `a` across, 1 down.
-    const cw = c.w * a * (1 + 2 * pad);
-    const ch = c.h * (1 + 2 * pad);
-    var h = @max(@max(ch, cw / want), min);
-    var w = h * want;
-    if (w > a) {
-        w = a;
-        h = w / want;
+/// A rect of whole pixels.
+pub const Px = struct { x: u32 = 0, y: u32 = 0, w: u32 = 0, h: u32 = 0 };
+
+/// The part of a picture `source` pixels big kept for a step's slice of the strip
+/// (`HistoryFrames`): `size` pixels, the strip's own, its middle at `centre` (pixels) as far as the
+/// picture allows. A picture smaller than `size` either way is kept whole that way.
+pub fn cropAt(centre: [2]f32, size: [2]u32, source: [2]u32) Px {
+    var out: Px = .{ .w = @min(size[0], source[0]), .h = @min(size[1], source[1]) };
+    inline for (.{ "x", "y" }, .{ "w", "h" }, 0..) |p, d, i| {
+        const room: f32 = @floatFromInt(source[i] - @field(out, d));
+        const at = @round(centre[i] - @as(f32, @floatFromInt(@field(out, d))) / 2);
+        @field(out, p) = @intFromFloat(std.math.clamp(at, 0, room));
     }
-    if (h > 1) {
-        h = 1;
-        w = want;
-    }
-    const mx = (c.x + c.w / 2) * a;
-    const my = c.y + c.h / 2;
-    const x = std.math.clamp(mx - w / 2, 0, a - w);
-    const y = std.math.clamp(my - h / 2, 0, 1 - h);
-    return .{ .x = x / a, .y = y, .w = w / a, .h = h };
+    return out;
 }
 
-/// What the strip frames of `boxes`, each one picture's content: the box round them all, leaving
-/// out any far bigger than most (four times the middle one's area), which is something passing
-/// over the pane when that picture was taken (the activity feed, a menu), not the document. Null
-/// for none.
-pub fn contentUnion(boxes: []Frac) ?Frac {
-    if (boxes.len == 0) return null;
-    std.mem.sort(Frac, boxes, {}, struct {
-        fn smaller(_: void, a: Frac, b: Frac) bool {
-            return a.w * a.h < b.w * b.h;
-        }
-    }.smaller);
-    const median = boxes[boxes.len / 2];
-    const most = 4 * median.w * median.h;
-    var u: ?Frac = null;
-    for (boxes) |b| {
-        if (b.w * b.h > most) break;
-        u = if (u) |v| blk: {
-            const x0 = @min(v.x, b.x);
-            const y0 = @min(v.y, b.y);
-            break :blk Frac{ .x = x0, .y = y0, .w = @max(v.x + v.w, b.x + b.w) - x0, .h = @max(v.y + v.h, b.y + b.h) - y0 };
-        } else b;
-    }
-    return u;
+/// A rect in pixels, as `oneToOne` takes and gives it.
+pub const Rect = struct { x: f32, y: f32, w: f32, h: f32 };
+
+/// Where a picture `pic` pixels big is drawn in `cell` (pixels) at one pixel for one, no closer
+/// and no further: its middle on the cell's, cut to the cell (`dest`, on whole pixels), and the
+/// part of the picture that shows there (`uv`, fractions of it). Null for an empty picture or cell.
+pub fn oneToOne(cell: Rect, pic: [2]u32) ?struct { dest: Rect, uv: Frac } {
+    if (pic[0] == 0 or pic[1] == 0 or cell.w < 1 or cell.h < 1) return null;
+    const pw: f32 = @floatFromInt(pic[0]);
+    const ph: f32 = @floatFromInt(pic[1]);
+    const w = @min(@floor(cell.w), pw);
+    const h = @min(@floor(cell.h), ph);
+    const x = @round(cell.x + (cell.w - w) / 2);
+    const y = @round(cell.y + (cell.h - h) / 2);
+    const u = @round((pw - w) / 2);
+    const v = @round((ph - h) / 2);
+    return .{ .dest = .{ .x = x, .y = y, .w = w, .h = h }, .uv = .{ .x = u / pw, .y = v / ph, .w = w / pw, .h = h / ph } };
 }
 
 const testing = std.testing;
@@ -414,60 +387,43 @@ test "each stop takes the stretch of the strip round its knob, or columns share 
     try testing.expectEqual(@as(f32, 50), none[0].x1);
 }
 
-test "the strip frames the content, at the strip's shape, inside the picture" {
-    const eq = struct {
-        fn eq(want: Frac, got: Frac) !void {
-            try testing.expectApproxEqAbs(want.x, got.x, 1e-4);
-            try testing.expectApproxEqAbs(want.y, got.y, 1e-4);
-            try testing.expectApproxEqAbs(want.w, got.w, 1e-4);
-            try testing.expectApproxEqAbs(want.h, got.h, 1e-4);
-        }
-    }.eq;
-    // No content known: the picture covers the strip round its middle.
-    try eq(.{ .x = 0, .y = 0.25, .w = 1, .h = 0.5 }, frameContent(null, 2, 4, 0.1, 0.3));
-    // A few words at the top left: framed close, as close as `min` allows, held to the corner.
-    try eq(.{ .x = 0, .y = 0, .w = 0.6, .h = 0.3 }, frameContent(.{ .x = 0, .y = 0, .w = 0.2, .h = 0.1 }, 2, 4, 0.1, 0.3));
-    // Content in the middle stays in the middle.
-    const mid = frameContent(.{ .x = 0.4, .y = 0.4, .w = 0.2, .h = 0.2 }, 2, 4, 0, 0.1);
-    try testing.expectApproxEqAbs(@as(f32, 0.5), mid.x + mid.w / 2, 1e-4);
-    try testing.expectApproxEqAbs(@as(f32, 0.5), mid.y + mid.h / 2, 1e-4);
-    // Always the strip's shape, in the picture's units.
-    for ([_]?Frac{ null, .{ .x = 0.1, .y = 0.7, .w = 0.05, .h = 0.05 }, .{ .x = 0, .y = 0, .w = 1, .h = 1 } }) |c| {
-        const f = frameContent(c, 2, 4, 0.1, 0.2);
-        try testing.expectApproxEqAbs(@as(f32, 4), f.w * 2 / f.h, 1e-3);
-        try testing.expect(f.x >= 0 and f.y >= 0 and f.x + f.w <= 1 + 1e-4 and f.y + f.h <= 1 + 1e-4);
-    }
-}
-
-test "the strip's content leaves out a picture of something passing over the pane" {
-    var boxes = [_]Frac{
-        .{ .x = 0, .y = 0, .w = 0.1, .h = 0.03 }, .{ .x = 0, .y = 0, .w = 0.2, .h = 0.03 },
-        .{ .x = 0, .y = 0, .w = 0.9, .h = 0.9 },  .{ .x = 0, .y = 0, .w = 0.25, .h = 0.03 },
-    };
-    const u = contentUnion(&boxes).?;
-    try testing.expectApproxEqAbs(@as(f32, 0.25), u.w, 1e-5);
-    try testing.expectApproxEqAbs(@as(f32, 0.03), u.h, 1e-5);
-    // All of them big: the document fills the pane, and the strip frames it all.
-    var big = [_]Frac{ .{ .w = 0.8, .h = 0.9 }, .{ .w = 0.9, .h = 0.9 } };
-    try testing.expectApproxEqAbs(@as(f32, 0.9), contentUnion(&big).?.w, 1e-5);
-    try testing.expectEqual(@as(?Frac, null), contentUnion(&.{}));
-}
-
-test "a step's slice stands round what it changed, inside the picture" {
-    // No change: where the strip puts it.
-    try testing.expectEqual(@as(f32, 0.3), sliceAt(0.3, 0.1, null));
-    // Round the change's middle.
-    try testing.expectApproxEqAbs(@as(f32, 0.65), sliceAt(0.3, 0.1, 0.7), 1e-6);
-    // Near an edge: held inside the picture.
-    try testing.expectEqual(@as(f32, 0), sliceAt(0.3, 0.1, 0.02));
-    try testing.expectApproxEqAbs(@as(f32, 0.9), sliceAt(0.3, 0.1, 0.99), 1e-6);
-    // A change wider than a slice: its middle (from `changedSpan`).
+test "a step's change is where its prints differ" {
     const before = [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
     const after = [_]u32{ 1, 2, 2, 2, 2, 2, 2, 1, 1, 1 };
     const span = changedSpan(&before, &after).?;
     try testing.expectApproxEqAbs(@as(f32, 0.1), span.lo, 1e-6);
     try testing.expectApproxEqAbs(@as(f32, 0.7), span.hi, 1e-6);
-    try testing.expectApproxEqAbs(@as(f32, 0.35), sliceAt(0.8, 0.1, (span.lo + span.hi) / 2), 1e-6);
-    // Pictures of different widths are not compared.
+    try testing.expectEqual(@as(?Span, null), changedSpan(&before, &before));
+    // Pictures of different sizes are not compared.
     try testing.expectEqual(@as(?Span, null), changedSpan(&before, after[0..9]));
+}
+
+test "a step's crop is the strip's size round its change, inside the picture" {
+    // Round the change.
+    try testing.expectEqual(Px{ .x = 450, .y = 248, .w = 600, .h = 104 }, cropAt(.{ 750, 300 }, .{ 600, 104 }, .{ 2000, 1200 }));
+    // Near an edge: held inside the picture.
+    try testing.expectEqual(Px{ .x = 0, .y = 0, .w = 600, .h = 104 }, cropAt(.{ 10, 5 }, .{ 600, 104 }, .{ 2000, 1200 }));
+    try testing.expectEqual(Px{ .x = 1400, .y = 1096, .w = 600, .h = 104 }, cropAt(.{ 1990, 1199 }, .{ 600, 104 }, .{ 2000, 1200 }));
+    // A picture smaller than the strip: all of it that way.
+    try testing.expectEqual(Px{ .x = 0, .y = 48, .w = 400, .h = 104 }, cropAt(.{ 100, 100 }, .{ 600, 104 }, .{ 400, 300 }));
+}
+
+test "a crop is drawn one pixel for one, centred in its cell and cut to it" {
+    // A narrow cell: the middle of the picture, as wide as the cell, on whole pixels.
+    const a = oneToOne(.{ .x = 100.4, .y = 20, .w = 30, .h = 104 }, .{ 600, 104 }).?;
+    try testing.expectEqual(@as(f32, 30), a.dest.w);
+    try testing.expectEqual(@as(f32, 104), a.dest.h);
+    try testing.expectEqual(@as(f32, 100), a.dest.x);
+    try testing.expectApproxEqAbs(@as(f32, 285.0 / 600.0), a.uv.x, 1e-6);
+    // The pixels it shows are as many as it is drawn over: never scaled.
+    try testing.expectApproxEqAbs(a.dest.w, a.uv.w * 600, 1e-4);
+    try testing.expectApproxEqAbs(a.dest.h, a.uv.h * 104, 1e-4);
+    // A cell bigger than the picture (a wider pane than it was taken from) or shorter (the strip
+    // still growing): the picture at its own size in the middle, cut to the cell.
+    const b = oneToOne(.{ .x = 0, .y = 0, .w = 800, .h = 50 }, .{ 600, 104 }).?;
+    try testing.expectEqual(@as(f32, 100), b.dest.x);
+    try testing.expectEqual(@as(f32, 600), b.dest.w);
+    try testing.expectEqual(@as(f32, 50), b.dest.h);
+    try testing.expectApproxEqAbs(@as(f32, 27.0 / 104.0), b.uv.y, 1e-6);
+    try testing.expect(oneToOne(.{ .x = 0, .y = 0, .w = 0, .h = 50 }, .{ 600, 104 }) == null);
 }

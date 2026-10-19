@@ -3148,7 +3148,7 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
         const pane = canvas.data().borderRectScale().r;
         // Above the bar as it stands, its strip and the feed over it included.
         const under = if (ds.transport.place(pane, dvui.frameTimeNS())) |bar| pane.y + pane.h - bar.y + 40 * dvui.windowRectScale().s else 0;
-        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under));
+        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under), @import("app").HistoryTransport.stripPixels(pane));
     }
 
     const focus_before = dvui.lastFocusedIdInFrame();
