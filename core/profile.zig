@@ -397,7 +397,7 @@ var host_spans: ?*Spans = null;
 /// work on other threads.
 var frame_span: OpenSpan = .{};
 
-const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7970_7266); // "fizzyprf"
+const publish_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_7970_7266)); // "fizzyprf"
 const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
 const lookback_key = std.fmt.comptimePrint("_profiler_lookback{d}", .{Lookback.abi});
 const causes_key = std.fmt.comptimePrint("_profiler_causes{d}", .{FrameCauses.abi});
@@ -551,6 +551,9 @@ pub fn hostFrameBegin(prev_submit_ns: ?u64, gpu_total: ?Gpu) void {
     is_host = true;
     host_profiler.frameBegin(prev_submit_ns, gpu_total);
     dvui.dataSet(null, publish_id, publish_key, @as(usize, @intFromPtr(&host_profiler)));
+    // The glass's scopes (`glass.prof`): the host's copy takes them here, a plugin's from the store.
+    glass_prof.host = &glass_hooks;
+    dvui.dataSet(null, glass_prof.publish_id, glass_prof.publish_key, @as(usize, @intFromPtr(&glass_hooks)));
     if (host_lookback == null and host_profiler.active) host_lookback = Lookback.create(std.heap.page_allocator, max_entries) catch null;
     if (host_lookback) |lb| dvui.dataSet(null, publish_id, lookback_key, @as(usize, @intFromPtr(lb)));
     dvui.dataSet(null, publish_id, phases_key, @as(usize, @intFromPtr(&host_phases)));
@@ -602,6 +605,21 @@ pub fn writeTrace(w: *std.Io.Writer, ms: u32) (std.Io.Writer.Error || error{OutO
     defer arena.deinit();
     const since: i64 = if (ms == 0) std.math.minInt(i64) else Spans.now() - @as(i64, ms) * std.time.ns_per_ms;
     try Spans.writeTrace(w, try sp.collect(arena.allocator(), since), sp.ui_thread.load(.monotonic));
+}
+
+/// The glass (`glass`, the backend's: the frame target, the frosted backdrops) cannot import this
+/// file, which is fizzy's; its scopes come here through these (`glass.prof`).
+const glass_prof = @import("glass").prof;
+const glass_hooks: glass_prof.Hooks = .{ .begin = glassBegin, .end = glassEnd };
+
+fn glassBegin(owner: [*]const u8, owner_len: usize, name: [*]const u8, name_len: usize) callconv(.c) glass_prof.Scope {
+    const scope = begin(owner[0..owner_len], name[0..name_len]);
+    return .{ .p = scope.p, .idx = scope.idx };
+}
+
+fn glassEnd(scope: glass_prof.Scope) callconv(.c) void {
+    const p: *Profiler = @ptrCast(@alignCast(scope.p orelse return));
+    p.close(scope.idx);
 }
 
 /// An open scope; `end` it (deferred) where the timed code ends.
@@ -867,7 +885,8 @@ test "a report says what each owner and scope cost, as ZON that reads back" {
     };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const r = try std.zon.parse.fromSliceAlloc(Report, arena.allocator(), try arena.allocator().dupeZ(u8, text), null, .{});
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const r = try std.zon.parse.fromSlice(Report, .{ .gpa = std.testing.allocator, .arena = arena.allocator(), .source = try arena.allocator().dupeSentinel(u8, text, 0), .diagnostics = &diag });
     // The plugin's own time is what it spent; fizzy's own is what was left once that is taken out.
     try std.testing.expectEqualStrings("text", r.owners[0].owner);
     try std.testing.expect(r.owners[0].self_ms >= 1.5);

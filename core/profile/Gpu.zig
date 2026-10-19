@@ -27,7 +27,7 @@ target_switches: u32 = 0,
 /// totals do.
 pub fn since(self: Gpu, prev: Gpu) Gpu {
     var out: Gpu = .{};
-    inline for (std.meta.fields(Gpu)) |f| @field(out, f.name) = @field(self, f.name) -% @field(prev, f.name);
+    inline for (@typeInfo(Gpu).@"struct".field_names, @typeInfo(Gpu).@"struct".field_types, @typeInfo(Gpu).@"struct".field_attrs) |f_name, _, _| @field(out, f_name) = @field(self, f_name) -% @field(prev, f_name);
     return out;
 }
 
@@ -45,7 +45,7 @@ pub const Sum = struct {
     frames: u32 = 0,
 
     pub fn add(self: *Sum, g: Gpu) void {
-        inline for (std.meta.fields(Gpu)) |f| @field(self, f.name) += @field(g, f.name);
+        inline for (@typeInfo(Gpu).@"struct".field_names, @typeInfo(Gpu).@"struct".field_types, @typeInfo(Gpu).@"struct".field_attrs) |f_name, _, _| @field(self, f_name) += @field(g, f_name);
         self.frames += 1;
     }
 
@@ -54,7 +54,7 @@ pub const Sum = struct {
         if (self.frames == 0) return null;
         const n: f64 = @floatFromInt(self.frames);
         var out: PerFrame = .{};
-        inline for (std.meta.fields(Gpu)) |f| @field(out, f.name) = @as(f64, @floatFromInt(@field(self, f.name))) / n;
+        inline for (@typeInfo(Gpu).@"struct".field_names, @typeInfo(Gpu).@"struct".field_types, @typeInfo(Gpu).@"struct".field_attrs) |f_name, _, _| @field(out, f_name) = @as(f64, @floatFromInt(@field(self, f_name))) / n;
         return out;
     }
 };

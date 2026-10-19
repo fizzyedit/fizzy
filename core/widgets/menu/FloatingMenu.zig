@@ -13,9 +13,9 @@
 //! a floating surface. Everything else is dvui's, and updates by re-copying.
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../../motion.zig");
+const motion = @import("glass").motion;
 const dialogs = @import("../../dialogs.zig");
-const BlurBackdrop = @import("../BlurBackdrop.zig");
+const BlurBackdrop = @import("glass").BlurBackdrop;
 const screens = @import("../../screens.zig");
 
 /// Natural units a menu stays in from the edges of the screen it opens on — the main window's, or

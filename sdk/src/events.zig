@@ -15,6 +15,7 @@
 //!   so tooling and agents can list what a plugin announces. Emitting an undeclared name works.
 const std = @import("std");
 const Plugin = @import("Plugin.zig");
+const Author = @import("Author.zig");
 
 /// One event as a handler sees it: borrowed for the call.
 pub const Event = struct {
@@ -52,8 +53,9 @@ pub fn matches(pattern: []const u8, name: []const u8) bool {
 /// an emitter can grow a payload without breaking its listeners.
 pub fn parse(comptime T: type, arena: std.mem.Allocator, event: Event) !T {
     const text = std.mem.trim(u8, event.payload, " \t\r\n");
-    const source = try arena.dupeZ(u8, if (text.len == 0) ".{}" else text);
-    return std.zon.parse.fromSliceAlloc(T, arena, source, null, .{ .ignore_unknown_fields = true });
+    const source = try arena.dupeSentinel(u8, if (text.len == 0) ".{}" else text, 0);
+    var diag: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSlice(T, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diag, .ignore_unknown_fields = true });
 }
 
 // ---- what fizzy announces ----
@@ -73,6 +75,12 @@ pub fn parse(comptime T: type, arena: std.mem.Allocator, event: Event) !T {
 //
 // `fizzy.files.changed`: files under the project folder changed on disk, `FilesChanged`.
 //
+// `fizzy.history.undone`, `fizzy.history.redone`: a step of a document's history was taken back
+// (or put back) by someone other than whoever made it, `StepTaken`: the person undoing an agent's
+// draw, an agent's undo of the person's typing. How an agent hears that its work was taken back,
+// so it does not draw it again from a stale picture (`plans/SHARED_HISTORY_PLAN.md`). Never for
+// one's own steps, and never while the person works alone.
+//
 // `fizzy.files.reveal`: a path was just made and should be shown the way a new file is: revealed
 // in whatever lists the project's files, selected, its name open for editing. `Path`. Emitted by
 // fizzy's `files` service (`reveal`), for a plugin's New flow or its own.
@@ -81,6 +89,18 @@ pub fn parse(comptime T: type, arena: std.mem.Allocator, event: Event) !T {
 pub const Path = struct {
     /// Absolute; a mount's path (`gdrive://…`) for a document on one. Empty for an unsaved buffer.
     path: []const u8,
+};
+
+/// The payload of `fizzy.history.undone` and `.redone`.
+pub const StepTaken = struct {
+    /// The document's path (`Path.path`).
+    path: []const u8,
+    /// The step's id on the document's line (`Plugin.HistoryLine.Entry.id`).
+    step: u64,
+    /// Who made it.
+    made_by: Author,
+    /// Who took it back, or put it back.
+    by: Author,
 };
 
 /// One change on disk under the project folder.

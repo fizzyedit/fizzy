@@ -24,6 +24,14 @@ pub const Want = struct {
     radius: f32,
 };
 
+/// Whether the compositor blurs behind windows at all, as `behind` would say, setting nothing.
+pub fn offered(display: *anyopaque) bool {
+    if (comptime builtin.target.os.tag != .linux) return false;
+    const s = ready(display) orelse return false;
+    _ = s.lib.display_dispatch_queue_pending(s.display, s.queue);
+    return (s.effect_manager != null and s.effect_blur) or s.kde_manager != null;
+}
+
 /// Blur behind `surface` (a `wl_surface` of `display`, SDL's) as `want` says, or none: whether
 /// the compositor blurs behind windows at all — it has one of the protocols, and its blur is on.
 /// Cheap to call every frame: the region is sent only when it changes. The first call binds the
@@ -118,9 +126,9 @@ fn load() ?Lib {
     // SDL's own copy, already loaded for the window: never a second one.
     const handle = std.c.dlopen("libwayland-client.so.0", .{ .LAZY = true, .NOLOAD = true }) orelse return null;
     var lib: Lib = undefined;
-    inline for (@typeInfo(Lib).@"struct".fields) |f| {
-        const sym = std.c.dlsym(handle, "wl_" ++ f.name) orelse return null;
-        @field(lib, f.name) = @ptrCast(@alignCast(sym));
+    inline for (@typeInfo(Lib).@"struct".field_names, @typeInfo(Lib).@"struct".field_types, @typeInfo(Lib).@"struct".field_attrs) |f_name, _, _| {
+        const sym = std.c.dlsym(handle, "wl_" ++ f_name) orelse return null;
+        @field(lib, f_name) = @ptrCast(@alignCast(sym));
     }
     return lib;
 }

@@ -43,13 +43,13 @@ pub fn freeEntries(gpa: Allocator, entries: []const Entry) void {
 /// restriction on `name`). Returns the field's value node, or null if `container` isn't a struct
 /// literal or has no such field.
 fn findField(zoir: std.zig.Zoir, container: std.zig.Zoir.Node.Index, name: []const u8) ?std.zig.Zoir.Node.Index {
-    const node = container.get(zoir);
+    const node = container.get(&zoir);
     const s = switch (node) {
         .struct_literal => |sl| sl,
         else => return null,
     };
     for (s.names, 0..) |field_name, i| {
-        if (std.mem.eql(u8, field_name.get(zoir), name)) return s.vals.at(@intCast(i));
+        if (std.mem.eql(u8, field_name.get(&zoir), name)) return s.vals.at(@intCast(i));
     }
     return null;
 }
@@ -57,7 +57,7 @@ fn findField(zoir: std.zig.Zoir, container: std.zig.Zoir.Node.Index, name: []con
 /// Owned copy of `node`'s exact source text (first token's start through last token's end),
 /// preserving whitespace/comments inside the span verbatim.
 fn nodeSourceText(gpa: Allocator, ast: std.zig.Ast, zoir: std.zig.Zoir, node: std.zig.Zoir.Node.Index) Allocator.Error![]u8 {
-    const ast_node = node.getAstNode(zoir);
+    const ast_node = node.getAstNode(&zoir);
     const first_tok = ast.firstToken(ast_node);
     const last_tok = ast.lastToken(ast_node);
     const start = ast.tokenStart(first_tok);
@@ -70,7 +70,7 @@ fn nodeSourceText(gpa: Allocator, ast: std.zig.Ast, zoir: std.zig.Zoir, node: st
 const Parsed = struct { ast: std.zig.Ast, zoir: std.zig.Zoir };
 
 fn parseZon(gpa: Allocator, source: [:0]const u8) ?Parsed {
-    var ast = std.zig.Ast.parse(gpa, source, .zon) catch return null;
+    var ast = std.zig.Ast.parse(gpa, source, .{ .mode = .zon }) catch return null;
     errdefer ast.deinit(gpa);
     var zoir = std.zig.ZonGen.generate(gpa, ast, .{ .parse_str_lits = false }) catch {
         ast.deinit(gpa);
@@ -102,7 +102,7 @@ pub fn extractField(gpa: Allocator, source: [:0]const u8, field_name: []const u8
 pub fn extractPluginBlob(gpa: Allocator, source: [:0]const u8, id: []const u8) ?[]u8 {
     const plugins = extractField(gpa, source, "plugins") orelse return null;
     defer gpa.free(plugins);
-    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    const plugins_z = gpa.dupeSentinel(u8, plugins, 0) catch return null;
     defer gpa.free(plugins_z);
     return extractField(gpa, plugins_z, id);
 }
@@ -122,7 +122,7 @@ pub fn listPluginBlocks(gpa: Allocator, source: ?[:0]const u8) Allocator.Error![
     }
 
     const plugins_node = findField(parsed.zoir, .root, "plugins") orelse return &.{};
-    const node = plugins_node.get(parsed.zoir);
+    const node = plugins_node.get(&parsed.zoir);
     const s = switch (node) {
         .struct_literal => |sl| sl,
         else => return &.{},
@@ -137,7 +137,7 @@ pub fn listPluginBlocks(gpa: Allocator, source: ?[:0]const u8) Allocator.Error![
         out.deinit(gpa);
     }
     for (s.names, 0..) |field_name, i| {
-        const id = try gpa.dupe(u8, field_name.get(parsed.zoir));
+        const id = try gpa.dupe(u8, field_name.get(&parsed.zoir));
         errdefer gpa.free(id);
         const text = try nodeSourceText(gpa, parsed.ast, parsed.zoir, s.vals.at(@intCast(i)));
         try out.append(gpa, .{ .id = id, .text = text });
@@ -295,7 +295,7 @@ pub fn upsertOne(gpa: Allocator, existing_full_source: ?[:0]const u8, entry: Ent
         return gpa.dupe(u8, src);
     }
 
-    const ast_node = plugins_node.getAstNode(parsed.zoir);
+    const ast_node = plugins_node.getAstNode(&parsed.zoir);
     const last_tok = parsed.ast.lastToken(ast_node);
     const insert_at = parsed.ast.tokenStart(last_tok);
 
@@ -435,11 +435,11 @@ test "extractPluginBlob returns null when the id is missing from an existing .pl
 test "nested extractField reaches .plugins.<id>.settings" {
     const plugins = extractField(testing.allocator, sample_source, "plugins").?;
     defer testing.allocator.free(plugins);
-    const plugins_z = try testing.allocator.dupeZ(u8, plugins);
+    const plugins_z = try testing.allocator.dupeSentinel(u8, plugins, 0);
     defer testing.allocator.free(plugins_z);
     const id_block = extractField(testing.allocator, plugins_z, "text").?;
     defer testing.allocator.free(id_block);
-    const id_z = try testing.allocator.dupeZ(u8, id_block);
+    const id_z = try testing.allocator.dupeSentinel(u8, id_block, 0);
     defer testing.allocator.free(id_z);
     const settings = extractField(testing.allocator, id_z, "settings").?;
     defer testing.allocator.free(settings);
@@ -453,7 +453,7 @@ test "composeMergedText round-trips: overlay replaces one id, others survive unt
     const composed = try composeMergedText(testing.allocator, fizzy_text, sample_source, &overlay);
     defer testing.allocator.free(composed);
 
-    const composed_z = try testing.allocator.dupeZ(u8, composed);
+    const composed_z = try testing.allocator.dupeSentinel(u8, composed, 0);
     defer testing.allocator.free(composed_z);
 
     const pixi = extractPluginBlob(testing.allocator, composed_z, "pixi").?;
@@ -472,7 +472,7 @@ test "composeMergedText removes an id when overlay text is null" {
     const composed = try composeMergedText(testing.allocator, fizzy_text, sample_source, &overlay);
     defer testing.allocator.free(composed);
 
-    const composed_z = try testing.allocator.dupeZ(u8, composed);
+    const composed_z = try testing.allocator.dupeSentinel(u8, composed, 0);
     defer testing.allocator.free(composed_z);
 
     try testing.expect(extractPluginBlob(testing.allocator, composed_z, "pixi") == null);
@@ -489,7 +489,7 @@ test "composeMergedText adds a brand-new id when there is no existing .plugins b
     const composed = try composeMergedText(testing.allocator, fizzy_text, null, &overlay);
     defer testing.allocator.free(composed);
 
-    const composed_z = try testing.allocator.dupeZ(u8, composed);
+    const composed_z = try testing.allocator.dupeSentinel(u8, composed, 0);
     defer testing.allocator.free(composed_z);
 
     const pixi = extractPluginBlob(testing.allocator, composed_z, "pixi").?;
@@ -512,7 +512,7 @@ test "composeMergedText accepts an empty fizzy struct (every fizzy field at its 
     const composed = try composeMergedText(testing.allocator, ".{}", null, &overlay);
     defer testing.allocator.free(composed);
 
-    const composed_z = try testing.allocator.dupeZ(u8, composed);
+    const composed_z = try testing.allocator.dupeSentinel(u8, composed, 0);
     defer testing.allocator.free(composed_z);
 
     const pixi = extractPluginBlob(testing.allocator, composed_z, "pixi").?;
@@ -523,7 +523,7 @@ test "composeMergedText accepts an empty fizzy struct (every fizzy field at its 
 test "upsertOne inserts a new id into an existing .plugins block, leaving the rest untouched" {
     const composed = try upsertOne(testing.allocator, sample_source, .{ .id = "markdown", .text = ".{ .enabled = true }" });
     defer testing.allocator.free(composed);
-    const composed_z = try testing.allocator.dupeZ(u8, composed);
+    const composed_z = try testing.allocator.dupeSentinel(u8, composed, 0);
     defer testing.allocator.free(composed_z);
 
     const markdown = extractPluginBlob(testing.allocator, composed_z, "markdown").?;
@@ -546,7 +546,7 @@ test "upsertOne adds a .plugins block when none exists yet" {
     const source: [:0]const u8 = ".{ .theme = 0.35 }";
     const composed = try upsertOne(testing.allocator, source, .{ .id = "pixi", .text = ".{ .enabled = true }" });
     defer testing.allocator.free(composed);
-    const composed_z = try testing.allocator.dupeZ(u8, composed);
+    const composed_z = try testing.allocator.dupeSentinel(u8, composed, 0);
     defer testing.allocator.free(composed_z);
 
     const pixi = extractPluginBlob(testing.allocator, composed_z, "pixi").?;
@@ -557,7 +557,7 @@ test "upsertOne adds a .plugins block when none exists yet" {
 test "upsertOne handles a missing settings.zon (null source)" {
     const composed = try upsertOne(testing.allocator, null, .{ .id = "pixi", .text = ".{ .enabled = true }" });
     defer testing.allocator.free(composed);
-    const composed_z = try testing.allocator.dupeZ(u8, composed);
+    const composed_z = try testing.allocator.dupeSentinel(u8, composed, 0);
     defer testing.allocator.free(composed_z);
 
     const pixi = extractPluginBlob(testing.allocator, composed_z, "pixi").?;
@@ -601,7 +601,7 @@ test "composed extensions survive extractField + parseExtensions" {
     );
     defer testing.allocator.free(block);
 
-    const block_z = try testing.allocator.dupeZ(u8, block);
+    const block_z = try testing.allocator.dupeSentinel(u8, block, 0);
     defer testing.allocator.free(block_z);
 
     const exts_text = extractField(testing.allocator, block_z, "extensions").?;
@@ -642,24 +642,24 @@ test "every Reserved field is discoverable by extractField" {
     // reserved field that composes to something `extractField` cannot find back is silently
     // destructive: it would be reinterpreted as a plugin-author setting. This asserts the two
     // sides stay in step for every field, including ones added later.
-    inline for (@typeInfo(Reserved).@"struct".fields) |field| {
+    inline for (@typeInfo(Reserved).@"struct".field_names, @typeInfo(Reserved).@"struct".field_types, @typeInfo(Reserved).@"struct".field_attrs) |field_name, field_type, _| {
         // Compose a block in which this field is guaranteed non-default, so it is actually
         // emitted (fields are written only when they differ from their default).
         var reserved: Reserved = .{};
-        switch (field.type) {
-            bool => @field(reserved, field.name) = !@field(reserved, field.name),
+        switch (field_type) {
+            bool => @field(reserved, field_name) = !@field(reserved, field_name),
             // Tri-state: absent is the default, so either concrete value is "non-default" and
             // must be emitted. `false` is the interesting one — it used to be omitted.
-            ?bool => @field(reserved, field.name) = false,
-            []const []const u8 => @field(reserved, field.name) = &.{".probe"},
-            else => @compileError("extend this test for Reserved field type " ++ @typeName(field.type)),
+            ?bool => @field(reserved, field_name) = false,
+            []const []const u8 => @field(reserved, field_name) = &.{".probe"},
+            else => @compileError("extend this test for Reserved field type " ++ @typeName(field_type)),
         }
         const block = try composePluginIdBlock(testing.allocator, reserved, null);
         defer testing.allocator.free(block);
-        const block_z = try testing.allocator.dupeZ(u8, block);
+        const block_z = try testing.allocator.dupeSentinel(u8, block, 0);
         defer testing.allocator.free(block_z);
 
-        const found = extractField(testing.allocator, block_z, field.name);
+        const found = extractField(testing.allocator, block_z, field_name);
         try testing.expect(found != null);
         testing.allocator.free(found.?);
     }

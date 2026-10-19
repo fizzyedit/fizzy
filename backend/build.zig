@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     // harness, against the patched library. Arguments after `--` reach the runner:
     // `--filter <suite|test>`, `--require-gpu <driver>`.
     const test_sdl_step = b.step("test-sdl", "Build and run the suites for fizzy's SDL patches");
-    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseFast else optimize;
+    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .debug) .fast else optimize;
     if (sdlDependency(b, target, sdl_optimize, null)) |sdl| {
         const source = patchedSdl(b).?;
         const sdl_test = b.addLibrary(.{
@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
         suites.root_module.linkLibrary(sdl_test);
         suites.root_module.linkLibrary(sdl.artifact("SDL3"));
         const run = b.addRunArtifact(suites);
-        if (b.args) |args| run.addArgs(args);
+        run.addPassthruArgs();
         test_sdl_step.dependOn(&run.step);
     }
 }
@@ -72,6 +72,8 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     // The backend's health counters: frame-time percentiles, per-frame counts, SDL's log counted
     // from any thread, a snapshot as ZON.
     .{ .name = "backend-health-tests", .root = "src/Health.zig" },
+    // Which touch button each finger on the screen presses; a trackpad's fingers, none.
+    .{ .name = "backend-touch-slots-tests", .root = "src/touch_slots.zig" },
 };
 
 /// Where the macOS SDK is, for a macOS target that is not the host's own (`-Dtarget=aarch64-macos`
@@ -93,6 +95,36 @@ pub const Options = struct {
 /// it. dvui imports it by name, and a second module over the same file in one compilation is an
 /// error.
 var backend_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+var glass_look_module: ?*std.Build.Module = null;
+
+/// What every glass is at the window's opacity (`src/glass_look.zig`), std-only: one module for the
+/// whole build, so the backend and the app's `core` that a build links together share it (a file
+/// may belong to only one module). Pass it to `core_module.addImports` for a `core` linked beside
+/// this backend.
+pub fn glassLookModule(dep: *std.Build.Dependency) *std.Build.Module {
+    if (glass_look_module) |m| return m;
+    const m = dep.builder.createModule(.{ .root_source_file = dep.builder.path("src/glass_look.zig") });
+    glass_look_module = m;
+    return m;
+}
+
+/// The glass module for each dvui (`glassModule`), for the same reason.
+var glass_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+
+/// Fizzy's in-app glass (`src/glass/root.zig`: the frame target, the frosted backdrops, the liquid
+/// glass and its program, motion) over `dvui_mod`: one per dvui, as the backend is, so the backend
+/// and the app's `core` that a build links together share it. Pass it to `core_module.addImports`
+/// for a `core` linked beside this backend.
+pub fn glassModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module) *std.Build.Module {
+    if (glass_modules.get(dvui_mod)) |m| return m;
+    const b = dep.builder;
+    const m = b.createModule(.{ .root_source_file = b.path("src/glass/root.zig") });
+    m.addImport("dvui", dvui_mod);
+    m.addImport("glass_look", glassLookModule(dep));
+    glass_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
+    return m;
+}
+
 /// The `platform` module for each backend module, for the same reason.
 var platform_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
 
@@ -107,7 +139,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     // device, every window's present. A Debug frame spent much of itself there (`sample`), and a
     // window's way into full screen ran at half the display's rate in Debug alone. The app's own
     // code stays Debug; stepping into SDL's C is what a Debug app gives up.
-    const sdl_optimize: std.builtin.OptimizeMode = if (opts.optimize == .Debug) .ReleaseFast else opts.optimize;
+    const sdl_optimize: std.builtin.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
     const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.macos_sdk);
 
     const sdl_translate_c = b.addTranslateC(.{
@@ -134,6 +166,12 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
         addMacosSdk(m, opts);
         m.addCSourceFile(.{ .file = b.path("src/macos_monitor.m") });
     }
+    m.addImport("glass_look", glassLookModule(dep));
+    // A plain dvui app's frame is drawn through the glass's frame target (`plainFrameBegin`), and
+    // its floating windows are made of the glass (`floatingWindowBackground`). The
+    // same module as the app's `core` takes (`glassModule`, one per dvui); it imports dvui, never
+    // the backend.
+    m.addImport("glass", glassModule(dep, dvui_mod));
     dvui_mod.addImport("backend", m);
     backend_modules.put(b.allocator, dvui_mod, m) catch @panic("OOM");
     return m;
@@ -145,7 +183,8 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
 fn patchedSdl(b: *std.Build) ?std.Build.LazyPath {
     const io = b.graph.io;
     var names: std.ArrayList([]const u8) = .empty;
-    var dir = b.build_root.handle.openDir(io, "patches/sdl", .{ .iterate = true }) catch |err|
+    b.dependOnDirectoryContents(b.path("patches/sdl"));
+    var dir = b.root.openDir(io, "patches/sdl", .{ .iterate = true }) catch |err|
         std.debug.panic("backend: open patches/sdl: {t}", .{err});
     defer dir.close(io);
     var it = dir.iterate();

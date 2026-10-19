@@ -28,6 +28,11 @@ pub const ide = struct {
     pub const panel: []const []const u8 = &.{ "bottom", "panel", "output" };
     /// The main area: documents, canvases — the thing being worked on.
     pub const main: []const []const u8 = &.{ "main", "center", "workspace" };
+    /// The home page: what the main area shows while nothing is open, in place of the
+    /// workbench's own (its logo, New File, Open Folder). The workbench declares that place,
+    /// named `Home`, only while its one document pane is empty, so a document opening puts the
+    /// home page away (`docs/PLUGINS.md` §3.1.2).
+    pub const home: []const []const u8 = &.{"home"};
 };
 
 /// The studio shape (`src/editor/layout/studio.zig`): no file explorer, a large canvas, a
@@ -135,7 +140,7 @@ pub fn strength(region: []const []const u8, surface: []const []const u8) Fit {
     var best: Fit = .none;
     for (region) |r| for (surface) |s| {
         const f = fit(r, s);
-        if (@intFromEnum(f) > @intFromEnum(best)) best = f;
+        if (@backingInt(f) > @backingInt(best)) best = f;
     };
     return best;
 }

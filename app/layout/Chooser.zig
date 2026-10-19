@@ -303,7 +303,8 @@ fn carryLifted(self: *Chooser) void {
     } else {
         f.beginViewDrag(lift.id, lift.rect);
         // From the motion that lifted it on: a release in the same frame is the drag's too.
-        if (dvui.currentWindow().capture) |cm| dvui.captureMouseCustom(cm, lift.event);
+        if (dvui.captureMouseGet()) |cm|
+            dvui.captureMouseCustom(cm, lift.event);
     }
     self.carried = lift.id;
     dvui.refresh(null, @src(), null);
@@ -376,13 +377,19 @@ fn placeName(f: *Layout, place: *const Region) ?[]const u8 {
 
 // ── The two stock looks ────────────────────────────────────────────────────────────────────────
 
-/// A tab's look: the view's title, uppercase, in the heading font, highlighted when selected.
-pub fn label(view: *const Layout.Surface, selected: bool) void {
+/// A tab's look: the view's title, uppercase, in the heading font, highlighted when selected and
+/// brightened under the pointer.
+pub fn label(view: *const Layout.Surface, selected: bool, hovered: bool) void {
     var buf: [64]u8 = undefined;
     const title = if (view.title.len <= buf.len) std.ascii.upperString(&buf, view.title) else view.title;
     const theme = dvui.themeGet();
     dvui.labelNoFmt(@src(), title, .{}, .{
-        .color_text = .{ .color = if (selected) theme.color(.highlight, .fill) else theme.color(.control, .text) },
+        .color_text = .{ .color = if (selected)
+            theme.color(.highlight, .fill)
+        else if (hovered)
+            theme.color(.window, .text)
+        else
+            theme.color(.control, .text) },
         .font = dvui.Font.theme(.heading),
         .padding = dvui.Rect.all(4),
         .gravity_y = 0.5,

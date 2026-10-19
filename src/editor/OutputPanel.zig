@@ -207,7 +207,6 @@ fn drawTabStrip(scopes: []const []const u8) void {
         .expand = .vertical,
         .min_size_content = .{ .w = 120 },
         .background = false,
-        .gravity_x = 1.0,
         .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) },
     });
     defer strip.deinit();

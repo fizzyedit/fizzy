@@ -18,7 +18,7 @@
 //! node indices (and thus `split_ratio` pointers) valid for the whole frame.
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../motion.zig");
+const motion = @import("glass").motion;
 const anim = @import("../anim.zig");
 const icon_tex = @import("../gfx/icon.zig");
 
@@ -960,7 +960,7 @@ pub fn deinit(self: *Dockspace) void {
         const s = self.data().rectScale().s;
         const highlight = dvui.themeGet().color(.highlight, .fill);
         if (@import("../dialogs.zig").dialogFrost()) |frost| {
-            @import("BlurBackdrop.zig").frostPane(self.data().id.update("drop_zone_frost"), self.hover_rect, @import("../corners.zig").round(8), s, .{
+            @import("glass").BlurBackdrop.frostPane(self.data().id.update("drop_zone_frost"), self.hover_rect, @import("../corners.zig").round(8), s, .{
                 .radius = frost.radius,
                 .tint = highlight.opacity(0.6),
                 .mix = 0.35,

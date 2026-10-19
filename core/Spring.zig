@@ -8,7 +8,7 @@
 //! playful overshoots, minimal arrives without overshoot, off goes straight to the target.
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("motion.zig");
+const motion = @import("glass").motion;
 
 const Spring = @This();
 

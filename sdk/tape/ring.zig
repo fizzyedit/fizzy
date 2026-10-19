@@ -315,7 +315,7 @@ test "the rings keep the newest, and a stretch starts at the oldest frame still 
     for (0..TestRing.frames_cap + 10) |i| ring.appendFrame(.{ .t_ns = @intCast(i) }, &.{.{ .button = @intCast(i % 16) }}, &.{});
     try std.testing.expectEqual(@as(u64, 10), ring.oldestWhole());
     // Payloads outrunning their ring: a frame whose bytes were overwritten is not whole.
-    for (0..8) |_| ring.appendFrame(.{ .t_ns = 100 }, &.{.{ .button = 1 }}, &.{"x" ** 64});
+    for (0..8) |_| ring.appendFrame(.{ .t_ns = 100 }, &.{.{ .button = 1 }}, &.{&@as([64]u8, @splat('x'))});
     const oldest = ring.frame(ring.oldestWhole());
     const r = ring.records[@intCast(oldest.first % TestRing.records_cap)];
     try std.testing.expect(r.bytes_at >= ring.bytes_n - TestRing.bytes_cap);

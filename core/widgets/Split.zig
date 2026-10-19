@@ -6,7 +6,7 @@
 //! event-routing rules rather than layout logic. It depends on nothing but dvui.
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../motion.zig");
+const motion = @import("glass").motion;
 const icon_tex = @import("../gfx/icon.zig");
 const icons = @import("icons");
 const anim = @import("../anim.zig");
@@ -435,7 +435,10 @@ pub fn grab(self: *Split, container: *dvui.WidgetData) Grab {
                     };
                 }
             },
-            .position => dvui.cursorSet(cursor),
+            // Over the edge of a neighbour asking for a cursor of its own (a tab's hand), the
+            // split's arrow says what a press beside the sash does: it outranks a hover cursor
+            // whichever was drawn first. The cursor only: which widget takes a press is unchanged.
+            .position => dvui.cursorSetPriority(cursor, .resize),
             else => {},
         }
     }
@@ -915,8 +918,8 @@ test "a tray takes what it asks for while there is room" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const left: dvui.Id = @enumFromInt(0xA1);
-    const right: dvui.Id = @enumFromInt(0xA2);
+    const left: dvui.Id = @fromBackingInt(@intCast(0xA1));
+    const right: dvui.Id = @fromBackingInt(@intCast(0xA2));
     setSize(left, 100);
     setSize(right, 100);
 
@@ -931,8 +934,8 @@ test "a pull stops when the base is at its minimum and leaves the other tray" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const left: dvui.Id = @enumFromInt(0xB1);
-    const right: dvui.Id = @enumFromInt(0xB2);
+    const left: dvui.Id = @fromBackingInt(@intCast(0xB1));
+    const right: dvui.Id = @fromBackingInt(@intCast(0xB2));
     setSize(left, 200);
     setSize(right, 200);
 
@@ -948,8 +951,8 @@ test "a pull that asks for more than the whole budget still leaves the other tra
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const left: dvui.Id = @enumFromInt(0xC1);
-    const right: dvui.Id = @enumFromInt(0xC2);
+    const left: dvui.Id = @fromBackingInt(@intCast(0xC1));
+    const right: dvui.Id = @fromBackingInt(@intCast(0xC2));
     setSize(left, 200);
     setSize(right, 200);
 
@@ -964,8 +967,8 @@ test "push_out past min shrinks the tray behind" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const inner: dvui.Id = @enumFromInt(0xC3);
-    const outer: dvui.Id = @enumFromInt(0xC4);
+    const inner: dvui.Id = @fromBackingInt(@intCast(0xC3));
+    const outer: dvui.Id = @fromBackingInt(@intCast(0xC4));
     setSize(inner, 0);
     setSize(outer, 120);
 
@@ -981,8 +984,8 @@ test "push_out on the right does not close the left" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const left: dvui.Id = @enumFromInt(0xC5);
-    const right: dvui.Id = @enumFromInt(0xC6);
+    const left: dvui.Id = @fromBackingInt(@intCast(0xC5));
+    const right: dvui.Id = @fromBackingInt(@intCast(0xC6));
     setSize(left, 160);
     setSize(right, 0);
 
@@ -997,8 +1000,8 @@ test "a pull with no flex left reclaims the opposite side" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const left: dvui.Id = @enumFromInt(0xC7);
-    const right: dvui.Id = @enumFromInt(0xC8);
+    const left: dvui.Id = @fromBackingInt(@intCast(0xC7));
+    const right: dvui.Id = @fromBackingInt(@intCast(0xC8));
     setSize(left, 0);
     setSize(right, 980);
 
@@ -1014,8 +1017,8 @@ test "conflicting minimums squeeze the base rather than inverting the layout" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const left: dvui.Id = @enumFromInt(0xD1);
-    const right: dvui.Id = @enumFromInt(0xD2);
+    const left: dvui.Id = @fromBackingInt(@intCast(0xD1));
+    const right: dvui.Id = @fromBackingInt(@intCast(0xD2));
     setSize(left, 100);
     setSize(right, 100);
 
@@ -1034,7 +1037,7 @@ test "a container smaller than the base leaves the trays nothing" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const only: dvui.Id = @enumFromInt(0xE1);
+    const only: dvui.Id = @fromBackingInt(@intCast(0xE1));
     setSize(only, 100);
 
     // base_min alone exceeds the container: room is zero, not negative.
@@ -1047,7 +1050,7 @@ test "a max below the min does not panic in the clamp" {
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
 
-    const only: dvui.Id = @enumFromInt(0xF1);
+    const only: dvui.Id = @fromBackingInt(@intCast(0xF1));
     setSize(only, 50);
 
     // `std.math.clamp` asserts lower <= upper, so a contradictory pair has to be reconciled

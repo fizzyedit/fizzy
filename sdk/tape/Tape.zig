@@ -493,7 +493,7 @@ pub const Owned = struct {
 /// (`parse`) otherwise.
 pub fn load(gpa: std.mem.Allocator, bytes: []const u8, check: Check) !Owned {
     if (binary.sniff(bytes)) return binary.read(gpa, bytes, check);
-    const source = try gpa.dupeZ(u8, bytes);
+    const source = try gpa.dupeSentinel(u8, bytes, 0);
     defer gpa.free(source);
     return parse(gpa, source, check);
 }
@@ -502,7 +502,8 @@ pub fn load(gpa: std.mem.Allocator, bytes: []const u8, check: Check) !Owned {
 pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8, check: Check) !Owned {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
-    const tape = try std.zon.parse.fromSliceAlloc(Tape, arena.allocator(), source, null, .{});
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const tape = try std.zon.parse.fromSlice(Tape, .{ .gpa = gpa, .arena = arena.allocator(), .source = source, .diagnostics = &diag });
     try tape.validate(check);
     return .{ .arena = arena, .tape = tape };
 }
@@ -691,7 +692,7 @@ test "a tape round-trips through ZON" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
     try tape.write(&out.writer);
-    const text = try testing.allocator.dupeZ(u8, out.written());
+    const text = try testing.allocator.dupeSentinel(u8, out.written(), 0);
     defer testing.allocator.free(text);
 
     var back = try parse(testing.allocator, text, .{});
@@ -762,7 +763,7 @@ test "a step changes a file of the keyframe before it, whose owner the app can a
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
     try tape.write(&out.writer);
-    const source = try testing.allocator.dupeZ(u8, out.written());
+    const source = try testing.allocator.dupeSentinel(u8, out.written(), 0);
     defer testing.allocator.free(source);
     var back = try parse(testing.allocator, source, test_steps);
     defer back.deinit();

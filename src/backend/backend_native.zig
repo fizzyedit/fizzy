@@ -126,7 +126,7 @@ pub fn restoreWindowState(win: *dvui.Window) void {
         platform.geometry.setStore(.{ .load = layoutStoreLoad, .save = layoutStoreSave });
     };
     platform.geometry.restore(win);
-    platform.macos_monitor.install(win);
+    platform.macos_monitor.install(win, false);
 }
 
 /// Keep where the window is for the next launch. Call at shutdown (AppDeinit).
@@ -150,7 +150,9 @@ pub fn windowGlass(win: *dvui.Window, look: WindowGlassLook) bool {
 /// OS windows besides the main one, each showing a part of the one frame — a float popped out
 /// (`plans/POPOUT_WINDOWS_PLAN.md`): the backend package's, for any dvui app on it. On dvui's own
 /// SDL3 backend (`-Dnative-backend=sdl3`) there are none, as on the web, and floats stay in.
-pub const viewports = if (@hasDecl(@import("backend"), "viewports")) @import("backend").viewports else @import("viewports_none");
+/// Chosen by the backend the build linked, not by looking for the declaration: a `viewports` the
+/// backend stops exporting fails the build here instead of quietly keeping every float in.
+pub const viewports = if (@import("native_backend").fizzy) @import("backend").viewports else @import("viewports_none");
 
 /// Fizzy keeps the window's geometry in `layout.zon`, beside its regions — one file for where the
 /// window and everything in it were left, and the file it has always kept the frame in.
@@ -158,8 +160,9 @@ var layout_store_dir: []const u8 = "";
 
 fn layoutStoreLoad(_: ?*anyopaque) ?platform.geometry.Geometry {
     const gpa = std.heap.page_allocator;
-    const f = loadWindowFile(gpa, layout_store_dir);
-    defer std.zon.parse.free(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const f = loadWindowFile(gpa, arena.allocator(), layout_store_dir);
     if (f.w < 1 or f.h < 1) return null;
     return .{ .x = f.x, .y = f.y, .w = f.w, .h = f.h, .state = if (f.maximized) .maximized else .normal };
 }
@@ -167,8 +170,9 @@ fn layoutStoreLoad(_: ?*anyopaque) ?platform.geometry.Geometry {
 fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
     // Read-modify-write: the regions and tree on disk stay as they are.
     const gpa = std.heap.page_allocator;
-    var f = loadWindowFile(gpa, layout_store_dir);
-    defer std.zon.parse.free(gpa, f);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var f = loadWindowFile(gpa, arena.allocator(), layout_store_dir);
     f.x = g.x;
     f.y = g.y;
     f.w = g.w;
@@ -182,18 +186,7 @@ fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
 /// pane mid-transition; a zoom without a Space keeps the full strip. Fizzy's titlebar heights
 /// over the window's state (`platform.macos_monitor.titlebarState`).
 pub fn titlebarStripHeight(win: *dvui.Window) f32 {
-    if (builtin.target.os.tag != .macos) return Constants.titlebar_height;
-    const t = platform.macos_monitor.titlebarState(win);
-    const in: platform.window_layout.StripInputs = .{
-        .collapsed = t.collapsed,
-        .restoring_chrome = t.restoring_chrome,
-        .live_inset = t.live_inset,
-        .saved_inset = t.saved_inset,
-        .titlebar_height = Constants.titlebar_height,
-        .titlebar_top_buffer = Constants.titlebar_top_buffer,
-    };
-    if (platform.window.spaceFullness(win)) |f| return platform.window_layout.titlebarStripAtFullness(in, f);
-    return platform.window_layout.chooseTitlebarStrip(in);
+    return platform.macos_monitor.titlebarStrip(win.backend.impl.window, Constants.titlebar_height, Constants.titlebar_top_buffer);
 }
 
 // ---- The native menu bar: fizzy's menus (`menu_model`) on the platform's (`platform.menu`) ----
@@ -245,7 +238,7 @@ const native_menus: []const platform.menu.Menu = blk: {
             .aliases = sub.aliases,
             .title = sub.title,
             .entries = &done,
-            .help = std.mem.eql(u8, sub.id, "fizzy.menu.help"),
+            .help = sub == menu_model.help,
         };
     }
     const done = menus;
@@ -293,7 +286,7 @@ fn menuEnabled(_: ?*anyopaque, ref: platform.menu.Ref) bool {
             // A `visible` item that isn't is shown greyed rather than removed: rebuilding the
             // retained NSMenu on every state change isn't worth it for the same information.
             if (item.visible) |f| if (!f(fizzy.editor())) return false;
-            const enabled = item.enabled orelse return true;
+            const enabled = item.enabled orelse return fizzy.editor().app.host.commandEnabled(item.id);
             return enabled(fizzy.editor());
         },
         // A plugin's item is its command's, on both bars; no command is always enabled.
@@ -350,7 +343,7 @@ pub fn rebuildNativeRecentFolders() void {
     const folders = fizzy.editor().app.recents.folders.items;
     const titles = alloc().alloc([]const u8, folders.len) catch return;
     defer alloc().free(titles);
-    for (folders, 0..) |f, i| titles[folders.len - 1 - i] = f;
+    for (folders, 0..) |f, i| titles[folders.len - 1 - i] = f.path;
     native_recent_count = folders.len;
     platform.menu.setList(0, titles);
 }

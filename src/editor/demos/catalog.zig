@@ -4,8 +4,11 @@
 //! Adding one: a file beside this with `pub fn build(s: *Script) !void`, and a row below. It is
 //! then a command ("Demo: <title>", `fizzy.demo.<name>`), `FIZZY_DEMO=<name>` natively and
 //! `?demo=<name>` on the web. What a script can aim at is in `docs/AUTOMATION.md`.
+//!
+//! They need nothing but `tape`, so `zig build demos` builds them on the host too, into the tapes
+//! the site's copies of the app serve beside themselves (`scripts/demos.zig`).
 const std = @import("std");
-const Script = @import("app").automation.Script;
+const Script = @import("tape").Script;
 
 pub const Entry = struct {
     /// Stable id: the command's suffix, the web's `?demo=`, the mount `demo://<name>`.
@@ -76,8 +79,10 @@ pub const documents = "region:Main";
 pub const palette = "fizzy.palette";
 
 /// The rail's Files icon. A click opens the explorer when it is put away, and puts it away when it
-/// is open — on a narrow window, where the explorer is folded rather than closed, too.
-pub const files_icon = "fizzy.rail:" ++ @import("workbench").view_files;
+/// is open — on a narrow window, where the explorer is folded rather than closed, too. Spelled out
+/// rather than built from `workbench.view_files`, which would bring dvui into `zig build demos`;
+/// `tests/demos.zig` holds them equal.
+pub const files_icon = "fizzy.rail:workbench.files";
 
 /// Open `rel` the way a person who keeps the explorer put away would: open the explorer from the
 /// rail, click the file, and put the explorer away again so the editor has the room. A demo's

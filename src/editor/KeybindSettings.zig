@@ -704,7 +704,7 @@ fn directShortcut(editor: *fizzy.Editor, id: []const u8, platform: Keymap.Platfo
     // Prefer the highest-source binding (user > plugin > profile > dvui).
     var best = found[0];
     for (found[1..]) |b| {
-        if (@intFromEnum(b.source) >= @intFromEnum(best.source)) best = b;
+        if (@backingInt(b.source) >= @backingInt(best.source)) best = b;
     }
     const keys = Keymap.formatKeys(arena, best.stroke, platform) catch return null;
     return .{ .keys = keys, .stroke = best.stroke };

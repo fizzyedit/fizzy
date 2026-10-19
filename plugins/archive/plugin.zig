@@ -57,6 +57,7 @@ const vtable: sdk.Plugin.VTable = .{
     .encodeSnapshot = encodeSnapshot,
     .releaseSnapshot = releaseSnapshot,
     .documentWritten = documentWritten,
+    .documentBytes = documentBytes,
 };
 
 comptime {
@@ -287,6 +288,12 @@ fn releaseSnapshot(_: *anyopaque, snapshot: *anyopaque) void {
     const snap: *Snapshot = @ptrCast(@alignCast(snapshot));
     snap.allocator.free(snap.bytes);
     snap.allocator.destroy(snap);
+}
+/// The archive packed as it stands, for a copy that is not a save: no generation remembered, so a
+/// save in flight still cleans up to its own.
+fn documentBytes(_: *anyopaque, handle: DocHandle, _: []const u8, allocator: std.mem.Allocator) anyerror![]u8 {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    return doc.pack(allocator);
 }
 fn documentWritten(state: *anyopaque, handle: DocHandle, path: []const u8) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;

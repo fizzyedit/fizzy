@@ -168,6 +168,9 @@ preview_split_ratio_user: f32 = 0.5,
 
 /// Undo/redo history — see `textcore.History` for the capture + grouping strategy.
 history: tc.History = .{},
+/// Who last went back in the history (`undo`): the steps an edit after it adds for the jump are
+/// theirs (`recordGoneBack`).
+went_back_by: sdk.Host.Acting = .{},
 /// `history.topOpId()` as of the last successful save; the document is dirty exactly when
 /// the two differ. Deliberately an id, not `undo.items.len` — a length can return to its
 /// saved value via undo-then-new-edit while content differs from disk, but an id can't:
@@ -317,7 +320,7 @@ pub fn fromPath(path: []const u8) !Document {
 /// The token its editor keeps its measured layout under while hidden (`TextEntryWidget
 /// .InitOptions.retain_layout`), released when the document closes.
 pub fn layoutToken(self: *const Document) dvui.data.Token {
-    return @enumFromInt(std.hash.Wyhash.hash(0x7e47_1a70, std.mem.asBytes(&self.id)));
+    return @fromBackingInt(@intCast(std.hash.Wyhash.hash(0x7e47_1a70, std.mem.asBytes(&self.id))));
 }
 
 pub fn deinit(self: *Document) void {
@@ -394,11 +397,12 @@ pub fn save(self: *Document) !void {
     self.notifyContentChanged();
 }
 
-/// The bytes `save` would write, for a host that does the writing itself (a mounted drive).
-/// Remembers which edit those bytes stand for: the write lands later, and edits typed in the
-/// meantime must still count as unsaved when it does.
+/// The bytes `save` would write, for a host that does the writing itself (a mounted drive), as a
+/// save starts. Remembers which edit those bytes stand for: the write lands later, and edits typed
+/// in the meantime must still count as unsaved when it does. The run of typing stays open until
+/// then: the save's undo stop is made when its write lands (`written`). A copy that is no save (a
+/// crash checkpoint) takes `text` instead (the plugin's `documentBytes`), remembering nothing.
 pub fn savedBytes(self: *Document, allocator: std.mem.Allocator) ![]u8 {
-    self.history.closeGroup();
     self.serialized_op_id = self.history.topOpId();
     return allocator.dupe(u8, self.text.items);
 }
@@ -415,6 +419,10 @@ pub fn written(self: *Document, path: []const u8) !void {
         self.unsaved = false;
     }
     self.clean_op_id = self.serialized_op_id;
+    // The state written is an undo stop, as `save` makes it, while it is still the top. Typed
+    // while the write was in flight, a keystroke has already joined that step: the step is newer
+    // than the file, so the document stays dirty, and undo takes it back past the saved state.
+    if (self.history.topOpId() == self.serialized_op_id) self.history.closeGroup();
     self.notifyContentChanged();
 }
 
@@ -455,7 +463,7 @@ pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
         .dirty = self.isDirty(),
         .focused = self.editor_focused,
         .untitled = self.unsaved,
-        .preview_mode = @intFromEnum(self.preview_mode),
+        .preview_mode = @backingInt(self.preview_mode),
         .scroll_y = self.scroll_y,
         .split = self.preview_split_ratio_user,
     });
@@ -467,7 +475,7 @@ pub fn fingerprint(self: *const Document) u64 {
     var h = std.hash.Wyhash.init(0x7e47_f1);
     h.update(self.text.items);
     const sel = self.selection();
-    h.update(std.mem.asBytes(&[_]u64{ sel.anchor, sel.head, @intFromBool(self.isDirty()), @intFromEnum(self.preview_mode) }));
+    h.update(std.mem.asBytes(&[_]u64{ sel.anchor, sel.head, @intFromBool(self.isDirty()), @backingInt(self.preview_mode) }));
     return h.final();
 }
 
@@ -550,7 +558,9 @@ pub fn replaceRange(self: *Document, start: usize, end: usize, new: []const u8) 
 pub fn undo(self: *Document) void {
     const gpa = sdk.allocator();
     const sel = self.history.applyUndo(gpa, &self.text) orelse return;
-    if (self.history.lastUndone()) |s| self.recordEdits(.undone, s.step, s.edits, s.sel_before, true);
+    // Whoever goes back owns the jump, when an edit later makes it steps (`recordGoneBack`).
+    self.went_back_by = sdk.host().acted();
+    if (self.history.lastUndone()) |s| self.recordEdits(.undone, s.step, s.edits, s.sel_before, true, null);
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
@@ -562,7 +572,7 @@ pub fn undo(self: *Document) void {
 pub fn redo(self: *Document) void {
     const gpa = sdk.allocator();
     const sel = self.history.applyRedo(gpa, &self.text) orelse return;
-    if (self.history.lastApplied()) |s| self.recordEdits(.redone, s.step, s.edits, s.sel_after, false);
+    if (self.history.lastApplied()) |s| self.recordEdits(.redone, s.step, s.edits, s.sel_after, false, null);
     self.refreshLineCount();
     self.sel_start = @min(sel.start(), self.text.items.len);
     self.sel_end = @min(sel.end(), self.text.items.len);
@@ -579,16 +589,35 @@ fn recordStep(self: *const Document, step: sdk.Step) void {
     sdk.host().recordStep(self.id, step);
 }
 
-/// What `history.end` or `pushComplete` did, reported as a step.
-pub fn recordCommitted(self: *const Document, c: tc.History.Committed) void {
-    self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false);
+/// What `history.end` or `pushComplete` did, reported as a step: after the steps an edit after
+/// going back put on the line (`recordGoneBack`).
+pub fn recordCommitted(self: *Document, c: tc.History.Committed) void {
+    if (c.back > 0) self.recordGoneBack(c.back);
+    self.recordEdits(if (c.joined) .joined else .added, c.step, c.edits, c.sel_after, false, null);
+    // Last: the steps reported above are read from the history.
+    if (!c.joined) self.history.trim(sdk.allocator(), sdk.host().historyLimit());
+}
+
+/// The steps an edit after going back put on the line below it (`tc.History.keepGoneBack`): the
+/// `n` gone back over, applied again, then their reverses. Reported as whoever went back, so an
+/// agent's next edit never makes it the author of taking back the person's work.
+fn recordGoneBack(self: *const Document, n: usize) void {
+    const host = sdk.host();
+    const outer = host.actAgain(self.went_back_by);
+    defer host.endAct(outer);
+    // Below the commit: the reverses (1..n), then the steps gone back over (n+1..2n). Oldest first.
+    var i: usize = 2 * n;
+    while (i > 0) : (i -= 1) {
+        const s = self.history.appliedBelowTop(i) orelse continue;
+        if (i > n) self.recordEdits(.redone, s.step, s.edits, s.sel_after, false, s.step) else self.recordEdits(.added, s.step, s.edits, s.sel_after, false, s.step);
+    }
 }
 
 /// `edits` of history step `id` reported as a step, forward or (`reverse`) as their undo, `sel`
 /// the selection they leave.
-fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool) void {
+fn recordEdits(self: *const Document, kind: sdk.Step.Kind, id: u64, edits: []const tc.Transaction.Edit, sel: tc.Range, reverse: bool, on_top: ?u64) void {
     // Every step reaches the host, which keeps who made it; its bytes only while it is recorded.
-    const top: u64 = if (self.history.lastApplied()) |r| r.step else 0;
+    const top: u64 = on_top orelse if (self.history.lastApplied()) |r| r.step else 0;
     if (!sdk.host().recording(self.id)) return self.recordStep(.{ .kind = kind, .id = id, .top = top });
     const gpa = sdk.allocator();
     var out: std.Io.Writer.Allocating = .init(gpa);
@@ -622,6 +651,55 @@ pub fn applyStep(self: *Document, effect: []const u8) !void {
     self.sel_cursor = @min(sel.head, self.text.items.len);
     self.pending_sel = sel;
     sdk.host().documentEdited(self.id);
+}
+
+/// Put the history back as its track recorded it (`sdk.Plugin.VTable.restoreHistory`), in place
+/// of what it holds: each entry's parts (`step_format`, as `recordEdits` wrote them) joined into
+/// one transaction, its id kept. Checked against the text first, on a copy: undoing every applied
+/// entry, and redoing every one after them, must land, or `error.StepDoesNotApply` and nothing
+/// changes. The text is untouched, and a clean document stays clean.
+pub fn restoreHistory(self: *Document, history: sdk.Plugin.RestoredHistory) !void {
+    const gpa = sdk.allocator();
+    if (history.applied > history.entries.len) return error.BadStep;
+    const built = try gpa.alloc(tc.History.Restored, history.entries.len);
+    defer gpa.free(built);
+    var made: usize = 0;
+    var taken = false;
+    defer if (!taken) for (built[0..made]) |*b| b.txn.deinit(gpa);
+    for (history.entries, built) |e, *b| {
+        b.* = .{ .step = e.id, .txn = .{} };
+        made += 1;
+        var first = true;
+        for (e.parts) |part| {
+            const view = try tc.Transaction.StepView.init(part);
+            var it = view.iterator();
+            while (it.next()) |edit| {
+                if (first) b.txn.sel_before = .collapsed(edit.pos);
+                first = false;
+                try b.txn.append(gpa, edit.pos, edit.removed, edit.inserted);
+            }
+            b.txn.sel_after = view.sel;
+        }
+    }
+    // Back to where the history began, and forward through what redo brings back: each must fit.
+    {
+        var copy: std.ArrayList(u8) = .empty;
+        defer copy.deinit(gpa);
+        try copy.appendSlice(gpa, self.text.items);
+        var i = history.applied;
+        while (i > 0) {
+            i -= 1;
+            built[i].txn.applyInverse(gpa, &copy) catch return error.StepDoesNotApply;
+        }
+        copy.clearRetainingCapacity();
+        try copy.appendSlice(gpa, self.text.items);
+        for (built[history.applied..]) |b| b.txn.applyForward(gpa, &copy) catch return error.StepDoesNotApply;
+    }
+    const was_clean = !self.isDirty();
+    try self.history.restore(gpa, built, history.applied);
+    taken = true;
+    if (was_clean) self.clean_op_id = self.history.topOpId();
+    self.history.trim(gpa, sdk.host().historyLimit());
 }
 
 /// Undo or redo until history step `step` is the last applied; 0 goes back before the first.

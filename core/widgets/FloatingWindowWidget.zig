@@ -1,9 +1,9 @@
 const std = @import("std");
 const dvui = @import("dvui");
-const motion = @import("../motion.zig");
+const motion = @import("glass").motion;
 
 const Event = dvui.Event;
-const BlurBackdrop = @import("BlurBackdrop.zig");
+const BlurBackdrop = @import("glass").BlurBackdrop;
 const screens = @import("../screens.zig");
 const Options = dvui.Options;
 const Point = dvui.Point;
@@ -813,7 +813,7 @@ pub fn processEventsBefore(self: *FloatingWindowWidget) void {
                 }
                 if (me.action == .position) {
                     e.handle(@src(), self.data()); // don't want any widgets under this to see a hover
-                    dvui.cursorSet(.arrow_nw_se);
+                    dvui.cursorSetPriority(.arrow_nw_se, .resize);
                     continue;
                 }
             }
@@ -890,6 +890,10 @@ pub fn processEventsAfter(self: *FloatingWindowWidget) void {
                         } else {
                             if (self.init_options.resize == .none) continue;
                         }
+                        // At `.normal`: this runs after the children, which take a press here
+                        // first, so the edge's arrow must not outrank their cursors. The corner,
+                        // which takes its press before them (`processEventsBefore`), asks at
+                        // `.resize`.
                         dvui.cursorSet(self.cursorFor(dp));
                     },
                     else => {},
