@@ -40,7 +40,8 @@
         // `fizzy-sdk-<version>` tag in the fork before the pin lands. `fizzy-dev` itself stays a
         // working branch and can be rebased freely — the tag, never.
         .dvui = .{
-            // zig-0.17 branch (zig/0.17 pins a commit; tagged when it merges to main)
+            // The zig-0.17 branch: fizzy-sdk-0.2.30-7 and the floating window background hook after
+            // it (docs/DEPENDENCIES.md, patch 14)
             .url = "git+https://github.com/foxnne/dvui-dev#3d90fdda949d50ba7fa82117ccb18a40da5b41cc",
             .hash = "dvui-0.6.0-dev-AQFJmTG2BAHCy_MTZv6SjCTs3xHXSOPuxEsON67RQ7uS",
             //.path = "../../dvui-dev",

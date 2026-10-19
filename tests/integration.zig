@@ -12,6 +12,7 @@
 //! See `tests/README.md` for the overall layering.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("fizzy");
 const Tracks = @import("app").Tracks;
@@ -2507,6 +2508,80 @@ test "a split before a region that hides itself is not drawn, and nothing draws 
     try std.testing.expectEqual(@as(usize, 2), editor.app.layout.regions.items.len);
 }
 
+// A view whose content is its own scroll area, without `Surface.scrolls_itself`, grows wider
+// without limit in a place that scrolls what it shows, and nothing on screen says why. A Debug
+// build names it, once; one that says it scrolls itself, or whose scroll area does not fill its
+// place, is not named.
+const ScrollerFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn fills(_: ?*anyopaque) anyerror!dvui.App.Result {
+        var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+        defer scroll.deinit();
+        dvui.label(@src(), "rows", .{}, .{});
+        return .ok;
+    }
+
+    fn small(_: ?*anyopaque) anyerror!dvui.App.Result {
+        var scroll = dvui.scrollArea(@src(), .{}, .{ .min_size_content = .{ .w = 40, .h = 40 } });
+        defer scroll.deinit();
+        dvui.label(@src(), "rows", .{}, .{});
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        {
+            var content = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer content.deinit();
+            {
+                var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
+                defer main.deinit();
+            }
+            {
+                var panel = try layout.region(@src(), .{ .name = "Panel", .keywords = fizzy.sdk.keywords.ide.panel }, .{ .expand = .both });
+                defer panel.deinit();
+            }
+            {
+                var sidebar = try layout.region(@src(), .{ .name = "Sidebar", .keywords = fizzy.sdk.keywords.ide.sidebar }, .{ .expand = .both });
+                defer sidebar.deinit();
+            }
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+};
+
+test "a view filling its place with an unmarked scroll area is named once in Debug" {
+    if (builtin.mode != .debug) return error.SkipZigTest;
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+
+    const host = &editor.app.host;
+    try host.registerSurface(.{ .id = "test.unmarked", .title = "Unmarked", .keywords = fizzy.sdk.keywords.ide.main, .draw = ScrollerFrame.fills });
+    try host.registerSurface(.{ .id = "test.marked", .title = "Marked", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ScrollerFrame.fills, .scrolls_itself = true });
+    try host.registerSurface(.{ .id = "test.small", .title = "Small", .keywords = fizzy.sdk.keywords.ide.sidebar, .draw = ScrollerFrame.small });
+
+    ScrollerFrame.editor = editor;
+    defer ScrollerFrame.editor = null;
+    try dvui.testing.settle(ScrollerFrame.frame);
+    try dvui.testing.settle(ScrollerFrame.frame);
+
+    const named = &editor.app.layout.unmarked_scrollers;
+    try std.testing.expectEqual(@as(u8, 1), named.len);
+    try std.testing.expect(named.contains("test.unmarked"));
+    try std.testing.expect(!named.contains("test.marked"));
+    try std.testing.expect(!named.contains("test.small"));
+}
+
 /// Sidebar beside Main over Panel, with the picker drawn over them as fizzy's frame does.
 const PickerFrame = struct {
     var editor: ?*fizzy.Editor = null;
@@ -4615,6 +4690,113 @@ test "drag: a document not open yet goes only to a document's slot, whose drop g
     try std.testing.expect(state.assignment("Panel") == null);
 }
 
+/// An application's views holding documents (`State.documents`), for the layout to float: a new
+/// one is always `test.workspace.2`; the view a document carries alone is `lone`'s.
+const DocViews = struct {
+    var housed: [64]u8 = undefined;
+    var housed_len: usize = 0;
+    var lone: ?[]const u8 = null;
+    var folded: usize = 0;
+
+    fn house(_: *anyopaque, ids: []const []const u8) ?[]const u8 {
+        housed_len = @min(ids[0].len, housed.len);
+        @memcpy(housed[0..housed_len], ids[0][0..housed_len]);
+        return "test.workspace.2";
+    }
+
+    fn alone(_: *anyopaque, _: []const u8) ?[]const u8 {
+        return lone;
+    }
+
+    fn fold(_: *anyopaque, id: []const u8) bool {
+        if (!std.mem.startsWith(u8, id, "test.workspace.")) return false;
+        folded += 1;
+        return true;
+    }
+};
+
+test "float: a document tab dropped on its own pane's middle floats in a view holding it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+
+    const state = &editor.app.layout;
+    const gpa = editor.app.gpa;
+    const host = &editor.app.host;
+    const doc_kw: []const []const u8 = &.{"main.document"};
+    const regions = struct {
+        fn publish(st: *@TypeOf(editor.app.layout), g: std.mem.Allocator, float: bool) void {
+            st.registerRegion(g, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = .{ .x = 0, .y = 0, .w = 800, .h = 400 }, .size = .{ .w = 800, .h = 400 } });
+            st.registerRegion(g, .{ .name = "Pane 0", .keywords = &.{"main.document"}, .by_name = true, .kind_slot = true, .shows = .many, .bounds = .{ .x = 100, .y = 40, .w = 600, .h = 320 }, .on_drop = DropProbe.onDrop });
+            if (float) st.registerRegion(g, .{ .name = "Float 2", .keywords = fizzy.sdk.keywords.ide.main, .bounds = .{ .x = 200, .y = 100, .w = 400, .h = 240 } });
+            st.publishRegions();
+        }
+    };
+    regions.publish(state, gpa, false);
+    try host.registerSurface(.{ .id = "test.workspace.1", .title = "Workspace", .keywords = fizzy.sdk.keywords.ide.main, .draw = ManyPanelFrame.draw });
+    try host.registerSurface(.{ .id = "test.workspace.2", .title = "Workspace", .keywords = fizzy.sdk.keywords.ide.main, .draw = ManyPanelFrame.draw });
+    try host.registerSurface(.{ .id = "text.doc:/project/a.md", .title = "a.md", .keywords = doc_kw, .draw = ManyPanelFrame.draw });
+    try host.registerSurface(.{ .id = "text.doc:/project/b.md", .title = "b.md", .keywords = doc_kw, .draw = ManyPanelFrame.draw });
+    try state.assign(gpa, "Main", &.{"test.workspace.1"});
+    try state.assign(gpa, "Pane 0", &.{ "text.doc:/project/a.md", "text.doc:/project/b.md" });
+    var docs_ctx: u8 = 0;
+    state.documents = .{ .ctx = &docs_ctx, .house = DocViews.house, .alone = DocViews.alone, .fold = DocViews.fold };
+    defer state.documents = null;
+    DocViews.lone = null;
+    DocViews.folded = 0;
+
+    var layout = fizzy.Editor.Layout.init(host, state, gpa, dvui.currentWindow().arena());
+    const VD = fizzy.Editor.Layout.ViewDrag;
+
+    // One tab of two: it floats in a new view holding just it, and the pane is never asked.
+    DropProbe.last = null;
+    VD.beginLoose(&layout, "text.doc:/project/a.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    state.view_drag.discard();
+    try std.testing.expect(DropProbe.last == null);
+    try std.testing.expectEqualStrings("text.doc:/project/a.md", DocViews.housed[0..DocViews.housed_len]);
+    try std.testing.expectEqual(@as(usize, 1), state.floats.items.items.len);
+    const first = state.floats.items.items[0];
+    try std.testing.expectEqualStrings("Float 1", first.name);
+    const in_first = state.assignment("Float 1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), in_first.len);
+    try std.testing.expectEqualStrings("test.workspace.2", in_first[0]);
+    // The workspace it came out of stays where it was.
+    try std.testing.expectEqualStrings("test.workspace.1", (state.assignment("Main") orelse return error.TestExpectedEqual)[0]);
+
+    // A workspace's only tab carries the workspace: that floats, out of the place showing it.
+    try state.assign(gpa, "Pane 0", &.{"text.doc:/project/b.md"});
+    DocViews.lone = "test.workspace.1";
+    VD.beginLoose(&layout, "text.doc:/project/b.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    state.view_drag.discard();
+    try std.testing.expectEqual(@as(usize, 2), state.floats.items.items.len);
+    try std.testing.expectEqualStrings("Main", state.floats.items.items[1].home);
+    try std.testing.expectEqualStrings("test.workspace.1", (state.assignment("Float 2") orelse return error.TestExpectedEqual)[0]);
+    try std.testing.expectEqual(@as(usize, 0), (state.assignment("Main") orelse return error.TestExpectedEqual).len);
+
+    // Alone in a float nobody split, it does not float again: the pane takes the drop.
+    regions.publish(state, gpa, true);
+    VD.beginLoose(&layout, "text.doc:/project/b.md", .{ .x = 110, .y = 44, .w = 120, .h = 24 }, null);
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    state.view_drag.discard();
+    try std.testing.expectEqual(@as(usize, 2), state.floats.items.items.len);
+    try std.testing.expect(DropProbe.last != null);
+
+    // Closed, a float's workspace gives its documents to the main window's (`fold`), and is
+    // not sent home as itself.
+    layout.closeFloat("Float 2");
+    try std.testing.expectEqual(@as(usize, 1), DocViews.folded);
+    try std.testing.expectEqual(@as(usize, 0), (state.assignment("Main") orelse return error.TestExpectedEqual).len);
+}
+
 test "a region with no drop handler takes the middle by the app's default" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -6696,6 +6878,141 @@ test "workbench: where a tab carried over a strip goes in is read as if its open
     try std.testing.expectEqual(@as(usize, 3), pane.insertIndexAt(500, 3));
 }
 
+// An app's home page in place of the workbench's: a surface keyworded `home`, shown in the `Home`
+// place the sole document pane declares while it is empty (`Workspace.drawHome`). The pane here is
+// declared as `Workspace.draw` declares it, through the plugin's `Host`, so the place is the one
+// the workbench makes.
+const HomeFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+    /// Which home surface drew this frame (its `ctx`), and how many times one did.
+    var home: ?usize = null;
+    var home_draws: usize = 0;
+    var doc_draws: usize = 0;
+    /// The workbench would have drawn its own page this frame.
+    var builtin_home = false;
+
+    const pane_key: u64 = 1;
+    const doc = "test.doc:/notes.txt";
+
+    fn drawHome(ctx: ?*anyopaque) anyerror!dvui.App.Result {
+        home = @intFromPtr(ctx);
+        home_draws += 1;
+        return .ok;
+    }
+
+    fn drawDoc(_: ?*anyopaque) anyerror!dvui.App.Result {
+        doc_draws += 1;
+        return .ok;
+    }
+
+    fn registerHome(e: *fizzy.Editor, id: []const u8, n: usize) !void {
+        try e.app.host.registerSurface(.{
+            .id = id,
+            .title = "Start",
+            .keywords = fizzy.sdk.keywords.ide.home,
+            .ctx = @ptrFromInt(n),
+            .draw = drawHome,
+        });
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        home = null;
+        home_draws = 0;
+        doc_draws = 0;
+        builtin_home = false;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        e.app.frame_layout = &layout;
+        defer e.app.frame_layout = null;
+        {
+            var main = try layout.region(@src(), .{
+                .name = "Main",
+                .keywords = fizzy.sdk.keywords.ide.main,
+            }, .{ .expand = .both });
+            defer main.deinit();
+
+            var pane = e.app.host.region(.{
+                .name = "Pane 1",
+                .keywords = fizzy.sdk.document.keywords,
+                .shows = .many,
+                .key = pane_key,
+            }) orelse return error.TestUnexpectedResult;
+            defer pane.deinit();
+            if (pane.matching().len > 0) {
+                _ = try pane.drawContents();
+            } else {
+                builtin_home = !try workbench.Workspace.drawHome(&e.app.host, pane_key);
+            }
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+};
+
+test "workbench: a home surface shows while nothing is open, and a document puts it away" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.deinitSwaps(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    editor.app.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable });
+
+    HomeFrame.editor = editor;
+    defer HomeFrame.editor = null;
+
+    // No plugin offers a home page: the place declines, and the workbench draws its own.
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expect(HomeFrame.builtin_home);
+    try std.testing.expectEqual(@as(usize, 0), HomeFrame.home_draws);
+
+    // One does: it is the home page, drawn once, in the Home place and not in Main beside it.
+    try HomeFrame.registerHome(editor, "test.home", 1);
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expect(!HomeFrame.builtin_home);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+    try std.testing.expectEqual(@as(?usize, 1), HomeFrame.home);
+
+    // A restored session: the pane already lists a document that has not landed. Nothing is open
+    // yet, so the home stays...
+    try editor.app.host.assignSurfaces("Pane 1", &.{HomeFrame.doc});
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+
+    // ...until it lands, a few frames later, and the home is put away: drawn nowhere, Main
+    // included, with nothing on the plugin's side.
+    try editor.app.host.registerSurface(.{
+        .id = HomeFrame.doc,
+        .title = "notes.txt",
+        .keywords = fizzy.sdk.document.keywords,
+        .draw = HomeFrame.drawDoc,
+    });
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.doc_draws);
+    try std.testing.expectEqual(@as(usize, 0), HomeFrame.home_draws);
+    try std.testing.expect(!HomeFrame.builtin_home);
+
+    // The last document closing brings it back.
+    editor.app.host.unregisterSurface(HomeFrame.doc);
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+    try std.testing.expectEqual(@as(?usize, 1), HomeFrame.home);
+
+    // Two plugins offer one: the first registered shows, until the app chooses the other by
+    // assigning the place, as the picker would.
+    try HomeFrame.registerHome(editor, "test.home2", 2);
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(?usize, 1), HomeFrame.home);
+    try editor.app.host.assignSurfaces(workbench.Workspace.home_region, &.{"test.home2"});
+    try dvui.testing.settle(HomeFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), HomeFrame.home_draws);
+    try std.testing.expectEqual(@as(?usize, 2), HomeFrame.home);
+}
+
 // -- rows carried out of a tree and back --------------------------------------------------------
 
 // A tree of two folders and two files, as the explorer draws one: `F` open with `c` inside it, `G`
@@ -7981,6 +8298,15 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     const notes = try std.fs.path.join(gpa, &.{ project, "notes.md" });
     defer gpa.free(notes);
     try editor.setProjectFolder(project);
+    // It is now the most recent folder, and a plugin can read when it was opened.
+    {
+        const host = &editor.app.host;
+        const last = host.recentFolderCount() - 1;
+        try std.testing.expectEqualStrings(project, host.recentFolderAt(last).?);
+        const opened = host.recentFolderOpened(last) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(@abs(std.Io.Clock.real.now(dvui.io).toSeconds() - opened) < 60);
+        try std.testing.expect(host.recentFolderOpened(last + 1) == null);
+    }
     _ = try editor.openFilePath(notes, editor.workbench.currentGroupingID());
     for (0..200) |_| {
         if (editor.activeDoc() != null) break;
@@ -8651,10 +8977,16 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         const a = try newDoc(editor, host, was.id);
         rec.doc = a.id;
-        // Typed a keystroke at a time: one step, joined.
-        for ([_][]const u8{ "a", "b" }) |key| {
+        // Typed a keystroke at a time: one step, joined. A crash checkpoint between them (one is
+        // taken every few seconds of typing, by the wall clock: `Checkpoint`) is no save, so the
+        // run stays open; taken here, it is between them however long a frame takes.
+        for ([_][]const u8{ "a", "b" }, 0..) |key, i| {
             try dvui.testing.writeText(key);
             try dvui.testing.settle(headlessFrame);
+            if (i == 0) {
+                var kept = try fizzy.Editor.KeptDocuments.capture(editor, null);
+                kept.deinit();
+            }
         }
         try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"X\", .line = 1 }", host.arena()) == .ok);
         try editor.undo();
@@ -8680,6 +9012,23 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.applyStep.?(b.owner.state, b, rec.effects.items[3], "", 0));
         try std.testing.expectEqualStrings("Yab", try textOf(host, b));
 
+        // A save is an undo stop, made when its write lands (`documentWritten`): typing after it
+        // is a step of its own, and undoing that step comes back to the saved, clean document.
+        const c = try newDoc(editor, host, b.id);
+        try dvui.testing.writeText("a");
+        try dvui.testing.settle(headlessFrame);
+        const bytes = (try c.owner.documentBytes(c, c.owner.documentPath(c), gpa)) orelse return error.TestUnexpectedResult;
+        gpa.free(bytes);
+        try c.owner.documentWritten(c, c.owner.documentPath(c));
+        try std.testing.expect(!c.owner.isDirty(c));
+        try dvui.testing.writeText("b");
+        try dvui.testing.settle(headlessFrame);
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqualStrings("a", try textOf(host, c));
+        try std.testing.expect(!c.owner.isDirty(c));
+
+        try editor.rawCloseFileID(c.id);
         try editor.rawCloseFileID(b.id);
         try editor.rawCloseFileID(a.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
@@ -8760,6 +9109,42 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const tb = tracks.trackOf(b.id) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(usize, 0), tb.steps.items.len);
 
+        // The history it recorded, put back into a document that stands where it ends
+        // (`Tracks.historyOf`, `restoreHistory`): the same line, ids and all, that undoes to where
+        // the track began and redoes to where it ended.
+        {
+            var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+            defer arena.deinit();
+            const h = (try Tracks.historyOf(track, arena.allocator())) orelse return error.TestUnexpectedResult;
+            const la = a.owner.historyLine(a, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(la.entries.len, h.entries.len);
+            try std.testing.expectEqual(la.at, h.applied);
+            for (la.entries, h.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            try tracks.replayInto(a.id, b, n);
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqualStrings(want, try textOf(host, b));
+            try std.testing.expect(b.owner.restoreHistory(b, h));
+            const lb = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(la.at, lb.at);
+            for (la.entries, lb.entries) |x, y| try std.testing.expectEqual(x.id, y.id);
+            try std.testing.expectEqualStrings(want, try textOf(host, b));
+            try std.testing.expect(b.owner.historyGoTo(b, 0));
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqualStrings("", try textOf(host, b));
+            try std.testing.expect(b.owner.historyGoTo(b, la.entries[la.entries.len - 1].id));
+            try dvui.testing.settle(headlessFrame);
+            try std.testing.expectEqual(want.len + 1, (try textOf(host, b)).len);
+            // A history that does not fit what the document holds is refused, and nothing moves:
+            // back at the start, there is nothing for its applied entries to undo.
+            try std.testing.expect(b.owner.historyGoTo(b, 0));
+            try dvui.testing.settle(headlessFrame);
+            const lb2 = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectError(error.StepDoesNotApply, b.owner.vtable.restoreHistory.?(b.owner.state, b, .{ .entries = h.entries, .applied = h.applied }));
+            const lb3 = b.owner.historyLine(b, arena.allocator()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(lb2.at, lb3.at);
+            try std.testing.expectEqual(lb2.version, lb3.version);
+        }
+
         // A frame nothing asked of does no tracks work: an idle app, recording, costs a branch.
         const worked = tracks.worked;
         for (0..120) |_| {
@@ -8781,6 +9166,176 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try editor.rawCloseFileID(a.id);
         try std.testing.expect(tracks.open.get(a.id) == null);
         try std.testing.expectEqual(track, tracks.trackOf(a.id).?);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // A closed document's track is kept in the profile and picked up when the document opens
+    // again (`Tracks.keep`, `pickUp`, plan step 10): its history comes back, ids and all, and
+    // undoes to where the track began. A file changed outside fizzy since starts a new one.
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+        const kept_path = try std.fs.path.join(gpa, &.{ root, "kept-history.txt" });
+        defer gpa.free(kept_path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-history.txt", .data = "" });
+        const open = struct {
+            fn open(ed: *fizzy.Editor, path: []const u8) !sdk.DocHandle {
+                _ = try ed.openFilePath(path, ed.workbench.currentGroupingID());
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (std.mem.eql(u8, d.owner.documentPath(d), path)) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.open;
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+
+        var doc = try open(editor, kept_path);
+        try dvui.testing.settle(headlessFrame);
+        for ([_][]const u8{ "a", "b", "c" }) |letter| {
+            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+            try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
+        }
+        try editor.undo();
+        try dvui.testing.settle(headlessFrame);
+        try editor.save();
+        for (0..100) |_| {
+            _ = try dvui.testing.step(headlessFrame);
+            if (!editor.docSaving(doc)) break;
+        }
+        const before = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        const ids = try arena.allocator().alloc(u64, before.entries.len);
+        for (before.entries, ids) |e, *id| id.* = e.id;
+        const steps = (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len;
+        try std.testing.expectEqual(@as(usize, 3), ids.len);
+        try std.testing.expectEqual(@as(usize, 2), before.at);
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Opened again, saved: its file is where the track ended.
+        doc = try open(editor, kept_path);
+        try dvui.testing.settle(headlessFrame);
+        const after = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(before.at, after.at);
+        try std.testing.expectEqual(ids.len, after.entries.len);
+        for (ids, after.entries) |id, e| try std.testing.expectEqual(id, e.id);
+        try std.testing.expectEqual(steps, (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len);
+        try std.testing.expect(!doc.owner.isDirty(doc));
+        try std.testing.expect(doc.owner.historyGoTo(doc, 0));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(doc.owner.historyGoTo(doc, ids[1]));
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!doc.owner.isDirty(doc));
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Changed outside fizzy: a new track, and no history.
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-history.txt", .data = "changed elsewhere" });
+        doc = try open(editor, kept_path);
+        try dvui.testing.settle(headlessFrame);
+        const fresh = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 0), fresh.entries.len);
+        try std.testing.expectEqual(@as(usize, 0), (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len);
+        try editor.rawCloseFileID(doc.id);
+        editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    // Kept history keeps to its cap, takes the files of documents gone from disk, and a document's
+    // can be forgotten outright (`Tracks.sweep`, `forget`, `fizzy.tracks.forget`).
+    {
+        const host = &editor.app.host;
+        const was = editor.activeDoc() orelse return error.TestUnexpectedResult;
+        editor.setTracking(true);
+        defer editor.setTracking(false);
+        const tracks = &editor.app.tracks.?;
+        const open = struct {
+            fn open(ed: *fizzy.Editor, path: []const u8) !sdk.DocHandle {
+                _ = try ed.openFilePath(path, ed.workbench.currentGroupingID());
+                for (0..200) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    const d = ed.activeDoc() orelse continue;
+                    if (std.mem.eql(u8, d.owner.documentPath(d), path)) return d;
+                }
+                return error.TestUnexpectedResult;
+            }
+        }.open;
+        // Edited, saved and closed: kept.
+        const editSaveClose = struct {
+            fn run(ed: *fizzy.Editor, h: *sdk.Host, path: []const u8, o: *const fn (*fizzy.Editor, []const u8) anyerror!sdk.DocHandle) !void {
+                const d = try o(ed, path);
+                try dvui.testing.settle(headlessFrame);
+                try std.testing.expect(h.callCommand("text.insert", ".{ .text = \"kept\", .line = 1 }", h.arena()) == .ok);
+                try ed.save();
+                for (0..100) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    if (!ed.docSaving(d)) break;
+                }
+                try ed.rawCloseFileID(d.id);
+                try dvui.testing.settle(headlessFrame);
+            }
+        }.run;
+        _ = tracks.forgetKept();
+        try std.testing.expectEqual(@as(usize, 0), tracks.keptSize().files);
+
+        // Forgotten: no history now, none kept, none when it opens again.
+        const forget_path = try std.fs.path.join(gpa, &.{ root, "forget-me.txt" });
+        defer gpa.free(forget_path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "forget-me.txt", .data = "" });
+        try editSaveClose(editor, host, forget_path, open);
+        try std.testing.expectEqual(@as(usize, 1), tracks.keptSize().files);
+        var doc = try open(editor, forget_path);
+        try dvui.testing.settle(headlessFrame);
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        try std.testing.expectEqual(@as(usize, 1), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try std.testing.expect(host.callCommand("fizzy.tracks.forget", "", host.arena()) == .ok);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 0), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try std.testing.expectEqual(@as(usize, 0), (tracks.trackOf(doc.id) orelse return error.TestUnexpectedResult).steps.items.len);
+        try std.testing.expectEqual(@as(usize, 0), tracks.keptSize().files);
+        try std.testing.expect(!doc.owner.isDirty(doc));
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+        doc = try open(editor, forget_path);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 0), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Past the cap, the oldest kept file goes; the newest stays.
+        const older_path = try std.fs.path.join(gpa, &.{ root, "kept-older.txt" });
+        defer gpa.free(older_path);
+        const newer_path = try std.fs.path.join(gpa, &.{ root, "kept-newer.txt" });
+        defer gpa.free(newer_path);
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-older.txt", .data = "" });
+        try tmp.dir.writeFile(dvui.io, .{ .sub_path = "kept-newer.txt", .data = "" });
+        try editSaveClose(editor, host, older_path, open);
+        const one = tracks.keptSize().bytes;
+        try std.testing.expect(one > 0);
+        try std.Io.sleep(dvui.io, .fromMilliseconds(20), .awake);
+        const cap_was = editor.app.settings.kept_history_gb;
+        editor.app.settings.kept_history_gb = @as(f32, @floatFromInt(one + one / 2)) / (1 << 30);
+        try editSaveClose(editor, host, newer_path, open);
+        editor.app.settings.kept_history_gb = cap_was;
+        try std.testing.expectEqual(@as(usize, 1), tracks.keptSize().files);
+        doc = try open(editor, newer_path);
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expectEqual(@as(usize, 1), (doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult).entries.len);
+        try editor.rawCloseFileID(doc.id);
+        try dvui.testing.settle(headlessFrame);
+
+        // Its document gone from disk, the first sweep of a session takes its file.
+        try tmp.dir.deleteFile(dvui.io, "kept-newer.txt");
+        tracks.swept_gone = false;
+        tracks.sweep();
+        try std.testing.expectEqual(@as(usize, 0), tracks.keptSize().files);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
     }

@@ -1166,6 +1166,12 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
+    // A `.zip` opened as a mounted folder, as the web opens the site (`tests/demos.zig`).
+    const archive_module_test = plugins.archive.addStaticModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+    }, fizzy_test_module);
     // What the test build bundles, as the exe's does (`build/exe.zig`), so a test can bring up
     // the whole editor — `Editor.postInit` registers whatever is listed here.
     fizzy_test_module.addImport("bundled_plugins", sdk.bundledPluginsModule(b, target, optimize, &.{
@@ -1174,6 +1180,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ .name = "image", .module = image_module_test },
         .{ .name = "markdown", .module = markdown_module_test },
         .{ .name = "devtools", .module = devtools_module_test },
+        .{ .name = "archive", .module = archive_module_test },
     }));
 
     if (target.result.os.tag == .macos) {

@@ -21,13 +21,31 @@
 //! each, the copy being immutable once taken. They record while `on`: in fizzy by default, as its
 //! setting says (`record_history`, `FIZZY_TRACKS` over it). `zig build bench-tracks` measures what
 //! a step, a checkpoint and a replay cost.
+//!
+//! **A track outlives its document** (plan step 10). Where there is a profile to keep them in
+//! (`dir`), a document's track is written there as it closes, and every open one as the app quits
+//! (`keep`, `track_file`), one file per document, named by its path. Opened again, a document
+//! picks its track up at the next frame's top, in place of a new base (`pickUp`), when the same
+//! owner recorded it in the same format and the document is where the track ended
+//! (`track_file.End`: its file, as it closed saved, or its exact state, as a restart brings an
+//! unsaved one back): its steps and checkpoints come back, re-timed to end now, and its owner takes the
+//! history they hold back (`historyOf`, `Plugin.restoreHistory`). A document changed outside
+//! fizzy since, or an owner that cannot take its history back, starts a new track, which takes the
+//! old one's place when it is kept.
+//!
+//! **What is kept, all told, keeps to a cap** (`kept_cap`, a setting): after a track is written,
+//! the oldest kept files go until the rest fit, never one of a document still open (`sweep`). The
+//! first sweep of a session also takes the files of documents gone from disk. A document's
+//! history can be forgotten outright (`forget`): its kept file, its track, and its owner's undo.
 const Tracks = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const state_delta = @import("state_delta.zig");
+const track_file = @import("track_file.zig");
 const tape = @import("tape");
 
 gpa: std.mem.Allocator,
@@ -53,8 +71,16 @@ held: usize = 0,
 cap: usize = default_cap,
 /// Frames whose top did any work (`tick`): one per state asked for, never one a frame.
 worked: u64 = 0,
+/// Where tracks are kept when their documents close (`<config>/tracks`), owned; null keeps none
+/// (the web, a test).
+dir: ?[]u8 = null,
+/// What the kept tracks may come to on disk, all told (`sweep`).
+kept_cap: u64 = default_kept_cap,
+/// The files of documents gone from disk have been looked for this session (`sweep`).
+swept_gone: bool = false,
 
 pub const default_cap = 256 << 20;
+pub const default_kept_cap: u64 = 2 << 30;
 /// Checkpoints older than this are thinned to one per `sparse_steps` steps.
 pub const dense_ms = 60 * std.time.ms_per_min;
 pub const sparse_steps = 4096;
@@ -183,13 +209,35 @@ pub fn init(gpa: std.mem.Allocator) Tracks {
     return .{ .gpa = gpa };
 }
 
+/// Keep tracks in `dir` (`<config>/tracks`) from now on: as documents close, and as the app quits
+/// (`keepOpen`).
+pub fn keepIn(self: *Tracks, dir: []const u8) !void {
+    if (self.dir) |d| self.gpa.free(d);
+    self.dir = try self.gpa.dupe(u8, dir);
+}
+
+/// The app is quitting: keep every open document's track, while its document can still be read.
+pub fn keepOpen(self: *Tracks) void {
+    for (self.open.values()) |t| self.keep(t);
+    self.sweep();
+}
+
 pub fn deinit(self: *Tracks) void {
+    const dir = self.dir;
+    defer self.dir = dir;
     for (self.open.values()) |t| t.deinit(self.gpa);
     self.open.deinit(self.gpa);
     for (self.ended.items) |t| t.deinit(self.gpa);
     self.ended.deinit(self.gpa);
     self.focus.deinit(self.gpa);
     self.* = .{ .gpa = self.gpa, .clock = self.clock, .on = self.on, .cap = self.cap };
+}
+
+/// Free what `keepIn` holds: the app's last word on its tracks.
+pub fn deinitAll(self: *Tracks) void {
+    self.deinit();
+    if (self.dir) |d| self.gpa.free(d);
+    self.dir = null;
 }
 
 /// What the host calls with each step (`sdk.Host.recorder`).
@@ -215,7 +263,251 @@ pub fn opened(self: *Tracks, doc: sdk.DocHandle) void {
 /// holds nothing and goes.
 pub fn closed(self: *Tracks, doc_id: u64) void {
     const kv = self.open.fetchSwapRemove(doc_id) orelse return;
+    self.keep(kv.value);
     self.end(kv.value);
+    self.sweep();
+}
+
+/// The file `path`'s document's track is kept in, under `dir`: named by a hash of the path, so any
+/// path names a file.
+fn keptFile(self: *const Tracks, gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
+    const dir = self.dir orelse return null;
+    var name: [16 + ".track".len]u8 = undefined;
+    _ = std.fmt.bufPrint(&name, "{x:0>16}.track", .{std.hash.Wyhash.hash(0, path)}) catch return null;
+    return std.fs.path.join(gpa, &.{ dir, &name }) catch null;
+}
+
+/// The hash of the file at `path` (`track_file.fileHash`), or null when it cannot be read.
+fn fileHashOf(gpa: std.mem.Allocator, path: []const u8) ?u64 {
+    if (comptime !can_keep) return null;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .unlimited) catch return null;
+    defer gpa.free(bytes);
+    return track_file.fileHash(bytes);
+}
+
+/// Keep the kept tracks to `kept_cap`: the oldest files go (by when each was written) until the rest
+/// fit, never the file of a document still open. The first sweep of a session also takes the files
+/// of documents no longer on disk, reading only each file's head for its path. Costs a listing of
+/// the folder, run after a track is written, never on a timer.
+pub fn sweep(self: *Tracks) void {
+    if (comptime !can_keep) return;
+    const dir_path = self.dir orelse return;
+    const prof = core.profile.begin("fizzy", "tracks.sweep");
+    defer prof.end();
+    const gpa = self.gpa;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(dvui.io);
+    const Kept = struct { name: []const u8, size: u64, written: i96 };
+    var files: std.ArrayListUnmanaged(Kept) = .empty;
+    var total: u64 = 0;
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |e| {
+        if (e.kind != .file or !std.mem.endsWith(u8, e.name, ".track")) continue;
+        const st = dir.statFile(dvui.io, e.name, .{}) catch continue;
+        // Gone from disk: its document will not open again to pick it up.
+        if (!self.swept_gone) gone: {
+            const kept_path = keptPathOf(dir, e.name) orelse break :gone;
+            _ = std.Io.Dir.cwd().statFile(dvui.io, kept_path, .{}) catch |err| if (err == error.FileNotFound) {
+                dir.deleteFile(dvui.io, e.name) catch {};
+                continue;
+            };
+        }
+        const name = arena.dupe(u8, e.name) catch return;
+        files.append(arena, .{ .name = name, .size = st.size, .written = st.mtime.nanoseconds }) catch return;
+        total += st.size;
+    }
+    self.swept_gone = true;
+    if (total <= self.kept_cap) return;
+    // The open documents' files stay, whatever the cap.
+    var open_names: std.StringHashMapUnmanaged(void) = .empty;
+    for (self.open.values()) |t| {
+        const file = self.keptFile(arena, t.owner.documentPath(t.doc)) orelse continue;
+        open_names.put(arena, std.fs.path.basename(file), {}) catch return;
+    }
+    std.mem.sort(Kept, files.items, {}, struct {
+        fn older(_: void, a: Kept, b: Kept) bool {
+            return a.written < b.written;
+        }
+    }.older);
+    for (files.items) |f| {
+        if (total <= self.kept_cap) break;
+        if (open_names.contains(f.name)) continue;
+        dir.deleteFile(dvui.io, f.name) catch continue;
+        total -= f.size;
+    }
+}
+
+/// The path the kept file `name` in `dir` is for, from its head; null when it cannot be read.
+fn keptPathOf(dir: std.Io.Dir, name: []const u8) ?[]const u8 {
+    const S = struct {
+        var head: [track_file.head_len]u8 = undefined;
+    };
+    var f = dir.openFile(dvui.io, name, .{}) catch return null;
+    defer f.close(dvui.io);
+    const n = f.readPositionalAll(dvui.io, &S.head, 0) catch return null;
+    return track_file.headPath(S.head[0..n]);
+}
+
+/// Forget `doc`'s history outright: its kept file, its track (which starts again from the document
+/// as it is), and what its owner keeps to undo. Returns whether its owner let its undo go too.
+pub fn forget(self: *Tracks, doc: sdk.DocHandle) bool {
+    if (comptime can_keep) if (self.keptFile(self.gpa, doc.owner.documentPath(doc))) |file| {
+        defer self.gpa.free(file);
+        std.Io.Dir.cwd().deleteFile(dvui.io, file) catch {};
+    };
+    if (self.open.get(doc.id)) |t| {
+        self.held -|= t.size();
+        if (t.base) |b| self.gpa.free(b.bytes);
+        t.base = null;
+        for (t.checkpoints.items) |c| self.gpa.free(c.bytes);
+        t.checkpoints.clearRetainingCapacity();
+        t.steps.clearRetainingCapacity();
+        t.bytes.clearRetainingCapacity();
+        t.checkpoint_due = false;
+        t.since_steps = 0;
+        t.since_bytes = 0;
+        t.state_len = 0;
+        self.due = true;
+    }
+    // An empty history in place of what it held: nothing to undo or redo.
+    return doc.owner.restoreHistory(doc, .{ .entries = &.{}, .applied = 0 });
+}
+
+/// Forget every kept file: the history of every document not open now. Open documents keep theirs
+/// until they close. Returns how many files went.
+pub fn forgetKept(self: *Tracks) usize {
+    if (comptime !can_keep) return 0;
+    const dir_path = self.dir orelse return 0;
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return 0;
+    defer dir.close(dvui.io);
+    var gone: usize = 0;
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |e| {
+        if (e.kind != .file or !std.mem.endsWith(u8, e.name, ".track")) continue;
+        dir.deleteFile(dvui.io, e.name) catch continue;
+        gone += 1;
+    }
+    return gone;
+}
+
+/// The kept tracks' size on disk, all told, and how many files.
+pub fn keptSize(self: *const Tracks) struct { bytes: u64, files: usize } {
+    if (comptime !can_keep) return .{ .bytes = 0, .files = 0 };
+    const dir_path = self.dir orelse return .{ .bytes = 0, .files = 0 };
+    var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return .{ .bytes = 0, .files = 0 };
+    defer dir.close(dvui.io);
+    var bytes: u64 = 0;
+    var files: usize = 0;
+    var it = dir.iterate();
+    while (it.next(dvui.io) catch null) |e| {
+        if (e.kind != .file or !std.mem.endsWith(u8, e.name, ".track")) continue;
+        const st = dir.statFile(dvui.io, e.name, .{}) catch continue;
+        bytes += st.size;
+        files += 1;
+    }
+    return .{ .bytes = bytes, .files = files };
+}
+
+/// Whether this target keeps tracks on disk at all: not the web, which has no profile folder.
+const can_keep = builtin.target.cpu.arch != .wasm32;
+
+/// A document a track can be kept for: one with a file (an untitled one has none to come back to).
+fn keepable(path: []const u8) bool {
+    return std.fs.path.isAbsolute(path);
+}
+
+/// Write `t` to its document's file under `dir`, while its document is still open: where it ends,
+/// which reopening checks (`track_file.End`: its fingerprint, and its file's hash when it is
+/// saved). A track with no steps keeps nothing, and
+/// leaves an older file for that document as it was. Written beside, then renamed over, so a crash
+/// leaves the old one or the new one, never half of either.
+fn keep(self: *Tracks, t: *const Track) void {
+    // The web has no profile folder to keep them in.
+    if (comptime !can_keep) return;
+    if (t.base == null or t.steps.items.len == 0) return;
+    const path = t.owner.documentPath(t.doc);
+    if (!keepable(path)) return;
+    const fingerprint = t.owner.documentFingerprint(t.doc) orelse return;
+    const prof = core.profile.begin("fizzy", "tracks.keep");
+    defer prof.end();
+    const file = self.keptFile(self.gpa, path) orelse return;
+    defer self.gpa.free(file);
+    const ends: track_file.End = .{ .fingerprint = fingerprint, .file_hash = if (t.owner.isDirty(t.doc)) null else fileHashOf(self.gpa, path) };
+    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends) catch return;
+    defer self.gpa.free(bytes);
+    const part = std.fmt.allocPrint(self.gpa, "{s}.part", .{file}) catch return;
+    defer self.gpa.free(part);
+    const cwd = std.Io.Dir.cwd();
+    cwd.createDirPath(dvui.io, std.fs.path.dirname(file).?) catch {};
+    cwd.writeFile(dvui.io, .{ .sub_path = part, .data = bytes }) catch |err| {
+        dvui.log.warn("tracks: could not keep {s}'s history: {t}", .{ path, err });
+        return;
+    };
+    std.Io.Dir.renameAbsolute(part, file, dvui.io) catch |err| dvui.log.warn("tracks: could not keep {s}'s history: {t}", .{ path, err });
+}
+
+/// `t`'s document has just opened: take up its kept track, if it has one that fits (the same
+/// owner and format, ending where the document is), in place of a new base. Returns whether it
+/// did; `t` is untouched when not.
+fn pickUp(self: *Tracks, t: *Track) bool {
+    if (comptime !can_keep) return false;
+    const path = t.owner.documentPath(t.doc);
+    if (!keepable(path)) return false;
+    const file = self.keptFile(self.gpa, path) orelse return false;
+    defer self.gpa.free(file);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(dvui.io, file, self.gpa, .unlimited) catch return false;
+    defer self.gpa.free(bytes);
+    const prof = core.profile.begin("fizzy", "tracks.pickUp");
+    defer prof.end();
+    var kept = track_file.read(self.gpa, bytes) catch return false;
+    var taken = false;
+    defer if (!taken) kept.deinit(self.gpa);
+    if (!std.mem.eql(u8, kept.path, path) or !std.mem.eql(u8, kept.owner, t.owner.id) or kept.format != t.format) return false;
+    // Where the track ended: exactly (a restart's unsaved document), or its file (a saved one).
+    const at_end = t.owner.documentFingerprint(t.doc) == kept.end.fingerprint or
+        (kept.end.file_hash != null and !t.owner.isDirty(t.doc) and fileHashOf(self.gpa, path) == kept.end.file_hash);
+    if (!at_end) return false;
+    // Re-timed to end now, the pauses between its steps kept: its moments count from this
+    // session's start, as every step's does.
+    const now_ms = self.now();
+    const last = if (kept.steps.items.len > 0) kept.steps.getLast().at else 0;
+    const shift = struct {
+        fn at(v: u32, last_at: u32, to: u32) u32 {
+            return to -| (last_at -| v);
+        }
+    }.at;
+    for (kept.steps.items) |*r| r.at = shift(r.at, last, now_ms);
+    for (kept.checkpoints.items) |*c| c.at = shift(c.at, last, now_ms);
+    kept.base.at = shift(kept.base.at, last, now_ms);
+    var arena: std.heap.ArenaAllocator = .init(self.gpa);
+    defer arena.deinit();
+    var held: Track = .{
+        .doc_id = t.doc_id,
+        .doc = t.doc,
+        .owner = t.owner,
+        .format = t.format,
+        .base = kept.base,
+        .base_top = kept.base_top,
+        .steps = kept.steps,
+        .bytes = kept.bytes,
+        .checkpoints = kept.checkpoints,
+    };
+    const history = (historyOf(&held, arena.allocator()) catch null) orelse return false;
+    // Its owner takes the history back, or the track would name entries the document has not got.
+    if (!t.owner.restoreHistory(t.doc, history)) return false;
+    taken = true;
+    self.gpa.free(kept.owner);
+    self.gpa.free(kept.path);
+    held.checkpoint_due = false;
+    // What the new track held (steps reported before its base, cleared) goes for the kept one.
+    t.steps.deinit(self.gpa);
+    t.bytes.deinit(self.gpa);
+    t.checkpoints.deinit(self.gpa);
+    t.* = held;
+    return true;
 }
 
 fn end(self: *Tracks, t: *Track) void {
@@ -243,6 +535,11 @@ pub fn tick(self: *Tracks) void {
             // in it, so they go.
             t.steps.clearRetainingCapacity();
             t.bytes.clearRetainingCapacity();
+            // Opened again: its kept track, when it fits, in place of a new start.
+            if (self.pickUp(t)) {
+                self.held = self.held - @min(self.held, before) + t.size();
+                continue;
+            }
             t.base = self.take(t.doc, 0) orelse continue;
             t.base_top = historyTop(t.doc, self.gpa) orelse 0;
         } else if (t.checkpoint_due) {
@@ -494,6 +791,41 @@ pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{Out
         .restarted => return null,
     };
     return if (at == 0) t.base_top else line.items[at - 1];
+}
+
+/// The history `t` recorded, as its owner takes it back (`sdk.Plugin.restoreHistory`): the
+/// entries added since the track began, oldest first, each with its parts (its `added` step's
+/// effect and every `joined` one after it), and how many stand applied at its end. Worked out from
+/// the steps alone, on `topAfter`'s rules, so it holds for any owner. Null where it cannot be
+/// known (an undo or redo reaching an entry from before the track began, or a restart), or where
+/// a step's effect was not kept. The parts are `t`'s bytes: they last as long as it does.
+pub fn historyOf(t: *const Track, arena: std.mem.Allocator) error{OutOfMemory}!?sdk.Plugin.RestoredHistory {
+    const Building = struct { id: u64, parts: std.ArrayListUnmanaged([]const u8) = .empty };
+    var line: std.ArrayListUnmanaged(Building) = .empty;
+    var at: usize = 0;
+    for (t.steps.items) |r| switch (r.kind) {
+        .added => {
+            if (r.effect.len == 0) return null;
+            line.shrinkRetainingCapacity(at);
+            try line.append(arena, .{ .id = r.id });
+            try line.items[at].parts.append(arena, t.effect(r));
+            at += 1;
+        },
+        .joined => {
+            if (at == 0 or line.items[at - 1].id != r.id or r.effect.len == 0) return null;
+            try line.items[at - 1].parts.append(arena, t.effect(r));
+        },
+        .undone => at = for (line.items[0..at], 0..) |e, i| {
+            if (e.id == r.id) break i;
+        } else return null,
+        .redone => at = 1 + for (line.items, 0..) |e, i| {
+            if (e.id == r.id) break i;
+        } else return null,
+        .restarted => return null,
+    };
+    const entries = try arena.alloc(sdk.Plugin.RestoredHistory.Entry, line.items.len);
+    for (line.items, entries) |b, *e| e.* = .{ .id = b.id, .parts = b.parts.items };
+    return .{ .entries = entries, .applied = at };
 }
 
 /// What a range of a track holds, for the person to see before it is shared (`summarize`).
@@ -928,4 +1260,33 @@ test "where the history stood after each step, from the steps alone" {
     // overwrites it, and undoing 7 (from before the track) cannot be known.
     const want = [_]?u64{ 7, 10, 10, 11, 10, 7, 10, 12, null };
     for (want, 0..) |w, count| try testing.expectEqual(w, try topAfter(&t, testing.allocator, count));
+}
+
+test "the history a track recorded, as its owner takes it back" {
+    var t: Track = .{ .doc_id = 1, .doc = Stand.doc(1), .owner = &Stand.plugin, .format = 1 };
+    defer t.steps.deinit(testing.allocator);
+    defer t.bytes.deinit(testing.allocator);
+    // Each step's effect is one byte, its letter, so the parts can be read back.
+    const steps = [_]struct { sdk.Step.Kind, u64, u8 }{
+        .{ .added, 10, 'a' }, .{ .joined, 10, 'b' }, .{ .added, 11, 'c' },  .{ .undone, 11, 'C' },
+        .{ .added, 12, 'd' }, .{ .added, 13, 'e' },  .{ .undone, 13, 'E' },
+    };
+    for (steps) |st| {
+        try t.bytes.append(testing.allocator, st[2]);
+        try t.steps.append(testing.allocator, .{ .kind = st[0], .id = st[1], .at = 0, .ms = 0, .effect = .{ .start = t.bytes.items.len - 1, .len = 1 }, .motion = .{ .start = 0, .len = 0 } });
+    }
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const h = (try historyOf(&t, arena.allocator())).?;
+    // 11 was undone and written over by 12; 13 is undone, a redo away.
+    try testing.expectEqual(@as(usize, 3), h.entries.len);
+    try testing.expectEqual(@as(usize, 2), h.applied);
+    try testing.expectEqual(@as(u64, 10), h.entries[0].id);
+    try testing.expectEqual(@as(usize, 2), h.entries[0].parts.len);
+    try testing.expectEqualStrings("b", h.entries[0].parts[1]);
+    try testing.expectEqual(@as(u64, 12), h.entries[1].id);
+    try testing.expectEqual(@as(u64, 13), h.entries[2].id);
+    // An undo of an entry from before the track cannot be put back.
+    try t.steps.append(testing.allocator, .{ .kind = .undone, .id = 3, .at = 0, .ms = 0, .effect = .{ .start = 0, .len = 1 }, .motion = .{ .start = 0, .len = 0 } });
+    try testing.expectEqual(@as(?sdk.Plugin.RestoredHistory, null), try historyOf(&t, arena.allocator()));
 }

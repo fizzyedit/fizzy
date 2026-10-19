@@ -69,6 +69,7 @@ const vtable: sdk.Plugin.VTable = .{
     .restoreDocumentState = restoreDocumentState,
     .historyLine = historyLine,
     .historyGoTo = historyGoTo,
+    .restoreHistory = restoreHistory,
     .applyStep = applyStep,
     .documentFingerprint = documentFingerprint,
     .isDirty = isDirty,
@@ -420,6 +421,10 @@ fn kindTitle(kind: @import("src/textcore/textcore.zig").History.EditKind) []cons
         .deleting_left, .deleting_right => "Delete",
         .other => "Edit",
     };
+}
+fn restoreHistory(_: *anyopaque, handle: DocHandle, history: sdk.Plugin.RestoredHistory) anyerror!void {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    try doc.restoreHistory(history);
 }
 fn historyGoTo(_: *anyopaque, handle: DocHandle, id: u64) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;

@@ -92,6 +92,24 @@ pub const HistoryLine = struct {
     };
 };
 
+/// A document's history to put back (`restoreHistory`), as its track recorded it: each entry on
+/// it, oldest first, and how many are applied, the rest being what redo brings back. The document
+/// already stands where they leave it (applied, every entry up to `applied` is in it).
+pub const RestoredHistory = struct {
+    entries: []const Entry,
+    /// How many of `entries` are applied.
+    applied: usize,
+
+    pub const Entry = struct {
+        /// The entry's own id (`Step.id`, `HistoryLine.Entry.id`), kept: steps reported after
+        /// the restore name it by this.
+        id: u64,
+        /// What the entry did, in the owner's `step_format`, as it reported it: the `effect` of
+        /// its `added` step, then each `joined` part after it.
+        parts: []const []const u8,
+    };
+};
+
 /// A question an owner wants asked before fizzy saves a document (`saveQuestion`): a save that
 /// would flatten layers, drop data, change an encoding. fizzy asks it wherever a save starts
 /// (Save, Save All, Save and Close, the quit walk) and goes on by itself with the answer.
@@ -247,6 +265,13 @@ pub const VTable = struct {
     /// step that does not fit what `doc` holds is an error, and `doc` is left as it was. Absent =
     /// tapes of this owner's documents cannot be played.
     applyStep: ?*const fn (state: *anyopaque, doc: DocHandle, effect: []const u8, motion: []const u8, ms: u32) anyerror!void = null,
+    /// Put `doc`'s history back as its track recorded it (`RestoredHistory`), in place of what it
+    /// holds: a document opened again picks up the history it had. `doc` already stands where
+    /// the history leaves it; nothing in it changes, and it is not dirty for it. Each entry keeps
+    /// its id. A history that does not fit `doc` (an effect of another format, or one that does
+    /// not undo to a document) is an error, and `doc`'s history is left as it was. Absent = a
+    /// document of this owner opens with no history, as ever.
+    restoreHistory: ?*const fn (state: *anyopaque, doc: DocHandle, history: RestoredHistory) anyerror!void = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
 
     /// Register a loaded/created document in the plugin's open-doc map. `file` points at
@@ -630,6 +655,18 @@ pub fn applyStep(self: Plugin, doc: DocHandle, effect: []const u8, motion: []con
     const f = self.vtable.applyStep orelse return false;
     f(self.state, doc, effect, motion, ms) catch |err| {
         std.log.err("{s}: applyStep failed: {s}", .{ self.id, self.errorName(err) });
+        return false;
+    };
+    return true;
+}
+
+/// Put `doc`'s history back from its track (`restoreHistory`). Returns whether it did.
+pub fn restoreHistory(self: Plugin, doc: DocHandle, history: RestoredHistory) bool {
+    const prof = core.profile.begin(self.id, "restoreHistory");
+    defer prof.end();
+    const f = self.vtable.restoreHistory orelse return false;
+    f(self.state, doc, history) catch |err| {
+        std.log.err("{s}: restoreHistory failed: {s}", .{ self.id, self.errorName(err) });
         return false;
     };
     return true;
