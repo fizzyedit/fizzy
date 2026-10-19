@@ -170,10 +170,9 @@ pub fn play(self: *Demo, name: []const u8) !void {
 /// One that opens on no keyframe is a live tape, played on the app as it is (`live`).
 pub fn playTape(self: *Demo, bytes: []const u8) !void {
     const gpa = self.editor.app.gpa;
-    var check = automation.Input.check;
-    check.steps = stepsCheck;
-    var owned = automation.Tape.load(gpa, bytes, check) catch |err| switch (err) {
+    var owned = loadDemoTape(gpa, bytes) catch |err| switch (err) {
         error.NoKeyframeAtStart => {
+            var check = automation.Input.check;
             check.live = true;
             const live = automation.Tape.load(gpa, bytes, check) catch |e| {
                 dvui.log.err("demo: could not read the live tape: {t}", .{e});
@@ -194,6 +193,14 @@ pub fn playTape(self: *Demo, bytes: []const u8) !void {
     };
     if (!self.mayStart()) return owned.deinit();
     self.player.load(owned, .{});
+}
+
+/// `bytes` as a demo's tape, checked as fizzy plays one: its chords in the keymap's spelling, its
+/// steps ones a loaded plugin applies (`stepsCheck`).
+pub fn loadDemoTape(gpa: std.mem.Allocator, bytes: []const u8) !automation.Tape.Owned {
+    var check = automation.Input.check;
+    check.steps = stepsCheck;
+    return automation.Tape.load(gpa, bytes, check);
 }
 
 /// `FIZZY_DEMO` naming a tape file (`.zon` or `.tape`) rather than a bundled demo: read in the
@@ -234,17 +241,22 @@ fn queue(self: *Demo, p: Pending) void {
 /// A demo replaces the open documents, so it waits for unsaved work to be saved or closed. A
 /// demo's own documents are not anyone's work: one demo may replace another.
 fn mayStart(self: *Demo) bool {
+    return self.startable() == .started;
+}
+
+/// Whether a demo can start now (`.started`), and if not why, told to the person as a toast too.
+pub fn startable(self: *Demo) sdk.services.demos.Api.Play {
     if (self.live.playing()) {
         dvui.toast(@src(), .{ .message = "Something is driving fizzy right now — the demo can start once it has finished." });
-        return false;
+        return .busy;
     }
     for (self.editor.app.open_files.values()) |doc| {
         if (!doc.owner.isDirty(doc)) continue;
         if (std.mem.startsWith(u8, doc.owner.documentPath(doc), "demo://")) continue;
         dvui.toast(@src(), .{ .message = "Save or close your changes first — a demo replaces the open files while it plays." });
-        return false;
+        return .unsaved;
     }
-    return true;
+    return .started;
 }
 
 /// Once a frame, before anything reads events.

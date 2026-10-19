@@ -95,6 +95,7 @@ pub const FileLoadJob = workbench_mod.FileLoadJob;
 pub const sdk = fizzy.sdk;
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
+const Demos = @import("Demos.zig");
 const TapeTabs = @import("TapeTabs.zig");
 /// A float taken out of the main window into an OS window of its own: on by default on macOS,
 /// `FIZZY_POPOUT=1` elsewhere (`plans/POPOUT_WINDOWS_PLAN.md`).
@@ -131,6 +132,8 @@ command_palette: @import("CommandPalette.zig") = .{},
 /// The demo player and fizzy's stage for it. Attached in `postInit`, at the Editor's final
 /// address (the stage's context is this field).
 demo: Demo = .detached,
+/// Every demo fizzy can play, as the `demos` service lists them. Bound in `postInit`, beside `demo`.
+demos: Demos = .detached,
 /// Tapes playing in tabs of their own (`Demo: Play a Tape…`, the transport's share).
 tape_tabs: TapeTabs = .{},
 /// The recording setting as last applied (`tick`); null before the first frame.
@@ -2360,6 +2363,10 @@ pub fn postInit(editor: *Editor) !void {
     // The `automation` service: plugins play live tapes on the app as it is (`automation.Service`).
     // `editor.demo` was attached above, at its final address.
     try editor.app.host.registerService(sdk.services.automation.Api, &editor.demo.service.api, null);
+    // The `demos` service: fizzy's demos and plugins' (`Host.registerDemo`), listed and played.
+    editor.demos = .init(editor);
+    editor.demos.bind();
+    try editor.app.host.registerService(sdk.services.demos.Api, &editor.demos.api, null);
 
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see
     // R11/R12 in plans/PLUGIN_MANIFEST_PLAN.md). Must happen here, in `postInit`, not `init` —
@@ -6797,6 +6804,7 @@ pub fn deinit(editor: *Editor) !void {
     // nothing it changed is written below.
     const demo_was_active = editor.demo.active();
     editor.demo.deinit();
+    editor.demos.deinit();
     editor.tape_tabs.deinit(editor);
     editor.black_box.deinit(editor.app.gpa);
     editor.app.host.recorder = null;
