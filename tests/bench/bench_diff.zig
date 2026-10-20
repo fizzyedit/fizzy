@@ -194,7 +194,7 @@ test "bench: text, 1 MB" {
 
     var one: std.ArrayList(u8) = .empty;
     try one.appendSlice(tgpa, a.items);
-    const mid = std.mem.indexOfScalarPos(u8, one.items, a.items.len / 2, '\n').? + 1;
+    const mid = std.mem.findScalarPos(u8, one.items, a.items.len / 2, '\n').? + 1;
     try one.insertSlice(tgpa, mid, "    one edited line\n");
     try run(&t, "one line inserted", 2, a.items, one.items);
 

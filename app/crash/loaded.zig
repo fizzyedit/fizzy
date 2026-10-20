@@ -107,7 +107,7 @@ fn parseMaps(text: []const u8, out: []Mapping) struct { len: usize, all: bool } 
         const offset = std.fmt.parseInt(usize, fields.next() orelse continue, 16) catch continue;
         const dev = fields.next() orelse continue;
         const inode = fields.next() orelse continue;
-        const dash = std.mem.indexOfScalar(u8, range, '-') orelse continue;
+        const dash = std.mem.findScalar(u8, range, '-') orelse continue;
         const lo = std.fmt.parseInt(usize, range[0..dash], 16) catch continue;
         const hi = std.fmt.parseInt(usize, range[dash + 1 ..], 16) catch continue;
         var path = std.mem.trim(u8, fields.rest(), " ");

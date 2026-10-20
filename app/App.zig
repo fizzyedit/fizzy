@@ -1246,7 +1246,7 @@ pub fn migrateFlatPluginLayout(allocator: std.mem.Allocator, plugins_dir: []cons
         while (iter.next(dvui.io) catch null) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.name, ext_suffix)) continue;
-            const dot = std.mem.lastIndexOf(u8, entry.name, ".") orelse continue;
+            const dot = std.mem.findLast(u8, entry.name, ".") orelse continue;
             const id = entry.name[0..dot];
             if (id.len == 0) continue;
             const dup = allocator.dupe(u8, id) catch continue;

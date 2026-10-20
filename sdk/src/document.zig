@@ -65,6 +65,6 @@ pub const keywords: []const []const u8 = &.{keyword};
 /// carries nothing document-shaped.
 pub fn pathOfSurfaceId(id: []const u8) ?[]const u8 {
     const marker = ".doc:";
-    const at = std.mem.indexOf(u8, id, marker) orelse return null;
+    const at = std.mem.find(u8, id, marker) orelse return null;
     return id[at + marker.len ..];
 }

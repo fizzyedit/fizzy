@@ -636,7 +636,7 @@ fn fetchSignatureHint(doc: *Document, ext: []const u8, te: *TextEntryWidget, gpa
     }
 
     const hint = result.label[result.active_param_start..];
-    if (std.mem.indexOfScalar(u8, hint, '\n') != null) return null;
+    if (std.mem.findScalar(u8, hint, '\n') != null) return null;
 
     const owned = gpa.dupe(u8, hint) catch return null;
     te.signature_hint = owned;
@@ -1424,10 +1424,10 @@ fn hoverLooksLikeFunction(hover_text: []const u8) bool {
         if (!first.is_code) return false;
         const t = std.mem.trim(u8, first.content, " \t\n\r");
         // Builtin: `@name(`…
-        if (t.len > 1 and t[0] == '@' and std.mem.indexOfScalar(u8, t, '(') != null) return true;
+        if (t.len > 1 and t[0] == '@' and std.mem.findScalar(u8, t, '(') != null) return true;
         // `pub fn foo(`, `fn foo(`, `inline fn (`, export/extern variants, etc.
-        if (std.mem.indexOf(u8, t, "fn ")) |_| {
-            return std.mem.indexOfScalar(u8, t, '(') != null;
+        if (std.mem.find(u8, t, "fn ")) |_| {
+            return std.mem.findScalar(u8, t, '(') != null;
         }
         if (std.mem.startsWith(u8, t, "fn(") or std.mem.startsWith(u8, t, "fn (")) return true;
     }
@@ -1548,9 +1548,9 @@ fn endOfGoToLinks(src: []const u8, links_start: usize) ?usize {
     var i = links_start;
     var found_one = false;
     while (i < src.len and src[i] == '[') {
-        const close_bracket = std.mem.indexOfScalarPos(u8, src, i + 1, ']') orelse break;
+        const close_bracket = std.mem.findScalarPos(u8, src, i + 1, ']') orelse break;
         if (close_bracket + 1 >= src.len or src[close_bracket + 1] != '(') break;
-        const close_paren = std.mem.indexOfScalarPos(u8, src, close_bracket + 2, ')') orelse break;
+        const close_paren = std.mem.findScalarPos(u8, src, close_bracket + 2, ')') orelse break;
         i = close_paren + 1;
         found_one = true;
         if (std.mem.startsWith(u8, src[i..], " | ")) {
@@ -1565,9 +1565,9 @@ fn endOfGoToLinks(src: []const u8, links_start: usize) ?usize {
 fn parseGoToLinks(links_text: []const u8, out: *std.ArrayListUnmanaged(HoverGoToLink), arena: std.mem.Allocator) !void {
     var i: usize = 0;
     while (i < links_text.len and links_text[i] == '[') {
-        const close_bracket = std.mem.indexOfScalarPos(u8, links_text, i + 1, ']') orelse break;
+        const close_bracket = std.mem.findScalarPos(u8, links_text, i + 1, ']') orelse break;
         if (close_bracket + 1 >= links_text.len or links_text[close_bracket + 1] != '(') break;
-        const close_paren = std.mem.indexOfScalarPos(u8, links_text, close_bracket + 2, ')') orelse break;
+        const close_paren = std.mem.findScalarPos(u8, links_text, close_bracket + 2, ')') orelse break;
         const label = links_text[i + 1 .. close_bracket];
         const url = links_text[close_bracket + 2 .. close_paren];
         // De-dupe by URL — field-access joins can repeat the same referenced type.
@@ -1633,7 +1633,7 @@ fn parseHoverFileUri(arena: std.mem.Allocator, url: []const u8) ?struct { path: 
     var uri_part = url;
     var line_1based: u32 = 0;
     var character_1based: u32 = 0;
-    if (std.mem.indexOfScalar(u8, url, '#')) |hash| {
+    if (std.mem.findScalar(u8, url, '#')) |hash| {
         const frag = url[hash + 1 ..];
         uri_part = url[0..hash];
         if (frag.len >= 2 and (frag[0] == 'L' or frag[0] == 'l')) {
@@ -1668,13 +1668,13 @@ const HoverSegment = struct { is_code: bool, content: []const u8, rest: []const 
 /// header/body split doesn't hold in general.
 fn nextHoverSegment(hover_text: []const u8) ?HoverSegment {
     if (hover_text.len == 0) return null;
-    if (std.mem.indexOf(u8, hover_text, "```")) |fence_idx| {
+    if (std.mem.find(u8, hover_text, "```")) |fence_idx| {
         if (fence_idx > 0) {
             return .{ .is_code = false, .content = hover_text[0..fence_idx], .rest = hover_text[fence_idx..] };
         }
         var after = hover_text[3..];
-        if (std.mem.indexOfScalar(u8, after, '\n')) |nl| after = after[nl + 1 ..];
-        const close_idx = std.mem.indexOf(u8, after, "```");
+        if (std.mem.findScalar(u8, after, '\n')) |nl| after = after[nl + 1 ..];
+        const close_idx = std.mem.find(u8, after, "```");
         const code = if (close_idx) |c| after[0..c] else after;
         const rest = if (close_idx) |c| after[c + 3 ..] else "";
         return .{ .is_code = true, .content = code, .rest = rest };
@@ -1690,7 +1690,7 @@ fn drawHoverBody(tl: *dvui.TextLayoutWidget, body_text: []const u8, ext: []const
     var rest = body_text;
     var in_code = false;
     while (rest.len > 0) {
-        if (std.mem.indexOf(u8, rest, fence)) |idx| {
+        if (std.mem.find(u8, rest, fence)) |idx| {
             const segment = rest[0..idx];
             if (in_code) {
                 drawCodeBlock(tl, segment, ext);
@@ -1863,7 +1863,7 @@ fn markText(doc: *const Document, te: *TextEntryWidget, font: dvui.Font, line_he
     const left = rs.r.x - vp.x * rs.s;
     const top = rs.r.y + (editor_pad_y - vp.y) * rs.s;
 
-    const tail = if (std.mem.lastIndexOfScalar(u8, text, '\n')) |i| text[i + 1 ..] else text;
+    const tail = if (std.mem.findScalarLast(u8, text, '\n')) |i| text[i + 1 ..] else text;
     const last: f32 = @floatFromInt(doc.line_count -| 1);
     const end: dvui.Rect.Physical = .{
         .x = left + font.textSize(tail).w * rs.s,

@@ -191,7 +191,7 @@ fn readBranding(b: *std.Build, id: Identity, own: ?Own, renamed: bool) Branding 
 fn windowsRc(b: *std.Build, id: Identity, ico: std.Build.LazyPath) std.Build.LazyPath {
     // `v1.2.3-dev+5` → 1,2,3,0: up to four numeric parts, anything else 0.
     var parts = [4]u16{ 0, 0, 0, 0 };
-    const core = std.mem.trimStart(u8, id.version[0 .. std.mem.indexOfAny(u8, id.version, "-+") orelse id.version.len], "vV");
+    const core = std.mem.trimStart(u8, id.version[0 .. std.mem.findAny(u8, id.version, "-+") orelse id.version.len], "vV");
     var it = std.mem.splitScalar(u8, core, '.');
     for (&parts) |*part| part.* = std.fmt.parseInt(u16, it.next() orelse break, 10) catch 0;
     // An rc string literal holds no control characters (they are dropped), doubles its quotes

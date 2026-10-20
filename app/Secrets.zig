@@ -97,7 +97,7 @@ fn load(self: *Secrets) void {
     defer self.gpa.free(raw);
     var lines = std.mem.splitScalar(u8, raw, '\n');
     while (lines.next()) |line| {
-        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const eq = std.mem.findScalar(u8, line, '=') orelse continue;
         const key = line[0..eq];
         const enc = std.mem.trimEnd(u8, line[eq + 1 ..], "\r");
         const len = std.base64.standard.Decoder.calcSizeForSlice(enc) catch continue;

@@ -15,7 +15,7 @@ const replacement = "\u{FFFD}";
 /// test git and most editors use. Used to warn, not to refuse: unknown files still open.
 pub fn looksBinary(bytes: []const u8) bool {
     const sample = bytes[0..@min(bytes.len, binary_sniff_bytes)];
-    if (std.mem.indexOfScalar(u8, sample, 0) != null) return true;
+    if (std.mem.findScalar(u8, sample, 0) != null) return true;
     // The sample may end mid-codepoint; only a *malformed* sequence counts, not a truncated one.
     var i: usize = 0;
     while (i < sample.len) {

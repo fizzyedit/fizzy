@@ -500,9 +500,9 @@ pub fn interceptLog(comptime level: std.log.Level, comptime scope: @EnumLiteral(
 /// their places.
 pub fn interceptPluginLine(level: std.log.Level, message: []const u8) bool {
     if (level != .debug or !recordingCauses()) return false;
-    const at = std.mem.indexOf(u8, message, " refresh") orelse return false;
+    const at = std.mem.find(u8, message, " refresh") orelse return false;
     const loc = message[0..at];
-    const colon = std.mem.lastIndexOfScalar(u8, loc, ':') orelse return false;
+    const colon = std.mem.findScalarLast(u8, loc, ':') orelse return false;
     const line = std.fmt.parseInt(u32, loc[colon + 1 ..], 10) catch return false;
     noteRefresh(loc[0..colon], line, std.mem.startsWith(u8, message[at..], " refreshBackend"));
     return true;

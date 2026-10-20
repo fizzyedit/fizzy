@@ -88,7 +88,7 @@ pub fn tokensFor(
     const span = source_span orelse return tokens;
     // The overwhelmingly common case: no backslash anywhere in this run of text, so nothing
     // can have been escaped and the literal is the source. Costs one memchr.
-    if (std.mem.indexOfScalar(u8, span, '\\') == null) return tokens;
+    if (std.mem.findScalar(u8, span, '\\') == null) return tokens;
 
     var un = try unescape(gpa, span);
     defer un.deinit(gpa);

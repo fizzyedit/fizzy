@@ -241,7 +241,7 @@ pub fn byteOffsetForLineCharacter(self: *const Document, line: u32, character: u
     var line_start: usize = 0;
     var lines_seen: u32 = 0;
     while (lines_seen < line) {
-        const nl = std.mem.indexOfScalarPos(u8, self.text.items, line_start, '\n') orelse break;
+        const nl = std.mem.findScalarPos(u8, self.text.items, line_start, '\n') orelse break;
         line_start = nl + 1;
         lines_seen += 1;
     }
@@ -283,7 +283,7 @@ pub fn scrollTargetLine(self: *const Document, target_line: u32) ?u32 {
     var start: usize = 0;
     var line_num: u32 = 0;
     while (line_num < target_line) {
-        const nl = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse return null;
+        const nl = std.mem.findScalarPos(u8, text, start, '\n') orelse return null;
         start = nl + 1;
         line_num += 1;
     }
@@ -296,7 +296,7 @@ pub fn scrollTargetLine(self: *const Document, target_line: u32) ?u32 {
         line -= 1;
         if (line_end == 0) break; // defensive; see the loop-invariant note below.
         const content_end = line_end - 1; // exclude the line's own trailing '\n'
-        const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..content_end], '\n')) |i| i + 1 else 0;
+        const line_start = if (std.mem.findScalarLast(u8, text[0..content_end], '\n')) |i| i + 1 else 0;
         if (std.mem.trim(u8, text[line_start..content_end], " \t\r").len == 0) return line;
         // `line_start == 0` only happens on line 0 itself, which is also exactly when `line`
         // reaches 0 and the loop condition ends it — so `line_end` never reaches 0 with `line`
@@ -517,7 +517,7 @@ pub fn recoverState(self: *Document, bytes: []const u8) !void {
 
     const gpa = sdk.allocator();
     const now = self.text.items;
-    const head = std.mem.indexOfDiff(u8, now, st.text) orelse now.len;
+    const head = std.mem.findDiff(u8, now, st.text) orelse now.len;
     var tail: usize = 0;
     while (tail < now.len - head and tail < st.text.len - head and now[now.len - 1 - tail] == st.text[st.text.len - 1 - tail]) tail += 1;
     const removed = now[head .. now.len - tail];

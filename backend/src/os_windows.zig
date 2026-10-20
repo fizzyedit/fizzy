@@ -75,7 +75,7 @@ pub fn closable(id: dvui.Id, can_close: bool) void {
 }
 
 fn canClose(id: dvui.Id) bool {
-    return std.mem.indexOfScalar(dvui.Id, closable_list[0..closable_n], id) != null;
+    return std.mem.findScalar(dvui.Id, closable_list[0..closable_n], id) != null;
 }
 
 /// The floating window that has the keyboard, as last read from the OS's key window: null for the

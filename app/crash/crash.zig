@@ -577,10 +577,10 @@ test "a report names the innermost frame's module, and writes each frame against
     try writeReport(&w, test_run, .{ .panic = "index out of bounds" }, .{ .id = 7, .name = "main" }, &.{ app, pixi }, &.{ 0x500001, 0x20101, 0x1201 }, testCodeAt);
     const text = w.buffered();
     try std.testing.expect(std.mem.startsWith(u8, text, "fizzy crashed in pixi 0.1.40: panic: index out of bounds\n"));
-    try std.testing.expect(std.mem.indexOf(u8, text, "thread 7 \"main\"\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "registers:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "  1 pixi 0.1.40 0x20000 0x8000 ab01\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "  0 fizzy 0.4.2 0x1000 0x8000 -\n") != null);
+    try std.testing.expect(std.mem.find(u8, text, "thread 7 \"main\"\n") != null);
+    try std.testing.expect(std.mem.find(u8, text, "registers:") == null);
+    try std.testing.expect(std.mem.find(u8, text, "  1 pixi 0.1.40 0x20000 0x8000 ab01\n") != null);
+    try std.testing.expect(std.mem.find(u8, text, "  0 fizzy 0.4.2 0x1000 0x8000 -\n") != null);
     try std.testing.expect(std.mem.endsWith(u8, text, "frames:\n  libc.so.6+0x100000\n  pixi+0x100\n  fizzy+0x200\n"));
 }
 
@@ -601,7 +601,7 @@ test "a PC that is not code is reported with its registers, code and caller, and
     try writeReport(&w, test_run, .{ .signal = .{ .name = "Segmentation fault", .address = 0x7f0000, .code = 2 } }, thread, &.{app}, &.{ 0x7f0001, 0x1301, 0x1201 }, testCodeAt);
     const text = w.buffered();
     try std.testing.expect(std.mem.startsWith(u8, text, "fizzy crashed in fizzy 0.4.2: Segmentation fault at address 0x7f0000 (code 2)\n"));
-    try std.testing.expect(std.mem.indexOf(u8, text, "thread 42\nregisters: pc 0x7f0000 sp 0x9ff0 fp 0x10\ncaller (by call convention): fizzy+0x300 (pc is not code)\n") != null);
+    try std.testing.expect(std.mem.find(u8, text, "thread 42\nregisters: pc 0x7f0000 sp 0x9ff0 fp 0x10\ncaller (by call convention): fizzy+0x300 (pc is not code)\n") != null);
     try std.testing.expect(std.mem.endsWith(u8, text, "frames:\n  0x7f0000 (not code)\n  fizzy+0x300\n  fizzy+0x200\n"));
 }
 
@@ -632,7 +632,7 @@ test "a PC that came from a return names no caller" {
     var w: std.Io.Writer = .fixed(&buf);
     const thread: Thread = .{ .id = 1, .registers = .{ .pc = 0x7f0000, .sp = 0x9ff0, .fp = 0x10, .caller = .from_return } };
     try writeReport(&w, test_run, .{ .signal = .{ .name = "Segmentation fault" } }, thread, &.{}, &.{0x7f0001}, testCodeAt);
-    try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "registers: pc 0x7f0000 sp 0x9ff0 fp 0x10\ncaller: (caller unknown: pc came from a return)\n") != null);
+    try std.testing.expect(std.mem.find(u8, w.buffered(), "registers: pc 0x7f0000 sp 0x9ff0 fp 0x10\ncaller: (caller unknown: pc came from a return)\n") != null);
 }
 
 test "a fault code is this thread's only" {

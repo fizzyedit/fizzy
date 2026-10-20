@@ -323,7 +323,7 @@ fn outcomeAnswer(arena: std.mem.Allocator, as_zon: bool, id: []const u8, outcome
 
 fn isZon(content_type: ?[]const u8) bool {
     const t = content_type orelse return false;
-    const bare = std.mem.trim(u8, t[0 .. std.mem.indexOfScalar(u8, t, ';') orelse t.len], " ");
+    const bare = std.mem.trim(u8, t[0 .. std.mem.findScalar(u8, t, ';') orelse t.len], " ");
     return std.ascii.eqlIgnoreCase(bare, zon_type);
 }
 

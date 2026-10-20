@@ -464,7 +464,7 @@ test "a snapshot names what a person acts on, and what a tape aims at" {
     }
     try std.testing.expectEqual(@as(usize, 2), buttons);
     try std.testing.expect(save and close and area);
-    try std.testing.expect(std.mem.indexOf(u8, text, "plain") == null);
+    try std.testing.expect(std.mem.find(u8, text, "plain") == null);
     // The capture is let go once written.
     try std.testing.expectEqual(@as(usize, 0), dvui.debug.capturedFrameCount());
 }
@@ -579,7 +579,7 @@ test "taken every frame, the latest is the frame last drawn, at once, until it s
         _ = try dvui.testing.step(testFrame);
     }
     const first = test_snapshot.latest() orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.indexOf(u8, first, "Save") != null);
+    try std.testing.expect(std.mem.find(u8, first, "Save") != null);
     // Each frame drawn after is taken too, without asking.
     const taken = test_snapshot.taken;
     _ = try dvui.testing.step(testFrame);

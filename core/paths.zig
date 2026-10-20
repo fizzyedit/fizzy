@@ -30,13 +30,13 @@ pub fn normalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 /// to but not including the first `/` after the `://`; the scheme is letters, digits, `+`,
 /// `-` and `.` and starts with a letter, so a Windows drive (`C:\`) never qualifies.
 pub fn mountPrefixLen(path: []const u8) ?usize {
-    const sep = std.mem.indexOf(u8, path, "://") orelse return null;
+    const sep = std.mem.find(u8, path, "://") orelse return null;
     if (sep == 0 or !std.ascii.isAlphabetic(path[0])) return null;
     for (path[0..sep]) |c| {
         if (!(std.ascii.isAlphanumeric(c) or c == '+' or c == '-' or c == '.')) return null;
     }
     const host_start = sep + 3;
-    const host_end = std.mem.indexOfScalarPos(u8, path, host_start, '/') orelse path.len;
+    const host_end = std.mem.findScalarPos(u8, path, host_start, '/') orelse path.len;
     return host_end;
 }
 

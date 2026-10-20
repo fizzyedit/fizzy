@@ -71,7 +71,7 @@ fn request(_: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, c
     for (req.headers) |h| {
         // The line format is the protocol between Zig and JS; a CR/LF in a value would end
         // the line early (or trap the frame inside `Headers.append`), so it is refused here.
-        if (std.mem.indexOfAny(u8, h.name, "\r\n:") != null or std.mem.indexOfAny(u8, h.value, "\r\n") != null) return error.Http;
+        if (std.mem.findAny(u8, h.name, "\r\n:") != null or std.mem.findAny(u8, h.value, "\r\n") != null) return error.Http;
         try lines.appendSlice(a, h.name);
         try lines.appendSlice(a, ": ");
         try lines.appendSlice(a, h.value);

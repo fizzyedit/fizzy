@@ -156,7 +156,7 @@ fn instead(q: Pending) void {
         .save_and_close => editor.app.pending_close_after_save.put(gpa, q.doc_id, {}) catch {},
         .quit => {
             // In flight now: the walk closes it once it lands clean, and goes on.
-            if (std.mem.indexOfScalar(u64, editor.app.quit_save_all_ids.items, q.doc_id)) |i| _ = editor.app.quit_save_all_ids.swapRemove(i);
+            if (std.mem.findScalar(u64, editor.app.quit_save_all_ids.items, q.doc_id)) |i| _ = editor.app.quit_save_all_ids.swapRemove(i);
             editor.app.quit_saves_in_flight.put(gpa, q.doc_id, {}) catch {};
             editor.app.pending_quit_continue = true;
         },

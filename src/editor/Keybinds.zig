@@ -1043,7 +1043,7 @@ pub const document_verbs = [_]DocumentVerb{
 };
 
 pub fn commandActionSuffix(id: []const u8) []const u8 {
-    if (std.mem.lastIndexOfScalar(u8, id, '.')) |dot| return id[dot + 1 ..];
+    if (std.mem.findScalarLast(u8, id, '.')) |dot| return id[dot + 1 ..];
     return id;
 }
 
@@ -1654,7 +1654,7 @@ fn runInvocation(editor: *Editor, invoked: Keymap.Invocation) void {
 fn ownerIdForCommand(command: []const u8) ?[]const u8 {
     if (std.mem.startsWith(u8, command, "fizzy.")) return null;
     if (std.mem.startsWith(u8, command, bind_override_prefix)) return null;
-    const dot = std.mem.indexOfScalar(u8, command, '.') orelse return null;
+    const dot = std.mem.findScalar(u8, command, '.') orelse return null;
     return command[0..dot];
 }
 

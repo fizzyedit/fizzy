@@ -48,7 +48,7 @@ pub fn installLayoutSupported(io: std.Io) bool {
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.process.executablePath(io, &buf) catch return false;
-    return std.mem.indexOf(u8, buf[0..n], ".app/") != null;
+    return std.mem.find(u8, buf[0..n], ".app/") != null;
 }
 
 /// Iterates the ordered list of GitHub repo URLs to check for updates: the
@@ -67,7 +67,7 @@ const RepoUrlIterator = struct {
             if (build_opts.app_repo_url.len != 0) return build_opts.app_repo_url;
         }
         while (self.rest.len != 0) {
-            const comma = std.mem.indexOfScalar(u8, self.rest, ',');
+            const comma = std.mem.findScalar(u8, self.rest, ',');
             const raw = if (comma) |c| self.rest[0..c] else self.rest;
             self.rest = if (comma) |c| self.rest[c + 1 ..] else self.rest[self.rest.len..];
             const item = std.mem.trim(u8, raw, " \t");
