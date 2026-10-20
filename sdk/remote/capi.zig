@@ -30,7 +30,7 @@ const Status = enum(c_int) {
 };
 
 fn status(err: Client.Error) c_int {
-    return @intFromEnum(switch (err) {
+    return @backingInt(switch (err) {
         error.NotInstalled => Status.not_installed,
         error.NotRunning => .not_running,
         error.Sandboxed => .sandboxed,
@@ -89,12 +89,12 @@ fn dup(a: std.mem.Allocator, s: ?[*:0]const u8) error{OutOfMemory}!?[]const u8 {
 
 /// Find, start and connect: `*out` is a handle to close, on `ok` only.
 export fn fizzy_remote_open(options: ?*const Options, out: ?*?*Handle) callconv(.c) c_int {
-    const o = options orelse return @intFromEnum(Status.invalid_argument);
-    const result = out orelse return @intFromEnum(Status.invalid_argument);
+    const o = options orelse return @backingInt(Status.invalid_argument);
+    const result = out orelse return @backingInt(Status.invalid_argument);
     result.* = null;
-    if (o.size < @offsetOf(Options, "socket_path") + @sizeOf(?[*:0]const u8)) return @intFromEnum(Status.invalid_argument);
+    if (o.size < @offsetOf(Options, "socket_path") + @sizeOf(?[*:0]const u8)) return @backingInt(Status.invalid_argument);
 
-    const handle = gpa.create(Handle) catch return @intFromEnum(Status.out_of_memory);
+    const handle = gpa.create(Handle) catch return @backingInt(Status.out_of_memory);
     handle.* = .{ .arena = .init(gpa), .threaded = .init(gpa, .{ .environ = processEnviron() }), .client = undefined };
     var started = false;
     defer if (!started) {
@@ -104,7 +104,7 @@ export fn fizzy_remote_open(options: ?*const Options, out: ?*?*Handle) callconv(
     };
     const a = handle.arena.allocator();
 
-    const opts = clientOptions(a, o) catch return @intFromEnum(Status.out_of_memory);
+    const opts = clientOptions(a, o) catch return @backingInt(Status.out_of_memory);
 
     handle.client = .init(gpa, handle.threaded.io(), opts);
     handle.client.connect() catch |err| {
@@ -141,7 +141,7 @@ fn processEnviron() std.process.Environ {
 
 /// Connect again after a drop (`recv`/`send` returned `closed`), starting fizzy if it quit.
 export fn fizzy_remote_reconnect(handle: ?*Handle) callconv(.c) c_int {
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
+    const h = handle orelse return @backingInt(Status.invalid_argument);
     h.client.connect() catch |err| return status(err);
     h.refreshSocket();
     return 0;
@@ -149,15 +149,15 @@ export fn fizzy_remote_reconnect(handle: ?*Handle) callconv(.c) c_int {
 
 /// Send one whole frame.
 export fn fizzy_remote_send(handle: ?*Handle, frame: ?[*]const u8, len: usize) callconv(.c) c_int {
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    const bytes = (frame orelse return @intFromEnum(Status.invalid_argument))[0..len];
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const bytes = (frame orelse return @backingInt(Status.invalid_argument))[0..len];
     var reader: FrameReader = .init(gpa);
     defer reader.deinit();
-    reader.push(bytes) catch return @intFromEnum(Status.out_of_memory);
+    reader.push(bytes) catch return @backingInt(Status.out_of_memory);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const frame_in = (reader.next() catch return @intFromEnum(Status.protocol)) orelse return @intFromEnum(Status.protocol);
-    const msg = (codec.decode(arena.allocator(), frame_in) catch return @intFromEnum(Status.protocol)) orelse return @intFromEnum(Status.protocol);
+    const frame_in = (reader.next() catch return @backingInt(Status.protocol)) orelse return @backingInt(Status.protocol);
+    const msg = (codec.decode(arena.allocator(), frame_in) catch return @backingInt(Status.protocol)) orelse return @backingInt(Status.protocol);
     h.client.send(msg) catch |err| return status(err);
     return 0;
 }
@@ -166,18 +166,18 @@ export fn fizzy_remote_send(handle: ?*Handle, frame: ?[*]const u8, len: usize) c
 /// `*len` is its length; 0 with `ok` means the wait passed. A frame larger than `cap` is kept:
 /// `buffer_too_small` with `*len` the size needed, then call again with room.
 export fn fizzy_remote_recv(handle: ?*Handle, buf: ?[*]u8, cap: usize, len: ?*usize, timeout_ms: i32) callconv(.c) c_int {
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    const out_len = len orelse return @intFromEnum(Status.invalid_argument);
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const out_len = len orelse return @backingInt(Status.invalid_argument);
     out_len.* = 0;
     if (h.stash.items.len == 0) {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         defer arena.deinit();
         const wait: ?u32 = if (timeout_ms < 0) null else @intCast(timeout_ms);
         const msg = (h.client.poll(arena.allocator(), wait) catch |err| return status(err)) orelse return 0;
-        codec.encode(gpa, &h.stash, msg, codec.default_max_frame) catch return @intFromEnum(Status.protocol);
+        codec.encode(gpa, &h.stash, msg, codec.default_max_frame) catch return @backingInt(Status.protocol);
     }
     out_len.* = h.stash.items.len;
-    if (h.stash.items.len > cap or buf == null) return @intFromEnum(Status.buffer_too_small);
+    if (h.stash.items.len > cap or buf == null) return @backingInt(Status.buffer_too_small);
     @memcpy(buf.?[0..h.stash.items.len], h.stash.items);
     h.stash.clearRetainingCapacity();
     return 0;
@@ -253,7 +253,7 @@ test "the C ABI opens, round trips a frame and closes" {
 
     var small: [4]u8 = undefined;
     var len: usize = 0;
-    try t.expectEqual(@intFromEnum(Status.buffer_too_small), fizzy_remote_recv(handle, &small, small.len, &len, 5000));
+    try t.expectEqual(@backingInt(Status.buffer_too_small), fizzy_remote_recv(handle, &small, small.len, &len, 5000));
     try t.expect(len > small.len);
     var frame: [256]u8 = undefined;
     try t.expectEqual(@as(c_int, 0), fizzy_remote_recv(handle, &frame, frame.len, &len, 5000));
@@ -275,8 +275,8 @@ test "the C ABI says why it could not open" {
     opts.exe = "/nonexistent/fizzy";
     var handle: ?*Handle = null;
     const code = fizzy_remote_open(&opts, &handle);
-    try t.expectEqual(@intFromEnum(Status.not_installed), code);
+    try t.expectEqual(@backingInt(Status.not_installed), code);
     try t.expect(handle == null);
     try t.expectEqualStrings("fizzy is not installed", std.mem.span(fizzy_remote_status_string(code)));
-    try t.expectEqual(@intFromEnum(Status.invalid_argument), fizzy_remote_open(null, &handle));
+    try t.expectEqual(@backingInt(Status.invalid_argument), fizzy_remote_open(null, &handle));
 }
