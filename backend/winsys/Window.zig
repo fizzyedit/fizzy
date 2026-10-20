@@ -39,8 +39,10 @@ pub const Options = struct {
 };
 
 /// What the OS is told the window is for, which decides its stacking, its task-switcher entry
-/// and whether it takes focus. The set fizzy really opens: its windows, floats, menus, dialogs.
-pub const Kind = enum { normal, float, menu, dialog };
+/// and whether it takes focus. The set fizzy really opens: its windows, floats, menus, dialogs,
+/// and the overlay (tooltips, drag carriers): never activated and click-through, so it takes no
+/// focus and no input, whatever `Options.focusable` says. Only where `Platform.Caps.overlay`.
+pub const Kind = enum { normal, float, menu, dialog, overlay };
 
 /// A window's place in the user's arrangement. Orthogonal to `visible`: a hidden window keeps the
 /// state it returns to.

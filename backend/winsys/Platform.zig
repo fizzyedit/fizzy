@@ -37,6 +37,9 @@ pub const Caps = struct {
     materials: std.EnumSet(Window.MaterialKind) = .initOne(.none),
     /// More than one window at once: false on the web and on a phone.
     multiple_windows: bool = true,
+    /// `Window.Kind.overlay`: non-activating, click-through windows. Opening one elsewhere is
+    /// `error.Unsupported`.
+    overlay: bool = false,
 };
 
 /// The platform's own report of when pictures reach the screen: the frame-pacing seam. The
