@@ -10,6 +10,8 @@
 # The environment's setup script is this one line:
 #   curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash
 #
+# jj is not needed here: the script never calls it, so a machine without it is fine.
+#
 # Re-running is safe: it overwrites the cache's packages with the published ones.
 set -euo pipefail
 
@@ -18,6 +20,9 @@ asset_url="${DEPS_CACHE_URL:-https://github.com/fizzyedit/fizzy/releases/downloa
 cache="${ZIG_GLOBAL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/zig}"
 
 as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
+# Root, or a sudo that needs no password. Codex cloud has neither, so the zig link goes in a user
+# bin directory there.
+can_root() { [ "$(id -u)" -eq 0 ] || { command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; }; }
 
 # --- Zig -------------------------------------------------------------------------------------
 if command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$zig_version" ]; then
@@ -25,13 +30,23 @@ if command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$zig_version" ]; then
 else
     python3 -m pip install --quiet --break-system-packages "ziglang==$zig_version" 2>/dev/null ||
         python3 -m pip install --quiet "ziglang==$zig_version"
-    zig_dir="$(python3 -I -c 'import os, ziglang; print(os.path.dirname(ziglang.__file__))')"
-    as_root ln -sf "$zig_dir/zig" /usr/local/bin/zig
+    # No -I: pip may have installed into the user site, which -I leaves out. It reads nothing
+    # untrusted; running from / keeps the current directory off the import path.
+    zig_dir="$(cd / && python3 -c 'import os, ziglang; print(os.path.dirname(ziglang.__file__))')"
+    if can_root; then
+        as_root ln -sf "$zig_dir/zig" /usr/local/bin/zig
+    else
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$zig_dir/zig" "$HOME/.local/bin/zig"
+        export PATH="$HOME/.local/bin:$PATH"
+        echo "no root or sudo: linked zig into $HOME/.local/bin; add it to PATH in later shells"
+    fi
     echo "installed zig $(zig version)"
 fi
 
 # --- zstd (to unpack the cache) ----------------------------------------------------------------
 if ! command -v zstd >/dev/null 2>&1; then
+    can_root || { echo "zstd is missing and there is no root or sudo to install it" >&2; exit 1; }
     as_root apt-get update -qq >/dev/null
     as_root apt-get install -y --no-install-recommends zstd >/dev/null
 fi
