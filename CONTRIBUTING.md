@@ -200,6 +200,7 @@ maintainer makes the SDK **live** on the site (below).
 | How Zig and comments are written | `docs/STYLE.md` |
 | How we work | this file |
 | The plugin contract | `docs/PLUGINS.md` |
+| Letting any agent claim a labelled issue | `docs/AGENT_WORK.md` |
 | Plans | private, in [`fizzyedit/plans`](https://github.com/fizzyedit/plans): issues, and a long design as `plans/<NAME>_PLAN.md` opening with a status line (`Status: proposed`, `in progress, fizzyedit/fizzy#N`, or `done`) |
 | The forks fizzy builds on | `docs/DEPENDENCIES.md` |
 | Releases | `RELEASING.md` |

@@ -1,0 +1,190 @@
+# The label side of docs/AGENT_WORK.md: `running:*` is a lock, a stranded claim is released, and
+# `merge-ok` stays the maintainers'. Labels and events only: no checkout, no secrets, no model
+# calls, and event data is read in JavaScript, never interpolated into a shell. Not part of
+# `ci-ok`'s needs: it guards labels, not code.
+#
+# `pull_request_target`, not `pull_request`: a fork's PR gets a read-only token under the latter,
+# so removing `merge-ok` from it would fail. It is safe here only because this workflow never
+# checks out or runs PR code; keep it that way.
+name: agent-work
+
+on:
+  issues:
+    types: [labeled]
+  pull_request_target:
+    types: [labeled]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: read
+
+concurrency:
+  # The label is in the group so a pending merge-ok run is never replaced by a run for another label.
+  group: agent-work-${{ github.event.issue.number || github.event.pull_request.number || 'sweep' }}-${{ github.event.label.name }}
+
+jobs:
+  labels:
+    if: github.repository == 'fizzyedit/fizzy' && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const item = context.payload.issue || context.payload.pull_request;
+            const number = item.number;
+            const added = context.payload.label.name;
+            const gone = async (name) => {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name });
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+            };
+            if (added === 'merge-ok') {
+              let allowed = false;
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner, repo, username: context.payload.sender.login });
+                allowed = ['admin', 'maintain'].includes(data.permission);
+              } catch (e) {
+                core.info('permission lookup failed (' + e.status + '); treating as no permission');
+              }
+              if (!allowed) {
+                // A late run may see a label a maintainer re-applied since: judge the latest
+                // application, not this event's sender.
+                const evs = await github.paginate(github.rest.issues.listEvents,
+                  { owner, repo, issue_number: number, per_page: 100 });
+                const last = evs.filter(e => e.event === 'labeled' && e.label && e.label.name === 'merge-ok').pop();
+                if (last && last.actor) {
+                  try {
+                    const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                      owner, repo, username: last.actor.login });
+                    if (['admin', 'maintain'].includes(data.permission)) return;
+                  } catch (e) {
+                    core.info('permission lookup failed (' + e.status + '); treating as no permission');
+                  }
+                }
+                await gone('merge-ok');
+                await github.rest.issues.createComment({ owner, repo, issue_number: number,
+                  body: '`merge-ok` is applied by maintainers only; removed.' });
+              }
+              return;
+            }
+            if (!added.startsWith('running:') || !context.payload.issue) return;
+            // Runs for different labels (running:a, running:b) can overlap; this is idempotent, so
+            // that is fine.
+            // Decide from current state, not this event's payload: the earliest running:* label
+            // wins, every other one goes. Any run therefore repairs all extras.
+            const { data: cur } = await github.rest.issues.get({ owner, repo, issue_number: number });
+            const claims = cur.labels.map(l => l.name).filter(n => n.startsWith('running:'));
+            if (claims.length < 2) return;
+            const events = await github.paginate(github.rest.issues.listEvents,
+              { owner, repo, issue_number: number, per_page: 100 });
+            // A label with no event yet (a lagging timeline) sorts last, so it cannot take the lock.
+            const at = (name) => {
+              const t = events
+                .filter(e => e.event === 'labeled' && e.label && e.label.name === name)
+                .map(e => Date.parse(e.created_at));
+              return t.length ? Math.max(...t) : Infinity;
+            };
+            claims.sort((a, b) => (at(a) === at(b) ? (a < b ? -1 : 1) : at(a) < at(b) ? -1 : 1));
+            const [winner, ...losers] = claims;
+            for (const name of losers) await gone(name);
+            await github.rest.issues.createComment({ owner, repo, issue_number: number,
+              body: 'Already claimed by `' + winner + '`; one `running:*` label per issue, first claim wins. Removed ' +
+                losers.map(n => '`' + n + '`').join(', ') + '.' });
+
+  stale:
+    if: github.repository == 'fizzyedit/fizzy' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const cutoff = Date.now() - 24 * 3600 * 1000;
+            // Fails closed: any lookup error (a bot, a deleted user) reads as no permission.
+            const permission = async (username) => {
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
+                return data.permission;
+              } catch (e) {
+                return 'none';
+              }
+            };
+            const canWrite = async (u) => ['admin', 'maintain', 'write'].includes(await permission(u));
+            // merge-ok backstop: if the label-time guard never ran, strip any merge-ok whose most
+            // recent application was not by a maintainer.
+            const marked = await github.paginate(github.rest.issues.listForRepo,
+              { owner, repo, state: 'open', labels: 'merge-ok', per_page: 100 });
+            for (const item of marked) {
+              try {
+                const evs = await github.paginate(github.rest.issues.listEvents,
+                  { owner, repo, issue_number: item.number, per_page: 100 });
+                const last = evs.filter(e => e.event === 'labeled' && e.label && e.label.name === 'merge-ok').pop();
+                const by = last && last.actor ? last.actor.login : null;
+                if (by && ['admin', 'maintain'].includes(await permission(by))) continue;
+                try {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number: item.number, name: 'merge-ok' });
+                } catch (e) {
+                  if (e.status !== 404) throw e;
+                }
+                await github.rest.issues.createComment({ owner, repo, issue_number: item.number,
+                  body: '`merge-ok` is applied by maintainers only; removed by the daily sweep.' });
+              } catch (e) {
+                core.warning('merge-ok #' + item.number + ': ' + e.message);
+              }
+            }
+            const issues = await github.paginate(github.rest.issues.listForRepo,
+              { owner, repo, state: 'open', labels: 'agent', per_page: 100 });
+            for (const issue of issues) {
+              try {
+                if (issue.pull_request) continue;
+                const claims = issue.labels.map(l => l.name).filter(n => n.startsWith('running:'));
+                if (claims.length === 0) continue;
+                const events = await github.paginate(github.rest.issues.listEventsForTimeline,
+                  { owner, repo, issue_number: issue.number, per_page: 100 });
+                const times = events
+                  .filter(e => e.event === 'labeled' && e.label && claims.includes(e.label.name))
+                  .map(e => Date.parse(e.created_at));
+                if (times.length === 0) continue; // no labeled event seen: never release blind
+                if (Math.max(...times) >= cutoff) continue;
+                // A live claim is an open PR in this repo that references the issue and either has
+                // its head branch in this repo (only write access can push one, so bot-authored
+                // PRs count) or, for a fork PR, is authored by someone with write access. An
+                // outsider's fork PR that merely mentions the issue holds nothing. Fail safe: a
+                // lookup error on a linked PR keeps the claim.
+                let live = false;
+                for (const e of events) {
+                  const src = e.event === 'cross-referenced' && e.source && e.source.issue;
+                  if (!src || !src.pull_request) continue;
+                  if (!src.repository || src.repository.full_name !== owner + '/' + repo) continue;
+                  let pr;
+                  try {
+                    pr = (await github.rest.pulls.get({ owner, repo, pull_number: src.number })).data;
+                  } catch (err) {
+                    live = true;
+                    break;
+                  }
+                  if (pr.state !== 'open') continue;
+                  if (pr.head.repo && pr.head.repo.full_name === owner + '/' + repo) { live = true; break; }
+                  if (await canWrite(pr.user.login)) { live = true; break; }
+                }
+                if (live) continue;
+                for (const name of claims) {
+                  try {
+                    await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name });
+                  } catch (e) {
+                    if (e.status !== 404) throw e;
+                  }
+                }
+                await github.rest.issues.createComment({ owner, repo, issue_number: issue.number,
+                  body: 'No open PR within 24 hours of the claim; released. `agent` stays, so another worker can take it.' });
+              } catch (e) {
+                core.warning('issue #' + issue.number + ': ' + e.message);
+              }
+            }
