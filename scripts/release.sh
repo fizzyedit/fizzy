@@ -18,7 +18,7 @@
 #   - Leaves *.nupkg and releases.<channel>.json under their canonical names
 #     (Velopack auto-update looks for those literally; do not rename).
 #   - Creates a *draft* GitHub release with `gh release create` and uploads
-#     all 18 assets (6 installers + 6 nupkgs + 6 release manifests).
+#     all 20 assets (6 installers + 2 macOS .dmg + 6 nupkgs + 6 release manifests).
 #   - Prints the draft URL. You review, edit notes, and click Publish in the
 #     browser. Velopack-linked binaries only start finding the update once
 #     the release is published (not while it's a draft).
@@ -252,6 +252,19 @@ for ch in "${channels[@]}"; do
     cp "$installer" "$staging/$public_name"
     uploads+=("$staging/$public_name")
     echo "    $ch: $(basename "$installer") -> $public_name"
+
+    # macOS also gets a drag-to-Applications disk image of the same bundle the .pkg installs.
+    if [[ "$os" == macos ]]; then
+        dmg="$(find_installer "$out" dmg)"
+        if [[ -z "$dmg" ]]; then
+            echo "error: no *.dmg found in $out for channel $ch" >&2
+            ls -la "$out" >&2
+            exit 1
+        fi
+        cp "$dmg" "$staging/fizzy_${os}_${arch}.dmg"
+        uploads+=("$staging/fizzy_${os}_${arch}.dmg")
+        echo "    $ch: $(basename "$dmg") -> fizzy_${os}_${arch}.dmg"
+    fi
 
     # nupkg(s) — keep canonical names. vpk emits one with `--delta None`.
     # We glob `*-full.nupkg` rather than `*-${ch}-full.nupkg` because vpk

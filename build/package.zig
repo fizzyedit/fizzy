@@ -203,7 +203,25 @@ pub fn addSteps(opts: Options) *std.Build.Step {
         vpk_pkg_sh.stdio = .inherit;
         vpk_pkg_sh.step.dependOn(pack_stage_tail);
 
-        break :vpk vpk_pkg_out_dir;
+        if (target.result.os.tag != .macos) break :vpk vpk_pkg_out_dir;
+
+        // Beside the .pkg, a drag-to-Applications .dmg of the same signed bundle, named as vpk
+        // names its own (`<packId>-<channel>-…`).
+        const dmg_name = b.fmt("{s}-{s}.dmg", .{ app_name, zig_out_subdir });
+        const dmg_sh = b.addSystemCommand(&.{"/bin/sh"});
+        dmg_sh.addFileArg(b.path("build/macos_dmg.sh"));
+        dmg_sh.addDirectoryArg(vpk_pkg_out_dir);
+        dmg_sh.addArg(branding.package_title);
+        dmg_sh.addArg(macos_sign_app_identity orelse "");
+        dmg_sh.addArg(macos_notary_profile orelse "");
+        const dmg = dmg_sh.addOutputFileArg(dmg_name);
+        // Inherited stdio makes the step rerun each time, as vpk's does: its input directory's
+        // path stays the same across vpk runs, so a cached image could hold a stale bundle.
+        dmg_sh.stdio = .inherit;
+        const with_dmg = b.addWriteFiles();
+        _ = with_dmg.addCopyDirectory(vpk_pkg_out_dir, "", .{});
+        _ = with_dmg.addCopyFile(dmg, dmg_name);
+        break :vpk with_dmg.getDirectory();
     };
     package_step.dependOn(&b.addInstallDirectory(.{
         .source_dir = installers,
