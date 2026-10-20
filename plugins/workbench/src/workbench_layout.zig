@@ -12,6 +12,11 @@ const Panes = Workbench.Panes;
 /// Where the arrangement is kept, inside the plugin's own directory.
 const panes_file = "panes.zon";
 
+/// Whether `path` is under a mount only a recording or a demo makes, which no later session has.
+pub fn isSessionMount(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "tape://") or std.mem.startsWith(u8, path, "demo://");
+}
+
 /// Bring the panes in line with the documents: every open document sits in exactly one pane's
 /// assignment, every pane with nothing assigned is gone (bar the last), and — once — last
 /// session's panes are re-seated from the assignments the app kept for them.
@@ -31,16 +36,24 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
             // A copy: the assignment is borrowed until the next `assignSurfaces`, and each open
             // below seats a loading placeholder in this pane, which reassigns it.
             const borrowed = host.assignedSurfaces(region_name) orelse continue;
+            // The mounts a recording or a demo makes (`tape://`, `demo://`) are gone with the
+            // session that made them: quitting mid-tour leaves its files in the assignment, and
+            // reopening one only fails. They leave the assignment rather than wait in the pane.
+            var ids: std.ArrayList([]const u8) = .empty;
+            for (borrowed) |b| {
+                const path = sdk.document.pathOfSurfaceId(b) orelse "";
+                if (isSessionMount(path)) continue;
+                try ids.append(arena, try arena.dupe(u8, b));
+            }
             // A pane that was empty when last session ended has nothing to bring back. Seating
             // it would leave an empty pane beside the others with nothing ever coming to it.
-            if (borrowed.len == 0) {
+            if (ids.items.len == 0) {
                 host.assignSurfaces(try arena.dupe(u8, region_name), null) catch {};
                 continue;
             }
+            if (ids.items.len != borrowed.len) host.assignSurfaces(try arena.dupe(u8, region_name), ids.items) catch {};
             _ = try wb.pane(grouping);
-            const ids = try arena.alloc([]const u8, borrowed.len);
-            for (borrowed, ids) |b, *c| c.* = try arena.dupe(u8, b);
-            for (ids) |id| {
+            for (ids.items) |id| {
                 const path = sdk.document.pathOfSurfaceId(id) orelse continue;
                 if (host.docFromPath(path) != null) continue;
                 _ = host.openFile(.{ .path = path, .grouping = grouping }) catch continue;

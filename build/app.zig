@@ -8,6 +8,7 @@ const plugin = fizzy_sdk.plugin;
 const core_mod = fizzy_sdk.core_module;
 const dvui = fizzy_sdk.dvui;
 const velopack = @import("velopack.zig");
+const rehome_fixture = @import("rehome_fixture.zig");
 
 /// A plugin checkout for the web build, with the modules its own `build.zig` would have added
 /// beside the SDK's (a bundled library under `src/`, say) — the web build has no way to run that
@@ -1157,6 +1158,25 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     }
 
     const sdk_module_test = sdk.wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), dvui_test_proxy_bridge, core_module_test, fizzy_test_module);
+    if (opts.own != null) {
+        const fixture = rehome_fixture.graph(b, target, optimize);
+        const consumer = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+        const module = @import("plugins.zig").rehome(b, .{
+            .target = target,
+            .optimize = optimize,
+            .dvui = dvui_testing_dep.module("dvui_testing"),
+            .core = core_module_test,
+            .sdk = sdk_module_test,
+            .icons = icons_test,
+            .backend = null,
+            .workbench_opts = workbench_opts,
+            .consumer = consumer,
+        }, "rehome_fixture", fixture);
+        // The same target as the source: the independent module is shared, the rest copied.
+        rehome_fixture.check(b, fixture, module, true);
+        const fixture_test = b.addTest(.{ .name = "rehome-fixture", .root_module = module });
+        test_step.dependOn(&b.addRunArtifact(fixture_test).step);
+    }
     const workbench_module_test = workbench_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,

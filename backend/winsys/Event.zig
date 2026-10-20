@@ -123,6 +123,9 @@ pub const Touch = struct {
     /// Which screen, and which finger on it; a finger keeps its pair from `down` to `up`.
     device: u64,
     finger: u64,
+    /// Which of `TouchSlots.count` numbers the finger holds from `down` to `up`, for a consumer
+    /// that reads touch as buttons. Filled in by `EventQueue`; a platform leaves it zero.
+    slot: u4 = 0,
     /// Across the window, as a fraction (`geometry.Norm`). A deliberate exception to "window
     /// positions are physical pixels": the screen reports where on itself, and the window size
     /// the platform would convert by can change before the event is read. Multiply by the window's current size (`Platform.windowSize`) at
