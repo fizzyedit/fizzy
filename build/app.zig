@@ -891,9 +891,6 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // dvui half (`sdk/replay/`) compiles on its own below, and is covered by
         // `tests/integration.zig`.
         .{ "fizzy-tape-tests", "sdk/tape/root.zig" },
-        // The remote-view protocol (`sdk/remote/`, plans/EMBEDDED_EDITOR_PLAN.md step 2): messages,
-        // framing, the connection rules and a loopback pair. std-only, so a host's adapter can link it.
-        .{ "fizzy-remote-tests", "sdk/remote/root.zig" },
         // Where Report a Bug goes when the build isn't told. std-only (see issues_url.zig); the
         // build is its only user.
         .{ "fizzy-issues-url-tests", "build/issues_url.zig" },
@@ -1035,6 +1032,34 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
             .root_module = work_module,
             .filters = test_filters,
         }));
+    }
+
+    {
+        // The remote-view protocol (`sdk/remote/`, plans/EMBEDDED_EDITOR_PLAN.md steps 2 and 5):
+        // messages, framing, the connection rules, and the client that finds, starts and connects
+        // to fizzy, against a fake fizzy executable built here. std-only, so a host's adapter can
+        // link it.
+        const fake_fizzy = b.addExecutable(.{
+            .name = "fake-fizzy",
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = b.path("sdk/remote/fake_fizzy.zig"),
+            }),
+        });
+        const fake_options = b.addOptions();
+        fake_options.addOptionPath("fake_fizzy", fake_fizzy.getEmittedBin());
+        const remote_tests = b.addTest(.{
+            .name = "fizzy-remote-tests",
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = b.path("sdk/remote/root.zig"),
+                .imports = &.{.{ .name = "fake_fizzy_options", .module = fake_options.createModule() }},
+            }),
+            .filters = test_filters,
+        });
+        try unit_test_artifacts.append(b.allocator, remote_tests);
     }
 
     for (unit_test_artifacts.items) |unit_test| {

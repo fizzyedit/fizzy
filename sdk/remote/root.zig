@@ -10,11 +10,13 @@
 //!   * `FrameReader` — cuts a byte stream into frames, in whatever chunks it arrives.
 //!   * `Connection` — the rules of the conversation, with no bytes in it.
 //!   * `Endpoint` — a `Connection` with the bytes around it, and a loopback `pump` for tests.
+//!   * `Client` — finds, quietly starts and connects to the installed fizzy; `capi.zig` is its C ABI.
 pub const message = @import("message.zig");
 pub const codec = @import("codec.zig");
 pub const FrameReader = @import("FrameReader.zig");
 pub const Connection = @import("Connection.zig");
 pub const Endpoint = @import("Endpoint.zig");
+pub const Client = @import("Client.zig");
 
 pub const Message = message.Message;
 
@@ -24,5 +26,8 @@ test {
     _ = FrameReader;
     _ = Connection;
     _ = Endpoint;
+    _ = Client;
     _ = @import("tests.zig");
+    _ = @import("client_tests.zig");
+    _ = @import("capi.zig");
 }
