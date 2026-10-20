@@ -7363,6 +7363,53 @@ test "workbench: a home surface shows while nothing is open, and a document puts
     try std.testing.expectEqual(@as(?usize, 2), HomeFrame.home);
 }
 
+test "workbench: restoring panes leaves tape and demo files out of the assignment" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.deinitSwaps(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    editor.app.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable });
+
+    // Installing the runtime routes dialogs through this host, which is freed with the test.
+    const prior_chrome = fizzy.core.dialogs.host_chrome;
+    fizzy.sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
+    defer fizzy.core.dialogs.host_chrome = prior_chrome;
+    editor.workbench = .init(gpa);
+    defer editor.workbench.deinit();
+    try editor.workbench.initDefaultWorkspace();
+    defer editor.workbench.panes.deinit();
+    defer editor.workbench.workspaces.deinit(gpa);
+    workbench.runtime.setWorkbench(&editor.workbench);
+    // The real path is opened through these; no plugin claims its extension here, so it stays closed.
+    editor.app.file_table = fizzy.core.FileTable.init(gpa, dvui.io);
+    defer editor.app.file_table.deinit();
+    editor.doc_io = @FieldType(fizzy.Editor, "doc_io").init(editor);
+
+    // Last session quit mid-tour, with a recording's tab open beside a file of the person's.
+    const real = "test.doc:/home/nobody/restore-real.txt";
+    try editor.app.host.assignSurfaces("Pane 1", &.{ "test.doc:demo://tour/x.zig", "test.doc:tape://1/a.txt", real });
+    editor.workbench.restored = false;
+    try editor.workbench.rebuildWorkspaces();
+
+    const kept = editor.app.host.assignedSurfaces("Pane 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), kept.len);
+    try std.testing.expectEqualStrings(real, kept[0]);
+    try std.testing.expect(editor.app.host.docFromPath("demo://tour/x.zig") == null);
+    try std.testing.expect(editor.app.host.docFromPath("tape://1/a.txt") == null);
+
+    // A pane holding nothing else goes, rather than waiting for what will never come.
+    try editor.app.host.assignSurfaces("Pane 2", &.{"test.doc:demo://tour/y.zig"});
+    editor.workbench.restored = false;
+    try editor.workbench.rebuildWorkspaces();
+    try std.testing.expect(editor.app.host.assignedSurfaces("Pane 2") == null);
+}
+
 // -- rows carried out of a tree and back --------------------------------------------------------
 
 // A tree of two folders and two files, as the explorer draws one: `F` open with `c` inside it, `G`
