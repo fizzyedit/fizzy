@@ -91,6 +91,9 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     // The windowing interface (`winsys`): window, event, display, clipboard, dnd and IME types,
     // and the platform vtable every backend implements. std-only.
     .{ .name = "backend-winsys-tests", .root = "winsys/root.zig" },
+    // The GPU device interface (`gpu`): the narrow surface `GpuRenderer` draws through, shader
+    // formats and their pick, and the `Null` device. std-only.
+    .{ .name = "backend-gpu-tests", .root = "gpu/root.zig" },
 };
 
 /// Where the macOS SDK is, for a macOS target that is not the host's own (`-Dtarget=aarch64-macos`

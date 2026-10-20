@@ -16,6 +16,9 @@ how an app wires it).
   does not dress its windows (`platform.window.app_dresses_windows`): never both. It sits inside
   `os_windows`' `beforeFrame`/`afterFrame`, whose pictures bind their own targets and give this
   one back; anything that draws into the main window's frame goes before `plainFrameEnd`.
+- **`gpu/` is the device interface `GpuRenderer` is to draw through** (std-only, no SDL): shaped
+  like SDL_GPU, with an SDL_GPU adapter and renderers of our own meant to stand behind it.
+  `GpuRenderer` does not use it yet. `gpu/README.md` has the audit and the decisions.
 - **dvui is the caller's.** It is never pinned here; the backend compiles against the app's dvui.
 - **SDL is patched here,** not in a fork: `patches/sdl/*.patch`, applied by zig-patch. How to
   change, add or bump them is `docs/DEPENDENCIES.md` ("SDL", "Bumping"). Touching a patch or this
