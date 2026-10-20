@@ -17,6 +17,8 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     const run_lint = b.addRunArtifact(lint);
+    if (b.option(bool, "lint-verbose", "Print all lint findings") orelse false)
+        run_lint.addArg("--verbose");
     run_lint.setCwd(b.path("."));
     run_lint.has_side_effects = true;
     b.step("lint", "Check Zig source against lint budgets").dependOn(&run_lint.step);

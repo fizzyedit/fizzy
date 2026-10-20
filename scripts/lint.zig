@@ -9,6 +9,11 @@ const skip_dirs = [_][]const u8{ "zig-pkg", "zig-out", "zig-cache", "spikes", "e
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
+    const verbose = args.len == 2 and std.mem.eql(u8, args[1], "--verbose");
+    if (args.len > 1 and !verbose) return error.InvalidArguments;
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
     const io = init.io;
     const cwd = std.Io.Dir.cwd();
     const source = try cwd.readFileAllocOptions(io, "scripts/lint-allow.zon", allocator, .unlimited, .of(u8), 0);
@@ -46,40 +51,59 @@ pub fn main(init: std.process.Init) !void {
             std.mem.replaceScalar(u8, path, '\\', '/');
             const bytes = try entry.dir.readFileAllocOptions(io, entry.basename, allocator, .unlimited, .of(u8), 0);
             const findings = try analyze(allocator, bytes);
-            for (findings) |finding| std.debug.print("{s}:{d}: {s}: {s}\n", .{
-                path, finding.line, @tagName(finding.rule), finding.message,
-            });
-            inline for (std.meta.tags(Rule)) |rule| {
-                var count: usize = 0;
-                for (findings) |finding| if (finding.rule == rule) {
-                    count += 1;
-                };
-                var budget: usize = 0;
-                for (parsed, 0..) |allow, index| {
-                    if (allow.rule == rule and std.mem.eql(u8, allow.file, path)) {
-                        seen[index] = true;
-                        budget = allow.count;
-                    }
-                }
-                switch (ratchet(count, budget)) {
-                    .over => {
-                        std.debug.print("{s}:1: {s}: count {d} exceeds allowance {d}\n", .{ path, @tagName(rule), count, budget });
-                        failed = true;
-                    },
-                    .under => {
-                        std.debug.print("{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n", .{ path, @tagName(rule), count, budget, count });
-                        failed = true;
-                    },
-                    .equal => {},
-                }
-            }
+            failed = try reportFile(&output.writer, path, findings, parsed, seen, verbose) or failed;
         }
     }
     for (parsed, seen) |allow, visited| if (!visited) {
-        std.debug.print("{s}:1: {s}: file not found; remove its allowance of {d}\n", .{ allow.file, @tagName(allow.rule), allow.count });
+        try output.writer.print("{s}:1: {s}: file not found; remove its allowance of {d}\n", .{ allow.file, @tagName(allow.rule), allow.count });
         failed = true;
     };
+    std.debug.print("{s}", .{output.written()});
     if (failed) std.process.exit(1);
+}
+
+fn reportFile(
+    writer: *std.Io.Writer,
+    path: []const u8,
+    findings: []const Finding,
+    allowances: []const Allow,
+    seen: []bool,
+    verbose: bool,
+) !bool {
+    var failed = false;
+    inline for (std.meta.tags(Rule)) |rule| {
+        var count: usize = 0;
+        for (findings) |finding| if (finding.rule == rule) {
+            count += 1;
+        };
+        var budget: usize = 0;
+        for (allowances, 0..) |allow, index| {
+            if (allow.rule == rule and std.mem.eql(u8, allow.file, path)) {
+                seen[index] = true;
+                budget = allow.count;
+            }
+        }
+        const status = ratchet(count, budget);
+        if (verbose or status == .over) {
+            for (findings) |finding| {
+                if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s}\n", .{
+                    path, finding.line, @tagName(rule), finding.message,
+                });
+            }
+        }
+        switch (status) {
+            .over => {
+                try writer.print("{s}:1: {s}: count {d} exceeds allowance {d}\n", .{ path, @tagName(rule), count, budget });
+                failed = true;
+            },
+            .under => {
+                try writer.print("{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n", .{ path, @tagName(rule), count, budget, count });
+                failed = true;
+            },
+            .equal => {},
+        }
+    }
+    return failed;
 }
 
 fn ratchet(count: usize, budget: usize) enum { over, under, equal } {
@@ -234,4 +258,58 @@ test "line suppressions require a nonempty reason" {
         a,
         "const s = \"// lint-allow(fn-length)\";",
     )).len);
+}
+
+test "runner is quiet on pass and verbose prints known findings" {
+    const findings = [_]Finding{.{ .rule = .@"fn-length", .line = 2, .message = "known" }};
+    const allowances = [_]Allow{.{ .rule = .@"fn-length", .file = "known.zig", .count = 1 }};
+    var seen = [_]bool{false};
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    try std.testing.expect(!try reportFile(&output.writer, "known.zig", &findings, &allowances, &seen, false));
+    try std.testing.expectEqualStrings("", output.written());
+    try std.testing.expect(seen[0]);
+    try std.testing.expect(!try reportFile(&output.writer, "known.zig", &findings, &allowances, &seen, true));
+    try std.testing.expectEqualStrings("known.zig:2: fn-length: known\n", output.written());
+}
+
+test "runner prints only over-budget rules and unallowed files" {
+    const findings = [_]Finding{
+        .{ .rule = .@"fn-length", .line = 2, .message = "first" },
+        .{ .rule = .@"fn-length", .line = 3, .message = "second" },
+        .{ .rule = .@"create-needs-destroy", .line = 4, .message = "known" },
+    };
+    const allowances = [_]Allow{
+        .{ .rule = .@"fn-length", .file = "over.zig", .count = 1 },
+        .{ .rule = .@"create-needs-destroy", .file = "over.zig", .count = 1 },
+        .{ .rule = .@"fn-length", .file = "known.zig", .count = 2 },
+        .{ .rule = .@"create-needs-destroy", .file = "known.zig", .count = 1 },
+    };
+    var seen = [_]bool{ false, false, false, false };
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    try std.testing.expect(try reportFile(&output.writer, "over.zig", &findings, &allowances, &seen, false));
+    try std.testing.expect(!try reportFile(&output.writer, "known.zig", &findings, &allowances, &seen, false));
+    try std.testing.expect(try reportFile(&output.writer, "new.zig", findings[2..], &allowances, &seen, false));
+    try std.testing.expectEqualStrings(
+        "over.zig:2: fn-length: first\n" ++
+            "over.zig:3: fn-length: second\n" ++
+            "over.zig:1: fn-length: count 2 exceeds allowance 1\n" ++
+            "new.zig:4: create-needs-destroy: known\n" ++
+            "new.zig:1: create-needs-destroy: count 1 exceeds allowance 0\n",
+        output.written(),
+    );
+}
+
+test "runner keeps the ratchet hint without printing remaining known findings" {
+    const findings = [_]Finding{.{ .rule = .@"fn-length", .line = 2, .message = "known" }};
+    const allowances = [_]Allow{.{ .rule = .@"fn-length", .file = "under.zig", .count = 2 }};
+    var seen = [_]bool{false};
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    try std.testing.expect(try reportFile(&output.writer, "under.zig", &findings, &allowances, &seen, false));
+    try std.testing.expectEqualStrings(
+        "under.zig:1: fn-length: count 1 is under allowance 2; lower the allowance to 1\n",
+        output.written(),
+    );
 }
