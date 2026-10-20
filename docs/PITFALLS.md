@@ -49,7 +49,7 @@ Four things in that split cost time on the move to 0.17:
 - **A tarball `zig fetch` cached breaks the next build's hash.** `zig fetch <url>` prints the
   right hash and saves the tarball to the global cache (`~/.cache/zig/p/<hash>.tar.gz`). A build
   that finds it there unpacks it with its top folder kept: no `build.zig.zon` at the package's
-  root, an unnamed `N-V-…` hash, and "hash mismatch". It is not the URL: it hit GitHub
+  root, an unnamed `N-V-...` hash, and "hash mismatch". It is not the URL: it hit GitHub
   `archive/<sha>.tar.gz` URLs (dvui-dev `bd7736d`) and fizzy's own `fizzy-sdk-v0.2.30.tar.gz`
   alike. Delete `p/<hash>.tar.gz` after a `zig fetch` and the build fetches the package itself.
   fizzyedit/plugin-build-action's repin does (fizzyedit/plugin-build-action#4).
@@ -59,7 +59,7 @@ Four things in that split cost time on the move to 0.17:
 Three that the release builds (`zig build package`, MSVC) hit and the macOS build never shows:
 
 - **An `*-windows-msvc` exe must link `oldnames` itself.** MSVC's C runtime spells the POSIX
-  calls `_getcwd`, `_chdir`, …, and `oldnames.lib` maps the plain names onto them. Zig 0.16
+  calls `_getcwd`, `_chdir`, ..., and `oldnames.lib` maps the plain names onto them. Zig 0.16
   linked it into every MSVC exe; 0.17 does not, so C that calls `getcwd` (dvui's
   tinyfiledialogs, fizzy's startup) fails to link with unresolved symbols. `build/exe.zig` adds
   it for `abi == .msvc`; any other MSVC exe built from this tree needs the same line.
@@ -119,7 +119,7 @@ source code open in another window. Do not copy code, comments or tables from SD
 GLFW or another implementation. Our patch descriptions and recorded pitfalls can
 identify a behaviour to investigate; patch files mix prose and implementation hunks,
 so read only the commit-message part above the first `---` and never open the diff
-hunks while writing a note; read the prose, not implementation hunks, and
-state the behaviour in our own words. Cite only public OS documentation. Separate
-recorded observations, documented contracts and cases still awaiting observation;
+hunks while writing a note. State the behaviour in our own words. Cite only public OS
+documentation. Separate recorded observations, documented contracts and cases still
+awaiting observation;
 include platform and verification limits so a proposed test is not mistaken for a pass.
