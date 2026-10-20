@@ -1,5 +1,5 @@
 //! What a windowing backend is: a `{ctx, vtable}` the app calls to make windows and read
-//! events, and nothing else. SDL3 (`backend/src/SDLBackend.zig`), a fake that replays a tape, and
+//! events, and nothing else. SDL3 (`backend/src/SDLBackend.zig`), a Sim that replays a tape, and
 //! the native Zig platforms are each one; the app cannot tell which.
 //!
 //! **Threading.** Every function is called from the one thread that polls, except `wake`, which
