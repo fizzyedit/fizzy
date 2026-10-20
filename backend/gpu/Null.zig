@@ -282,7 +282,10 @@ const vtable: Device.VTable = .{
 };
 
 // A frame in the order `GpuRenderer` records one: setup, a texture upload, a vertex upload, the
-// window's pass with a program draw, present. Each call here is one `GpuRenderer` makes today.
+// window's pass with a program draw, present. Each call here is one `GpuRenderer` makes today, and
+// the order follows `claimViewport` and `setVSync` (setup), `encodePass` (uploads, then the
+// drawable, then the pass), `present` (submit) and `readPixels` (download, fence); `README.md`'s
+// audit table maps each call to its lines.
 test "a GpuRenderer frame runs through the interface" {
     var null_device: Null = .{};
     const dev = null_device.device();
@@ -297,7 +300,8 @@ test "a GpuRenderer frame runs through the interface" {
     const set: shader.Set = .{ .spirv = "spv", .msl = "msl", .dxil = "dxil" };
     const vs_code = shader.resolve(set, dev.caps.shader_formats, &shader.default_preference, .vertex, null).?;
     const vs = try dev.createShader(.{ .code = vs_code, .stage = .vertex });
-    const fs = try dev.createShader(.{ .code = vs_code, .stage = .fragment, .num_samplers = 1 });
+    const fs_code = shader.resolve(set, dev.caps.shader_formats, &shader.default_preference, .fragment, null).?;
+    const fs = try dev.createShader(.{ .code = fs_code, .stage = .fragment, .num_samplers = 1 });
     const sampler = try dev.createSampler(.{ .filter = .linear, .address_u = .clamp_to_edge, .address_v = .clamp_to_edge });
     const pipeline = try dev.createPipeline(.{
         .vertex_shader = vs,

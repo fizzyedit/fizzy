@@ -1,7 +1,7 @@
 # backend/gpu: the GPU device interface
 
 Std-only: a `Device` (`{ctx, vtable}`), its plain types, shader formats and a `Null` skeleton.
-Read `README.md` first; `PLAN_DRAFT.md` is the plan for what implements it.
+Read `README.md` first; what implements it is a plan in fizzyedit/plans.
 
 - **No SDL, no dvui, no `winsys` import.** A file here compiles for every target and builds into a
   test with no GPU. A window is a `WindowId` (`winsys.Window.id`); the implementation maps it.

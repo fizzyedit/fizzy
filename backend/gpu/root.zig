@@ -2,7 +2,7 @@
 //!
 //! Pure data and a vtable, like `winsys`: no SDL, no dvui, nothing that allocates on its own.
 //! `README.md` is the audit of what `GpuRenderer` asks of SDL_GPU, the decisions, and what is
-//! left out; `PLAN_DRAFT.md` is the plan for the renderers that implement `Device`.
+//! left out; the renderers that implement `Device` are a plan of their own (fizzyedit/plans).
 //!
 //! Nothing outside this directory uses it yet: moving `GpuRenderer` onto it is the first step
 //! of that plan, once the interface has been read against the SDL_GPU adapter.

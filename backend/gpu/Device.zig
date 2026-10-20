@@ -10,8 +10,9 @@
 //!
 //! **Threads.** Everything is called from the frame's thread, except `createShader` and
 //! `releaseShader`, which a device must accept from any thread (`GpuRenderer` compiles Metal
-//! source on a thread of its own so a cold compile does not stall a frame). A device that cannot
-//! says so in `Caps.threaded_shader_compile`, and the caller compiles inline.
+//! source on a thread of its own so a cold compile does not stall a frame).
+//! TODO(seam): a device that cannot compile off-thread needs a `Caps` flag; add it with the first
+//! such device, and the caller compiles inline.
 //!
 //! **Lifetime.** `release*` may be called while the GPU still uses the object; the device frees
 //! it once the command buffers that use it are done. `Device.destroy` waits for the GPU.
@@ -33,9 +34,6 @@ pub const Caps = struct {
     driver: []const u8,
     /// The shader formats it compiles (`shader.resolve` picks among them).
     shader_formats: shader.Formats,
-    threaded_shader_compile: bool = true,
-    /// Whether a window can be claimed more than once on a device (viewports).
-    multiple_windows: bool = true,
 };
 
 pub const ShaderDesc = struct {

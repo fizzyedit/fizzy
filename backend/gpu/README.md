@@ -4,7 +4,7 @@ Replacing SDL3 replaces SDL_GPU, and SDL_GPU is what `GpuRenderer` draws on. Thi
 seam that makes that a swap of a device and not a rewrite of the renderer: a narrow `Device`
 (`Device.zig`), the plain types it speaks (`types.zig`), shader formats and how one is picked
 (`shader.zig`), and a device that draws nothing (`Null.zig`). All std-only; nothing outside this
-directory uses it yet (`GpuRenderer` moves onto it in step 1 of `PLAN_DRAFT.md`).
+directory uses it yet (`GpuRenderer` moves onto it in step 1 of the follow-up plan, fizzyedit/plans).
 
 Status: windowing library plan, step 10. Clean room: the surface is cut from what `GpuRenderer`
 does today and from SDL_GPU's public documentation and behaviour, never from its source.
@@ -59,8 +59,8 @@ Entry points are `main0` for MSL and `main` otherwise (`Format.defaultEntry`), a
 its own, so a shader that names its entry otherwise needs no new field.
 
 `createShader` is callable from any thread: `GpuRenderer` compiles Metal source on its own
-thread because a cold compile is 40–240 ms (`GpuRenderer.Compile`). `Caps.threaded_shader_compile`
-is false for a device that cannot, and the caller then compiles inline.
+thread because a cold compile is 40–240 ms (`GpuRenderer.Compile`). A device that cannot needs a
+`Caps` flag so the caller compiles inline (`TODO(seam)` in `Device.zig`); none exists yet.
 
 ## Audit: every SDL_GPU call
 

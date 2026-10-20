@@ -1,8 +1,8 @@
 //! Shaders by format: what a device accepts, what a program ships, and the pick between them.
 //!
 //! A device compiles one *format* of shader code and says which (`Caps.shader_formats`). A
-//! program is shipped as a `ShaderSet`, the same shader in as many formats as its author made;
-//! `ShaderSet.resolve` picks the code a device takes. A format missing from the set can be
+//! program is shipped as a `Set`, the same shader in as many formats as its author made;
+//! `resolve` picks the code a device takes. A format missing from the set can be
 //! derived from SPIR-V by a `Translator` (SPIRV-Cross to MSL or HLSL, then `D3DCompile` for
 //! DXBC), which is how a shader written in Zig, compiled to SPIR-V alone (`fizzyedit/fizzy#658`),
 //! reaches Metal and D3D12 with no other offline step.

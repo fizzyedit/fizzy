@@ -35,7 +35,7 @@ pub const WindowId = u64;
 pub const TextureFormat = enum {
     rgba8_unorm,
     bgra8_unorm,
-    /// Precise render targets (`Caps.supportsTexture` says whether the device has them).
+    /// Precise render targets (`Device.supportsTexture` says whether the device has them).
     rgba16_float,
 
     pub fn bytesPerTexel(self: TextureFormat) u32 {
@@ -173,9 +173,9 @@ pub const DrawIndexed = struct {
     instance_count: u32 = 1,
 };
 
-/// A copy of one texture's top-left region into another outside any pass, scaled by `filter`
-/// when the sizes differ. `load_op = .clear` clears the destination first (`presentInto` uses
-/// it to leave what the source does not cover transparent).
+/// A copy of one texture's top-left region into another outside any pass, scaled with nearest
+/// filtering when the sizes differ. The destination is cleared to transparent first, so what the
+/// source does not cover stays transparent (`presentInto` is the one caller).
 pub const Blit = struct {
     source: Texture,
     source_w: u32,
@@ -185,9 +185,6 @@ pub const Blit = struct {
     dest_y: u32,
     dest_w: u32,
     dest_h: u32,
-    load_op: LoadOp = .load,
-    clear_color: [4]f32 = .{ 0, 0, 0, 0 },
-    filter: Filter = .nearest,
 };
 
 /// A window's drawable for this frame, valid until the command buffer it was acquired on is
