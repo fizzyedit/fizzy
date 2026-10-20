@@ -77,7 +77,7 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
         if (p.hidden) continue;
         for (p.accounts(arena), 0..) |a, ai| {
             const extra = pi * 64 + ai;
-            const label = std.fmt.allocPrint(arena, "{s} ({s})", .{ a.label, p.name }) catch a.label;
+            const label = arena.print("{s} ({s})", .{ a.label, p.name }) catch a.label;
             var r = Popover.row(@src(), .{ .id_extra = extra, .active = sub_for == extra });
             accountRowContent(label, a.avatar);
             if (r.hovered or r.clicked) hovered_any = extra;
@@ -91,7 +91,7 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
         if (p.hidden or !p.canSignIn() or p.accounts(arena).len != 0) continue;
         if (offered == 0 and rows > 0) _ = dvui.separator(@src(), .{ .expand = .horizontal, .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
         offered += 1;
-        const label = std.fmt.allocPrint(arena, "Sign in to {s}…", .{p.name}) catch p.name;
+        const label = arena.print("Sign in to {s}…", .{p.name}) catch p.name;
         var r = Popover.row(@src(), .{ .id_extra = pi });
         dvui.labelNoFmt(@src(), label, .{}, .{ .gravity_y = 0.5, .margin = .all(0), .padding = .all(0) });
         r.deinit();

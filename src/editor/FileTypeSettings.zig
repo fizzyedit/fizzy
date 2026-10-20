@@ -469,7 +469,7 @@ fn drawReopenAction(row: Row, ri: usize) void {
         return;
     }
 
-    const label = std.fmt.allocPrint(arena, "Reopen {d}", .{stale.len}) catch "Reopen";
+    const label = arena.print("Reopen {d}", .{stale.len}) catch "Reopen";
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = ri,
         .expand = .horizontal,
@@ -480,8 +480,7 @@ fn drawReopenAction(row: Row, ri: usize) void {
         const reopened, const skipped = editor.reopenDocsUnderCurrentOwner(stale);
         if (skipped > 0) {
             // Unsaved work is never closed to satisfy a preference — say which files were left.
-            core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
-                arena,
+            core.dialogs.toast(@src(), .{ .message = arena.print(
                 "Reopened {d}; left {d} with unsaved changes alone.",
                 .{ reopened, skipped },
             ) catch "Some files have unsaved changes." });

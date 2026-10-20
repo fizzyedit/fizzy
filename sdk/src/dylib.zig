@@ -364,7 +364,7 @@ pub fn stdOptions(comptime id: []const u8) std.Options {
             // A wasm side module has no stderr of its own (std's default sink wants a
             // threaded Io); the host's panel is the only sink there.
             if (comptime @import("builtin").target.cpu.arch != .wasm32) dvui.App.logFn(level, scope, format, args);
-            const msg = std.fmt.allocPrint(runtime.allocator(), format, args) catch return;
+            const msg = runtime.allocator().print(format, args) catch return;
             defer runtime.allocator().free(msg);
             runtime.host().logLine(level, id, msg);
         }

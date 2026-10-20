@@ -632,7 +632,7 @@ fn drawInputScheme() void {
     const label_text: []const u8 = switch (fizzy.editor().app.settings.input_scheme) {
         .auto => switch (dvui.mouseType()) {
             .unknown => "Auto",
-            .mouse, .trackpad => |hint| std.fmt.allocPrint(dvui.currentWindow().arena(), "Auto ({s})", .{@tagName(hint)}) catch "Auto",
+            .mouse, .trackpad => |hint| dvui.currentWindow().arena().print("Auto ({s})", .{@tagName(hint)}) catch "Auto",
         },
         .mouse => "Mouse",
         .trackpad => "Trackpad",

@@ -52,7 +52,7 @@ pub fn loadBytesIntoStaging(
 /// app that registers it, and the workbench that assigns it to a pane. Stable across sessions
 /// by construction, which is what makes an assignment to it a way to restore one.
 pub fn surfaceId(allocator: std.mem.Allocator, owner_id: []const u8, path: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}.doc:{s}", .{ owner_id, path });
+    return allocator.print("{s}.doc:{s}", .{ owner_id, path });
 }
 
 /// The keyword every document surface carries. A shape places documents by accepting this,

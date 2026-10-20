@@ -190,7 +190,7 @@ fn drawIcon(editor: *Editor, c: *Chooser, view: *Layout.Surface, index: usize) f
         0;
     // Say what the dot means — a bare badge on a 20px rail icon is otherwise a riddle.
     const detail: ?[]const u8 = if (undecided_count > 0)
-        std.fmt.allocPrint(dvui.currentWindow().arena(), "{d} plugin{s} ready to load", .{
+        dvui.currentWindow().arena().print("{d} plugin{s} ready to load", .{
             undecided_count,
             if (undecided_count == 1) "" else "s",
         }) catch null

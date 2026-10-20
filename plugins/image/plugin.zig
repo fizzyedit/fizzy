@@ -209,7 +209,7 @@ fn infobarEntries(_: *anyopaque, active_doc: ?DocHandle) []const sdk.infobar.Ent
     if (handle.owner != &plugin) return &.{};
     const doc = docFrom(handle) orelse return &.{};
     const arena = sdk.host().arena();
-    const dim = std.fmt.allocPrint(arena, "{d}×{d} px", .{ doc.width, doc.height }) catch return &.{};
+    const dim = arena.print("{d}×{d} px", .{ doc.width, doc.height }) catch return &.{};
     const name = std.fs.path.basename(doc.path);
     const entries = arena.alloc(sdk.infobar.Entry, 2) catch return &.{};
     entries[0] = .{ .icon = dvui.entypo.image, .text = if (name.len > 0) name else "Untitled" };

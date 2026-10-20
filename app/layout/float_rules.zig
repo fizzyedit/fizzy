@@ -124,7 +124,7 @@ pub fn lerp(a: Rect, b: Rect, t: f32) Rect {
 pub fn nextName(buf: []u8, taken: []const []const u8) []const u8 {
     var n: u32 = 1;
     while (true) : (n += 1) {
-        const name = std.fmt.bufPrint(buf, name_prefix ++ "{d}", .{n}) catch return name_prefix ++ "1";
+        const name = std.mem.print(buf, name_prefix ++ "{d}", .{n}) catch return name_prefix ++ "1";
         for (taken) |t| {
             if (std.mem.eql(u8, t, name)) break;
         } else return name;

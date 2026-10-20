@@ -160,7 +160,7 @@ fn wait(self: *TapeTabs, editor: *Editor) void {
         const native = comptime @import("builtin").target.cpu.arch != .wasm32;
         if (native or failed or dvui.frameTimeNS() - since > wait_limit_ns) {
             dvui.log.warn("tape: it needs the plugin '{s}', which is not loaded", .{o});
-            core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(dvui.currentWindow().arena(), "This tape needs the {s} plugin", .{o}) catch "This tape needs a plugin that is not loaded" });
+            core.dialogs.toast(@src(), .{ .message = dvui.currentWindow().arena().print("This tape needs the {s} plugin", .{o}) catch "This tape needs a plugin that is not loaded" });
             w.deinit(gpa);
             self.waiting = null;
             return;
@@ -211,7 +211,7 @@ pub fn open(self: *TapeTabs, editor: *Editor, bytes: []const u8, opts: OpenOptio
     // A root nothing holds: not a mount, and no document open under it (one a crash's recovery
     // or a restart brought back from an earlier run).
     const root = root: while (true) : (self.next += 1) {
-        const r = try std.fmt.allocPrint(gpa, "tape://{d}", .{self.next});
+        const r = try gpa.print("tape://{d}", .{self.next});
         if (!editor.app.file_table.isMounted(r) and !openUnder(editor, r)) break :root r;
         gpa.free(r);
     };
@@ -222,7 +222,7 @@ pub fn open(self: *TapeTabs, editor: *Editor, bytes: []const u8, opts: OpenOptio
     errdefer gpa.destroy(mem);
     mem.* = try .init(gpa);
     errdefer mem.deinit();
-    const at = try std.fmt.allocPrint(gpa, "/{s}", .{file.path});
+    const at = try gpa.print("/{s}", .{file.path});
     defer gpa.free(at);
     try mem.put(at, file.text);
     try editor.app.host.mount(root, mem.fs());

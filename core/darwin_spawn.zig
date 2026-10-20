@@ -195,12 +195,12 @@ fn buildEnvp(gpa: std.mem.Allocator, path_override: ?[]const u8) ![:null]?[*:0]c
 
     for (forwarded_env_keys) |key| {
         const value = c.getenv(key) orelse continue;
-        tmp[n] = (try std.fmt.allocPrintSentinel(gpa, "{s}={s}", .{ key, std.mem.span(value) }, 0)).ptr;
+        tmp[n] = (try gpa.printSentinel("{s}={s}", .{ key, std.mem.span(value) }, 0)).ptr;
         n += 1;
     }
     const path_value = path_override orelse if (c.getenv("PATH")) |p| std.mem.span(p) else null;
     if (path_value) |p| {
-        tmp[n] = (try std.fmt.allocPrintSentinel(gpa, "PATH={s}", .{p}, 0)).ptr;
+        tmp[n] = (try gpa.printSentinel("PATH={s}", .{p}, 0)).ptr;
         n += 1;
     }
 

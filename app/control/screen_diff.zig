@@ -91,8 +91,8 @@ pub fn key(arena: std.mem.Allocator, nodes: []const Node) ![]const Keyed {
     for (nodes, out, 0..) |n, *k, i| {
         const parent: ?[]const u8 = if (n.parent) |p| if (p < i) out[p].key else null else null;
         const base: []const u8 = if (n.tag) |t| t else blk: {
-            const step = try std.fmt.allocPrint(arena, "{s}:{s}", .{ n.role orelse "", n.name orelse "" });
-            break :blk if (parent) |p| try std.fmt.allocPrint(arena, "{s}/{s}", .{ p, step }) else step;
+            const step = try arena.print("{s}:{s}", .{ n.role orelse "", n.name orelse "" });
+            break :blk if (parent) |p| try arena.print("{s}/{s}", .{ p, step }) else step;
         };
         // Like siblings (or a tag used twice) numbered from the second, in tree order, past any
         // number already given out.
@@ -101,7 +101,7 @@ pub fn key(arena: std.mem.Allocator, nodes: []const Node) ![]const Keyed {
         var unique = base;
         while (true) {
             gop.value_ptr.* += 1;
-            if (gop.value_ptr.* > 1) unique = try std.fmt.allocPrint(arena, "{s}#{d}", .{ base, gop.value_ptr.* });
+            if (gop.value_ptr.* > 1) unique = try arena.print("{s}#{d}", .{ base, gop.value_ptr.* });
             if (!given.contains(unique)) break;
         }
         try given.put(arena, unique, {});

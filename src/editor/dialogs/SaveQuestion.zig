@@ -143,7 +143,7 @@ fn instead(q: Pending) void {
     const doc = editor.app.docById(q.doc_id) orelse return;
     const path = doc.owner.documentPath(doc);
     const stem = path[0 .. path.len - std.fs.path.extension(path).len];
-    const new_path = std.fmt.allocPrint(gpa, "{s}{s}", .{ stem, q.instead_extension }) catch return;
+    const new_path = gpa.print("{s}{s}", .{ stem, q.instead_extension }) catch return;
     defer gpa.free(new_path);
     editor.save_answered.put(gpa, q.doc_id, {}) catch {};
     editor.doc_io.save(doc, new_path) catch |err| {

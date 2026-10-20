@@ -40,7 +40,7 @@ pub fn mergeLegacyPerPluginFiles(allocator: std.mem.Allocator, settings_zon_path
 }
 
 fn mergeOne(allocator: std.mem.Allocator, settings_zon_path: []const u8, plugins_dir: []const u8, id: []const u8) !void {
-    const legacy_path = try std.fmt.allocPrint(allocator, "{s}/{s}{s}", .{ plugins_dir, id, legacy_suffix });
+    const legacy_path = try allocator.print("{s}/{s}{s}", .{ plugins_dir, id, legacy_suffix });
     defer allocator.free(legacy_path);
 
     const legacy_text = try core.fs.read(allocator, dvui.io, legacy_path);

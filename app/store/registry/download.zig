@@ -61,7 +61,7 @@ pub fn download(
 
     // Write to a sibling temp file, then rename into place so a crash mid-write never leaves a
     // half-written dylib at the load path.
-    const tmp_path = try std.fmt.allocPrint(allocator, "{s}.part", .{dest_path});
+    const tmp_path = try allocator.print("{s}.part", .{dest_path});
     defer allocator.free(tmp_path);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = tmp_path, .data = data });
     try std.Io.Dir.renameAbsolute(tmp_path, dest_path, io);

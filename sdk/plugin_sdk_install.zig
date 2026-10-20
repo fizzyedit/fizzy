@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
     // reading `dest` right now (`PluginLoader.stableLoadCopyPath` copies from it), and on Windows
     // a plain overwrite of a file the editor still has open fails outright. The rename also means
     // a crash mid-write never leaves a half-written dylib at the load path.
-    const tmp = try std.fmt.allocPrint(arena, "{s}.part", .{dest});
+    const tmp = try arena.print("{s}.part", .{dest});
     try cwd.writeFile(io, .{ .sub_path = tmp, .data = data, .flags = .{ .permissions = permissions } });
     try std.Io.Dir.rename(cwd, tmp, cwd, dest, io);
     std.log.info("fizzy: installed {s} → {s}", .{ file_name, dest });

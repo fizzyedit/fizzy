@@ -141,7 +141,7 @@ fn recording(cycles: usize) !automation.Tape.Owned {
         try s.click(.{ .tag = button_tags[i % buttons] }, .{});
         const y: f32 = @as(f32, @floatFromInt(i % 17)) / 20 + 0.05;
         try s.click(.{ .tag = "bench.field", .x = 0.3, .y = y }, .{});
-        try s.typeText(try std.fmt.bufPrint(&word, "word{d} ", .{i}), .{});
+        try s.typeText(try std.mem.print(&word, "word{d} ", .{i}), .{});
     }
     return s.finish();
 }

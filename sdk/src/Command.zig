@@ -141,7 +141,7 @@ pub const Call = struct {
 
     /// Fail with a message: `return call.fail("no line {d}", .{n});`.
     pub fn fail(self: *Call, comptime fmt: []const u8, args: anytype) error{CommandFailed} {
-        self.message = std.fmt.allocPrint(self.arena, fmt, args) catch fmt;
+        self.message = self.arena.print(fmt, args) catch fmt;
         return error.CommandFailed;
     }
 };
@@ -181,24 +181,23 @@ pub fn answer(arena: std.mem.Allocator, param: Param, text: []const u8) Answer {
         },
         .int => |k| {
             const n = std.fmt.parseInt(i64, t, 10) catch return .{ .problem = "Enter a whole number" };
-            if (n < k.min or n > k.max) return .{ .problem = std.fmt.allocPrint(
-                arena,
+            if (n < k.min or n > k.max) return .{ .problem = arena.print(
                 "Enter a number from {d} to {d}",
                 .{ k.min, k.max },
             ) catch "Out of range" };
-            return .{ .zon = std.fmt.allocPrint(arena, "{d}", .{n}) catch return .{ .problem = "Out of memory" } };
+            return .{ .zon = arena.print("{d}", .{n}) catch return .{ .problem = "Out of memory" } };
         },
         .float => {
             const n = std.fmt.parseFloat(f64, t) catch return .{ .problem = "Enter a number" };
             if (!std.math.isFinite(n)) return .{ .problem = "Enter a finite number" };
-            return .{ .zon = std.fmt.allocPrint(arena, "{d}", .{n}) catch return .{ .problem = "Out of memory" } };
+            return .{ .zon = arena.print("{d}", .{n}) catch return .{ .problem = "Out of memory" } };
         },
-        .string => return .{ .zon = std.fmt.allocPrint(arena, "\"{f}\"", .{std.zig.fmtString(text)}) catch
+        .string => return .{ .zon = arena.print("\"{f}\"", .{std.zig.fmtString(text)}) catch
             return .{ .problem = "Out of memory" } },
         .enumeration => |k| {
             const name = if (t[0] == '.') t[1..] else t;
             for (k.choices) |choice| {
-                if (std.mem.eql(u8, choice, name)) return .{ .zon = std.fmt.allocPrint(arena, ".{f}", .{std.zig.fmtId(choice)}) catch
+                if (std.mem.eql(u8, choice, name)) return .{ .zon = arena.print(".{f}", .{std.zig.fmtId(choice)}) catch
                     return .{ .problem = "Out of memory" } };
             }
             return .{ .problem = "Choose one of the listed values" };
@@ -226,7 +225,7 @@ pub fn Params(comptime T: type) type {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ParseZon => {
                     call.bad_args = true;
-                    const msg = std.fmt.allocPrint(call.arena, "{f}", .{diag.fmt("args")}) catch "the arguments do not fit";
+                    const msg = call.arena.print("{f}", .{diag.fmt("args")}) catch "the arguments do not fit";
                     call.message = std.mem.trimEnd(u8, msg, "\n");
                     return error.BadArguments;
                 },
@@ -368,7 +367,7 @@ test "answer: what a person typed, as ZON the parameters parse" {
     try std.testing.expectEqualStrings("\"\"", answer(arena, P.params[4], "").zon);
 
     // Everything `answer` writes, the parameters parse back.
-    const args = try std.fmt.allocPrint(arena, ".{{ .n = {s}, .x = {s}, .on = {s}, .mode = {s}, .name = {s} }}", .{
+    const args = try arena.print(".{{ .n = {s}, .x = {s}, .on = {s}, .mode = {s}, .name = {s} }}", .{
         answer(arena, P.params[0], "7").zon,
         answer(arena, P.params[1], "-0.25").zon,
         answer(arena, P.params[2], "false").zon,

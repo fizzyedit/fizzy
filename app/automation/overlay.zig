@@ -947,7 +947,7 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     const total: f64 = @floatFromInt(tape.duration());
     const mono = dvui.Font.theme(.mono);
     var buf: [48]u8 = undefined;
-    const time = std.fmt.bufPrint(&buf, "{d}:{d:0>2} / {d}:{d:0>2}", .{
+    const time = std.mem.print(&buf, "{d}:{d:0>2} / {d}:{d:0>2}", .{
         minutes(now), seconds(now), minutes(total), seconds(total),
     }) catch "";
     const time_w = mono.textSize(time).w;
@@ -966,7 +966,7 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
 
     // The speed, top right of the capsule: a press steps it (`Player.stepRate`).
     var speed_buf: [8]u8 = undefined;
-    const speed = std.fmt.bufPrint(&speed_buf, "{d}\u{00D7}", .{player.rate}) catch "";
+    const speed = std.mem.print(&speed_buf, "{d}\u{00D7}", .{player.rate}) catch "";
     const speed_w = small_font.textSize(speed).w;
     const speed_r: dvui.Rect = .{ .x = x1 - speed_w, .y = r.y + 5, .w = speed_w, .h = small_font.lineHeight() };
     dvui.labelNoFmt(@src(), speed, .{}, .{

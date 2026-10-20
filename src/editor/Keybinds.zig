@@ -912,7 +912,7 @@ fn writeTraceFile(editor: *Editor, path: []const u8, ms: u32) ![]const u8 {
     const file = if (path.len > 0) path else blk: {
         const dir = try std.fs.path.join(arena, &.{ editor.app.config_folder, "traces" });
         try cwd.createDirPath(dvui.io, dir);
-        break :blk try std.fmt.allocPrint(arena, "{s}/trace-{d}.json", .{ dir, std.Io.Clock.real.now(dvui.io).toSeconds() });
+        break :blk try arena.print("{s}/trace-{d}.json", .{ dir, std.Io.Clock.real.now(dvui.io).toSeconds() });
     };
     try cwd.writeFile(dvui.io, .{ .sub_path = file, .data = out.written() });
     dvui.log.info("trace written to {s}", .{file});

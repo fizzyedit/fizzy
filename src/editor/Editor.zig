@@ -796,7 +796,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             if (group.items[0].ptr == plugin_id.ptr) {
                 var names: std.Io.Writer.Allocating = .init(editor.app.arena.allocator());
                 for (group.items, 0..) |name, i| names.writer.print("{s}'{s}'", .{ @as([]const u8, if (i > 0) ", " else ""), name }) catch {};
-                const why = std.fmt.allocPrint(editor.app.arena.allocator(), "plugin folders {s} differ only in case, so none is loaded: keep one", .{names.written()}) catch "plugin folders differ only in case, so none is loaded";
+                const why = editor.app.arena.allocator().print("plugin folders {s} differ only in case, so none is loaded: keep one", .{names.written()}) catch "plugin folders differ only in case, so none is loaded";
                 dvui.log.warn("user plugin '{s}': {s}", .{ plugin_id, why });
                 editor.app.recordPluginFailure(plugin_id, why, null, null, .{});
             }
@@ -1749,7 +1749,7 @@ export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]
     }
     if (editor.app.isPluginDisabled(id)) return;
     var buf: [512]u8 = undefined;
-    const url = if (url_len != 0) url_ptr[0..url_len] else std.fmt.bufPrint(&buf, "plugins/{s}/{s}.wasm", .{ id, id }) catch return;
+    const url = if (url_len != 0) url_ptr[0..url_len] else std.mem.print(&buf, "plugins/{s}/{s}.wasm", .{ id, id }) catch return;
     // No hash: this is either a local `plugins/<id>/<id>.wasm` beside the app or a URL the page
     // remembered from an install it already verified. A store install always carries one.
     editor.loadWebPlugin(id, url, "") catch |err| {
@@ -1793,7 +1793,7 @@ export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
     const root = editor.app.folder orelse return;
     const relative = std.mem.trimStart(u8, path_ptr[0..path_len], "/");
     if (relative.len == 0) return;
-    const full = std.fmt.allocPrint(editor.app.gpa, "{s}/{s}", .{ std.mem.trimEnd(u8, root, "/"), relative }) catch return;
+    const full = editor.app.gpa.print("{s}/{s}", .{ std.mem.trimEnd(u8, root, "/"), relative }) catch return;
     // Not opened here: the page can call before the app has drawn a frame (a tab opened in the
     // background, a phone slow to its first frame), when there are no places yet to open it in
     // or to close round it. The first frame that has them does it (`processPendingShow`).
@@ -3029,7 +3029,7 @@ const ClaimPill = struct {
     const inset: f32 = 12;
 
     fn init(canvas: *dvui.WidgetData, label: []const u8) ClaimPill {
-        const text = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s} is working", .{label}) catch "Working";
+        const text = dvui.currentWindow().arena().print("{s} is working", .{label}) catch "Working";
         const font = dvui.Font.theme(.body).larger(-1);
         const w = font.textSize(text).w + stop + stop_pad * 2 + pad * 2;
         const content = canvas.contentRect();
@@ -3075,7 +3075,7 @@ fn drawClaim(editor: *Editor, claim: sdk.Claim, pill: ClaimPill, path: []const u
     const font = dvui.Font.theme(.body).larger(-1);
     const ink = dvui.themeGet().color(.window, .text);
     dvui.labelNoFmt(@src(), pill.text, .{}, .{ .gravity_y = 0.5, .padding = .all(0), .font = font, .color_text = .{ .color = ink.opacity(0.8) } });
-    const tag = std.fmt.allocPrint(dvui.currentWindow().arena(), "fizzy.claim.stop:{s}", .{path}) catch null;
+    const tag = dvui.currentWindow().arena().print("fizzy.claim.stop:{s}", .{path}) catch null;
     var stop: dvui.ButtonWidget = undefined;
     stop.init(@src(), .{}, .{
         .gravity_y = 0.5,
@@ -3337,7 +3337,7 @@ pub fn exportDocument(editor: *Editor, doc: sdk.DocHandle, from: usize, to: usiz
         _ = editor.noteOnDocument(doc.id, "Could not save the tape");
         return;
     };
-    _ = editor.noteOnDocument(doc.id, std.fmt.allocPrint(arena, "Saved {s}", .{std.fs.path.basename(saved)}) catch "Saved the tape");
+    _ = editor.noteOnDocument(doc.id, arena.print("Saved {s}", .{std.fs.path.basename(saved)}) catch "Saved the tape");
 }
 
 /// Say `message` on the document's own panes, in the glass its commands show in
@@ -3356,7 +3356,7 @@ pub fn keepTape(editor: *Editor, arena: std.mem.Allocator, doc: sdk.DocHandle, b
     const io = dvui.io;
     const path = if (out.len > 0) out else path: {
         const stem = std.fs.path.stem(doc.owner.documentPath(doc));
-        const file = try std.fmt.allocPrint(arena, "{s}-{d}.tape", .{ stem, std.Io.Clock.real.now(io).toSeconds() });
+        const file = try arena.print("{s}-{d}.tape", .{ stem, std.Io.Clock.real.now(io).toSeconds() });
         break :path try std.fs.path.join(arena, &.{ editor.app.config_folder, "tapes", file });
     };
     if (std.fs.path.dirname(path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
@@ -5237,7 +5237,7 @@ pub fn revealPosition(editor: *Editor, path: []const u8, line: u32, character: u
 /// one (a pixel editor) has no position to go to.
 fn revealIn(editor: *Editor, doc: sdk.DocHandle, line: u32, character: u32) void {
     const arena = editor.app.arena.allocator();
-    const id = std.fmt.allocPrint(arena, "{s}.goToLine", .{doc.owner.id}) catch return;
+    const id = arena.print("{s}.goToLine", .{doc.owner.id}) catch return;
     if (!editor.app.host.hasCommand(id)) return;
     var args: std.Io.Writer.Allocating = .init(arena);
     std.zon.stringify.serialize(.{
@@ -5589,8 +5589,7 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     // Recents after a sign-out, it does not.
     const on_mount = fizzy.core.paths.isMountPath(path);
     if (on_mount and !editor.app.file_table.isMounted(path)) {
-        core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
-            editor.app.arena.allocator(),
+        core.dialogs.toast(@src(), .{ .message = editor.app.arena.allocator().print(
             "{s} is not connected. Sign in or open it first.",
             .{path[0..(fizzy.core.paths.mountPrefixLen(path) orelse path.len)]},
         ) catch "That location is not connected." });
@@ -5603,13 +5602,13 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
         const arena = editor.app.arena.allocator();
         const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch |err| {
             core.dialogs.toast(@src(), .{ .message = if (err == error.FileNotFound)
-                std.fmt.allocPrint(arena, "{s} can't be found.", .{path}) catch "That folder can't be found."
+                arena.print("{s} can't be found.", .{path}) catch "That folder can't be found."
             else
-                std.fmt.allocPrint(arena, "{s} can't be opened ({t}).", .{ path, err }) catch "That folder can't be opened." });
+                arena.print("{s} can't be opened ({t}).", .{ path, err }) catch "That folder can't be opened." });
             return err;
         };
         if (st.kind != .directory) {
-            core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(arena, "{s} is not a folder.", .{path}) catch "That is not a folder." });
+            core.dialogs.toast(@src(), .{ .message = arena.print("{s} is not a folder.", .{path}) catch "That is not a folder." });
             return error.NotADirectory;
         }
     };
@@ -6392,8 +6391,7 @@ pub fn processLoadingJobs(editor: *Editor) void {
                 dvui.log.err("Failed to open file: {s}", .{job.path});
                 // Its placeholder says so; only an open with none (a plugin's, say) needs a toast.
                 if (!editor.openings.fail(editor, job.path, "Its plugin could not read it. See the Output panel.")) {
-                    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
-                        editor.app.arena.allocator(),
+                    core.dialogs.toast(@src(), .{ .message = editor.app.arena.allocator().print(
                         "Could not open {s}.",
                         .{std.fs.path.basename(job.path)},
                     ) catch "Could not open file." });
@@ -6512,7 +6510,7 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
 /// fizzy's Edit menu / keybinds reach per-editor actions without naming any plugin.
 pub fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
     const doc = editor.activeDoc() orelse return;
-    const id = try std.fmt.allocPrint(editor.app.arena.allocator(), "{s}.{s}", .{ doc.owner.id, action });
+    const id = try editor.app.arena.allocator().print("{s}.{s}", .{ doc.owner.id, action });
     try editor.app.host.runCommand(id);
 }
 
@@ -6520,7 +6518,7 @@ pub fn runActiveDocCommand(editor: *Editor, action: []const u8) !void {
 pub fn activeDocCommandEnabled(editor: *Editor, action: []const u8) bool {
     const doc = editor.activeDoc() orelse return false;
     var buf: [128]u8 = undefined;
-    const id = std.fmt.bufPrint(&buf, "{s}.{s}", .{ doc.owner.id, action }) catch return false;
+    const id = std.mem.print(&buf, "{s}.{s}", .{ doc.owner.id, action }) catch return false;
     return editor.app.host.commandEnabled(id);
 }
 
@@ -6530,7 +6528,7 @@ pub fn activeDocCommandEnabled(editor: *Editor, action: []const u8) bool {
 pub fn activeDocHasCommand(editor: *Editor, action: []const u8) bool {
     const doc = editor.activeDoc() orelse return false;
     var buf: [128]u8 = undefined;
-    const id = std.fmt.bufPrint(&buf, "{s}.{s}", .{ doc.owner.id, action }) catch return false;
+    const id = std.mem.print(&buf, "{s}.{s}", .{ doc.owner.id, action }) catch return false;
     return editor.app.host.hasCommand(id);
 }
 
@@ -6907,7 +6905,7 @@ fn historyStep(editor: *Editor, action: HistoryAction) !void {
         defer host.activity_muted = muted;
         try editor.runActiveDocCommand(name);
         var buf: [96]u8 = undefined;
-        const said = std.fmt.bufPrint(&buf, "Undid {s}'s {s}", .{ authorName(t.by), t.step.title }) catch "Undid a change";
+        const said = std.mem.print(&buf, "Undid {s}'s {s}", .{ authorName(t.by), t.step.title }) catch "Undid a change";
         if (editor.doc_surfaces.get(doc.id)) |d| d.feed.pushAction(said, "Redo", .redo, t.step.id, dvui.frameTimeNS());
     }
 }
@@ -6939,19 +6937,19 @@ fn actFromFeed(editor: *Editor, doc: sdk.DocHandle, ds: *DocSurface, pressed: @i
         .go_back, .go_back_anyway => {
             const who: u32 = @intCast(pressed.tag);
             const back = editor.backBefore(doc, who, editor.app.host.arena()) orelse {
-                const said = std.fmt.bufPrint(&buf, "Nothing of {s}'s left to go back before", .{authorName(editor.app.host.authors.items[who])}) catch "Nothing to go back before";
+                const said = std.mem.print(&buf, "Nothing of {s}'s left to go back before", .{authorName(editor.app.host.authors.items[who])}) catch "Nothing to go back before";
                 ds.feed.push(said, now);
                 return;
             };
             // The person's own steps since the run began go back with it: say so first.
             if (pressed.act == .go_back and back.yours > 0) {
-                const said = std.fmt.bufPrint(&buf, "Also takes back {d} of your edits", .{back.yours}) catch "Also takes back your edits";
+                const said = std.mem.print(&buf, "Also takes back {d} of your edits", .{back.yours}) catch "Also takes back your edits";
                 ds.feed.pushAction(said, "Go back", .go_back_anyway, pressed.tag, now);
                 return;
             }
             if (editor.app.host.documentClaim(doc.id)) |c| editor.stopClaim(c);
             if (!doc.owner.historyGoTo(doc, back.to)) return;
-            const said = std.fmt.bufPrint(&buf, "Back before {s}'s change", .{authorName(back.by)}) catch "Went back";
+            const said = std.mem.print(&buf, "Back before {s}'s change", .{authorName(back.by)}) catch "Went back";
             ds.feed.pushAction(said, "Forward", .forward, back.from, now);
         },
     }
@@ -7074,7 +7072,7 @@ pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
     // `start` is a cmd.exe builtin, not a standalone executable, so spawning it directly
     // (bypassing the shell) always fails on Windows — reveal via explorer.exe instead.
     if (builtin.target.os.tag == .windows) {
-        const arg = try std.fmt.allocPrint(editor.app.gpa, "/select,{s}", .{path});
+        const arg = try editor.app.gpa.print("/select,{s}", .{path});
         defer editor.app.gpa.free(arg);
         _ = std.process.run(editor.app.gpa, dvui.io, .{ .argv = &.{ "explorer.exe", arg } }) catch {
             dvui.log.err("Failed to open file browser", .{});

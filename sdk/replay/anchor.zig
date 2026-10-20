@@ -55,7 +55,7 @@ pub fn mark(wd: *const dvui.WidgetData, comptime fmt: []const u8, args: anytype)
 pub fn markRect(id: dvui.Id, r: dvui.Rect.Physical, visible: bool, comptime fmt: []const u8, args: anytype) void {
     if (!wanted()) return;
     var buf: [512]u8 = undefined;
-    const name = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    const name = std.mem.print(&buf, fmt, args) catch return;
     if (dvui.currentWindow().tags.containsUsed(name) orelse false) return;
     dvui.tag(name, .{ .id = id, .rect = r, .visible = visible });
 }

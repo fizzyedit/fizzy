@@ -375,7 +375,7 @@ fn infobarEntries(_: *anyopaque, active_doc: ?DocHandle) []const sdk.infobar.Ent
     const doc = docFrom(handle) orelse return &.{};
     const arena = sdk.host().arena();
     const pos = doc.lineCharacterForByteOffset(doc.sel_start);
-    const pos_text = std.fmt.allocPrint(arena, "Ln {d}, Col {d}", .{ pos.line + 1, pos.character + 1 }) catch return &.{};
+    const pos_text = arena.print("Ln {d}, Col {d}", .{ pos.line + 1, pos.character + 1 }) catch return &.{};
     const name = std.fs.path.basename(doc.path);
     const entries = arena.alloc(sdk.infobar.Entry, 2) catch return &.{};
     entries[0] = .{
@@ -417,7 +417,7 @@ fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyer
         const what = for (steps) |o| {
             if (o.step == to) break kindTitle(o.kind);
         } else if (to == 0) "the Start" else "an Earlier Step";
-        e.title = try std.fmt.allocPrint(arena, "Back to {s}", .{what});
+        e.title = try arena.print("Back to {s}", .{what});
     }
     return .{ .version = doc.history.version, .entries = entries, .at = doc.history.undo_stack.items.len };
 }

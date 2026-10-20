@@ -275,7 +275,7 @@ pub fn composeMergedText(
 pub fn upsertOne(gpa: Allocator, existing_full_source: ?[:0]const u8, entry: Entry) ![]u8 {
     const text = entry.text orelse return error.NullEntryText;
     const src = existing_full_source orelse {
-        return std.fmt.allocPrint(gpa, ".{{\n    .plugins = .{{\n        .{f} = {s},\n    }},\n}}\n", .{ std.zig.fmtId(entry.id), text });
+        return gpa.print(".{{\n    .plugins = .{{\n        .{f} = {s},\n    }},\n}}\n", .{ std.zig.fmtId(entry.id), text });
     };
 
     var parsed = parseZon(gpa, src) orelse return gpa.dupe(u8, src);

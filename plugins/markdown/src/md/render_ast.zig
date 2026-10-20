@@ -2465,7 +2465,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 const task_checked: ?bool = if (item_node.isTaskListItem()) item_node.taskListItemChecked() else null;
                 const bullet_str: []const u8 = switch (list_kind) {
                     .ul => "•",
-                    .ol => std.fmt.bufPrint(&buf, "{d}.", .{idx}) catch "?",
+                    .ol => std.mem.print(&buf, "{d}.", .{idx}) catch "?",
                 };
                 if (list_kind == .ol) idx += 1;
 

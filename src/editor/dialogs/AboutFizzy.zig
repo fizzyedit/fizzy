@@ -162,7 +162,7 @@ fn consumeCheckResult() void {
         .install_layout_unsupported => setStatus("On macOS, use the packaged .app from a release (zig-out binary cannot use Velopack updates)."),
         .failed => {
             if (check_msg_len > 0) {
-                if (std.fmt.bufPrint(&status_line_buf, "Check failed: {s}", .{check_msg_buf[0..check_msg_len]})) |s| {
+                if (std.mem.print(&status_line_buf, "Check failed: {s}", .{check_msg_buf[0..check_msg_len]})) |s| {
                     status_line = s;
                 } else |_| {
                     setStatus("Check failed.");
@@ -175,7 +175,7 @@ fn consumeCheckResult() void {
         .remote_empty => setStatus("Release feed is empty."),
         .available => {
             update_ready_after_check = true;
-            if (std.fmt.bufPrint(&status_line_buf, "Update available: {s}.", .{check_msg_buf[0..check_msg_len]})) |s| {
+            if (std.mem.print(&status_line_buf, "Update available: {s}.", .{check_msg_buf[0..check_msg_len]})) |s| {
                 status_line = s;
             } else |_| {
                 setStatus("Update available.");

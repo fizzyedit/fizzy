@@ -88,7 +88,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     const intro = if (count == 1)
         "1 plugin has an update."
     else
-        std.fmt.allocPrint(dvui.currentWindow().arena(), "{d} plugins have updates.", .{count}) catch
+        dvui.currentWindow().arena().print("{d} plugins have updates.", .{count}) catch
             "Plugins have updates.";
     dvui.labelNoFmt(@src(), intro, .{}, .{ .font = body, .gravity_x = 0.5 });
 

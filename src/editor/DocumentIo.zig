@@ -215,10 +215,9 @@ const Load = struct {
         const read = result catch |err| {
             dvui.log.err("Failed to open {s}: {t}", .{ load.path, err });
             // Its placeholder says so; only an open with none needs a toast.
-            const why = std.fmt.allocPrint(editor.app.arena.allocator(), "Reading it failed ({t}).", .{err}) catch "Reading it failed.";
+            const why = editor.app.arena.allocator().print("Reading it failed ({t}).", .{err}) catch "Reading it failed.";
             if (!editor.openings.fail(editor, load.path, why)) {
-                core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
-                    editor.app.arena.allocator(),
+                core.dialogs.toast(@src(), .{ .message = editor.app.arena.allocator().print(
                     "Could not open {s}.",
                     .{std.fs.path.basename(load.path)},
                 ) catch "Could not open file." });
@@ -421,8 +420,7 @@ const Save = struct {
                 // and the next save from the user goes through regardless.
                 io.force_next.put(editor.app.gpa, job.doc_id, {}) catch {};
                 dvui.log.warn("{s} changed since it was opened", .{job.path});
-                core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
-                    editor.app.arena.allocator(),
+                core.dialogs.toast(@src(), .{ .message = editor.app.arena.allocator().print(
                     "{s} changed since you opened it. Save again to overwrite it, or Save As to keep both.",
                     .{std.fs.path.basename(job.path)},
                 ) catch "The file changed since you opened it. Save again to overwrite." });
@@ -478,8 +476,7 @@ const Save = struct {
 };
 
 fn couldNotSave(editor: *Editor, path: []const u8) void {
-    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(
-        editor.app.arena.allocator(),
+    core.dialogs.toast(@src(), .{ .message = editor.app.arena.allocator().print(
         "Could not save {s}.",
         .{std.fs.path.basename(path)},
     ) catch "Could not save file." });

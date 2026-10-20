@@ -222,11 +222,11 @@ fn drawDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     const arena = sdk.host().arena();
     dvui.labelNoFmt(@src(), std.fs.path.basename(doc.path), .{}, .{ .font = dvui.Font.theme(.title) });
     const summary = if (changed == 0)
-        std.fmt.allocPrint(arena, "Open as {s} — {d} file{s}, unchanged since it was {s}.", .{
+        arena.print("Open as {s} — {d} file{s}, unchanged since it was {s}.", .{
             doc.prefix, files, if (files == 1) "" else "s", if (doc.saved_once) "saved" else "opened",
         }) catch ""
     else
-        std.fmt.allocPrint(arena, "Open as {s} — {d} file{s}, {d} changed since it was {s}.", .{
+        arena.print("Open as {s} — {d} file{s}, {d} changed since it was {s}.", .{
             doc.prefix, files, if (files == 1) "" else "s", changed, if (doc.saved_once) "saved" else "opened",
         }) catch "";
     dvui.labelNoFmt(@src(), summary, .{}, .{});

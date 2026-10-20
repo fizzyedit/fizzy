@@ -100,7 +100,7 @@ fn startOptions() dvui.App.StartOptions {
         }
         // A profile is the config folder itself (`app.profile`), for SDL's preferences too.
         const pref: ?[:0]const u8 = if (@import("app").profile.root) |root|
-            std.fmt.bufPrintSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
+            std.mem.printSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
         else
             paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
         if (pref) |pref_path| {

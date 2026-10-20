@@ -719,16 +719,16 @@ pub const WindowGeometry = struct {
     fn filePath(buf: []u8, options: InitOptions) ?[:0]const u8 {
         if (options.pref_path) |dir| {
             if (std.mem.endsWith(u8, dir, std.fs.path.sep_str)) {
-                return std.fmt.bufPrintSentinel(buf, "{s}{s}", .{ dir, zon_file_name }, 0) catch null;
+                return std.mem.printSentinel(buf, "{s}{s}", .{ dir, zon_file_name }, 0) catch null;
             }
-            return std.fmt.bufPrintSentinel(buf, "{s}{c}{s}", .{ dir, std.fs.path.sep, zon_file_name }, 0) catch null;
+            return std.mem.printSentinel(buf, "{s}{c}{s}", .{ dir, std.fs.path.sep, zon_file_name }, 0) catch null;
         }
         const pref = c.SDL_GetPrefPath(options.org.ptr, options.title.ptr) orelse {
             logErr("SDL_GetPrefPath in WindowGeometry") catch {};
             return null;
         };
         defer c.SDL_free(pref);
-        return std.fmt.bufPrintSentinel(buf, "{s}" ++ zon_file_name, .{std.mem.span(@as([*:0]const u8, @ptrCast(pref)))}, 0) catch null;
+        return std.mem.printSentinel(buf, "{s}" ++ zon_file_name, .{std.mem.span(@as([*:0]const u8, @ptrCast(pref)))}, 0) catch null;
     }
 
     fn fromSaved(saved: Saved) ?WindowGeometry {
@@ -1006,7 +1006,7 @@ pub fn native(self: *SDLBackend, _: *dvui.Window) dvui.Window.Native {
 
 pub fn title(self: *SDLBackend, _: *dvui.Window, new_title: []const u8) void {
     var buf: [300]u8 = @splat(0);
-    const c_text: []const u8 = std.fmt.bufPrintSentinel(&buf, "{s}", .{new_title}, 0) catch "title: Error";
+    const c_text: []const u8 = std.mem.printSentinel(&buf, "{s}", .{new_title}, 0) catch "title: Error";
     _ = c.SDL_SetWindowTitle(self.window, c_text.ptr);
 }
 
@@ -2118,7 +2118,7 @@ pub fn viewportDragMove(_: *SDLBackend, vp: *Viewport) bool {
 /// (macOS), the window switcher.
 pub fn viewportTitle(_: *SDLBackend, vp: *Viewport, text: []const u8) void {
     var buf: [128]u8 = undefined;
-    const z = std.fmt.bufPrintSentinel(&buf, "{s}", .{text[0..@min(text.len, buf.len - 1)]}, 0) catch return;
+    const z = std.mem.printSentinel(&buf, "{s}", .{text[0..@min(text.len, buf.len - 1)]}, 0) catch return;
     _ = c.SDL_SetWindowTitle(vp.window, z.ptr);
     if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_windows_item(cocoaWindow(vp.window), z.ptr);
 }

@@ -228,8 +228,8 @@ const Runs = struct {
         const dim = dvui.themeGet().color(.control, .text).opacity(0.6);
         var buf: [32]u8 = undefined;
         if (name.len > 0) self.tl.addText(name, .{ .font = mono, .color_text = .{ .color = dim } });
-        self.tl.addText(std.fmt.bufPrint(&buf, " " ++ fmt, args) catch "", .{ .font = mono });
-        if (unit.len > 0) self.tl.addText(std.fmt.bufPrint(&buf, " {s}", .{unit}) catch "", .{ .font = mono, .color_text = .{ .color = dim } });
+        self.tl.addText(std.mem.print(&buf, " " ++ fmt, args) catch "", .{ .font = mono });
+        if (unit.len > 0) self.tl.addText(std.mem.print(&buf, " {s}", .{unit}) catch "", .{ .font = mono, .color_text = .{ .color = dim } });
         self.tl.addText("   ", .{ .font = mono });
     }
 
@@ -327,12 +327,12 @@ fn whatToShow(p: *profile.Profiler, arena: std.mem.Allocator, picked: Picked) Sh
         if (p.historyFrame(ago)) |f| {
             shown.entries = withFrame(arena, shown.entries, f.ns, f.calls);
             shown.work = @max(@as(f64, @floatFromInt(f.work_ns)), 1);
-            shown.caption = std.fmt.allocPrint(arena, "frame -{d}", .{ago}) catch "";
+            shown.caption = arena.print("frame -{d}", .{ago}) catch "";
         }
     } else if (picked.held) |h| {
         shown.entries = withFrame(arena, shown.entries, h.ns, h.calls);
         shown.work = @max(@as(f64, @floatFromInt(h.work_ns)), 1);
-        shown.caption = std.fmt.allocPrint(arena, "hitch {d:.1} s ago", .{secondsAgo(h.at_ns)}) catch "";
+        shown.caption = arena.print("hitch {d:.1} s ago", .{secondsAgo(h.at_ns)}) catch "";
     } else if (span == .long) {
         if (profile.lookback()) |lb| {
             if (arena.alloc(profile.Lookback.Cost, shown.entries.len)) |costs| {
@@ -346,7 +346,7 @@ fn whatToShow(p: *profile.Profiler, arena: std.mem.Allocator, picked: Picked) Sh
                 }
                 shown.entries = copy;
                 shown.work = @max(covered.work_ns, 1);
-                shown.caption = std.fmt.allocPrint(arena, "per frame · {d:.0} s", .{@as(f64, @floatFromInt(covered.ns)) / std.time.ns_per_s}) catch "";
+                shown.caption = arena.print("per frame · {d:.0} s", .{@as(f64, @floatFromInt(covered.ns)) / std.time.ns_per_s}) catch "";
             } else |_| {}
         }
     }
@@ -438,16 +438,16 @@ fn drawHitchChips() void {
     defer dvui.clipSet(prev_clip);
     const dim = dvui.themeGet().color(.control, .text).opacity(0.6);
     var buf: [64]u8 = undefined;
-    const title = std.fmt.bufPrint(&buf, "over {d:.1} ms:", .{@as(f64, @floatFromInt(lb.budget_ns)) / std.time.ns_per_ms}) catch "";
+    const title = std.mem.print(&buf, "over {d:.1} ms:", .{@as(f64, @floatFromInt(lb.budget_ns)) / std.time.ns_per_ms}) catch "";
     dvui.labelNoFmt(@src(), title, .{}, .{ .color_text = .{ .color = dim }, .gravity_y = 0.5 });
     var ago: usize = 0;
     while (lb.hitchAt(ago)) |h| : (ago += 1) {
         const is_held = held_hitch != null and held_hitch.? == h.at_ns;
         const made = h.gpu.textures + h.gpu.targets;
         const text = (if (made > 0)
-            std.fmt.bufPrint(&buf, "{d:.0} s ago · {d:.1} ms · made {d}", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms, made })
+            std.mem.print(&buf, "{d:.0} s ago · {d:.1} ms · made {d}", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms, made })
         else
-            std.fmt.bufPrint(&buf, "{d:.0} s ago · {d:.1} ms", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms })) catch "";
+            std.mem.print(&buf, "{d:.0} s ago · {d:.1} ms", .{ secondsAgo(h.at_ns), @as(f64, @floatFromInt(h.work_ns)) / std.time.ns_per_ms })) catch "";
         if (dvui.button(@src(), text, .{}, .{ .id_extra = ago, .style = if (is_held) .highlight else .control, .margin = .all(2), .padding = .{ .x = 6, .w = 6, .y = 2, .h = 2 } })) {
             held_hitch = if (is_held) null else h.at_ns;
         }
@@ -500,10 +500,10 @@ fn drawGraph(p: *profile.Profiler, font: dvui.Font, dim: dvui.Color, fill: bool)
         const f = p.historyFrame(h).?;
         // Submit only where the backend measures it (`FrameStats.submit_ns`).
         break :blk if (p.stats.submit_ns != null)
-            std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms + submit {d:.2} ms · {s}", .{ h, ms(@floatFromInt(f.work_ns)), ms(@floatFromInt(f.submit_ns)), if (locked != null) "locked, click it to let go" else "click to lock it" }) catch ""
+            std.mem.print(&label_buf, "frame -{d}: {d:.2} ms + submit {d:.2} ms · {s}", .{ h, ms(@floatFromInt(f.work_ns)), ms(@floatFromInt(f.submit_ns)), if (locked != null) "locked, click it to let go" else "click to lock it" }) catch ""
         else
-            std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms · {s}", .{ h, ms(@floatFromInt(f.work_ns)), if (locked != null) "locked, click it to let go" else "click to lock it" }) catch "";
-    } else std.fmt.bufPrint(&label_buf, "last {d} frames · hover one to see it, click to lock it", .{n}) catch "";
+            std.mem.print(&label_buf, "frame -{d}: {d:.2} ms · {s}", .{ h, ms(@floatFromInt(f.work_ns)), if (locked != null) "locked, click it to let go" else "click to lock it" }) catch "";
+    } else std.mem.print(&label_buf, "last {d} frames · hover one to see it, click to lock it", .{n}) catch "";
     // Drawn over the graph, not laid out in it: a longer caption (a tall frame's numbers) must not
     // widen the graph and shift what is around it.
     {
@@ -627,7 +627,7 @@ fn collectSlices(arena: std.mem.Allocator, entries: []profile.Entry, work: f64) 
             const e = entries[i];
             // Fizzy's own scopes by name; a plugin's with its id in front, unless the name says it.
             const short = shortName(e.name);
-            const label = if (std.mem.eql(u8, e.owner, "fizzy") or std.mem.startsWith(u8, short, e.owner)) short else std.fmt.allocPrint(arena, "{s} · {s}", .{ e.owner, short }) catch short;
+            const label = if (std.mem.eql(u8, e.owner, "fizzy") or std.mem.startsWith(u8, short, e.owner)) short else arena.print("{s} · {s}", .{ e.owner, short }) catch short;
             slices.append(arena, .{ .label = label, .value = @floatCast(ms(e.avg_self_ns)), .key = e.key }) catch break;
             named += e.avg_self_ns;
         }
@@ -756,7 +756,7 @@ fn collectTree(arena: std.mem.Allocator, entries: []profile.Entry, rows: *std.Ar
             for (list) |i| {
                 const e = es[i];
                 if (ms(e.avg_ns) < min_ms_shown) continue;
-                const name = if (outermostForOwner(es, e)) std.fmt.allocPrint(a, "{s} · {s}", .{ e.owner, shortName(e.name) }) catch e.name else shortName(e.name);
+                const name = if (outermostForOwner(es, e)) a.print("{s} · {s}", .{ e.owner, shortName(e.name) }) catch e.name else shortName(e.name);
                 out.append(a, .{
                     .name = name,
                     .key = e.key,
@@ -805,7 +805,7 @@ fn drawPlugins(host: *sdk.Host, arena: std.mem.Allocator, entries: []const profi
             self_ns += e.avg_self_ns;
         };
         var version_buf: [32]u8 = undefined;
-        const version = if (info.link == .bundled) "" else std.fmt.bufPrint(&version_buf, "{f}", .{info.version}) catch "";
+        const version = if (info.link == .bundled) "" else std.mem.print(&version_buf, "{f}", .{info.version}) catch "";
         const failed = info.status.state == .failed;
         table.text(i, 0, info.name, .{ .strong = true });
         table.text(i, 1, if (failed) "failed" else @tagName(info.link), .{});

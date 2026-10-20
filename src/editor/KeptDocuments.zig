@@ -346,7 +346,7 @@ pub fn saveGeneration(self: *const KeptDocuments, dir: []const u8, generation: u
     var d = cwd.openDir(dvui.io, dir, .{ .iterate = true }) catch return;
     defer d.close(dvui.io);
     var prefix_buf: [16]u8 = undefined;
-    const prefix = std.fmt.bufPrint(&prefix_buf, "{d}-", .{generation}) catch return;
+    const prefix = std.mem.print(&prefix_buf, "{d}-", .{generation}) catch return;
     var it = d.iterate();
     while (it.next(dvui.io) catch null) |entry| {
         if (entry.kind != .file or std.mem.eql(u8, entry.name, "session.zon") or std.mem.startsWith(u8, entry.name, prefix)) continue;
@@ -386,8 +386,8 @@ fn writeFiles(self: *const KeptDocuments, dir: []const u8, generation: u32) ![]u
 }
 
 fn blobName(gpa: std.mem.Allocator, generation: u32, i: usize, kind: []const u8) ![]u8 {
-    if (generation == 0) return std.fmt.allocPrint(gpa, "{d}.{s}", .{ i, kind });
-    return std.fmt.allocPrint(gpa, "{d}-{d}.{s}", .{ generation, i, kind });
+    if (generation == 0) return gpa.print("{d}.{s}", .{ i, kind });
+    return gpa.print("{d}-{d}.{s}", .{ generation, i, kind });
 }
 
 fn writeBlob(gpa: std.mem.Allocator, dir: []const u8, generation: u32, i: usize, kind: []const u8, bytes: []const u8) !void {
@@ -557,7 +557,7 @@ fn recover(editor: *Editor, d: Kept) void {
     defer gpa.free(dir);
     std.Io.Dir.cwd().createDirPath(dvui.io, dir) catch {};
     const ext = if (d.save_as) |a| std.fs.path.extension(a) else "";
-    const name = std.fmt.allocPrint(gpa, "{d}-{s}{s}", .{ std.Io.Clock.real.now(dvui.io).toSeconds(), std.fs.path.basename(path), ext }) catch return;
+    const name = gpa.print("{d}-{s}{s}", .{ std.Io.Clock.real.now(dvui.io).toSeconds(), std.fs.path.basename(path), ext }) catch return;
     defer gpa.free(name);
     const out = std.fs.path.join(gpa, &.{ dir, name }) catch return;
     defer gpa.free(out);
@@ -566,5 +566,5 @@ fn recover(editor: *Editor, d: Kept) void {
         return;
     };
     dvui.log.warn("reload: the unsaved contents of {s} are in {s}", .{ path, out });
-    core.dialogs.toast(@src(), .{ .message = std.fmt.allocPrint(editor.app.arena.allocator(), "Unsaved changes to {s} were kept in {s}", .{ std.fs.path.basename(path), out }) catch "Unsaved changes were kept in fizzy's recovered folder." });
+    core.dialogs.toast(@src(), .{ .message = editor.app.arena.allocator().print("Unsaved changes to {s} were kept in {s}", .{ std.fs.path.basename(path), out }) catch "Unsaved changes were kept in fizzy's recovered folder." });
 }

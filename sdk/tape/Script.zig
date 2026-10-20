@@ -109,7 +109,7 @@ fn handOver(tape: *const Tape, captions: []Tape.Caption) void {
 
 /// Format a string that lives as long as the tape — a tag name built from `root`, say.
 pub fn print(self: *Script, comptime fmt: []const u8, args: anytype) ![]const u8 {
-    return std.fmt.allocPrint(self.arena.allocator(), fmt, args);
+    return self.arena.allocator().print(fmt, args);
 }
 
 fn dupe(self: *Script, bytes: []const u8) ![]const u8 {

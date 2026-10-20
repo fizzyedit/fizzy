@@ -284,11 +284,11 @@ pub fn panel(self: *Dockspace) ?Panel {
 // by the wrong split afterwards.
 
 fn shownKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
-    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_shown:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_shown";
+    return dvui.currentWindow().arena().print("_shown:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_shown";
 }
 
 fn animKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
-    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_ease:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_ease";
+    return dvui.currentWindow().arena().print("_ease:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_ease";
 }
 
 /// dvui has no way to drop an animation early; one that is already over is deleted at the start
@@ -358,7 +358,7 @@ fn gapOf(self: *Dockspace, node: Layout.NodeIndex) f32 {
 }
 
 fn extentKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
-    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_extent:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_extent";
+    return dvui.currentWindow().arena().print("_extent:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_extent";
 }
 
 /// How `extent` divides at `ratio`: `first` is the first child's length; `usable` the room the
@@ -376,7 +376,7 @@ fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32) @Ty
 }
 
 fn minKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
-    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_min:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_min";
+    return dvui.currentWindow().arena().print("_min:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_min";
 }
 
 /// The share a `fit` child needs for its content — what its leaf cell reported last frame —
@@ -850,7 +850,7 @@ fn drawHeader(self: *Dockspace, node: Layout.NodeIndex, leaf: Layout.Node.Leaf) 
                     .hover => i == leaf.active or tab.hovered(),
                 };
                 if (show_close) {
-                    const close_tag = std.fmt.allocPrint(dvui.currentWindow().arena(), "docktab_close:{s}", .{slug}) catch null;
+                    const close_tag = dvui.currentWindow().arena().print("docktab_close:{s}", .{slug}) catch null;
                     // Processed before the tab's own click handling below, so a
                     // close click isn't also read as a tab-select.
                     if (dvui.buttonIcon(@src(), "docktab_close", dvui.entypo.cross, .{}, .{}, .{
@@ -1411,12 +1411,12 @@ test "dockspace: floating a panel via a drawHeaderExtra menu doesn't corrupt the
             var m = dvui.menu(@src(), .horizontal, .{ .id_extra = slugIdExtra(id), .gravity_x = 1.0 });
             defer m.deinit();
 
-            const dots_tag = std.fmt.allocPrint(dvui.currentWindow().arena(), "hdr_dots:{s}", .{id}) catch return;
+            const dots_tag = dvui.currentWindow().arena().print("hdr_dots:{s}", .{id}) catch return;
             if (dvui.menuItemLabel(@src(), "...", .{ .submenu = true }, .{ .id_extra = slugIdExtra(id), .tag = dots_tag })) |r| {
                 var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
                 defer fw.deinit();
 
-                const float_tag = std.fmt.allocPrint(dvui.currentWindow().arena(), "hdr_float:{s}", .{id}) catch return;
+                const float_tag = dvui.currentWindow().arena().print("hdr_float:{s}", .{id}) catch return;
                 if (dvui.menuItemLabel(@src(), "Float Panel", .{}, .{ .tag = float_tag }) != null) {
                     fw.close();
                     pending = id;

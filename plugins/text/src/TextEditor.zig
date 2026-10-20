@@ -963,7 +963,7 @@ fn drawCompletionInfoPanel(ext: []const u8, candidate: TextEntryWidget.Completio
     // there's nothing to split; each is rendered as exactly what it is.
     if (candidate.detail.len > 0) {
         var header_buf: [256]u8 = undefined;
-        const header = std.fmt.bufPrint(&header_buf, "{s}: {s}", .{ candidate.label, candidate.detail }) catch candidate.label;
+        const header = std.mem.print(&header_buf, "{s}: {s}", .{ candidate.label, candidate.detail }) catch candidate.label;
         var header_tl = dvui.textLayout(@src(), .{}, .{ .background = false });
         drawCodeBlock(header_tl, header, ext);
         header_tl.deinit();
@@ -1844,7 +1844,7 @@ const max_text_bytes: usize = 64 * 1024 * 1024;
 
 fn lineNumberColumnWidth(line_count: usize, font: dvui.Font) f32 {
     var buf: [16]u8 = undefined;
-    const sample = std.fmt.bufPrint(&buf, "{d}", .{line_count}) catch "9999";
+    const sample = std.mem.print(&buf, "{d}", .{line_count}) catch "9999";
     return line_number_pad_left + font.textSize(sample).w + text_gap_after_numbers;
 }
 
@@ -1913,7 +1913,7 @@ fn drawLineNumbers(
         line += 1;
         y += line_height;
     }) {
-        const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{line + 1}) catch continue;
+        const num_str = std.mem.print(&num_buf, "{d}", .{line + 1}) catch continue;
         const text_size = font.textSize(num_str).scale(rs.s, dvui.Size.Physical);
         const x = rs.r.x + line_number_pad_left * rs.s;
         const y_phys = rs.r.y + y * rs.s;

@@ -65,7 +65,7 @@ fn editorOf(self: *Workspaces) *Editor {
 
 /// The view id of `grouping`'s pane, in `buf`.
 fn viewId(buf: []u8, grouping: u64) []const u8 {
-    return std.fmt.bufPrint(buf, id_prefix ++ "{d}", .{grouping}) catch id_prefix;
+    return std.mem.print(buf, id_prefix ++ "{d}", .{grouping}) catch id_prefix;
 }
 
 /// Bring the views in line with the workbench's panes, once a frame after it has rebuilt them

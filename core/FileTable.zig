@@ -489,9 +489,9 @@ fn install(self: *FileTable, directory: []const u8, raw: []const vfs.Entry, read
         const kind: std.Io.File.Kind = if (entry.kind == .dir) .directory else .file;
         if (proj_root) |root| {
             const abs = (if (on_mount)
-                std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ directory, entry.name })
+                std.mem.print(&path_buf, "{s}/{s}", .{ directory, entry.name })
             else
-                std.fmt.bufPrint(&path_buf, "{s}" ++ std.fs.path.sep_str ++ "{s}", .{ directory, entry.name })) catch continue;
+                std.mem.print(&path_buf, "{s}" ++ std.fs.path.sep_str ++ "{s}", .{ directory, entry.name })) catch continue;
             if (self.env.ignored(self.env.ctx, root, abs, entry.name, kind)) continue;
         }
         const name = gpa.dupe(u8, entry.name) catch continue;
