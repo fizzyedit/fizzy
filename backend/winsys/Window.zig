@@ -32,8 +32,7 @@ pub const Options = struct {
     resizable: bool = true,
     /// No OS frame: the app draws its own title bar (see `Hints`).
     borderless: bool = false,
-    /// What the window is made of behind its picture (`Material`).
-    material: Material = .none,
+    material: MaterialSpec = .{},
     /// The window it belongs to, if any: it closes with it and (menus, dialogs) stays over it.
     parent: ?Window = null,
     kind: Kind = .normal,
@@ -47,11 +46,27 @@ pub const Kind = enum { normal, float, menu, dialog };
 /// state it returns to.
 pub const State = enum { normal, minimized, maximized, fullscreen };
 
-/// The kinds of window material, field for field with `backend/src/materials.zig`'s `Kind` (and
-/// fizzy's `core.material.Kind`), from the plainest to the richest. Whether a platform can draw
-/// one is `Platform.Caps.materials`; asking for one it cannot is not an error: the platform
-/// falls back to the nearest plainer one, and `Platform.windowMaterial` says which it got.
-pub const Material = enum(u8) { none, transparent, blur, frost, liquid };
+/// The kinds of window material, from the plainest to the richest. Today the same five as
+/// `backend/src/materials.zig`'s `Kind`; the SDL adapter maps one to the other, and a platform
+/// may add kinds of its own. Whether a platform can draw one is `Platform.Caps.materials`;
+/// asking for one it cannot is not an error: the platform falls back to the nearest plainer
+/// one, and `Platform.windowMaterial` says which it got.
+pub const MaterialKind = enum(u8) { none, transparent, blur, frost, liquid };
+
+/// What a window is made of behind its picture: the kind and how it is drawn. Every field but
+/// the kind is a default a kind may ignore (`none` ignores them all), so a new knob costs the
+/// callers that do not set it nothing.
+pub const MaterialSpec = struct {
+    kind: MaterialKind = .none,
+    /// How much of the window's colour covers what is behind, 0 (clear) to 1.
+    opacity: f32 = 1,
+    /// How strongly the kind acts: blur radius scale, glass refraction. 1 is the kind's own look.
+    strength: f32 = 1,
+    /// A colour mixed over the material, straight RGBA bytes; null, none.
+    tint: ?[4]u8 = null,
+    /// Corner radius of the material, in the window's physical pixels; 0, square.
+    radius: f32 = 0,
+};
 
 /// The mouse cursor over a window, by meaning, so each platform picks its own picture. The set
 /// dvui draws with. `hidden` hides the cursor over the window; any other shows it.

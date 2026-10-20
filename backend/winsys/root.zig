@@ -15,6 +15,7 @@
 //!   *returns* names the allocator that owns it (`Platform`).
 //! - Text offsets are **UTF-8 bytes** (`Ime`).
 //! - A window handle is an id, **never reused** (`Window`).
+//! - One exception to physical pixels, on purpose: a touch is a fraction of the window (`Event.Touch`).
 //!
 //! Deferred, each with the seam it will use:
 //!
@@ -26,7 +27,8 @@
 //!   window"; modes go in a separate `VTable` function, with `Display.refresh_hz` as the report.
 //! - Frame pacing beyond asking when the next picture lands (`Platform.FrameTiming`):
 //!   submitting at a time and learning when one was shown.
-//! - Clipboard and drag formats beyond text and files (`Clipboard.Format`).
+//! - Dragging *out* of the app (`Drag`, the counterpart of `Drop`), and clipboard and drop formats
+//!   beyond text and files.
 //! - Window creation's long tail (always-on-top, icons, min/max size, aspect, modal parents):
 //!   `Window.Options` fields, added with the platform that needs one.
 const std = @import("std");
@@ -36,7 +38,7 @@ pub const Window = @import("Window.zig");
 pub const Display = @import("Display.zig");
 pub const Event = @import("Event.zig");
 pub const Clipboard = @import("Clipboard.zig");
-pub const Dnd = @import("Dnd.zig");
+pub const Drop = @import("Drop.zig");
 pub const Ime = @import("Ime.zig");
 pub const geometry = @import("geometry.zig");
 
@@ -46,6 +48,12 @@ const Stub = struct {
     title_set: bool = false,
     text_buf: [64]u8 = undefined,
     text_len: ?usize = null,
+    next_id: u64 = 1,
+    /// Scripted text events: `poll` hands out the next one copied into `event_buf`, so the slice
+    /// it returns is overwritten by the next `poll`, the contract `Event` states.
+    script: []const []const u8 = &.{},
+    event_buf: [16]u8 = undefined,
+    empty_name: bool = false,
 
     fn platform(self: *Stub) Platform {
         return .{ .ctx = self, .vtable = &vtable, .caps = .{} };
@@ -60,13 +68,20 @@ const Stub = struct {
         s.clock += 1;
         return s.clock;
     }
-    fn poll(_: *anyopaque) ?Event {
-        return null;
+    fn poll(ctx: *anyopaque) ?Event {
+        const s = me(ctx);
+        if (s.script.len == 0) return null;
+        const text = s.script[0];
+        s.script = s.script[1..];
+        @memcpy(s.event_buf[0..text.len], text);
+        return .{ .time_ns = 0, .window = .{ .id = 1 }, .payload = .{ .text = s.event_buf[0..text.len] } };
     }
     fn wait(_: *anyopaque, _: ?u64) void {}
     fn wake(_: *anyopaque) void {}
-    fn openWindow(_: *anyopaque, _: Window.Options) anyerror!Window {
-        return .{ .id = 1 };
+    fn openWindow(ctx: *anyopaque, _: Window.Options) Platform.Error!Window {
+        const s = me(ctx);
+        defer s.next_id += 1;
+        return .{ .id = s.next_id };
     }
     fn closeWindow(_: *anyopaque, _: Window) void {}
     fn setTitle(ctx: *anyopaque, _: Window, _: []const u8) void {
@@ -91,19 +106,19 @@ const Stub = struct {
     fn raiseWindow(_: *anyopaque, _: Window) void {}
     fn setCursor(_: *anyopaque, _: Window, _: Window.Cursor) void {}
     fn setHints(_: *anyopaque, _: Window, _: Window.Hints) void {}
-    fn setMaterial(_: *anyopaque, _: Window, _: Window.Material, _: f32) void {}
-    fn windowMaterial(_: *anyopaque, _: Window) Window.Material {
+    fn setMaterial(_: *anyopaque, _: Window, _: Window.MaterialSpec) void {}
+    fn windowMaterial(_: *anyopaque, _: Window) Window.MaterialKind {
         return .none;
     }
     fn displayOf(_: *anyopaque, _: Window) ?u64 {
         return 7;
     }
-    fn displays(_: *anyopaque, allocator: std.mem.Allocator) anyerror![]Display {
+    fn displays(ctx: *anyopaque, allocator: std.mem.Allocator) Platform.Error![]Display {
         const list = try allocator.alloc(Display, 1);
         errdefer allocator.free(list);
         list[0] = .{
             .id = 7,
-            .name = try allocator.dupe(u8, "stub"),
+            .name = try allocator.dupe(u8, if (me(ctx).empty_name) "" else "stub"),
             .bounds = .{ .w = 1280, .h = 800 },
             .usable = .{ .y = 24, .w = 1280, .h = 776 },
             .scale = 2,
@@ -116,16 +131,16 @@ const Stub = struct {
     fn clipboardSerial(_: *anyopaque) Clipboard {
         return .{ .serial = 1 };
     }
-    fn clipboardText(ctx: *anyopaque, allocator: std.mem.Allocator) anyerror!?[]u8 {
+    fn clipboardText(ctx: *anyopaque, allocator: std.mem.Allocator) Platform.Error!?[]u8 {
         const s = me(ctx);
         return try allocator.dupe(u8, s.text_buf[0 .. s.text_len orelse return null]);
     }
-    fn setClipboardText(ctx: *anyopaque, text: []const u8) anyerror!void {
+    fn setClipboardText(ctx: *anyopaque, text: []const u8) Platform.Error!void {
         const s = me(ctx);
         @memcpy(s.text_buf[0..text.len], text);
         s.text_len = text.len;
     }
-    fn dndRespond(_: *anyopaque, _: Window, _: Dnd.Response) void {}
+    fn dropRespond(_: *anyopaque, _: Window, _: Drop.Response) void {}
 
     const vtable: Platform.VTable = .{
         .now = now,
@@ -155,7 +170,7 @@ const Stub = struct {
         .clipboard_serial = clipboardSerial,
         .clipboard_text = clipboardText,
         .set_clipboard_text = setClipboardText,
-        .dnd_respond = dndRespond,
+        .drop_respond = dropRespond,
     };
 };
 
@@ -208,6 +223,55 @@ test "displays and clipboard text are owned by the caller's allocator" {
     const got = (try p.clipboardText(a)).?;
     defer a.free(got);
     try std.testing.expectEqualStrings("héllo", got);
+}
+
+test "an event's text is valid only until the next poll" {
+    var stub: Stub = .{ .script = &.{ "a", "b" } };
+    const p = stub.platform();
+    const first = p.poll().?.payload.text;
+    try std.testing.expectEqualStrings("a", first);
+    const second = p.poll().?.payload.text;
+    try std.testing.expectEqualStrings("b", second);
+    // The first slice now shows the second event: a consumer that kept it saw it change.
+    try std.testing.expectEqualStrings("b", first);
+    try std.testing.expect(p.poll() == null);
+}
+
+test "a window id is never reused after close" {
+    var stub: Stub = .{};
+    const p = stub.platform();
+    const a = try p.openWindow(.{});
+    p.closeWindow(a);
+    const b = try p.openWindow(.{});
+    try std.testing.expect(a.id != b.id);
+    try std.testing.expect(a.id != 0 and b.id != 0);
+}
+
+test "freeDisplays frees an empty name as well as a named one" {
+    var stub: Stub = .{ .empty_name = true };
+    const p = stub.platform();
+    const list = try p.displays(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), list[0].name.len);
+    // The testing allocator fails the test on a leak or a bad free.
+    Platform.freeDisplays(std.testing.allocator, list);
+}
+
+test "a material spec defaults to the plain, fully covering one" {
+    const spec: Window.MaterialSpec = .{};
+    try std.testing.expectEqual(Window.MaterialKind.none, spec.kind);
+    try std.testing.expectEqual(@as(f32, 1), spec.opacity);
+    const opts: Window.Options = .{};
+    try std.testing.expectEqual(spec, opts.material);
+}
+
+test "a key carries both where it is and what it types" {
+    const k: Event.Key = .{
+        .physical = .k,
+        .logical = .{ .char = 0x043A }, // Cyrillic ka on that key
+        .action = .down,
+        .mods = .{},
+    };
+    try std.testing.expect(k.logical.char != @backingInt(k.physical));
 }
 
 test "every modifier is one distinct bit" {

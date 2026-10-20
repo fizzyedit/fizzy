@@ -13,7 +13,7 @@ const std = @import("std");
 const geometry = @import("geometry.zig");
 const Window = @import("Window.zig");
 const Clipboard = @import("Clipboard.zig");
-const Dnd = @import("Dnd.zig");
+const Drop = @import("Drop.zig");
 const Ime = @import("Ime.zig");
 
 const Event = @This();
@@ -46,30 +46,45 @@ pub const Payload = union(enum) {
     /// shows, so the size drawn at and the size shown can be compared.
     resized: Resized,
     moved: geometry.DesktopPoint,
-    /// Shown, hidden or changed `Window.State`.
-    state: State,
+    /// Shown, hidden or changed `Window.State` (`StateChange`).
+    state: StateChange,
     /// Someone else replaced the clipboard.
     clipboard: Clipboard,
     /// A drag from another program is over the window.
-    drop: Dnd,
+    drop: Drop,
     /// The user asked the window to close (its close button, a shortcut). It is *not* closed: the
     /// app decides, then calls `Platform.closeWindow`.
     close_requested,
     /// The app is leaving the foreground (mobile): release touches, stop animating.
     background,
+    /// Back in the foreground.
+    foreground,
+    /// The window is entirely hidden (true: behind others, on another Space, minimized) or
+    /// visible again (false). While hidden nothing it draws is seen, so pacing may stop.
+    occluded: bool,
     /// The process was asked to quit (dock menu, OS shutdown). `window` is null.
     quit,
 };
 
-/// A physical key by what is printed on it (`code`, after the layout) and by where it is
-/// (`physical`, the key a US keyboard has there). Shortcuts want `physical` when they mean a
-/// place (WASD) and `code` when they mean a letter (Cmd+S), so both come
-/// (`docs/window-notes/input.md`).
+/// A key by where it is (`physical`, the name of the key a US keyboard has there) and by what
+/// the layout makes of it (`logical`). Shortcuts want `physical` when they mean a place (WASD)
+/// and `logical` when they mean a letter (Cmd+S), so both come (`docs/window-notes/input.md`).
 pub const Key = struct {
-    code: Code,
     physical: Code,
+    logical: Logical,
     action: enum { down, repeat, up },
     mods: Mods,
+
+    /// What the layout gives the key with no modifier held: the Unicode scalar it types, or, for
+    /// a key that types nothing (arrows, F-keys, modifiers), its name. A Cyrillic or Greek
+    /// layout's letters are `char`s that no US-named `Code` has, which is why the character is
+    /// carried and not looked up.
+    pub const Logical = union(enum) {
+        char: u21,
+        named: Code,
+        /// The platform could not tell.
+        none,
+    };
 };
 
 /// The modifiers held when the event happened, from the OS's own state and not tracked from key
@@ -96,6 +111,7 @@ pub const Pointer = struct {
     at: geometry.Point,
     /// Only for `press` and `release`.
     button: Button = .left,
+    mods: Mods = .{},
 
     /// `leave`: the pointer left this window, for another window or for none; the next `move`,
     /// in whichever window, says which.
@@ -107,8 +123,9 @@ pub const Touch = struct {
     /// Which screen, and which finger on it; a finger keeps its pair from `down` to `up`.
     device: u64,
     finger: u64,
-    /// Across the window, as a fraction (`geometry.Norm`): a touch screen reports where on
-    /// itself, not in pixels. Multiply by the window's current size (`Platform.windowSize`) at
+    /// Across the window, as a fraction (`geometry.Norm`). A deliberate exception to "window
+    /// positions are physical pixels": the screen reports where on itself, and the window size
+    /// the platform would convert by can change before the event is read. Multiply by the window's current size (`Platform.windowSize`) at
     /// the time the event is handled; a `resized` ahead of it in the queue is then already
     /// applied.
     at: geometry.Norm,
@@ -118,19 +135,21 @@ pub const Touch = struct {
 
 pub const Wheel = struct {
     /// Wheel travel in notches (a fraction of one when `precise`): positive x is right, positive
-    /// y is away from the user, the OS's own convention, before the app's scroll speed.
+    /// y is away from the user, the OS's own convention (natural scrolling already applied),
+    /// before the app's scroll speed.
     dx: f32,
     dy: f32,
+    /// Where the pointer is, window pixels: the scroll goes to what is under it.
+    at: geometry.Point,
     /// A trackpad or touch scroll (continuous, no notches) rather than a notched wheel, where
     /// the platform can tell.
     precise: bool,
-    /// The OS inverts the direction for the user's "natural scrolling" setting and has done so
-    /// already in `dx`/`dy`; this says it did.
-    flipped: bool = false,
-    /// Delivered once per display refresh, so a frame's sum doubles on a 120 Hz display
-    /// (macOS continuous scroll). Rate-normalising is the event queue's job (plans#51, step 3);
-    /// the platform only says it needs it.
-    per_refresh: bool = false,
+    /// Where a continuous scroll is in its gesture, so a fling can be told from a new scroll;
+    /// `none` for a notched wheel.
+    phase: enum { none, began, changed, momentum, ended } = .none,
+    mods: Mods = .{},
+    // Not here until a consumer needs them: a per-refresh flag (macOS delivers continuous scroll
+    // at the display rate; normalising it is the event queue's, with `Display.refresh_hz`).
 };
 
 pub const Resized = struct {
@@ -144,133 +163,44 @@ pub const Resized = struct {
     live: bool = false,
 };
 
-/// What just happened to the window, as a transition. What it *is* afterwards is
-/// `Platform.windowState`; `restored` is the return from `minimized` to whichever of `normal`
-/// or `maximized` it had been, and visibility (`shown`/`hidden`) is separate from `Window.State`.
-pub const State = enum { shown, hidden, minimized, restored, maximized, entered_fullscreen, left_fullscreen };
+/// What just happened to the window, as a transition; what it *is* afterwards is
+/// `Platform.windowState`. Visibility (`shown`/`hidden`) is separate from `Window.State`.
+/// `restored` is the return to `Window.State.normal` from maximized; `unminimized` and
+/// `left_fullscreen` go back to wherever the window was, which `windowState` then names (a
+/// window that went full screen from maximized comes back maximized, not normal).
+pub const StateChange = enum {
+    shown,
+    hidden,
+    minimized,
+    unminimized,
+    maximized,
+    restored,
+    entered_fullscreen,
+    left_fullscreen,
+};
 
 /// The keys, named by their meaning on a US layout. Not SDL's or dvui's numbering: the platform
 /// maps its own scancodes and keycodes to these.
+// zig fmt: off
 pub const Code = enum(u16) {
     unknown,
-    a,
-    b,
-    c,
-    d,
-    e,
-    f,
-    g,
-    h,
-    i,
-    j,
-    k,
-    l,
-    m,
-    n,
-    o,
-    p,
-    q,
-    r,
-    s,
-    t,
-    u,
-    v,
-    w,
-    x,
-    y,
-    z,
-    @"0",
-    @"1",
-    @"2",
-    @"3",
-    @"4",
-    @"5",
-    @"6",
-    @"7",
-    @"8",
-    @"9",
-    f1,
-    f2,
-    f3,
-    f4,
-    f5,
-    f6,
-    f7,
-    f8,
-    f9,
-    f10,
-    f11,
-    f12,
-    f13,
-    f14,
-    f15,
-    f16,
-    f17,
-    f18,
-    f19,
-    f20,
-    f21,
-    f22,
-    f23,
-    f24,
-    left,
-    right,
-    up,
-    down,
-    page_up,
-    page_down,
-    home,
-    end,
-    insert,
-    delete,
-    enter,
-    escape,
-    tab,
-    space,
-    backspace,
-    minus,
-    equal,
-    left_bracket,
-    right_bracket,
-    backslash,
-    semicolon,
-    apostrophe,
-    grave,
-    comma,
-    period,
-    slash,
-    caps_lock,
-    num_lock,
-    scroll_lock,
-    print_screen,
-    pause,
-    menu,
-    kp_0,
-    kp_1,
-    kp_2,
-    kp_3,
-    kp_4,
-    kp_5,
-    kp_6,
-    kp_7,
-    kp_8,
-    kp_9,
-    kp_decimal,
-    kp_divide,
-    kp_multiply,
-    kp_minus,
-    kp_plus,
-    kp_enter,
-    kp_equal,
-    left_shift,
-    right_shift,
-    left_ctrl,
-    right_ctrl,
-    left_alt,
-    right_alt,
-    left_gui,
-    right_gui,
+    a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z,
+    @"0", @"1", @"2", @"3", @"4", @"5", @"6", @"7", @"8", @"9",
+    f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12,
+    f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23, f24,
+    left, right, up, down, page_up, page_down, home, end, insert, delete,
+    enter, escape, tab, space, backspace,
+    minus, equal, left_bracket, right_bracket, backslash,
+    semicolon, apostrophe, grave, comma, period, slash,
+    caps_lock, num_lock, scroll_lock, print_screen, pause, menu,
+    kp_0, kp_1, kp_2, kp_3, kp_4, kp_5, kp_6, kp_7, kp_8, kp_9,
+    kp_decimal, kp_divide, kp_multiply, kp_minus, kp_plus, kp_enter, kp_equal, kp_clear,
+    left_shift, right_shift, left_ctrl, right_ctrl, left_alt, right_alt, left_gui, right_gui,
+    // The extra key of ISO and JIS boards, and the Japanese and Korean input-mode keys.
+    intl_backslash, intl_ro, intl_yen, lang_kana, lang_eisu, lang_hangul, lang_hanja,
+    media_play_pause, media_stop, media_next, media_prev, volume_up, volume_down, volume_mute,
 };
+// zig fmt: on
 
 test "an event is small enough to queue by value" {
     try std.testing.expect(@sizeOf(Event) <= 128);

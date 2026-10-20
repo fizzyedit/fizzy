@@ -12,7 +12,7 @@ const geometry = @import("geometry.zig");
 const Window = @import("Window.zig");
 const Display = @import("Display.zig");
 const Event = @import("Event.zig");
-const Dnd = @import("Dnd.zig");
+const Drop = @import("Drop.zig");
 const Ime = @import("Ime.zig");
 const Clipboard = @import("Clipboard.zig");
 
@@ -24,9 +24,17 @@ vtable: *const VTable,
 /// lost its blur) is asked of the window.
 caps: Caps,
 
+/// Why a call that can fail did. Not an `anyerror`: a caller can act on each.
+pub const Error = std.mem.Allocator.Error || error{
+    /// The platform cannot do it (a window kind on the web, a second window on a phone).
+    Unsupported,
+    /// It can, but not now: too many windows, no display, the OS refused.
+    PlatformFailed,
+};
+
 pub const Caps = struct {
-    /// Which `Window.Material`s it can draw.
-    materials: std.EnumSet(Window.Material) = .initOne(.none),
+    /// Which `Window.MaterialKind`s it can draw.
+    materials: std.EnumSet(Window.MaterialKind) = .initOne(.none),
     /// More than one window at once: false on the web and on a phone.
     multiple_windows: bool = true,
 };
@@ -63,7 +71,7 @@ pub const VTable = struct {
     frame_timing: ?*const fn (ctx: *anyopaque, window: Window) ?FrameTiming = null,
 
     // ---- windows -------------------------------------------------------------------------
-    open_window: *const fn (ctx: *anyopaque, options: Window.Options) anyerror!Window,
+    open_window: *const fn (ctx: *anyopaque, options: Window.Options) Error!Window,
     /// Closes it now. Idempotent; events already queued for it are still delivered.
     close_window: *const fn (ctx: *anyopaque, window: Window) void,
     set_title: *const fn (ctx: *anyopaque, window: Window, title: []const u8) void,
@@ -83,16 +91,16 @@ pub const VTable = struct {
     raise_window: *const fn (ctx: *anyopaque, window: Window) void,
     set_cursor: *const fn (ctx: *anyopaque, window: Window, cursor: Window.Cursor) void,
     set_hints: *const fn (ctx: *anyopaque, window: Window, hints: Window.Hints) void,
-    set_material: *const fn (ctx: *anyopaque, window: Window, material: Window.Material, opacity: f32) void,
-    /// What the window is made of now, which is `set_material`'s if the platform could.
-    window_material: *const fn (ctx: *anyopaque, window: Window) Window.Material,
+    set_material: *const fn (ctx: *anyopaque, window: Window, material: Window.MaterialSpec) void,
+    /// The kind the window is made of now, which is `set_material`'s if the platform could.
+    window_material: *const fn (ctx: *anyopaque, window: Window) Window.MaterialKind,
     /// The display most of the window is on; null while it is on none.
     display_of: *const fn (ctx: *anyopaque, window: Window) ?u64,
 
     // ---- displays ------------------------------------------------------------------------
     /// Every display now, in the platform's order; `allocator` owns the slice and the names
     /// (free with `freeDisplays`).
-    displays: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator) anyerror![]Display,
+    displays: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator) Error![]Display,
 
     // ---- text input ----------------------------------------------------------------------
     /// Whether keystrokes in the window are offered as `text`/`ime` events. On while an editor
@@ -104,12 +112,12 @@ pub const VTable = struct {
     /// A write by `set_clipboard_text` changes the serial but sends no event.
     clipboard_serial: *const fn (ctx: *anyopaque) Clipboard,
     /// The text on the clipboard, or null if it holds none; `allocator` owns the result.
-    clipboard_text: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator) anyerror!?[]u8,
+    clipboard_text: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator) Error!?[]u8,
     /// The platform copies `text` before returning.
-    set_clipboard_text: *const fn (ctx: *anyopaque, text: []const u8) anyerror!void,
+    set_clipboard_text: *const fn (ctx: *anyopaque, text: []const u8) Error!void,
 
-    // ---- drag and drop from other programs -----------------------------------------------
-    dnd_respond: *const fn (ctx: *anyopaque, window: Window, response: Dnd.Response) void,
+    // ---- drops from other programs -----------------------------------------------
+    drop_respond: *const fn (ctx: *anyopaque, window: Window, response: Drop.Response) void,
 };
 
 // The functions below are the interface's surface, one per `VTable` function (as `std.Io` does):
@@ -138,7 +146,7 @@ pub fn frameTiming(self: Platform, window: Window) ?FrameTiming {
     return f(self.ctx, window);
 }
 
-pub fn openWindow(self: Platform, options: Window.Options) !Window {
+pub fn openWindow(self: Platform, options: Window.Options) Error!Window {
     return self.vtable.open_window(self.ctx, options);
 }
 
@@ -194,11 +202,11 @@ pub fn setHints(self: Platform, window: Window, hints: Window.Hints) void {
     self.vtable.set_hints(self.ctx, window, hints);
 }
 
-pub fn setMaterial(self: Platform, window: Window, material: Window.Material, opacity: f32) void {
-    self.vtable.set_material(self.ctx, window, material, opacity);
+pub fn setMaterial(self: Platform, window: Window, material: Window.MaterialSpec) void {
+    self.vtable.set_material(self.ctx, window, material);
 }
 
-pub fn windowMaterial(self: Platform, window: Window) Window.Material {
+pub fn windowMaterial(self: Platform, window: Window) Window.MaterialKind {
     return self.vtable.window_material(self.ctx, window);
 }
 
@@ -207,7 +215,7 @@ pub fn displayOf(self: Platform, window: Window) ?u64 {
 }
 
 /// Free with `freeDisplays` and the same allocator.
-pub fn displays(self: Platform, allocator: std.mem.Allocator) ![]Display {
+pub fn displays(self: Platform, allocator: std.mem.Allocator) Error![]Display {
     return self.vtable.displays(self.ctx, allocator);
 }
 
@@ -230,14 +238,14 @@ pub fn clipboardSerial(self: Platform) Clipboard {
 }
 
 /// Free the result with `allocator`.
-pub fn clipboardText(self: Platform, allocator: std.mem.Allocator) !?[]u8 {
+pub fn clipboardText(self: Platform, allocator: std.mem.Allocator) Error!?[]u8 {
     return self.vtable.clipboard_text(self.ctx, allocator);
 }
 
-pub fn setClipboardText(self: Platform, text: []const u8) !void {
+pub fn setClipboardText(self: Platform, text: []const u8) Error!void {
     return self.vtable.set_clipboard_text(self.ctx, text);
 }
 
-pub fn dndRespond(self: Platform, window: Window, response: Dnd.Response) void {
-    self.vtable.dnd_respond(self.ctx, window, response);
+pub fn dropRespond(self: Platform, window: Window, response: Drop.Response) void {
+    self.vtable.drop_respond(self.ctx, window, response);
 }
