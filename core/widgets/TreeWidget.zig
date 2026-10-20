@@ -80,7 +80,7 @@ pub const InitOptions = struct {
     drag_name: ?[]const u8 = null,
 };
 
-pub fn init(self: *TreeWidget, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *TreeWidget, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     self.* = .{};
     const defaults = Options{ .name = "Tree", .role = .tree };
     self.init_options = init_opts;
@@ -116,7 +116,7 @@ pub fn init(self: *TreeWidget, src: std.builtin.SourceLocation, init_opts: InitO
     }
 }
 
-pub fn tree(src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) *TreeWidget {
+pub fn tree(src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) *TreeWidget {
     var ret = dvui.widgetAlloc(TreeWidget);
     ret.init(src, init_opts, opts);
     ret.processEvents();
@@ -375,7 +375,7 @@ pub fn reorderDragActive(self: *TreeWidget) bool {
     return self.drag_point != null or dvui.captured(self.data().id);
 }
 
-pub fn branch(self: *TreeWidget, src: std.builtin.SourceLocation, init_opts: Branch.InitOptions, opts: Options) *Branch {
+pub fn branch(self: *TreeWidget, src: std.lang.SourceLocation, init_opts: Branch.InitOptions, opts: Options) *Branch {
     const ret = dvui.widgetAlloc(Branch);
     ret.init(src, self, init_opts, opts);
     ret.install();
@@ -463,7 +463,7 @@ pub const Branch = struct {
         .padding = dvui.Rect.all(2),
     };
 
-    pub fn init(self: *Branch, src: std.builtin.SourceLocation, tw: *TreeWidget, init_opts: Branch.InitOptions, opts: Options) void {
+    pub fn init(self: *Branch, src: std.lang.SourceLocation, tw: *TreeWidget, init_opts: Branch.InitOptions, opts: Options) void {
         self.* = .{};
         self.tree = tw;
         self.init_options = init_opts;
@@ -744,7 +744,7 @@ pub const Branch = struct {
         return false;
     }
 
-    pub fn expander(self: *Branch, src: std.builtin.SourceLocation, init_opts: ExpanderOptions, opts: Options) bool {
+    pub fn expander(self: *Branch, src: std.lang.SourceLocation, init_opts: ExpanderOptions, opts: Options) bool {
         var clicked: bool = false;
         if (self.button.clicked()) {
             const r = self.button.data().borderRectScale().r;

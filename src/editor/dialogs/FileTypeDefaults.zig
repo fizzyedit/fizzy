@@ -155,10 +155,10 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     defer outer.deinit();
 
     const intro = if (rows.len == 1)
-        std.fmt.allocPrint(arena, "{s} can also open this file type.", .{plugin_name}) catch
+        arena.print("{s} can also open this file type.", .{plugin_name}) catch
             "This plugin can also open some file types."
     else
-        std.fmt.allocPrint(arena, "{s} can also open these {d} file types.", .{ plugin_name, rows.len }) catch
+        arena.print("{s} can also open these {d} file types.", .{ plugin_name, rows.len }) catch
             "This plugin can also open some file types.";
     dvui.labelNoFmt(@src(), intro, .{}, .{ .font = body, .gravity_x = 0.5 });
 

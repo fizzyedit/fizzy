@@ -191,14 +191,14 @@ fn drawIntChoices(schema: *const settings.SettingsSchema, field: settings.Settin
         .expand = .vertical,
         .gravity_x = 1.0,
     });
-    const label_text = std.fmt.allocPrint(dvui.currentWindow().arena(), "{d}", .{current}) catch "?";
+    const label_text = dvui.currentWindow().arena().print("{d}", .{current}) catch "?";
     dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
     core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
     hbox.deinit();
 
     if (dropdown.dropped()) {
         for (choices) |choice| {
-            const choice_label = std.fmt.allocPrint(dvui.currentWindow().arena(), "{d}", .{choice}) catch continue;
+            const choice_label = dvui.currentWindow().arena().print("{d}", .{choice}) catch continue;
             if (dropdown.addChoiceLabel(choice_label)) {
                 access.setInt(value, field_index, choice);
                 access.persist(value, schema.owner);

@@ -68,13 +68,13 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
 /// `zip://<stem>`, or `zip://<stem> (2)`, … when that prefix is already mounted: two archives
 /// with one name must not share a mount, or closing either unmounts both.
 fn uniquePrefix(gpa: std.mem.Allocator, stem: []const u8) ![]u8 {
-    const files = sdk.host().files orelse return std.fmt.allocPrint(gpa, "zip://{s}", .{stem});
+    const files = sdk.host().files orelse return gpa.print("zip://{s}", .{stem});
     var n: usize = 1;
     while (n < 1000) : (n += 1) {
         const candidate = if (n == 1)
-            try std.fmt.allocPrint(gpa, "zip://{s}", .{stem})
+            try gpa.print("zip://{s}", .{stem})
         else
-            try std.fmt.allocPrint(gpa, "zip://{s} ({d})", .{ stem, n });
+            try gpa.print("zip://{s} ({d})", .{ stem, n });
         var taken = false;
         for (files.mountList()) |m| {
             if (std.mem.eql(u8, m.prefix, candidate)) taken = true;

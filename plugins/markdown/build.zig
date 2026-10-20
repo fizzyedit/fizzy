@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) void {
 fn md4zigModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
 ) *std.Build.Module {
     return b.dependency("md4zig", .{
         .target = target,

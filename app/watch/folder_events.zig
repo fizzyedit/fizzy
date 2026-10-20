@@ -453,7 +453,7 @@ pub const Watches = struct {
 
     /// An entry of `dir` whose path is too long to walk.
     fn loseLong(self: *Watches, dir: []const u8, name: []const u8, ctx: anytype) void {
-        const p = std.fmt.allocPrint(self.gpa, "{s}{c}{s}", .{ dir, std.fs.path.sep, name }) catch return self.degrade(ctx);
+        const p = self.gpa.print("{s}{c}{s}", .{ dir, std.fs.path.sep, name }) catch return self.degrade(ctx);
         defer self.gpa.free(p);
         _ = self.lose(p, "NAMETOOLONG", ctx);
     }
@@ -562,7 +562,7 @@ pub const Watches = struct {
         if (!remove) return;
         const to = as orelse return ctx.remove(k);
         // Too long to name: the watch stays, untracked. Said as such.
-        const name = std.fmt.bufPrint(buf, "{s}{s}", .{ to, k[dir.len..] }) catch return self.degrade(ctx);
+        const name = std.mem.print(buf, "{s}{s}", .{ to, k[dir.len..] }) catch return self.degrade(ctx);
         ctx.remove(name);
     }
 
@@ -986,7 +986,7 @@ const TestTree = struct {
 
     /// `rel` under the root, with `/` for the separator. Valid until the next call.
     fn path(self: *TestTree, rel: []const u8) []const u8 {
-        const out = std.fmt.bufPrint(&self.scratch, "{s}{s}{s}", .{ self.root, std.fs.path.sep_str, rel }) catch unreachable;
+        const out = std.mem.print(&self.scratch, "{s}{s}{s}", .{ self.root, std.fs.path.sep_str, rel }) catch unreachable;
         for (out[self.root.len..]) |*c| if (c.* == '/') {
             c.* = std.fs.path.sep;
         };
@@ -1037,7 +1037,7 @@ test "a walk's folders land in order, however many" {
     defer t.tmp.cleanup();
     for (0..40) |i| {
         var name: [16]u8 = undefined;
-        try t.tmp.dir.createDirPath(testing.io, try std.fmt.bufPrint(&name, "d{d}/e", .{i}));
+        try t.tmp.dir.createDirPath(testing.io, try std.mem.print(&name, "d{d}/e", .{i}));
     }
     var w = t.watches();
     defer w.deinit();

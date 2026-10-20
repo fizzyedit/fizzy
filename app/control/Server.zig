@@ -43,7 +43,7 @@ pub fn socketPath(gpa: std.mem.Allocator, config_folder: []const u8, runtime_dir
     if (preferred.len <= max_path) return preferred;
     gpa.free(preferred);
     var name: [32]u8 = undefined;
-    const folder = try std.fmt.bufPrint(&name, "fizzy-control-{x:0>16}", .{std.hash.Wyhash.hash(0, config_folder)});
+    const folder = try std.mem.print(&name, "fizzy-control-{x:0>16}", .{std.hash.Wyhash.hash(0, config_folder)});
     return std.fs.path.join(gpa, &.{ runtime_dir orelse "/tmp", folder, "control.sock" });
 }
 

@@ -106,7 +106,7 @@ mouse_good_this_frame: bool = false,
 installed: bool = false,
 
 /// It's expected to call this when `self` is `undefined`.
-pub fn init(self: *TooltipWidget, src: std.builtin.SourceLocation, init_opts: InitOptions) void {
+pub fn init(self: *TooltipWidget, src: std.lang.SourceLocation, init_opts: InitOptions) void {
     // No surface of its own: `install` lays down fizzy's floating surface
     // (`core.dialogs.tooltipSurface`) — frosted like the dialogs, menus and every other tooltip.
     const options: dvui.Options = core.dialogs.tooltipOptions(@intCast(init_opts.id_extra)).override(.{

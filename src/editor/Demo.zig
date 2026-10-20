@@ -360,12 +360,12 @@ pub fn frameEnd(self: *Demo, main: ?Picture) void {
 /// `fizzy.window:<what>:<title>` (no title, `fizzy.window:<what>`), and a number after where a
 /// window before it has the name.
 fn windowTag(arena: std.mem.Allocator, before: []const automation.Snapshot.Window, what: []const u8, title: []const u8) ![]const u8 {
-    const base = if (title.len > 0) try std.fmt.allocPrint(arena, "fizzy.window:{s}:{s}", .{ what, title }) else try std.fmt.allocPrint(arena, "fizzy.window:{s}", .{what});
+    const base = if (title.len > 0) try arena.print("fizzy.window:{s}:{s}", .{ what, title }) else try arena.print("fizzy.window:{s}", .{what});
     var tag = base;
     var n: usize = 2;
     while (for (before) |w| {
         if (std.mem.eql(u8, w.tag, tag)) break true;
-    } else false) : (n += 1) tag = try std.fmt.allocPrint(arena, "{s}:{d}", .{ base, n });
+    } else false) : (n += 1) tag = try arena.print("{s}:{d}", .{ base, n });
     return tag;
 }
 
@@ -725,14 +725,14 @@ fn mountFiles(self: *Demo, kf: *const automation.Tape.Keyframe) !void {
         // `Mem` makes no parents of its own; every directory on the way is put first.
         var i: usize = 0;
         while (std.mem.findScalarPos(u8, f.path, i, '/')) |slash| : (i = slash + 1) {
-            const dir = try std.fmt.allocPrint(gpa, "/{s}", .{f.path[0..slash]});
+            const dir = try gpa.print("/{s}", .{f.path[0..slash]});
             defer gpa.free(dir);
             mem.putDir(dir) catch |err| switch (err) {
                 error.Exists => {},
                 else => return err,
             };
         }
-        const path = try std.fmt.allocPrint(gpa, "/{s}", .{f.path});
+        const path = try gpa.print("/{s}", .{f.path});
         defer gpa.free(path);
         try mem.put(path, f.text);
     }

@@ -206,7 +206,7 @@ pub const Forest = struct {
         var n: u32 = 1;
         var buf: [128]u8 = undefined;
         while (n < 10_000) : (n += 1) {
-            const raw = std.fmt.bufPrint(&buf, "{s}/{c}{d}", .{ origin, letter, n }) catch return null;
+            const raw = std.mem.print(&buf, "{s}/{c}{d}", .{ origin, letter, n }) catch return null;
             if (self.findLeaf(raw) == null) return intern(gpa, raw);
         }
         return null;

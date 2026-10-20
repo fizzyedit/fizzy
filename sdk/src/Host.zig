@@ -993,7 +993,7 @@ pub fn takePendingPluginSettings(self: *Host) PluginSettings {
 /// filesystem access — caller-owned, free with `self.allocator`.
 pub fn pluginInstallDir(self: *Host, id: []const u8) ?[]u8 {
     const dir = self.plugins_dir orelse return null;
-    return std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir, id }) catch null;
+    return self.allocator.print("{s}/{s}", .{ dir, id }) catch null;
 }
 
 /// Register a plugin under its self-declared `id`. The `id` is the single source of truth
@@ -2118,7 +2118,7 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
     // stay plain.
     const who = self.author();
     const title = (if (who.kind == .agent and who.label.len > 0)
-        std.fmt.allocPrint(self.allocator, "{s} · {s}", .{ who.label, what })
+        self.allocator.print("{s} · {s}", .{ who.label, what })
     else
         self.allocator.dupe(u8, what)) catch return;
     if (self.activity.items.len == activity_cap) {
@@ -3499,7 +3499,7 @@ const EventLog = struct {
     fn handler(state: *anyopaque, e: events.Event) void {
         const self: *EventLog = @ptrCast(@alignCast(state));
         if (self.n == self.seen.len) return;
-        const text = std.fmt.bufPrint(&self.seen[self.n], "{s} {s}", .{ e.name, e.payload }) catch return;
+        const text = std.mem.print(&self.seen[self.n], "{s} {s}", .{ e.name, e.payload }) catch return;
         self.lens[self.n] = text.len;
         self.n += 1;
         if (self.echo) |h| {

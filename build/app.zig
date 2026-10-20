@@ -52,7 +52,7 @@ pub const Options = struct {
     macos_sdk: ?[]const u8 = null,
 };
 
-pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options) !void {
+pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options) !void {
     const cfg = try readConfig(b, target, opts);
     try construct(b, target, optimize, opts, cfg);
 }
@@ -490,7 +490,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
 }
 
 /// Phase two of `build`: the executables, the web build, tests, packaging.
-pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options, cfg: Config) !void {
+pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config) !void {
     const common = @import("common.zig");
     const plugins = @import("plugins.zig");
     const sdk = @import("sdk.zig");
@@ -829,6 +829,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
+        // Where a macOS bundle runs from: whether it updates, is offered the move to
+        // /Applications, and what happens to the copy it leaves. std-only (see
+        // install_location.zig); `macos_bundle.zig` asks the system and acts on it.
+        .{ "fizzy-install-location-tests", "app/update/install_location.zig" },
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },

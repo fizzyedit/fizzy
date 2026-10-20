@@ -173,7 +173,7 @@ const Collector = struct {
     diagnostics: std.ArrayList(Diagnostic) = .empty,
 
     fn diag(self: *Collector, line: u32, column: u32, comptime fmt: []const u8, args: anytype) void {
-        const msg = std.fmt.allocPrint(self.gpa, fmt, args) catch return;
+        const msg = self.gpa.print(fmt, args) catch return;
         self.diagnostics.append(self.gpa, .{ .line = line, .column = column, .message = msg }) catch {
             self.gpa.free(msg);
         };

@@ -22,7 +22,7 @@ const widgets = @import("widgets.zig");
 /// Falls back to a plain `dvui.label` when the query is empty or nothing matched. `plain`
 /// should match how the row was scored (`false` for paths, `true` for bare names/titles).
 pub fn labelHighlighted(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     text: []const u8,
     query: *const fuzzy.Query,
     plain: bool,

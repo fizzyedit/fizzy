@@ -8,6 +8,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const auto_update = @import("auto_update.zig");
 const update_install = @import("update_install.zig");
+const move_offer = @import("move_offer.zig");
 const restart = @import("../restart.zig");
 
 const Phase = enum(u8) {
@@ -54,8 +55,14 @@ const SUBWINDOW_ID: dvui.Id = @fromBackingInt(@intCast(0xF122_DA70_AD0E_71D0));
 // Used as the anchor point in `drawAbove`; the FloatingWidget self-sizes vertically.
 const TOAST_MARGIN: f32 = 14.0;
 
-/// Call once after `Editor` (and settings) exist. Safe to call multiple times.
-pub fn startLaunchCheck(io: std.Io, simulate_out_of_date: bool) void {
+/// The `Io` the launch check runs on, kept for a check the move offer holds back. Written once,
+/// on the GUI thread, by `startLaunchCheck`.
+var launch_io: std.Io = undefined;
+
+/// Call once after `Editor` (and settings) exist. Safe to call multiple times. On macOS, an app
+/// running from anywhere it cannot update is first offered the move to /Applications
+/// (`move_offer`); the check waits for the answer. `memory` is where a Not now is kept.
+pub fn startLaunchCheck(io: std.Io, simulate_out_of_date: bool, memory: move_offer.Memory) void {
     if (launched) return;
     launched = true;
 
@@ -73,6 +80,15 @@ pub fn startLaunchCheck(io: std.Io, simulate_out_of_date: bool) void {
         return;
     }
 
+    launch_io = io;
+    // Only an updating build offers the move: what it offers is updates, and a development build
+    // run from where it was built is not to be asked.
+    if (move_offer.wanted(io, memory, startCheck)) return;
+    startCheck();
+}
+
+fn startCheck() void {
+    const io = launch_io;
     if (!auto_update.installLayoutSupported(io)) {
         phase.store(@backingInt(Phase.done_no), .release);
         return;
@@ -146,10 +162,11 @@ pub fn appUpdateState() AppUpdateState {
     };
 }
 
-/// Arms the launch toast once an available update is detected. Must run on the
-/// GUI thread between `Window.begin` / `Window.end` (call from a per-frame tick).
-/// Subsequent calls are cheap no-ops.
+/// Shows the move offer when there is one, and arms the launch toast once an available update is
+/// detected. Must run on the GUI thread between `Window.begin` / `Window.end` (call from a
+/// per-frame tick). Subsequent calls are cheap no-ops.
 pub fn tick() void {
+    move_offer.tick();
     if (toast_armed) return;
     if (!badgeVisible()) return;
     toast_armed = true;

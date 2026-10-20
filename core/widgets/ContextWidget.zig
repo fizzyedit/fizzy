@@ -54,7 +54,7 @@ activePt: Point.Natural = .{},
 hold: HoldState = .{},
 
 /// It's expected to call this when `self` is `undefined`
-pub fn init(self: *ContextWidget, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *ContextWidget, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     const defaults = Options{ .name = "Context" };
     self.* = .{
         .wd = WidgetData.init(src, .{}, defaults.override(opts).override(.{ .rect = dvui.parentGet().data().contentRectScale().rectFromPhysical(init_opts.rect) })),

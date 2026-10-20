@@ -96,7 +96,7 @@ fn documentOf(s: *const sdk.Surface) ?sdk.DocHandle {
 /// The region name this pane persists under. One spelling, here, because the app's assignment
 /// table is keyed by it and the workbench has to find last session's panes by it.
 pub fn name(buf: []u8, grouping: u64) []const u8 {
-    return std.fmt.bufPrint(buf, "Pane {d}", .{grouping}) catch "Pane";
+    return std.mem.print(buf, "Pane {d}", .{grouping}) catch "Pane";
 }
 
 /// The grouping a pane name encodes, or null if the name is not a pane's.

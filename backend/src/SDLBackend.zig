@@ -16,6 +16,7 @@ const dvui = @import("dvui");
 
 const GpuRenderer = @import("GpuRenderer.zig");
 pub const viewport_map = @import("viewport_map.zig");
+pub const materials = @import("materials.zig");
 const TouchSlots = @import("touch_slots.zig");
 const glass_look = @import("glass_look");
 /// The OS windows besides the main one an app draws with (`Viewport`).
@@ -101,6 +102,8 @@ sdl_quit: bool = true,
 clear_window_on_begin: bool = false,
 /// See `mainPicture`.
 main_picture: ?viewport_map.Rect = null,
+/// What this platform can draw (`materialPlatform`), probed once a frame: cleared in `begin`.
+material_platform: ?materials.Platform = null,
 /// The main window's frame goes down where its picture is (`mainPicture`): a plain dvui app's,
 /// whose picture is also below the title bar (`platform.macos_monitor.titlebarStrip`). Its frame
 /// target lays it there (`plain_frame`, `pictureInWindow`); the backend moves what is drawn
@@ -719,16 +722,16 @@ pub const WindowGeometry = struct {
     fn filePath(buf: []u8, options: InitOptions) ?[:0]const u8 {
         if (options.pref_path) |dir| {
             if (std.mem.endsWith(u8, dir, std.fs.path.sep_str)) {
-                return std.fmt.bufPrintSentinel(buf, "{s}{s}", .{ dir, zon_file_name }, 0) catch null;
+                return std.mem.printSentinel(buf, "{s}{s}", .{ dir, zon_file_name }, 0) catch null;
             }
-            return std.fmt.bufPrintSentinel(buf, "{s}{c}{s}", .{ dir, std.fs.path.sep, zon_file_name }, 0) catch null;
+            return std.mem.printSentinel(buf, "{s}{c}{s}", .{ dir, std.fs.path.sep, zon_file_name }, 0) catch null;
         }
         const pref = c.SDL_GetPrefPath(options.org.ptr, options.title.ptr) orelse {
             logErr("SDL_GetPrefPath in WindowGeometry") catch {};
             return null;
         };
         defer c.SDL_free(pref);
-        return std.fmt.bufPrintSentinel(buf, "{s}" ++ zon_file_name, .{std.mem.span(@as([*:0]const u8, @ptrCast(pref)))}, 0) catch null;
+        return std.mem.printSentinel(buf, "{s}" ++ zon_file_name, .{std.mem.span(@as([*:0]const u8, @ptrCast(pref)))}, 0) catch null;
     }
 
     fn fromSaved(saved: Saved) ?WindowGeometry {
@@ -1006,7 +1009,7 @@ pub fn native(self: *SDLBackend, _: *dvui.Window) dvui.Window.Native {
 
 pub fn title(self: *SDLBackend, _: *dvui.Window, new_title: []const u8) void {
     var buf: [300]u8 = @splat(0);
-    const c_text: []const u8 = std.fmt.bufPrintSentinel(&buf, "{s}", .{new_title}, 0) catch "title: Error";
+    const c_text: []const u8 = std.mem.printSentinel(&buf, "{s}", .{new_title}, 0) catch "title: Error";
     _ = c.SDL_SetWindowTitle(self.window, c_text.ptr);
 }
 
@@ -1125,8 +1128,8 @@ var plain_material: ?WindowMaterial = null;
 var plain_base: dvui.Color = .{};
 
 /// The kinds of window material, field for field with fizzy's `core.material.Kind`: from the
-/// plainest to the richest, what `effectiveMaterial` falls back through.
-pub const MaterialKind = enum(u8) { none, transparent, blur, frost, liquid };
+/// plainest to the richest, what `effectiveMaterial` falls back through (`materials.effective`).
+pub const MaterialKind = materials.Kind;
 
 pub const WindowMaterial = struct {
     kind: MaterialKind = .none,
@@ -1158,8 +1161,8 @@ pub fn setWindowLook(color: dvui.Color, opacity: f32) void {
     window_material.opacity = opacity;
 }
 
-/// `window_material`, or the best kind below it this backend can show (`materialKinds`), its
-/// colour less opaque in a light theme (`light_tint`) where the app gave none of its own.
+/// `window_material` as this backend can show it (`materials.effective`: the richest glass at or
+/// below it, else opaque; clear only when asked), its colour less opaque in a light theme (`light_tint`) where the app gave none of its own.
 pub fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
     return self.materialAt(window_material.opacity);
 }
@@ -1167,24 +1170,17 @@ pub fn effectiveMaterial(self: *SDLBackend) WindowMaterial {
 /// `effectiveMaterial` with the window's colour at `opacity` instead of the main window's: a float's
 /// own window, eased opaque on its own as it is zoomed or goes full screen (`viewportMaterialBase`).
 pub fn materialAt(self: *SDLBackend, window_opacity: f32) WindowMaterial {
-    const offered = self.materialKinds();
     // In a light theme the window's colour is light over a desktop that is mostly darker, and at
     // the opacity a dark theme reads well at, little showed through it (the user): a light theme's
     // colour covers `light_tint` as much. Fizzy's own defaults are the same ratio (`app/settings`:
     // 0.7 dark, 0.3 light), which fizzy's people set apart, and fizzy hands its own over with its
     // colour; a plain app has the one value.
     const opacity = if (window_material.color != null or dvui.themeGet().dark) window_opacity else window_opacity * light_tint;
-    var k = @backingInt(window_material.kind);
-    while (k > 0) : (k -= 1) {
-        const material: MaterialKind = @fromBackingInt(k);
-        const has = switch (material) {
-            inline else => |t| @field(offered, @tagName(t)),
-        };
-        // Glass keeps a little of the window's colour (`material_min_opacity`); a clear window may
-        // have none.
-        if (has) return .{ .kind = material, .opacity = if (material == .transparent) opacity else @max(opacity, material_min_opacity), .color = window_material.color };
-    }
-    return .{ .kind = .none, .opacity = opacity, .color = window_material.color };
+    const drawn = materials.effective(self.materialPlatform(), window_material.kind);
+    // Glass keeps a little of the window's colour (`material_min_opacity`); a clear or opaque
+    // window may have none.
+    const is_glass = drawn != .none and drawn != .transparent;
+    return .{ .kind = drawn, .opacity = if (is_glass) @max(opacity, material_min_opacity) else opacity, .color = window_material.color };
 }
 
 /// The least of the window's colour a material other than a clear window covers what is behind
@@ -1384,10 +1380,7 @@ pub fn floatingWindowBackground(self: *SDLBackend, id: dvui.Id, rect: dvui.Rect.
 }
 
 /// The kinds of window material this backend can show (fizzy's `core.material`, field for field):
-/// only a kind every surface it puts glass on can show. A clear window everywhere (`transparent`);
-/// on macOS vibrancy (`frost`) and a plain blur, and Liquid Glass from macOS 26; on Windows
-/// Acrylic (`frost`); on Linux the compositor's blur behind a window, where it has one
-/// (`wayland_blur`).
+/// only a kind every surface it puts glass on can show, as `materials.missing` answers it.
 pub const MaterialKinds = struct {
     none: bool = true,
     transparent: bool = false,
@@ -1458,12 +1451,28 @@ pub fn pointerHeld(_: *SDLBackend) bool {
 }
 
 pub fn materialKinds(self: *SDLBackend) MaterialKinds {
-    return switch (comptime builtin.target.os.tag) {
-        .macos => .{ .transparent = true, .blur = true, .frost = true, .liquid = liquidGlassAvailable() },
-        .windows => .{ .transparent = true, .frost = true },
-        .linux => .{ .transparent = true, .blur = platform.linux_titlebar.blurOffered(self.window) },
-        else => .{},
+    const p = self.materialPlatform();
+    var kinds: MaterialKinds = .{};
+    inline for (comptime std.enums.values(MaterialKind)) |k| @field(kinds, @tagName(k)) = materials.missing(p, k) == null;
+    return kinds;
+}
+
+/// Why `material` cannot be drawn here, one static line for a tooltip; null when it can
+/// (`materials.missing`).
+pub fn materialMissing(self: *SDLBackend, material: MaterialKind) ?[]const u8 {
+    return materials.missing(self.materialPlatform(), material);
+}
+
+/// What this platform can draw this frame: the OS's Liquid Glass, the compositor's blur.
+fn materialPlatform(self: *SDLBackend) materials.Platform {
+    if (self.material_platform) |p| return p;
+    const p: materials.Platform = .{
+        .os = builtin.target.os.tag,
+        .liquid_glass = liquidGlassAvailable(),
+        .compositor_blur = platform.linux_titlebar.blurOffered(self.window),
     };
+    self.material_platform = p;
+    return p;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2118,7 +2127,7 @@ pub fn viewportDragMove(_: *SDLBackend, vp: *Viewport) bool {
 /// (macOS), the window switcher.
 pub fn viewportTitle(_: *SDLBackend, vp: *Viewport, text: []const u8) void {
     var buf: [128]u8 = undefined;
-    const z = std.fmt.bufPrintSentinel(&buf, "{s}", .{text[0..@min(text.len, buf.len - 1)]}, 0) catch return;
+    const z = std.mem.printSentinel(&buf, "{s}", .{text[0..@min(text.len, buf.len - 1)]}, 0) catch return;
     _ = c.SDL_SetWindowTitle(vp.window, z.ptr);
     if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_windows_item(cocoaWindow(vp.window), z.ptr);
 }
@@ -2966,6 +2975,7 @@ pub fn prefersReducedMotion(_: *@This()) bool {
 
 pub fn begin(self: *SDLBackend, arena: std.mem.Allocator) !void {
     self.arena = arena;
+    self.material_platform = null;
     if (self.begin_hook) |hook| hook(self);
     // Its step for this frame taken (`begin_hook`): where the main window's picture is now.
     self.main_picture = if (platform.window.windowSpacePicture(self.window)) |p| .{ .x = p.x, .y = p.y, .w = p.w, .h = p.h } else null;

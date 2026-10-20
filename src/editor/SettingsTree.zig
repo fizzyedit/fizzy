@@ -167,13 +167,13 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
             .score = std.math.floatMax(f64),
             .tie = gi,
             .group = group,
-            .key = branchKey(std.fmt.allocPrint(arena, "{s}/{s}", .{ fizzy_branch_title, group.title }) catch group.title),
+            .key = branchKey(arena.print("{s}/{s}", .{ fizzy_branch_title, group.title }) catch group.title),
         };
         for (group.items, 0..) |item, ii| {
             // An item that owns a searchable list scores itself: its rows, not its label, are
             // what the query is really matching against (`settings.Search`).
             const s = if (item.search) |sr| sr.score(query) orelse continue else blk: {
-                const path = std.fmt.allocPrint(arena, "{s}/{s}/{s}", .{ fizzy_branch_title, group.title, item.label }) catch item.label;
+                const path = arena.print("{s}/{s}/{s}", .{ fizzy_branch_title, group.title, item.label }) catch item.label;
                 break :blk scoreLeaf(query, path, item.label, item.keyNow(), item.keywords) orelse continue;
             };
             child.leaves.append(arena, .{
@@ -214,7 +214,7 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
         const branch_hit = fuzzy.scoreBest(&.{ title, schema.owner.id }, query, .{ .plain = true });
 
         for (schema.fields, 0..) |field, fi| {
-            const path = std.fmt.allocPrint(arena, "{s}/{s}", .{ title, field.label }) catch field.label;
+            const path = arena.print("{s}/{s}", .{ title, field.label }) catch field.label;
             const leaf_hit = scoreLeaf(query, path, field.label, field.key, schema.owner.id);
             // A hit on the plugin itself keeps all of its settings visible — you searched for the
             // plugin, so you want its panel, not a filtered subset of it.
@@ -245,7 +245,7 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
             .failed = f,
             // Distinct from a loaded plugin's key: the same id can legitimately appear in both
             // lists, and the two rows expand independently.
-            .key = branchKey(std.fmt.allocPrint(arena, "failed/{s}", .{f.id}) catch f.id),
+            .key = branchKey(arena.print("failed/{s}", .{f.id}) catch f.id),
         };
         branch.leaves.append(arena, .{ .index = 0, .label = f.reason, .score = s, .tie = 0 }) catch {};
         roots.append(arena, branch) catch {};
@@ -502,9 +502,9 @@ fn hashId(s: []const u8) usize {
 fn drawFailure(f: fizzy.Editor.FailedPlugin) void {
     var buf: [256]u8 = undefined;
     const text = if (f.detail) |d|
-        std.fmt.bufPrint(&buf, "Failed to load: {s} ({s})", .{ f.reason, d }) catch f.reason
+        std.mem.print(&buf, "Failed to load: {s} ({s})", .{ f.reason, d }) catch f.reason
     else
-        std.fmt.bufPrint(&buf, "Failed to load: {s}", .{f.reason}) catch f.reason;
+        std.mem.print(&buf, "Failed to load: {s}", .{f.reason}) catch f.reason;
 
     // Wrapped, and with the same insets as a real setting row: an ABI-mismatch reason is a long
     // sentence, and a single unwrapped line of it would widen the whole pane (see `draw`).

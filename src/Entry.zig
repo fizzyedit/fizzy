@@ -13,6 +13,8 @@ const workbench = @import("workbench");
 const auto_update = @import("app").update.auto_update;
 const file_assoc = @import("backend/file_assoc.zig");
 const update_notify = @import("app").update.update_notify;
+const move_offer = @import("app").update.move_offer;
+const install_location = @import("app").update.install_location;
 const singleton = @import("app").single_instance;
 const restart = @import("app").restart;
 const automation = @import("app").automation;
@@ -67,12 +69,11 @@ const start_options_base: dvui.App.StartOptions = .{
 };
 
 /// macOS only: is the process image inside a `.app` bundle (as opposed to a loose
-/// `zig-out/bin/fizzy` from `zig build run`)? Mirrors `auto_update.installLayoutSupported`'s
-/// probe, minus its Velopack gating.
+/// `zig-out/bin/fizzy` from `zig build run`)?
 fn runningFromAppBundle(io: std.Io) bool {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.process.executablePath(io, &buf) catch return false;
-    return std.mem.find(u8, buf[0..n], ".app/") != null;
+    return install_location.bundlePath(buf[0..n]) != null;
 }
 
 fn startOptions() dvui.App.StartOptions {
@@ -100,7 +101,7 @@ fn startOptions() dvui.App.StartOptions {
         }
         // A profile is the config folder itself (`app.profile`), for SDL's preferences too.
         const pref: ?[:0]const u8 = if (@import("app").profile.root) |root|
-            std.fmt.bufPrintSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
+            std.mem.printSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
         else
             paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
         if (pref) |pref_path| {
@@ -408,7 +409,14 @@ pub fn AppInit(win: *dvui.Window) !void {
     // The install runs on a background thread and outlives the frame that starts it, so it
     // needs a long-lived allocator — the app's, which `app/update/` cannot name for itself.
     update_notify.setAllocator(allocator);
-    update_notify.startLaunchCheck(dvui.io, Constants.debug_simulate_update_available);
+    update_notify.startLaunchCheck(dvui.io, Constants.debug_simulate_update_available, .{
+        .recents = &fizzy.editor().app.recents,
+        .save = struct {
+            fn f() void {
+                fizzy.editor().saveRecents();
+            }
+        }.f,
+    });
 
     // From here on the monitor's pump timer may drive frames during macOS
     // window animations.
@@ -455,6 +463,8 @@ pub fn AppDeinit(_: *dvui.Window) void {
     // everything is saved and the single-instance listener is down, so the new instance owns it
     // rather than handing its launch to this one.
     defer restart.relaunch(dvui.io, appAllocator());
+    // A move to /Applications the user said yes to: the new copy opens once this one has exited.
+    defer move_offer.openAtExit(appAllocator());
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.entry().window);
     // Before the editor goes: the bar's hooks read its host.
@@ -527,6 +537,28 @@ fn materialOffered() fizzy.core.material.Kinds {
     return k;
 }
 
+/// Why the backend cannot draw `kind`, one static line for a tooltip; null when it can. The
+/// backend's own reason where it gives one (`SDLBackend.materialMissing`), else a plain one for a
+/// kind it does not offer.
+pub fn materialMissing(kind: fizzy.core.material.Kind) ?[]const u8 {
+    if (comptime @hasDecl(dvui.backend, "materialMissing")) {
+        return dvui.currentWindow().backend.impl.materialMissing(switch (kind) {
+            inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
+        });
+    }
+    return if (materialOffered().has(kind)) null else "Not available with this backend";
+}
+
+/// Whether the backend draws the app's glass program (`core.programs`), which in-app Liquid Glass
+/// needs.
+const glass_program = @hasDecl(dvui.backend, "program_api");
+
+/// Why the app's own renderer cannot draw `kind` as in-app glass (`core.material.inAppMissing`);
+/// null when it can.
+pub fn inAppMaterialMissing(kind: fizzy.core.material.Kind) ?[]const u8 {
+    return fizzy.core.material.inAppMissing(kind, glass_program);
+}
+
 /// The kind of window material asked for: `FIZZY_GLASS` where it names one, else the setting
 /// (`Settings.window_material`).
 fn materialAsked() fizzy.core.material.Kind {
@@ -562,9 +594,20 @@ fn frameOnce() !dvui.App.Result {
     }
     // What the app's windows are made of, as the backend can show it, for every glass drawn this
     // frame (`core.material`): before `Popout`, whose OS glass is offered only for `liquid`. The
-    // setting asks (Liquid Glass by default, so each platform shows the best it can);
+    // setting asks (Liquid Glass by default, so each platform shows the richest glass it has, or
+    // an opaque window), and is never rewritten by what this platform draws;
     // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`, `liquid`) overrides it.
-    fizzy.core.material.publish((fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered()));
+    const window_material = (fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered());
+    fizzy.core.material.publish(window_material);
+    // The glass the app draws itself: the window's, or the person's own choice as the app's
+    // renderer can draw it, whatever the windows are made of. The window's under `FIZZY_GLASS`,
+    // and while a demo has the window material (`Demo.material_saved`), whose tape shows one look.
+    const editor = fizzy.editor();
+    const own_in_app = if (materialOverride() != null or editor.demo.material_saved != null) null else editor.app.settings.in_app_material;
+    fizzy.core.material.publishInApp(if (own_in_app) |kind|
+        (fizzy.core.material.Material{ .kind = kind }).effective(fizzy.core.material.inAppKinds(glass_program))
+    else
+        window_material);
     // And the backend, which makes the windows it dresses itself of it: the one decision, one
     // applier (`SDLBackend.window_material`).
     if (comptime @hasDecl(dvui.backend, "setWindowMaterial")) {

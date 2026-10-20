@@ -7,7 +7,7 @@ const sdk = @import("sdk.zig");
 
 pub fn addSteps(
     b: *std.Build,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     build_opts: *std.Build.Step.Options,
     workbench_opts: *std.Build.Step.Options,
     assets_module: *std.Build.Module,

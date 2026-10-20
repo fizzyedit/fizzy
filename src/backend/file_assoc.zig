@@ -135,11 +135,11 @@ const WindowsImpl = struct {
 
         // "C:\path\to\fizzy.exe" "%1"
         var open_cmd_buf: [std.fs.max_path_bytes + 16]u8 = undefined;
-        const open_cmd = try std.fmt.bufPrint(&open_cmd_buf, "\"{s}\" \"%1\"", .{exe_path});
+        const open_cmd = try std.mem.print(&open_cmd_buf, "\"{s}\" \"%1\"", .{exe_path});
 
         // C:\path\to\fizzy.exe,0
         var icon_ref_buf: [std.fs.max_path_bytes + 4]u8 = undefined;
-        const icon_ref = try std.fmt.bufPrint(&icon_ref_buf, "{s},0", .{exe_path});
+        const icon_ref = try std.mem.print(&icon_ref_buf, "{s},0", .{exe_path});
 
         for (default_progid_extensions) |a| {
             try writeProgid(a.progid, a.friendly, icon_ref, open_cmd);
@@ -183,9 +183,9 @@ const WindowsImpl = struct {
 
         for (open_with_only_extensions) |ext| {
             var sub_buf: [64]u8 = undefined;
-            const sub = std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithProgids", .{ext}) catch continue;
+            const sub = std.mem.print(&sub_buf, "{s}\\OpenWithProgids", .{ext}) catch continue;
             deleteValueIfPresent(classes_key, sub, open_with_progid);
-            const sub2 = std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithList", .{ext}) catch continue;
+            const sub2 = std.mem.print(&sub_buf, "{s}\\OpenWithList", .{ext}) catch continue;
             deleteValueIfPresent(classes_key, sub2, exe_name);
         }
 
@@ -195,16 +195,16 @@ const WindowsImpl = struct {
     fn writeProgid(progid: []const u8, friendly: []const u8, icon_ref: []const u8, open_cmd: []const u8) !void {
         try setStringDefault(progid, friendly);
         var sub_buf: [128]u8 = undefined;
-        const di = try std.fmt.bufPrint(&sub_buf, "{s}\\DefaultIcon", .{progid});
+        const di = try std.mem.print(&sub_buf, "{s}\\DefaultIcon", .{progid});
         try setStringDefault(di, icon_ref);
-        const oc = try std.fmt.bufPrint(&sub_buf, "{s}\\shell\\open\\command", .{progid});
+        const oc = try std.mem.print(&sub_buf, "{s}\\shell\\open\\command", .{progid});
         try setStringDefault(oc, open_cmd);
     }
 
     fn writeExtensionDefault(ext: []const u8, progid: []const u8) !void {
         try setStringDefault(ext, progid);
         var sub_buf: [128]u8 = undefined;
-        const sub = try std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithProgids", .{ext});
+        const sub = try std.mem.print(&sub_buf, "{s}\\OpenWithProgids", .{ext});
         try setStringValue(sub, progid, "");
     }
 
@@ -226,9 +226,9 @@ const WindowsImpl = struct {
 
     fn writeOpenWithEntry(ext: []const u8, progid: []const u8) !void {
         var sub_buf: [128]u8 = undefined;
-        const owp = try std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithProgids", .{ext});
+        const owp = try std.mem.print(&sub_buf, "{s}\\OpenWithProgids", .{ext});
         try setStringValue(owp, progid, "");
-        const owl = try std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithList", .{ext});
+        const owl = try std.mem.print(&sub_buf, "{s}\\OpenWithList", .{ext});
         try setStringValue(owl, exe_name, "");
     }
 
@@ -244,7 +244,7 @@ const WindowsImpl = struct {
         // Path is anchored at HKCU\Software\Classes\ so the prefix doesn't need to be
         // repeated at every call site (shorter than HKCR and avoids touching HKLM).
         var full_buf: [512]u8 = undefined;
-        const full = try std.fmt.bufPrint(&full_buf, "Software\\Classes\\{s}", .{sub_key});
+        const full = try std.mem.print(&full_buf, "Software\\Classes\\{s}", .{sub_key});
 
         var hkey: ?HKEY = null;
         const open_status = registry.RegCreateKeyExW(

@@ -84,7 +84,7 @@ pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
 pub fn showOpenFolderDialog(cb: *const fn (?[][:0]const u8) void, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         const dir = default_folder orelse initialDir(.open);
-        break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{dir}, 0) catch "untitled";
+        break :blk alloc().printSentinel("{s}", .{dir}, 0) catch "untitled";
     };
     defer alloc().free(default);
     const parent: ?*c.SDL_Window = if (builtin.target.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;

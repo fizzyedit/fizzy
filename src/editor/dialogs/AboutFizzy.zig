@@ -5,6 +5,7 @@ const dvui = @import("dvui");
 const build_opts = @import("build_opts");
 const auto_update = @import("app").update.auto_update;
 const update_notify = @import("app").update.update_notify;
+const macos_bundle = @import("app").update.macos_bundle;
 const assets = @import("assets");
 const AppInfo = @import("app").AppInfo;
 
@@ -162,7 +163,7 @@ fn consumeCheckResult() void {
         .install_layout_unsupported => setStatus("On macOS, use the packaged .app from a release (zig-out binary cannot use Velopack updates)."),
         .failed => {
             if (check_msg_len > 0) {
-                if (std.fmt.bufPrint(&status_line_buf, "Check failed: {s}", .{check_msg_buf[0..check_msg_len]})) |s| {
+                if (std.mem.print(&status_line_buf, "Check failed: {s}", .{check_msg_buf[0..check_msg_len]})) |s| {
                     status_line = s;
                 } else |_| {
                     setStatus("Check failed.");
@@ -175,7 +176,7 @@ fn consumeCheckResult() void {
         .remote_empty => setStatus("Release feed is empty."),
         .available => {
             update_ready_after_check = true;
-            if (std.fmt.bufPrint(&status_line_buf, "Update available: {s}.", .{check_msg_buf[0..check_msg_len]})) |s| {
+            if (std.mem.print(&status_line_buf, "Update available: {s}.", .{check_msg_buf[0..check_msg_len]})) |s| {
                 status_line = s;
             } else |_| {
                 setStatus("Update available.");
@@ -240,7 +241,10 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         if (!auto_update.installLayoutSupported(dvui.io) and builtin.target.os.tag == .macos) {
             dvui.labelNoFmt(
                 @src(),
-                "In-app updates need a packaged .app (Velopack). A zig-out binary is not an app bundle.",
+                if (macos_bundle.current(dvui.io) != null)
+                    "In-app updates need the app in the Applications folder."
+                else
+                    "In-app updates need a packaged .app (Velopack). A zig-out binary is not an app bundle.",
                 .{},
                 .{ .font = body_small, .gravity_x = 0.5 },
             );

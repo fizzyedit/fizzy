@@ -79,7 +79,7 @@ pub fn keyColor(key: u64) dvui.Color {
 }
 
 /// `series` over time in a box of their own. The caller `deinit`s what it returns.
-pub fn line(src: std.builtin.SourceLocation, series: []const Series, opts: LineOptions, wopts: dvui.Options) Line {
+pub fn line(src: std.lang.SourceLocation, series: []const Series, opts: LineOptions, wopts: dvui.Options) Line {
     const defaults: dvui.Options = .{ .name = "viz.line", .expand = .horizontal, .min_size_content = .{ .w = 200, .h = 90 } };
     const box = dvui.box(src, .{}, defaults.override(wopts));
     const rs = box.data().contentRectScale();
@@ -235,7 +235,7 @@ pub const BarOptions = struct {
 
 /// `fraction` (0 to 1) of the box's width filled from its left edge, so bars side by side
 /// compare by their length. `scale.fraction` makes one from a value and its whole.
-pub fn bar(src: std.builtin.SourceLocation, fraction: f32, opts: BarOptions, wopts: dvui.Options) void {
+pub fn bar(src: std.lang.SourceLocation, fraction: f32, opts: BarOptions, wopts: dvui.Options) void {
     const defaults: dvui.Options = .{ .name = "viz.bar", .expand = .horizontal, .min_size_content = .{ .w = 48, .h = 10 }, .gravity_y = 0.5 };
     var bb = dvui.box(src, .{}, defaults.override(wopts));
     defer bb.deinit();
@@ -256,7 +256,7 @@ pub const StatOptions = struct {
 
 /// `label value unit`, the label and unit faint and the number in the monospace font: one
 /// reading of a dashboard's header, a status line's figure.
-pub fn stat(src: std.builtin.SourceLocation, label: []const u8, value: f64, opts: StatOptions, wopts: dvui.Options) void {
+pub fn stat(src: std.lang.SourceLocation, label: []const u8, value: f64, opts: StatOptions, wopts: dvui.Options) void {
     const defaults: dvui.Options = .{ .name = "viz.stat", .gravity_y = 0.5, .padding = .{ .w = 12 } };
     var row = dvui.box(src, .{ .dir = .horizontal }, defaults.override(wopts));
     defer row.deinit();
@@ -264,7 +264,7 @@ pub fn stat(src: std.builtin.SourceLocation, label: []const u8, value: f64, opts
     const mono = dvui.Font.theme(.mono);
     if (label.len > 0) dvui.labelNoFmt(@src(), label, .{}, .{ .font = mono, .color_text = .{ .color = dim }, .padding = .{ .w = 4 }, .gravity_y = 0.5 });
     var buf: [48]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "{[v]d:.[p]}", .{ .v = value, .p = opts.decimals }) catch "?";
+    const text = std.mem.print(&buf, "{[v]d:.[p]}", .{ .v = value, .p = opts.decimals }) catch "?";
     // As wide as three digits and the decimals whatever the number, so a row of stats keeps
     // its layout while the numbers change: "79" and "120" take the same room.
     const digits = "000.000000000";
@@ -286,5 +286,5 @@ pub fn fit(arena: std.mem.Allocator, font: dvui.Font, text: []const u8, max_w: f
     const ellipsis = "…";
     var end: usize = 0;
     _ = font.textSizeEx(text, .{ .max_width = @max(0, max_w - font.textSize(ellipsis).w), .end_idx = &end });
-    return std.fmt.allocPrint(arena, "{s}{s}", .{ text[0..end], ellipsis }) catch text[0..end];
+    return arena.print("{s}{s}", .{ text[0..end], ellipsis }) catch text[0..end];
 }

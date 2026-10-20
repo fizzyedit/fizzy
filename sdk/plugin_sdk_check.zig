@@ -51,8 +51,8 @@ pub fn main(main_init: std.process.Init) !void {
     }
 
     const v = sdk.version.sdk_version;
-    const want_version = try std.fmt.allocPrint(arena, "{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
-    const want_fingerprint = try std.fmt.allocPrint(arena, "0x{x}", .{sdk.dylib.abi_fingerprint});
+    const want_version = try arena.print("{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
+    const want_fingerprint = try arena.print("0x{x}", .{sdk.dylib.abi_fingerprint});
 
     std.debug.print("pinned fizzy SDK: {s}  abi_fingerprint: {s}\n", .{ want_version, want_fingerprint });
 

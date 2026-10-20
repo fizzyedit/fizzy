@@ -13,7 +13,7 @@ pub fn derive(gpa: std.mem.Allocator, repo: ?[]const u8, is_fizzy: bool) ![]cons
     var r = repo orelse "";
     while (std.mem.endsWith(u8, r, "/")) r = r[0 .. r.len - 1];
     if (std.mem.endsWith(u8, r, ".git")) r = r[0 .. r.len - ".git".len];
-    if (r.len > 0) return std.fmt.allocPrint(gpa, "{s}/issues", .{r});
+    if (r.len > 0) return gpa.print("{s}/issues", .{r});
     return if (is_fizzy) fizzy_issues else "";
 }
 

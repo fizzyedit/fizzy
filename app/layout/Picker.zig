@@ -752,7 +752,7 @@ fn drawLifted(self: *Picker, f: *Layout) void {
 /// Published as `region.menu.<action>:<place>` while it can be pressed — a dimmed one swallows the
 /// click, and a driver waiting for the name should wait for the action, not for the button.
 /// Delete wears the theme's error colour. Disabled, it keeps its place (dimmed, no hover).
-fn controlButton(src: std.builtin.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, id_extra: usize) bool {
+fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
     const tint = if (c.action == .delete) theme.color(.err, .text) else theme.color(.control, .text);
     var bw: dvui.ButtonWidget = undefined;

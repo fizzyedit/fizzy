@@ -58,7 +58,7 @@ inner: *dvui.BoxWidget,
 gap_at: f32 = 0,
 gap_len: f32 = 0,
 
-pub fn init(src: std.builtin.SourceLocation, opts: Options) Tabs {
+pub fn init(src: std.lang.SourceLocation, opts: Options) Tabs {
     const vertical = opts.dir == .vertical;
     const outer = dvui.box(src, .{ .dir = opts.dir }, (dvui.Options{
         .expand = .none,
@@ -218,7 +218,7 @@ pub fn handCursor(wd: *dvui.WidgetData) void {
 
 /// One tab, keyed by `key`. `name` is what it is called — the view's title — for a screen reader
 /// or a script, which a rail of icons does not otherwise show; it must outlive the frame.
-pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, key: usize, selected: bool, name: []const u8) Tab {
+pub fn tab(self: *Tabs, src: std.lang.SourceLocation, key: usize, selected: bool, name: []const u8) Tab {
     const box = dvui.widgetAlloc(dvui.BoxWidget);
     box.init(src, .{ .dir = .horizontal }, .{
         .role = .tab,
@@ -243,7 +243,7 @@ pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, key: usize, selected: b
 /// (physical) — before whichever tab is drawn next, or past the last. The carried look's drop
 /// slot (`dialogs.dropSlot`), seen blurred through the glass of what is carried over it: the same
 /// slot every strip opens. `id_extra` tells two apart in one frame.
-pub fn gap(self: *Tabs, src: std.builtin.SourceLocation, len: f32, id_extra: usize) void {
+pub fn gap(self: *Tabs, src: std.lang.SourceLocation, len: f32, id_extra: usize) void {
     const s = dvui.currentWindow().natural_scale;
     const vertical = self.opts.dir == .vertical;
     var g = dvui.box(src, .{}, .{

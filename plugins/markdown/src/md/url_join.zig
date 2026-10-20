@@ -16,7 +16,7 @@ pub fn resolve(arena: std.mem.Allocator, base: []const u8, rel: []const u8) ?[]c
     const host_end = std.mem.findScalarPos(u8, base, host_start, '/') orelse base.len;
     if (host_end == host_start) return null; // "https:///foo" — no host
 
-    if (rel[0] == '/') return std.fmt.allocPrint(arena, "{s}{s}", .{ base[0..host_end], rel }) catch null;
+    if (rel[0] == '/') return arena.print("{s}{s}", .{ base[0..host_end], rel }) catch null;
 
     // The document's own name is not part of its directory.
     var dir = std.mem.trimEnd(u8, base, "/");
@@ -34,7 +34,7 @@ pub fn resolve(arena: std.mem.Allocator, base: []const u8, rel: []const u8) ?[]c
     while (std.mem.startsWith(u8, tail, "./")) tail = tail["./".len..];
     if (tail.len == 0) return null;
 
-    return std.fmt.allocPrint(arena, "{s}/{s}", .{ dir, tail }) catch null;
+    return arena.print("{s}/{s}", .{ dir, tail }) catch null;
 }
 
 const testing = std.testing;

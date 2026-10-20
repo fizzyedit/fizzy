@@ -76,7 +76,7 @@ test "most recent first, re-use moves to the top, oldest drops past the cap" {
 
     // Past the cap the oldest falls off.
     var buf: [8]u8 = undefined;
-    for (0..max) |i| try r.use(gpa, try std.fmt.bufPrint(&buf, "c{d}", .{i}));
+    for (0..max) |i| try r.use(gpa, try std.mem.print(&buf, "c{d}", .{i}));
     try std.testing.expectEqual(max, r.ids.items.len);
     try std.testing.expectEqual(@as(?usize, null), r.recency("b"));
     try std.testing.expectEqual(@as(?usize, 0), r.recency("c7"));

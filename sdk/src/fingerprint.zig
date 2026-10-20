@@ -159,7 +159,7 @@ pub fn hashAllShape(h_in: u64, comptime types: anytype, comptime depth: comptime
     }
 }
 
-/// `callconv(.c)` is sugar for `std.builtin.CallingConvention.c`, which is itself
+/// `callconv(.c)` is sugar for `std.lang.CallingConvention.c`, which is itself
 /// `builtin.target.cCallingConvention().?` — a *concrete*, target-specific tag (e.g.
 /// `.x86_64_sysv` on Linux/macOS x86_64, `.x86_64_win` on Windows, `.aarch64_aapcs_darwin` on
 /// Apple aarch64). So two hook signatures declared identically as `callconv(.c)` report
@@ -167,8 +167,8 @@ pub fn hashAllShape(h_in: u64, comptime types: anytype, comptime depth: comptime
 /// target-specificity `hashTypeShape` exists to ignore. Canonicalize that one case back to a
 /// single key; every other calling convention (`.auto`, `.naked`, `.@"inline"`, ...) is already
 /// target-invariant and is hashed as-is.
-fn callingConventionShapeKey(cc: std.builtin.CallingConvention) u64 {
-    if (std.meta.eql(cc, std.builtin.CallingConvention.c)) return 0;
+fn callingConventionShapeKey(cc: std.lang.CallingConvention) u64 {
+    if (std.meta.eql(cc, std.lang.CallingConvention.c)) return 0;
     return 1 + @backingInt(std.meta.activeTag(cc));
 }
 

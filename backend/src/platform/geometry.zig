@@ -61,9 +61,9 @@ var file_io: std.Io = undefined;
 pub fn fileStore(io: std.Io, dir: []const u8) Store {
     const sep = std.fs.path.sep_str;
     file_path = (if (std.mem.endsWith(u8, dir, sep))
-        std.fmt.bufPrint(&file_path_buf, "{s}window_geometry.zon", .{dir})
+        std.mem.print(&file_path_buf, "{s}window_geometry.zon", .{dir})
     else
-        std.fmt.bufPrint(&file_path_buf, "{s}" ++ sep ++ "window_geometry.zon", .{dir})) catch null;
+        std.mem.print(&file_path_buf, "{s}" ++ sep ++ "window_geometry.zon", .{dir})) catch null;
     file_io = io;
     return .{ .load = fileLoad, .save = fileSave };
 }

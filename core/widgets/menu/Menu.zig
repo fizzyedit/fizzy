@@ -99,7 +99,7 @@ child_popup_rect: ?Rect.Physical = null,
 mouse_mode: bool = false,
 
 /// It's expected to call this when `self` is `undefined`
-pub fn init(self: *Menu, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *Menu, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     self.* = Menu{
         .wd = WidgetData.init(src, .{}, defaults.override(opts)),
         .init_opts = init_opts,

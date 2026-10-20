@@ -108,7 +108,7 @@ const max_levels = 24;
 /// Safe to call every frame, any time before `init`/`deinit` - in
 /// particular, before other same-frame code needs to mutate fields on the
 /// returned pointer (e.g. a slider bound to `&backdrop.radius_px`).
-pub fn get(src: std.builtin.SourceLocation) *BlurBackdrop {
+pub fn get(src: std.lang.SourceLocation) *BlurBackdrop {
     const id = dvui.parentGet().extendId(src, 0);
     const self = dvui.dataGetPtrDefault(null, id, "blur_backdrop", BlurBackdrop, .{});
     dvui.dataSetDeinitFunction(null, id, "blur_backdrop", &releaseTexture);

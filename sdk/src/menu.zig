@@ -4,7 +4,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 
 pub fn menuItem(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     label_str: []const u8,
     init_opts: dvui.MenuItemWidget.InitOptions,
     opts: dvui.Options,
@@ -23,7 +23,7 @@ pub fn menuItem(
 }
 
 pub fn menuItemWithChevron(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     label_str: []const u8,
     init_opts: dvui.MenuItemWidget.InitOptions,
     opts: dvui.Options,
@@ -54,7 +54,7 @@ pub fn menuItemWithChevron(
 }
 
 pub fn submenu(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     label_str: []const u8,
     opts: dvui.Options,
     draw_body: *const fn () anyerror!void,

@@ -130,7 +130,7 @@ fn announceEnd(gpa: std.mem.Allocator, host: *sdk.Host, s: Sessions.Session) voi
 
 /// A session id as its header carries it: 16 hex digits.
 pub fn formatSession(id: u64, buf: *[16]u8) []const u8 {
-    return std.fmt.bufPrint(buf, "{x:0>16}", .{id}) catch unreachable;
+    return std.mem.print(buf, "{x:0>16}", .{id}) catch unreachable;
 }
 
 /// A header's session id, or null when it is not one.
@@ -216,7 +216,7 @@ pub fn handle(host: *sdk.Host, body: []const u8, arena: std.mem.Allocator, sink:
         defer host.endAct(outer);
         return callTool(host, arena, id, params, sink);
     }
-    return .{ .now = try failure(arena, id, -32601, try std.fmt.allocPrint(arena, "no method {s}", .{name})) };
+    return .{ .now = try failure(arena, id, -32601, try arena.print("no method {s}", .{name})) };
 }
 
 /// A tool call's answer once its command answers later (`Reply.later`).
@@ -323,7 +323,7 @@ fn writeTools(s: *Stringify, list: []const Tool, arena: std.mem.Allocator) opena
         try s.write(c.title);
         try s.objectField("description");
         // The id as the app names it: what history, keybindings and `POST /commands/{id}` say.
-        try s.write(try std.fmt.allocPrint(arena, "{s} ({s}'s command {s}{s})", .{
+        try s.write(try arena.print("{s} ({s}'s command {s}{s})", .{
             c.title,
             c.owner.?.id,
             c.id,
@@ -355,7 +355,7 @@ fn callTool(host: *sdk.Host, arena: std.mem.Allocator, id: []const u8, params: ?
     const p = params orelse return .{ .now = try failure(arena, id, -32602, "tools/call takes .name and .arguments") };
     const name = if (p.get("name")) |n| if (n == .string) n.string else null else null;
     const tool = name orelse return .{ .now = try failure(arena, id, -32602, "tools/call needs a name") };
-    const c = try lookup(host, arena, tool) orelse return .{ .now = try failure(arena, id, -32602, try std.fmt.allocPrint(arena, "no tool {s}", .{tool})) };
+    const c = try lookup(host, arena, tool) orelse return .{ .now = try failure(arena, id, -32602, try arena.print("no tool {s}", .{tool})) };
     // The arguments, through the same JSON-to-ZON edge as a REST call (`json.zig`).
     // Absent and null are none.
     const arguments = if (p.get("arguments")) |a| if (a == .null) "{}" else try Stringify.valueAlloc(arena, a, .{}) else "{}";
@@ -384,10 +384,10 @@ fn toolResult(arena: std.mem.Allocator, id: []const u8, text: []const u8, is_err
 
 /// `{"jsonrpc":"2.0","id":<id>,"result":<body>}`: `id` and `body` already JSON.
 fn result(arena: std.mem.Allocator, id: []const u8, body: []const u8) error{OutOfMemory}![]const u8 {
-    return std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}", .{ id, body });
+    return arena.print("{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}", .{ id, body });
 }
 
 fn failure(arena: std.mem.Allocator, id: []const u8, code: i32, message: []const u8) error{OutOfMemory}![]const u8 {
     const err = try Stringify.valueAlloc(arena, .{ .code = code, .message = message }, .{});
-    return std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{s}}}", .{ id, err });
+    return arena.print("{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{s}}}", .{ id, err });
 }

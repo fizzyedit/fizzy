@@ -70,7 +70,7 @@ pub fn request(doc_id: u64, q: sdk.Plugin.SaveQuestion, then: Then) void {
 
 pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) !void {}
 
-fn button(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
+fn button(src: std.lang.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
     const opts: dvui.Options = .{
         .tab_index = tab_idx,
         .style = style,
@@ -143,7 +143,7 @@ fn instead(q: Pending) void {
     const doc = editor.app.docById(q.doc_id) orelse return;
     const path = doc.owner.documentPath(doc);
     const stem = path[0 .. path.len - std.fs.path.extension(path).len];
-    const new_path = std.fmt.allocPrint(gpa, "{s}{s}", .{ stem, q.instead_extension }) catch return;
+    const new_path = gpa.print("{s}{s}", .{ stem, q.instead_extension }) catch return;
     defer gpa.free(new_path);
     editor.save_answered.put(gpa, q.doc_id, {}) catch {};
     editor.doc_io.save(doc, new_path) catch |err| {

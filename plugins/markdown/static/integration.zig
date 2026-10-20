@@ -28,7 +28,7 @@ fn applyImports(module: *std.Build.Module, imports: ModuleImports) void {
 pub fn addMd4zig(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     module: *std.Build.Module,
 ) void {
     module.addImport("md4zig", b.dependency("md4zig", .{
@@ -40,7 +40,7 @@ pub fn addMd4zig(
 pub fn addStaticModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     imports: ModuleImports,
     consumer: *std.Build.Module,
 ) *std.Build.Module {
@@ -61,7 +61,7 @@ pub fn addStaticModule(
 pub fn addDylib(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     imports: ModuleImports,
 ) *std.Build.Step.Compile {
     const created = helpers.addDylib(b, .{

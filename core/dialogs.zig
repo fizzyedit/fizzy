@@ -843,7 +843,7 @@ pub fn dialogCanvasPointerInputSuppressed() bool {
 
 /// Creates a new file dialog with necessary data set and returns the id mutex.
 /// Caller must unlock the mutex after setting any additional data on the id.
-pub fn dialog(src: std.builtin.SourceLocation, opts: DialogOptions) dvui.IdMutex {
+pub fn dialog(src: std.lang.SourceLocation, opts: DialogOptions) dvui.IdMutex {
     // The default frame is the host's where there is one (see `HostChrome`); a caller that
     // brought its own `windowFn` keeps it.
     const window_fn: dvui.Dialog.DisplayFn = if (opts.windowFn == &dialogWindow)
@@ -1130,7 +1130,7 @@ pub fn dialogTitle(id: dvui.Id) ?[]const u8 {
 /// A button in a dialog's body, as its footer's are: what a dialog with buttons of its own
 /// (`hide_footer`) draws them with. Named `fizzy.dialog:<title>:<label>` for a tape, a test or an
 /// agent to click (docs/AUTOMATION.md, "Anchors"); `dialog_id` is the id its `displayFn` was given.
-pub fn bodyButton(src: std.builtin.SourceLocation, dialog_id: dvui.Id, label: []const u8, look: dvui.Theme.Style.Name, tab_index: u16, id_extra: usize) bool {
+pub fn bodyButton(src: std.lang.SourceLocation, dialog_id: dvui.Id, label: []const u8, look: dvui.Theme.Style.Name, tab_index: u16, id_extra: usize) bool {
     const opts: dvui.Options = .{
         .tab_index = tab_index,
         .style = look,
@@ -1350,7 +1350,7 @@ pub const SpinnerOptions = struct {
     end_time: i32 = 1_000_000,
 };
 
-pub fn spinner(src: std.builtin.SourceLocation, spinner_opts: SpinnerOptions, opts: dvui.Options) void {
+pub fn spinner(src: std.lang.SourceLocation, spinner_opts: SpinnerOptions, opts: dvui.Options) void {
     var defaults: dvui.Options = .{
         .name = "Spinner",
         .min_size_content = .{ .w = 50, .h = 50 },
@@ -1402,7 +1402,7 @@ pub fn spinner(src: std.builtin.SourceLocation, spinner_opts: SpinnerOptions, op
 /// A toast: `dvui.toast` with fizzy's look (`toastDisplay`) in place of dvui's, which paints a
 /// plain theme-coloured label whatever the window's material. Every toast the app raises goes
 /// through here; a toast that names its own `displayFn` keeps it.
-pub fn toast(src: std.builtin.SourceLocation, opts: dvui.ToastOptions) void {
+pub fn toast(src: std.lang.SourceLocation, opts: dvui.ToastOptions) void {
     var o = opts;
     if (o.displayFn == @as(dvui.Dialog.DisplayFn, dvui.toastDisplay)) o.displayFn = toastDisplay;
     dvui.toast(src, o);
@@ -1519,7 +1519,7 @@ pub fn bubbleSpinnerSaveInCheckPhase(complete_elapsed_ns: i128) bool {
 /// `options.color(.text)` is the bubbles' colour. Runs at the motion speed; with motion off it
 /// stands still, and the finish is the check.
 pub fn bubbleSpinner(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     opts: dvui.Options,
     init: BubbleSpinnerInit,
 ) void {

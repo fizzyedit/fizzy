@@ -318,7 +318,7 @@ pub fn closed(self: *Tracks, doc_id: u64) void {
 fn keptFile(self: *const Tracks, gpa: std.mem.Allocator, path: []const u8) ?[]u8 {
     const dir = self.dir orelse return null;
     var name: [16 + ".track".len]u8 = undefined;
-    _ = std.fmt.bufPrint(&name, "{x:0>16}.track", .{std.hash.Wyhash.hash(0, path)}) catch return null;
+    _ = std.mem.print(&name, "{x:0>16}.track", .{std.hash.Wyhash.hash(0, path)}) catch return null;
     return std.fs.path.join(gpa, &.{ dir, &name }) catch null;
 }
 
@@ -520,7 +520,7 @@ fn encodeKept(self: *Tracks, t: *const Track) ?KeptFile {
 pub fn writeKept(k: KeptFile, part: []const u8) bool {
     if (comptime !can_keep) return false;
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const beside = std.fmt.bufPrint(&buf, "{s}.{s}", .{ k.file, part }) catch return false;
+    const beside = std.mem.print(&buf, "{s}.{s}", .{ k.file, part }) catch return false;
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(dvui.io, std.fs.path.dirname(k.file).?) catch {};
     cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = k.bytes }) catch |err| {
@@ -1042,7 +1042,7 @@ pub fn exportTape(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     for (t.steps.items[first..to], ops[2..]) |r, *op| {
         op.* = .{ .at = timing.place(r), .ms = r.ms, .do = .{ .step = .{ .file = name, .effect = t.effect(r), .motion = t.motion(r) } } };
     }
-    const title = try std.fmt.allocPrint(arena, "How {s} was made", .{name});
+    const title = try arena.print("How {s} was made", .{name});
     return tape.binary.encode(gpa, .{ .name = "share", .title = title, .ops = ops, .keyframes = keyframes }, .{ .deflate = true }) catch return error.OutOfMemory;
 }
 
@@ -1153,7 +1153,7 @@ pub fn exportLine(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, gpa: std.m
     for (recs, ops[2..]) |r, *op| {
         op.* = .{ .at = timing.place(r), .ms = r.ms, .do = .{ .step = .{ .file = name, .effect = t.effect(r), .motion = t.motion(r) } } };
     }
-    const title = try std.fmt.allocPrint(arena, "How {s} was made", .{name});
+    const title = try arena.print("How {s} was made", .{name});
     return tape.binary.encode(gpa, .{ .name = "share", .title = title, .ops = ops, .keyframes = keyframes }, .{ .deflate = true }) catch return error.OutOfMemory;
 }
 

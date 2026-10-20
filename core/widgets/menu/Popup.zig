@@ -28,7 +28,7 @@ menu: ?Menu = null,
 floating: FloatingMenu,
 
 /// Shows the popup and returns it while `open_flag.*` is true; null (and nothing drawn) when not.
-pub fn active(self: *Popup, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: dvui.Options) ?*Popup {
+pub fn active(self: *Popup, src: std.lang.SourceLocation, init_opts: InitOptions, opts: dvui.Options) ?*Popup {
     self.* = .{
         .init_opts = init_opts,
         .floating = undefined,

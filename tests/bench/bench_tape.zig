@@ -17,7 +17,7 @@ fn nowNs() i96 {
 /// A tape of `n` ops, as a recorder might write one.
 fn recording(arena: std.mem.Allocator, n: usize) !Tape {
     var tags: [40][]const u8 = undefined;
-    for (&tags, 0..) |*t, i| t.* = try std.fmt.allocPrint(arena, "workbench.file:demo://rec/src/file_{d}.zig", .{i});
+    for (&tags, 0..) |*t, i| t.* = try arena.print("workbench.file:demo://rec/src/file_{d}.zig", .{i});
     const ops = try arena.alloc(Tape.Op, n);
     ops[0] = .{ .at = 0, .do = .{ .keyframe = 0 } };
     var prng: std.Random.DefaultPrng = .init(0x7a9e);

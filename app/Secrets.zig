@@ -135,7 +135,7 @@ fn save(self: *Secrets) !void {
     if (is_wasm) return core.fs.write(self.io, self.path, out.written());
     // Created `0600`, written whole, then moved into place: never a moment where the file
     // is world-readable or half-written.
-    const tmp = try std.fmt.allocPrint(self.gpa, "{s}.tmp", .{self.path});
+    const tmp = try self.gpa.print("{s}.tmp", .{self.path});
     defer self.gpa.free(tmp);
     {
         var file = try std.Io.Dir.createFileAbsolute(self.io, tmp, .{ .permissions = @fromBackingInt(@intCast(0o600)), .truncate = true });

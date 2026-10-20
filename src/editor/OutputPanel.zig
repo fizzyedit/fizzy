@@ -217,7 +217,7 @@ fn drawTabStrip(scopes: []const []const u8) void {
     }
 }
 
-fn drawTab(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize, selected: bool) void {
+fn drawTab(src: std.lang.SourceLocation, label: []const u8, id_extra: usize, selected: bool) void {
     const clicked = dvui.button(src, label, .{}, .{
         .id_extra = id_extra,
         .expand = .horizontal,

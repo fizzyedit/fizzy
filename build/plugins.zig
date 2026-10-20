@@ -41,7 +41,7 @@ pub fn linksFizzys(plugins: []const BundledPlugin, name: []const u8) bool {
 /// What one executable gives the plugins it links.
 pub const Wiring = struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     dvui: *std.Build.Module,
     core: *std.Build.Module,
     sdk: *std.Build.Module,

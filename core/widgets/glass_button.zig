@@ -107,7 +107,7 @@ pub const BubbleOptions = struct {
 /// while it grows in) with `icon` (tvg) in it and a tooltip. Floats over whatever is drawn there,
 /// clipped to the screen it is on (the main window, or a float popped out of it). True on the
 /// frame it is clicked.
-pub fn bubble(src: std.builtin.SourceLocation, rect: dvui.Rect, icon: []const u8, opts: BubbleOptions) bool {
+pub fn bubble(src: std.lang.SourceLocation, rect: dvui.Rect, icon: []const u8, opts: BubbleOptions) bool {
     var fw: dvui.FloatingWidget = undefined;
     fw.init(src, .{}, .{
         .rect = rect,

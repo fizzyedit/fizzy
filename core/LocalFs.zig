@@ -192,7 +192,7 @@ fn listImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8) vfs.
             .directory => .dir,
             .file => .file,
             else => blk: {
-                const abs = std.fmt.bufPrint(&path_buf, "{s}" ++ std.fs.path.sep_str ++ "{s}", .{ path, entry.name }) catch break :blk .file;
+                const abs = std.mem.print(&path_buf, "{s}" ++ std.fs.path.sep_str ++ "{s}", .{ path, entry.name }) catch break :blk .file;
                 break :blk if (isDirAbsolute(io, abs)) .dir else .file;
             },
         };

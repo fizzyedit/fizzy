@@ -24,7 +24,7 @@ drag_ending: bool = false,
 reorderable_size: Size = .{},
 found_slot: bool = false,
 
-pub fn init(self: *ReorderWidget, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *ReorderWidget, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     const defaults = Options{ .name = "Reorder" };
     const wd = WidgetData.init(src, .{}, defaults.override(opts));
     self.* = .{
@@ -212,7 +212,7 @@ pub const draggableInitOptions = struct {
     color: ?dvui.Color = null,
 };
 
-pub fn draggable(src: std.builtin.SourceLocation, init_opts: draggableInitOptions, opts: dvui.Options) ?dvui.Point.Physical {
+pub fn draggable(src: std.lang.SourceLocation, init_opts: draggableInitOptions, opts: dvui.Options) ?dvui.Point.Physical {
     var iw: dvui.IconWidget = undefined;
     iw.init(src, "reorder_drag_icon", init_opts.tvg_bytes orelse dvui.entypo.menu, .{ .fill_color = .{ .color = init_opts.color }, .stroke_color = .{ .color = init_opts.color } }, opts);
     var ret: ?dvui.Point.Physical = null;
@@ -255,7 +255,7 @@ pub fn draggable(src: std.builtin.SourceLocation, init_opts: draggableInitOption
     return ret;
 }
 
-pub fn reorderable(self: *ReorderWidget, src: std.builtin.SourceLocation, init_opts: Reorderable.InitOptions, opts: Options) *Reorderable {
+pub fn reorderable(self: *ReorderWidget, src: std.lang.SourceLocation, init_opts: Reorderable.InitOptions, opts: Options) *Reorderable {
     const ret = dvui.widgetAlloc(Reorderable);
     ret.init(src, self, init_opts, opts);
     ret.install();
@@ -300,7 +300,7 @@ pub const Reorderable = struct {
     target_rs: ?dvui.RectScale = null,
     target_id: ?dvui.Id = null,
 
-    pub fn init(self: *Reorderable, src: std.builtin.SourceLocation, reorder: *ReorderWidget, init_opts: Reorderable.InitOptions, opts: Options) void {
+    pub fn init(self: *Reorderable, src: std.lang.SourceLocation, reorder: *ReorderWidget, init_opts: Reorderable.InitOptions, opts: Options) void {
         const defaults = Options{ .name = "Reorderable" };
         const options = defaults.override(opts);
         self.* = .{

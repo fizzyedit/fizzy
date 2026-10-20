@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
         const root = try cwd.realPathFileAlloc(io, args[i], arena);
         const dir = std.fs.path.dirname(root) orelse ".";
         try binaries.append(arena, .{
-            .root_dir = try std.fmt.allocPrint(arena, "{s}{c}", .{ dir, std.fs.path.sep }),
+            .root_dir = try arena.print("{s}{c}", .{ dir, std.fs.path.sep }),
             .bytes = try cwd.readFileAlloc(io, args[i + 1], arena, .unlimited),
         });
     }
@@ -126,7 +126,7 @@ fn reached(arena: std.mem.Allocator, binaries: []const Binary, file: []const u8,
         if (!std.mem.startsWith(u8, file, b.root_dir)) continue;
         const rel = file[b.root_dir.len .. file.len - ".zig".len];
         const fqn = std.mem.replaceOwned(u8, arena, rel, std.fs.path.sep_str, ".") catch return false;
-        const want = std.fmt.allocPrint(arena, "{s}.{s}.{s}", .{ fqn, t.kind, t.name }) catch return false;
+        const want = arena.print("{s}.{s}.{s}", .{ fqn, t.kind, t.name }) catch return false;
         if (std.mem.find(u8, b.bytes, want) != null) return true;
     }
     return false;

@@ -21,9 +21,9 @@ fn downloadNameWithExtension(allocator: std.mem.Allocator, filename: []const u8,
     const base = std.fs.path.basename(filename);
     const stem: []const u8 = if (std.mem.findLast(u8, base, ".")) |i| base[0..i] else base;
     if (stem.len == 0) {
-        return try std.fmt.allocPrint(allocator, "download{s}", .{ext});
+        return try allocator.print("download{s}", .{ext});
     }
-    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ stem, ext });
+    return try allocator.print("{s}{s}", .{ stem, ext });
 }
 
 pub fn downloadBytes(filename: []const u8, data: []const u8) !void {

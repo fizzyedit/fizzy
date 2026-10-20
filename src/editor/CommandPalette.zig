@@ -159,7 +159,7 @@ const Asking = struct {
 
     /// Append `.key = zon, `; false when it does not fit.
     fn add(self: *Asking, key: []const u8, zon: []const u8) bool {
-        const out = std.fmt.bufPrint(self.given_buf[self.given_len..], ".{f} = {s}, ", .{ std.zig.fmtId(key), zon }) catch return false;
+        const out = std.mem.print(self.given_buf[self.given_len..], ".{f} = {s}, ", .{ std.zig.fmtId(key), zon }) catch return false;
         self.given_len += out.len;
         return true;
     }
@@ -301,7 +301,7 @@ fn answer(self: *CommandPalette, editor: *Editor, text: []const u8, row: ?usize)
         return;
     }
 
-    const args = std.fmt.allocPrint(arena, ".{{ {s}}}", .{asking.given()}) catch return;
+    const args = arena.print(".{{ {s}}}", .{asking.given()}) catch return;
     switch (editor.app.host.callCommand(asking.id(), args, arena)) {
         .ok => {
             self.activated = row;
@@ -487,7 +487,7 @@ fn shouldShowCommand(editor: *Editor, id: []const u8) bool {
         if (v.fizzy_id != null) return false;
         const doc = editor.activeDoc() orelse return false;
         var buf: [128]u8 = undefined;
-        const want = std.fmt.bufPrint(&buf, "{s}.{s}", .{ doc.owner.id, v.action }) catch return false;
+        const want = std.mem.print(&buf, "{s}.{s}", .{ doc.owner.id, v.action }) catch return false;
         return std.mem.eql(u8, id, want);
     }
     return true;

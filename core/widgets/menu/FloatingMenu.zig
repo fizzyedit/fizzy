@@ -123,7 +123,7 @@ scaler: dvui.ScaleWidget,
 scroll: ScrollAreaWidget,
 
 /// It's expected to call this when `self` is `undefined`
-pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *FloatingMenu, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     self.* = .{
         // the widget itself doesn't have any styling, it comes from the
         // embedded Menu

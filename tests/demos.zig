@@ -249,7 +249,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         p.unload();
         try dvui.testing.settle(headlessFrame);
         // The person's own split first: a file of theirs in a pane of its own beside the zip's.
-        const readme = try std.fmt.allocPrint(gpa, "{s}/notes.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
+        const readme = try gpa.print("{s}/notes.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
         defer gpa.free(readme);
         try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = readme, .data = "# Notes\n" });
         const beside = wb.newGroupingID();
@@ -296,7 +296,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     // theirs — through a play, a seek back and an end, with settings.zon never written.
     {
         const wb = &app.editor.workbench;
-        const draft = try std.fmt.allocPrint(gpa, "{s}/draft.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
+        const draft = try gpa.print("{s}/draft.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
         defer gpa.free(draft);
         try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = draft, .data = "# Draft\n" });
         _ = try app.editor.openFilePath(draft, wb.currentGroupingID());
@@ -304,7 +304,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         while (host.docFromPath(draft) == null and frames < 200) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
         try dvui.testing.settle(headlessFrame);
         const doc = host.docFromPath(draft) orelse return error.TestUnexpectedResult;
-        const write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"# Draft, not saved\\n\" }}", .{draft});
+        const write = try gpa.print(".{{ .path = \"{s}\", .text = \"# Draft, not saved\\n\" }}", .{draft});
         defer gpa.free(write);
         try std.testing.expect(host.callCommand("text.write", write, host.arena()) == .ok);
         try dvui.testing.settle(headlessFrame);
@@ -344,7 +344,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         const back = host.docFromPath(draft) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(doc.id, back.id);
         try std.testing.expect(back.owner.isDirty(back));
-        const read_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{draft});
+        const read_args = try gpa.print(".{{ .path = \"{s}\" }}", .{draft});
         defer gpa.free(read_args);
         const out = host.callCommand("text.read", read_args, host.arena()).ok orelse return error.TestUnexpectedResult;
         try std.testing.expect(std.mem.find(u8, out, "# Draft, not saved") != null);

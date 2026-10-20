@@ -751,7 +751,7 @@ pub fn allocNextUntitledPath(app: *App) ![]u8 {
             max_n = @max(max_n, 1);
         }
     }
-    return std.fmt.allocPrint(app.gpa, "untitled-{d}", .{max_n + 1});
+    return app.gpa.print("untitled-{d}", .{max_n + 1});
 }
 
 pub fn abortSaveAllQuit(app: *App) void {
@@ -1009,7 +1009,7 @@ pub fn pluginCaseClash(app: *App, buf: []u8, id: []const u8) ?CaseClash {
 /// installed (`pluginCaseClash`, `Host.registerPlugin`): logged, and shown in the store as a failure
 /// that says so. `path` is the build's, when there is one to read a version from.
 pub fn recordCaseClash(app: *App, id: []const u8, other: []const u8, path: ?[]const u8) void {
-    const why = std.fmt.allocPrint(app.arena.allocator(), "id '{s}' differs only in case from the plugin '{s}'", .{ id, other }) catch "id differs only in case from another plugin";
+    const why = app.arena.allocator().print("id '{s}' differs only in case from the plugin '{s}'", .{ id, other }) catch "id differs only in case from another plugin";
     std.log.warn("plugin '{s}': {s}; not loaded", .{ id, why });
     // The web's loader has no build on disk to read a version from.
     const probe = if (comptime builtin.target.cpu.arch == .wasm32) null else if (path) |p| PluginLoader.probeVersionInfo(p) else null;
@@ -1192,7 +1192,7 @@ const load_failure_reasons = .{
 };
 
 pub fn formatPluginProbeDetail(allocator: std.mem.Allocator, info: PluginLoader.PluginVersionInfo) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "plugin {d}.{d}.{d}, min SDK {d}.{d}.{d}", .{
+    return allocator.print("plugin {d}.{d}.{d}, min SDK {d}.{d}.{d}", .{
         info.plugin_version.major,
         info.plugin_version.minor,
         info.plugin_version.patch,

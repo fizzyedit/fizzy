@@ -284,7 +284,7 @@ fn buildQualified(gpa: std.mem.Allocator, prefix: []const u8, base: []const []co
         dst.* = if (std.mem.startsWith(u8, src, prefix) and src.len > prefix.len and src[prefix.len] == '.')
             try gpa.dupe(u8, src)
         else
-            try std.fmt.allocPrint(gpa, "{s}.{s}", .{ prefix, src });
+            try gpa.print("{s}.{s}", .{ prefix, src });
     }
     return entry;
 }

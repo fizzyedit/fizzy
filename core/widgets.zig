@@ -62,13 +62,13 @@ pub const orb = @import("widgets/orb.zig");
 pub const DropdownWidget = @import("widgets/Dropdown.zig");
 
 /// `dvui.menu` / `dvui.menuItem` / `dvui.floatingMenu`, over the copies above.
-pub fn menu(src: std.builtin.SourceLocation, dir: dvui.enums.Direction, opts: dvui.Options) *MenuWidget {
+pub fn menu(src: std.lang.SourceLocation, dir: dvui.enums.Direction, opts: dvui.Options) *MenuWidget {
     var ret = dvui.widgetAlloc(MenuWidget);
     ret.init(src, .{ .dir = dir }, opts);
     return ret;
 }
 
-pub fn menuItem(src: std.builtin.SourceLocation, init_opts: MenuItemWidget.InitOptions, opts: dvui.Options) *MenuItemWidget {
+pub fn menuItem(src: std.lang.SourceLocation, init_opts: MenuItemWidget.InitOptions, opts: dvui.Options) *MenuItemWidget {
     var ret = dvui.widgetAlloc(MenuItemWidget);
     ret.init(src, init_opts, opts);
     ret.processEvents();
@@ -78,14 +78,14 @@ pub fn menuItem(src: std.builtin.SourceLocation, init_opts: MenuItemWidget.InitO
 
 /// A right-click / touch-hold area over `init_opts.rect` — use this, not `dvui.context`: see
 /// `ContextWidget`'s header for why a touch hold needs the copy.
-pub fn context(src: std.builtin.SourceLocation, init_opts: ContextWidget.InitOptions, opts: dvui.Options) *ContextWidget {
+pub fn context(src: std.lang.SourceLocation, init_opts: ContextWidget.InitOptions, opts: dvui.Options) *ContextWidget {
     var ret = dvui.widgetAlloc(ContextWidget);
     ret.init(src, init_opts, opts);
     ret.processEvents();
     return ret;
 }
 
-pub fn floatingMenu(src: std.builtin.SourceLocation, init_opts: FloatingMenuWidget.InitOptions, opts: dvui.Options) *FloatingMenuWidget {
+pub fn floatingMenu(src: std.lang.SourceLocation, init_opts: FloatingMenuWidget.InitOptions, opts: dvui.Options) *FloatingMenuWidget {
     var ret = dvui.widgetAlloc(FloatingMenuWidget);
     ret.init(src, init_opts, opts);
     return ret;
@@ -94,7 +94,7 @@ pub fn floatingMenu(src: std.builtin.SourceLocation, init_opts: FloatingMenuWidg
 /// `dvui.tooltip` drawn as fizzy's floating surface (`dialogs.tooltipSurface`): a line of text
 /// in a frosted, rounded, shadowed card like the dialogs and menus, rather than dvui's opaque box.
 /// Same arguments; `opts` styles the text.
-pub fn tooltip(src: std.builtin.SourceLocation, init_opts: FloatingTooltipWidget.InitOptions, comptime fmt: []const u8, fmt_args: anytype, opts: dvui.Options) void {
+pub fn tooltip(src: std.lang.SourceLocation, init_opts: FloatingTooltipWidget.InitOptions, comptime fmt: []const u8, fmt_args: anytype, opts: dvui.Options) void {
     var tt: FloatingTooltipWidget = undefined;
     const defaults: dvui.Options = .{ .role = .tooltip, .padding = dvui.Rect.all(6) };
     tt.init(src, init_opts, defaults.override(dialogs.tooltipOptions(0)).override(opts));
@@ -108,7 +108,7 @@ pub fn tooltip(src: std.builtin.SourceLocation, init_opts: FloatingTooltipWidget
 }
 
 /// `dvui.popup` on this module's menu chain, so it can be frosted — see `PopupWidget`.
-pub fn popup(src: std.builtin.SourceLocation, init_opts: PopupWidget.InitOptions, opts: dvui.Options) ?*PopupWidget {
+pub fn popup(src: std.lang.SourceLocation, init_opts: PopupWidget.InitOptions, opts: dvui.Options) ?*PopupWidget {
     var ret = dvui.widgetAlloc(PopupWidget);
     return ret.active(src, init_opts, opts);
 }
@@ -154,7 +154,7 @@ pub const MenuRowOptions = struct {
 /// two menus in the app can disagree about what a row is.
 ///
 /// Returns the rect a submenu would open from, or null when not activated.
-pub fn menuRow(src: std.builtin.SourceLocation, label: []const u8, opts: MenuRowOptions) ?dvui.Rect.Natural {
+pub fn menuRow(src: std.lang.SourceLocation, label: []const u8, opts: MenuRowOptions) ?dvui.Rect.Natural {
     var mi = menuItem(src, .{ .submenu = opts.submenu }, menuRowOptions(.{ .expand = .horizontal, .id_extra = opts.id_extra }));
     const ret: ?dvui.Rect.Natural = if (opts.enabled) mi.activeRect() else null;
     if (opts.command) |id| anchor.mark(mi.data(), "fizzy.command:{s}", .{id});
@@ -181,7 +181,7 @@ pub fn menuRow(src: std.builtin.SourceLocation, label: []const u8, opts: MenuRow
 /// A row with a label and nothing else — `menuRow` with no icon or shortcut. Kept for the callers
 /// that only name a verb; it is the same row, so it sits in the same column as its neighbours.
 pub fn menuItemLabel(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     label_str: []const u8,
     init_opts: MenuItemWidget.InitOptions,
     opts: dvui.Options,
@@ -193,7 +193,7 @@ pub fn menuItemLabel(
 /// field's Copy/Paste menu. One control, so the file tree, the settings, the plugin store and the
 /// region picker read as the same thing and cannot drift apart. Returns the text, which borrows
 /// the field's buffer — read it this frame.
-pub fn filterRow(src: std.builtin.SourceLocation, placeholder: []const u8, opts: dvui.Options) []const u8 {
+pub fn filterRow(src: std.lang.SourceLocation, placeholder: []const u8, opts: dvui.Options) []const u8 {
     var row = dvui.box(src, .{ .dir = .horizontal }, (dvui.Options{ .expand = .horizontal }).override(opts));
     defer row.deinit();
     icon_tex.icon(
@@ -253,7 +253,7 @@ pub fn textEntryMenu(te: *dvui.TextEntryWidget) bool {
     return false;
 }
 
-pub fn contextMenu(src: std.builtin.SourceLocation, at: dvui.Point.Natural, opts: dvui.Options) *FloatingMenuWidget {
+pub fn contextMenu(src: std.lang.SourceLocation, at: dvui.Point.Natural, opts: dvui.Options) *FloatingMenuWidget {
     // `.popup`, not the `.menu` default: a right-click menu is not part of a menubar chain, and
     // the difference that matters is that a popup closes when you click outside it. The default
     // left a context menu standing while the click that should have dismissed it went somewhere
@@ -335,7 +335,7 @@ pub fn treeGlyphColor(theme: dvui.Theme) dvui.Color {
 /// itself to the slot by the proportions dvui remembers for its id. Drawn under one id, a
 /// just-collapsed caret was fitted by the down arrow's proportions and stayed stretched until
 /// something redrew the row, so each direction has an id of its own.
-pub fn treeCaret(src: std.builtin.SourceLocation, expanded: bool, color: dvui.Color) void {
+pub fn treeCaret(src: std.lang.SourceLocation, expanded: bool, color: dvui.Color) void {
     var slot = treeRowGlyph(src, .{});
     defer slot.deinit();
     _ = icon_tex.icon(
@@ -373,7 +373,7 @@ pub fn treeRowIconOptions(over: dvui.Options) dvui.Options {
 /// a floor that any large icon can push open.
 ///
 /// Caller deinits, as with `dvui.box`.
-pub fn treeRowGlyph(src: std.builtin.SourceLocation, opts: dvui.Options) *dvui.BoxWidget {
+pub fn treeRowGlyph(src: std.lang.SourceLocation, opts: dvui.Options) *dvui.BoxWidget {
     const size = treeRowGlyphSize();
     const defaults: dvui.Options = .{
         .gravity_y = 0.5,
@@ -397,7 +397,7 @@ pub fn scrollShadows(area: *dvui.ScrollAreaWidget) void {
     draw.drawScrollEdgeShadows(rs, rs, area.si, .{});
 }
 
-pub fn floatingWindow(src: std.builtin.SourceLocation, floating_opts: FloatingWindowWidget.InitOptions, opts: dvui.Options) *FloatingWindowWidget {
+pub fn floatingWindow(src: std.lang.SourceLocation, floating_opts: FloatingWindowWidget.InitOptions, opts: dvui.Options) *FloatingWindowWidget {
     var ret = dvui.widgetAlloc(FloatingWindowWidget);
     ret.init(src, floating_opts, opts);
     ret.processEventsBefore();
@@ -431,7 +431,7 @@ pub fn hoverRestFill(hover: dvui.Color) dvui.Color {
     return hover.opacity(0);
 }
 
-pub fn reorder(src: std.builtin.SourceLocation, init_opts: ReorderWidget.InitOptions, opts: dvui.Options) *ReorderWidget {
+pub fn reorder(src: std.lang.SourceLocation, init_opts: ReorderWidget.InitOptions, opts: dvui.Options) *ReorderWidget {
     var ret = dvui.widgetAlloc(ReorderWidget);
     ret.init(src, init_opts, opts);
     ret.processEvents();

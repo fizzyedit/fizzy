@@ -70,9 +70,9 @@ pub const Catalog = struct {
     /// `abi_fingerprint_hex` is this host's own fingerprint as `"0x..."`, matching a
     /// `catalog/<abi_fingerprint>/releases.json` path segment. Both are duped into the Catalog.
     pub fn init(allocator: std.mem.Allocator, io: std.Io, base_url: []const u8, abi_fingerprint_hex: []const u8) !Catalog {
-        const summary_url = try std.fmt.allocPrint(allocator, "{s}/summary.json", .{base_url});
+        const summary_url = try allocator.print("{s}/summary.json", .{base_url});
         errdefer allocator.free(summary_url);
-        const shard_url = try std.fmt.allocPrint(allocator, "{s}/{s}/releases.json", .{ base_url, abi_fingerprint_hex });
+        const shard_url = try allocator.print("{s}/{s}/releases.json", .{ base_url, abi_fingerprint_hex });
         return .{ .allocator = allocator, .io = io, .summary_url = summary_url, .shard_url = shard_url };
     }
 
@@ -263,7 +263,7 @@ fn cacheBust(allocator: std.mem.Allocator, io: std.Io, url: []const u8) ?[]u8 {
     const sep: u8 = if (std.mem.findScalar(u8, url, '?') != null) '&' else '?';
     bust_counter += 1;
     const nonce = @as(u64, @truncate(@as(u96, @bitCast(std.Io.Clock.boot.now(io).nanoseconds)))) +% bust_counter;
-    return std.fmt.allocPrint(allocator, "{s}{c}_={d}", .{ url, sep, nonce }) catch null;
+    return allocator.print("{s}{c}_={d}", .{ url, sep, nonce }) catch null;
 }
 
 test {

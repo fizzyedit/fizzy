@@ -268,8 +268,8 @@ pub fn basename(path: []const u8) []const u8 {
 
 /// Owned. `join("/", "a")` → `"/a"`; `join("/a", "b")` → `"/a/b"`.
 pub fn join(allocator: Allocator, dir: []const u8, name: []const u8) Allocator.Error![]u8 {
-    if (isRoot(dir)) return std.fmt.allocPrint(allocator, "/{s}", .{name});
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name });
+    if (isRoot(dir)) return allocator.print("/{s}", .{name});
+    return allocator.print("{s}/{s}", .{ dir, name });
 }
 
 pub fn isRoot(path: []const u8) bool {

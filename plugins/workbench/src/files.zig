@@ -1681,7 +1681,7 @@ pub fn createFolderInteractive(parent: []const u8) void {
         const name = if (n == 1)
             "New Folder"
         else
-            std.fmt.bufPrint(&name_buf, "New Folder {d}", .{n}) catch return;
+            std.mem.print(&name_buf, "New Folder {d}", .{n}) catch return;
         const candidate = joinChild(arena, parent, name) catch return;
         const taken = if (table()) |files| files.exists(candidate) else false;
         if (!taken) break candidate;

@@ -213,7 +213,7 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
         return ok(arena, .{
             .name = AppInfo.current.name,
             .version = AppInfo.current.version,
-            .sdk_version = try std.fmt.allocPrint(arena, "{f}", .{sdk.version.sdk_version}),
+            .sdk_version = try arena.print("{f}", .{sdk.version.sdk_version}),
         });
     }
     if (std.mem.eql(u8, trimmed, "/commands")) {
@@ -270,14 +270,14 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
     if (std.mem.startsWith(u8, trimmed, prefix)) {
         const id = std.Uri.percentDecodeInPlace(try arena.dupe(u8, trimmed[prefix.len..]));
         const c = host.command(id) orelse
-            return failure(arena, .not_found, try std.fmt.allocPrint(arena, "no command {s}", .{id}));
+            return failure(arena, .not_found, try arena.print("no command {s}", .{id}));
         return switch (method) {
             .GET, .HEAD => ok(arena, try describe(c, arena)),
             .POST => call(host, c, content_type, body, arena, waiter),
             else => notAllowed(arena, "GET, POST"),
         };
     }
-    return failure(arena, .not_found, try std.fmt.allocPrint(arena, "nothing at {s}", .{path}));
+    return failure(arena, .not_found, try arena.print("nothing at {s}", .{path}));
 }
 
 fn call(host: *sdk.Host, c: *const sdk.Command, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator, waiter: ?*Waiter) error{OutOfMemory}!Answer {
@@ -314,7 +314,7 @@ fn outcomeAnswer(arena: std.mem.Allocator, as_zon: bool, id: []const u8, outcome
             };
             return .{ .status = .ok, .body = out };
         },
-        .unknown => return failure(arena, .not_found, try std.fmt.allocPrint(arena, "no command {s}", .{id})),
+        .unknown => return failure(arena, .not_found, try arena.print("no command {s}", .{id})),
         .disabled => return failure(arena, .conflict, "the command is not enabled now"),
         .bad_args => |msg| return failure(arena, .bad_request, msg),
         .failed => |msg| return failure(arena, .internal_server_error, msg),
@@ -405,5 +405,5 @@ fn failure(arena: std.mem.Allocator, status: std.http.Status, message: []const u
 }
 
 fn notAllowed(arena: std.mem.Allocator, allowed: []const u8) error{OutOfMemory}!Answer {
-    return failure(arena, .method_not_allowed, try std.fmt.allocPrint(arena, "use {s}", .{allowed}));
+    return failure(arena, .method_not_allowed, try arena.print("use {s}", .{allowed}));
 }

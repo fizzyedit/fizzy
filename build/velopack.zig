@@ -78,7 +78,7 @@ pub fn addVpkRun(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget) !*std
 
 /// `Velopack.h` as a Zig module, through translate-c: Zig 0.17 removed `@cImport`. Imported as
 /// `velopack_c` by the modules `linkVelopack` is given.
-fn velopackCModule(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+fn velopackCModule(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
     const tc = b.addTranslateC(.{
         .root_source_file = vz.builder.dependency("velopack", .{}).path("include/Velopack.h"),
         .target = target,
@@ -89,7 +89,7 @@ fn velopackCModule(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget, opt
 
 pub const LinkVelopackOptions = struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     /// Modules that call Velopack's C API (the `app` module's updater does): each gets
     /// `Velopack.h` as the `velopack_c` import.
     c_modules: []const *std.Build.Module = &.{},
