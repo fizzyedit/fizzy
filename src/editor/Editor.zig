@@ -4911,7 +4911,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         tr.covered_n = 0;
         for (Popout.windowsShown(&buf)) |w| {
             tr.covered[tr.covered_n] = w.part;
-            tr.covered_main[tr.covered_n] = .{ .x = w.in_main.x, .y = w.in_main.y, .w = w.part.w, .h = w.part.h };
+            tr.covered_main[tr.covered_n] = w.over;
             tr.covered_n += 1;
         }
     }

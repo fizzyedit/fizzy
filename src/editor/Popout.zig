@@ -428,6 +428,9 @@ pub const Shown = struct {
     h: u32,
     /// Where its window lies over the main window's frame, physical pixels from its top left.
     in_main: dvui.Point.Physical,
+    /// The window's rect there, whole: its size over the main window, which can differ from its
+    /// `part`'s (a float scaled or clipped to its viewport).
+    over: dvui.Rect.Physical,
 };
 
 /// Each OS window shown this frame besides the main one, into `buf`, bottom to top as the OS
@@ -440,7 +443,7 @@ pub fn windowsShown(buf: []Shown) []Shown {
         const p = o.part orelse continue;
         const t = o.target orelse continue;
         if (n == buf.len) break;
-        buf[n] = .{ .kind = .float, .title = o.title_buf[0..o.title_len], .part = physical(p), .subwindow = o.subwindow, .target = t, .w = o.drawn[0], .h = o.drawn[1], .in_main = physical(viewports.inMain(o.viewport)).topLeft() };
+        buf[n] = .{ .kind = .float, .title = o.title_buf[0..o.title_len], .part = physical(p), .subwindow = o.subwindow, .target = t, .w = o.drawn[0], .h = o.drawn[1], .in_main = physical(viewports.inMain(o.viewport)).topLeft(), .over = physical(viewports.inMain(o.viewport)) };
         n += 1;
     }
     for (menus) |slot| {
@@ -449,7 +452,7 @@ pub fn windowsShown(buf: []Shown) []Shown {
         const t = m.target orelse continue;
         if (n == buf.len) break;
         const title = if (m.dialog) fizzy.core.dialogs.dialogTitle(m.id) orelse "" else "";
-        buf[n] = .{ .kind = if (m.dialog) .dialog else .menu, .title = title, .part = physical(p), .subwindow = m.id, .target = t, .w = t.width, .h = t.height, .in_main = physical(viewports.inMain(m.viewport)).topLeft() };
+        buf[n] = .{ .kind = if (m.dialog) .dialog else .menu, .title = title, .part = physical(p), .subwindow = m.id, .target = t, .w = t.width, .h = t.height, .in_main = physical(viewports.inMain(m.viewport)).topLeft(), .over = physical(viewports.inMain(m.viewport)) };
         n += 1;
     }
     return buf[0..n];

@@ -5600,8 +5600,12 @@ fn demoRun() !dvui.App.Result {
     }
     if (demo_other_bar) |b| @import("app").dome.publishBar(b);
     automation.overlay.draw(&demo_player);
+    demo_callout_main = if (dvui.tagGet(automation.overlay.callout_anchor)) |td| fizzy.core.screens.isMain(td.id) else null;
     return .ok;
 }
+
+/// Whether the callout was the main window's in the frame just run (`core.screens.markMain`).
+var demo_callout_main: ?bool = null;
 
 /// Seed, count once, click into the field, type two words with a chapter between, ping.
 fn demoTape() !automation.Tape.Owned {
@@ -6120,6 +6124,36 @@ test "demo: a callout about what an OS window shows is drawn within that window"
         }
     }
     try std.testing.expect(seen > 0);
+}
+
+test "demo: a callout is the main window's unless its subject's window can hold it" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    const count = (dvui.tagGet("demo.count") orelse return error.TestUnexpectedResult).rect;
+    const main = dvui.windowRectPixels();
+    const cases = [_]struct { part: dvui.Rect.Physical, main: bool }{
+        // A window around the button, big enough: the callout goes into it.
+        .{ .part = .{ .x = main.x, .y = main.y, .w = main.w - 120, .h = main.h }, .main = false },
+        // A menu's: around the button, too small to hold a callout, so it stays on the main window.
+        .{ .part = .{ .x = count.x - 4, .y = count.y - 4, .w = count.w + 8, .h = count.h + 8 }, .main = true },
+    };
+    for (cases) |case| {
+        demo_player.load(try calloutTape(), .{});
+        demo_player.transport.covered[0] = case.part;
+        demo_player.transport.covered_main[0] = .{ .x = 1e6, .y = 1e6, .w = case.part.w, .h = case.part.h };
+        demo_player.transport.covered_n = 1;
+        defer demo_player.transport.covered_n = 0;
+        var seen: usize = 0;
+        for (0..400) |_| {
+            if (demo_player.state == .ended or demo_player.now() > 3000) break;
+            _ = try dvui.testing.step(demoFrame);
+            if (calloutRect() == null) continue;
+            seen += 1;
+            try std.testing.expectEqual(@as(?bool, case.main), demo_callout_main);
+        }
+        try std.testing.expect(seen > 0);
+    }
 }
 
 test "demo: a replay that does not reach what playing did is caught" {

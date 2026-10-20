@@ -355,6 +355,8 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     const own = if (subject) |s| windowAround(player, s.rect) else null;
     const frame = own orelse win;
     const in_main = own == null;
+    // The stage's bar is in the main window, under the OS windows (`Transport.covered`): another
+    // window has no bar to keep above, so its floor is its own foot.
     const floor_in = if (in_main) floor else frame.y + frame.h;
     var keep_buf: [40]dvui.Rect = undefined;
     const keep = keepClear(player, tape, c, win, !in_main, &keep_buf);
@@ -397,7 +399,8 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     });
     defer fw.deinit();
     // Beside what the pointer acts on, it goes where that is, as the pointer does: over a dialog's
-    // button, into the dialog's window. At the foot of the home view it is the stage's (`layer`).
+    // button, into the dialog's window. At the foot of the home view it is the stage's (`layer`),
+    // and so is one whose subject's window is too small to hold it (`windowAround`).
     if (subject == null or in_main) core.screens.markMain(fw.data().id);
     // It opens out of the side nearest what it is beside, as a popover does from its anchor.
     captionCard(c, shown, o.origin, w);
