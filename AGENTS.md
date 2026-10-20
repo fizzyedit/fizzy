@@ -142,7 +142,8 @@ source and nothing outside fizzy should need to look in it.
 Zig files *are* structs, so the repo follows that literally and you should too:
 
 - **`CapitalName.zig` IS the struct.** Fields are declared at the top level of the file, with
-  `const Self = @This();`, and consumers write `const Surface = @import("Surface.zig");` — not a
+  `const Surface = @This();` (the file's own name, as in std; `Self` only inside a type-returning
+  fn), and consumers write `const Surface = @import("Surface.zig");` — not a
   file containing `pub const Surface = struct { ... }`, which nests the type one level deeper for
   no reason. Existing examples: `Host.zig`, `Plugin.zig`, `DocHandle.zig`, `Surface.zig`,
   `RegionSpec.zig`.

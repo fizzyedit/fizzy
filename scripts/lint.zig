@@ -1,7 +1,7 @@
 //! Repository lint with per-file budgets for existing findings.
 const std = @import("std");
 
-const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason" };
+const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias" };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
 const Suppression = struct { rule: []const u8, line: usize };
@@ -50,7 +50,11 @@ pub fn main(init: std.process.Init) !void {
             const path = try allocator.dupe(u8, entry.path);
             std.mem.replaceScalar(u8, path, '\\', '/');
             const bytes = try entry.dir.readFileAllocOptions(io, entry.basename, allocator, .unlimited, .of(u8), 0);
-            const findings = try analyze(allocator, bytes);
+            const stem = entry.basename[0 .. entry.basename.len - ".zig".len];
+            const findings = try std.mem.concat(allocator, Finding, &.{
+                try analyze(allocator, bytes),
+                try fileAlias(allocator, bytes, stem),
+            });
             failed = try reportFile(&output.writer, path, findings, parsed, seen, verbose) or failed;
         }
     }
@@ -163,6 +167,33 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         .line = create_line.?,
         .message = "file has pub fn create* but no destroy function",
     });
+    return findings.toOwnedSlice(allocator);
+}
+
+/// A file-level `const X = @This();` is named for the file, as in std (`const Writer = @This();`).
+/// Only top-level declarations count: `Self` inside a type-returning fn is fine.
+fn fileAlias(allocator: std.mem.Allocator, source: [:0]const u8, stem: []const u8) ![]Finding {
+    var tree = try std.zig.Ast.parse(allocator, source, .{});
+    defer tree.deinit(allocator);
+    if (tree.errors.len != 0) return error.InvalidZigSource;
+    var findings: std.ArrayList(Finding) = .empty;
+    errdefer findings.deinit(allocator);
+    for (tree.rootDecls()) |node| {
+        const decl = tree.fullVarDecl(node) orelse continue;
+        const init_node = decl.ast.init_node.unwrap() orelse continue;
+        if (!std.mem.eql(u8, tree.tokenSlice(decl.ast.mut_token), "const")) continue;
+        var buffer: [2]std.zig.Ast.Node.Index = undefined;
+        const params = tree.builtinCallParams(&buffer, init_node) orelse continue;
+        if (params.len != 0) continue;
+        if (!std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(init_node)), "@This")) continue;
+        const name = tree.tokenSlice(decl.ast.mut_token + 1);
+        if (std.mem.eql(u8, name, stem)) continue;
+        try findings.append(allocator, .{
+            .rule = .@"file-alias",
+            .line = tree.tokenLocation(0, decl.ast.mut_token).line + 1,
+            .message = try std.fmt.allocPrint(allocator, "@This() alias is {s}; name it for the file ({s})", .{ name, stem }),
+        });
+    }
     return findings.toOwnedSlice(allocator);
 }
 
@@ -310,6 +341,41 @@ test "runner keeps the ratchet hint without printing remaining known findings" {
     try std.testing.expect(try reportFile(&output.writer, "under.zig", &findings, &allowances, &seen, false));
     try std.testing.expectEqualStrings(
         "under.zig:1: fn-length: count 1 is under allowance 2; lower the allowance to 1\n",
+        output.written(),
+    );
+}
+
+test "file alias must equal the file stem, only at the top level" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "const Writer = @This();",
+        "pub const Writer = @This();",
+        "const Other = struct {};\nfn Gen() type {\n    return struct {\n        const Self = @This();\n    };\n}",
+        "const x = @import(\"std\");\nconst T = @TypeOf(1);",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try fileAlias(a, source, "Writer")).len);
+    const findings = try fileAlias(a, "const std = @import(\"std\");\nconst Self = @This();", "Writer");
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expectEqual(Rule.@"file-alias", findings[0].rule);
+    try std.testing.expectEqual(@as(usize, 2), findings[0].line);
+    try std.testing.expectEqual(@as(usize, 1), (try fileAlias(a, "const writer = @This();", "Writer")).len);
+}
+
+test "file alias findings are reported over budget and quiet when baselined" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const findings = try fileAlias(arena.allocator(), "const Self = @This();", "Step");
+    const allowances = [_]Allow{.{ .rule = .@"file-alias", .file = "Step.zig", .count = 1 }};
+    var seen = [_]bool{false};
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    try std.testing.expect(!try reportFile(&output.writer, "Step.zig", findings, &allowances, &seen, false));
+    try std.testing.expectEqualStrings("", output.written());
+    try std.testing.expect(try reportFile(&output.writer, "Claim.zig", findings, &allowances, &seen, false));
+    try std.testing.expectEqualStrings(
+        "Claim.zig:1: file-alias: @This() alias is Self; name it for the file (Step)\n" ++
+            "Claim.zig:1: file-alias: count 1 exceeds allowance 0\n",
         output.written(),
     );
 }

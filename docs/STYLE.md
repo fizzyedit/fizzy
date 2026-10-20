@@ -41,7 +41,9 @@ In order:
 1. The `//!` doc comment.
 2. `const std = @import("std");` once, never inline as `@import("std").x`. Then named modules,
    then relative files.
-3. In a struct file, `const Self = @This();`, then the fields, then the declarations.
+3. In a struct file, `const Writer = @This();` (the file's own name, as in std), then the fields,
+   then the declarations. `Self` is for a type-returning fn only. `zig build lint` checks it
+   (`file-alias`).
 4. Among related declarations, `pub` ones first. Do not reorder an existing file for this.
 5. Tests at the bottom of the file they test.
 
