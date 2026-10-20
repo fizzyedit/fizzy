@@ -1,7 +1,7 @@
 //! Repository lint with per-file budgets for existing findings.
 const std = @import("std");
 
-const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias" };
+const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
 const Suppression = struct { rule: []const u8, line: usize };
@@ -145,6 +145,22 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(index));
         var buffer: [1]std.zig.Ast.Node.Index = undefined;
         const proto = tree.fullFnProto(&buffer, node) orelse continue;
+        const line = tree.tokenLocation(0, tree.firstToken(node)).line + 1;
+        if (tree.nodeTag(node) != .fn_decl) {
+            if (proto.ast.return_type.unwrap()) |return_type| {
+                const return_line = tree.tokenLocation(0, tree.firstToken(return_type)).line + 1;
+                if (returnsAnyerror(tree, return_type) and
+                    !silenced(suppressions.items, .anyerror, line) and
+                    !silenced(suppressions.items, .anyerror, return_line))
+                {
+                    try findings.append(allocator, .{
+                        .rule = .anyerror,
+                        .line = return_line,
+                        .message = "return type uses anyerror; infer or name the error set",
+                    });
+                }
+            }
+        }
         const name_token = proto.name_token orelse continue;
         const spelling = tree.tokenSlice(name_token);
         const name = if (std.mem.startsWith(u8, spelling, "@\""))
@@ -152,7 +168,6 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         else
             spelling;
         if (std.mem.eql(u8, name, "destroy")) has_destroy = true;
-        const line = tree.tokenLocation(0, tree.firstToken(node)).line + 1;
         if (proto.visib_token != null and std.mem.startsWith(u8, name, "create") and create_line == null and
             !silenced(suppressions.items, .@"create-needs-destroy", line)) create_line = line;
         if (tree.nodeTag(node) != .fn_decl) continue;
@@ -195,6 +210,15 @@ fn fileAlias(allocator: std.mem.Allocator, source: [:0]const u8, stem: []const u
         });
     }
     return findings.toOwnedSlice(allocator);
+}
+
+fn returnsAnyerror(tree: std.zig.Ast, return_type: std.zig.Ast.Node.Index) bool {
+    const err_type = switch (tree.nodeTag(return_type)) {
+        .error_union => tree.nodeData(return_type).node_and_node[0],
+        else => return_type,
+    };
+    return tree.nodeTag(err_type) == .identifier and
+        std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(err_type)), "anyerror");
 }
 
 fn silenced(suppressions: []const Suppression, rule: Rule, line: usize) bool {
@@ -376,6 +400,49 @@ test "file alias findings are reported over budget and quiet when baselined" {
     try std.testing.expectEqualStrings(
         "Claim.zig:1: file-alias: @This() alias is Self; name it for the file (Step)\n" ++
             "Claim.zig:1: file-alias: count 1 exceeds allowance 0\n",
+        output.written(),
+    );
+}
+
+test "anyerror return type covers hit, allowed file, suppressed line, and ratchet-under" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "fn f() anyerror!void {}",
+        "fn f() anyerror { return error.OutOfMemory; }",
+        "const F = fn () anyerror!u32;",
+        "const VTable = struct { open: *const fn () anyerror!void };",
+        "fn outer() *const fn () anyerror!void { unreachable; }",
+    }) |source| {
+        const findings = try analyze(a, source);
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(Rule.anyerror, findings[0].rule);
+    }
+    for ([_][:0]const u8{
+        "fn f() !void {}",
+        "fn f() error{OutOfMemory}!void {}",
+        "fn f(err: anyerror) void { _ = err; }",
+        "// lint-allow(anyerror): vtable slot\nconst VTable = struct { open: *const fn () anyerror!void };",
+        "fn f() anyerror!void {} // lint-allow(anyerror): callback",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
+
+    const hit = try analyze(a, "fn f() anyerror!void {}\n");
+    const allowances = [_]Allow{
+        .{ .rule = .anyerror, .file = "allowed.zig", .count = 1 },
+        .{ .rule = .anyerror, .file = "under.zig", .count = 2 },
+    };
+    var seen = [_]bool{ false, false };
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    try std.testing.expect(try reportFile(&output.writer, "hit.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(!try reportFile(&output.writer, "allowed.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(try reportFile(&output.writer, "under.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(seen[0] and seen[1]);
+    try std.testing.expectEqualStrings(
+        "hit.zig:1: anyerror: return type uses anyerror; infer or name the error set\n" ++
+            "hit.zig:1: anyerror: count 1 exceeds allowance 0\n" ++
+            "under.zig:1: anyerror: count 1 is under allowance 2; lower the allowance to 1\n",
         output.written(),
     );
 }
