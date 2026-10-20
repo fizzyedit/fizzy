@@ -23,8 +23,11 @@ test "a window dragged to a display of another scale hears the new one, and a lo
     const re = try t.expectNext(p, w, .resized);
     try std.testing.expectEqual(@as(f32, 2), re.scale);
     try std.testing.expectEqual(@as(u32, 800), re.size.w);
-    // The frame timing is that display's.
-    try std.testing.expectEqual(@as(u64, 1_000_000_000 / 120), p.frameTiming(w).?.refresh_ns);
+
+    const both = try p.displays(std.testing.allocator);
+    defer Platform.freeDisplays(std.testing.allocator, both);
+    try std.testing.expectEqual(@as(f32, 120), both[1].refresh_hz);
+    try std.testing.expectEqual(@as(i32, -1440), both[1].bounds.x);
 
     sim.removeDisplay(hidpi);
     try std.testing.expect(p.displayOf(w) != null);

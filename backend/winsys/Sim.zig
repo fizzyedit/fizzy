@@ -359,23 +359,6 @@ pub fn windowCount(sim: *const Sim) usize {
     return sim.windows.items.len;
 }
 
-/// The window the title was set to; borrowed until the next call that changes windows.
-pub fn titleOf(sim: *Sim, window: Window) ?[]const u8 {
-    return if (sim.find(window.id)) |w| w.title else null;
-}
-
-pub fn cursorOf(sim: *Sim, window: Window) ?Window.Cursor {
-    return if (sim.find(window.id)) |w| w.cursor else null;
-}
-
-pub fn isVisible(sim: *Sim, window: Window) bool {
-    return if (sim.find(window.id)) |w| w.visible else false;
-}
-
-pub fn imeAreaOf(sim: *Sim, window: Window) ?Ime.Area {
-    return if (sim.find(window.id)) |w| w.ime_area else null;
-}
-
 /// The topmost window that takes input at this desktop point: not hidden, not minimized, and
 /// never an overlay, which is click-through.
 pub fn windowAt(sim: *const Sim, at: Pt) ?Window {
@@ -566,8 +549,8 @@ fn openWindow(ctx: *anyopaque, options: Window.Options) Platform.Error!Window {
 fn cascade(sim: *Sim) geometry.DesktopPoint {
     const n: i32 = @intCast(sim.opened % 10);
     sim.opened += 1;
-    const origin: geometry.DesktopPoint = if (sim.primaryDisplay()) |d| .{ .x = d.usable.x, .y = d.usable.y } else .{};
-    return .{ .x = origin.x + 40 + 24 * n, .y = origin.y + 40 + 24 * n };
+    const d = sim.primaryDisplay() orelse return .{ .x = 40 + 24 * n, .y = 40 + 24 * n };
+    return .{ .x = d.usable.x + 40 + 24 * n, .y = d.usable.y + 40 + 24 * n };
 }
 
 fn nearestMaterial(sim: *const Sim, want: Window.MaterialKind) Window.MaterialKind {
@@ -638,19 +621,6 @@ fn wait(ctx: *anyopaque, timeout_ns: ?u64) void {
 
 fn wake(ctx: *anyopaque) void {
     me(ctx).woken = true;
-}
-
-fn frameTiming(ctx: *anyopaque, window: Window) ?Platform.FrameTiming {
-    const sim = me(ctx);
-    const w = sim.find(window.id) orelse return null;
-    const d = sim.displayAt(w.rect()) orelse return null;
-    if (d.refresh_hz <= 0) return null;
-    const period: u64 = @intFromFloat(@as(f32, std.time.ns_per_s) / d.refresh_hz);
-    return .{
-        .refresh_ns = period,
-        .next_present_ns = (sim.clock_ns / period + 1) * period,
-        .source = .estimate,
-    };
 }
 
 fn setTitle(ctx: *anyopaque, window: Window, title: []const u8) void {
@@ -849,11 +819,6 @@ pub fn wheel(sim: *Sim, dx: f32, dy: f32, precise: bool) void {
     } });
 }
 
-pub fn touch(sim: *Sim, window: Window, kind: @FieldType(Event.Touch, "kind"), finger: u64, at: geometry.Norm) void {
-    if (sim.find(window.id) == null) return;
-    sim.emit(window.id, .{ .touch = .{ .kind = kind, .device = 1, .finger = finger, .at = at } });
-}
-
 /// A key event for the focused window. The modifiers a key holds are tracked here, as the OS
 /// does, so every event carries them; `caps_lock` and `num_lock` toggle on a press.
 pub fn key(sim: *Sim, code: Event.Code, action: @FieldType(Event.Key, "action")) void {
@@ -956,16 +921,7 @@ fn emitIme(sim: *Sim, id: u64, text: []const u8, start: u32, len: u32) void {
 pub fn dragBegin(sim: *Sim, data: Drop.Data) void {
     std.debug.assert(sim.drag == null);
     const arena = sim.newArena();
-    const a = arena.allocator();
-    const owned: Drop.Data = switch (data) {
-        .unsupported => .unsupported,
-        .text => |t| .{ .text = a.dupe(u8, t) catch oom() },
-        .files => |files| blk: {
-            const list = a.alloc([]const u8, files.len) catch oom();
-            for (files, list) |f, *out| out.* = a.dupe(u8, f) catch oom();
-            break :blk .{ .files = list };
-        },
-    };
+    const owned = cloneData(arena.allocator(), data);
     sim.drag = .{ .arena = arena, .data = owned };
     sim.dragSync(if (sim.windowAt(sim.pointer)) |w| w.id else null);
 }
@@ -976,17 +932,20 @@ fn dropEvent(sim: *Sim, id: u64, phase: Drop.Phase, with_data: bool) void {
     const arena = sim.newArena();
     const a = arena.allocator();
     const at = if (phase == .leave) geometry.Point{} else toWindow(sim.find(id).?.*, sim.pointer);
-    var data: Drop.Data = .unsupported;
-    if (with_data) switch (sim.drag.?.data) {
-        .unsupported => {},
-        .text => |t| data = .{ .text = a.dupe(u8, t) catch oom() },
-        .files => |files| {
+    const data: Drop.Data = if (with_data) cloneData(a, sim.drag.?.data) else .unsupported;
+    sim.emitOwned(id, .{ .drop = .{ .phase = phase, .at = at, .data = data } }, arena);
+}
+
+fn cloneData(a: Allocator, data: Drop.Data) Drop.Data {
+    return switch (data) {
+        .unsupported => .unsupported,
+        .text => |t| .{ .text = a.dupe(u8, t) catch oom() },
+        .files => |files| blk: {
             const list = a.alloc([]const u8, files.len) catch oom();
             for (files, list) |f, *out| out.* = a.dupe(u8, f) catch oom();
-            data = .{ .files = list };
+            break :blk .{ .files = list };
         },
     };
-    sim.emitOwned(id, .{ .drop = .{ .phase = phase, .at = at, .data = data } }, arena);
 }
 
 fn dragSync(sim: *Sim, target: ?u64) void {
@@ -1033,7 +992,6 @@ const vtable: Platform.VTable = .{
     .poll = poll,
     .wait = wait,
     .wake = wake,
-    .frame_timing = frameTiming,
     .open_window = openWindow,
     .close_window = closeWindow,
     .set_title = setTitle,
