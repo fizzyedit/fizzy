@@ -4,6 +4,7 @@ const helpers = @import("../plugins/shared/build/helpers.zig");
 const core_mod = @import("fizzy_sdk").core_module;
 const plugins = @import("plugins.zig");
 const sdk = @import("sdk.zig");
+const rehome_fixture = @import("rehome_fixture.zig");
 
 pub fn addSteps(
     b: *std.Build,
@@ -334,6 +335,15 @@ pub fn addSteps(
     // from the wasm root. No install — just compile.
     const check_web_step = b.step("check-web", "Compile fizzy web (wasm) without installing artifacts");
     check_web_step.dependOn(&web_exe.step);
+    if (own) {
+        // Re-home a native-built plugin graph to wasm32 and compile it, apart from the app.
+        const fixture = rehome_fixture.graph(b, b.resolveTargetQuery(.{}), optimize);
+        var fixture_wiring = wiring;
+        fixture_wiring.consumer = b.createModule(.{ .target = web_target, .optimize = optimize, .link_libc = false, .single_threaded = true });
+        const module = plugins.rehome(b, fixture_wiring, "rehome_fixture", fixture);
+        rehome_fixture.check(b, fixture, module, false);
+        check_web_step.dependOn(&b.addObject(.{ .name = "rehome-fixture-web", .root_module = module }).step);
+    }
 
     // Copy zig-out/web into web/app/ for local preview at the production
     // `/app/` path: `cd web && python3 -m http.server` then open
