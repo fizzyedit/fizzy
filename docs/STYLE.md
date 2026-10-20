@@ -228,3 +228,9 @@ const n = std.fmt.bufPrint(&buf, "{d}", .{id}) catch unreachable;
 `TODO(<seam, plans/X.md or #issue>): what`. An issue number is allowed here, as the one
 exception to the `#NNN` rule. The seam is what the work will hook into, which is
 what CONTRIBUTING.md asks of a deferred feature. A bare `TODO` is deleted or given a seam.
+
+### Deprecated names its replacement
+
+In `sdk/src`, `/// Deprecated: use `X`.` names what to move to, and adds the removal
+`sdk_version` when it is known. The shim stays until a release PR removes it, so a plugin
+author reading the marker sees what to change to.
