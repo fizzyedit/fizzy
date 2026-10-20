@@ -19,6 +19,17 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
 
+    // The interface compiles for the web too: no OS, no libc, nothing that allocates.
+    const winsys_web = b.addObject(.{
+        .name = "winsys-wasm32",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("winsys/root.zig"),
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&winsys_web.step);
+
     // The suites for fizzy's SDL patches (the `test:` patches in `patches/sdl`), on SDL's own test
     // harness, against the patched library. Arguments after `--` reach the runner:
     // `--filter <suite|test>`, `--require-gpu <driver>`.
@@ -76,6 +87,9 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     .{ .name = "backend-health-tests", .root = "src/Health.zig" },
     // Which touch button each finger on the screen presses; a trackpad's fingers, none.
     .{ .name = "backend-touch-slots-tests", .root = "src/touch_slots.zig" },
+    // The windowing interface (`winsys`): window, event, display, clipboard, dnd and IME types,
+    // and the platform vtable every backend implements. std-only.
+    .{ .name = "backend-winsys-tests", .root = "winsys/root.zig" },
 };
 
 /// Where the macOS SDK is, for a macOS target that is not the host's own (`-Dtarget=aarch64-macos`
