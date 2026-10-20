@@ -1493,6 +1493,11 @@ pub fn rememberPaletteCommand(editor: *Editor, id: []const u8) void {
         dvui.log.warn("recents: command not remembered: {s}", .{@errorName(err)});
         return;
     };
+    editor.saveRecents();
+}
+
+/// Write `recents.zon` now. A failure is logged; the recents stay in memory.
+pub fn saveRecents(editor: *Editor) void {
     if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
         defer editor.app.gpa.free(recents_path);
         editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});

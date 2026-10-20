@@ -13,6 +13,8 @@ const workbench = @import("workbench");
 const auto_update = @import("app").update.auto_update;
 const file_assoc = @import("backend/file_assoc.zig");
 const update_notify = @import("app").update.update_notify;
+const move_offer = @import("app").update.move_offer;
+const install_location = @import("app").update.install_location;
 const singleton = @import("app").single_instance;
 const restart = @import("app").restart;
 const automation = @import("app").automation;
@@ -67,12 +69,11 @@ const start_options_base: dvui.App.StartOptions = .{
 };
 
 /// macOS only: is the process image inside a `.app` bundle (as opposed to a loose
-/// `zig-out/bin/fizzy` from `zig build run`)? Mirrors `auto_update.installLayoutSupported`'s
-/// probe, minus its Velopack gating.
+/// `zig-out/bin/fizzy` from `zig build run`)?
 fn runningFromAppBundle(io: std.Io) bool {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.process.executablePath(io, &buf) catch return false;
-    return std.mem.find(u8, buf[0..n], ".app/") != null;
+    return install_location.bundlePath(buf[0..n]) != null;
 }
 
 fn startOptions() dvui.App.StartOptions {
@@ -408,7 +409,14 @@ pub fn AppInit(win: *dvui.Window) !void {
     // The install runs on a background thread and outlives the frame that starts it, so it
     // needs a long-lived allocator — the app's, which `app/update/` cannot name for itself.
     update_notify.setAllocator(allocator);
-    update_notify.startLaunchCheck(dvui.io, Constants.debug_simulate_update_available);
+    update_notify.startLaunchCheck(dvui.io, Constants.debug_simulate_update_available, .{
+        .recents = &fizzy.editor().app.recents,
+        .save = struct {
+            fn f() void {
+                fizzy.editor().saveRecents();
+            }
+        }.f,
+    });
 
     // From here on the monitor's pump timer may drive frames during macOS
     // window animations.
@@ -455,6 +463,8 @@ pub fn AppDeinit(_: *dvui.Window) void {
     // everything is saved and the single-instance listener is down, so the new instance owns it
     // rather than handing its launch to this one.
     defer restart.relaunch(dvui.io, appAllocator());
+    // A move to /Applications the user said yes to: the new copy opens once this one has exited.
+    defer move_offer.openAtExit(appAllocator());
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.entry().window);
     // Before the editor goes: the bar's hooks read its host.

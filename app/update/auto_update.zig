@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_opts = @import("build_opts");
+const install_location = @import("install_location.zig");
+const macos_bundle = @import("macos_bundle.zig");
 
 /// What the application wants done at Velopack's lifecycle points — after an install, after an
 /// update, before an uninstall.
@@ -39,16 +41,16 @@ fn castManager(m: *anyopaque) *Vpk.vpkc_update_manager_t {
     return @ptrCast(@alignCast(m));
 }
 
-/// Velopack's macOS locator expects the process image under `*.app/Contents/MacOS/*`.
-/// Loose binaries from `zig build` / `zig-out/.../fizzy` are not supported — skip the C API
-/// so we don't spam logs or Velopack errors on every frame.
+/// Velopack's macOS locator expects the process image under `*.app/Contents/MacOS/*`, and the
+/// bundle where Velopack can write the new version: in an Applications folder, not translocated by
+/// Gatekeeper (`install_location.updatable`). Loose binaries from `zig build` / `zig-out/.../fizzy`
+/// are not supported — skip the C API so we don't spam logs or Velopack errors on every frame.
 pub fn installLayoutSupported(io: std.Io) bool {
     if (!impl) return false;
     if (builtin.target.os.tag != .macos) return true;
 
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const n = std.process.executablePath(io, &buf) catch return false;
-    return std.mem.find(u8, buf[0..n], ".app/") != null;
+    const bundle = macos_bundle.current(io) orelse return false;
+    return install_location.updatable(bundle.place);
 }
 
 /// Iterates the ordered list of GitHub repo URLs to check for updates: the

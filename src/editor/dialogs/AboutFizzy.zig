@@ -5,6 +5,7 @@ const dvui = @import("dvui");
 const build_opts = @import("build_opts");
 const auto_update = @import("app").update.auto_update;
 const update_notify = @import("app").update.update_notify;
+const macos_bundle = @import("app").update.macos_bundle;
 const assets = @import("assets");
 const AppInfo = @import("app").AppInfo;
 
@@ -240,7 +241,10 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         if (!auto_update.installLayoutSupported(dvui.io) and builtin.target.os.tag == .macos) {
             dvui.labelNoFmt(
                 @src(),
-                "In-app updates need a packaged .app (Velopack). A zig-out binary is not an app bundle.",
+                if (macos_bundle.current(dvui.io) != null)
+                    "In-app updates need the app in the Applications folder."
+                else
+                    "In-app updates need a packaged .app (Velopack). A zig-out binary is not an app bundle.",
                 .{},
                 .{ .font = body_small, .gravity_x = 0.5 },
             );

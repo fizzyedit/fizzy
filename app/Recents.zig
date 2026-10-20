@@ -19,6 +19,7 @@ const Disk = struct {
     /// unknown.
     folders_opened: []const i64 = &.{},
     commands: []const []const u8 = &.{},
+    move_declined_version: []const u8 = "",
 };
 
 /// A remembered folder.
@@ -36,6 +37,9 @@ last_open_folder: ?[]const u8 = null,
 folders: std.array_list.Managed(Folder),
 /// Commands run from the command palette — what it lists as recently used (`RecentCommands`).
 commands: RecentCommands = .{},
+/// The app version whose offer to move to /Applications the user put off (`update.move_offer`);
+/// the offer comes back with any other. Owned by the list's allocator.
+move_declined_version: ?[]const u8 = null,
 
 /// Treats "/" and `\` at the end like extra directory hints: `/foo` and `/foo/` compare equal.
 fn trimTrailingPathSeparators(path: []const u8) []const u8 {
@@ -92,6 +96,10 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
             return .{
                 .folders = folders,
                 .commands = RecentCommands.fromIds(allocator, disk.commands),
+                .move_declined_version = if (disk.move_declined_version.len > 0)
+                    try allocator.dupe(u8, disk.move_declined_version)
+                else
+                    null,
                 .last_open_folder = if (disk.last_open_folder.len > 0)
                     try canonicalize(allocator, disk.last_open_folder)
                 else
@@ -180,6 +188,7 @@ pub fn save(recents: *Recents, allocator: std.mem.Allocator, path: []const u8) !
         .commands = recents.commands.ids.items,
         .last_save_folder = recents.last_save_folder orelse "",
         .last_open_folder = recents.last_open_folder orelse "",
+        .move_declined_version = recents.move_declined_version orelse "",
     };
 
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -198,6 +207,8 @@ pub fn deinit(recents: *Recents, allocator: std.mem.Allocator) void {
     recents.folders.deinit();
 
     recents.commands.deinit(allocator);
+    if (recents.move_declined_version) |v| allocator.free(v);
+    recents.move_declined_version = null;
 }
 
 /// Two folders made in a fresh temporary directory, and where `recents.zon` goes beside them.
@@ -283,4 +294,20 @@ test "a time stays with its folder when a row before it is gone from disk" {
     try std.testing.expectEqual(@as(usize, 1), recents.folders.items.len);
     try std.testing.expectEqualStrings(dirs.b, recents.folders.items[0].path);
     try std.testing.expectEqual(@as(i64, 200), recents.folders.items[0].opened);
+}
+
+test "a put-off move to Applications survives a save" {
+    const gpa = std.testing.allocator;
+    var dirs = try TestDirs.init(gpa);
+    defer dirs.deinit(gpa);
+
+    var recents = try Recents.load(gpa, dirs.zon);
+    try std.testing.expect(recents.move_declined_version == null);
+    recents.move_declined_version = try gpa.dupe(u8, "1.2.3");
+    try recents.save(gpa, dirs.zon);
+    recents.deinit(gpa);
+
+    var back = try Recents.load(gpa, dirs.zon);
+    defer back.deinit(gpa);
+    try std.testing.expectEqualStrings("1.2.3", back.move_declined_version.?);
 }
