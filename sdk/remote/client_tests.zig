@@ -129,13 +129,18 @@ test "a slow start is waited for, a too slow one times out and is found later" {
     try roundTrip(&client, 1);
     client.close();
 
-    var slow = try Fixture.init("slow 700");
+    var slow = try Fixture.init("slow 2500");
     defer slow.deinit();
     var opts = slow.options();
-    opts.timeout_ms = 200;
+    opts.timeout_ms = 1000;
     var late: Client = .init(t.allocator, t.io, opts);
     defer late.deinit();
     try t.expectError(error.TimedOut, late.connect());
+    // The process may not have run far enough to note its start when the deadline passed.
+    for (0..100) |_| {
+        if (slow.starts() != 0) break;
+        try t.io.sleep(.fromMilliseconds(50), .awake);
+    }
     try t.expectEqual(@as(usize, 1), slow.starts());
     late.opts.start = false;
     late.opts.timeout_ms = 5000;
