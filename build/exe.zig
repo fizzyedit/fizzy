@@ -36,37 +36,26 @@ pub fn addVelopackPackDirInstall(
 
     var tail: *std.Build.Step = &install_pack_exe.step;
 
-    if (fizzy.workbench_dylib) |dylib| {
-        const install_workbench = plugin.installBuiltinPlugin(b, dylib, "workbench", pack_plugins_install_dir);
-        install_workbench.step.dependOn(tail);
-        tail = &install_workbench.step;
-    }
-    if (fizzy.text_dylib) |dylib| {
-        const install_text = plugin.installBuiltinPlugin(b, dylib, "text", pack_plugins_install_dir);
-        install_text.step.dependOn(tail);
-        tail = &install_text.step;
-    }
-    if (fizzy.markdown_dylib) |dylib| {
-        const install_markdown = plugin.installBuiltinPlugin(b, dylib, "markdown", pack_plugins_install_dir);
-        install_markdown.step.dependOn(tail);
-        tail = &install_markdown.step;
-    }
-    if (fizzy.image_dylib) |dylib| {
-        const install_image = plugin.installBuiltinPlugin(b, dylib, "image", pack_plugins_install_dir);
-        install_image.step.dependOn(tail);
-        tail = &install_image.step;
+    for (fizzy.dylibs) |dylib| {
+        const install_dylib = plugin.installBuiltinPlugin(b, dylib.compile, dylib.id, pack_plugins_install_dir);
+        install_dylib.step.dependOn(tail);
+        tail = &install_dylib.step;
     }
 
     return tail;
 }
 
+pub const Dylib = struct {
+    /// The plugin's id, which names its folder under `plugins/`.
+    id: []const u8,
+    compile: *std.Build.Step.Compile,
+};
+
 pub const FizzyExecutable = struct {
     exe: *std.Build.Step.Compile,
-    /// Native-only; `null` on wasm targets.
-    workbench_dylib: ?*std.Build.Step.Compile = null,
-    text_dylib: ?*std.Build.Step.Compile = null,
-    markdown_dylib: ?*std.Build.Step.Compile = null,
-    image_dylib: ?*std.Build.Step.Compile = null,
+    /// The built-in plugins built as dynamic libraries: workbench first, then the others in the
+    /// order they are linked. Native-only; empty on wasm targets and when plugins are link-only.
+    dylibs: []const Dylib = &.{},
     /// Fizzy's own native backend module (the backend package's `SDLBackend`) the executable
     /// draws with; null for dvui's `sdl3` backend.
     backend: ?*std.Build.Module = null,
@@ -357,6 +346,7 @@ pub fn addFizzyExecutableForTarget(
         exe.root_module.addImport("app_layout", app_layout_mod);
     }
 
+    var dylibs: std.ArrayList(Dylib) = .empty;
     const workbench_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk workbench_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
@@ -396,6 +386,13 @@ pub fn addFizzyExecutableForTarget(
             .proxy_bridge = proxy_bridge_plugin_mod,
         });
     } else null;
+
+    inline for (.{
+        .{ "workbench", workbench_dylib },
+        .{ "text", text_dylib },
+        .{ "markdown", markdown_dylib },
+        .{ "image", image_dylib },
+    }) |entry| if (entry[1]) |compile| try dylibs.append(b.allocator, .{ .id = entry[0], .compile = compile });
 
     if (resolved_target.result.os.tag == .macos) {
         if (macos_sdl_paths) |p| {
@@ -445,10 +442,7 @@ pub fn addFizzyExecutableForTarget(
 
     return .{
         .exe = exe,
-        .workbench_dylib = workbench_dylib,
-        .text_dylib = text_dylib,
-        .markdown_dylib = markdown_dylib,
-        .image_dylib = image_dylib,
+        .dylibs = dylibs.items,
         .backend = if (native_backend == .fizzy) native.backend else null,
     };
 }
