@@ -9,8 +9,8 @@ const message = @import("remote").message;
 pub fn fromHid(code: u32) dvui.enums.Key {
     const K = dvui.enums.Key;
     return switch (code) {
-        4...29 => @enumFromInt(@intFromEnum(K.a) + (code - 4)),
-        30...38 => @enumFromInt(@intFromEnum(K.one) + (code - 30)),
+        4...29 => @fromBackingInt(@intCast(@backingInt(K.a) + (code - 4))),
+        30...38 => @fromBackingInt(@intCast(@backingInt(K.one) + (code - 30))),
         39 => .zero,
         40 => .enter,
         41 => .escape,
@@ -29,7 +29,7 @@ pub fn fromHid(code: u32) dvui.enums.Key {
         55 => .period,
         56 => .slash,
         57 => .caps_lock,
-        58...69 => @enumFromInt(@intFromEnum(K.f1) + (code - 58)),
+        58...69 => @fromBackingInt(@intCast(@backingInt(K.f1) + (code - 58))),
         70 => .print,
         71 => .scroll_lock,
         72 => .pause,
@@ -49,12 +49,12 @@ pub fn fromHid(code: u32) dvui.enums.Key {
         86 => .kp_subtract,
         87 => .kp_add,
         88 => .kp_enter,
-        89...97 => @enumFromInt(@intFromEnum(K.kp_1) + (code - 89)),
+        89...97 => @fromBackingInt(@intCast(@backingInt(K.kp_1) + (code - 89))),
         98 => .kp_0,
         99 => .kp_decimal,
         101 => .menu,
         103 => .kp_equal,
-        104...115 => @enumFromInt(@intFromEnum(K.f13) + (code - 104)),
+        104...115 => @fromBackingInt(@intCast(@backingInt(K.f13) + (code - 104))),
         224 => .left_control,
         225 => .left_shift,
         226 => .left_alt,
@@ -70,11 +70,11 @@ pub fn fromHid(code: u32) dvui.enums.Key {
 /// The modifiers a host reports, as dvui's left-hand bits (a host does not say which side).
 pub fn toMod(mods: message.Mods) dvui.enums.Mod {
     var bits: u16 = 0;
-    if (mods.shift) bits |= @intFromEnum(dvui.enums.Mod.lshift);
-    if (mods.ctrl) bits |= @intFromEnum(dvui.enums.Mod.lcontrol);
-    if (mods.alt) bits |= @intFromEnum(dvui.enums.Mod.lalt);
-    if (mods.super) bits |= @intFromEnum(dvui.enums.Mod.lcommand);
-    return @enumFromInt(bits);
+    if (mods.shift) bits |= @backingInt(dvui.enums.Mod.lshift);
+    if (mods.ctrl) bits |= @backingInt(dvui.enums.Mod.lcontrol);
+    if (mods.alt) bits |= @backingInt(dvui.enums.Mod.lalt);
+    if (mods.super) bits |= @backingInt(dvui.enums.Mod.lcommand);
+    return @fromBackingInt(@intCast(bits));
 }
 
 /// 0 left, 1 middle, 2 right, then the extras.

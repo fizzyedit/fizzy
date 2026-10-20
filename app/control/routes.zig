@@ -115,13 +115,14 @@ pub fn stop(server: *Server, state: *State, host: *sdk.Host) void {
     state.sessions.endAll(server.gpa, host);
     state.sessions.deinit(server.gpa);
     state.sessions = .{};
+    state.follow(host, server, false);
+    server.stop();
+    // After the server: stopping it shuts every connection down, so no link is left blocked.
     if (state.remote) |*remote| {
         remote.closeAll();
         remote.deinit(host);
         state.remote = null;
     }
-    state.follow(host, server, false);
-    server.stop();
 }
 
 /// `GET /remote`: the connection becomes the remote-view protocol's stream (`Service`).

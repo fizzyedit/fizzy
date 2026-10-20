@@ -500,3 +500,22 @@ test "GET /remote needs the upgrade, and only GET" {
     try std.testing.expectEqualStrings("HTTP/1.1 405 Method Not Allowed", post.status[0..post.len]);
     try std.testing.expect(state.remote == null);
 }
+
+test "a flood of motion keeps the last, and a release survives a full queue" {
+    var h: Harness = undefined;
+    try h.init();
+    defer h.deinit();
+    const v = try h.openView(1, 100, 100);
+    try h.client.send(.{ .focus = .{ .view = 1, .focused = true } });
+    try h.client.send(.{ .key = .{ .view = 1, .down = true, .host_code = 0, .code = 4 } });
+    try h.client.send(.{ .focus = .{ .view = 1, .focused = false } });
+    for (0..4) |i| try h.client.send(.{ .pointer_motion = .{ .view = 1, .x = @floatFromInt(i), .y = 0 } });
+    try h.client.send(.{ .key = .{ .view = 1, .down = false, .host_code = 0, .code = 4 } });
+    try h.client.send(.{ .resize = .{ .view = 1, .width = 0, .height = 0 } });
+    try h.step();
+    // The key down, one motion (the last), the key up although focus had left.
+    try std.testing.expectEqual(@as(usize, 3), v.input.items.len);
+    try std.testing.expectEqual(@as(f32, 3), v.input.items[1].motion.x);
+    try std.testing.expect(!v.input.items[2].key.down);
+    try std.testing.expectEqual(@as(u32, 100), v.width);
+}

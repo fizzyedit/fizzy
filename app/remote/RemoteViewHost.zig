@@ -26,7 +26,8 @@ pub const Input = union(enum) {
     text: []u8,
 };
 
-/// A client sending faster than frames run drops the rest rather than grow without end.
+/// A client sending faster than frames run loses motion past this, and everything past twice it,
+/// rather than grow without end.
 pub const max_queued = 1024;
 
 gpa: std.mem.Allocator,
@@ -88,6 +89,8 @@ pub fn place(self: *RemoteViewHost, origin: dvui.Point.Physical) void {
 }
 
 pub fn resize(self: *RemoteViewHost, width: u32, height: u32, scale: f32) void {
+    // A view has a size (`create_view` refuses one without).
+    if (width == 0 or height == 0) return;
     if (width != self.width or height != self.height or scale != self.scale) self.moved = true;
     self.width = width;
     self.height = height;
@@ -124,13 +127,28 @@ pub fn closeRequested(self: *RemoteViewHost) bool {
     return self.close_asked;
 }
 
-/// Hold `item` until `inject`. Keys and text are the focused view's alone.
+/// Hold `item` until `inject`. Keys and text are the focused view's alone, but a key's release is
+/// always kept: dropped, the key would stay held. Past `max_queued`, motion is what gives way (a
+/// run of it keeps only the last); a press, release or key never does.
 pub fn queue(self: *RemoteViewHost, item: Input) error{OutOfMemory}!void {
     const wanted = switch (item) {
-        .key, .text => self.focused,
+        .key => |k| self.focused or !k.down,
+        .text => self.focused,
         else => true,
     };
-    if (!wanted or self.input.items.len >= max_queued) {
+    if (!wanted) {
+        if (item == .text) self.gpa.free(item.text);
+        return;
+    }
+    if (item == .motion) {
+        const last = self.input.items.len;
+        if (last > 0 and self.input.items[last - 1] == .motion) {
+            self.input.items[last - 1] = item;
+            return;
+        }
+        if (last >= max_queued) return;
+    }
+    if (self.input.items.len >= 2 * max_queued) {
         if (item == .text) self.gpa.free(item.text);
         return;
     }

@@ -561,6 +561,16 @@ fn headerValue(head: *std.http.Server.Request, arena: std.mem.Allocator, name: [
 /// link, or the server stops; the link is finished last, whichever, and not touched after.
 fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Reader, writer: *Io.Writer, token: []const u8) void {
     defer link.finish();
+    link.lock.lockUncancelable(self.io);
+    link.stream = stream;
+    link.lock.unlock(self.io);
+    // Cleared before `finish`, under the lock `abort` shuts the socket down in: the connection
+    // closes it as soon as this returns.
+    defer {
+        link.lock.lockUncancelable(self.io);
+        link.stream = null;
+        link.lock.unlock(self.io);
+    }
     writer.print("HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: {s}\r\n\r\n", .{token}) catch return;
     writer.flush() catch return;
     var sender = self.io.concurrent(writeLink, .{ self, link, stream, writer }) catch return;

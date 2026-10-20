@@ -28,6 +28,8 @@ closing: std.atomic.Value(bool) = .init(false),
 /// The connection's tasks are done with the link: the peer left, or `close` was answered. Only
 /// then may the app `deinit` it; the tasks touch nothing after setting this.
 gone: std.atomic.Value(bool) = .init(false),
+/// The connection's socket, once its task has one, under `lock`: `abort` shuts it down.
+stream: ?Io.net.Stream = null,
 
 pub fn init(gpa: std.mem.Allocator, io: Io, wake: *const fn () void) Link {
     return .{ .gpa = gpa, .io = io, .wake = wake };
@@ -59,7 +61,7 @@ pub fn send(self: *Link, bytes: []const u8) error{OutOfMemory}!void {
             return;
         }
     }
-    self.close();
+    self.abort();
 }
 
 /// End the connection once what is queued is written. UI thread.
@@ -68,15 +70,26 @@ pub fn close(self: *Link) void {
     self.out_ready.set(self.io);
 }
 
+/// End the connection now, dropping what is queued: a peer that does not read would otherwise
+/// leave the writer blocked and `close` unheard. UI thread.
+pub fn abort(self: *Link) void {
+    self.close();
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    if (self.stream) |s| s.shutdown(self.io, .both) catch {};
+}
+
 pub fn isGone(self: *const Link) bool {
     return self.gone.load(.acquire);
 }
 
-/// From the connection's reader task: bytes arrived.
+/// From the connection's reader task: bytes arrived. A peer that sends more than the app takes
+/// is refused the rest (`error.OutOfMemory`, which ends the connection).
 pub fn push(self: *Link, bytes: []const u8) error{OutOfMemory}!void {
     {
         self.lock.lockUncancelable(self.io);
         defer self.lock.unlock(self.io);
+        if (self.inbox.items.len + bytes.len > max_backlog) return error.OutOfMemory;
         try self.inbox.appendSlice(self.gpa, bytes);
     }
     self.wake();
@@ -88,14 +101,18 @@ pub fn drain(self: *Link) error{OutOfMemory}!?[]u8 {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     self.out_ready.reset();
+    // A `close` that came after the caller read `closing` set the event before this reset.
+    if (self.closing.load(.acquire)) self.out_ready.set(self.io);
     if (self.outbox.items.len == 0) return null;
     return try self.outbox.toOwnedSlice(self.gpa);
 }
 
 /// From the connection's task, last: it will not touch the link again.
 pub fn finish(self: *Link) void {
+    // Read first: the app frees the link once it sees `gone`.
+    const wake = self.wake;
     self.gone.store(true, .release);
-    self.wake();
+    wake();
 }
 
 fn noWake() void {}

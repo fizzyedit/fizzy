@@ -50,10 +50,11 @@ pub fn deinit(self: *Service, host: *sdk.Host) void {
 /// once the connection's tasks are done with it.
 pub fn accept(self: *Service, host: *sdk.Host, link: *Link) error{OutOfMemory}!void {
     try self.ensureCommand(host);
+    // The link is the caller's until this succeeds: nothing after the session fails.
+    try self.sessions.ensureUnusedCapacity(self.gpa, 1);
     const session = try Session.create(self.gpa, link, self.hello);
-    errdefer session.destroy();
     session.id = self.next_session;
-    try self.sessions.append(self.gpa, session);
+    self.sessions.appendAssumeCapacity(session);
     self.next_session += 1;
 }
 
