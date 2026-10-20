@@ -21,7 +21,7 @@ cache="${ZIG_GLOBAL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/zig}"
 
 as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 # Root, or a sudo that needs no password. Codex cloud has neither, so the zig link goes in a user
-# bin directory there.
+# bin directory there (as it does wherever /usr/local/bin is not writable and sudo cannot help).
 can_root() { [ "$(id -u)" -eq 0 ] || { command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; }; }
 
 # --- Zig -------------------------------------------------------------------------------------
@@ -30,16 +30,19 @@ if command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$zig_version" ]; then
 else
     python3 -m pip install --quiet --break-system-packages "ziglang==$zig_version" 2>/dev/null ||
         python3 -m pip install --quiet "ziglang==$zig_version"
-    # No -I: pip may have installed into the user site, which -I leaves out. It reads nothing
-    # untrusted; running from / keeps the current directory off the import path.
-    zig_dir="$(cd / && python3 -c 'import os, ziglang; print(os.path.dirname(ziglang.__file__))')"
-    if can_root; then
-        as_root ln -sf "$zig_dir/zig" /usr/local/bin/zig
+    # Isolated mode first, as it always was; pip's user site-packages is outside it, so fall back
+    # to plain mode (from /, keeping the current directory off the import path) only if that fails.
+    find_zig='import os, ziglang; print(os.path.dirname(ziglang.__file__))'
+    zig_dir="$(python3 -I -c "$find_zig" 2>/dev/null || { cd / && python3 -c "$find_zig"; })"
+    if [ -w /usr/local/bin ]; then
+        ln -sf "$zig_dir/zig" /usr/local/bin/zig
+    elif [ "$(id -u)" -ne 0 ] && can_root; then
+        sudo ln -sf "$zig_dir/zig" /usr/local/bin/zig
     else
         mkdir -p "$HOME/.local/bin"
         ln -sf "$zig_dir/zig" "$HOME/.local/bin/zig"
         export PATH="$HOME/.local/bin:$PATH"
-        echo "no root or sudo: linked zig into $HOME/.local/bin; add it to PATH in later shells"
+        echo "/usr/local/bin is not writable and there is no sudo: linked zig into $HOME/.local/bin; add it to PATH in later shells"
     fi
     echo "installed zig $(zig version)"
 fi
