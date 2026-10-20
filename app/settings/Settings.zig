@@ -88,6 +88,11 @@ motion_speed: f32 = core.motion.default_speed,
 /// can. Applied at once; `FIZZY_GLASS` overrides it.
 window_material: core.material.Kind = .liquid,
 
+/// What the glass the app draws itself is made of (`core.material.inApp`): dialogs, menus, toasts
+/// and floats drawn in the window. Null, the window's (`window_material`), as drawn; a kind, that one wherever the
+/// app's renderer can draw it, whatever the windows are made of, else the richest glass below it.
+in_app_material: ?core.material.Kind = null,
+
 /// Whether glass is drawn by the glass program (`core.LiquidField`) where the backend has one —
 /// shapes that run together, in one pass a pixel — rather than by its meshes. On; a switch to
 /// compare the two.
@@ -242,6 +247,7 @@ fn fieldEqual(comptime FT: type, a: FT, b: FT) bool {
     return switch (@typeInfo(FT)) {
         .bool, .int, .float, .@"enum" => a == b,
         .pointer => |p| if (p.size == .slice and p.child == u8) std.mem.eql(u8, a, b) else false,
+        .optional => |o| if (a == null or b == null) a == null and b == null else fieldEqual(o.child, a.?, b.?),
         else => false,
     };
 }

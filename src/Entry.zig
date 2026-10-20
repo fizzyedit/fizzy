@@ -539,6 +539,16 @@ pub fn materialMissing(kind: fizzy.core.material.Kind) ?[]const u8 {
     return if (materialOffered().has(kind)) null else "Not available with this backend";
 }
 
+/// Whether the backend draws the app's glass program (`core.programs`), which in-app Liquid Glass
+/// needs.
+const glass_program = @hasDecl(dvui.backend, "program_api");
+
+/// Why the app's own renderer cannot draw `kind` as in-app glass (`core.material.inAppMissing`);
+/// null when it can.
+pub fn inAppMaterialMissing(kind: fizzy.core.material.Kind) ?[]const u8 {
+    return fizzy.core.material.inAppMissing(kind, glass_program);
+}
+
 /// The kind of window material asked for: `FIZZY_GLASS` where it names one, else the setting
 /// (`Settings.window_material`).
 fn materialAsked() fizzy.core.material.Kind {
@@ -577,7 +587,17 @@ fn frameOnce() !dvui.App.Result {
     // setting asks (Liquid Glass by default, so each platform shows the richest glass it has, or
     // an opaque window), and is never rewritten by what this platform draws;
     // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`, `liquid`) overrides it.
-    fizzy.core.material.publish((fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered()));
+    const window_material = (fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered());
+    fizzy.core.material.publish(window_material);
+    // The glass the app draws itself: the window's, or the person's own choice as the app's
+    // renderer can draw it, whatever the windows are made of. The window's under `FIZZY_GLASS`,
+    // and while a demo has the window material (`Demo.material_saved`), whose tape shows one look.
+    const editor = fizzy.editor();
+    const own_in_app = if (materialOverride() != null or editor.demo.material_saved != null) null else editor.app.settings.in_app_material;
+    fizzy.core.material.publishInApp(if (own_in_app) |kind|
+        (fizzy.core.material.Material{ .kind = kind }).effective(fizzy.core.material.inAppKinds(glass_program))
+    else
+        window_material);
     // And the backend, which makes the windows it dresses itself of it: the one decision, one
     // applier (`SDLBackend.window_material`).
     if (comptime @hasDecl(dvui.backend, "setWindowMaterial")) {

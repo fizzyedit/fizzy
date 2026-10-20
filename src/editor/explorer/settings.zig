@@ -299,12 +299,22 @@ const window_items = [_]Item{
         .label = "Window material",
         .key = "window_material",
         .description = "What the window is made of: opaque, clear, blurred, frosted or Liquid " ++
-            "Glass, and every dialog, menu and float with it. A material this platform cannot " ++
+            "Glass, and every dialog, menu and float with it unless In-app material says otherwise. A material this platform cannot " ++
             "draw is listed but not offered, and says why. A saved one it cannot draw (settings " ++
             "shared with another machine) is drawn as the richest glass below it here, else " ++
             "opaque, and stays saved.",
         .keywords = "glass material liquid frost blur transparent opaque translucent window background",
         .draw = drawWindowMaterial,
+    },
+    .{
+        .label = "In-app material",
+        .key = "in_app_material",
+        .description = "What the glass fizzy draws itself is made of: dialogs, menus, toasts and " ++
+            "floats drawn in the window. Same as window follows the window material; a material of its own is " ++
+            "drawn by fizzy wherever its renderer can, whatever the window is made of, so a " ++
+            "clear or opaque window can still have frosted or Liquid Glass menus.",
+        .keywords = "glass material liquid frost blur in-app menus dialogs floats toasts",
+        .draw = drawInAppMaterial,
     },
     .{
         .label = "Window opacity",
@@ -801,47 +811,87 @@ fn drawWindowMaterial() void {
         dvui.label(@src(), "{s}, set by FIZZY_GLASS", .{materialName(kind)}, .{ .gravity_x = 1.0 });
         return;
     }
+    const picked = materialDropdown(@src(), .{
+        .asked = editor.app.settings.window_material,
+        .shown = fizzy.core.material.get().kind,
+        .missing = fizzy.Entry.materialMissing,
+    }) orelse return;
+    editor.app.settings.window_material = picked orelse return;
+    editor.markSettingsDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+fn drawInAppMaterial() void {
+    const editor = fizzy.editor();
+    const picked = materialDropdown(@src(), .{
+        .asked = editor.app.settings.in_app_material,
+        .shown = fizzy.core.material.inApp().kind,
+        .missing = fizzy.Entry.inAppMaterialMissing,
+        .follows = true,
+    }) orelse return;
+    editor.app.settings.in_app_material = picked;
+    editor.markSettingsDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+const MaterialDropdown = struct {
+    /// The kind saved; null, the window's (only with `follows`).
+    asked: ?fizzy.core.material.Kind,
+    /// The kind drawn: `asked` where it can be, else its fallback (`Material.effective`).
+    shown: fizzy.core.material.Kind,
+    /// Why a kind cannot be drawn here; null when it can.
+    missing: *const fn (fizzy.core.material.Kind) ?[]const u8,
+    /// Offer "Same as window" first, which picks null.
+    follows: bool = false,
+};
+
+/// A material row's dropdown: every kind listed, those that cannot be drawn here greyed, not
+/// chosen, and saying why. The row shows the kind drawn, and says which is saved where that
+/// differs; the saved kind is never rewritten. Null when nothing was picked; else the pick, null
+/// being "Same as window".
+fn materialDropdown(src: std.builtin.SourceLocation, m: MaterialDropdown) ??fizzy.core.material.Kind {
     const Kind = fizzy.core.material.Kind;
-    const asked = editor.app.settings.window_material;
-    // What is drawn: the saved choice where this platform can draw it, else its fallback
-    // (`Material.effective`). The saved choice stays, for a machine that can draw it.
-    const shown = fizzy.core.material.get().kind;
     var dropdown: core.widgets.DropdownWidget = undefined;
-    dropdown.init(@src(), .{ .selected_index = @backingInt(shown) }, .{ .expand = .horizontal, .corners = dvui.CornerRect.all(1000) });
+    // With `follows`, choice 0 is the window's and each kind is one further down.
+    const first: usize = @intFromBool(m.follows);
+    const selected: usize = if (m.asked == null) 0 else first + @backingInt(m.shown);
+    dropdown.init(src, .{ .selected_index = selected }, .{ .expand = .horizontal, .corners = dvui.CornerRect.all(1000) });
     defer dropdown.deinit();
     {
         var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .vertical, .gravity_x = 1.0 });
         defer hbox.deinit();
-        dvui.labelNoFmt(@src(), materialName(shown), .{}, .{ .margin = .all(0), .padding = .all(0) });
+        if (m.asked == null) {
+            dvui.label(@src(), "Same as window ({s})", .{materialName(m.shown)}, .{ .margin = .all(0), .padding = .all(0) });
+        } else {
+            dvui.labelNoFmt(@src(), materialName(m.shown), .{}, .{ .margin = .all(0), .padding = .all(0) });
+        }
         core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
     }
-    if (shown != asked) {
-        const why = fizzy.Entry.materialMissing(asked) orelse "Not drawn here";
+    if (m.asked) |asked| if (asked != m.shown) {
+        const why = m.missing(asked) orelse "Not drawn here";
         core.widgets.tooltip(@src(), .{ .active_rect = dropdown.data().borderRectScale().r, .position = .vertical }, "{s} is saved. {s}.", .{ materialName(asked), why }, .{});
-    }
-    if (dropdown.dropped()) {
-        for (std.enums.values(Kind), 0..) |kind, i| {
-            const missing = fizzy.Entry.materialMissing(kind);
-            var mi = dropdown.addChoice();
-            defer mi.deinit();
-            const text = dvui.themeGet().color(.window, .text);
-            dvui.labelNoFmt(@src(), materialName(kind), .{}, mi.data().options.strip().override(mi.style()).override(.{
-                .color_text = if (missing == null) null else .{ .color = text.opacity(0.4) },
-            }));
-            // A kind this platform cannot draw is listed, not chosen: it says why instead.
-            if (missing) |why| {
-                core.widgets.tooltip(@src(), .{ .active_rect = mi.data().borderRectScale().r }, "{s}", .{why}, .{ .id_extra = i });
-                continue;
-            }
-            if (mi.activeRect() != null) {
-                dropdown.close();
-                editor.app.settings.window_material = kind;
-                editor.markSettingsDirty();
-                dvui.refresh(null, @src(), null);
-                break;
-            }
+    };
+    if (!dropdown.dropped()) return null;
+    if (m.follows and dropdown.addChoiceLabel("Same as window")) return @as(?Kind, null);
+    const text = dvui.themeGet().color(.window, .text);
+    for (std.enums.values(Kind), 0..) |kind, i| {
+        const missing = m.missing(kind);
+        var mi = dropdown.addChoice();
+        defer mi.deinit();
+        dvui.labelNoFmt(@src(), materialName(kind), .{}, mi.data().options.strip().override(mi.style()).override(.{
+            .color_text = if (missing == null) null else .{ .color = text.opacity(0.4) },
+        }));
+        // A kind this platform cannot draw is listed, not chosen: it says why instead.
+        if (missing) |why| {
+            core.widgets.tooltip(@src(), .{ .active_rect = mi.data().borderRectScale().r }, "{s}", .{why}, .{ .id_extra = i });
+            continue;
+        }
+        if (mi.activeRect() != null) {
+            dropdown.close();
+            return kind;
         }
     }
+    return null;
 }
 
 /// A material kind as the settings name it.

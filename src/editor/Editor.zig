@@ -3879,6 +3879,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.native_menus = parsed.native_menus;
     editor.app.settings.native_dialogs = parsed.native_dialogs;
     editor.app.settings.window_material = parsed.window_material;
+    editor.app.settings.in_app_material = parsed.in_app_material;
     editor.app.settings.black_box = parsed.black_box;
     editor.app.settings.record_history = parsed.record_history;
     editor.app.settings.kept_history_gb = parsed.kept_history_gb;
@@ -4323,22 +4324,22 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         const chrome = fill;
         const dark = dvui.themeGet().dark;
         const glass_look = fizzy.core.glass_look;
-        // Every glass the app draws is the window's, at its opacity as the user set it — not as the
-        // window eases to opaque when maximized (`core.glass_look`) — and glass even where the
-        // window is clear (0): a dialog or a menu always carries something to read. On macOS, with
+        // Every glass the app draws is the in-app material's, at the window's opacity as the user
+        // set it — not as the window eases to opaque when maximized (`core.glass_look`) — and glass
+        // even where the window is clear (0): a dialog or a menu always carries something to read. On macOS, with
         // the glass program, Apple's lens (`inApp`), as the OS's Liquid Glass beside it is: its
         // frost over a blur at the full frost, and its own colour and bend. Elsewhere — the web,
         // Linux, Windows, where there is no OS glass to match — the app's frosted pane (`frosted`).
         //
-        // The app's material (`core.material`, published by `Entry`) says how much of that there
-        // is, the same for every glass here and in every plugin, which reads these values:
+        // The in-app material (`core.material.inApp`, published by `Entry`) says how much of that
+        // there is, the same for every glass here and in every plugin, which reads these values:
         // - `liquid`: all of it.
         // - `frost`: the frosted pane, no bend and no glass program (`LiquidField`).
         // - `blur`: the same at half the blur.
         // - `transparent`: no blur, so no frost. Surfaces fall back to `dialogFill`, the window's
         //   colour at its opacity over what is behind.
         // - `none`: that fill, opaque.
-        const kind = fizzy.core.material.get().kind;
+        const kind = fizzy.core.material.inApp().kind;
         const liquid = kind == .liquid;
         const opacity = @max(if (dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light, glass_look.min_opacity);
         const lens = builtin.target.os.tag == .macos and editor.app.settings.glass_shader and liquid;
@@ -4378,7 +4379,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         const square = fizzy.backend.isFullscreenChromeHidden(win) or (builtin.target.os.tag != .macos and fizzy.backend.isMaximized(win));
         fizzy.core.screens.publishMainRadius(if (square) 0 else if (builtin.target.os.tag == .linux) Constants.linux_window_radius else fizzy.backend.viewports.windowRadius());
     }
-    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.get().kind == .liquid);
+    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader and fizzy.core.material.inApp().kind == .liquid);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();

@@ -11645,3 +11645,16 @@ test "layout.zon: a place an older fizzy showed one view in keeps that one, not 
     try std.testing.expectEqual(@as(usize, 2), saved[1].surfaces.?.len);
     try std.testing.expectEqual(@as(usize, 2), saved[2].surfaces.?.len);
 }
+
+test "settings: an untouched in-app material is not written; a chosen one is" {
+    const Settings = @import("app").settings.Settings;
+    const gpa = std.testing.allocator;
+    var s: Settings = .{};
+    const plain = try s.serialize(gpa);
+    defer gpa.free(plain);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "in_app_material") == null);
+    s.in_app_material = .frost;
+    const chosen = try s.serialize(gpa);
+    defer gpa.free(chosen);
+    try std.testing.expect(std.mem.indexOf(u8, chosen, ".in_app_material = .frost") != null);
+}

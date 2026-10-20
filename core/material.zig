@@ -1,17 +1,20 @@
-//! What the app's windows are made of: an opaque window (`none`, the default), or one that shows
-//! what is behind it — through clear window colour (`transparent`), blurred (`blur`), frosted
+//! What the app's windows are made of, and the glass the app draws itself: opaque (`none`), or
+//! showing what is behind — through clear colour (`transparent`), blurred (`blur`), frosted
 //! (`frost`), or as Liquid Glass (`liquid`) — and how much of the window's colour covers it
-//! (`opacity`). One for the app: every OS window the backend shows takes it, and every glass the
-//! app draws reads it (`get`), so they look as one.
+//! (`opacity`).
 //!
-//! The backend says which kinds it can show; a kind asked for and not offered falls back to the
-//! richest glass below it that is, else to an opaque window, never to a clear one
-//! (`Material.effective`). What was asked stays as it was saved. The app publishes the result each
-//! frame before anything draws (`publish`): in dvui's data, as `native_glass` is, so a plugin's
-//! glass reads the same value as fizzy's.
+//! Two materials, each published every frame before anything draws, in dvui's data so a plugin's
+//! glass reads the same values as fizzy's. The window material (`publish`, `get`) is what every OS
+//! window the backend shows is made of; the backend says which kinds it can show. The in-app
+//! material (`publishInApp`, `inApp`) is what the glass the app draws itself is made of — dialogs,
+//! menus, floats, toasts — the window material's unless the person chose another; the app's own
+//! renderer says which kinds it can draw (`inAppMissing`).
 //!
-//! `Material`, `Kind`, `Kinds` and `effective` are std-only (a unit-test root in `build/app.zig`);
-//! only `publish` and `get` reach dvui.
+//! A kind asked for and not offered falls back to the richest glass below it that is, else to an
+//! opaque window, never to a clear one (`Material.effective`). What was asked stays as it was
+//! saved.
+//!
+//! All but the four publish and read functions is std-only (a unit-test root in `build/app.zig`).
 const std = @import("std");
 
 pub const Material = struct {
@@ -54,18 +57,51 @@ pub const Kinds = packed struct {
     }
 };
 
+/// Why the app's own renderer cannot draw `kind` as in-app glass, one static line for a tooltip;
+/// null when it can. Frost and blur are drawn over the app's own frame on every backend; Liquid
+/// Glass needs the glass program (`glass_program`: the backend draws `programs`).
+pub fn inAppMissing(kind: Kind, glass_program: bool) ?[]const u8 {
+    return switch (kind) {
+        .liquid => if (glass_program) null else "Not available with this renderer: needs the glass program",
+        .none, .transparent, .blur, .frost => null,
+    };
+}
+
+/// The kinds the app's own renderer draws as in-app glass (`inAppMissing`).
+pub fn inAppKinds(glass_program: bool) Kinds {
+    var kinds: Kinds = .{};
+    inline for (comptime std.enums.values(Kind)) |k| @field(kinds, @tagName(k)) = inAppMissing(k, glass_program) == null;
+    return kinds;
+}
+
 const key = "core.material";
 
-/// The material this frame, as the backend can show it, set by the app before anything draws.
+/// The window material this frame, as the backend can show it, set by the app before anything
+/// draws: what the OS windows are made of.
 pub fn publish(m: Material) void {
     const dvui = @import("dvui");
     dvui.dataSet(null, dvui.Id.update(.zero, key), "_material", m);
 }
 
-/// The material every glass draws in this frame (`publish`): `none` until the app says.
+/// The window material this frame (`publish`): `none` until the app says.
 pub fn get() Material {
     const dvui = @import("dvui");
     return dvui.dataGet(null, dvui.Id.update(.zero, key), "_material", Material) orelse .{};
+}
+
+/// The in-app material this frame, set by the app before anything draws: what the glass the app
+/// draws itself is made of (dialogs, menus, floats, toasts), the window material's unless the
+/// person chose another.
+pub fn publishInApp(m: Material) void {
+    const dvui = @import("dvui");
+    dvui.dataSet(null, dvui.Id.update(.zero, key), "_in_app", m);
+}
+
+/// The material every glass the app draws is made of this frame (`publishInApp`): the window
+/// material's until the app says otherwise.
+pub fn inApp() Material {
+    const dvui = @import("dvui");
+    return dvui.dataGet(null, dvui.Id.update(.zero, key), "_in_app", Material) orelse get();
 }
 
 test "effective falls back to the richest glass offered below the one asked" {
@@ -87,4 +123,14 @@ test "glass not offered falls back to opaque, never to a clear window" {
     }
     try std.testing.expectEqual(Kind.transparent, (Material{ .kind = .transparent }).effective(linux).kind);
     try std.testing.expectEqual(Kind.blur, (Material{ .kind = .liquid }).effective(.{ .transparent = true, .blur = true }).kind);
+}
+
+test "in-app glass draws every kind where the glass program is, Liquid Glass only there" {
+    const with: Kinds = inAppKinds(true);
+    inline for (comptime std.enums.values(Kind)) |k| try std.testing.expect(with.has(k));
+    const without: Kinds = inAppKinds(false);
+    try std.testing.expect(!without.has(.liquid));
+    try std.testing.expect(without.has(.frost));
+    try std.testing.expectEqual(Kind.frost, (Material{ .kind = .liquid }).effective(without).kind);
+    try std.testing.expect(inAppMissing(.liquid, false) != null);
 }
