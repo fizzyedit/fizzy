@@ -251,7 +251,15 @@ right, below, left or above, else in a corner of the window — the nearest that
 the other things the pointer goes to in the caption's time, what `.clear` names (what the viewer is
 meant to be watching), or a bar out under the overlay (a history bar, a corner vial). What it is
 beside grows by whatever of those touches it, so a bar out of a grip or a menu out of a button is
-sat beside whole. `.side` asks for one side when that side is clear.
+sat beside whole. `.side` asks for one side when that side is clear. `.clear` means "keep these
+anchors uncovered" — not a clear look: the card is the usual glass either way.
+
+**A callout belongs to its subject's window.** When what it is beside is shown in an OS window of
+its own (a popped-out float, a dialog), the callout is drawn in that window, in its part of the
+frame and kept to its bounds, so it sits beside the subject there rather than over it or clamped
+back onto the main window. A caption with no subject stays pinned to the main window, with the
+rest of the stage. Every OS window shown over the main one is also kept clear of, where it lies
+there, by a callout in the main window. This is the rule, not an option.
 
 It moves like a guide, not a label (`app/automation/Calm.zig`): it keeps its spot while the spot is
 still on the window, clear and near enough, and moves only when the pointer's aim moves on to

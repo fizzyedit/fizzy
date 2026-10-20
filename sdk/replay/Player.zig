@@ -232,6 +232,9 @@ pub const Transport = struct {
     /// the window the bar is in, those windows' rects last frame, physical: the app's to set. The
     /// bar is drawn under them, so a press there is theirs, not the bar's.
     covered: [8]dvui.Rect.Physical = undefined,
+    /// Each of `covered` as it lies over the main window's frame, physical: where the OS window is
+    /// on screen, which a caption in the main window keeps clear of.
+    covered_main: [8]dvui.Rect.Physical = undefined,
     covered_n: u8 = 0,
     /// When the real pointer was last on the bar, or its rest brought it (ns, `wallNs`): while
     /// playing, the bar shows for a while after, then goes back to rest.

@@ -349,9 +349,16 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     const src = @src();
     const size: dvui.Size = dvui.minSizeGet(dvui.parentGet().extendId(src, index + 1)) orelse .{};
     const subject = subjectOf(player, tape, c, win);
+    // Its subject's window: the OS window that shows it (a float's, a dialog's), else the main one.
+    // The callout is drawn there, in that window's own frame and bounds, so it sits beside the
+    // subject rather than over the view or clamped back onto the main window.
+    const own = if (subject) |s| windowAround(player, s.rect) else null;
+    const frame = own orelse win;
+    const in_main = own == null;
+    const floor_in = if (in_main) floor else frame.y + frame.h;
     var keep_buf: [40]dvui.Rect = undefined;
-    const keep = keepClear(player, tape, c, win, &keep_buf);
-    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+    const keep = keepClear(player, tape, c, win, !in_main, &keep_buf);
+    const home = (if (in_main and tape.home.len > 0) tagRect(tape.home) else null) orelse frame;
     const now = player.now();
 
     // Its own, so two showing at once each keep theirs.
@@ -361,13 +368,13 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
         .caption = c.at,
         .subject = if (subject) |s| s.key else 0,
         .near = if (subject) |s| s.rect else null,
-        .home = .{ .x = home.x + home.w / 2 - size.w / 2, .y = @min(home.y + home.h * home_down, floor) - size.h },
+        .home = .{ .x = home.x + home.w / 2 - size.w / 2, .y = @min(home.y + home.h * home_down, floor_in) - size.h },
         .keep = keep,
         .bounds = .{
-            .x = win.x + 16,
-            .y = win.y + 16,
-            .w = @max(0, win.w - 32 - size.w),
-            .h = @max(0, floor - size.h - win.y - 16),
+            .x = frame.x + 16,
+            .y = frame.y + 16,
+            .w = @max(0, frame.w - 32 - size.w),
+            .h = @max(0, floor_in - size.h - frame.y - 16),
         },
         .size = size,
         .now = now,
@@ -381,9 +388,9 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     if (o.moving and player.state == .playing) dvui.refresh(null, @src(), null);
 
     // A callout reads at a narrower measure than a card over a whole view.
-    const w = @min(440, win.w - 32);
+    const w = @min(440, frame.w - 32);
     // The first named, for what checks where it went (`callout_anchor`): a name is one widget's.
-    const fw = plain.layer(src, .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h }, .tag = if (first) callout_anchor else null }, .{
+    const fw = plain.layer(src, .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = frame.h }, .tag = if (first) callout_anchor else null }, .{
         .from = dvui.windowRectScale().pointToPhysical(o.at),
         .from_gravity_x = 1,
         .from_gravity_y = 1,
@@ -391,7 +398,7 @@ fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize
     defer fw.deinit();
     // Beside what the pointer acts on, it goes where that is, as the pointer does: over a dialog's
     // button, into the dialog's window. At the foot of the home view it is the stage's (`layer`).
-    if (subject == null) core.screens.markMain(fw.data().id);
+    if (subject == null or in_main) core.screens.markMain(fw.data().id);
     // It opens out of the side nearest what it is beside, as a popover does from its anchor.
     captionCard(c, shown, o.origin, w);
 }
@@ -479,11 +486,22 @@ fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
 /// not; every bar out under the overlay (`dome.barsOut`: a document's history bar, a corner
 /// vial), which is what a step brings out; and the pointer while it rests. Not while it moves: it
 /// passes under the callout on its way, and would push it about.
-fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, buf: []dvui.Rect) []const dvui.Rect {
+fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, in_window: bool, buf: []dvui.Rect) []const dvui.Rect {
     var keep: std.ArrayList(dvui.Rect) = .initBuffer(buf);
     if (player.pointerShown(0) > 0 and !pointerMoving(tape, player.now())) {
         const p = dvui.windowRectScale().pointFromPhysical(.{ .x = player.seq.pointer.x, .y = player.seq.pointer.y });
         keep.appendAssumeCapacity(.{ .x = p.x - 4, .y = p.y - 4, .w = 22, .h = 28 });
+    }
+    // Every OS window shown over the main one, where it lies there: a callout in the main window is
+    // under it, and is not placed where it would be hidden. Not the subject's own, which the
+    // callout is drawn in (`in_window`).
+    const rs = dvui.windowRectScale();
+    if (!in_window) {
+        const tr = &player.transport;
+        for (tr.covered_main[0..tr.covered_n]) |r| {
+            if (keep.items.len == keep.capacity) break;
+            keep.appendAssumeCapacity(rs.rectFromPhysical(r));
+        }
     }
     for (c.clear) |tag| {
         if (keep.items.len == keep.capacity) break;
@@ -498,12 +516,31 @@ fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
             keep.appendAssumeCapacity(r);
         } else if (Input.targetPoint(target)) |p| keep.appendAssumeCapacity(pointRect(p));
     }
-    const rs = dvui.windowRectScale();
     for (dome.barsOut()) |b| {
         if (keep.items.len == keep.capacity) break;
         keep.appendAssumeCapacity(rs.rectFromPhysical(b));
     }
     return keep.items;
+}
+
+/// The least an OS window may be, natural, to draw a callout in (`windowAround`).
+const min_window: dvui.Size = .{ .w = 300, .h = 160 };
+
+/// The OS window (natural, its part of the frame) that `r`'s middle lies in, the topmost where
+/// parts overlap (they are listed bottom to top), else null: the main window's. Not one too small
+/// to hold a callout (a menu's), which the callout then keeps to the main window.
+fn windowAround(player: *Player, r: dvui.Rect) ?dvui.Rect {
+    const tr = &player.transport;
+    const mid = dvui.windowRectScale().pointToPhysical(.{ .x = r.x + r.w / 2, .y = r.y + r.h / 2 });
+    var i = tr.covered_n;
+    while (i > 0) {
+        i -= 1;
+        const part = tr.covered[i];
+        if (!part.contains(mid)) continue;
+        const natural = dvui.windowRectScale().rectFromPhysical(part);
+        return if (natural.w >= min_window.w and natural.h >= min_window.h) natural else null;
+    }
+    return null;
 }
 
 /// Whether a move or a trace is carrying the tape's pointer at `now` (demo ms).
