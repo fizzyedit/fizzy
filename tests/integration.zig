@@ -6156,6 +6156,43 @@ test "demo: a callout is the main window's unless its subject's window can hold 
     }
 }
 
+test "demo: a callout with no subject stays on the main window, clear of an OS window over it" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    var s: automation.Script = .init(std.testing.allocator, "no-subject", "No subject");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://callout", .files = &.{.{ .path = "field", .text = "" }} });
+    // Beside something that is not drawn, with no pointer to aim at: nothing to sit beside.
+    try s.caption("Nothing here to point at.", .{ .ms = 6000, .near = "demo.nowhere" });
+    s.pause(6000);
+    demo_player.load(try s.finish(), .{});
+
+    // A window over the main one, across the foot of it where such a callout goes at home, with
+    // a part of the frame elsewhere that holds nothing here.
+    const window: dvui.Rect.Physical = .{ .x = 150, .y = 380, .w = 500, .h = 100 };
+    demo_player.transport.covered[0] = .{ .x = 1e6, .y = 1e6, .w = 400, .h = 300 };
+    demo_player.transport.covered_main[0] = window;
+    demo_player.transport.covered_n = 1;
+    defer demo_player.transport.covered_n = 0;
+    const over = dvui.windowRectScale().rectFromPhysical(window);
+
+    var seen: usize = 0;
+    for (0..400) |_| {
+        if (demo_player.state == .ended or demo_player.now() > 3000) break;
+        _ = try dvui.testing.step(demoFrame);
+        const r = calloutRect() orelse continue;
+        seen += 1;
+        try std.testing.expectEqual(@as(?bool, true), demo_callout_main);
+        const hit = r.intersect(over);
+        if (hit.w > 0 and hit.h > 0) {
+            std.debug.print("callout {any} covers the window {any}\n", .{ r, over });
+            return error.TestUnexpectedResult;
+        }
+    }
+    try std.testing.expect(seen > 0);
+}
+
 test "demo: a replay that does not reach what playing did is caught" {
     var t = try demoCtx();
     defer deinitDemo(&t);
