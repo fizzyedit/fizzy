@@ -128,4 +128,103 @@ Source: judgment, not `std`. A fixed number makes the limit checkable.
 
 ## Comments
 
-(Written in a following change.)
+Three kinds, three jobs. Source: the language reference sections "Comments" and "Doc
+Comments", and the doc comments in `lib/std/array_list.zig` and `lib/std/mem/Allocator.zig`.
+
+- `//!` opens a file or container: what it is for and what it is not, in one to three short
+  paragraphs. Every file has one: a new file starts with it, and a change that rewrites a file
+  without one adds it.
+- `///` documents the declaration below it. It is the contract, read by the caller.
+- `//` is for the next reader of the implementation. It says why, never what.
+
+### What a `///` states
+
+- What the declaration does, in one line. Leave out what the name and signature already say.
+- The contract: what the caller must pass, and what the function asserts or assumes.
+- Ownership and lifetime: who frees, with which allocator, how long a returned slice or
+  pointer stays valid, and which calls invalidate it.
+- The errors it can return, and when.
+- Thread or frame restrictions.
+
+A field gets a `///` when its use is not clear from its name and type, as `ArrayList.items`
+and `capacity` do. Sibling functions may repeat shared wording; it helps in IDE help.
+
+### What a `///` leaves out
+
+The implementation, who calls it today, how it used to work, and any plan step, PR number or
+date.
+
+```zig
+// Bad: restates the signature and names a caller.
+/// Returns the path. Called by the tab bar.
+pub fn path(self: *const File) []const u8
+
+// Good: ownership and lifetime.
+/// The file's path. Valid until `close`; the caller does not free it.
+pub fn path(self: *const File) []const u8
+```
+
+### Tone and length
+
+- Plain, present tense, declarative. Full sentences with a period in `///` and `//!`; short
+  fragments are fine in `//`.
+- One line is the norm. A paragraph is for ownership or an invariant. A `//` block of more
+  than about 15 lines wants a `//!` or a file in `docs/`.
+- ASCII, plus typographic punctuation such as the em dash. No other non-ASCII, no emoji, no
+  emphasis markup beyond backticks around identifiers.
+- No narration (`// increment i`), no section banners (`// ---- tests ----`), no commented-out
+  code (version control keeps it).
+
+### No change-log wording
+
+A comment describes the code as it is. Do not write history: "no longer", "used to",
+"previously", "formerly", "fixed", "now X instead", "the old ...", a date, `#NNN` or "this
+PR". History belongs in the commit and the PR. Words that only describe the code ("returns a
+new slice") are fine.
+
+A comment may say why not the obvious alternative, because that is a constraint that holds
+today.
+
+```zig
+// Bad: tells a story.
+// This used to give up after 200,000 yields, which failed on a slow CI disk.
+// Now it waits 5 s.
+
+// Good: states the constraint.
+// The read runs on the Io's pool, so wait on the clock: 5 s, because a yield count varies
+// with the disk.
+```
+
+Once the lint exists, this rule is report-only at first, then fails. A false hit (such as
+"fixed-size") goes on its allowlist with a reason; the word list is not loosened.
+
+### When a comment is required
+
+The full list; Errors and Invariants name the same constructs. Each has a comment saying why
+it is sound:
+
+- `unreachable` and `catch unreachable`
+- `@panic`
+- `@constCast` and `@setRuntimeSafety`
+- `@ptrCast`, except a plain vtable or FFI cast
+- `undefined` for a value that is not trivial
+- a file-scope `var` (who writes it, on which thread)
+- a lock (at its declaration: what it guards) and an atomic ordering (why that order)
+- a workaround for another project's bug: name the project and the condition for removing it
+- a literal other than 0, 1 or one its name explains; an ordering constraint; a
+  frame-timing assumption
+
+```zig
+// Bad
+const n = std.fmt.bufPrint(&buf, "{d}", .{id}) catch unreachable;
+
+// Good
+// 20 digits hold any u64, and buf is 32 bytes.
+const n = std.fmt.bufPrint(&buf, "{d}", .{id}) catch unreachable;
+```
+
+### TODO names a seam
+
+`TODO(<seam, plans/X.md or #issue>): what`. An issue number is allowed here, as the one
+exception to the `#NNN` rule. The seam is what the work will hook into, which is
+what CONTRIBUTING.md asks of a deferred feature. A bare `TODO` is deleted or given a seam.

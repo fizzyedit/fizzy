@@ -224,6 +224,8 @@ copied from elsewhere must carry a license compatible with MIT, and keeps its no
   general primitive (an event its owner fires, a host-owned copy) rather than a fix for this one
   plugin (a per-frame poll, a slice borrowed from plugin memory). Moving the fingerprint for the
   clearer shape is fine.
+- **Comments follow [`docs/STYLE.md`](docs/STYLE.md).** `//` says why, not what; `///` states
+  the contract and ownership; no comment narrates history; `TODO(seam)` names its seam.
 - **Pitfalls go where they bite.** A trap that cost real time is written down in the
   `AGENTS.md` of the directory it lives in, or `docs/PITFALLS.md` if it has none.
 
