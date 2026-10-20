@@ -255,21 +255,21 @@ pub const Fs = struct {
 /// `"/a/b/c"` → `"/a/b"`; `"/a"` → `"/"`; `"/"` → `"/"`.
 pub fn dirname(path: []const u8) []const u8 {
     if (path.len <= 1) return "/";
-    const i = std.mem.lastIndexOfScalar(u8, path, '/') orelse return "/";
+    const i = std.mem.findScalarLast(u8, path, '/') orelse return "/";
     return if (i == 0) "/" else path[0..i];
 }
 
 /// `"/a/b/c"` → `"c"`; `"/"` → `""`.
 pub fn basename(path: []const u8) []const u8 {
     if (path.len <= 1) return "";
-    const i = std.mem.lastIndexOfScalar(u8, path, '/') orelse return path;
+    const i = std.mem.findScalarLast(u8, path, '/') orelse return path;
     return path[i + 1 ..];
 }
 
 /// Owned. `join("/", "a")` → `"/a"`; `join("/a", "b")` → `"/a/b"`.
 pub fn join(allocator: Allocator, dir: []const u8, name: []const u8) Allocator.Error![]u8 {
-    if (isRoot(dir)) return std.fmt.allocPrint(allocator, "/{s}", .{name});
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name });
+    if (isRoot(dir)) return allocator.print("/{s}", .{name});
+    return allocator.print("{s}/{s}", .{ dir, name });
 }
 
 pub fn isRoot(path: []const u8) bool {
@@ -283,7 +283,7 @@ pub const Segments = struct {
     pub fn next(self: *Segments) ?[]const u8 {
         while (self.rest.len > 0 and self.rest[0] == '/') self.rest = self.rest[1..];
         if (self.rest.len == 0) return null;
-        const end = std.mem.indexOfScalar(u8, self.rest, '/') orelse self.rest.len;
+        const end = std.mem.findScalar(u8, self.rest, '/') orelse self.rest.len;
         const seg = self.rest[0..end];
         self.rest = self.rest[end..];
         return seg;

@@ -38,7 +38,7 @@ pub fn write(editor: *Editor, seconds: u32, why: []const u8) !Written {
         why_buf[n] = if (std.ascii.isAlphanumeric(c)) std.ascii.toLower(c) else '-';
         n += 1;
     }
-    const name = try std.fmt.allocPrint(arena, "{d}-{s}", .{ std.Io.Clock.real.now(io).toSeconds(), if (n == 0) "asked" else why_buf[0..n] });
+    const name = try arena.print("{d}-{s}", .{ std.Io.Clock.real.now(io).toSeconds(), if (n == 0) "asked" else why_buf[0..n] });
     const dir = try std.fs.path.join(arena, &.{ editor.app.config_folder, "captures", name });
     try cwd.createDirPath(io, dir);
 

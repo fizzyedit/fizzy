@@ -61,7 +61,7 @@ pub fn readLocalAsset(io: std.Io, subpath: []const u8, filename: []const u8, lim
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     var depth: u8 = 0;
     while (depth < 16) : (depth += 1) {
-        const abs = std.fmt.bufPrint(
+        const abs = std.mem.print(
             &path_buf,
             "{s}" ++ std.fs.path.sep_str ++ "{s}" ++ std.fs.path.sep_str ++ "{s}",
             .{ dir_buf[0..dir_len], trimmed, filename },
@@ -113,13 +113,13 @@ pub fn rawGithubUrls(url_storage: *[3][256]u8, repo: []const u8, subpath: []cons
     const refs = [_][]const u8{ "HEAD", "main", "master" };
     for (refs, 0..) |ref, i| {
         const s = if (trimmed_subpath.len > 0)
-            std.fmt.bufPrint(
+            std.mem.print(
                 &url_storage[i],
                 "https://raw.githubusercontent.com/{s}/{s}/{s}/{s}/{s}",
                 .{ owner, name, ref, trimmed_subpath, filename },
             ) catch continue
         else
-            std.fmt.bufPrint(
+            std.mem.print(
                 &url_storage[i],
                 "https://raw.githubusercontent.com/{s}/{s}/{s}/{s}",
                 .{ owner, name, ref, filename },

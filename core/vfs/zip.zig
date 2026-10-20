@@ -178,7 +178,7 @@ pub fn pack(allocator: Allocator, mem: *const Mem) Error![]u8 {
 /// comment may follow it. (`std.zip.EndRecord.findBuffer` exists but does not compile as of
 /// 0.16 — it returns an error outside its own set.)
 fn findEndRecord(bytes: []const u8) ?zip.EndRecord {
-    const pos = std.mem.lastIndexOf(u8, bytes, &zip.end_record_sig) orelse return null;
+    const pos = std.mem.findLast(u8, bytes, &zip.end_record_sig) orelse return null;
     return readStruct(zip.EndRecord, bytes, pos);
 }
 
@@ -198,7 +198,7 @@ test "truncated and inflated-size-lying archives are refused, not read past" {
     // Lie about the inflated size past the budget.
     const bad = try a.dupe(u8, good);
     defer a.free(bad);
-    const cd = std.mem.indexOf(u8, bad, "PK\x01\x02").?;
+    const cd = std.mem.find(u8, bad, "PK\x01\x02").?;
     const size_at = cd + 24; // uncompressed_size in the central header
     std.mem.writeInt(u32, bad[size_at..][0..4], 0xFFFF_FFFF, .little);
     try std.testing.expectError(error.TooLarge, unpackInto(&dst, bad));
@@ -272,7 +272,7 @@ fn entryName(allocator: Allocator, path: []const u8, is_dir: bool) Allocator.Err
 
 fn ensureParents(mem: *Mem, path: []const u8) Error!void {
     var i: usize = 1;
-    while (std.mem.indexOfScalarPos(u8, path, i, '/')) |slash| : (i = slash + 1) {
+    while (std.mem.findScalarPos(u8, path, i, '/')) |slash| : (i = slash + 1) {
         const dir = path[0..slash];
         if (mem.nodes.contains(dir)) continue;
         mem.putDir(dir) catch |err| switch (err) {

@@ -122,7 +122,7 @@ pub fn relaunch(io: std.Io, gpa: std.mem.Allocator) void {
         // The new instance is up and waiting for the lock this one just let go of.
         const dir = handover_dir orelse return;
         var buf: [std.fs.max_path_bytes]u8 = undefined;
-        const released = std.fmt.bufPrint(&buf, "{s}/released", .{dir}) catch return;
+        const released = std.mem.print(&buf, "{s}/released", .{dir}) catch return;
         std.Io.Dir.cwd().writeFile(io, .{ .sub_path = released, .data = "" }) catch |err| {
             dvui.log.err("restart: could not hand the lock over ({t}); the new instance takes it when it times out", .{err});
             return;
@@ -253,7 +253,7 @@ pub fn pollHandover(io: std.Io) Poll {
     if (handover != .waiting) return .none;
     const dir = handover_dir orelse return .none;
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const ready = std.fmt.bufPrint(&buf, "{s}/ready", .{dir}) catch return .waiting;
+    const ready = std.mem.print(&buf, "{s}/ready", .{dir}) catch return .waiting;
     // The time first: a new instance that says ready by the time its deadline is seen is not stopped.
     const late = std.Io.Clock.awake.now(io).nanoseconds > handover_deadline_ns;
     if (std.Io.Dir.cwd().access(io, ready, .{})) |_| {
@@ -312,7 +312,7 @@ pub fn signalReady(io: std.Io) void {
     if (comptime !supported) return;
     const dir = handed_from orelse return;
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const ready = std.fmt.bufPrint(&buf, "{s}/ready", .{dir}) catch return;
+    const ready = std.mem.print(&buf, "{s}/ready", .{dir}) catch return;
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = ready, .data = "" }) catch |err|
         dvui.log.err("restart: could not tell the old instance this one is ready ({t})", .{err});
     released_deadline_ns = std.Io.Clock.awake.now(io).nanoseconds + 15 * std.time.ns_per_s;
@@ -342,7 +342,7 @@ pub fn pollReleased(io: std.Io) bool {
         return false;
     }
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const released = std.fmt.bufPrint(&buf, "{s}/released", .{dir}) catch return false;
+    const released = std.mem.print(&buf, "{s}/released", .{dir}) catch return false;
     if (std.Io.Dir.cwd().access(io, released, .{})) |_| {
         dvui.log.info("restart: the old instance let go of the lock", .{});
     } else |_| if (now > released_deadline_ns) {

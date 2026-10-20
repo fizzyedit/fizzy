@@ -179,7 +179,7 @@ fn eventsPath(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!vo
 
 fn commandPath(s: *Stringify, c: *const sdk.Command, arena: std.mem.Allocator) Error!void {
     // Escaped as the server unescapes it (`routes`): an id with `{`, a space or `%` is still one path.
-    try s.objectField(try std.fmt.allocPrint(arena, "/commands/{f}", .{std.fmt.alt(std.Uri.Component{ .raw = c.id }, .formatEscaped)}));
+    try s.objectField(try arena.print("/commands/{f}", .{std.fmt.alt(std.Uri.Component{ .raw = c.id }, .formatEscaped)}));
     try s.beginObject();
     try s.objectField("post");
     try s.beginObject();
@@ -254,11 +254,11 @@ fn paramSchema(s: *Stringify, arena: std.mem.Allocator, p: sdk.Command.Param) Er
     try s.objectField("description");
     try s.write(switch (p.kind) {
         // ZON of their own: JSON that converts to it (`json.zig`), described rather than typed.
-        .color, .other => try std.fmt.allocPrint(arena, "{s} (any JSON that converts to the ZON it takes)", .{p.description}),
+        .color, .other => try arena.print("{s} (any JSON that converts to the ZON it takes)", .{p.description}),
         .int => |k| if (k.choices.len > 0)
-            try std.fmt.allocPrint(arena, "{s} (suggested: {any})", .{ p.description, k.choices })
+            try arena.print("{s} (suggested: {any})", .{ p.description, k.choices })
         else
-            try std.fmt.allocPrint(arena, "{s} (from {d} to {d})", .{ p.description, k.min, k.max }),
+            try arena.print("{s} (from {d} to {d})", .{ p.description, k.min, k.max }),
         else => p.description,
     });
     switch (p.kind) {

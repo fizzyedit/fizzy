@@ -457,7 +457,7 @@ fn add_event_raw(w: *dvui.Window, which: u8, int1: u32, int2: u32, float1: f32, 
     //    .float1 = float1,
     //    .float2 = float2,
     //}) catch |err| {
-    //    const msg = std.fmt.allocPrint(gpa, "{any}", .{err}) catch "allocPrint OOM";
+    //    const msg = gpa.print("{any}", .{err}) catch "allocPrint OOM";
     //    wasm.wasm_panic(msg.ptr, msg.len);
     //};
     switch (which) {

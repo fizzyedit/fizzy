@@ -169,7 +169,7 @@ fn worker(job: *Job) void {
     // By its host alone: a URL's path and query can carry tokens, and a trace is for sharing.
     var name_buf: [64]u8 = undefined;
     const host = if (std.Uri.parse(job.url)) |u| (if (u.host) |h| h.percent_encoded else "") else |_| "";
-    const timed = @import("../profile/Spans.zig").span(std.fmt.bufPrint(&name_buf, "http {t} {s}", .{ job.method, host }) catch "http");
+    const timed = @import("../profile/Spans.zig").span(std.mem.print(&name_buf, "http {t} {s}", .{ job.method, host }) catch "http");
     const result = perform(job);
     timed.end();
     const self = job.owner;
@@ -395,7 +395,7 @@ test "a request round-trips through a loopback server and lands from pump" {
     defer nt.deinit();
     const t = nt.transport();
 
-    const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/files?x=1", .{ts.port()});
+    const url = try a.print("http://127.0.0.1:{d}/files?x=1", .{ts.port()});
     defer a.free(url);
     var sink: Sink = .{ .allocator = a };
     defer if (sink.body) |b| a.free(b);
@@ -459,7 +459,7 @@ test "cancel returns at once while the server is still holding the connection" {
 
     var nt = NativeTransport.init(a, io, null);
     const t = nt.transport();
-    const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/", .{server.socket.address.getPort()});
+    const url = try a.print("http://127.0.0.1:{d}/", .{server.socket.address.getPort()});
     defer a.free(url);
     var sink: Sink = .{ .allocator = a };
     const job = try t.request(a, .{ .method = .GET, .url = url }, Sink.onDone, &sink);

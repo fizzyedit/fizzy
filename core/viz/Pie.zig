@@ -191,7 +191,7 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
         const swatch: dvui.Rect.Physical = .{ .x = legend_x, .y = y + (line_h - sw) / 2, .w = sw, .h = sw };
         swatch.fill(.all(2 * s), .{ .color = .{ .color = if (faded) colors[i].opacity(0.4) else colors[i] }, .fade = 1 });
         var buf: [32]u8 = undefined;
-        const value = std.fmt.bufPrint(&buf, "{[v]d:.[p]} {[u]s}", .{ .v = slices[i].value, .p = opts.decimals, .u = opts.unit }) catch "";
+        const value = std.mem.print(&buf, "{[v]d:.[p]} {[u]s}", .{ .v = slices[i].value, .p = opts.decimals, .u = opts.unit }) catch "";
         const value_w = mono.textSize(value).w * s;
         const name_x = legend_x + sw + 6 * s;
         const name = viz.fit(arena, font, slices[i].label, (r.x + r.w - value_w - 8 * s - name_x) / s);
@@ -235,7 +235,7 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
             // The name, cut to the room that side has, and its value under it: level with the
             // leader's end, outward from it.
             var buf: [32]u8 = undefined;
-            const value = std.fmt.bufPrint(&buf, "{[v]d:.[p]} {[u]s}", .{ .v = sl.value, .p = opts.decimals, .u = opts.unit }) catch "";
+            const value = std.mem.print(&buf, "{[v]d:.[p]} {[u]s}", .{ .v = sl.value, .p = opts.decimals, .u = opts.unit }) catch "";
             const room = (if (side) r.x + r.w - end.x else end.x - r.x) - 6 * s;
             const name = viz.fit(arena, font, sl.label, room / s);
             const name_w = font.textSize(name).w * s;
@@ -255,10 +255,10 @@ pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Option
         var vbuf: [48]u8 = undefined;
         var cbuf: [96]u8 = undefined;
         const value, const caption = if (hovered) |h| .{
-            std.fmt.bufPrint(&vbuf, "{[v]d:.[p]} {[u]s}", .{ .v = slices[h].value, .p = opts.decimals, .u = opts.unit }) catch "",
-            std.fmt.bufPrint(&cbuf, "{d:.0}% · {s}", .{ shares[h] / sum * 100, slices[h].label }) catch "",
+            std.mem.print(&vbuf, "{[v]d:.[p]} {[u]s}", .{ .v = slices[h].value, .p = opts.decimals, .u = opts.unit }) catch "",
+            std.mem.print(&cbuf, "{d:.0}% · {s}", .{ shares[h] / sum * 100, slices[h].label }) catch "",
         } else .{
-            std.fmt.bufPrint(&vbuf, "{[v]d:.[p]} {[u]s}", .{ .v = total, .p = opts.decimals, .u = opts.unit }) catch "",
+            std.mem.print(&vbuf, "{[v]d:.[p]} {[u]s}", .{ .v = total, .p = opts.decimals, .u = opts.unit }) catch "",
             opts.caption,
         };
         const vs = big.textSize(value).scale(s, dvui.Size.Physical);

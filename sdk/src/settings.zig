@@ -962,7 +962,7 @@ test "diffSerialize compares string fields by content, not pointer" {
     S.access_vtable.setString(&value, 0, "goodbye");
     const blob = (try S.diffSerialize(testing.allocator, value)).?;
     defer testing.allocator.free(blob);
-    try testing.expect(std.mem.indexOf(u8, blob, "goodbye") != null);
+    try testing.expect(std.mem.find(u8, blob, "goodbye") != null);
     S.deinit(&value);
 }
 
@@ -1005,10 +1005,10 @@ test "diffSerialize emits only the fields that differ from the declared defaults
     defer testing.allocator.free(blob);
 
     // The on-disk shape is bare payloads: `.tab_size = 8`, not `.tab_size = .{ .v = 8 }`.
-    try testing.expect(std.mem.indexOf(u8, blob, "tab_size = 8") != null);
-    try testing.expect(std.mem.indexOf(u8, blob, ".v") == null);
-    try testing.expect(std.mem.indexOf(u8, blob, "insert_spaces_on_tab") == null);
-    try testing.expect(std.mem.indexOf(u8, blob, "format_on_save") == null);
+    try testing.expect(std.mem.find(u8, blob, "tab_size = 8") != null);
+    try testing.expect(std.mem.find(u8, blob, ".v") == null);
+    try testing.expect(std.mem.find(u8, blob, "insert_spaces_on_tab") == null);
+    try testing.expect(std.mem.find(u8, blob, "format_on_save") == null);
 }
 
 test "a partial (diff-only) blob still fills the rest from the declared defaults" {
@@ -1051,7 +1051,7 @@ test "a type with no dedicated control is still a legal setting, edited as zon t
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const text = S.access_vtable.getZonText(&value, 0, arena_state.allocator());
-    try testing.expect(std.mem.indexOf(u8, text, "3") != null);
+    try testing.expect(std.mem.find(u8, text, "3") != null);
 
     // `.other` payloads take part in diff-vs-default like anything else.
     try testing.expect(try S.diffSerialize(testing.allocator, .{}) == null);

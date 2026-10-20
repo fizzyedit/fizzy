@@ -6,10 +6,29 @@ Fizzy ships installers for six targets via [Velopack](https://velopack.io):
 | -------------------- | ------- | ------- | ------------------------------- |
 | `x86-64-linux`       | Linux   | x86_64  | `fizzy_linux_x86_64.AppImage`    |
 | `arm64-linux`        | Linux   | arm64   | `fizzy_linux_arm64.AppImage`     |
-| `x86-64-macos`       | macOS   | x86_64  | `fizzy_macos_x86_64.pkg`         |
-| `arm64-macos`        | macOS   | arm64   | `fizzy_macos_arm64.pkg`          |
+| `x86-64-macos`       | macOS   | x86_64  | `fizzy_macos_x86_64.pkg`, `fizzy_macos_x86_64.dmg` |
+| `arm64-macos`        | macOS   | arm64   | `fizzy_macos_arm64.pkg`, `fizzy_macos_arm64.dmg`   |
 | `x86-64-windows`     | Windows | x86_64  | `fizzy_windows_x86_64.exe`       |
 | `arm64-windows`      | Windows | arm64   | `fizzy_windows_arm64.exe`        |
+
+## macOS: the .pkg and the .dmg
+
+Each macOS channel ships two installers holding the same signed bundle. The `.pkg` is vpk's
+own and installs into `/Applications`. The `.dmg` is a drag-to-Applications disk image: the
+`.app` from vpk's `*-Portable.zip` beside a link to `/Applications`, made by
+`build/macos_dmg.sh` in the same `zig build package` run (`build/package.zig`), so an app built
+on fizzy (`fizzy.addPackageSteps`) gets one too, named after its `app-name` and its volume after
+its `app-package-title`. Velopack has no disk image output of its own.
+
+An app dragged out of the image updates itself like a `.pkg` install: Velopack finds the bundle
+by its executable's path and swaps it in place. A user who isn't an admin gets the system's
+password prompt when an update applies to `/Applications`. An app run straight from the mounted
+image, or from `~/Downloads` before it is moved, is translocated by Gatekeeper to a read-only
+path and cannot update.
+
+When signing is set up, the image is signed with the *Developer ID Application* identity,
+notarized and stapled after vpk has notarized the bundle inside it; without it, the image is
+unsigned like the rest.
 
 Channel strings use hyphens only (no underscores): Velopack parses
 `<version>-<channel>-…` as a NuGet version, and NuGet disallows `_` in the
@@ -45,13 +64,15 @@ exists to survive a repo move (see "Migrating the repo" below).
 
 For this to work, **three files per channel** must be present on the release:
 
-1. The renamed installer (`fizzy_<os>_<arch>.<ext>`) — what humans download.
+1. The renamed installer (`fizzy_<os>_<arch>.<ext>`) — what humans download. macOS has a
+   `.dmg` beside its `.pkg`; Velopack reads neither.
 2. `fizzy-<version>-<channel>-full.nupkg` — the actual update payload Velopack
    downloads and applies.
 3. `releases.<channel>.json` (or `RELEASES-<channel>` on older vpk) — the
    manifest that tells Velopack which nupkg version is current.
 
-The release script handles all three for all six channels (18 files total).
+The release script handles all three for all six channels, plus the two `.dmg` (20 files
+total).
 
 ## Cutting a release
 
@@ -120,7 +141,7 @@ export FIZZY_MACOS_NOTARY_PROFILE="fizzy-notary"   # see one-time setup below
 ./scripts/release.sh
 ```
 
-This does everything CI does, plus signs/notarizes the macOS bundle using
+This does everything CI does, plus signs/notarizes the macOS bundle, `.pkg` and `.dmg` using
 the certs in your login Keychain.
 
 It's safe to run after CI has already run — the script uses `gh release
@@ -136,7 +157,7 @@ instead of leaving it as a draft.
 You need two **Developer ID** certificates from Apple — request them from
 the Apple Developer portal:
 
-- *Developer ID Application* — signs the `.app` bundle
+- *Developer ID Application* — signs the `.app` bundle and the `.dmg`
 - *Developer ID Installer* — signs the `.pkg` installer
 
 Install both into your login Keychain. Find their exact names with:

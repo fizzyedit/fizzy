@@ -23,7 +23,7 @@ pub fn main() !void {
         else => "so",
     };
     var buf: [256]u8 = undefined;
-    const path = try std.fmt.bufPrint(&buf, "zig-out/lib/libplugin.{s}", .{ext});
+    const path = try std.mem.print(&buf, "zig-out/lib/libplugin.{s}", .{ext});
 
     var lib = try std.DynLib.open(path);
     defer lib.close();

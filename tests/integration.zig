@@ -1947,7 +1947,7 @@ test "assigning a region whose ids other regions hold, whatever the map's fill" 
         var names: [64][16]u8 = undefined;
         var ids: [64][]const u8 = undefined;
         for (0..count) |i| {
-            const name = try std.fmt.bufPrint(&names[i], "pane.{d}", .{i});
+            const name = try std.mem.print(&names[i], "pane.{d}", .{i});
             try state.assign(gpa, name, &.{name});
             ids[i] = name;
         }
@@ -1965,7 +1965,7 @@ test "taking one id out of a region of many keeps the rest" {
     defer state.deinitAssignments(gpa);
     var bufs: [40][16]u8 = undefined;
     var ids: [40][]const u8 = undefined;
-    for (&ids, 0..) |*id, i| id.* = try std.fmt.bufPrint(&bufs[i], "doc.{d}", .{i});
+    for (&ids, 0..) |*id, i| id.* = try std.mem.print(&bufs[i], "doc.{d}", .{i});
     try state.assign(gpa, "pane.1", &ids);
     try state.assign(gpa, "pane.2", &.{ids[0]});
     try std.testing.expectEqual(@as(usize, 39), state.assignment("pane.1").?.len);
@@ -2713,7 +2713,7 @@ test "the picker lists each view under the place it is made for, the open place 
     const y = struct {
         fn of(id: []const u8) !f32 {
             var buf: [64]u8 = undefined;
-            return (try dvui.testing.tagGet(try std.fmt.bufPrint(&buf, "picker:{s}", .{id}))).rect.y;
+            return (try dvui.testing.tagGet(try std.mem.print(&buf, "picker:{s}", .{id}))).rect.y;
         }
     }.of;
 
@@ -2762,7 +2762,7 @@ const UnplacedViews = struct {
     /// Whether the picker's list had view `n`'s card in view on the last frame.
     fn shown(n: usize) !bool {
         var buf: [64]u8 = undefined;
-        return (try dvui.testing.tagGet(try std.fmt.bufPrint(&buf, "picker:{s}", .{ids[n]}))).visible;
+        return (try dvui.testing.tagGet(try std.mem.print(&buf, "picker:{s}", .{ids[n]}))).visible;
     }
 
     /// Step a frame; fails if two of the views were drawn in it.
@@ -7834,7 +7834,7 @@ test "control: commands are listed, described and run over the routes" {
     // Who is answering.
     const root = routes.handle(&host, .GET, "/", null, "", arena);
     try std.testing.expectEqual(std.http.Status.ok, root.status);
-    try std.testing.expect(std.mem.indexOf(u8, root.body, "\"sdk_version\":") != null);
+    try std.testing.expect(std.mem.find(u8, root.body, "\"sdk_version\":") != null);
 
     // The listing: each command with its params, an enum's choices and a default.
     const list = routes.handle(&host, .GET, "/commands", null, "", arena);
@@ -7862,7 +7862,7 @@ test "control: commands are listed, described and run over the routes" {
     const zon = routes.handle(&host, .POST, "/commands/t.place", "application/zon", ".{ .line = 5, .side = .left }", arena);
     try std.testing.expectEqual(std.http.Status.ok, zon.status);
     try std.testing.expectEqualStrings("application/zon", zon.content_type);
-    try std.testing.expect(std.mem.indexOf(u8, zon.body, ".side = .left") != null or std.mem.indexOf(u8, zon.body, ".side=.left") != null);
+    try std.testing.expect(std.mem.find(u8, zon.body, ".side = .left") != null or std.mem.find(u8, zon.body, ".side=.left") != null);
 
     // Errors as HTTP's.
     try std.testing.expectEqual(std.http.Status.not_found, routes.handle(&host, .POST, "/commands/t.missing", null, "", arena).status);
@@ -7932,7 +7932,7 @@ test "control: /openapi.json describes each command's body and the declared even
     try std.testing.expectEqualStrings("integer", line.get("type").?.string);
     // Bounds the server does not check stay out of the schema, said in words instead.
     try std.testing.expect(line.get("minimum") == null and line.get("maximum") == null);
-    try std.testing.expect(std.mem.indexOf(u8, line.get("description").?.string, "from 1 to") != null);
+    try std.testing.expect(std.mem.find(u8, line.get("description").?.string, "from 1 to") != null);
     try std.testing.expectEqualStrings("right", props.get("side").?.object.get("enum").?.array.items[1].string);
     try std.testing.expectEqual(@as(i64, 1), props.get("column").?.object.get("default").?.integer);
     const required = schema.get("required").?.array.items;
@@ -7968,9 +7968,9 @@ test "control: /openapi.json describes each command's body and the declared even
     }
     const schemas = spec.get("components").?.object.get("schemas").?.object;
     var at: usize = 0;
-    while (std.mem.indexOfPos(u8, answer.body, at, "#/components/schemas/")) |i| {
+    while (std.mem.findPos(u8, answer.body, at, "#/components/schemas/")) |i| {
         const name_start = i + "#/components/schemas/".len;
-        const name_end = std.mem.indexOfScalarPos(u8, answer.body, name_start, '"').?;
+        const name_end = std.mem.findScalarPos(u8, answer.body, name_start, '"').?;
         try std.testing.expect(schemas.get(answer.body[name_start..name_end]) != null);
         at = name_end;
     }
@@ -8003,7 +8003,7 @@ const ControlOneShot = struct {
         }
         const key = "content-length: ";
         const i = std.ascii.findIgnoreCase(self.reply[0..self.len], key) orelse return;
-        const end = std.mem.indexOfPos(u8, self.reply[0..self.len], i, "\r\n") orelse return;
+        const end = std.mem.findPos(u8, self.reply[0..self.len], i, "\r\n") orelse return;
         const want = std.fmt.parseInt(usize, self.reply[i + key.len .. end], 10) catch return;
         r.interface.readSliceAll(self.reply[self.len..][0..want]) catch return;
         self.len += want;
@@ -8107,7 +8107,7 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     const routes = control.routes;
     // Without a socket (`handle`): the replies a client reads.
     const init = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\"}}", arena);
-    try std.testing.expect(std.mem.indexOf(u8, init.body, "\"protocolVersion\":\"2025-03-26\"") != null);
+    try std.testing.expect(std.mem.find(u8, init.body, "\"protocolVersion\":\"2025-03-26\"") != null);
     try std.testing.expectEqual(std.http.Status.accepted, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", arena).status);
     const list = try std.json.parseFromSliceLeaky(std.json.Value, arena, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", arena).body, .{});
     const tools = list.object.get("result").?.object.get("tools").?.array.items;
@@ -8115,16 +8115,16 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     const place = tools[1].object;
     // Named as every client accepts, with the command's id in its description.
     try std.testing.expectEqualStrings("t__place", place.get("name").?.string);
-    try std.testing.expect(std.mem.indexOf(u8, place.get("description").?.string, "t.place") != null);
+    try std.testing.expect(std.mem.find(u8, place.get("description").?.string, "t.place") != null);
     try std.testing.expectEqualStrings("integer", place.get("inputSchema").?.object.get("properties").?.object.get("line").?.object.get("type").?.string);
     const called = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"t__place\",\"arguments\":{\"line\":4,\"side\":\"right\"}}}", arena);
-    try std.testing.expect(std.mem.indexOf(u8, called.body, "\"isError\":false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, called.body, "\\\"note\\\":\\\"placed\\\"") != null);
+    try std.testing.expect(std.mem.find(u8, called.body, "\"isError\":false") != null);
+    try std.testing.expect(std.mem.find(u8, called.body, "\\\"note\\\":\\\"placed\\\"") != null);
     const refused = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"t__place\",\"arguments\":{\"side\":\"right\"}}}", arena);
-    try std.testing.expect(std.mem.indexOf(u8, refused.body, "\"isError\":true") != null);
+    try std.testing.expect(std.mem.find(u8, refused.body, "\"isError\":true") != null);
     // A client written before the names were spelled still reaches it by its id.
     const by_id = routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"t.place\",\"arguments\":{\"line\":4,\"side\":\"right\"}}}", arena);
-    try std.testing.expect(std.mem.indexOf(u8, by_id.body, "\"isError\":false") != null);
+    try std.testing.expect(std.mem.find(u8, by_id.body, "\"isError\":false") != null);
     // An id that shares t.place's name, but does not spell back as it does, gets a suffix; a call
     // by that name runs it (it answers later), not t.place (which answers now).
     try host.registerCommand(.{ .id = "t__place", .owner = &plugin, .title = "Twin", .runWith = SlowCommand.start });
@@ -8134,17 +8134,17 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     try std.testing.expectEqualStrings("t__place", three[1].object.get("name").?.string);
     const twin = three[2].object.get("name").?.string;
     try std.testing.expect(std.mem.startsWith(u8, twin, "t__place_") and twin.len == "t__place_".len + 6);
-    const twin_call = try std.fmt.allocPrint(arena, "{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{{\"name\":\"{s}\"}}}}", .{twin});
-    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, twin_call, arena).body, "answer comes later") != null);
+    const twin_call = try arena.print("{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{{\"name\":\"{s}\"}}}}", .{twin});
+    try std.testing.expect(std.mem.find(u8, routes.handle(&host, .POST, "/mcp", null, twin_call, arena).body, "answer comes later") != null);
 
-    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"nope\"}", arena).body, "-32601") != null);
+    try std.testing.expect(std.mem.find(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"nope\"}", arena).body, "-32601") != null);
     // A response from the client, as a notification is, is taken (202), not refused.
     try std.testing.expectEqual(std.http.Status.accepted, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}", arena).status);
     // An id comes back as it was sent; one that is neither a string nor a number is refused.
-    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":12345678901234567890,\"method\":\"ping\"}", arena).body, "\"id\":12345678901234567890,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":true,\"method\":\"ping\"}", arena).body, "-32600") != null);
+    try std.testing.expect(std.mem.find(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":12345678901234567890,\"method\":\"ping\"}", arena).body, "\"id\":12345678901234567890,") != null);
+    try std.testing.expect(std.mem.find(u8, routes.handle(&host, .POST, "/mcp", null, "{\"jsonrpc\":\"2.0\",\"id\":true,\"method\":\"ping\"}", arena).body, "-32600") != null);
     // Told only of commands the app has: no fizzy.screen here.
-    try std.testing.expect(std.mem.indexOf(u8, init.body, "fizzy.screen") == null);
+    try std.testing.expect(std.mem.find(u8, init.body, "fizzy.screen") == null);
 
     // Over the socket, a tool whose command answers later answers its call then.
     var tmp = std.testing.tmpDir(.{});
@@ -8161,7 +8161,7 @@ test "control: MCP on the socket lists the commands as tools and calls them, now
     var state: control.routes.State = .{};
     defer control.routes.stop(&server, &state, &host);
     const body = "{\"jsonrpc\":\"2.0\",\"id\":\"later\",\"method\":\"tools/call\",\"params\":{\"name\":\"t__slow\"}}";
-    const request = try std.fmt.allocPrint(arena, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
+    const request = try arena.print("POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body });
     var client: ControlOneShot = .{ .path = path, .request = request };
     const thread = try std.Thread.spawn(.{}, ControlOneShot.run, .{&client});
     var frames: usize = 0;
@@ -8300,7 +8300,7 @@ test "control: an MCP session's id comes back as a header, and DELETE /mcp ends 
         }
     };
     const init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"probe\"}}}";
-    var opening: ControlOneShot = .{ .path = path, .request = try std.fmt.allocPrint(arena, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ init.len, init }) };
+    var opening: ControlOneShot = .{ .path = path, .request = try arena.print("POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ init.len, init }) };
     try Exchange.run(&server, &state, &host, &opening);
     const reply = opening.reply[0..opening.len];
     const key = "mcp-session-id: ";
@@ -8309,7 +8309,7 @@ test "control: an MCP session's id comes back as a header, and DELETE /mcp ends 
     try std.testing.expectEqual(@as(usize, 1), state.sessions.list.items.len);
     try std.testing.expectEqual(@import("app").mcp.parseSession(id), state.sessions.list.items[0].id);
 
-    var ending: ControlOneShot = .{ .path = path, .request = try std.fmt.allocPrint(arena, "DELETE /mcp HTTP/1.1\r\nHost: x\r\nMcp-Session-Id: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{id}) };
+    var ending: ControlOneShot = .{ .path = path, .request = try arena.print("DELETE /mcp HTTP/1.1\r\nHost: x\r\nMcp-Session-Id: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{id}) };
     try Exchange.run(&server, &state, &host, &ending);
     try std.testing.expect(std.mem.startsWith(u8, ending.reply[0..ending.len], "HTTP/1.1 200"));
     try std.testing.expectEqual(@as(usize, 0), state.sessions.list.items.len);
@@ -8819,7 +8819,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectError(error.DuplicatePluginId, editor.loadUserPluginById("Text"));
             const status = editor.app.pluginStatus("Text");
             try std.testing.expectEqual(sdk.services.plugins.Api.State.failed, status.state);
-            try std.testing.expect(std.mem.indexOf(u8, status.why, "differs only in case") != null);
+            try std.testing.expect(std.mem.find(u8, status.why, "differs only in case") != null);
             // Uninstalling from that card never deletes the loaded plugin's folder, which on macOS
             // and Windows is the same folder by another name.
             try tmp.dir.createDirPath(dvui.io, "plugins/text");
@@ -8898,14 +8898,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         _ = try dvui.testing.step(headlessFrame);
     }
     const text = shot orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.indexOf(u8, text, ".role=\"tab\",.name=\"Files\",.tag=\"fizzy.rail:workbench.files\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, ".role=\"button\",.name=\"Close Tab\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, ".tag=\"workbench.tab:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, ".role=\"button\",.name=\"notes.md\",.tag=\"workbench.file:") != null);
+    try std.testing.expect(std.mem.find(u8, text, ".role=\"tab\",.name=\"Files\",.tag=\"fizzy.rail:workbench.files\"") != null);
+    try std.testing.expect(std.mem.find(u8, text, ".role=\"button\",.name=\"Close Tab\"") != null);
+    try std.testing.expect(std.mem.find(u8, text, ".tag=\"workbench.tab:") != null);
+    try std.testing.expect(std.mem.find(u8, text, ".role=\"button\",.name=\"notes.md\",.tag=\"workbench.file:") != null);
     // A region is not named by what is in it.
-    try std.testing.expect(std.mem.indexOf(u8, text, ".name=\"FILES\"") == null);
+    try std.testing.expect(std.mem.find(u8, text, ".name=\"FILES\"") == null);
     // A markdown file opens on its preview.
-    try std.testing.expect(std.mem.indexOf(u8, text, ".tag=\"text.preview:") != null);
+    try std.testing.expect(std.mem.find(u8, text, ".tag=\"text.preview:") != null);
     // The windows first, the main one alone here: the testing backend opens no others.
     try std.testing.expect(std.mem.startsWith(u8, text, ".{\n    .{.role=\"window\",.name=\"fizzy\",.tag=\"fizzy.window:main\""));
 
@@ -8927,8 +8927,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         fizzy.Editor.Dialogs.AboutFizzy.request();
         try dvui.testing.settle(headlessFrame);
         const open = try shotOf(automation_api);
-        try std.testing.expect(std.mem.indexOf(u8, open, ".name=\"About Fizzy\"") != null);
-        try std.testing.expect(std.mem.indexOf(u8, open, ".role=\"button\",.name=\"Close\",.tag=\"" ++ about_close ++ "\"") != null);
+        try std.testing.expect(std.mem.find(u8, open, ".name=\"About Fizzy\"") != null);
+        try std.testing.expect(std.mem.find(u8, open, ".role=\"button\",.name=\"Close\",.tag=\"" ++ about_close ++ "\"") != null);
 
         var s: automation.Script = .init(gpa, "close-about", "");
         s.check = automation.Input.check;
@@ -8942,7 +8942,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(editor.demo.live.outcome.? == .finished);
         try dvui.testing.settle(headlessFrame);
         const shut = try shotOf(automation_api);
-        try std.testing.expect(std.mem.indexOf(u8, shut, "About Fizzy") == null);
+        try std.testing.expect(std.mem.find(u8, shut, "About Fizzy") == null);
     }
 
     // Open, open folder, save as and close, told a path, as a keybind with arguments, a tape or
@@ -8969,7 +8969,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         defer gpa.free(b);
         const args = struct {
             fn path(p: []const u8) ![]u8 {
-                return std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{p});
+                return gpa.print(".{{ .path = \"{s}\" }}", .{p});
             }
         };
 
@@ -9076,14 +9076,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const profiled = out.written();
         // Past the half second: the costliest scopes over the last 30 s, and the frames that
         // went over budget, each with what it spent.
-        try std.testing.expect(std.mem.indexOf(u8, profiled, ".over = .{ .seconds = ") != null);
-        try std.testing.expect(std.mem.indexOf(u8, profiled, ".hitch_budget_ms = 0.000") != null);
+        try std.testing.expect(std.mem.find(u8, profiled, ".over = .{ .seconds = ") != null);
+        try std.testing.expect(std.mem.find(u8, profiled, ".hitch_budget_ms = 0.000") != null);
         try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, profiled, ".ago_s = "));
         // Spans: the UI thread's frames, each kept, and as a Chrome trace that reads back.
         var with_spans: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer with_spans.deinit();
         try fizzy.core.profile.report(fizzy.core.profile.host(), &with_spans.writer, .{ .spans = 4 });
-        try std.testing.expect(std.mem.indexOf(u8, with_spans.written(), ".spans = .{\n        .{ .name = \"frame\", .count = ") != null);
+        try std.testing.expect(std.mem.find(u8, with_spans.written(), ".spans = .{\n        .{ .name = \"frame\", .count = ") != null);
         var trace: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer trace.deinit();
         try fizzy.core.profile.writeTrace(&trace.writer, 0);
@@ -9092,11 +9092,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         var frames_traced: usize = 0;
         for (parsed.value.traceEvents) |e| frames_traced += @intFromBool(std.mem.eql(u8, e.ph, "X") and std.mem.eql(u8, e.name, "frame"));
         try std.testing.expect(frames_traced > 10);
-        try std.testing.expect(std.mem.indexOf(u8, profiled, ".frame = .{ .fps = ") != null);
-        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"fizzy\"") != null);
+        try std.testing.expect(std.mem.find(u8, profiled, ".frame = .{ .fps = ") != null);
+        try std.testing.expect(std.mem.find(u8, profiled, ".owner = \"fizzy\"") != null);
         // The plugins drawing the tour, each under its own name.
-        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"workbench\"") != null);
-        try std.testing.expect(std.mem.indexOf(u8, profiled, ".owner = \"text\"") != null);
+        try std.testing.expect(std.mem.find(u8, profiled, ".owner = \"workbench\"") != null);
+        try std.testing.expect(std.mem.find(u8, profiled, ".owner = \"text\"") != null);
     }
     // The tour leaves the explorer, the panel and the rest of the window open: their buttons too.
     try expectButtonsNamed(headlessFrame);
@@ -9187,7 +9187,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
 
         // By path: a document that is open but not the one in front, read and written.
-        const notes_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{notes});
+        const notes_args = try gpa.print(".{{ .path = \"{s}\" }}", .{notes});
         defer gpa.free(notes_args);
         try std.testing.expect(std.mem.startsWith(u8, (try read(host, notes_args)).text, "# Notes"));
         try std.testing.expect(host.callCommand("text.read", ".{ .path = \"/not/open.txt\" }", host.arena()) == .failed);
@@ -9210,23 +9210,23 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
 
         // A write changes only what differs, as one edit, and one undo puts back exactly that.
-        const write_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{main_zig});
+        const write_args = try gpa.print(".{{ .path = \"{s}\", .text = \"// top\\nconst a = 42;\\nconst b = 3;\\n\" }}", .{main_zig});
         defer gpa.free(write_args);
         const wrote = host.callCommand("text.write", write_args, host.arena());
         try std.testing.expect(wrote == .ok);
-        try std.testing.expect(std.mem.indexOf(u8, wrote.ok.?, ".line = 2") != null);
+        try std.testing.expect(std.mem.find(u8, wrote.ok.?, ".line = 2") != null);
         try std.testing.expectEqualStrings("// top\nconst a = 42;\nconst b = 3;\n", (try read(host, "")).text);
         try editor.undo();
         try std.testing.expectEqualStrings("// top\nconst a = 1;\nconst b = 3;\n", (try read(host, "")).text);
-        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = true") != null);
-        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = false") != null);
+        try std.testing.expect(std.mem.find(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = true") != null);
+        try std.testing.expect(std.mem.find(u8, host.callCommand("text.write", write_args, host.arena()).ok.?, ".changed = false") != null);
 
         // `fizzy.undo`/`fizzy.redo` by path, on a document behind the one in front, as a script or
         // an agent calls them: only the step `expect` names, and the answer says whose it was.
         {
             const notes_doc = editor.docFromPath(notes) orelse return error.TestUnexpectedResult;
             const before = (try read(host, notes_args)).text;
-            const notes_write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"# Notes, by Claude\\n\" }}", .{notes});
+            const notes_write = try gpa.print(".{{ .path = \"{s}\", .text = \"# Notes, by Claude\\n\" }}", .{notes});
             defer gpa.free(notes_write);
             const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
             try std.testing.expect(host.callCommand("text.write", notes_write, host.arena()) == .ok);
@@ -9234,19 +9234,19 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             const line = notes_doc.owner.historyLine(notes_doc, host.arena()) orelse return error.TestUnexpectedResult;
             const top = line.entries[line.at - 1].id;
 
-            const stale = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top + 1000 });
+            const stale = try gpa.print(".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top + 1000 });
             defer gpa.free(stale);
             switch (host.callCommand("fizzy.undo", stale, host.arena())) {
-                .failed => |m| try std.testing.expect(std.mem.indexOf(u8, m, "by Claude") != null),
+                .failed => |m| try std.testing.expect(std.mem.find(u8, m, "by Claude") != null),
                 else => return error.TestUnexpectedResult,
             }
             try std.testing.expectEqualStrings("# Notes, by Claude\n", (try read(host, notes_args)).text);
 
-            const named = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top });
+            const named = try gpa.print(".{{ .path = \"{s}\", .expect = {d} }}", .{ notes, top });
             defer gpa.free(named);
             const undid = host.callCommand("fizzy.undo", named, host.arena());
             try std.testing.expect(undid == .ok);
-            try std.testing.expect(std.mem.indexOf(u8, undid.ok.?, ".by = \"Claude\"") != null);
+            try std.testing.expect(std.mem.find(u8, undid.ok.?, ".by = \"Claude\"") != null);
             try std.testing.expectEqualStrings(before, (try read(host, notes_args)).text);
             // The document in front is untouched, and still in front.
             try std.testing.expectEqualStrings(main_zig, (editor.activeDoc() orelse return error.TestUnexpectedResult).owner.documentPath(editor.activeDoc().?));
@@ -9262,7 +9262,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
             const before = (try read(host, "")).text;
-            const front_write = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// by Claude\\n\" }}", .{main_zig});
+            const front_write = try gpa.print(".{{ .path = \"{s}\", .text = \"// by Claude\\n\" }}", .{main_zig});
             defer gpa.free(front_write);
             const outer = host.act(.{ .kind = .agent, .plugin = "test", .session = 1, .label = "Claude" });
             try std.testing.expect(host.callCommand("text.write", front_write, host.arena()) == .ok);
@@ -9289,9 +9289,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         {
             const front = editor.activeDoc() orelse return error.TestUnexpectedResult;
             const claude: sdk.Author = .{ .kind = .agent, .plugin = "test", .session = 2, .label = "Claude" };
-            const first = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// first\\n\" }}", .{main_zig});
+            const first = try gpa.print(".{{ .path = \"{s}\", .text = \"// first\\n\" }}", .{main_zig});
             defer gpa.free(first);
-            const second = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\", .text = \"// second\\n\" }}", .{main_zig});
+            const second = try gpa.print(".{{ .path = \"{s}\", .text = \"// second\\n\" }}", .{main_zig});
             defer gpa.free(second);
             const before = try gpa.dupe(u8, (try read(host, "")).text);
             defer gpa.free(before);
@@ -9332,7 +9332,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             defer gpa.free(before);
             const writeAs = struct {
                 fn f(h: *sdk.Host, who: sdk.Author, path: []const u8, body: []const u8) !void {
-                    const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ path, body });
+                    const args = try h.arena().print(".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ path, body });
                     const outer = h.act(who);
                     defer h.endAct(outer);
                     try std.testing.expect(h.callCommand("text.write", args, h.arena()) == .ok);
@@ -9344,7 +9344,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 const outer = host.act(claude);
                 defer host.endAct(outer);
                 for ([_][]const u8{ "// claude one\\n", "// claude two\\n" }) |body| {
-                    const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ main_zig, body });
+                    const args = try host.arena().print(".{{ .path = \"{s}\", .text = \"{s}\" }}", .{ main_zig, body });
                     try std.testing.expect(host.callCommand("text.write", args, host.arena()) == .ok);
                 }
             }
@@ -9365,10 +9365,10 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             try std.testing.expectEqual(@as(usize, 1), mixed.yours);
             try std.testing.expectEqual(back.to, mixed.to);
 
-            const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\" }}", .{main_zig});
+            const args = try host.arena().print(".{{ .path = \"{s}\" }}", .{main_zig});
             const went = host.callCommand("fizzy.goBackBefore", args, host.arena());
             try std.testing.expect(went == .ok);
-            try std.testing.expect(std.mem.indexOf(u8, went.ok.?, ".also_taken_back = 1") != null);
+            try std.testing.expect(std.mem.find(u8, went.ok.?, ".also_taken_back = 1") != null);
             try std.testing.expectEqualStrings("// mine\n", (try read(host, "")).text);
             // Nothing lost: Claude's call and the person's edit are still on the line ahead.
             try std.testing.expect(front.owner.historyGoTo(front, mixed.from));
@@ -9443,7 +9443,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             .ok => |r| r orelse return error.TestUnexpectedResult,
             else => return error.TestUnexpectedResult,
         };
-        try std.testing.expect(std.mem.indexOf(u8, zon, ".text = \"typed\"") != null);
+        try std.testing.expect(std.mem.find(u8, zon, ".text = \"typed\"") != null);
 
         // A document a plugin holds (`sdk.Claim`) takes none of the person's input: what they
         // type waits, and so do the commands they run on it and its close, until the holder lets
@@ -9478,7 +9478,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         try dvui.testing.writeText("held");
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
+        try std.testing.expect(std.mem.find(u8, try docText(host), ".text = \"typed\"") != null);
         // Its history aside: the person's undo always runs, and stops the holder (below).
         try std.testing.expectError(error.DocumentClaimed, editor.runActiveDocCommand("paste"));
         try editor.closeFileID(doc.id);
@@ -9486,10 +9486,10 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
         // The holder's own edit lands.
         try std.testing.expect(host.callCommand("text.insert", ".{ .text = \"!\", .line = 1 }", host.arena()) == .ok);
-        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"!typed\"") != null);
+        try std.testing.expect(std.mem.find(u8, try docText(host), ".text = \"!typed\"") != null);
 
         // Who holds it is on its panes, with Stop, which a person (or a tape) presses.
-        const stop_tag = try std.fmt.allocPrint(gpa, "fizzy.claim.stop:{s}", .{path});
+        const stop_tag = try gpa.print("fizzy.claim.stop:{s}", .{path});
         defer gpa.free(stop_tag);
         var s: automation.Script = .init(gpa, "stop-claim", "");
         s.check = automation.Input.check;
@@ -9507,7 +9507,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // Let go, the person's commands reach it again.
         try editor.undo();
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expect(std.mem.indexOf(u8, try docText(host), ".text = \"typed\"") != null);
+        try std.testing.expect(std.mem.find(u8, try docText(host), ".text = \"typed\"") != null);
     }
 
     // Documents a command creates open beside the person (`Host.openBeside`), as an agent's
@@ -9519,7 +9519,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const grid: sdk.EditorAPI.NewDocGrid = .{ .column_width = 16, .row_height = 16 };
         var made: [4]u64 = undefined;
         for (&made, 0..) |*id, i| {
-            const p = try std.fmt.allocPrint(gpa, "{s}/beside-{d}.txt", .{ project, i });
+            const p = try gpa.print("{s}/beside-{d}.txt", .{ project, i });
             defer gpa.free(p);
             host.openBeside();
             defer host.endOpenBeside();
@@ -9552,7 +9552,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const doc = editor.activeDoc() orelse return error.TestUnexpectedResult;
         try std.testing.expect(doc.id != was.id);
         for ([_][]const u8{ "1", "2", "3" }) |digit| {
-            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{digit});
+            const args = try host.arena().print(".{{ .text = \"{s}\", .line = 1 }}", .{digit});
             try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
         }
         const readText = struct {
@@ -9561,9 +9561,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
                 };
-                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const at = std.mem.find(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
                 const rest = zon[at + ".text = \"".len ..];
-                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+                return rest[0 .. std.mem.findScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
             }
         }.readText;
         try std.testing.expectEqualStrings("321", try readText(host));
@@ -9610,14 +9610,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }.newDoc;
         const textOf = struct {
             fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
-                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
                 };
-                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const at = std.mem.find(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
                 const rest = zon[at + ".text = \"".len ..];
-                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+                return rest[0 .. std.mem.findScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
             }
         }.textOf;
         const Recorded = struct {
@@ -9779,14 +9779,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }.newDoc;
         const textOf = struct {
             fn textOf(h: *sdk.Host, d: sdk.DocHandle) ![]const u8 {
-                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
+                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{d.owner.documentPath(d)});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
                 };
-                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const at = std.mem.find(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
                 const rest = zon[at + ".text = \"".len ..];
-                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+                return rest[0 .. std.mem.findScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
             }
         }.textOf;
         editor.setTracking(true);
@@ -9889,9 +9889,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             .ok => |r| r orelse return error.TestUnexpectedResult,
             else => return error.TestUnexpectedResult,
         };
-        try std.testing.expect(std.mem.indexOf(u8, report, ".on = true") != null);
-        const steps_row = try std.fmt.allocPrint(host.arena(), ".steps = {d}", .{n});
-        try std.testing.expect(std.mem.indexOf(u8, report, steps_row) != null);
+        try std.testing.expect(std.mem.find(u8, report, ".on = true") != null);
+        const steps_row = try host.arena().print(".steps = {d}", .{n});
+        try std.testing.expect(std.mem.find(u8, report, steps_row) != null);
 
         // Closed, a document's track is kept for the session.
         try editor.rawCloseFileID(b.id);
@@ -9931,7 +9931,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         var doc = try open(editor, kept_path);
         try dvui.testing.settle(headlessFrame);
         for ([_][]const u8{ "a", "b", "c" }) |letter| {
-            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+            const args = try host.arena().print(".{{ .text = \"{s}\", .line = 1 }}", .{letter});
             try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
         }
         try editor.undo();
@@ -10001,7 +10001,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
         // An agent's edits, through the text plugin's commands: unsaved.
         for ([_][]const u8{ "a", "b", "c" }) |letter| {
-            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+            const args = try host.arena().print(".{{ .text = \"{s}\", .line = 1 }}", .{letter});
             try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
         }
         try dvui.testing.settle(headlessFrame);
@@ -10040,14 +10040,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 };
             }
         }.read;
-        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"cba\"") != null);
+        try std.testing.expect(std.mem.find(u8, try read(host), ".text = \"cba\"") != null);
         // The person's Undo (what mod+z runs), then the command, as an agent calls it.
         try editor.undo();
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"ba\"") != null);
+        try std.testing.expect(std.mem.find(u8, try read(host), ".text = \"ba\"") != null);
         try std.testing.expect(host.callCommand("fizzy.undo", "", host.arena()) == .ok);
         try dvui.testing.settle(headlessFrame);
-        try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"a\"") != null);
+        try std.testing.expect(std.mem.find(u8, try read(host), ".text = \"a\"") != null);
         try editor.rawCloseFileID(doc.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
@@ -10089,7 +10089,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             } else return error.TestUnexpectedResult;
             try dvui.testing.settle(headlessFrame);
             for ([_][]const u8{ "a", "b", "c" }) |letter| {
-                const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\", .line = 1 }}", .{letter});
+                const args = try host.arena().print(".{{ .text = \"{s}\", .line = 1 }}", .{letter});
                 try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
             }
             try dvui.testing.settle(headlessFrame);
@@ -10134,7 +10134,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(doc.id) orelse return error.TestUnexpectedResult);
             try dvui.testing.settle(headlessFrame);
             try std.testing.expect(doc.owner.isDirty(doc));
-            try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"cbadisk\"") != null);
+            try std.testing.expect(std.mem.find(u8, try read(host), ".text = \"cbadisk\"") != null);
             const line = doc.owner.historyLine(doc, arena.allocator()) orelse return error.TestUnexpectedResult;
             if (recorded) {
                 // Its history, picked up: each letter undoes on its own.
@@ -10142,14 +10142,14 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 try std.testing.expectEqual(@as(usize, 3), line.at);
                 try editor.undo();
                 try dvui.testing.settle(headlessFrame);
-                try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"badisk\"") != null);
+                try std.testing.expect(std.mem.find(u8, try read(host), ".text = \"badisk\"") != null);
             } else {
                 // One step over its file, and undo goes back to it: saved, nothing changed.
                 try std.testing.expectEqual(@as(usize, 1), line.entries.len);
                 try std.testing.expectEqualStrings("Recovered", line.entries[0].title);
                 try editor.undo();
                 try dvui.testing.settle(headlessFrame);
-                try std.testing.expect(std.mem.indexOf(u8, try read(host), ".text = \"disk\"") != null);
+                try std.testing.expect(std.mem.find(u8, try read(host), ".text = \"disk\"") != null);
                 try std.testing.expect(!doc.owner.isDirty(doc));
             }
             try editor.rawCloseFileID(doc.id);
@@ -10195,7 +10195,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
             editor.undo() catch {};
         }
         try std.testing.expect(host.claimHolds(claim));
-        try std.testing.expect(std.mem.indexOf(u8, host.callCommand("text.read", "", host.arena()).ok.?, ".text = \"drawn\"") != null);
+        try std.testing.expect(std.mem.find(u8, host.callCommand("text.read", "", host.arena()).ok.?, ".text = \"drawn\"") != null);
         // The person's mod+z.
         host.setInputAuthor(.person);
         try editor.undo();
@@ -10204,7 +10204,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(!host.claimHolds(claim));
         try std.testing.expect(!doc.owner.isDirty(doc));
         const out = host.callCommand("text.read", "", host.arena());
-        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"\"") != null);
+        try std.testing.expect(std.mem.find(u8, out.ok.?, ".text = \"\"") != null);
         try editor.rawCloseFileID(doc.id);
         editor.workbench.setActiveDocIndex(editor.app.open_files.getIndex(was.id) orelse return error.TestUnexpectedResult);
         try dvui.testing.settle(headlessFrame);
@@ -10341,7 +10341,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // The pointer held on the grip (the bottom edge of the pane, in its middle) brings the bar
         // up; nothing else is pressed or moved.
         {
-            const grip_tag = try std.fmt.allocPrint(gpa, "history.grip:{s}", .{path});
+            const grip_tag = try gpa.print("history.grip:{s}", .{path});
             defer gpa.free(grip_tag);
             var s: automation.Script = .init(gpa, "transport-grip", "");
             s.check = automation.Input.check;
@@ -10361,7 +10361,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
 
             // Its tab sends it back into the grip, and the pointer resting on it after does not
             // bring it back.
-            const tab_tag = try std.fmt.allocPrint(gpa, "history.collapse:{s}", .{path});
+            const tab_tag = try gpa.print("history.collapse:{s}", .{path});
             defer gpa.free(tab_tag);
             var fold: automation.Script = .init(gpa, "transport-collapse", "");
             fold.check = s.check;
@@ -10410,9 +10410,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 try std.testing.expect(ed.demo.live.outcome.? == .finished);
             }
         }.play;
-        const line_tag = try std.fmt.allocPrint(gpa, "history.line:{s}", .{path});
+        const line_tag = try gpa.print("history.line:{s}", .{path});
         defer gpa.free(line_tag);
-        const forward_tag = try std.fmt.allocPrint(gpa, "history.forward:{s}", .{path});
+        const forward_tag = try gpa.print("history.forward:{s}", .{path});
         defer gpa.free(forward_tag);
         {
             // A press on the title, over the line's start, is the bar's and goes nowhere.
@@ -10478,21 +10478,21 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(doc.id != was.id);
         try dvui.testing.settle(headlessFrame);
         for ([_][]const u8{ "one", "two", "three", "four", "five" }) |word| {
-            const args = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\\n\", .line = 1 }}", .{word});
+            const args = try host.arena().print(".{{ .text = \"{s}\\n\", .line = 1 }}", .{word});
             try std.testing.expect(host.callCommand("text.insert", args, host.arena()) == .ok);
         }
         try editor.undo();
         try dvui.testing.settle(headlessFrame);
         const textOf = struct {
             fn textOf(h: *sdk.Host, path: []const u8) ![]const u8 {
-                const args = try std.fmt.allocPrint(h.arena(), ".{{ .path = \"{s}\" }}", .{path});
+                const args = try h.arena().print(".{{ .path = \"{s}\" }}", .{path});
                 const zon = switch (h.callCommand("text.read", args, h.arena())) {
                     .ok => |r| r orelse return error.TestUnexpectedResult,
                     else => return error.TestUnexpectedResult,
                 };
-                const at = std.mem.indexOf(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
+                const at = std.mem.find(u8, zon, ".text = \"") orelse return error.TestUnexpectedResult;
                 const rest = zon[at + ".text = \"".len ..];
-                return rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
+                return rest[0 .. std.mem.findScalar(u8, rest, '"') orelse return error.TestUnexpectedResult];
             }
         }.textOf;
         const path = doc.owner.documentPath(doc);
@@ -10500,9 +10500,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         defer gpa.free(want);
         const line_before = (doc.owner.historyLine(doc, host.arena()) orelse return error.TestUnexpectedResult);
 
-        const out = try std.fmt.allocPrint(gpa, "{s}/tapes/export-test.tape", .{editor.app.config_folder});
+        const out = try gpa.print("{s}/tapes/export-test.tape", .{editor.app.config_folder});
         defer gpa.free(out);
-        const args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ path, out });
+        const args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ path, out });
         const result = switch (host.callCommand("fizzy.tracks.export", args, host.arena())) {
             .ok => |r| r orelse return error.TestUnexpectedResult,
             else => |r| {
@@ -10510,20 +10510,20 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                 return error.TestUnexpectedResult;
             },
         };
-        try std.testing.expect(std.mem.indexOf(u8, result, ".steps = 6") != null);
+        try std.testing.expect(std.mem.find(u8, result, ".steps = 6") != null);
         // A range (`from`): the tape opens on the document as it was after two steps, and holds
         // the four after; its summary names whose they are.
         {
-            const ranged = try std.fmt.allocPrint(gpa, "{s}/tapes/export-range.tape", .{editor.app.config_folder});
+            const ranged = try gpa.print("{s}/tapes/export-range.tape", .{editor.app.config_folder});
             defer gpa.free(ranged);
-            const range_args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\", .from = 2 }}", .{ path, ranged });
+            const range_args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\", .from = 2 }}", .{ path, ranged });
             const range_result = switch (host.callCommand("fizzy.tracks.export", range_args, host.arena())) {
                 .ok => |r| r orelse return error.TestUnexpectedResult,
                 else => return error.TestUnexpectedResult,
             };
-            try std.testing.expect(std.mem.indexOf(u8, range_result, ".steps = 4") != null);
+            try std.testing.expect(std.mem.find(u8, range_result, ".steps = 4") != null);
             // One author, named (a command run with no one acting is nobody known).
-            try std.testing.expect(std.mem.indexOf(u8, range_result, ".authors = .{\"unattributed\"}") != null);
+            try std.testing.expect(std.mem.find(u8, range_result, ".authors = .{\"unattributed\"}") != null);
             const range_bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, ranged, gpa, .limited(1 << 20));
             defer gpa.free(range_bytes);
             var range_check = app.automation.Input.check;
@@ -10581,7 +10581,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // Its plugin loaded, a tape plays at the next frame's top (`openWhenReady`), as
         // `Demo: Play a Tape…` and a page's `?tape=` both open one.
         try editor.tape_tabs.openWhenReady(editor, bytes, false);
-        const played_path = try std.fmt.allocPrint(gpa, "tape://1/{s}", .{std.fs.path.basename(path)});
+        const played_path = try gpa.print("tape://1/{s}", .{std.fs.path.basename(path)});
         defer gpa.free(played_path);
         for (0..2000) |_| {
             _ = try dvui.testing.step(headlessFrame);
@@ -10672,7 +10672,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }
         const gone = editor.activeDoc() orelse return error.TestUnexpectedResult;
         for ([_][]const u8{ "a", "b" }) |word| {
-            const insert = try std.fmt.allocPrint(host.arena(), ".{{ .text = \"{s}\\n\", .line = 1 }}", .{word});
+            const insert = try host.arena().print(".{{ .text = \"{s}\\n\", .line = 1 }}", .{word});
             try std.testing.expect(host.callCommand("text.insert", insert, host.arena()) == .ok);
         }
         editor.setTracking(true);
@@ -10683,7 +10683,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const gone_path = gone.owner.documentPath(gone);
         const before_text = try gpa.dupe(u8, try textOf(host, gone_path));
         defer gpa.free(before_text);
-        const gone_args = try std.fmt.allocPrint(host.arena(), ".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ gone_path, out });
+        const gone_args = try host.arena().print(".{{ .path = \"{s}\", .out = \"{s}\" }}", .{ gone_path, out });
         try std.testing.expect(host.callCommand("fizzy.tracks.export", gone_args, host.arena()) == .ok);
         try std.testing.expectEqualStrings(before_text, try textOf(host, gone_path));
         try editor.rawCloseFileID(gone.id);
@@ -10776,7 +10776,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         } else false);
         // And what the capture says about itself.
         const meta = try std.Io.Dir.cwd().readFileAlloc(dvui.io, try std.fs.path.join(host.arena(), &.{ written.path, "meta.zon" }), host.arena(), .unlimited);
-        try std.testing.expect(std.mem.indexOf(u8, meta, ".why = \"test\"") != null);
+        try std.testing.expect(std.mem.find(u8, meta, ".why = \"test\"") != null);
     }
 
     // The markdown service's inline render: no scroll area of its own, as tall as its text at the
@@ -10873,7 +10873,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expectEqualStrings(path, after.owner.documentPath(after));
         try std.testing.expect(text_plugin.isDirty(after));
         const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
-        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        try std.testing.expect(std.mem.find(u8, out.ok.?, ".text = \"typed\"") != null);
         // Still untitled: Save asks where, rather than writing its placeholder name.
         try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
     }
@@ -10906,7 +10906,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         const after = editor.docFromPath(path) orelse return error.TestUnexpectedResult;
         try std.testing.expect(after.owner.isDirty(after));
         const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
-        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        try std.testing.expect(std.mem.find(u8, out.ok.?, ".text = \"typed\"") != null);
         if (editor.session) |*kept| kept.deinit();
         editor.session = null;
     }
@@ -10956,7 +10956,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(after.owner.isDirty(after));
         try std.testing.expect(!after.owner.documentHasRecognizedSaveExtension(after));
         const out = editor.app.host.callCommand("text.read", "", editor.app.host.arena());
-        try std.testing.expect(std.mem.indexOf(u8, out.ok.?, ".text = \"typed\"") != null);
+        try std.testing.expect(std.mem.find(u8, out.ok.?, ".text = \"typed\"") != null);
         if (editor.session) |*kept| kept.deinit();
         editor.session = null;
     }

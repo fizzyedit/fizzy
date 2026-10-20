@@ -77,7 +77,7 @@ pub fn runtimeDir(gpa: std.mem.Allocator, profile_root: []const u8) ![]u8 {
 /// is a named pipe with no directory to put it in, as much as on Unix. Caller owns.
 pub fn lockId(gpa: std.mem.Allocator, app_id: []const u8, profile_root: []const u8) ![:0]u8 {
     const h: u32 = @truncate(std.hash.Wyhash.hash(0, profile_root));
-    return std.fmt.allocPrintSentinel(gpa, "{s}.p{x:0>8}", .{ app_id, h }, 0);
+    return gpa.printSentinel("{s}.p{x:0>8}", .{ app_id, h }, 0);
 }
 
 const testing = std.testing;

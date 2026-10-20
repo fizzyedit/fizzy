@@ -36,8 +36,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(8) });
     defer outer.deinit();
 
-    const message = std.fmt.allocPrint(
-        dvui.currentWindow().arena(),
+    const message = dvui.currentWindow().arena().print(
         "\"{s}\" has a newer version on disk. Overwrite with your edits, or discard them and reload?",
         .{name},
     ) catch name;

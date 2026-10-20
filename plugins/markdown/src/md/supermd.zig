@@ -104,7 +104,7 @@ fn rewriteLine(gpa: std.mem.Allocator, out: *std.ArrayList(u8), line: []const u8
             // An inline code span runs to the next run of as many backticks.
             var n: usize = 0;
             while (i + n < line.len and line[i + n] == '`') n += 1;
-            const close = std.mem.indexOfPos(u8, line, i + n, line[i .. i + n]) orelse line.len;
+            const close = std.mem.findPos(u8, line, i + n, line[i .. i + n]) orelse line.len;
             const end = @min(line.len, close + n);
             try out.appendSlice(gpa, line[i..end]);
             i = end;
@@ -192,7 +192,7 @@ const Directive = struct {
         var d: Directive = .{};
         if (expr.len < 2 or expr[0] != '$') return d;
         var i: usize = 1;
-        const name_end = std.mem.indexOfAnyPos(u8, expr, i, ".(") orelse expr.len;
+        const name_end = std.mem.findAnyPos(u8, expr, i, ".(") orelse expr.len;
         d.kind = std.meta.stringToEnum(Kind, expr[i..name_end]) orelse .other;
         i = name_end;
         // `.method('arg', …)` calls, in any order.
@@ -202,7 +202,7 @@ const Directive = struct {
                 continue;
             }
             const m_start = i + 1;
-            const m_end = std.mem.indexOfScalarPos(u8, expr, m_start, '(') orelse break;
+            const m_end = std.mem.findScalarPos(u8, expr, m_start, '(') orelse break;
             const method = expr[m_start..m_end];
             const arg = firstStringArg(expr, m_end);
             i = endOfCall(expr, m_end);
@@ -273,7 +273,7 @@ fn firstStringArg(expr: []const u8, paren: usize) ?[]const u8 {
     while (i < expr.len and expr[i] == ' ') i += 1;
     if (i >= expr.len or (expr[i] != '\'' and expr[i] != '"')) return null;
     const q = expr[i];
-    const end = std.mem.indexOfScalarPos(u8, expr, i + 1, q) orelse return null;
+    const end = std.mem.findScalarPos(u8, expr, i + 1, q) orelse return null;
     return expr[i + 1 .. end];
 }
 

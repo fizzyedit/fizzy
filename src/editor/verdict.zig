@@ -279,7 +279,7 @@ fn started(driver: @TypeOf(result.driver), name: []const u8) void {
 }
 
 fn endFmt(comptime fmt: []const u8, args: anytype) bool {
-    return end(std.fmt.bufPrint(&ended_buf, fmt, args) catch "ended");
+    return end(std.mem.print(&ended_buf, fmt, args) catch "ended");
 }
 
 fn end(how: []const u8) bool {

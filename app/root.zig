@@ -107,6 +107,9 @@ pub const update = struct {
     pub const auto_update = @import("update/auto_update.zig");
     pub const update_install = @import("update/update_install.zig");
     pub const update_notify = @import("update/update_notify.zig");
+    pub const install_location = @import("update/install_location.zig");
+    pub const macos_bundle = @import("update/macos_bundle.zig");
+    pub const move_offer = @import("update/move_offer.zig");
 };
 
 /// The Model Context Protocol's dispatch: a JSON-RPC message in, its answer out, the app's commands

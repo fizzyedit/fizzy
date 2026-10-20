@@ -370,7 +370,7 @@ fn stampStorage(b: *std.Build) std.Build.LazyPath {
     b.dependOnFileContents(b.path("web/index.html"));
     const html = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.root.joinString(b.allocator, "web/index.html") catch @panic("OOM"), b.allocator, .unlimited) catch |err|
         std.debug.panic("web/index.html: {t}", .{err});
-    if (std.mem.indexOf(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
+    if (std.mem.find(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
     const stamped = std.mem.replaceOwned(u8, b.allocator, html, token, name) catch @panic("OOM");
     return b.addWriteFiles().add("index.html", stamped);
 }

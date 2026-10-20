@@ -15,9 +15,9 @@ const sdk = @import("fizzy_sdk");
 
 /// The full line (sans newline) containing the first occurrence of `key`, or null if absent.
 fn findLine(haystack: []const u8, key: []const u8) ?[]const u8 {
-    const pos = std.mem.indexOf(u8, haystack, key) orelse return null;
-    const line_start = if (std.mem.lastIndexOfScalar(u8, haystack[0..pos], '\n')) |nl| nl + 1 else 0;
-    var line_end = pos + (std.mem.indexOfScalar(u8, haystack[pos..], '\n') orelse (haystack.len - pos));
+    const pos = std.mem.find(u8, haystack, key) orelse return null;
+    const line_start = if (std.mem.findScalarLast(u8, haystack[0..pos], '\n')) |nl| nl + 1 else 0;
+    var line_end = pos + (std.mem.findScalar(u8, haystack[pos..], '\n') orelse (haystack.len - pos));
     if (line_end > line_start and haystack[line_end - 1] == '\r') line_end -= 1;
     return haystack[line_start..line_end];
 }
@@ -29,9 +29,9 @@ fn leadingWhitespace(line: []const u8) []const u8 {
 }
 
 fn quotedValue(line: []const u8) ?[]const u8 {
-    const q1 = std.mem.indexOfScalar(u8, line, '"') orelse return null;
+    const q1 = std.mem.findScalar(u8, line, '"') orelse return null;
     const after = line[q1 + 1 ..];
-    const q2 = std.mem.indexOfScalar(u8, after, '"') orelse return null;
+    const q2 = std.mem.findScalar(u8, after, '"') orelse return null;
     return after[0..q2];
 }
 
@@ -51,8 +51,8 @@ pub fn main(main_init: std.process.Init) !void {
     }
 
     const v = sdk.version.sdk_version;
-    const want_version = try std.fmt.allocPrint(arena, "{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
-    const want_fingerprint = try std.fmt.allocPrint(arena, "0x{x}", .{sdk.dylib.abi_fingerprint});
+    const want_version = try arena.print("{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
+    const want_fingerprint = try arena.print("0x{x}", .{sdk.dylib.abi_fingerprint});
 
     std.debug.print("pinned fizzy SDK: {s}  abi_fingerprint: {s}\n", .{ want_version, want_fingerprint });
 

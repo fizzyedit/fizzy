@@ -213,7 +213,7 @@ fn drawHeader(self: *Table) void {
     for (self.columns, 0..) |c, col| {
         var title = c.title;
         if (self.sort) |so| if (so.col == col) {
-            title = std.fmt.allocPrint(arena, "{s} {s}", .{ c.title, if (so.descending) "↓" else "↑" }) catch c.title;
+            title = arena.print("{s} {s}", .{ c.title, if (so.descending) "↓" else "↑" }) catch c.title;
         };
         const size = body_font.textSize(title).scale(s, dvui.Size.Physical);
         const x = if (c.kind == .number) self.xs[col] + self.ws[col] - pad * s - size.w else self.xs[col] + pad * s;
@@ -267,7 +267,7 @@ pub fn number(self: *Table, row: usize, col: usize, v: ?f64) void {
     if (col >= self.columns.len) return;
     const x = v orelse return;
     var buf: [48]u8 = undefined;
-    const t = std.fmt.bufPrint(&buf, "{[v]d:.[p]}", .{ .v = x, .p = self.columns[col].decimals }) catch "?";
+    const t = std.mem.print(&buf, "{[v]d:.[p]}", .{ .v = x, .p = self.columns[col].decimals }) catch "?";
     const mono = dvui.Font.theme(.mono);
     const r = self.cell(row, col);
     const size = mono.textSize(t).scale(self.s, dvui.Size.Physical);

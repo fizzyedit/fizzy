@@ -36,7 +36,7 @@ pub fn suffixed(id: []const u8, seed: u64) Name {
     var n = spell(id);
     n.len = @min(n.len, max_len - suffix_len);
     const hash: u24 = @truncate(std.hash.Wyhash.hash(seed, id));
-    _ = std.fmt.bufPrint(n.buf[n.len..][0..suffix_len], "_{x:0>6}", .{hash}) catch unreachable;
+    _ = std.mem.print(n.buf[n.len..][0..suffix_len], "_{x:0>6}", .{hash}) catch unreachable;
     n.len += suffix_len;
     return n;
 }

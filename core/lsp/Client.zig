@@ -1169,7 +1169,7 @@ fn startupThreadMain(self: *Client, io: std.Io) void {
         if (err == error.ShuttingDown) return;
         dvui.log.warn("{s}: language server unavailable ({any})", .{ self.config.language_id, err });
         var msg_buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "language server unavailable ({any})", .{err}) catch "language server unavailable";
+        const msg = std.mem.print(&msg_buf, "language server unavailable ({any})", .{err}) catch "language server unavailable";
         self.config.log(self.config.language_id, .warn, msg);
         self.state.store(.unavailable, .release);
         self.config.refresh();
@@ -1224,7 +1224,7 @@ fn spawnProcess(self: *Client, io: std.Io) !void {
     const spawned = spawnChild(gpa, io, argv, root) catch |err| {
         dvui.log.warn("{s}: could not spawn \"{s}\" ({any}) — hover/goto-definition disabled for this session", .{ self.config.language_id, argv[0], err });
         var msg_buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "could not spawn \"{s}\" ({any}) — hover/goto-definition disabled for this session", .{ argv[0], err }) catch "could not spawn language server";
+        const msg = std.mem.print(&msg_buf, "could not spawn \"{s}\" ({any}) — hover/goto-definition disabled for this session", .{ argv[0], err }) catch "could not spawn language server";
         self.config.log(self.config.language_id, .warn, msg);
         return err;
     };
@@ -1292,7 +1292,7 @@ fn spawnChild(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8, cwd:
 /// that background thread.
 fn resolveExecutable(gpa: std.mem.Allocator, io: std.Io, name: []const u8) ?[]u8 {
     if (comptime builtin.target.os.tag == .windows) return null;
-    if (std.mem.indexOfScalar(u8, name, '/') != null) return null;
+    if (std.mem.findScalar(u8, name, '/') != null) return null;
 
     const inherited_path: ?[]const u8 = if (std.c.getenv("PATH")) |p| std.mem.span(p) else null;
     if (findInPath(gpa, io, inherited_path, name)) |found| return found;
@@ -1701,7 +1701,7 @@ fn stderrDrainThreadMain(self: *Client, io: std.Io) void {
         dvui.log.warn("{s}: language server stderr: {s}", .{ self.config.language_id, line });
 
         var msg_buf: [4160]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "language server stderr: {s}", .{line}) catch line;
+        const msg = std.mem.print(&msg_buf, "language server stderr: {s}", .{line}) catch line;
         self.config.log(self.config.language_id, .warn, msg);
     }
 }
@@ -1831,7 +1831,7 @@ fn runHoverJob(self: *Client, io: std.Io, j: HoverJob) !void {
     if (resp.err != null) {
         if (jsonString(resp.err.?, "message")) |msg| {
             var msg_buf: [256]u8 = undefined;
-            const line = std.fmt.bufPrint(&msg_buf, "hover rejected: {s}", .{msg}) catch "hover rejected";
+            const line = std.mem.print(&msg_buf, "hover rejected: {s}", .{msg}) catch "hover rejected";
             self.config.log(self.config.language_id, .warn, line);
         } else {
             self.config.log(self.config.language_id, .warn, "hover rejected");
@@ -2552,7 +2552,7 @@ fn resolveSignatureHelp(result: std.json.Value) ?ResolvedSignatureHelp {
 
     return switch (param_label) {
         .string => |s| blk: {
-            const idx = std.mem.indexOf(u8, label, s) orelse break :blk no_emphasis;
+            const idx = std.mem.find(u8, label, s) orelse break :blk no_emphasis;
             break :blk ResolvedSignatureHelp{ .label = label, .active_param_start = idx, .active_param_end = idx + s.len };
         },
         .array => |arr| blk: {

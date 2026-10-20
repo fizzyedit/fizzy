@@ -275,7 +275,7 @@ pub fn composeMergedText(
 pub fn upsertOne(gpa: Allocator, existing_full_source: ?[:0]const u8, entry: Entry) ![]u8 {
     const text = entry.text orelse return error.NullEntryText;
     const src = existing_full_source orelse {
-        return std.fmt.allocPrint(gpa, ".{{\n    .plugins = .{{\n        .{f} = {s},\n    }},\n}}\n", .{ std.zig.fmtId(entry.id), text });
+        return gpa.print(".{{\n    .plugins = .{{\n        .{f} = {s},\n    }},\n}}\n", .{ std.zig.fmtId(entry.id), text });
     };
 
     var parsed = parseZon(gpa, src) orelse return gpa.dupe(u8, src);
@@ -354,9 +354,9 @@ pub fn parseExtensions(gpa: Allocator, text: []const u8) ![]const []const u8 {
         out.deinit(gpa);
     }
     var rest = text;
-    while (std.mem.indexOfScalar(u8, rest, '"')) |open_q| {
+    while (std.mem.findScalar(u8, rest, '"')) |open_q| {
         rest = rest[open_q + 1 ..];
-        const close_q = std.mem.indexOfScalar(u8, rest, '"') orelse break;
+        const close_q = std.mem.findScalar(u8, rest, '"') orelse break;
         const ext = rest[0..close_q];
         rest = rest[close_q + 1 ..];
         if (ext.len == 0) continue;
@@ -414,7 +414,7 @@ const sample_source: [:0]const u8 =
 test "extractField returns the verbatim value text for a top-level field" {
     const plugins = extractField(testing.allocator, sample_source, "plugins").?;
     defer testing.allocator.free(plugins);
-    try testing.expect(std.mem.indexOf(u8, plugins, ".pixi") != null);
+    try testing.expect(std.mem.find(u8, plugins, ".pixi") != null);
 }
 
 test "extractPluginBlob returns the verbatim value text for an existing id" {
@@ -672,7 +672,7 @@ test "composePluginIdBlock records enabled as a tri-state" {
     // unanswered offer on the next launch.
     const unset = try composePluginIdBlock(testing.allocator, .{}, ".{ .a = 1 }");
     defer testing.allocator.free(unset);
-    try testing.expect(std.mem.indexOf(u8, unset, ".enabled") == null);
+    try testing.expect(std.mem.find(u8, unset, ".enabled") == null);
 
     const off = try composePluginIdBlock(testing.allocator, .{ .enabled = false }, null);
     defer testing.allocator.free(off);

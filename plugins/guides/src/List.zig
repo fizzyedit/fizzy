@@ -126,7 +126,7 @@ fn label(title: []const u8, ms: u32, color: dvui.Color) void {
 /// `ms` as m:ss.
 fn clock(buf: []u8, ms: u32) []const u8 {
     const s = ms / 1000;
-    return std.fmt.bufPrint(buf, "{d}:{d:0>2}", .{ s / 60, s % 60 }) catch "";
+    return std.mem.print(buf, "{d}:{d:0>2}", .{ s / 60, s % 60 }) catch "";
 }
 
 fn dim() dvui.Color {

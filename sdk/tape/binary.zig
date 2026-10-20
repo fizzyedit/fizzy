@@ -893,7 +893,7 @@ test "a recording's key chords and steps are checked against the app, as in ZON"
     defer testing.allocator.free(bytes);
     try testing.expectError(error.BadChord, read(testing.allocator, bytes, .{ .steps = steps_check.steps, .key = struct {
         fn ok(c: []const u8) bool {
-            return std.mem.indexOfScalar(u8, c, ' ') == null;
+            return std.mem.findScalar(u8, c, ' ') == null;
         }
     }.ok }));
     try testing.expectError(error.StepsUnsupported, read(testing.allocator, bytes, .{}));

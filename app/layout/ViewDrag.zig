@@ -1792,7 +1792,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
 /// from another, and an icon alone says only what kind of file it is.
 fn dropTitle(l: *Layout, d: ViewDrag) ?[]const u8 {
     // Carried with others: the one in hand, and how many more.
-    if (d.with_n > 1) return std.fmt.allocPrint(l.arena, "{s} +{d}", .{ carriedTitle(l, d), d.with_n - 1 }) catch carriedTitle(l, d);
+    if (d.with_n > 1) return l.arena.print("{s} +{d}", .{ carriedTitle(l, d), d.with_n - 1 }) catch carriedTitle(l, d);
     if (d.with_n == 1) return carriedTitle(l, d);
     if (l.host.surfaceById(d.moved_id)) |s| return s.title;
     const doc = draggedDoc(l, d) orelse return null;
@@ -1826,7 +1826,7 @@ fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
         while (n > 0) : (n -= 1) {
             // Never split a UTF-8 sequence.
             if (n < title.len and (title[n] & 0xC0) == 0x80) continue;
-            text = std.fmt.bufPrint(&buf, "{s}…", .{title[0..n]}) catch return;
+            text = std.mem.print(&buf, "{s}…", .{title[0..n]}) catch return;
             if (font.textSize(text).w <= max_w) break;
         }
         if (n == 0) return;
@@ -2140,7 +2140,7 @@ fn rowsSize(l: *Layout, d: *const ViewDrag, scale: f32) dvui.Size.Physical {
     }
     var count = rows.items.len;
     if (rows.more > 0) {
-        const more = std.fmt.allocPrint(l.arena, "+{d} more", .{rows.more}) catch "";
+        const more = l.arena.print("+{d} more", .{rows.more}) catch "";
         w = @max(w, face_icon + face_gap + font.textSize(more).w);
         count += 1;
     }

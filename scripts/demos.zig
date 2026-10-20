@@ -93,7 +93,7 @@ fn emit(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, out: std.I
     defer back.deinit();
     if (back.tape.ops.len != t.ops.len or back.tape.duration() != t.duration())
         return fail("{s}: its tape reads back as another", .{name});
-    const file = try std.fmt.allocPrint(arena, "{s}.tape", .{name});
+    const file = try arena.print("{s}.tape", .{name});
     try out.writeFile(io, .{ .sub_path = file, .data = bytes.written() });
     return .{ .name = try arena.dupe(u8, name), .title = try arena.dupe(u8, t.title), .file = file, .ms = t.duration(), .live = live };
 }

@@ -709,7 +709,7 @@ test "a live tape plays on the app as it is: no keyframe, anywhere" {
 /// A spelling for tests: any chord whose last key is a single letter.
 pub const test_check: Check = .{ .key = struct {
     fn ok(c: []const u8) bool {
-        const last = std.mem.lastIndexOfScalar(u8, c, '+') orelse return c.len == 1;
+        const last = std.mem.findScalarLast(u8, c, '+') orelse return c.len == 1;
         return c.len - last - 1 == 1;
     }
 }.ok };

@@ -993,7 +993,7 @@ pub fn takePendingPluginSettings(self: *Host) PluginSettings {
 /// filesystem access — caller-owned, free with `self.allocator`.
 pub fn pluginInstallDir(self: *Host, id: []const u8) ?[]u8 {
     const dir = self.plugins_dir orelse return null;
-    return std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir, id }) catch null;
+    return self.allocator.print("{s}/{s}", .{ dir, id }) catch null;
 }
 
 /// Register a plugin under its self-declared `id`. The `id` is the single source of truth
@@ -1762,7 +1762,7 @@ pub fn registerCommand(self: *Host, cmd: Command) !void {
 /// `id` followed by `.` (so a dotted id like `acme.paint` is one plugin), else the id's first
 /// dotted segment, for a plugin not loaded yet.
 fn commandNamespace(self: *const Host, id: []const u8) []const u8 {
-    var best: []const u8 = id[0 .. std.mem.indexOfScalar(u8, id, '.') orelse id.len];
+    var best: []const u8 = id[0 .. std.mem.findScalar(u8, id, '.') orelse id.len];
     var found = false;
     for (self.plugins.items) |p| {
         if (id.len <= p.id.len or id[p.id.len] != '.' or !std.mem.startsWith(u8, id, p.id)) continue;
@@ -2118,7 +2118,7 @@ pub fn documentEdited(self: *Host, doc_id: u64) void {
     // stay plain.
     const who = self.author();
     const title = (if (who.kind == .agent and who.label.len > 0)
-        std.fmt.allocPrint(self.allocator, "{s} · {s}", .{ who.label, what })
+        self.allocator.print("{s} · {s}", .{ who.label, what })
     else
         self.allocator.dupe(u8, what)) catch return;
     if (self.activity.items.len == activity_cap) {
@@ -3499,7 +3499,7 @@ const EventLog = struct {
     fn handler(state: *anyopaque, e: events.Event) void {
         const self: *EventLog = @ptrCast(@alignCast(state));
         if (self.n == self.seen.len) return;
-        const text = std.fmt.bufPrint(&self.seen[self.n], "{s} {s}", .{ e.name, e.payload }) catch return;
+        const text = std.mem.print(&self.seen[self.n], "{s} {s}", .{ e.name, e.payload }) catch return;
         self.lens[self.n] = text.len;
         self.n += 1;
         if (self.echo) |h| {
@@ -3730,7 +3730,7 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
 
     // Arguments that do not fit, and a command that refuses: each says why, in words.
     const missing = host.callCommand("t.goTo", "", results);
-    try testing.expect(std.mem.indexOf(u8, missing.bad_args, "line") != null);
+    try testing.expect(std.mem.find(u8, missing.bad_args, "line") != null);
     try testing.expectEqualStrings("lines count from 1", host.callCommand("t.goTo", ".{ .line = 0 }", results).failed);
 
     // Disabled and unknown are their own answers, not failures.

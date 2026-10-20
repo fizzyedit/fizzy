@@ -449,7 +449,7 @@ pub fn register(manager: PluginManager) !void {
     if (comptime !App.loads_plugins) return;
     const host = manager.host;
     const url = resolveRegistryUrl();
-    const fp_hex = try std.fmt.allocPrint(manager.gpa, "0x{x}", .{dylib.abi_fingerprint});
+    const fp_hex = try manager.gpa.print("0x{x}", .{dylib.abi_fingerprint});
     defer manager.gpa.free(fp_hex);
     catalog = try store.Catalog.init(manager.gpa, dvui.io, url, fp_hex);
     // The owner of `store://…` pages, and the mount they live on. Registered before the store's
@@ -642,7 +642,7 @@ fn drawAuthorLine(entry: StoreEntry, muted: dvui.Color) void {
         // Publisher links to the account itself, built from the publisher name rather than from
         // any URL the plugin supplied — the whole point of this half is that it isn't
         // author-controlled.
-        const url = std.fmt.allocPrint(dvui.currentWindow().arena(), "https://github.com/{s}", .{p}) catch "";
+        const url = dvui.currentWindow().arena().print("https://github.com/{s}", .{p}) catch "";
         drawCreditLink(@src(), p, if (url.len > 0) url else null, muted);
     }
 
@@ -1133,10 +1133,10 @@ fn drawUpdateCardControls(entry: StoreEntry) void {
 /// card's `installed vX / store vY` line, in the same slot.
 fn updateInfoLine(buf: []u8, row: PendingUpdate) []const u8 {
     if (row.repair) {
-        return std.fmt.bufPrint(buf, "rebuild for this version of Fizzy — v{s}", .{row.to}) catch row.to;
+        return std.mem.print(buf, "rebuild for this version of Fizzy — v{s}", .{row.to}) catch row.to;
     }
-    const from = row.from orelse return std.fmt.bufPrint(buf, "v{s}", .{row.to}) catch row.to;
-    return std.fmt.bufPrint(buf, "v{d}.{d}.{d} → v{s}", .{ from.major, from.minor, from.patch, row.to }) catch row.to;
+    const from = row.from orelse return std.mem.print(buf, "v{s}", .{row.to}) catch row.to;
+    return std.mem.print(buf, "v{d}.{d}.{d} → v{s}", .{ from.major, from.minor, from.patch, row.to }) catch row.to;
 }
 
 /// The offered updates as store cards — the same shell the Plugins tab draws, so the two never
@@ -1759,7 +1759,7 @@ var pass_folders: ?*const plugin_folders.Folders = null;
 /// message gets the message without it, never cut short.
 fn refusal(buf: []u8, id: []const u8) ?[]const u8 {
     if (app.host.pluginByIdIgnoringCase(id)) |p| if (!std.mem.eql(u8, p.id, id))
-        return std.fmt.bufPrint(buf, "its id differs only in case from the loaded plugin '{s}'", .{p.id}) catch "its id differs only in case from a loaded plugin";
+        return std.mem.print(buf, "its id differs only in case from the loaded plugin '{s}'", .{p.id}) catch "its id differs only in case from a loaded plugin";
     const read: ?plugin_folders.Folders = if (pass_folders == null) fresh: {
         const plugins_dir = std.fs.path.join(app.gpa, &.{ app.config_folder, "plugins" }) catch return "the plugins folder could not be read to check it";
         defer app.gpa.free(plugins_dir);
@@ -1768,7 +1768,7 @@ fn refusal(buf: []u8, id: []const u8) ?[]const u8 {
     defer if (read) |f| f.deinit(app.gpa);
     const folders = if (pass_folders) |f| f.* else read.?;
     const other = plugin_folders.clash(folders.names, id) orelse return null;
-    return std.fmt.bufPrint(buf, "its id differs only in case from the installed plugin '{s}'", .{other}) catch "its id differs only in case from an installed plugin";
+    return std.mem.print(buf, "its id differs only in case from the installed plugin '{s}'", .{other}) catch "its id differs only in case from an installed plugin";
 }
 
 /// Allocate a `Job` with all strings owned; `errdefer` unwinds every partial allocation so a
@@ -2646,9 +2646,9 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                 );
                 var fail_buf: [256]u8 = undefined;
                 const fail_text = if (f.detail) |d|
-                    std.fmt.bufPrint(&fail_buf, "Failed to load: {s} ({s})", .{ f.reason, d }) catch f.reason
+                    std.mem.print(&fail_buf, "Failed to load: {s} ({s})", .{ f.reason, d }) catch f.reason
                 else
-                    std.fmt.bufPrint(&fail_buf, "Failed to load: {s}", .{f.reason}) catch f.reason;
+                    std.mem.print(&fail_buf, "Failed to load: {s}", .{f.reason}) catch f.reason;
                 const fail_font = dvui.Font.theme(.body);
                 var fail_tl = dvui.textLayout(@src(), .{}, .{
                     .expand = .horizontal,
@@ -2898,14 +2898,14 @@ fn releaseDate(entry: StoreEntry) ?[]const u8 {
 fn infoLine(buf: []u8, entry: StoreEntry) []const u8 {
     var latest_buf: [40]u8 = undefined;
     const latest: ?[]const u8 = if (latestRegistryVersion(entry)) |lv|
-        std.fmt.bufPrint(&latest_buf, "store v{s}", .{lv}) catch null
+        std.mem.print(&latest_buf, "store v{s}", .{lv}) catch null
     else
         null;
 
     var installed_buf: [40]u8 = undefined;
     const installed: ?[]const u8 = if (isInstalled(entry))
         (if (currentVersion(entry.id)) |v|
-            std.fmt.bufPrint(&installed_buf, "installed v{d}.{d}.{d}", .{ v.major, v.minor, v.patch }) catch null
+            std.mem.print(&installed_buf, "installed v{d}.{d}.{d}", .{ v.major, v.minor, v.patch }) catch null
         else
             null)
     else
@@ -2941,7 +2941,7 @@ fn infoLine(buf: []u8, entry: StoreEntry) []const u8 {
 fn storeInfoLine(buf: []u8, entry: StoreEntry) []const u8 {
     var latest_buf: [40]u8 = undefined;
     const latest: ?[]const u8 = if (latestRegistryVersion(entry)) |lv|
-        std.fmt.bufPrint(&latest_buf, "store v{s}", .{lv}) catch null
+        std.mem.print(&latest_buf, "store v{s}", .{lv}) catch null
     else
         null;
 
@@ -2995,9 +2995,9 @@ fn drawUpdateBlocked(entry: StoreEntry) void {
     if (latest.order(installed) != .gt) return;
     var buf: [96]u8 = undefined;
     const why = if (!host_optimize_matches_store)
-        std.fmt.bufPrint(&buf, "v{s} needs a release build of Fizzy", .{latest_s}) catch return
+        std.mem.print(&buf, "v{s} needs a release build of Fizzy", .{latest_s}) catch return
     else
-        std.fmt.bufPrint(&buf, "v{s} needs a newer Fizzy (SDK {d}.{d}.{d} here)", .{ latest_s, version.sdk_version.major, version.sdk_version.minor, version.sdk_version.patch }) catch return;
+        std.mem.print(&buf, "v{s} needs a newer Fizzy (SDK {d}.{d}.{d} here)", .{ latest_s, version.sdk_version.major, version.sdk_version.minor, version.sdk_version.patch }) catch return;
     dvui.labelNoFmt(@src(), why, .{}, .{
         .gravity_y = 0.5,
         .margin = .{ .x = 4, .w = 4 },
@@ -3420,7 +3420,7 @@ fn readmeSource(entry: StoreEntry) ?RepoSource {
 /// Derived from the id, never a list: `isBundled` asks the build, so any plugin it says yes to
 /// must resolve here too.
 fn builtinSubpath(arena: std.mem.Allocator, id: []const u8) ?[]const u8 {
-    return std.fmt.allocPrint(arena, "plugins/{s}", .{id}) catch null;
+    return arena.print("plugins/{s}", .{id}) catch null;
 }
 
 fn drawHeader() !void {
@@ -3428,7 +3428,7 @@ fn drawHeader() !void {
     defer hbox.deinit();
 
     var buf: [96]u8 = undefined;
-    const host_sdk = std.fmt.bufPrint(&buf, "Fizzy SDK {d}.{d}.{d} · ABI 0x{x}", .{
+    const host_sdk = std.mem.print(&buf, "Fizzy SDK {d}.{d}.{d} · ABI 0x{x}", .{
         version.sdk_version.major,
         version.sdk_version.minor,
         version.sdk_version.patch,

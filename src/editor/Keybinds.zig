@@ -920,7 +920,7 @@ fn writeTraceFile(editor: *Editor, path: []const u8, ms: u32) ![]const u8 {
     const file = if (path.len > 0) path else blk: {
         const dir = try std.fs.path.join(arena, &.{ editor.app.config_folder, "traces" });
         try cwd.createDirPath(dvui.io, dir);
-        break :blk try std.fmt.allocPrint(arena, "{s}/trace-{d}.json", .{ dir, std.Io.Clock.real.now(dvui.io).toSeconds() });
+        break :blk try arena.print("{s}/trace-{d}.json", .{ dir, std.Io.Clock.real.now(dvui.io).toSeconds() });
     };
     try cwd.writeFile(dvui.io, .{ .sub_path = file, .data = out.written() });
     dvui.log.info("trace written to {s}", .{file});
@@ -1051,7 +1051,7 @@ pub const document_verbs = [_]DocumentVerb{
 };
 
 pub fn commandActionSuffix(id: []const u8) []const u8 {
-    if (std.mem.lastIndexOfScalar(u8, id, '.')) |dot| return id[dot + 1 ..];
+    if (std.mem.findScalarLast(u8, id, '.')) |dot| return id[dot + 1 ..];
     return id;
 }
 
@@ -1662,7 +1662,7 @@ fn runInvocation(editor: *Editor, invoked: Keymap.Invocation) void {
 fn ownerIdForCommand(command: []const u8) ?[]const u8 {
     if (std.mem.startsWith(u8, command, "fizzy.")) return null;
     if (std.mem.startsWith(u8, command, bind_override_prefix)) return null;
-    const dot = std.mem.indexOfScalar(u8, command, '.') orelse return null;
+    const dot = std.mem.findScalar(u8, command, '.') orelse return null;
     return command[0..dot];
 }
 

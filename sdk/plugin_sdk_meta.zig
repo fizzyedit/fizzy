@@ -21,9 +21,9 @@ pub fn main(main_init: std.process.Init) !void {
     const min_str: []const u8 = if (min.len > 0)
         min
     else
-        try std.fmt.allocPrint(arena, "{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
+        try arena.print("{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
 
-    const payload = try std.fmt.allocPrint(arena,
+    const payload = try arena.print(
         \\{{
         \\  "id": "{s}",
         \\  "version": "{s}",

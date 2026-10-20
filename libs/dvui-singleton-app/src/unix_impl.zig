@@ -187,7 +187,7 @@ fn writeAllFd(fd: std.c.fd_t, bytes: []const u8) !void {
 fn buildSocketPath(allocator: std.mem.Allocator, dir: []const u8, app_id: []const u8) ![]u8 {
     const trimmed = trimTrailingSlash(dir);
     const uid: u32 = @intCast(std.c.getuid());
-    return std.fmt.allocPrint(allocator, "{s}/{s}-{d}.sock", .{ trimmed, app_id, uid });
+    return allocator.print("{s}/{s}-{d}.sock", .{ trimmed, app_id, uid });
 }
 
 fn trimTrailingSlash(s: []const u8) []const u8 {
@@ -222,7 +222,7 @@ test "shutdown returns while the listener waits in accept" {
     if (comptime builtin.target.os.tag == .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var name_buf: [64]u8 = undefined;
-    const app_id = try std.fmt.bufPrint(&name_buf, "fizzy-singleton-test-{d}", .{std.c.getpid()});
+    const app_id = try std.mem.print(&name_buf, "fizzy-singleton-test-{d}", .{std.c.getpid()});
     const primary = (try Primary.acquire(.{
         .allocator = std.testing.allocator,
         .io = io,

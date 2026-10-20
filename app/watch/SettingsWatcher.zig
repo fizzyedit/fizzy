@@ -99,14 +99,14 @@ const Kind = enum { binary, ignored, other };
 /// it loads a plugin), say nothing new. Everything else — `settings.zon` above all, which an editor
 /// may write in several bursts — waits for the coalesce.
 fn classify(config_folder: []const u8, path: []const u8) Kind {
-    if (std.mem.indexOf(u8, path, ".load-copy") != null or std.mem.indexOf(u8, path, ".load-tmp") != null) return .ignored;
+    if (std.mem.find(u8, path, ".load-copy") != null or std.mem.find(u8, path, ".load-tmp") != null) return .ignored;
     // The app's own state beside its settings, written while it runs: a crash checkpoint every few
     // seconds while something is unsaved, a restart's session, a handover's signals and its log.
     // None of it is settings or a plugin, and reconciling on each write would re-read
     // `settings.zon` for nothing.
     if (std.mem.startsWith(u8, path, config_folder) and path.len > config_folder.len and std.fs.path.isSep(path[config_folder.len])) {
         const rest = path[config_folder.len + 1 ..];
-        const top = rest[0 .. std.mem.indexOfAny(u8, rest, "/\\") orelse rest.len];
+        const top = rest[0 .. std.mem.findAny(u8, rest, "/\\") orelse rest.len];
         for (state_folders) |name| if (std.mem.eql(u8, top, name)) return .ignored;
     }
     const ext = switch (builtin.target.os.tag) {

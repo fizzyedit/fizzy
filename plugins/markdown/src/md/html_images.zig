@@ -68,7 +68,7 @@ pub fn collect(html: []const u8, gpa: std.mem.Allocator) ?[]Image {
     var depth: usize = 0;
 
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, html, i, '<')) |start| {
+    while (std.mem.findScalarPos(u8, html, i, '<')) |start| {
         i = start + 1;
         const closing = i < html.len and html[i] == '/';
         if (closing) i += 1;
@@ -78,7 +78,7 @@ pub fn collect(html: []const u8, gpa: std.mem.Allocator) ?[]Image {
         const name = html[name_start..i];
         if (name.len == 0) continue;
 
-        const end = std.mem.indexOfScalarPos(u8, html, i, '>') orelse html.len;
+        const end = std.mem.findScalarPos(u8, html, i, '>') orelse html.len;
         const attrs = html[i..end];
         const self_closing = std.mem.endsWith(u8, std.mem.trimEnd(u8, attrs, " \t\r\n"), "/");
         i = end;
@@ -185,7 +185,7 @@ fn attrValue(tag: []const u8, name: []const u8) ?[]const u8 {
             const quote = tag[i];
             i += 1;
             const value_start = i;
-            const value_end = std.mem.indexOfScalarPos(u8, tag, i, quote) orelse tag.len;
+            const value_end = std.mem.findScalarPos(u8, tag, i, quote) orelse tag.len;
             value = tag[value_start..value_end];
             i = @min(value_end + 1, tag.len);
         } else {

@@ -76,7 +76,7 @@ pub fn recover(gpa: std.mem.Allocator, config_folder: []const u8, skip: bool) ?K
     if (comptime !supported) return null;
     const path = dir(gpa, config_folder) catch return null;
     defer gpa.free(path);
-    const next = std.fmt.allocPrint(gpa, "{s}.new", .{path}) catch return null;
+    const next = gpa.print("{s}.new", .{path}) catch return null;
     defer gpa.free(next);
     // An older build wrote the next checkpoint here before swapping it in. This build never makes
     // it, so removing it cannot race a watcher that has just seen it appear.
@@ -96,7 +96,7 @@ pub fn recover(gpa: std.mem.Allocator, config_folder: []const u8, skip: bool) ?K
 
 fn complete(path: []const u8) bool {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const zon = std.fmt.bufPrint(&buf, "{s}/session.zon", .{path}) catch return false;
+    const zon = std.mem.print(&buf, "{s}/session.zon", .{path}) catch return false;
     std.Io.Dir.cwd().access(dvui.io, zon, .{}) catch return false;
     return true;
 }

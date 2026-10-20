@@ -97,7 +97,7 @@ pub fn mintName(dock: *const DockLayout, origin: []const u8, side: DockLayout.Si
     };
     var n: u32 = 1;
     while (n < 10_000) : (n += 1) {
-        const raw = std.fmt.bufPrint(buf, "{s}/{c}{d}", .{ origin, letter, n }) catch return null;
+        const raw = std.mem.print(buf, "{s}/{c}{d}", .{ origin, letter, n }) catch return null;
         if (!dock.contains(raw)) return raw;
     }
     return null;

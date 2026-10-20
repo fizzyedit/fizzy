@@ -78,7 +78,7 @@ pub fn start(self: *PluginReloads, editor: *Editor, id: []const u8) void {
 
 fn work(job: *Job) void {
     var name_buf: [64]u8 = undefined;
-    const timed = fizzy.core.profile.span(std.fmt.bufPrint(&name_buf, "plugin open {s}", .{job.id}) catch "plugin open");
+    const timed = fizzy.core.profile.span(std.mem.print(&name_buf, "plugin open {s}", .{job.id}) catch "plugin open");
     // The worker's own allocator: `open` only needs a scratch path from it.
     job.opened = PluginLoader.open(std.heap.smp_allocator, job.path, job.id);
     timed.end();

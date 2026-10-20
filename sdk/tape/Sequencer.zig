@@ -661,7 +661,7 @@ test "a glide covered in one call still passes along its path, a frame's worth a
     var lines = std.mem.tokenizeScalar(u8, log.out.items, '\n');
     while (lines.next()) |l| {
         if (!std.mem.startsWith(u8, l, "move ")) continue;
-        const comma = std.mem.indexOfScalar(u8, l, ',').?;
+        const comma = std.mem.findScalar(u8, l, ',').?;
         try xs.append(testing.allocator, try std.fmt.parseFloat(f32, l[5..comma]));
     }
     try testing.expectEqual(@as(usize, 10), xs.items.len);

@@ -55,7 +55,7 @@ fn backLines(text: []const u8, at: usize, n: u32) usize {
     var pos = at;
     var left = n;
     while (left > 0 and pos > 0) : (left -= 1) {
-        pos = if (std.mem.lastIndexOfScalar(u8, text[0 .. pos - 1], '\n')) |nl| nl + 1 else 0;
+        pos = if (std.mem.findScalarLast(u8, text[0 .. pos - 1], '\n')) |nl| nl + 1 else 0;
     }
     return pos;
 }
@@ -65,7 +65,7 @@ fn forwardLines(text: []const u8, at: usize, n: u32) usize {
     var pos = at;
     var left = n;
     while (left > 0 and pos < text.len) : (left -= 1) {
-        pos = if (std.mem.indexOfScalarPos(u8, text, pos, '\n')) |nl| nl + 1 else text.len;
+        pos = if (std.mem.findScalarPos(u8, text, pos, '\n')) |nl| nl + 1 else text.len;
     }
     return pos;
 }
@@ -119,7 +119,7 @@ fn span(w: *std.Io.Writer, from: u32, len: u32) !void {
 fn lines(w: *std.Io.Writer, mark: u8, text: []const u8) !void {
     var at: usize = 0;
     while (at < text.len) {
-        const end = if (std.mem.indexOfScalarPos(u8, text, at, '\n')) |nl| nl + 1 else text.len;
+        const end = if (std.mem.findScalarPos(u8, text, at, '\n')) |nl| nl + 1 else text.len;
         try w.writeByte(mark);
         try w.writeAll(text[at..end]);
         if (text[end - 1] != '\n') try w.writeAll("\n\\ No newline at end of file\n");

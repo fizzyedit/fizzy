@@ -190,7 +190,7 @@ pub fn open(host: *sdk.Host, id: []const u8, grouping: u64) !void {
 /// reopens from, so it has to be the stable thing — and the tab still reads "Google Drive",
 /// because `documentTitle` answers that separately.
 fn pathFor(gpa: std.mem.Allocator, id: []const u8) ![]u8 {
-    return std.fmt.allocPrint(gpa, "{s}/{s}{s}", .{ mount_prefix, id, extension });
+    return gpa.print("{s}/{s}{s}", .{ mount_prefix, id, extension });
 }
 
 /// The plugin id a page path is about: its basename without the extension.

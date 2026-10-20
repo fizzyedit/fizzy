@@ -42,7 +42,7 @@ pub fn append(comptime level: std.log.Level, comptime scope: @EnumLiteral(), com
         level.asText() ++ ": "
     else
         level.asText() ++ "(" ++ @tagName(scope) ++ "): ";
-    const text = std.fmt.allocPrint(allocator, prefix ++ format, args) catch return;
+    const text = allocator.print(prefix ++ format, args) catch return;
     store(level, @import("app").AppInfo.current.name, text);
 }
 
@@ -59,7 +59,7 @@ pub fn appendLine(level: std.log.Level, scope: []const u8, message: []const u8) 
         .info => "info",
         .debug => "debug",
     };
-    const text = std.fmt.allocPrint(allocator, "{s}({s}): {s}", .{ level_text, scope, message }) catch return;
+    const text = allocator.print("{s}({s}): {s}", .{ level_text, scope, message }) catch return;
     store(level, scope, text);
 }
 

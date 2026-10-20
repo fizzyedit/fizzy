@@ -147,8 +147,8 @@ test "a frame is put down to its events, else the refreshes before it, else some
     try c.write(&out.writer, "", 8);
     const text = out.written();
     // The busiest place first.
-    const editor = std.mem.indexOf(u8, text, "src/editor/Editor.zig:120\", .count = 2").?;
-    const doc = std.mem.indexOf(u8, text, "plugins/text/src/Doc.zig:9\", .count = 1, .from_thread = true").?;
+    const editor = std.mem.find(u8, text, "src/editor/Editor.zig:120\", .count = 2").?;
+    const doc = std.mem.find(u8, text, "plugins/text/src/Doc.zig:9\", .count = 1, .from_thread = true").?;
     try std.testing.expect(editor < doc);
 
     c.reset();

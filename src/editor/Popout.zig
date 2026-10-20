@@ -258,7 +258,7 @@ fn popOut(f: *Floats.Float) void {
         if (o.* == null) break o;
     } else return;
     var title_buf: [96]u8 = undefined;
-    const title = std.fmt.bufPrintSentinel(&title_buf, "{s}", .{f.titleText()}, 0) catch "Fizzy";
+    const title = std.mem.printSentinel(&title_buf, "{s}", .{f.titleText()}, 0) catch "Fizzy";
     const s = dvui.windowNaturalScale();
     // Where it goes in the main window's frame, whole — not where it was last drawn: made last
     // frame, it may have been drawn as the carried glass it lands from, a drop's size.

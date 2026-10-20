@@ -112,7 +112,7 @@ pub fn pluginExtension() []const u8 {
 /// `{plugins_dir}/{name}/` directory (see plans/PLUGIN_MANIFEST_PLAN.md R10; every plugin, built-in
 /// or third-party, gets its own directory rather than sitting flat in `plugins/`).
 pub fn pluginFilename(name: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ name, pluginExtension() });
+    return allocator.print("{s}.{s}", .{ name, pluginExtension() });
 }
 
 /// `{exe_dir}/plugins/{name}/{name}.{ext}`
@@ -220,7 +220,7 @@ fn copyToFreshLoadPath(allocator: std.mem.Allocator, path: []const u8) ![]const 
 
     const base = std.fs.path.basename(path);
     const seq = load_tmp_seq.fetchAdd(1, .monotonic);
-    const dest = try std.fmt.allocPrint(allocator, "{s}/{d}-{s}", .{ tmp_dir, seq, base });
+    const dest = try allocator.print("{s}/{d}-{s}", .{ tmp_dir, seq, base });
     errdefer allocator.free(dest);
 
     try std.Io.Dir.copyFileAbsolute(path, dest, dvui.io, .{ .make_path = true, .replace = true });
@@ -258,7 +258,7 @@ fn stableLoadCopyPath(allocator: std.mem.Allocator, path: []const u8, st: std.Io
     const copy_dir = try loadCopyDir(allocator, path);
     defer allocator.free(copy_dir);
 
-    const dest = try std.fmt.allocPrint(allocator, "{s}/{d}-{d}-{s}", .{
+    const dest = try allocator.print("{s}/{d}-{d}-{s}", .{
         copy_dir,
         st.mtime.nanoseconds,
         st.size,
@@ -488,7 +488,7 @@ pub fn register(host: *Host, opened: Opened, pre: ?PreRegister) LoadError!Loaded
 
     // In the crash table from before its `register` runs, so a crash there is the plugin's.
     var version_buf: [24]u8 = undefined;
-    const plugin_version = std.fmt.bufPrint(&version_buf, "{f}", .{o.version_info.plugin_version}) catch "?";
+    const plugin_version = std.mem.print(&version_buf, "{f}", .{o.version_info.plugin_version}) catch "?";
     crash.addModule(o.plugin_id, plugin_version, @intFromPtr(o.register_fn));
     errdefer crash.removeModule(@intFromPtr(o.register_fn));
 

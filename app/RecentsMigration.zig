@@ -44,9 +44,9 @@ pub fn migrateIfNeeded(allocator: std.mem.Allocator, zon_path: []const u8) void 
 
 fn siblingJsonPath(allocator: std.mem.Allocator, zon_path: []const u8) ![]u8 {
     if (std.mem.endsWith(u8, zon_path, ".zon")) {
-        return std.fmt.allocPrint(allocator, "{s}json", .{zon_path[0 .. zon_path.len - 3]});
+        return allocator.print("{s}json", .{zon_path[0 .. zon_path.len - 3]});
     }
-    return std.fmt.allocPrint(allocator, "{s}.json", .{zon_path});
+    return allocator.print("{s}.json", .{zon_path});
 }
 
 fn migrate(allocator: std.mem.Allocator, zon_path: []const u8, json_path: []const u8, data: []const u8) !void {

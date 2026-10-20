@@ -1226,7 +1226,7 @@ fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts
         // Not in this chunk, or unsafe to splice at all (see `CompletionCandidate.text`'s doc
         // comment on the no-newline requirement).
         if (g.anchor < chunk_start or g.anchor > chunk_end) break :blk null;
-        if (std.mem.indexOfScalar(u8, g.text, '\n') != null) break :blk null;
+        if (std.mem.findScalar(u8, g.text, '\n') != null) break :blk null;
         break :blk g;
     };
 
@@ -2188,7 +2188,7 @@ fn insertIndent(self: *TextEntryWidget) void {
     }
 
     const cursor = self.textLayout.selectionGet(self.len).cursor;
-    const line_start = if (std.mem.lastIndexOfScalar(u8, self.text[0..cursor], '\n')) |nl| nl + 1 else 0;
+    const line_start = if (std.mem.findScalarLast(u8, self.text[0..cursor], '\n')) |nl| nl + 1 else 0;
     const column = cursor - line_start;
     const n = tab_size - (column % tab_size);
 
@@ -2202,7 +2202,7 @@ fn insertIndent(self: *TextEntryWidget) void {
 /// bounded by `buf.len` — indentation deeper than that just stops growing on Enter, not a
 /// correctness issue at any indentation depth anyone would actually use.
 fn copyLineIndent(text: []const u8, pos: usize, buf: []u8) []const u8 {
-    const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..pos], '\n')) |nl| nl + 1 else 0;
+    const line_start = if (std.mem.findScalarLast(u8, text[0..pos], '\n')) |nl| nl + 1 else 0;
     var end = line_start;
     while (end < text.len and (text[end] == ' ' or text[end] == '\t') and (end - line_start) < buf.len) : (end += 1) {
         buf[end - line_start] = text[end];
@@ -2301,7 +2301,7 @@ fn insertNewlineWithIndent(self: *TextEntryWidget) void {
     const next: ?u8 = if (cursor < self.len) self.text[cursor] else null;
     const opens = "{([";
     const closes = "})]";
-    const opener_idx = if (prev) |p| std.mem.indexOfScalar(u8, opens, p) else null;
+    const opener_idx = if (prev) |p| std.mem.findScalar(u8, opens, p) else null;
 
     var unit_buf: [16]u8 = undefined;
     const unit = if (opener_idx != null) self.oneIndentUnit(&unit_buf) else "";

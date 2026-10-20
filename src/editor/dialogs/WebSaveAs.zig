@@ -190,5 +190,5 @@ fn exportFileName(gpa: std.mem.Allocator, name: []const u8, patterns: []const u8
         if (first.len == 0) first = pattern;
     }
     if (first.len == 0) return gpa.dupeSentinel(u8, name, 0);
-    return std.fmt.allocPrintSentinel(gpa, "{s}.{s}", .{ name, first }, 0);
+    return gpa.printSentinel("{s}.{s}", .{ name, first }, 0);
 }

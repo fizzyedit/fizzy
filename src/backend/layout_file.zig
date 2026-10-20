@@ -91,9 +91,9 @@ const legacy_window_file = "window.zon";
 fn windowFilePath(buf: []u8, dir: []const u8, name: []const u8) ?[:0]const u8 {
     const sep = std.fs.path.sep_str;
     if (std.mem.endsWith(u8, dir, sep)) {
-        return std.fmt.bufPrintSentinel(buf, "{s}{s}", .{ dir, name }, 0) catch null;
+        return std.mem.printSentinel(buf, "{s}{s}", .{ dir, name }, 0) catch null;
     }
-    return std.fmt.bufPrintSentinel(buf, "{s}{s}{s}", .{ dir, sep, name }, 0) catch null;
+    return std.mem.printSentinel(buf, "{s}{s}{s}", .{ dir, sep, name }, 0) catch null;
 }
 
 /// Reads every field of `window.zon`, falling back to `SavedFrame`'s own defaults for whatever

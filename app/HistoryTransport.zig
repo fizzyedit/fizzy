@@ -604,7 +604,7 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     const font = dvui.Font.theme(.body).larger(-2);
     var buf: [96]u8 = undefined;
     const title = if (at == 0) "Before any change" else line.entries[at - 1].title;
-    const label = if (trimming and opts.window_summary.len > 0) opts.window_summary else std.fmt.bufPrint(&buf, "{s}   {d} / {d}", .{ title, at, n }) catch title;
+    const label = if (trimming and opts.window_summary.len > 0) opts.window_summary else std.mem.print(&buf, "{s}   {d} / {d}", .{ title, at, n }) catch title;
     // The strip of pictures, inset from the bar's top far enough that the trim's bracket round it
     // stays inside the glass, its corners the bar's own curve less that inset, so it never runs
     // into it.

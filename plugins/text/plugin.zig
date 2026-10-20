@@ -375,7 +375,7 @@ fn infobarEntries(_: *anyopaque, active_doc: ?DocHandle) []const sdk.infobar.Ent
     const doc = docFrom(handle) orelse return &.{};
     const arena = sdk.host().arena();
     const pos = doc.lineCharacterForByteOffset(doc.sel_start);
-    const pos_text = std.fmt.allocPrint(arena, "Ln {d}, Col {d}", .{ pos.line + 1, pos.character + 1 }) catch return &.{};
+    const pos_text = arena.print("Ln {d}, Col {d}", .{ pos.line + 1, pos.character + 1 }) catch return &.{};
     const name = std.fs.path.basename(doc.path);
     const entries = arena.alloc(sdk.infobar.Entry, 2) catch return &.{};
     entries[0] = .{
@@ -417,7 +417,7 @@ fn historyLine(_: *anyopaque, handle: DocHandle, arena: std.mem.Allocator) anyer
         const what = for (steps) |o| {
             if (o.step == to) break kindTitle(o.kind);
         } else if (to == 0) "the Start" else "an Earlier Step";
-        e.title = try std.fmt.allocPrint(arena, "Back to {s}", .{what});
+        e.title = try arena.print("Back to {s}", .{what});
     }
     return .{ .version = doc.history.version, .entries = entries, .at = doc.history.undo_stack.items.len };
 }
@@ -611,12 +611,12 @@ fn cmdReplace(state: *anyopaque, args: Replace.Args, call: *sdk.Command.Call) an
     if (count > 1 and !args.all) return call.fail("found {d} times: give more of the surrounding text, or all = true", .{count});
 
     if (count == 1) {
-        const at = std.mem.indexOf(u8, text, args.find).?;
+        const at = std.mem.find(u8, text, args.find).?;
         try doc.replaceRange(at, at + args.find.len, args.with);
     } else {
         // Every occurrence, as one edit: one undo puts them all back.
         const replaced = try std.mem.replaceOwned(u8, call.arena, text, args.find, args.with);
-        const first = std.mem.indexOf(u8, text, args.find).?;
+        const first = std.mem.find(u8, text, args.find).?;
         try doc.replaceRange(0, text.len, replaced);
         const caret = first + args.with.len;
         doc.sel_start = caret;
@@ -666,7 +666,7 @@ fn cmdWrite(state: *anyopaque, args: Write.Args, call: *sdk.Command.Call) anyerr
     const doc = try targetDoc(state, args.path, call);
     const old = doc.text.items;
     const new = args.text;
-    const prefix = std.mem.indexOfDiff(u8, old, new) orelse return call.returns(.{ .changed = false, .line = 1, .column = 1 });
+    const prefix = std.mem.findDiff(u8, old, new) orelse return call.returns(.{ .changed = false, .line = 1, .column = 1 });
     var suffix: usize = 0;
     while (suffix < old.len - prefix and suffix < new.len - prefix and old[old.len - 1 - suffix] == new[new.len - 1 - suffix]) suffix += 1;
     try doc.replaceRange(prefix, old.len - suffix, new[prefix .. new.len - suffix]);

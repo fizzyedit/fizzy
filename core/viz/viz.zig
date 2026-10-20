@@ -264,7 +264,7 @@ pub fn stat(src: std.builtin.SourceLocation, label: []const u8, value: f64, opts
     const mono = dvui.Font.theme(.mono);
     if (label.len > 0) dvui.labelNoFmt(@src(), label, .{}, .{ .font = mono, .color_text = .{ .color = dim }, .padding = .{ .w = 4 }, .gravity_y = 0.5 });
     var buf: [48]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "{[v]d:.[p]}", .{ .v = value, .p = opts.decimals }) catch "?";
+    const text = std.mem.print(&buf, "{[v]d:.[p]}", .{ .v = value, .p = opts.decimals }) catch "?";
     // As wide as three digits and the decimals whatever the number, so a row of stats keeps
     // its layout while the numbers change: "79" and "120" take the same room.
     const digits = "000.000000000";
@@ -286,5 +286,5 @@ pub fn fit(arena: std.mem.Allocator, font: dvui.Font, text: []const u8, max_w: f
     const ellipsis = "…";
     var end: usize = 0;
     _ = font.textSizeEx(text, .{ .max_width = @max(0, max_w - font.textSize(ellipsis).w), .end_idx = &end });
-    return std.fmt.allocPrint(arena, "{s}{s}", .{ text[0..end], ellipsis }) catch text[0..end];
+    return arena.print("{s}{s}", .{ text[0..end], ellipsis }) catch text[0..end];
 }

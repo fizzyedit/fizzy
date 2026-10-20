@@ -160,7 +160,7 @@ pub fn init(gpa: std.mem.Allocator) void {
     // makes "anything the registry offers this build" an exact allowlist rather than a
     // list of hosts to keep adding to.
     var buf: [32]u8 = undefined;
-    const fp = std.fmt.bufPrint(&buf, "0x{x}", .{dylib_api.abi_fingerprint}) catch return;
+    const fp = std.mem.print(&buf, "0x{x}", .{dylib_api.abi_fingerprint}) catch return;
     wasm.fizzy_web_plugin_fingerprint(fp.ptr, fp.len);
 }
 
