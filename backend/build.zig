@@ -19,6 +19,24 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
 
+    // The conformance suite as a program, for a real platform's driver. Today: Sim, to check the
+    // suite itself.
+    const winsys_module = b.createModule(.{ .root_source_file = b.path("winsys/root.zig"), .target = target, .optimize = optimize });
+    const conformance = b.addExecutable(.{
+        .name = "winsys-conformance",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("winsys/conformance/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "winsys", .module = winsys_module }},
+        }),
+    });
+    const conformance_run = b.addRunArtifact(conformance);
+    if (b.option([]const u8, "conformance-tag", "Run only the cases of this tag (all, needs_display, macos, windows, linux)")) |tag| conformance_run.addArgs(&.{ "--tag", tag });
+    if (b.option([]const u8, "conformance-filter", "Run only the cases whose name contains this")) |text| conformance_run.addArgs(&.{ "--filter", text });
+    if (b.option(bool, "conformance-list", "List the cases instead of running them") orelse false) conformance_run.addArg("--list");
+    b.step("conformance", "Run the windowing conformance suite (-Dconformance-tag, -Dconformance-filter, -Dconformance-list)").dependOn(&conformance_run.step);
+
     // The interface compiles for the web too: no OS, no libc. `analysed` in the root makes the object
     // analyse every declaration, which a build of unreferenced code would not.
     const winsys_web = b.addObject(.{
