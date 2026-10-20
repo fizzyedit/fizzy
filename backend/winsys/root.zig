@@ -1,11 +1,10 @@
 //! winsys: the windowing interface every platform implements and the app reads, std-only.
 //!
 //! Pure data and a vtable: no dvui, no SDL, nothing that allocates on its own, so it compiles for
-//! every target including wasm32 and can be built into a test without a window. `Sim` is a
-//! platform in memory, for tests. Event queueing
-//! and normalisation (plans#51 step 3),
-//! recording and replay (5), the conformance suite (6) and the SDL3 adapter (7) are built on this
-//! and live beside it later; none is here.
+//! every target including wasm32 and can be built into a test without a window. `Sim`, a platform
+//! in memory for tests, is here. Event queueing and normalisation (plans#51 step 3), recording and
+//! replay (5), the conformance suite (6) and the SDL3 adapter (7) are built on this and live
+//! beside it later; none of those is here.
 //!
 //! The decisions that apply to everything, one line each (the reason is at the type):
 //!

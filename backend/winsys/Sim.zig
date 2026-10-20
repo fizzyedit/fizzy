@@ -21,6 +21,11 @@
 //! this is Sim's choice, not a finding. Allocation failure aborts: Sim is a test double, and the
 //! functions an app calls cannot report it.
 //!
+//! **Raw events, not normalised.** Sim queues events itself and does not go through the event
+//! queue (plans#51 step 3), so it does not exercise normalisation: losing focus, for one, releases
+//! no held key or button. TODO(seam): an event-queue pass over Sim's output, before the
+//! conformance suite (step 6) relies on it.
+//!
 //! Not modelled yet: pointer capture across windows (a release lands in the window under the
 //! pointer), modal parents, window hints, display bounds changing in place.
 const std = @import("std");
