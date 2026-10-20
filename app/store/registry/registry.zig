@@ -145,7 +145,7 @@ fn fetchJson(comptime T: type, allocator: std.mem.Allocator, io: std.Io, url: []
     var body: std.Io.Writer.Allocating = .init(allocator);
     defer body.deinit();
 
-    const sep: u8 = if (std.mem.indexOfScalar(u8, url, '?') != null) '&' else '?';
+    const sep: u8 = if (std.mem.findScalar(u8, url, '?') != null) '&' else '?';
     const nonce = std.Io.Clock.boot.now(io).nanoseconds;
     const fresh_url = try std.fmt.allocPrint(allocator, "{s}{c}_={d}", .{ url, sep, nonce });
     defer allocator.free(fresh_url);

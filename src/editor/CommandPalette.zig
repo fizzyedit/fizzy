@@ -188,7 +188,7 @@ fn freeIndex(self: *CommandPalette, gpa: std.mem.Allocator) void {
 }
 
 fn queryText(self: *const CommandPalette) []const u8 {
-    const end = std.mem.indexOfScalar(u8, &self.text_buf, 0) orelse self.text_buf.len;
+    const end = std.mem.findScalar(u8, &self.text_buf, 0) orelse self.text_buf.len;
     return self.text_buf[0..end];
 }
 

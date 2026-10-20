@@ -649,9 +649,9 @@ const min_ms_shown: f64 = 0.005;
 /// A scope's name as shown: a surface named for a file path (`pixi.doc:/Users/…/sheet.fiz`)
 /// by its file name, which is the part that tells one from another.
 fn shortName(name: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, name, ":/")) |colon| {
+    if (std.mem.find(u8, name, ":/")) |colon| {
         const tail = name[colon + 1 ..];
-        return if (std.mem.lastIndexOfScalar(u8, tail, '/')) |slash| tail[slash + 1 ..] else tail;
+        return if (std.mem.findScalarLast(u8, tail, '/')) |slash| tail[slash + 1 ..] else tail;
     }
     return name;
 }

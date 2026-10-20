@@ -19,7 +19,7 @@ fn downloadNameWithExtension(allocator: std.mem.Allocator, filename: []const u8,
         return try allocator.dupe(u8, filename);
     }
     const base = std.fs.path.basename(filename);
-    const stem: []const u8 = if (std.mem.lastIndexOf(u8, base, ".")) |i| base[0..i] else base;
+    const stem: []const u8 = if (std.mem.findLast(u8, base, ".")) |i| base[0..i] else base;
     if (stem.len == 0) {
         return try std.fmt.allocPrint(allocator, "download{s}", .{ext});
     }

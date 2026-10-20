@@ -511,7 +511,7 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
 /// plugin's reload brought back), which the workbench holds (`Workbench.holdsDocument`).
 pub fn ownsDocument(self: *const Demo, doc: sdk.DocHandle) bool {
     const saved = self.saved orelse return true;
-    if (std.mem.indexOfScalar(u64, saved.docs, doc.id) != null) return false;
+    if (std.mem.findScalar(u64, saved.docs, doc.id) != null) return false;
     return !self.editor.workbench.holdsDocument(doc);
 }
 
@@ -724,7 +724,7 @@ fn mountFiles(self: *Demo, kf: *const automation.Tape.Keyframe) !void {
     for (kf.files) |f| {
         // `Mem` makes no parents of its own; every directory on the way is put first.
         var i: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, f.path, i, '/')) |slash| : (i = slash + 1) {
+        while (std.mem.findScalarPos(u8, f.path, i, '/')) |slash| : (i = slash + 1) {
             const dir = try std.fmt.allocPrint(gpa, "/{s}", .{f.path[0..slash]});
             defer gpa.free(dir);
             mem.putDir(dir) catch |err| switch (err) {

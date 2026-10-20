@@ -101,7 +101,7 @@ fn parseChord(text: []const u8, platform: Platform, buf: []u8) ParseError!Chord 
 
     // Split on '+', treating the final segment as the key. `+` is never itself a key name
     // (VSCode spells that key `=` / `shift+=`), so a trailing '+' is a missing key, not a plus.
-    while (std.mem.indexOfScalar(u8, rest, '+')) |idx| {
+    while (std.mem.findScalar(u8, rest, '+')) |idx| {
         const token = rest[0..idx];
         if (token.len == 0) return error.MissingKey;
         const lowered = lower(token, buf);

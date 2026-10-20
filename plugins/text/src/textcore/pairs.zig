@@ -70,7 +70,7 @@ pub fn onTyped(text: []const u8, sel_start: usize, sel_end: usize, ch: u8) Actio
         // Wrapping several lines in quotes is nearly always a mistake (and leaves an
         // unterminated string in every language this editor highlights); brackets over multiple
         // lines are normal.
-        if (p.is_quote and std.mem.indexOfScalar(u8, text[sel_start..sel_end], '\n') != null) return .insert;
+        if (p.is_quote and std.mem.findScalar(u8, text[sel_start..sel_end], '\n') != null) return .insert;
         return .{ .surround = p };
     }
 
@@ -114,7 +114,7 @@ pub const NestMark = struct {
 /// ignored — `    if (x) {` and a lone `}` at the same indent both report level 1.
 pub fn indentLevelAt(text: []const u8, pos: usize, tab_size: u8) u8 {
     const ts: usize = if (tab_size == 0) 4 else tab_size;
-    const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..@min(pos, text.len)], '\n')) |nl| nl + 1 else 0;
+    const line_start = if (std.mem.findScalarLast(u8, text[0..@min(pos, text.len)], '\n')) |nl| nl + 1 else 0;
     var col: usize = 0;
     var i = line_start;
     while (i < text.len) : (i += 1) {
@@ -435,7 +435,7 @@ test "nestMarks mid-range uses each line's own indent" {
         \\}
     ;
     // Inner `{ }` sit on the indented middle line — range covering only that line.
-    const mid = std.mem.indexOf(u8, text, "{ }").?;
+    const mid = std.mem.find(u8, text, "{ }").?;
     var out: [4]NestMark = undefined;
     const n = nestMarks(text, mid, mid + 3, 4, &out);
     try testing.expectEqual(@as(usize, 2), n);
@@ -463,7 +463,7 @@ test "nestMarks gives each bracket its own line's indent, from any range" {
             const n = nestMarks(text, start, end, 4, &out);
             var k: usize = 0;
             for (start..end) |i| {
-                if (std.mem.indexOfScalar(u8, brackets, text[i]) == null) continue;
+                if (std.mem.findScalar(u8, brackets, text[i]) == null) continue;
                 try testing.expectEqual(i, out[k].byte);
                 try testing.expectEqual(indentLevelAt(text, i, 4) +% kindOffset(text[i]), out[k].depth);
                 k += 1;

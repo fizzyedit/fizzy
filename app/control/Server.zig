@@ -171,7 +171,7 @@ pub const Request = struct {
 
     /// The path without its query.
     pub fn path(self: *const Request) []const u8 {
-        return self.target[0 .. std.mem.indexOfScalar(u8, self.target, '?') orelse self.target.len];
+        return self.target[0 .. std.mem.findScalar(u8, self.target, '?') orelse self.target.len];
     }
 
     /// Answer by streaming events to this connection from now on, from the UI thread. The stream
@@ -292,7 +292,7 @@ pub fn wants(self: *Server, name: []const u8) bool {
 /// The message is built once and copied to each. From any thread.
 pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
     // A line break would end the `event:` line early, and let a name forge messages of its own.
-    if (std.mem.indexOfAny(u8, name, "\r\n") != null) return;
+    if (std.mem.findAny(u8, name, "\r\n") != null) return;
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     for (self.streams.items) |st| {
@@ -309,7 +309,7 @@ pub fn publish(self: *Server, name: []const u8, json: []const u8) void {
 /// was last sent `delta.since` is sent `delta.json` instead, what changed since: the rest, `whole`,
 /// which a change-taking stream takes as its new base.
 pub fn publishNamed(self: *Server, name: []const u8, whole: []const u8, seq: u32, delta: ?Delta, changed: bool) void {
-    if (std.mem.indexOfAny(u8, name, "\r\n") != null) return;
+    if (std.mem.findAny(u8, name, "\r\n") != null) return;
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     for (self.streams.items) |st| {
@@ -369,7 +369,7 @@ pub fn stop(self: *Server) void {
     // streaming, blocked on a quiet client or not, is cancelled.
     for (self.conns.items) |c| {
         if (c.task) |*t| {
-            if (std.mem.indexOfScalar(*Conn, answered.items, c) != null) t.await(self.io) else t.cancel(self.io);
+            if (std.mem.findScalar(*Conn, answered.items, c) != null) t.await(self.io) else t.cancel(self.io);
         }
         self.gpa.destroy(c);
     }
@@ -585,7 +585,7 @@ fn serveStream(self: *Server, head: *std.http.Server.Request, stream: *Stream) v
 
 /// `?diff=1`: the stream wants changes on a base where an event offers them (`publishNamed`).
 fn wantsDiff(target: []const u8) bool {
-    const query = target[(std.mem.indexOfScalar(u8, target, '?') orelse return false) + 1 ..];
+    const query = target[(std.mem.findScalar(u8, target, '?') orelse return false) + 1 ..];
     var params = std.mem.tokenizeScalar(u8, query, '&');
     while (params.next()) |param| if (std.mem.eql(u8, param, "diff=1") or std.mem.eql(u8, param, "diff=true")) return true;
     return false;
@@ -593,11 +593,11 @@ fn wantsDiff(target: []const u8) bool {
 
 /// `?topics=a,b` as a list; everything when absent or empty.
 fn topicsOf(arena: std.mem.Allocator, target: []const u8) ![]const []const u8 {
-    const query = target[(std.mem.indexOfScalar(u8, target, '?') orelse return &.{"*"}) + 1 ..];
+    const query = target[(std.mem.findScalar(u8, target, '?') orelse return &.{"*"}) + 1 ..];
     var list: std.ArrayListUnmanaged([]const u8) = .empty;
     var params = std.mem.tokenizeScalar(u8, query, '&');
     while (params.next()) |param| {
-        const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
+        const eq = std.mem.findScalar(u8, param, '=') orelse continue;
         if (!std.mem.eql(u8, param[0..eq], "topics")) continue;
         const value = std.Uri.percentDecodeInPlace(try arena.dupe(u8, param[eq + 1 ..]));
         var names = std.mem.tokenizeScalar(u8, value, ',');
@@ -640,7 +640,7 @@ const TestClient = struct {
         const head = self.reply[0..self.reply_len];
         const key = "content-length: ";
         if (std.ascii.findIgnoreCase(head, key)) |i| {
-            const end = std.mem.indexOfPos(u8, head, i, "\r\n") orelse return;
+            const end = std.mem.findPos(u8, head, i, "\r\n") orelse return;
             const len = std.fmt.parseInt(usize, head[i + key.len .. end], 10) catch return;
             const want = @min(len, self.reply.len - self.reply_len);
             r.interface.readSliceAll(self.reply[self.reply_len..][0..want]) catch return;
@@ -694,7 +694,7 @@ test "a request reaches the UI thread and its answer goes back" {
 
     const reply = client.reply[0..client.reply_len];
     try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
-    try std.testing.expect(std.mem.indexOf(u8, reply, "content-type: application/json\r\n") != null);
+    try std.testing.expect(std.mem.find(u8, reply, "content-type: application/json\r\n") != null);
     try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\n{\"ok\":true}"));
 
     // Only this user may open it.
@@ -765,7 +765,7 @@ test "what cannot be served is refused before its body, and never reaches the ap
         client.run();
         const reply = client.reply[0..client.reply_len];
         try std.testing.expect(std.mem.startsWith(u8, reply, case.status));
-        try std.testing.expect(std.mem.indexOf(u8, reply, "100 Continue") == null);
+        try std.testing.expect(std.mem.find(u8, reply, "100 Continue") == null);
     }
     var taken: std.ArrayListUnmanaged(*Request) = .empty;
     defer taken.deinit(gpa);
@@ -872,7 +872,7 @@ test "a stream gets the events it asked for, once each, until the server stops" 
 
     const reply = client.reply[0..client.reply_len];
     try std.testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 200 OK\r\n"));
-    try std.testing.expect(std.mem.indexOf(u8, reply, "content-type: text/event-stream\r\n") != null);
+    try std.testing.expect(std.mem.find(u8, reply, "content-type: text/event-stream\r\n") != null);
     try std.testing.expect(std.mem.endsWith(u8, reply, "\r\n\r\nevent: fizzy.document.saved\ndata: {\"path\":\"/a\"}\n\nevent: chat.turn_ended\ndata: {}\n\n"));
 }
 

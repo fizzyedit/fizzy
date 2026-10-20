@@ -777,7 +777,7 @@ fn controlButton(src: std.builtin.SourceLocation, c: place_commands.Command, pla
     });
     bw.drawFocus();
     // Its title less the "Place: " every command of the palette's carries.
-    const title = if (std.mem.indexOf(u8, c.title, ": ")) |at| c.title[at + 2 ..] else c.title;
+    const title = if (std.mem.find(u8, c.title, ": ")) |at| c.title[at + 2 ..] else c.title;
     core.widgets.tooltip(@src(), .{ .active_rect = bw.data().borderRectScale().r }, "{s}", .{title}, .{});
     return enabled and bw.clicked();
 }

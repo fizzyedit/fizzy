@@ -85,7 +85,7 @@ pub const Result = struct {
 };
 
 /// The index of the first byte where `a` and `b` (the same length) differ, 64 bytes at a time.
-/// `std.mem.indexOfDiff` and `eql` are not vectorized well enough for a 4K image to meet the
+/// `std.mem.findDiff` and `eql` are not vectorized well enough for a 4K image to meet the
 /// budget; this is the loop the whole diff leans on.
 pub fn firstDiff(a: []const u8, b: []const u8) ?usize {
     std.debug.assert(a.len == b.len);
@@ -94,9 +94,9 @@ pub fn firstDiff(a: []const u8, b: []const u8) ?usize {
     while (i + 64 <= a.len) : (i += 64) {
         const va: V = a[i..][0..64].*;
         const vb: V = b[i..][0..64].*;
-        if (!@reduce(.And, va == vb)) return i + std.mem.indexOfDiff(u8, a[i..][0..64], b[i..][0..64]).?;
+        if (!@reduce(.And, va == vb)) return i + std.mem.findDiff(u8, a[i..][0..64], b[i..][0..64]).?;
     }
-    return if (i == a.len) null else if (std.mem.indexOfDiff(u8, a[i..], b[i..])) |d| i + d else null;
+    return if (i == a.len) null else if (std.mem.findDiff(u8, a[i..], b[i..])) |d| i + d else null;
 }
 
 /// One tile's changed pixels: an empty box (`x0 >= x1`) is unchanged.

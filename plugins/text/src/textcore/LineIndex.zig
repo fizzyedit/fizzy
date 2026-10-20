@@ -1,6 +1,6 @@
 //! Cached line-start offsets plus display-column math.
 //!
-//! Replaces the ad-hoc `std.mem.lastIndexOfScalar(u8, text[0..pos], '\n')` rescans sprinkled
+//! Replaces the ad-hoc `std.mem.findScalarLast(u8, text[0..pos], '\n')` rescans sprinkled
 //! through the editor, and the byte-based column arithmetic in `TextEntryWidget.insertIndent`
 //! (`column = cursor - line_start`), which is wrong for tabs and for any non-ASCII line.
 //!

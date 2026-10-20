@@ -119,12 +119,12 @@ fn matchesPattern(pat_in: []const u8, rel_unix: []const u8, entry_name: []const 
     if (anchored)
         pat = pat[1..];
 
-    const has_star = std.mem.indexOfScalar(u8, pat, '*') != null;
+    const has_star = std.mem.findScalar(u8, pat, '*') != null;
     if (has_star) {
         if (anchored) {
             return globMatch(rel_unix, pat);
         }
-        if (std.mem.indexOfScalar(u8, pat, '/') == null) {
+        if (std.mem.findScalar(u8, pat, '/') == null) {
             return globMatch(entry_name, pat);
         }
         return globMatch(rel_unix, pat);

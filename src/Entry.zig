@@ -72,7 +72,7 @@ const start_options_base: dvui.App.StartOptions = .{
 fn runningFromAppBundle(io: std.Io) bool {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.process.executablePath(io, &buf) catch return false;
-    return std.mem.indexOf(u8, buf[0..n], ".app/") != null;
+    return std.mem.find(u8, buf[0..n], ".app/") != null;
 }
 
 fn startOptions() dvui.App.StartOptions {

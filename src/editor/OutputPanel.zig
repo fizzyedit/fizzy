@@ -163,7 +163,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         shown += 1;
         // Only the "level(scope): " prefix gets the level color — the message stays the
         // default text color, so a long line doesn't read as one solid block of red/purple.
-        if (std.mem.indexOf(u8, line.text, ": ")) |idx| {
+        if (std.mem.find(u8, line.text, ": ")) |idx| {
             tl.addText(line.text[0 .. idx + 2], mono.override(.{ .color_text = .{ .color = levelColor(line.level) } }));
             tl.addText(line.text[idx + 2 ..], mono.override(message_color));
         } else {

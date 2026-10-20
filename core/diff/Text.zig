@@ -188,7 +188,7 @@ fn tokenize(self: *Text, gpa: std.mem.Allocator, text: []const u8, base: usize, 
     const mask = self.table.items.len - 1;
     var at: usize = 0;
     while (at < text.len) {
-        const end = if (std.mem.indexOfScalarPos(u8, text, at, '\n')) |nl| nl + 1 else text.len;
+        const end = if (std.mem.findScalarPos(u8, text, at, '\n')) |nl| nl + 1 else text.len;
         const line = text[at..end];
         const h = std.hash.Wyhash.hash(0, line);
         var slot: usize = @intCast(h & mask);

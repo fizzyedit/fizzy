@@ -1762,7 +1762,7 @@ pub fn registerCommand(self: *Host, cmd: Command) !void {
 /// `id` followed by `.` (so a dotted id like `acme.paint` is one plugin), else the id's first
 /// dotted segment, for a plugin not loaded yet.
 fn commandNamespace(self: *const Host, id: []const u8) []const u8 {
-    var best: []const u8 = id[0 .. std.mem.indexOfScalar(u8, id, '.') orelse id.len];
+    var best: []const u8 = id[0 .. std.mem.findScalar(u8, id, '.') orelse id.len];
     var found = false;
     for (self.plugins.items) |p| {
         if (id.len <= p.id.len or id[p.id.len] != '.' or !std.mem.startsWith(u8, id, p.id)) continue;
@@ -3730,7 +3730,7 @@ test "commands with arguments: callCommand, runCommand's fallback, and listing" 
 
     // Arguments that do not fit, and a command that refuses: each says why, in words.
     const missing = host.callCommand("t.goTo", "", results);
-    try testing.expect(std.mem.indexOf(u8, missing.bad_args, "line") != null);
+    try testing.expect(std.mem.find(u8, missing.bad_args, "line") != null);
     try testing.expectEqualStrings("lines count from 1", host.callCommand("t.goTo", ".{ .line = 0 }", results).failed);
 
     // Disabled and unknown are their own answers, not failures.

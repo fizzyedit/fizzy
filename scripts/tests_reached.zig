@@ -127,7 +127,7 @@ fn reached(arena: std.mem.Allocator, binaries: []const Binary, file: []const u8,
         const rel = file[b.root_dir.len .. file.len - ".zig".len];
         const fqn = std.mem.replaceOwned(u8, arena, rel, std.fs.path.sep_str, ".") catch return false;
         const want = std.fmt.allocPrint(arena, "{s}.{s}.{s}", .{ fqn, t.kind, t.name }) catch return false;
-        if (std.mem.indexOf(u8, b.bytes, want) != null) return true;
+        if (std.mem.find(u8, b.bytes, want) != null) return true;
     }
     return false;
 }

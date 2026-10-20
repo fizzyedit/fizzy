@@ -685,7 +685,7 @@ pub const UnmarkedScrollers = struct {
 
     pub fn contains(self: *const UnmarkedScrollers, id: []const u8) bool {
         const h = std.hash.Wyhash.hash(0, id);
-        return std.mem.indexOfScalar(u64, self.ids[0..self.len], h) != null;
+        return std.mem.findScalar(u64, self.ids[0..self.len], h) != null;
     }
 };
 

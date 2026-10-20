@@ -1292,7 +1292,7 @@ fn spawnChild(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8, cwd:
 /// that background thread.
 fn resolveExecutable(gpa: std.mem.Allocator, io: std.Io, name: []const u8) ?[]u8 {
     if (comptime builtin.target.os.tag == .windows) return null;
-    if (std.mem.indexOfScalar(u8, name, '/') != null) return null;
+    if (std.mem.findScalar(u8, name, '/') != null) return null;
 
     const inherited_path: ?[]const u8 = if (std.c.getenv("PATH")) |p| std.mem.span(p) else null;
     if (findInPath(gpa, io, inherited_path, name)) |found| return found;
@@ -2552,7 +2552,7 @@ fn resolveSignatureHelp(result: std.json.Value) ?ResolvedSignatureHelp {
 
     return switch (param_label) {
         .string => |s| blk: {
-            const idx = std.mem.indexOf(u8, label, s) orelse break :blk no_emphasis;
+            const idx = std.mem.find(u8, label, s) orelse break :blk no_emphasis;
             break :blk ResolvedSignatureHelp{ .label = label, .active_param_start = idx, .active_param_end = idx + s.len };
         },
         .array => |arr| blk: {

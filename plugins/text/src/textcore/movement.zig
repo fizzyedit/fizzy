@@ -201,13 +201,13 @@ pub fn subwordLeft(text: []const u8, off: usize) usize {
 
 pub fn lineStartOf(text: []const u8, off: usize) usize {
     const i = @min(off, text.len);
-    return if (std.mem.lastIndexOfScalar(u8, text[0..i], '\n')) |nl| nl + 1 else 0;
+    return if (std.mem.findScalarLast(u8, text[0..i], '\n')) |nl| nl + 1 else 0;
 }
 
 /// End of the line containing `off`, excluding the newline.
 pub fn lineEndOf(text: []const u8, off: usize) usize {
     const i = @min(off, text.len);
-    return std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len;
+    return std.mem.findScalarPos(u8, text, i, '\n') orelse text.len;
 }
 
 fn prevLineStart(text: []const u8, line_start: usize) ?usize {
@@ -216,7 +216,7 @@ fn prevLineStart(text: []const u8, line_start: usize) ?usize {
 }
 
 fn nextLineStart(text: []const u8, line_start: usize) ?usize {
-    const nl = std.mem.indexOfScalarPos(u8, text, line_start, '\n') orelse return null;
+    const nl = std.mem.findScalarPos(u8, text, line_start, '\n') orelse return null;
     return nl + 1;
 }
 
