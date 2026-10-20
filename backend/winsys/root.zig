@@ -2,9 +2,9 @@
 //!
 //! Pure data and a vtable: no dvui, no SDL, nothing that allocates on its own, so it compiles for
 //! every target including wasm32 and can be built into a test without a window. Event queueing
-//! and normalisation (plans#51 step 3), a Sim platform (4, `backend/winsys-sim`), recording and replay (5), the
-//! conformance suite (6) and the SDL3 adapter (7) are built on this and live beside it later;
-//! none is here.
+//! and normalisation (plans#51 step 3), a Sim platform (4, branch `backend/winsys-sim`),
+//! recording and replay (5), the conformance suite (6) and the SDL3 adapter (7) are built on this
+//! and live beside it later; none is here.
 //!
 //! The decisions that apply to everything, one line each (the reason is at the type):
 //!
