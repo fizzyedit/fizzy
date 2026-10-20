@@ -71,3 +71,10 @@ The `.m` files in `src/platform/macos/` are built **without ARC**, under a frame
   `nextDrawable`, before blaming shaders.
 - **Glass:** what each `NSGlassEffectView` variant and material actually does, measured, is in
   `docs/MACOS_GLASS.md`. Don't add SwiftUI or a `swiftc` step for transitions AppKit lacks.
+
+## Window behaviour records
+
+Keep observable window, event, input, clipboard, drag-and-drop, IME and display
+findings in `docs/window-notes/`, with the platform and what was actually verified.
+Follow `docs/PITFALLS.md`'s clean-room hygiene rule: patch prose identifies regression
+behaviour; implementation hunks are not material for these notes.

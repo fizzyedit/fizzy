@@ -111,3 +111,15 @@ Three that the release builds (`zig build package`, MSVC) hit and the macOS buil
 
 - **`patch -p1` can leave `*.orig` files,** and the next jj command snapshots them into your
   change. Remove them before any jj command, and read `jj diff --stat` before pushing.
+
+## Window behaviour notes: clean-room hygiene
+
+Write `docs/window-notes/` from behaviour observed or documentation read, never from
+source code open in another window. Do not copy code, comments or tables from SDL,
+GLFW or another implementation. Our patch descriptions and recorded pitfalls can
+identify a behaviour to investigate; patch files mix prose and implementation hunks,
+so read only the commit-message part above the first `---` and never open the diff
+hunks while writing a note; read the prose, not implementation hunks, and
+state the behaviour in our own words. Cite only public OS documentation. Separate
+recorded observations, documented contracts and cases still awaiting observation;
+include platform and verification limits so a proposed test is not mistaken for a pass.
