@@ -26,6 +26,11 @@ how an app wires it).
 - **std-only tests are listed in `build.zig`'s `unit_tests`,** and fizzy's `zig build test` runs
   them. Window rules that can be stated without a window go in such a file
   (`platform/window_layout.zig`, `viewport_map.zig`).
+- **`winsys/stream.zig` is a file format.** `Recorder` writes it, `Replayer` plays it into a
+  `Sim`, and `winsys/tests/streams/*.hex` are the golden streams. A change to `Event` or any
+  type a record holds moves the bytes: bump `stream.version`, then replace the hex a failing
+  test prints. A stream must carry no platform identity (window, display, touch ids are renamed
+  by `stream.Ids`) so one recorded on a Mac replays on Linux CI.
 - **Verify on the platform you changed.** CI's Windows cross-compile proves fizzy links, not that
   it works. `docs/MACOS_LIVE_RESIZE.md` and `docs/WINDOWS_LIVE_RESIZE.md` show how a resize
   was measured.

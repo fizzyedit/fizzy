@@ -2,9 +2,10 @@
 //!
 //! Pure data and a vtable: no dvui, no SDL, nothing that allocates on its own, so it compiles for
 //! every target including wasm32 and can be built into a test without a window. Event queueing
-//! and normalisation is `EventQueue`; `Sim` is a platform in memory, for tests. Recording and
-//! replay (5) and the SDL3 adapter (7) are built on this and live
-//! beside it later; neither is here. The conformance suite (`conformance/`) is.
+//! and normalisation is `EventQueue`; `Sim` is a platform in memory, for tests. `Recorder` wraps
+//! a platform and writes what crosses it as a `stream`; `Replayer` plays one into a `Sim` and
+//! diffs what comes out. The conformance suite (`conformance/`) is here too; the SDL3 adapter (7)
+//! is built on this and lives beside it later; it is not here.
 //!
 //! The decisions that apply to everything, one line each (the reason is at the type):
 //!
@@ -43,6 +44,9 @@ pub const Ime = @import("Ime.zig");
 pub const Sim = @import("Sim.zig");
 pub const EventQueue = @import("EventQueue.zig");
 pub const TouchSlots = @import("TouchSlots.zig");
+pub const Recorder = @import("Recorder.zig");
+pub const Replayer = @import("Replayer.zig");
+pub const stream = @import("stream.zig");
 pub const geometry = @import("geometry.zig");
 /// What every platform must do, written once; `zig build conformance` runs it on a real one.
 pub const conformance = @import("conformance/root.zig");

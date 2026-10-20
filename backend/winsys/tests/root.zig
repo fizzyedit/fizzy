@@ -14,6 +14,7 @@ test {
     _ = @import("dnd.zig");
     _ = @import("ime.zig");
     _ = @import("displays.zig");
+    _ = @import("streams.zig");
 }
 
 /// Polls everything waiting, so a test then looks only at what happens next.
