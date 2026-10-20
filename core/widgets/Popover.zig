@@ -59,7 +59,7 @@ pub const InitOptions = struct {
 };
 
 /// Open (or continue) the popover. Rows go between this and `deinit`.
-pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions) Popover {
+pub fn init(src: std.lang.SourceLocation, init_opts: InitOptions) Popover {
     // Only the position is ours each frame; the size is auto-size's, animated from whatever it
     // was — a fresh rect grows from the anchor with the overshoot.
     //
@@ -181,7 +181,7 @@ pub const Row = struct {
 /// One row: the palette's shell, inside the open popover. The caller draws the row's
 /// content (horizontal box) after, then `deinit`s it. Text inside inherits the popover's text colour; nothing changes on hover
 /// but the fill.
-pub fn row(src: std.builtin.SourceLocation, opts: RowOptions) Row {
+pub fn row(src: std.lang.SourceLocation, opts: RowOptions) Row {
     const theme = dvui.themeGet();
     const box = dvui.box(src, .{ .dir = .horizontal }, .{
         // Clicked like one; named by the text the caller draws in it.

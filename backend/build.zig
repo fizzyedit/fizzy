@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     // harness, against the patched library. Arguments after `--` reach the runner:
     // `--filter <suite|test>`, `--require-gpu <driver>`.
     const test_sdl_step = b.step("test-sdl", "Build and run the suites for fizzy's SDL patches");
-    const sdl_optimize: std.builtin.OptimizeMode = if (optimize == .debug) .fast else optimize;
+    const sdl_optimize: std.lang.OptimizeMode = if (optimize == .debug) .fast else optimize;
     if (sdlDependency(b, target, sdl_optimize, null)) |sdl| {
         const source = patchedSdl(b).?;
         const sdl_test = b.addLibrary(.{
@@ -86,7 +86,7 @@ pub const MacosSdk = struct {
 
 pub const Options = struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     /// Null on a native build.
     macos_sdk: ?MacosSdk = null,
 };
@@ -139,7 +139,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     // device, every window's present. A Debug frame spent much of itself there (`sample`), and a
     // window's way into full screen ran at half the display's rate in Debug alone. The app's own
     // code stays Debug; stepping into SDL's C is what a Debug app gives up.
-    const sdl_optimize: std.builtin.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
+    const sdl_optimize: std.lang.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
     const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.macos_sdk);
 
     const sdl_translate_c = b.addTranslateC(.{
@@ -209,7 +209,7 @@ fn patchedSdl(b: *std.Build) ?std.Build.LazyPath {
 fn sdlDependency(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     macos_sdk: ?MacosSdk,
 ) ?*std.Build.Dependency {
     const source = patchedSdl(b) orelse return null;

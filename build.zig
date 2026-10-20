@@ -83,7 +83,7 @@ pub fn build(b: *std.Build) !void {
 /// standard options on the same builder.
 var deferred: ?struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     base: @import("build/app.zig").Options,
     cfg: @import("build/app.zig").Config,
     /// `buildApp` has run (`addPackageSteps` needs its steps).

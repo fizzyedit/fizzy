@@ -8,7 +8,7 @@ pub const Options = struct {
     b: *std.Build,
     vz: velopack.Dep,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     app_version: []const u8,
     /// `--packId`, and the executable's name (`--mainExe`).
     app_name: []const u8,

@@ -171,7 +171,7 @@ pub const Options = struct {
 /// verb form lives in the namespace above the type — `core.widgets.split(...)` for a plugin,
 /// `Layout.split(...)` for a shape — exactly as `dvui.box()` sits above `BoxWidget.init`.
 pub fn init(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     axis: dvui.enums.Direction,
     id_extra: usize,
     at: ?dvui.Rect,
@@ -185,7 +185,7 @@ pub fn init(
 /// loses it in one step the frame the place is dropped. Closing it alongside costs nothing to
 /// grab, because there will be nothing to grab.
 pub fn initSized(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     axis: dvui.enums.Direction,
     id_extra: usize,
     at: ?dvui.Rect,

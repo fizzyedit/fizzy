@@ -33,7 +33,7 @@ pub fn addImports(
     dvui_mod: *std.Build.Module,
     sdk_pkg: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     glass_look: ?*std.Build.Module,
     glass: ?*std.Build.Module,
 ) ?*std.Build.Module {
@@ -85,7 +85,7 @@ pub fn repoPath(b: *std.Build, sub_path: []const u8) std.Build.LazyPath {
 pub fn zfModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
 ) *std.Build.Module {
     return b.dependency("zf", .{
         .target = target,

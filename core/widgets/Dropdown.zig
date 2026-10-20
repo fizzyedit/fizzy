@@ -75,7 +75,7 @@ pub fn wrapInner(opts: Options) Options {
 }
 
 /// It's expected to call this when `self` is `undefined`
-pub fn init(self: *Dropdown, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *Dropdown, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     const options = defaults.override(opts);
     self.* = .{
         .options = options,

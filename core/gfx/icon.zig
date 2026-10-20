@@ -20,7 +20,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 
 /// `dvui.icon`, drawn through the texture cache. Same layout, same options.
-pub fn icon(src: std.builtin.SourceLocation, name: []const u8, tvg_bytes: []const u8, icon_opts: dvui.IconRenderOptions, opts: dvui.Options) void {
+pub fn icon(src: std.lang.SourceLocation, name: []const u8, tvg_bytes: []const u8, icon_opts: dvui.IconRenderOptions, opts: dvui.Options) void {
     var iw: dvui.IconWidget = undefined;
     iw.init(src, name, tvg_bytes, icon_opts, opts);
     defer iw.deinit();

@@ -407,7 +407,7 @@ pub fn rescale(self: *CanvasWidget) void {
     self.scale = target_scale;
 }
 
-pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: dvui.Options) void {
+pub fn install(self: *CanvasWidget, src: std.lang.SourceLocation, init_opts: InitOptions, opts: dvui.Options) void {
     self.id = init_opts.id;
     self.init_opts = init_opts;
 

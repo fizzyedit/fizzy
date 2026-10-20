@@ -443,7 +443,7 @@ fn drawTheme() void {
 
 /// The four font sliders differ only in which settings field they drive, so they share one body.
 /// Format is value-only — `SettingsTree` draws the setting name above the control.
-fn fontSizeSlider(src: std.builtin.SourceLocation, value: *f32) void {
+fn fontSizeSlider(src: std.lang.SourceLocation, value: *f32) void {
     if (dvui.sliderEntry(src, "{d:0.0}", .{
         .value = value,
         .interval = 1.0,
@@ -488,7 +488,7 @@ fn drawWindowOpacity() void {
 }
 
 /// Names under a slider, each at its place along it (0 the left end, 1 the right).
-fn sliderMarks(src: std.builtin.SourceLocation, names: []const []const u8, at: []const f32) void {
+fn sliderMarks(src: std.lang.SourceLocation, names: []const []const u8, at: []const f32) void {
     var row = dvui.overlay(src, .{ .expand = .horizontal });
     defer row.deinit();
     const text = dvui.themeGet().color(.control, .text).opacity(0.6);

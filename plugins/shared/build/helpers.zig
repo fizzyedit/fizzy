@@ -133,7 +133,7 @@ pub const StaticModuleOptions = struct {
     /// The plugin's root `plugin.zig` (module root — no more `<name>.zig` hub).
     root_source_file: std.Build.LazyPath,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     options_name: ?[]const u8 = null,
     options: ?*std.Build.Step.Options = null,
 };
@@ -171,7 +171,7 @@ pub const DylibOptions = struct {
     /// module instance the caller also imports onto `plugin_impl` (see `Created.module`).
     sdk: *std.Build.Module,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     options_name: ?[]const u8 = null,
     options: ?*std.Build.Step.Options = null,
 };
@@ -198,7 +198,7 @@ pub const Created = struct {
 fn generatedDylibRoot(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     sdk_mod: *std.Build.Module,
     plugin_impl: *std.Build.Module,
 ) *std.Build.Module {

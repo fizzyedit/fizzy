@@ -1452,7 +1452,7 @@ pub fn drawOverlay(l: *Layout) void {
 /// its glass — and is re-added as a window of its own and raised, as the demo overlay's layers are
 /// (`automation/overlay.zig`). It takes no pointer events: what is under it still takes them, the
 /// drag's hold on the pointer included.
-fn layerOver(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) void {
+fn layerOver(layer: *dvui.FloatingWidget, src: std.lang.SourceLocation) void {
     layer.init(src, .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
     const wd = layer.data();
     dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
@@ -1466,7 +1466,7 @@ fn layerOver(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) void 
 /// glass, and nothing in the app's own windows follows it. A copy there — its glass, a drop's tail,
 /// the drop it ran into — was drawn at another moment than the window server moved the window, and
 /// trailed behind it. Whether it is; the layer is the caller's to `deinit` then.
-fn ownWindowLayer(layer: *dvui.FloatingWidget, src: std.builtin.SourceLocation) bool {
+fn ownWindowLayer(layer: *dvui.FloatingWidget, src: std.lang.SourceLocation) bool {
     if (!core.dialogs.carry_windows) return false;
     layerOver(layer, src);
     core.screens.markCarried(layer.data().id);

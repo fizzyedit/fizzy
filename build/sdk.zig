@@ -27,7 +27,7 @@ pub fn dvuiDependency(b: *std.Build, args: anytype) *std.Build.Dependency {
 pub fn addProxyBridgeModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     dvui_dep: *std.Build.Dependency,
     dvui_module: *std.Build.Module,
 ) *std.Build.Module {
@@ -43,7 +43,7 @@ pub fn addProxyBridgeModule(
 pub fn wireSdkModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     dvui_module: *std.Build.Module,
     proxy_bridge_module: *std.Build.Module,
     core_module: *std.Build.Module,
@@ -80,7 +80,7 @@ pub fn wireSdkModule(
 pub fn wireAppModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     dvui_module: *std.Build.Module,
     core_module: *std.Build.Module,
     sdk_module: *std.Build.Module,
@@ -126,7 +126,7 @@ pub fn wireAppModule(
 
 /// Crash reports (`app/crash/`): std-only, a module of its own so the plugin loader reaches it
 /// from a test rooted at the loader as well as from the app.
-pub fn crashModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+pub fn crashModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
     return b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -164,7 +164,7 @@ pub const BundledPlugin = struct {
 pub fn bundledPluginsModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     plugins: []const BundledPlugin,
 ) *std.Build.Module {
     var src = std.ArrayList(u8).empty;

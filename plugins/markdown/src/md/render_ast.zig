@@ -232,14 +232,14 @@ inline fn statBlock() void {
 }
 
 /// `dvui.textLayout` + the counters, so no call site can add one without the others.
-inline fn textLayout(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) *dvui.TextLayoutWidget {
+inline fn textLayout(src: std.lang.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) *dvui.TextLayoutWidget {
     stats.text_layouts += 1;
     const tl = dvui.textLayout(src, init_opts, opts);
     if (init_opts.break_lines and dvui.firstFrame(tl.data().id)) stats.fresh_text_layouts += 1;
     return tl;
 }
 
-inline fn box(src: std.builtin.SourceLocation, init_opts: dvui.BoxWidget.InitOptions, opts: dvui.Options) *dvui.BoxWidget {
+inline fn box(src: std.lang.SourceLocation, init_opts: dvui.BoxWidget.InitOptions, opts: dvui.Options) *dvui.BoxWidget {
     stats.boxes += 1;
     return dvui.box(src, init_opts, opts);
 }

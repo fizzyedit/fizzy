@@ -88,7 +88,7 @@ const pad: f32 = 8;
 /// Columns past this many are not drawn.
 pub const max_columns = 16;
 
-pub fn init(src: std.builtin.SourceLocation, columns: []const Column, opts: Options, wopts: dvui.Options) Table {
+pub fn init(src: std.lang.SourceLocation, columns: []const Column, opts: Options, wopts: dvui.Options) Table {
     const defaults: dvui.Options = .{ .name = "viz.Table", .expand = .both, .background = false };
     const body_font = dvui.Font.theme(.body);
     const mono = dvui.Font.theme(.mono);

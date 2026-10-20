@@ -13,7 +13,7 @@ source: [4]u32,
 /// Draw this sprite from `atlas_source` as a dvui widget (static textured quad).
 pub fn draw(
     self: Sprite,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     atlas_source: dvui.ImageSource,
     scale: f32,
     opts: dvui.Options,

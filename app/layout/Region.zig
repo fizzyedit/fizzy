@@ -327,7 +327,7 @@ pub const InitOptions = struct {
 /// }
 /// f.split(@src(), .{});
 /// ```
-pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptions, opts_given: dvui.Options) anyerror!Region {
+pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions, opts_given: dvui.Options) anyerror!Region {
     const opts = withCard(self, init_opts, opts_given);
     if (self.depth >= Layout.max_nesting) {
         dvui.log.err("layout nests deeper than {d} regions; \"{s}\" ignored", .{ Layout.max_nesting, init_opts.name });
@@ -1284,7 +1284,7 @@ fn idOf(state: *Layout.State, name: []const u8) ?dvui.Id {
 
 fn initTree(
     self: *Layout,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     init_opts: InitOptions,
     opts: dvui.Options,
     node: *SplitTree.Node,
@@ -1394,7 +1394,7 @@ fn initTree(
 
 fn drawTreeChildren(
     self: *Layout,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     shape: InitOptions,
     shape_opts: dvui.Options,
     branch: SplitTree.Branch,
@@ -1415,7 +1415,7 @@ fn drawTreeChildren(
     try drawTreeNode(self, src, shape, shape_opts, branch.b, omit_b, leftover_b);
 }
 
-fn packTreeSplit(self: *Layout, src: std.builtin.SourceLocation, branch: SplitTree.Branch) void {
+fn packTreeSplit(self: *Layout, src: std.lang.SourceLocation, branch: SplitTree.Branch) void {
     const new_name = SplitTree.newNameOf(branch);
     const leading = SplitTree.newIsLeading(branch.side);
     const sign: f32 = if (leading) 1 else -1;
@@ -1505,7 +1505,7 @@ fn placeVisual(opts: dvui.Options) dvui.Options {
 
 fn drawTreeNode(
     self: *Layout,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     shape: InitOptions,
     shape_opts: dvui.Options,
     node: *SplitTree.Node,

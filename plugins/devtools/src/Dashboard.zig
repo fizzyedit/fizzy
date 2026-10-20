@@ -266,7 +266,7 @@ fn drawControls(p: *profile.Profiler) void {
 }
 
 /// Buttons joined into one rounded group, those `on` lit: a segmented control. The one clicked.
-fn segmented(src: std.builtin.SourceLocation, labels: []const []const u8, on: []const bool) ?usize {
+fn segmented(src: std.lang.SourceLocation, labels: []const []const u8, on: []const bool) ?usize {
     var group = dvui.box(src, .{ .dir = .horizontal }, .{
         .background = true,
         .color_fill = .{ .color = dvui.themeGet().color(.control, .fill).opacity(0.5) },

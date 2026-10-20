@@ -30,7 +30,7 @@ fn applyImports(module: *std.Build.Module, imports: ModuleImports) void {
 pub fn addStaticModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     imports: ModuleImports,
     workbench_opts: *std.Build.Step.Options,
     consumer: *std.Build.Module,
@@ -53,7 +53,7 @@ pub fn addStaticModule(
 pub fn addDylib(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     imports: ModuleImports,
     workbench_opts: *std.Build.Step.Options,
 ) *std.Build.Step.Compile {

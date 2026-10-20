@@ -63,7 +63,7 @@ fn pointerRect(p: Sequencer.Point) dvui.Rect {
 /// A floating widget that takes no input, raised to the top. A floating widget otherwise stays
 /// just above the window it was made in, under anything opened after it; re-added as a subwindow
 /// of its own it can be raised, and each call puts the new one above the last.
-pub fn layer(src: std.builtin.SourceLocation, opts: dvui.Options, init: dvui.FloatingWidget.InitOptions) *dvui.FloatingWidget {
+pub fn layer(src: std.lang.SourceLocation, opts: dvui.Options, init: dvui.FloatingWidget.InitOptions) *dvui.FloatingWidget {
     var init_opts = init;
     init_opts.mouse_events = false;
     const fw = dvui.widgetAlloc(dvui.FloatingWidget);

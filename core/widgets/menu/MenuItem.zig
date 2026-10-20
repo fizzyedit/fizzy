@@ -54,7 +54,7 @@ hover_t: f32 = 0,
 over: bool = false,
 
 /// It's expected to call this when `self` is `undefined`
-pub fn init(self: *MenuItem, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *MenuItem, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     const options = defaults.override(opts);
     const wd = WidgetData.init(src, .{}, options);
 

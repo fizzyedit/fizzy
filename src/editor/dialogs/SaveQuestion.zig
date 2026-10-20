@@ -70,7 +70,7 @@ pub fn request(doc_id: u64, q: sdk.Plugin.SaveQuestion, then: Then) void {
 
 pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) !void {}
 
-fn button(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
+fn button(src: std.lang.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
     const opts: dvui.Options = .{
         .tab_index = tab_idx,
         .style = style,

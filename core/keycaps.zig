@@ -187,7 +187,7 @@ pub const DrawOptions = struct {
 };
 
 /// Draw `stroke`. A two-part chord draws both halves with a gap between them.
-pub fn draw(src: std.builtin.SourceLocation, stroke: Stroke, opts: DrawOptions) void {
+pub fn draw(src: std.lang.SourceLocation, stroke: Stroke, opts: DrawOptions) void {
     const theme = dvui.themeGet();
     const base = opts.color orelse theme.color(.control, .text).opacity(0.55);
     const color = if (opts.enabled) base else base.opacity(0.5);

@@ -32,7 +32,7 @@ pub fn modules(
     sdk_pkg: *std.Build,
     dvui_mod: *std.Build.Module,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
 ) Modules {
     const tape = b.createModule(.{
         .target = target,

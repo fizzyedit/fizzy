@@ -668,7 +668,7 @@ fn drawAuthorLine(entry: StoreEntry, muted: dvui.Color) void {
 /// `Font.withUnderline` + `color(.highlight, .fill)`, so every clickable bit of prose in the app
 /// reads the same way. A name with nowhere to go stays deliberately unstyled — underlining
 /// something unclickable is worse than leaving it plain.
-fn drawCreditLink(src: std.builtin.SourceLocation, text: []const u8, url: ?[]const u8, muted: dvui.Color) void {
+fn drawCreditLink(src: std.lang.SourceLocation, text: []const u8, url: ?[]const u8, muted: dvui.Color) void {
     const body = dvui.Font.theme(.body);
     const target = url orelse {
         dvui.labelNoFmt(src, text, .{}, .{
@@ -696,7 +696,7 @@ fn drawCreditLink(src: std.builtin.SourceLocation, text: []const u8, url: ?[]con
 /// separate bar), regular body text, and the selected tab marked by a `window`-text-colored
 /// underline rather than a filled pill. No drag/drop and no scroll area — there are only ever
 /// two tabs here.
-fn tabButton(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize, selected: bool) bool {
+fn tabButton(src: std.lang.SourceLocation, label: []const u8, id_extra: usize, selected: bool) bool {
     const theme = dvui.themeGet();
 
     // Sized to the label's own width (no expand), so the underline drawn below — which does
@@ -2231,7 +2231,7 @@ const card_stagger_cap: usize = 10;
 /// re-triggers whenever `dvui.firstFrame` sees a new widget id, so indexing by position would
 /// replay the whole cascade every time re-ranking moved a card (i.e. on every filter keystroke).
 /// Keyed by id, each plugin animates exactly once, no matter how the list is later sorted.
-fn cardAnimator(src: std.builtin.SourceLocation, entry: StoreEntry, index: usize) *dvui.AnimateWidget {
+fn cardAnimator(src: std.lang.SourceLocation, entry: StoreEntry, index: usize) *dvui.AnimateWidget {
     const stagger = @min(index, card_stagger_cap);
     return dvui.animate(src, .{
         .kind = .horizontal,

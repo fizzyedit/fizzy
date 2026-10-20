@@ -47,12 +47,12 @@ pub const Modules = struct {
 
 pub const ModulesOptions = struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
 };
 
 pub const ModuleOptions = struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     root_source_file: std.Build.LazyPath,
     link_libc: bool = true,
 };
@@ -387,7 +387,7 @@ pub const CSourceFile = struct {
 
 pub const CModuleOptions = struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     /// Zig bindings root (e.g. `zstbi.zig`).
     root_source_file: std.Build.LazyPath,
     /// C translation units compiled into the module.
@@ -418,7 +418,7 @@ pub fn addCModule(b: *std.Build, opts: CModuleOptions) *std.Build.Module {
 
 pub const CreateOptions = struct {
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     link_libc: bool = true,
     /// Override the author's module root — defaults to `b.path("plugin.zig")`. Only for edge
     /// cases (e.g. a built-in whose author-facing file doesn't sit at the plugin's repo root).
@@ -458,7 +458,7 @@ pub const PluginArtifact = struct {
 fn generatedDylibRoot(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     sdk_mod: *std.Build.Module,
     plugin_mod: *std.Build.Module,
 ) *std.Build.Module {
@@ -562,7 +562,7 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
 pub fn exportModules(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
 ) !void {
     // A wasm side module has no libc and no C libraries of its own: fonts and images are the
     // host's (rendered through the bridge), and the web has no tree-sitter to run.

@@ -70,7 +70,7 @@ pub const Options = struct {
 /// What a slice was last drawn as, kept between frames for the easing.
 const Shown = struct { key: u64, share: f32 };
 
-pub fn init(src: std.builtin.SourceLocation, slices: []const Slice, opts: Options, wopts: dvui.Options) Pie {
+pub fn init(src: std.lang.SourceLocation, slices: []const Slice, opts: Options, wopts: dvui.Options) Pie {
     const defaults: dvui.Options = .{ .name = "viz.Pie", .min_size_content = .{ .w = 300, .h = 200 } };
     const box = dvui.box(src, .{}, defaults.override(wopts));
     const id = box.data().id;

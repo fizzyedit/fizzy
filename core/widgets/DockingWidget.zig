@@ -37,7 +37,7 @@ const Dockspace = @This();
 
 /// Verb form, same as `dvui.dockspace` upstream — here so this copy (and its tests) never reach
 /// dvui's own `DockingWidget`, which would be a different type with the same name.
-pub fn dockspace(src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) *Dockspace {
+pub fn dockspace(src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) *Dockspace {
     var ret = dvui.widgetAlloc(Dockspace);
     ret.init(src, init_opts, opts);
     return ret;
@@ -204,7 +204,7 @@ pub const Panel = struct {
 };
 
 /// It's expected to call this when `self` is `undefined`
-pub fn init(self: *Dockspace, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *Dockspace, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     const defaults = Options{ .name = "Dockspace" };
     self.* = .{ .wd = WidgetData.init(src, .{}, defaults.override(opts)), .init_opts = init_opts };
     dvui.parentSet(self.widget());

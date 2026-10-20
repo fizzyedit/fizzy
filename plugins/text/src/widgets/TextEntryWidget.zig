@@ -497,7 +497,7 @@ text_changed_added: i64 = 0, // bytes added
 edited_outside_last_frame: *bool = undefined,
 
 /// It's expected to call this when `self` is `undefined`
-pub fn init(self: *TextEntryWidget, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+pub fn init(self: *TextEntryWidget, src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) void {
     var scroll_init_opts = ScrollAreaWidget.InitOpts{
         .vertical = if (init_opts.scroll_vertical orelse init_opts.multiline) .auto else .none,
         .vertical_bar = init_opts.scroll_vertical_bar orelse .auto,
@@ -2394,7 +2394,7 @@ pub fn deinit(self: *TextEntryWidget) void {
 }
 
 /// Same lifecycle as `dvui.textEntry`.
-pub fn textEntry(src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) *TextEntryWidget {
+pub fn textEntry(src: std.lang.SourceLocation, init_opts: InitOptions, opts: Options) *TextEntryWidget {
     var ret = dvui.widgetAlloc(TextEntryWidget);
     ret.init(src, init_opts, opts);
     ret.processEvents();

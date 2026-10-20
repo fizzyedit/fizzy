@@ -111,7 +111,7 @@ const Kept = struct {
 
 /// A chooser for `place`: a declared region, or `.{ .keywords = … }` for the place with those
 /// keywords. Draw items with `item`, then `deinit`.
-pub fn init(src: std.builtin.SourceLocation, f: *Layout, place: Region, opts: Options) Chooser {
+pub fn init(src: std.lang.SourceLocation, f: *Layout, place: Region, opts: Options) Chooser {
     const key = place.selectionKey();
     const id_extra = opts.id_extra ^ @as(usize, @truncate(key));
     const kept = dvui.dataGetPtrDefault(null, dvui.parentGet().extendId(src, id_extra), "_chooser", Kept, .{});
@@ -161,7 +161,7 @@ pub fn views(self: *const Chooser) []const *Layout.Surface {
 }
 
 /// One item. Draw what it looks like between this and `Item.deinit`.
-pub fn item(self: *Chooser, src: std.builtin.SourceLocation, view: *const Layout.Surface, opts: ItemOptions) Item {
+pub fn item(self: *Chooser, src: std.lang.SourceLocation, view: *const Layout.Surface, opts: ItemOptions) Item {
     const index = self.drawn.items.len;
     if (self.kept.slot_at) |at| if (at == index) self.openSlot();
     self.drawn.append(self.layout.arena, view.id) catch {};

@@ -83,7 +83,7 @@ const chrome = fizzy.core.dialogs;
 /// then blur, then its own translucent fill, and dvui's floating menu paints its background
 /// inside `init` where nothing outside can get in front of it. See
 /// `core/widgets/menu/FloatingMenu.zig`.
-fn menuPopup(src: std.builtin.SourceLocation, from: dvui.Rect.Natural, id_extra: usize) *widgets.FloatingMenuWidget {
+fn menuPopup(src: std.lang.SourceLocation, from: dvui.Rect.Natural, id_extra: usize) *widgets.FloatingMenuWidget {
     return widgets.floatingMenu(src, .{ .from = from, .frost = widgets.menuFrost() }, widgets.menuSurfaceOptions().override(.{
         .id_extra = id_extra,
     }));
@@ -237,7 +237,7 @@ fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
     }
 }
 
-pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: widgets.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
+pub fn menuItem(src: std.lang.SourceLocation, label_str: []const u8, init_opts: widgets.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
     var mi = widgets.menuItem(src, init_opts, rowOptions(opts));
     fizzy.core.anchor.mark(mi.data(), "fizzy.menu:{s}", .{label_str});
 

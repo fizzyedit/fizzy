@@ -70,7 +70,7 @@ const plain_fade_ms = (plain.Options{}).fade_ms;
 /// (`core.screens.markMain`): the captions, keys and bar are the stage's, and stay on it while a
 /// dialog or a menu is open in a window of its own over it. Only the pointer, and a callout beside
 /// what it acts on (`drawCallout`), go into those windows. Every part goes through this.
-fn layer(src: std.builtin.SourceLocation, opts: dvui.Options, init: dvui.FloatingWidget.InitOptions) *dvui.FloatingWidget {
+fn layer(src: std.lang.SourceLocation, opts: dvui.Options, init: dvui.FloatingWidget.InitOptions) *dvui.FloatingWidget {
     const fw = plain.layer(src, opts, init);
     core.screens.markMain(fw.data().id);
     return fw;

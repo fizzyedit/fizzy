@@ -97,7 +97,7 @@ tt_child_shown: bool = false,
 ///
 /// Use FloatingWindowWidget for a floating window that the user can change
 /// size, move around, and adjust stacking.
-pub fn init(self: *FloatingTooltipWidget, src: std.builtin.SourceLocation, init_opts: InitOptions, opts_in: Options) void {
+pub fn init(self: *FloatingTooltipWidget, src: std.lang.SourceLocation, init_opts: InitOptions, opts_in: Options) void {
     self.* = .{
         .wd = WidgetData.init(src, .{ .subwindow = true }, (Options{ .name = "FloatingTooltip" }).override(.{
             // passing options.rect will stop WidgetData.init from calling

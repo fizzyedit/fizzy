@@ -178,7 +178,7 @@ depth: usize = 0,
 plugin_regions: [max_nesting]Region = undefined,
 plugin_depth: usize = 0,
 
-pub const PendingSplit = struct { src: std.builtin.SourceLocation, opts: Split.Options };
+pub const PendingSplit = struct { src: std.lang.SourceLocation, opts: Split.Options };
 
 pub const Container = struct {
     dir: dvui.enums.Direction,
@@ -1090,7 +1090,7 @@ pub const placeVisible = ViewDrag.place;
 /// seed into a live `DockLayout`; after that the persisted tree is what is walked.
 pub fn tree(
     self: *Layout,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     seed: *const Seed,
     opts: dvui.Options,
 ) !Tree {
@@ -1298,7 +1298,7 @@ pub const State = @import("State.zig");
 /// so a plugin can draw one without a `Layout` at all, and everything this adds — finding the
 /// neighbour to resize, and the container constraint to resolve against — is layout state that
 /// `core` cannot see.
-pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: Split.Options) void {
+pub fn split(self: *Layout, src: std.lang.SourceLocation, opts: Split.Options) void {
     const c = self.innermost() orelse {
         dvui.log.err("split() outside a region does nothing", .{});
         return;
@@ -1337,7 +1337,7 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
 /// region's Options.margin is never a sash, and a card cannot paint over it.
 pub fn packSplit(
     self: *Layout,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     id_extra: usize,
     target: dvui.Id,
     sign: f32,
@@ -1349,7 +1349,7 @@ pub fn packSplit(
 /// `packSplit` with the gap given a width, for a sash closing along with the place beside it.
 pub fn packSplitSized(
     self: *Layout,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     id_extra: usize,
     target: dvui.Id,
     sign: f32,

@@ -103,7 +103,7 @@ pub fn nativeDvui(
     b: *std.Build,
     native_backend: NativeBackend,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
     macos_sdl_paths: ?MacosSdlPaths,
 ) NativeDvui {
@@ -133,7 +133,7 @@ pub fn nativeDvui(
 fn fizzyNativeDvui(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
     macos_sdl_paths: ?MacosSdlPaths,
 ) NativeDvui {
@@ -158,7 +158,7 @@ pub fn backendDependency(b: *std.Build) *std.Build.Dependency {
     return b.dependency("fizzy_backend", .{});
 }
 
-pub fn backendOptions(target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, macos_sdl_paths: ?MacosSdlPaths) fizzy_backend.Options {
+pub fn backendOptions(target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, macos_sdl_paths: ?MacosSdlPaths) fizzy_backend.Options {
     return .{
         .target = target,
         .optimize = optimize,
@@ -172,7 +172,7 @@ pub fn platformModule(
     b: *std.Build,
     native: NativeDvui,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     macos_sdl_paths: ?MacosSdlPaths,
 ) *std.Build.Module {
     return fizzy_backend.platformModule(backendDependency(b), native.dvui, native.backend, backendOptions(target, optimize, macos_sdl_paths));
@@ -183,7 +183,7 @@ pub fn addFizzyExecutableForTarget(
     /// Null on the configure pass that fetches Velopack (`app.readConfig`).
     vz: ?velopack.Dep,
     resolved_target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
     native_backend: NativeBackend,
     build_opts: *std.Build.Step.Options,

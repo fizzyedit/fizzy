@@ -52,7 +52,7 @@ pub const Options = struct {
     macos_sdk: ?[]const u8 = null,
 };
 
-pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options) !void {
+pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options) !void {
     const cfg = try readConfig(b, target, opts);
     try construct(b, target, optimize, opts, cfg);
 }
@@ -490,7 +490,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
 }
 
 /// Phase two of `build`: the executables, the web build, tests, packaging.
-pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options, cfg: Config) !void {
+pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config) !void {
     const common = @import("common.zig");
     const plugins = @import("plugins.zig");
     const sdk = @import("sdk.zig");
