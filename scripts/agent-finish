@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Publish a worker change with evidence that does not depend on a model's final message.
+# `agent-finish --claim <issue>` opens the draft PR early (no gates run); a plain run updates its body.
+set -euo pipefail
+reason='unexpected failure'
+trap 'echo "agent-finish: $reason" >&2' ERR
+fail() { echo "agent-finish: $*" >&2; exit 1; }
+claim=false
+if [[ ${1:-} == --claim ]]; then claim=true; shift; fi
+[[ $# == 1 ]] || fail 'usage: agent-finish [--claim] <issue number or fizzyedit/work#N>'
+issue=${1#fizzyedit/work#}
+[[ $issue =~ ^[1-9][0-9]*$ ]] || fail 'issue must be a positive number or fizzyedit/work#N'
+cd "$(dirname "$0")/.."
+command -v gh >/dev/null 2>&1 || fail 'gh is required'
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+branch_re='^[a-z][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$'
+use_jj=false
+if command -v jj >/dev/null 2>&1 && jj root >/dev/null 2>&1; then
+    use_jj=true
+    reason='could not identify the working bookmark'
+    # The bookmark sits on @, or on @- when the working copy is a fresh empty change above it.
+    rev=@
+    branch=$(jj log -r @ --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\n")' | grep -E "$branch_re" || true)
+    if [[ -z $branch ]]; then
+        rev=@-
+        branch=$(jj log -r @- --no-graph -T 'local_bookmarks.map(|b| b.name()).join("\n")' | grep -E "$branch_re" || true)
+    fi
+else
+    branch=$(git symbolic-ref --quiet --short HEAD)
+fi
+[[ $branch =~ $branch_re ]] || fail 'exactly one area/slug branch must point at the working change'
+title="${branch%%/*}: ${branch#*/}"
+if $use_jj; then
+    # Keep the worker's own description; only fill in an empty one.
+    reason='could not read the change description'
+    desc=$(jj log -r "$rev" --no-graph -T 'description.first_line()')
+    if [[ -n $desc ]]; then
+        title=$desc
+    else
+        jj describe -r "$rev" -m "$title"
+    fi
+fi
+reason='could not compare with origin/main'
+if $use_jj; then
+    jj diff --from main@origin --to "$rev" --stat >"$tmp/stat"
+else
+    # Inside this clone only; .gitignore keeps zig-pkg, .zig-cache, zig-out and .DS_Store out.
+    git add -A
+    git diff origin/main --stat >"$tmp/stat"
+fi
+$claim || [[ -s $tmp/stat ]] || fail 'no changes relative to main'
+{
+    printf 'Part of fizzyedit/work#%s\n\n## Changes\n\n```text\n' "$issue"
+    head -n 100 "$tmp/stat"
+    printf '```\n\n## Gates\n\n'
+} >"$tmp/body"
+if $claim; then
+    printf 'Gates not run yet; `scripts/agent-finish %s` replaces this with their output.\n' "$issue" >>"$tmp/body"
+else
+    run_gate() {
+        local status=0
+        "$@" >"$tmp/gate" 2>&1 || status=$?
+        cat "$tmp/gate"
+        {
+            printf '### `%s` (exit %s)\n\n```text\n' "$*" "$status"
+            # GitHub caps a PR body near 65k characters; the tail holds the summary.
+            if [[ $(wc -l <"$tmp/gate") -gt 50 ]]; then printf '... (earlier output omitted)\n'; fi
+            tail -n 50 "$tmp/gate"
+            printf '\n```\n\n'
+        } >>"$tmp/body"
+        [[ $status == 0 ]] || fail "gate failed: $*"
+        if [[ $1 == scripts/zb ]]; then
+            # A successful test count can accompany a failed build step; zig appends
+            # "; M/M tests passed" to the steps line when tests ran.
+            awk '
+                /Build Summary:/ {
+                    split($3, steps, "/")
+                    if (steps[1] > 0 && steps[1] == steps[2] &&
+                        $4 == "steps" && $5 ~ /^succeeded/) passed = 1
+                }
+                END { exit !passed }
+            ' "$tmp/gate" || fail "missing successful Build Summary: $*"
+        fi
+    }
+    run_gate scripts/check-fmt.sh
+    run_gate scripts/zb build --summary all
+    for gate in test test-integration check-web test-sdk-version; do
+        run_gate scripts/zb build "$gate" --summary all
+    done
+fi
+reason='could not publish branch'
+if $use_jj; then
+    jj git push --bookmark "$branch"
+else
+    if ! git diff --cached --quiet; then
+        git commit -m "$title"
+    elif [[ $(git rev-list --count origin/main..HEAD) == 0 ]]; then
+        # A claim before any work: gh pr create needs a commit ahead of main.
+        git commit --allow-empty -m "$title: claim"
+    fi
+    git push --set-upstream origin "$branch"
+fi
+reason='could not look up pull request'
+pr=$(gh pr list --head "$branch" --base main --json number --jq '.[0].number // empty')
+reason='could not write draft pull request'
+if [[ -n $pr ]]; then
+    gh pr edit "$pr" --body-file "$tmp/body"
+else
+    gh pr create --draft --base main --head "$branch" --title "$title" --body-file "$tmp/body"
+fi

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Create an isolated worker checkout and print its shared rules path.
+set -euo pipefail
+reason='unexpected failure'
+trap 'echo "agent-prepare: $reason" >&2' ERR
+fail() { echo "agent-prepare: $*" >&2; exit 1; }
+[[ $# == 1 ]] || fail 'usage: agent-prepare <branch>'
+branch=$1
+[[ $branch =~ ^[a-z][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$ ]] || fail 'branch must be area/slug'
+cd "$(dirname "$0")/.."
+root=$PWD
+workspace="$(dirname "$root")/$(basename "$root")-${branch//\//-}"
+case $workspace in
+    /tmp/* | /private/tmp/* | /var/tmp/* | *claude-*/scratchpad/*)
+        [[ ${AGENT_PREPARE_ALLOW_TMP:-} == 1 ]] || fail "workspace would sit in a temp directory the OS clears: $workspace" ;;
+esac
+[[ ! -e $workspace ]] || fail "workspace already exists: $workspace"
+reason='could not create workspace'
+if command -v jj >/dev/null 2>&1 && jj root >/dev/null 2>&1; then
+    jj git fetch >&2 || echo 'agent-prepare: warning: jj git fetch failed; main@origin may be stale' >&2
+    jj workspace add --name "${branch//\//-}" -r main@origin "$workspace" >&2
+    cd "$workspace"
+    jj describe -m "${branch%%/*}: ${branch#*/}" >&2
+    jj bookmark create "$branch" -r @ >&2
+else
+    git fetch origin main >&2 || echo 'agent-prepare: warning: git fetch failed; origin/main may be stale' >&2
+    git worktree add -b "$branch" "$workspace" origin/main >&2
+    cd "$workspace"
+fi
+if [[ $(uname -s) == Linux ]] && ! command -v zig >/dev/null 2>&1; then
+    reason='cloud setup failed'
+    scripts/cloud-setup.sh >&2
+fi
+printf '%s/docs/AGENT_WORK.md\n' "$workspace"
