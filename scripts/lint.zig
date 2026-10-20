@@ -66,14 +66,18 @@ pub fn main(init: std.process.Init) !void {
                         std.debug.print("{s}:1: {s}: count {d} exceeds allowance {d}\n", .{ path, @tagName(rule), count, budget });
                         failed = true;
                     },
-                    .under => std.debug.print("{s}:1: {s}: lower allowance from {d} to {d}\n", .{ path, @tagName(rule), budget, count }),
+                    .under => {
+                        std.debug.print("{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n", .{ path, @tagName(rule), count, budget, count });
+                        failed = true;
+                    },
                     .equal => {},
                 }
             }
         }
     }
     for (parsed, seen) |allow, visited| if (!visited) {
-        std.debug.print("{s}:1: {s}: lower allowance from {d} to 0 (file absent)\n", .{ allow.file, @tagName(allow.rule), allow.count });
+        std.debug.print("{s}:1: {s}: file not found; remove its allowance of {d}\n", .{ allow.file, @tagName(allow.rule), allow.count });
+        failed = true;
     };
     if (failed) std.process.exit(1);
 }
@@ -199,7 +203,7 @@ test "function length includes declaration and closing brace at 150 and 151" {
     }
 }
 
-test "ratchet rejects increases and hints on decreases" {
+test "ratchet rejects increases and decreases" {
     try std.testing.expectEqual(.over, ratchet(2, 1));
     try std.testing.expectEqual(.under, ratchet(0, 1));
     try std.testing.expectEqual(.equal, ratchet(1, 1));

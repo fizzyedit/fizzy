@@ -105,8 +105,9 @@ jobs:
           use-cache: false
       - name: zig fmt --check
         run: bash scripts/check-fmt.sh
-      - name: zig build lint
-        run: zig build lint --summary all
+      - name: lint
+        # Not `zig build lint`: the root build fetches the app's URL dependencies.
+        run: zig run scripts/lint.zig
       - name: scripts/zb (build lock)
         run: sh scripts/test-zb.sh
 

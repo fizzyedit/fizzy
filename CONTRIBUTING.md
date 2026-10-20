@@ -129,10 +129,10 @@ turns.
   of the editor, which would hold the slot until it quits; `FIZZY_BUILD_SKIP=1` runs at once.
 - **Gates:** `scripts/check-fmt.sh` (`--fix` formats), `zig build`, `zig build test`,
   `zig build test-integration`, `zig build check-web`, `zig build test-sdk-version`,
-  `zig build lint`, `zig build check-tests-reached`. CI runs all of them, `test-integration` on
+  `zig build lint` (or `zig run scripts/lint.zig`), `zig build check-tests-reached`. CI runs all of them, `test-integration` on
   Linux only, but a minute locally beats a ten-minute round trip: run them before you push.
 - **Lint budgets only go down.** `scripts/lint-allow.zon` holds existing findings per rule and
-  file. Lower a budget when lint asks; new files have a budget of zero. A justified exception
+  file. A budget must equal the current count: lint fails when a file is over or under it; new files have a budget of zero. A justified exception
   uses `// lint-allow(<rule>): <reason>` on the finding's line or the line immediately before it.
 - **Read the Build Summary, not the test count.** `test-integration` prints `failed command:`
   whenever a test logs a warning, even on a pass, and can show `N/N tests passed` beside a failed
