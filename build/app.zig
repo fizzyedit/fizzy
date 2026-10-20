@@ -512,7 +512,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // deployable as-is to a static host.
     const w = web.build(b, optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
     const built = try native(b, target, optimize, opts, cfg, assets_module, app_icon_module);
-    install(b, target, optimize, opts, cfg, w, built);
+    install(b, target, optimize, cfg, w, built);
     try addTests(b, target, optimize, cfg, built, assets_module, app_icon_module);
 }
 
@@ -580,7 +580,7 @@ fn native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Op
 }
 
 /// The steps over what `web.build` and `native` made: the installs, `run`, the dylib steps, packaging.
-fn install(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config, w: web.Web, built: Native) void {
+fn install(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, cfg: Config, w: web.Web, built: Native) void {
     const common = @import("common.zig");
     const package = @import("package.zig");
     const vz = cfg.vz;
@@ -595,7 +595,7 @@ fn install(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.O
     const macos_sign_install_identity = cfg.macos_sign_install_identity;
     const macos_notary_profile = cfg.macos_notary_profile;
 
-    web.install(b, w, opts.own != null);
+    web.install(b, w);
 
     const exe = built.main.exe;
     const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };

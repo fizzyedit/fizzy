@@ -16,6 +16,9 @@ pub const Web = struct {
     /// Fizzy's own build: a native-built plugin graph re-homed to wasm32 and compiled apart from
     /// the app, for `check-web`.
     rehome_fixture: ?*std.Build.Step.Compile,
+    /// The hosted demo tapes alone (fizzy's own build), which the `demos` step installs without
+    /// building the rest of the site.
+    demos: ?std.Build.LazyPath,
 };
 
 /// The web (wasm) build, apart from the native exe so it cannot disturb packaging, SDL or
@@ -289,7 +292,8 @@ pub fn build(
     // redirects back to, which posts its location to the opener and closes.
     _ = dir.addCopyFile(b.path("web/oauth-callback.html"), "oauth-callback.html");
     // The tapes the page can fetch (`?demo=demos/<name>.tape`), built from this commit's scripts.
-    if (own) _ = dir.addCopyDirectory(demoTapes(b), "demos", .{});
+    const demos: ?std.Build.LazyPath = if (own) demoTapes(b) else null;
+    if (demos) |tapes| _ = dir.addCopyDirectory(tapes, "demos", .{});
     for (web_pages.items) |page| {
         const web_dir = b.pathJoin(&.{ page.dir, "web" });
         var d = b.root.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch {
@@ -317,12 +321,12 @@ pub fn build(
         break :blk b.addObject(.{ .name = "rehome-fixture-web", .root_module = module });
     } else null;
 
-    return .{ .wasm = web_exe, .dir = dir.getDirectory(), .rehome_fixture = rehome_check };
+    return .{ .wasm = web_exe, .dir = dir.getDirectory(), .rehome_fixture = rehome_check, .demos = demos };
 }
 
 /// The steps over `build`'s result: `web` installs it into `zig-out/web/`, and the ones that
-/// serve, copy or only compile it. `own` is `build`'s, for the `demos` step.
-pub fn install(b: *std.Build, web: Web, own: bool) void {
+/// serve, copy or only compile it.
+pub fn install(b: *std.Build, web: Web) void {
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
     const install_wasm = b.addInstallArtifact(web.wasm, .{
         .dest_dir = .{ .override = web_install_dir },
@@ -336,9 +340,9 @@ pub fn install(b: *std.Build, web: Web, own: bool) void {
     const web_step = b.step("web", "Build the fizzy web (wasm) app into zig-out/web/");
     web_step.dependOn(&install_wasm.step);
     web_step.dependOn(&install_site.step);
-    if (own) {
+    if (web.demos) |tapes| {
         const install_demos = b.addInstallDirectory(.{
-            .source_dir = web.dir.path(b, "demos"),
+            .source_dir = tapes,
             .install_dir = web_install_dir,
             .install_subdir = "demos",
         });
