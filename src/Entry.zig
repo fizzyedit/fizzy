@@ -527,6 +527,18 @@ fn materialOffered() fizzy.core.material.Kinds {
     return k;
 }
 
+/// Why the backend cannot draw `kind`, one static line for a tooltip; null when it can. The
+/// backend's own reason where it gives one (`SDLBackend.materialMissing`), else a plain one for a
+/// kind it does not offer.
+pub fn materialMissing(kind: fizzy.core.material.Kind) ?[]const u8 {
+    if (comptime @hasDecl(dvui.backend, "materialMissing")) {
+        return dvui.currentWindow().backend.impl.materialMissing(switch (kind) {
+            inline else => |k| @field(dvui.backend.MaterialKind, @tagName(k)),
+        });
+    }
+    return if (materialOffered().has(kind)) null else "Not available with this backend";
+}
+
 /// The kind of window material asked for: `FIZZY_GLASS` where it names one, else the setting
 /// (`Settings.window_material`).
 fn materialAsked() fizzy.core.material.Kind {
@@ -562,7 +574,8 @@ fn frameOnce() !dvui.App.Result {
     }
     // What the app's windows are made of, as the backend can show it, for every glass drawn this
     // frame (`core.material`): before `Popout`, whose OS glass is offered only for `liquid`. The
-    // setting asks (Liquid Glass by default, so each platform shows the best it can);
+    // setting asks (Liquid Glass by default, so each platform shows the richest glass it has, or
+    // an opaque window), and is never rewritten by what this platform draws;
     // `FIZZY_GLASS` (`none`, `transparent`, `blur`, `frost`, `liquid`) overrides it.
     fizzy.core.material.publish((fizzy.core.material.Material{ .kind = materialAsked() }).effective(materialOffered()));
     // And the backend, which makes the windows it dresses itself of it: the one decision, one

@@ -259,10 +259,11 @@ fn cmdDemoPlayNamed(state: *anyopaque, args: DemoByName.Args, call: *sdk.Command
 }
 
 const WindowMaterial = sdk.Command.Params(struct {
-    kind: sdk.Command.Arg([]const u8, .{ .description = "What the window is made of: none (opaque), transparent, blur, frost or liquid. Each platform shows the best it has at or below it. Empty steps to the next." }) = .init(""),
+    kind: sdk.Command.Arg([]const u8, .{ .description = "What the window is made of: none (opaque), transparent, blur, frost or liquid. Saved as given; one this platform cannot draw is drawn as the richest glass below it, else opaque. Empty steps to the next it can draw." }) = .init(""),
 });
 
-/// The next material, round from Liquid Glass back to opaque, as a row or a shortcut runs it.
+/// The next material this platform can draw, round from Liquid Glass back to opaque, as a row or
+/// a shortcut runs it.
 fn cmdWindowMaterialStep(state: *anyopaque) anyerror!void {
     _ = stepWindowMaterial(editorFromState(state));
 }
@@ -280,7 +281,14 @@ fn cmdWindowMaterial(state: *anyopaque, args: WindowMaterial.Args, call: *sdk.Co
 
 fn stepWindowMaterial(editor: *Editor) fizzy.core.material.Kind {
     const Kind = fizzy.core.material.Kind;
-    const next: Kind = @fromBackingInt(@intCast((@backingInt(editor.app.settings.window_material) + 1) % std.enums.values(Kind).len));
+    const n = std.enums.values(Kind).len;
+    // From the kind drawn, which the row shows, not a saved one this platform cannot draw.
+    var next = fizzy.core.material.get().kind;
+    // `none` is drawn everywhere, so the walk ends within one round.
+    for (0..n) |_| {
+        next = @fromBackingInt(@intCast((@backingInt(next) + 1) % n));
+        if (fizzy.Entry.materialMissing(next) == null) break;
+    }
     setWindowMaterial(editor, next);
     return next;
 }

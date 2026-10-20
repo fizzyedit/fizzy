@@ -83,9 +83,9 @@ motion: f32 = 1,
 motion_speed: f32 = core.motion.default_speed,
 
 /// What the app's windows are made of (`core.material`): opaque (`none`), clear (`transparent`),
-/// blurred, frosted, or Liquid Glass. Each platform shows the best it has at or below the kind asked
-/// (`Material.effective`): Liquid Glass on macOS 26 and on the web (drawn in the page), frost on
-/// Windows, blur where a Linux compositor blurs. Applied at once; `FIZZY_GLASS` overrides it.
+/// blurred, frosted, or Liquid Glass. A kind the platform cannot draw is drawn as the richest glass
+/// below it that it can, else opaque (`Material.effective`), and stays saved for a machine that
+/// can. Applied at once; `FIZZY_GLASS` overrides it.
 window_material: core.material.Kind = .liquid,
 
 /// Whether glass is drawn by the glass program (`core.LiquidField`) where the backend has one —

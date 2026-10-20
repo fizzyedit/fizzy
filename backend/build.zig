@@ -65,6 +65,8 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     .{ .name = "backend-window-layout-tests", .root = "src/platform/window_layout.zig" },
     // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
     .{ .name = "backend-titlebar-tests", .root = "src/platform/titlebar.zig" },
+    // Which window materials each platform can draw, why not the others, and the fallback.
+    .{ .name = "backend-materials-tests", .root = "src/materials.zig" },
     // The rounded frame Linux's blur behind the window is stepped into (`wayland_blur`).
     .{ .name = "backend-blur-region-tests", .root = "src/platform/blur_region.zig" },
     // Where a viewport's OS window is on the desktop and where its part of the frame lies.
