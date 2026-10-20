@@ -17,9 +17,10 @@ id: u64,
 pub const Options = struct {
     /// UTF-8, copied by the platform before `openWindow` returns.
     title: []const u8 = "",
-    /// The drawable size to ask for, physical pixels. The platform may give another (a tiling
+    /// The size to ask for, in desktop points: pixels cannot be asked for, since the scale
+    /// depends on the display the window lands on. The platform may give another (a tiling
     /// compositor, a display too small); the first `Event.Payload.resized` is the truth.
-    size: geometry.Size = .{ .w = 1280, .h = 720 },
+    size: geometry.DesktopSize = .{ .w = 1280, .h = 720 },
     /// Desktop points; null lets the OS place it.
     position: ?geometry.DesktopPoint = null,
     state: State = .normal,

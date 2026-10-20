@@ -29,8 +29,6 @@ pub const Caps = struct {
     materials: std.EnumSet(Window.Material) = .initOne(.none),
     /// More than one window at once: false on the web and on a phone.
     multiple_windows: bool = true,
-    /// Reports `frameTiming`; otherwise callers pace by `Display.refresh_hz`.
-    frame_timing: bool = false,
 };
 
 /// The platform's own report of when pictures reach the screen: the frame-pacing seam. The
@@ -61,7 +59,7 @@ pub const VTable = struct {
     wait: *const fn (ctx: *anyopaque, timeout_ns: ?u64) void,
     /// Wakes a `wait` from any thread (a background job finished); `wait` then returns at once.
     wake: *const fn (ctx: *anyopaque) void,
-    /// Null if the platform cannot say (`Caps.frame_timing`).
+    /// Null if the platform cannot say; callers then pace by `Display.refresh_hz`.
     frame_timing: ?*const fn (ctx: *anyopaque, window: Window) ?FrameTiming = null,
 
     // ---- windows -------------------------------------------------------------------------
@@ -70,7 +68,7 @@ pub const VTable = struct {
     close_window: *const fn (ctx: *anyopaque, window: Window) void,
     set_title: *const fn (ctx: *anyopaque, window: Window, title: []const u8) void,
     window_size: *const fn (ctx: *anyopaque, window: Window) geometry.Size,
-    set_window_size: *const fn (ctx: *anyopaque, window: Window, size: geometry.Size) void,
+    set_window_size: *const fn (ctx: *anyopaque, window: Window, size: geometry.DesktopSize) void,
     window_scale: *const fn (ctx: *anyopaque, window: Window) f32,
     window_position: *const fn (ctx: *anyopaque, window: Window) geometry.DesktopPoint,
     set_window_position: *const fn (ctx: *anyopaque, window: Window, at: geometry.DesktopPoint) void,
@@ -103,17 +101,20 @@ pub const VTable = struct {
     set_ime_area: *const fn (ctx: *anyopaque, window: Window, area: Ime.Area) void,
 
     // ---- clipboard -----------------------------------------------------------------------
+    /// A write by `set_clipboard_text` changes the serial but sends no event.
     clipboard_serial: *const fn (ctx: *anyopaque) Clipboard,
     /// The text on the clipboard, or null if it holds none; `allocator` owns the result.
     clipboard_text: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator) anyerror!?[]u8,
+    /// The platform copies `text` before returning.
     set_clipboard_text: *const fn (ctx: *anyopaque, text: []const u8) anyerror!void,
 
     // ---- drag and drop from other programs -----------------------------------------------
     dnd_respond: *const fn (ctx: *anyopaque, window: Window, response: Dnd.Response) void,
 };
 
-// The functions below are the interface's surface: one per `VTable` function, so a call site
-// reads `platform.poll()` and a platform that lacks an optional one answers for it here.
+// The functions below are the interface's surface, one per `VTable` function (as `std.Io` does):
+// a call site reads `platform.poll()` and not a vtable, and a platform that lacks an optional
+// function is answered for here. They are the interface, not wrappers over a library call.
 
 pub fn now(self: Platform) u64 {
     return self.vtable.now(self.ctx);
@@ -131,7 +132,7 @@ pub fn wake(self: Platform) void {
     self.vtable.wake(self.ctx);
 }
 
-/// Null when the platform cannot say (`Caps.frame_timing`).
+/// Null when the platform cannot say.
 pub fn frameTiming(self: Platform, window: Window) ?FrameTiming {
     const f = self.vtable.frame_timing orelse return null;
     return f(self.ctx, window);
@@ -153,7 +154,7 @@ pub fn windowSize(self: Platform, window: Window) geometry.Size {
     return self.vtable.window_size(self.ctx, window);
 }
 
-pub fn setWindowSize(self: Platform, window: Window, size: geometry.Size) void {
+pub fn setWindowSize(self: Platform, window: Window, size: geometry.DesktopSize) void {
     self.vtable.set_window_size(self.ctx, window, size);
 }
 

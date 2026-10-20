@@ -28,6 +28,20 @@ pub const Size = struct {
     h: u32 = 0,
 };
 
+/// A position across a window as a fraction of it: 0..1 from the top left. For devices that
+/// have no pixel of their own (a touch screen reports where on itself, not where on the window).
+pub const Norm = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+};
+
+/// A size in desktop points: how big to make a window before the display it lands on, and so its
+/// scale, is known.
+pub const DesktopSize = struct {
+    w: u32 = 0,
+    h: u32 = 0,
+};
+
 /// A place on the desktop, in desktop points.
 pub const DesktopPoint = struct {
     x: i32 = 0,

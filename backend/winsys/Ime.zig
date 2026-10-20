@@ -4,7 +4,8 @@
 //! Only the provisional side is here. Committed text is `Event.Payload.text`, the same event a
 //! plain keystroke makes, so an editor needs no second path to insert. A composition that is
 //! cancelled sends an empty `Ime` and no `text`; one committed sends an empty
-//! `Composition` (clearing the provisional run) and then the `text`, in that order. See
+//! `Ime` (clearing the provisional run) and then the `text`, in that order: an empty `Ime` with a `text`
+//! straight after it is a commit, one without is a cancel. See
 //! `docs/window-notes/ime.md`: focus loss during composition is unrecorded, so the platform
 //! decides until a conformance case fixes it.
 const geometry = @import("geometry.zig");

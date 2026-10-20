@@ -107,10 +107,13 @@ pub const Touch = struct {
     /// Which screen, and which finger on it; a finger keeps its pair from `down` to `up`.
     device: u64,
     finger: u64,
-    /// 0..1 across the window from its top left. Not pixels: a touch device has no pixel.
-    at: geometry.Point,
+    /// Across the window, as a fraction (`geometry.Norm`): a touch screen reports where on
+    /// itself, not in pixels. Multiply by the window's current size (`Platform.windowSize`) at
+    /// the time the event is handled; a `resized` ahead of it in the queue is then already
+    /// applied.
+    at: geometry.Norm,
     /// Since the last event of this finger, same unit as `at`. Zero for `down`.
-    delta: geometry.Point = .{},
+    delta: geometry.Norm = .{},
 };
 
 pub const Wheel = struct {
@@ -141,6 +144,9 @@ pub const Resized = struct {
     live: bool = false,
 };
 
+/// What just happened to the window, as a transition. What it *is* afterwards is
+/// `Platform.windowState`; `restored` is the return from `minimized` to whichever of `normal`
+/// or `maximized` it had been, and visibility (`shown`/`hidden`) is separate from `Window.State`.
 pub const State = enum { shown, hidden, minimized, restored, maximized, entered_fullscreen, left_fullscreen };
 
 /// The keys, named by their meaning on a US layout. Not SDL's or dvui's numbering: the platform

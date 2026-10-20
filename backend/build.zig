@@ -19,7 +19,8 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
 
-    // The interface compiles for the web too: no OS, no libc, nothing that allocates.
+    // The interface compiles for the web too: no OS, no libc. `analysed` in the root makes the object
+    // analyse every declaration, which a build of unreferenced code would not.
     const winsys_web = b.addObject(.{
         .name = "winsys-wasm32",
         .root_module = b.createModule(.{

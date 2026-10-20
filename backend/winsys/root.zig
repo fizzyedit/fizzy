@@ -44,7 +44,8 @@ pub const geometry = @import("geometry.zig");
 const Stub = struct {
     clock: u64 = 0,
     title_set: bool = false,
-    text: ?[]const u8 = null,
+    text_buf: [64]u8 = undefined,
+    text_len: ?usize = null,
 
     fn platform(self: *Stub) Platform {
         return .{ .ctx = self, .vtable = &vtable, .caps = .{} };
@@ -74,7 +75,7 @@ const Stub = struct {
     fn windowSize(_: *anyopaque, _: Window) geometry.Size {
         return .{ .w = 640, .h = 480 };
     }
-    fn setWindowSize(_: *anyopaque, _: Window, _: geometry.Size) void {}
+    fn setWindowSize(_: *anyopaque, _: Window, _: geometry.DesktopSize) void {}
     fn windowScale(_: *anyopaque, _: Window) f32 {
         return 2;
     }
@@ -116,11 +117,13 @@ const Stub = struct {
         return .{ .serial = 1 };
     }
     fn clipboardText(ctx: *anyopaque, allocator: std.mem.Allocator) anyerror!?[]u8 {
-        const text = me(ctx).text orelse return null;
-        return try allocator.dupe(u8, text);
+        const s = me(ctx);
+        return try allocator.dupe(u8, s.text_buf[0 .. s.text_len orelse return null]);
     }
     fn setClipboardText(ctx: *anyopaque, text: []const u8) anyerror!void {
-        me(ctx).text = text;
+        const s = me(ctx);
+        @memcpy(s.text_buf[0..text.len], text);
+        s.text_len = text.len;
     }
     fn dndRespond(_: *anyopaque, _: Window, _: Dnd.Response) void {}
 
@@ -156,6 +159,14 @@ const Stub = struct {
     };
 };
 
+/// Referenced by the wasm32 object build (`build.zig`), which would otherwise analyse nothing:
+/// Zig skips what is never used. Every vtable function of the stub is reached through it.
+pub export fn winsys_analysed() usize {
+    var stub: Stub = .{};
+    const p = stub.platform();
+    return @sizeOf(Event) + p.windowSize(.{ .id = 1 }).w + @intFromPtr(&Stub.vtable);
+}
+
 test "calls reach the platform through the vtable" {
     var stub: Stub = .{};
     const p = stub.platform();
@@ -176,7 +187,6 @@ test "calls reach the platform through the vtable" {
 test "an optional function the platform lacks answers null" {
     var stub: Stub = .{};
     const p = stub.platform();
-    try std.testing.expect(!p.caps.frame_timing);
     try std.testing.expect(p.frameTiming(.{ .id = 1 }) == null);
 }
 
@@ -192,7 +202,9 @@ test "displays and clipboard text are owned by the caller's allocator" {
     try std.testing.expectEqual(p.displayOf(.{ .id = 1 }), list[0].id);
 
     try std.testing.expect(try p.clipboardText(a) == null);
-    try p.setClipboardText("héllo");
+    var scratch = "héllo".*;
+    try p.setClipboardText(&scratch);
+    scratch = "XXXXXX".*;
     const got = (try p.clipboardText(a)).?;
     defer a.free(got);
     try std.testing.expectEqualStrings("héllo", got);

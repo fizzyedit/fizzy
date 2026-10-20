@@ -9,7 +9,9 @@ const Display = @This();
 
 /// Stable while the display stays connected, never reused for a different one.
 id: u64,
-/// UTF-8, owned by the slice `Platform.displays` returned it in.
+/// UTF-8. Every name in a `Platform.displays` result is its own allocation from the caller's
+/// allocator (an empty name is an empty allocation, never a literal), so `freeDisplays` can
+/// free each.
 name: []const u8,
 /// The whole display on the desktop. Not necessarily positive: a display left of or above the
 /// primary one has negative origin.
