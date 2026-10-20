@@ -9,6 +9,18 @@ const std = @import("std");
 pub const plugin = @import("fizzy_sdk").plugin;
 
 pub fn build(b: *std.Build) !void {
+    const lint = b.addExecutable(.{
+        .name = "fizzy-lint",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/lint.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const run_lint = b.addRunArtifact(lint);
+    run_lint.setCwd(b.path("."));
+    run_lint.has_side_effects = true;
+    b.step("lint", "Check Zig source against lint budgets").dependOn(&run_lint.step);
+
     const windows_msvc_libc_opt = b.option([]const u8, "windows-msvc-libc", "zig libc manifest for *-windows-msvc when cross-compiling; forwarded by packageall for Windows children") orelse null;
     const fetch_msvc_opt = b.option(bool, "fetch-msvc", "If *-windows-msvc libc is missing under .velopack-msvc/, run msvcup-setup first (downloads MSVC+SDK; requires network). Defaults to true on Windows hosts targeting *-windows-msvc.") orelse null;
 

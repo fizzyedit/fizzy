@@ -105,6 +105,8 @@ jobs:
           use-cache: false
       - name: zig fmt --check
         run: bash scripts/check-fmt.sh
+      - name: zig build lint
+        run: zig build lint --summary all
       - name: scripts/zb (build lock)
         run: sh scripts/test-zb.sh
 

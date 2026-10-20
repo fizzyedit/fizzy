@@ -755,6 +755,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     var unit_test_artifacts: std.ArrayListUnmanaged(*std.Build.Step.Compile) = .empty;
 
     inline for (.{
+        .{ "fizzy-lint-tests", "scripts/lint.zig" },
         .{ "fizzy-direction-tests", "core/math/direction.zig" },
         .{ "fizzy-easing-tests", "core/math/easing.zig" },
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
