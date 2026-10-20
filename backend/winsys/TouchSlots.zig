@@ -7,7 +7,8 @@
 //! reaches here. An eleventh finger gets none and is not seen.
 //!
 //! A lift the window never hears of (it lost focus, went to the background or closed mid-touch)
-//! would hold its slot for good, so `EventQueue` cancels every held finger then (`releaseAll`).
+//! would hold its slot for good, so `EventQueue` cancels the held fingers then, and frees each
+//! slot with `up`.
 //!
 //! `backend/src/touch_slots.zig` is the same table for the SDL backend, which cannot import
 //! across its module root; step 7 of the windowing plan retires it when the SDL adapter reads
@@ -48,16 +49,6 @@ pub fn up(self: *TouchSlots, device: u64, finger: u64) ?u4 {
     return i;
 }
 
-/// Free every held slot: a bit per slot freed, from slot 0.
-pub fn releaseAll(self: *TouchSlots) u10 {
-    var freed: u10 = 0;
-    for (&self.fingers, 0..) |*slot, i| if (slot.* != null) {
-        slot.* = null;
-        freed |= @as(u10, 1) << @intCast(i);
-    };
-    return freed;
-}
-
 test "each finger on the screen keeps its own slot until it lifts" {
     var slots: TouchSlots = .{};
     try std.testing.expectEqual(0, slots.down(1, 100));
@@ -85,14 +76,4 @@ test "an eleventh finger is not seen" {
     try std.testing.expectEqual(null, slots.down(1, count));
     try std.testing.expectEqual(null, slots.find(1, count));
     try std.testing.expectEqual(null, slots.up(1, count));
-}
-
-test "lifts the window never hears of free every slot" {
-    var slots: TouchSlots = .{};
-    for (0..count) |i| _ = slots.down(1, i);
-    _ = slots.up(1, 3);
-    try std.testing.expectEqual(@as(u10, 0b11_1111_0111), slots.releaseAll());
-    try std.testing.expectEqual(@as(u10, 0), slots.releaseAll());
-    // Touch works again after.
-    try std.testing.expectEqual(0, slots.down(1, 99));
 }

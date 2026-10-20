@@ -17,7 +17,7 @@
 //! - **Text follows its key.** A `text` that a platform delivers ahead of the key down at the same
 //!   instant is put behind it. Text is delivered in pieces of at most `text_max` bytes, cut
 //!   between code points.
-//! - **Modifiers are the OS's,** carried by each event and remembered (`mods`); a modifier key's
+//! - **Modifiers are the OS's,** carried by each event and remembered per window (`modsOf`); a modifier key's
 //!   own down and up are corrected to show its own bit, which some platforms report one event late.
 //! - **A finger has a slot** (`Event.Touch.slot`, `TouchSlots`): held from down to up, reused
 //!   after, and an eleventh finger is not seen.
@@ -57,6 +57,14 @@ const Held = struct {
     what: union(enum) { key: Event.Key, button: Event.Button },
 };
 
+const max_windows = 8;
+
+const WindowState = struct {
+    id: u64 = 0,
+    at: geometry.Point = .{},
+    mods: Event.Mods = .{},
+};
+
 const FingerAt = struct { window: u64 = 0, at: geometry.Norm = .{} };
 
 slots: [capacity]Slot = undefined,
@@ -70,15 +78,29 @@ held_count: usize = 0,
 touches: TouchSlots = .{},
 finger_at: [TouchSlots.count]FingerAt = @splat(.{}),
 
-/// The modifiers the last event that carried them reported.
-mods: Event.Mods = .{},
+/// What each window last reported (`modsOf`), for the releases a focus loss makes: a window the
+/// table has no room for forgets its state first, oldest claimed first.
+states: [max_windows]WindowState = @splat(.{}),
+next_state: usize = 0,
 last_time_ns: u64 = 0,
-last_at: geometry.Point = .{},
 dropped: u64 = 0,
 stray: u64 = 0,
 
 pub fn len(self: *const EventQueue) usize {
     return self.count;
+}
+
+/// The modifiers the last event of `window` that carried them reported (0: no window).
+pub fn modsOf(self: *EventQueue, window: u64) Event.Mods {
+    return self.stateOf(window).mods;
+}
+
+fn stateOf(self: *EventQueue, window: u64) *WindowState {
+    for (&self.states) |*st| if (st.id == window) return st;
+    const st = &self.states[self.next_state];
+    self.next_state = (self.next_state + 1) % max_windows;
+    st.* = .{ .id = window };
+    return st;
 }
 
 /// Keys and buttons held, and fingers down: what a focus loss would release.
@@ -109,8 +131,9 @@ pub fn push(self: *EventQueue, event: Event) void {
         .pointer => |p| self.pushPointer(ev, p),
         .touch => |t| self.pushTouch(ev, t),
         .wheel => |w| {
-            self.mods = w.mods;
-            self.last_at = w.at;
+            const st = self.stateOf(windowId(ev));
+            st.mods = w.mods;
+            st.at = w.at;
             if (self.tailIs(ev)) |tail| {
                 const prev = &tail.event.payload.wheel;
                 if (prev.precise == w.precise and prev.phase == w.phase and @as(u8, @bitCast(prev.mods)) == @as(u8, @bitCast(w.mods))) {
@@ -283,7 +306,7 @@ fn pushKey(self: *EventQueue, ev0: Event, key0: Event.Key) void {
             }
             key.mods = self.withModifierKey(key.mods, window, key.physical, true);
             ev.payload = .{ .key = key };
-            self.mods = key.mods;
+            self.stateOf(window).mods = key.mods;
             self.addBeforeText(ev);
         },
         .up => {
@@ -294,7 +317,7 @@ fn pushKey(self: *EventQueue, ev0: Event, key0: Event.Key) void {
             self.unhold(i);
             key.mods = self.withModifierKey(key.mods, window, key.physical, false);
             ev.payload = .{ .key = key };
-            self.mods = key.mods;
+            self.stateOf(window).mods = key.mods;
             _ = self.add(ev, true);
         },
     }
@@ -339,10 +362,11 @@ fn pushText(self: *EventQueue, ev: Event, text: []const u8) void {
 
 fn pushPointer(self: *EventQueue, ev: Event, p: Event.Pointer) void {
     const window = windowId(ev);
-    self.mods = p.mods;
+    const st = self.stateOf(window);
+    st.mods = p.mods;
     switch (p.kind) {
         .move => {
-            self.last_at = p.at;
+            st.at = p.at;
             if (self.tailIs(ev)) |tail| if (tail.event.payload.pointer.kind == .move) {
                 tail.event = ev;
                 return;
@@ -350,7 +374,7 @@ fn pushPointer(self: *EventQueue, ev: Event, p: Event.Pointer) void {
             _ = self.add(ev, false);
         },
         .press => {
-            self.last_at = p.at;
+            st.at = p.at;
             if (self.findButton(window, p.button) != null) return;
             if (!self.makeSpace(false) or self.held_count == max_held) {
                 self.dropped += 1;
@@ -360,7 +384,7 @@ fn pushPointer(self: *EventQueue, ev: Event, p: Event.Pointer) void {
             _ = self.add(ev, false);
         },
         .release => {
-            self.last_at = p.at;
+            st.at = p.at;
             const i = self.findButton(window, p.button) orelse {
                 self.stray += 1;
                 return;
@@ -425,10 +449,13 @@ fn pushTouch(self: *EventQueue, ev0: Event, t0: Event.Touch) void {
     }
 }
 
-/// Releases what `window` holds (everything, for null), then forgets the modifiers: the OS will
-/// not send these, and a modifier released in another app must not stay down.
+/// Releases what `window` holds (everything, for null), then forgets that window's modifiers
+/// (every window's, for null): the OS will not send these, and a modifier released in another app
+/// must not stay down. A release carries its own window's last place and modifiers.
 fn releaseWhere(self: *EventQueue, time_ns: u64, window: ?u64) void {
-    self.mods = .{ .caps_lock = self.mods.caps_lock, .num_lock = self.mods.num_lock };
+    for (&self.states) |*st| if (st.id != 0 and (window == null or st.id == window.?)) {
+        st.mods = .{ .caps_lock = st.mods.caps_lock, .num_lock = st.mods.num_lock };
+    };
     var i: usize = 0;
     while (i < self.held_count) {
         const h = self.held[i];
@@ -437,9 +464,10 @@ fn releaseWhere(self: *EventQueue, time_ns: u64, window: ?u64) void {
             continue;
         }
         self.unhold(i);
+        const st = self.stateOf(h.window);
         const payload: Event.Payload = switch (h.what) {
-            .key => |k| .{ .key = .{ .physical = k.physical, .logical = k.logical, .action = .up, .mods = self.mods } },
-            .button => |b| .{ .pointer = .{ .kind = .release, .at = self.last_at, .button = b, .mods = self.mods } },
+            .key => |k| .{ .key = .{ .physical = k.physical, .logical = k.logical, .action = .up, .mods = st.mods } },
+            .button => |b| .{ .pointer = .{ .kind = .release, .at = st.at, .button = b, .mods = st.mods } },
         };
         _ = self.add(.{ .time_ns = time_ns, .window = windowOf(h.window), .payload = payload }, true);
     }
@@ -663,13 +691,13 @@ test "a modifier key shows its own bit, and its pair keeps it" {
     q.push(evAt(4, w1, keyPayload(.right_shift, .up)));
     const want = [_]bool{ true, true, true, false };
     for (want) |shift| try std.testing.expectEqual(shift, q.pop().?.payload.key.mods.shift);
-    try std.testing.expect(!q.mods.shift);
+    try std.testing.expect(!q.modsOf(1).shift);
 }
 
 test "the OS's modifiers on other events are remembered" {
     var q: EventQueue = .{};
     q.push(evAt(1, w1, .{ .pointer = .{ .kind = .move, .at = .{}, .mods = .{ .ctrl = true, .caps_lock = true } } }));
-    try std.testing.expect(q.mods.ctrl and q.mods.caps_lock);
+    try std.testing.expect(q.modsOf(1).ctrl and q.modsOf(1).caps_lock);
 }
 
 test "losing focus releases what the window holds, ahead of the focus event" {
@@ -698,6 +726,26 @@ test "losing focus releases what the window holds, ahead of the focus event" {
     try std.testing.expectEqual(1, q.heldCount());
     q.push(evAt(8, w2, .{ .focus = false }));
     try std.testing.expectEqual(0, q.heldCount());
+}
+
+test "a focus loss in one window leaves another's position and modifiers alone" {
+    var q: EventQueue = .{};
+    q.push(evAt(1, w1, .{ .pointer = .{ .kind = .press, .at = .{ .x = 1 }, .button = .left } }));
+    q.push(evAt(2, w2, .{ .pointer = .{ .kind = .press, .at = .{ .x = 50 }, .button = .left, .mods = .{ .ctrl = true } } }));
+    q.push(evAt(3, w2, .{ .pointer = .{ .kind = .move, .at = .{ .x = 60 }, .mods = .{ .ctrl = true } } }));
+    q.push(evAt(4, w1, .{ .focus = false }));
+    try std.testing.expect(q.modsOf(2).ctrl);
+    for (0..3) |_| _ = q.pop();
+    try expectDrained(&q, &.{
+        evAt(4, w1, .{ .pointer = .{ .kind = .release, .at = .{ .x = 1 }, .button = .left } }),
+        evAt(4, w1, .{ .focus = false }),
+    });
+    q.push(evAt(5, w2, .{ .focus = false }));
+    try std.testing.expectEqualDeep(
+        evAt(5, w2, .{ .pointer = .{ .kind = .release, .at = .{ .x = 60 }, .button = .left } }),
+        q.pop().?,
+    );
+    try std.testing.expect(!q.modsOf(2).ctrl);
 }
 
 test "going to the background releases every window's holds" {
