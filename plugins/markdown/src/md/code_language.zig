@@ -38,7 +38,7 @@ pub fn extensionForTag(info: []const u8) ?[]const u8 {
 /// first word is somebody else's convention, not ours.
 fn firstWord(info: []const u8) []const u8 {
     const trimmed = std.mem.trim(u8, info, " \t\r\n");
-    const end = std.mem.indexOfAny(u8, trimmed, " \t{,:") orelse trimmed.len;
+    const end = std.mem.findAny(u8, trimmed, " \t{,:") orelse trimmed.len;
     return trimmed[0..end];
 }
 

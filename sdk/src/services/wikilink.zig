@@ -123,7 +123,7 @@ fn scanAt(literal: []const u8, open: usize) ?Token {
     // inside the alias is just a character.
     var link = body;
     var alias: []const u8 = "";
-    if (std.mem.indexOfScalar(u8, body, '|')) |bar| {
+    if (std.mem.findScalar(u8, body, '|')) |bar| {
         link = body[0..bar];
         alias = std.mem.trim(u8, body[bar + 1 ..], " \t");
     }
@@ -132,7 +132,7 @@ fn scanAt(literal: []const u8, open: usize) ?Token {
     var target = link;
     var heading: []const u8 = "";
     var block_id: []const u8 = "";
-    if (std.mem.indexOfScalar(u8, link, '#')) |hash| {
+    if (std.mem.findScalar(u8, link, '#')) |hash| {
         target = link[0..hash];
         const anchor = link[hash + 1 ..];
         if (anchor.len > 0 and anchor[0] == '^') {

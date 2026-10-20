@@ -336,7 +336,7 @@ test "Params: descriptors, defaults and parsing" {
     var missing: Call = .{ .args = "", .arena = arena };
     try std.testing.expectError(error.BadArguments, P.parse(&missing));
     try std.testing.expect(missing.bad_args);
-    try std.testing.expect(std.mem.indexOf(u8, missing.message.?, "line") != null);
+    try std.testing.expect(std.mem.find(u8, missing.message.?, "line") != null);
 
     var unknown: Call = .{ .args = ".{ .line = 1, .lime = 2 }", .arena = arena };
     try std.testing.expectError(error.BadArguments, P.parse(&unknown));

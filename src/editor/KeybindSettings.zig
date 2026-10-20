@@ -109,7 +109,7 @@ fn setOwnerOpen(key: u64, open: bool) void {
 }
 
 fn ownerPrefix(id: []const u8) []const u8 {
-    return if (std.mem.indexOfScalar(u8, id, '.')) |dot| id[0..dot] else id;
+    return if (std.mem.findScalar(u8, id, '.')) |dot| id[0..dot] else id;
 }
 
 fn ownerLabel(owner: []const u8) []const u8 {

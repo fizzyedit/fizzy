@@ -215,4 +215,5 @@ test {
     _ = control.routes;
     _ = HistoryFrames;
     _ = Recents;
+    _ = @import("automation/Calm.zig");
 }

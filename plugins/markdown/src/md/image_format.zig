@@ -7,8 +7,8 @@ const std = @import("std");
 /// them without fetching on platforms that cannot rasterize SVG. Extension-less URLs
 /// still go through `isSvg` once the bytes arrive.
 pub fn urlLooksLikeSvg(url: []const u8) bool {
-    const no_hash = if (std.mem.indexOfScalar(u8, url, '#')) |i| url[0..i] else url;
-    const path = if (std.mem.indexOfScalar(u8, no_hash, '?')) |i| no_hash[0..i] else no_hash;
+    const no_hash = if (std.mem.findScalar(u8, url, '#')) |i| url[0..i] else url;
+    const path = if (std.mem.findScalar(u8, no_hash, '?')) |i| no_hash[0..i] else no_hash;
     return std.ascii.endsWithIgnoreCase(path, ".svg");
 }
 

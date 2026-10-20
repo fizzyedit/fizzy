@@ -250,7 +250,7 @@ fn drawRoot(path: []const u8, tree: *core.widgets.TreeWidget, unique_id: dvui.Id
 
 /// The root row's name. A mount's is what follows `scheme://` — the archive, the account.
 fn rootLabel(path: []const u8) []const u8 {
-    if (core.paths.isMountPath(path)) return path[(std.mem.indexOf(u8, path, "://") orelse 0) + 3 ..];
+    if (core.paths.isMountPath(path)) return path[(std.mem.find(u8, path, "://") orelse 0) + 3 ..];
 
     // Resolve before taking the basename. Launching as `fizzy .` (or any relative path) makes
     // `basename` return the literal "." and the root row's title becomes a single unreadable
@@ -554,7 +554,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
         if (dvui.firstFrame(te.data().id)) {
             te.textSet(label, true);
 
-            if (std.mem.indexOf(u8, label, ".")) |idx| {
+            if (std.mem.find(u8, label, ".")) |idx| {
                 if (idx == 0) {
                     te.textLayout.selection.moveCursor(1, false);
                     te.textLayout.selection.moveCursor(label.len - 1, true);

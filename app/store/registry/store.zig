@@ -260,7 +260,7 @@ pub const Catalog = struct {
 var bust_counter: u64 = 0;
 
 fn cacheBust(allocator: std.mem.Allocator, io: std.Io, url: []const u8) ?[]u8 {
-    const sep: u8 = if (std.mem.indexOfScalar(u8, url, '?') != null) '&' else '?';
+    const sep: u8 = if (std.mem.findScalar(u8, url, '?') != null) '&' else '?';
     bust_counter += 1;
     const nonce = @as(u64, @truncate(@as(u96, @bitCast(std.Io.Clock.boot.now(io).nanoseconds)))) +% bust_counter;
     return std.fmt.allocPrint(allocator, "{s}{c}_={d}", .{ url, sep, nonce }) catch null;

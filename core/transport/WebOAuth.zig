@@ -88,7 +88,7 @@ pub fn pageUrl(allocator: std.mem.Allocator, rel: []const u8) ![]u8 {
     const n = wasm.fizzy_web_oauth_callback_url(&buf, buf.len);
     if (n > buf.len) return error.NameTooLong;
     const base = buf[0..n];
-    const dir = base[0 .. (std.mem.lastIndexOfScalar(u8, base, '/') orelse return error.InvalidUrl) + 1];
+    const dir = base[0 .. (std.mem.findScalarLast(u8, base, '/') orelse return error.InvalidUrl) + 1];
     return std.mem.concat(allocator, u8, &.{ dir, rel });
 }
 

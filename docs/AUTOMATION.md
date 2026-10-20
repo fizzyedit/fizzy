@@ -247,10 +247,19 @@ it takes to read (`Script.readingMs`) unless given `ms`.
 
 A caption that narrates what the pointer does is a **callout beside the action**, where the viewer
 is looking: next to what the pointer is aimed at while it shows (or `.near`, an anchor), to its
-right, below, left or above — the first that covers none of it, the pointer, the other things the
-pointer goes to in the caption's time, or what `.clear` names (what the viewer is meant to be
-watching). It glides along as the pointer moves on. So write one caption per action rather than
-one over several. For typing, `catalog.aboutWriting(s, "README.md")` puts the callout beside where
+right, below, left or above, else in a corner of the window — the nearest that covers none of it,
+the other things the pointer goes to in the caption's time, what `.clear` names (what the viewer is
+meant to be watching), or a bar out under the overlay (a history bar, a corner vial). What it is
+beside grows by whatever of those touches it, so a bar out of a grip or a menu out of a button is
+sat beside whole. `.side` asks for one side when that side is clear.
+
+It moves like a guide, not a label (`app/automation/Calm.zig`): it keeps its spot while the spot is
+still on the window, clear and near enough, and moves only when the pointer's aim moves on to
+something else (a quarter second ahead of the pointer, so it arrives with it) or its spot stops
+being good; then it travels once, on a gentle eased curve, 300–600 ms by distance (a jump with
+motion off). A pointer's wiggle over the same thing moves nothing. It anchors as
+`automation.callout`, for a test to check what it covers. So write one caption per action rather
+than one over several. For typing, `catalog.aboutWriting(s, "README.md")` puts the callout beside where
 the words go, clear of them and of the preview.
 
 Everything else gathers at the demo's **home** — `s.home`, an anchor (fizzy's demos:

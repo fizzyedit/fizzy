@@ -872,8 +872,8 @@ pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{Out
             at += 1;
         },
         .joined => {},
-        .undone => at = std.mem.indexOfScalar(u64, line.items[0..at], r.id) orelse return null,
-        .redone => at = 1 + (std.mem.indexOfScalar(u64, line.items, r.id) orelse return null),
+        .undone => at = std.mem.findScalar(u64, line.items[0..at], r.id) orelse return null,
+        .redone => at = 1 + (std.mem.findScalar(u64, line.items, r.id) orelse return null),
         .restarted => return null,
     };
     return if (at == 0) t.base_top else line.items[at - 1];

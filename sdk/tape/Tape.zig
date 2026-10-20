@@ -186,6 +186,13 @@ pub const Caption = struct {
     /// pointer is aimed at in its time: whatever else the viewer is meant to be watching — the
     /// text being typed, a preview redrawing as it is.
     clear: []const []const u8 = &.{},
+    /// Which side of what it sits beside a callout would rather take, when that side is clear
+    /// (`Side.any`: wherever reads best). A hint, never a promise: a side that would cover what
+    /// the viewer is watching is passed over.
+    side: Side = .any,
+
+    /// A side of what a callout sits beside. On disk as a byte: appended to, never reordered.
+    pub const Side = enum(u8) { any, right, below, left, above };
 
     pub const Place = enum {
         /// Beside the action when it narrates one (`Tape.besideAction`); otherwise stacked with
@@ -702,7 +709,7 @@ test "a live tape plays on the app as it is: no keyframe, anywhere" {
 /// A spelling for tests: any chord whose last key is a single letter.
 pub const test_check: Check = .{ .key = struct {
     fn ok(c: []const u8) bool {
-        const last = std.mem.lastIndexOfScalar(u8, c, '+') orelse return c.len == 1;
+        const last = std.mem.findScalarLast(u8, c, '+') orelse return c.len == 1;
         return c.len - last - 1 == 1;
     }
 }.ok };

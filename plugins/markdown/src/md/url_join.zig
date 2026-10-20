@@ -11,23 +11,23 @@ const std = @import("std");
 /// `rel` walks above the host.
 pub fn resolve(arena: std.mem.Allocator, base: []const u8, rel: []const u8) ?[]const u8 {
     if (rel.len == 0) return null;
-    const scheme_end = std.mem.indexOf(u8, base, "://") orelse return null;
+    const scheme_end = std.mem.find(u8, base, "://") orelse return null;
     const host_start = scheme_end + 3;
-    const host_end = std.mem.indexOfScalarPos(u8, base, host_start, '/') orelse base.len;
+    const host_end = std.mem.findScalarPos(u8, base, host_start, '/') orelse base.len;
     if (host_end == host_start) return null; // "https:///foo" — no host
 
     if (rel[0] == '/') return std.fmt.allocPrint(arena, "{s}{s}", .{ base[0..host_end], rel }) catch null;
 
     // The document's own name is not part of its directory.
     var dir = std.mem.trimEnd(u8, base, "/");
-    if (std.mem.lastIndexOfScalar(u8, dir, '/')) |cut| {
+    if (std.mem.findScalarLast(u8, dir, '/')) |cut| {
         if (cut >= host_end) dir = dir[0..cut];
     }
 
     var tail = rel;
     while (std.mem.startsWith(u8, tail, "../")) {
         tail = tail["../".len..];
-        const cut = std.mem.lastIndexOfScalar(u8, dir, '/') orelse return null;
+        const cut = std.mem.findScalarLast(u8, dir, '/') orelse return null;
         if (cut < host_end) return null; // walked past the host — nothing sane to point at
         dir = dir[0..cut];
     }

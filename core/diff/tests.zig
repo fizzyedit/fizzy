@@ -246,5 +246,5 @@ test "unified cap leaves whole groups and counts the rest" {
     defer gpa.free(capped.text);
     try std.testing.expect(capped.omitted > 0 and capped.omitted < 5);
     try std.testing.expect(capped.text.len <= 250);
-    try std.testing.expect(std.mem.indexOf(u8, capped.text, " more hunk") != null);
+    try std.testing.expect(std.mem.find(u8, capped.text, " more hunk") != null);
 }

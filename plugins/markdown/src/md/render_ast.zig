@@ -858,8 +858,8 @@ fn tryRevealRelativePath(url: []const u8, open_side: bool, ctx: RenderContext) b
 
     // Anything with `://` is a real URL. A single `:` could be a Windows drive (`C:…`) — we
     // only treat that as local when it looks like `X:/` or `X:\`; otherwise bail to openURL.
-    if (std.mem.indexOf(u8, trimmed, "://") != null) return false;
-    if (std.mem.indexOfScalar(u8, trimmed, ':')) |colon| {
+    if (std.mem.find(u8, trimmed, "://") != null) return false;
+    if (std.mem.findScalar(u8, trimmed, ':')) |colon| {
         const windows_drive = colon == 1 and std.ascii.isAlphabetic(trimmed[0]) and
             trimmed.len > 2 and (trimmed[2] == '/' or trimmed[2] == '\\');
         if (!windows_drive) return false;
@@ -867,7 +867,7 @@ fn tryRevealRelativePath(url: []const u8, open_side: bool, ctx: RenderContext) b
 
     var path_part = trimmed;
     var fragment: []const u8 = "";
-    if (std.mem.indexOfScalar(u8, path_part, '#')) |hash| {
+    if (std.mem.findScalar(u8, path_part, '#')) |hash| {
         fragment = path_part[hash + 1 ..];
         path_part = path_part[0..hash];
     }
@@ -882,7 +882,7 @@ fn tryRevealRelativePath(url: []const u8, open_side: bool, ctx: RenderContext) b
             break :blk std.fs.path.resolve(arena, &.{decoded}) catch return false;
         const base = ctx.image_base_dir orelse dirnameOf(ctx.document_path) orelse return false;
         // Remote README bases are URLs — relative *page* links aren't editor targets.
-        if (std.mem.indexOf(u8, base, "://") != null) return false;
+        if (std.mem.find(u8, base, "://") != null) return false;
         break :blk std.fs.path.resolve(arena, &.{ base, decoded }) catch return false;
     };
 
@@ -939,7 +939,7 @@ fn dirnameOf(path: []const u8) ?[]const u8 {
 }
 
 fn percentDecode(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, src, '%') == null) return src;
+    if (std.mem.findScalar(u8, src, '%') == null) return src;
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(arena, src.len);
     var i: usize = 0;
@@ -1004,7 +1004,7 @@ fn parseFileUri(arena: std.mem.Allocator, url: []const u8) ?ParsedFileUri {
     var path_part = url[prefix.len..];
     var line_1based: u32 = 0;
     var character_1based: u32 = 0;
-    if (std.mem.indexOfScalar(u8, path_part, '#')) |hash| {
+    if (std.mem.findScalar(u8, path_part, '#')) |hash| {
         const frag = path_part[hash + 1 ..];
         path_part = path_part[0..hash];
         // Accept `L12`, `L12C3`, `L12:3` (case-insensitive L/C).

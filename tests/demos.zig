@@ -228,7 +228,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         defer gpa.free(path);
         const written = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(1 << 20));
         defer gpa.free(written);
-        try std.testing.expect(std.mem.indexOf(u8, written, ".window_material = .blur") != null);
+        try std.testing.expect(std.mem.find(u8, written, ".window_material = .blur") != null);
     }
     p.seek(0);
     frames = 0;
@@ -249,7 +249,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         p.unload();
         try dvui.testing.settle(headlessFrame);
         // The person's own split first: a file of theirs in a pane of its own beside the zip's.
-        const readme = try std.fmt.allocPrint(gpa, "{s}/notes.md", .{app.root_buf[0 .. std.mem.indexOfScalar(u8, &app.root_buf, 0) orelse 0]});
+        const readme = try std.fmt.allocPrint(gpa, "{s}/notes.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
         defer gpa.free(readme);
         try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = readme, .data = "# Notes\n" });
         const beside = wb.newGroupingID();
@@ -296,7 +296,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     // theirs — through a play, a seek back and an end, with settings.zon never written.
     {
         const wb = &app.editor.workbench;
-        const draft = try std.fmt.allocPrint(gpa, "{s}/draft.md", .{app.root_buf[0 .. std.mem.indexOfScalar(u8, &app.root_buf, 0) orelse 0]});
+        const draft = try std.fmt.allocPrint(gpa, "{s}/draft.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
         defer gpa.free(draft);
         try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = draft, .data = "# Draft\n" });
         _ = try app.editor.openFilePath(draft, wb.currentGroupingID());
@@ -347,7 +347,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         const read_args = try std.fmt.allocPrint(gpa, ".{{ .path = \"{s}\" }}", .{draft});
         defer gpa.free(read_args);
         const out = host.callCommand("text.read", read_args, host.arena()).ok orelse return error.TestUnexpectedResult;
-        try std.testing.expect(std.mem.indexOf(u8, out, "# Draft, not saved") != null);
+        try std.testing.expect(std.mem.find(u8, out, "# Draft, not saved") != null);
         const line_after = back.owner.historyLine(back, host.arena()) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(steps_before, line_after.entries.len);
         try std.testing.expectEqual(at_before, line_after.at);
@@ -444,8 +444,8 @@ const Steady = struct {
         // Lit now, not lit the frame before, and lit at some time before that: it went out and
         // came back.
         for (now_lit.items) |lit| {
-            const before = std.mem.indexOfScalar(u64, self.was_lit.items, lit) != null;
-            const ever = std.mem.indexOfScalar(u64, self.lit.items, lit) != null;
+            const before = std.mem.findScalar(u64, self.was_lit.items, lit) != null;
+            const ever = std.mem.findScalar(u64, self.lit.items, lit) != null;
             if (ever and !before) {
                 std.debug.print("demo '{s}': a drop's bubble lit again at {d:.0} ms after another was\n", .{ name, p.seq.now });
                 return error.DropFlickers;

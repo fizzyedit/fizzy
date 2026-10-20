@@ -39,7 +39,7 @@ pub fn zigOutSubdirForTarget(b: *std.Build, rt: std.Build.ResolvedTarget) []cons
         else => @tagName(rt.result.os.tag),
     };
     const base = b.fmt("{s}-{s}", .{ arch_name, os_name });
-    if (std.mem.indexOfScalar(u8, base, '_') == null)
+    if (std.mem.findScalar(u8, base, '_') == null)
         return base;
     const buf = b.allocator.alloc(u8, base.len) catch @panic("OOM");
     @memcpy(buf, base);
