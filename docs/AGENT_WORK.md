@@ -62,3 +62,14 @@ Run `python3 scripts/test-check-kickoff.py` for the validator tests.
 - Draft PR on the first push; take it to ready only when the gates pass and CI is green.
 - A different worker than the author reviews the PR.
 - No auto-merge. Merging is the maintainer's (`CONTRIBUTING.md`).
+
+## Which worker suits which work
+
+`scripts/agent-record <pr>` appends one line per finished agent PR to
+`${FIZZY_AGENT_LOG:-~/.cache/fizzy-agent-record.txt}` (skipping a PR already there) and prints it:
+`PR | worker | rounds-to-green | review findings | CI reds`. It reads GitHub through `gh` only. The worker is the
+claimed issue's `running:*` label (found by the PR's `Part of fizzyedit/work#N` line); rounds-to-green is the
+commits pushed after the PR left draft or first went red, whichever was first; review findings are
+`<review comments>c/<review threads>t`; CI reds are failed or timed-out check runs across every commit of the
+head's history. `agent-record --all <YYYY-MM-DD>` backfills merged PRs since then. `python3
+scripts/test-agent-record.py` checks it against saved `gh` JSON.
