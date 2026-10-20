@@ -127,6 +127,13 @@ comptime {
     _ = &mcp.handle;
 }
 
+/// Views of the app shown by another process, over the control socket (`GET /remote`): the
+/// service the control routes feed and the `ViewHost` a remote view is. Native only.
+pub const remote = struct {
+    pub const Service = @import("remote/Service.zig");
+    pub const RemoteViewHost = @import("remote/RemoteViewHost.zig");
+};
+
 /// The control server: HTTP on a Unix socket in the config folder, the app's commands as its API,
 /// so `curl --unix-socket` drives the app with no agent (plans/CONTROL_SERVER_PLAN.md). Native
 /// only. The app starts a `Server`, calls `routes.answerPending` each frame and stops it at quit.
@@ -222,6 +229,7 @@ test {
     _ = HistoryTransport;
     _ = dome;
     _ = control.routes;
+    _ = @import("remote/tests.zig");
     _ = HistoryFrames;
     _ = Recents;
     _ = @import("automation/Calm.zig");

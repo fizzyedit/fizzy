@@ -21,6 +21,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 
+pub const Link = @import("Link.zig");
+
 /// The most a request body may hold. A command's arguments can be a whole drawing, but not this.
 pub const max_body = 64 * 1024 * 1024;
 /// The most a stream may fall behind: a client that reads no faster than events come is closed
@@ -157,6 +159,8 @@ pub const Request = struct {
     content_type: ?[]const u8,
     /// The `Mcp-Session-Id` header, as sent (`routes`, `mcp.Sessions`).
     mcp_session: ?[]const u8 = null,
+    /// The `Upgrade` header, as sent: what the client asks the connection to become (`/remote`).
+    upgrade: ?[]const u8 = null,
     /// The `Mcp-Session-Id` to answer with, formatted by the routes (`mcp.formatSession`).
     mcp_session_reply: ?[16]u8 = null,
     body: []const u8,
@@ -196,6 +200,15 @@ pub const Request = struct {
         self.done.set(server.io);
     }
 
+    /// Answer by handing the connection to `link` from now on (`101 Switching Protocols`, then the
+    /// peer's bytes into `link` and what the app queues on it out), from the UI thread. The link
+    /// is the app's to free once `isGone`.
+    pub fn answerUpgrade(self: *Request, server: *Server, link: *Link) void {
+        self.response = .{ .status = .switching_protocols, .upgrade = link };
+        server.settle(self);
+        self.done.set(server.io);
+    }
+
     /// Answer, from the UI thread. `body` is copied with the server's `gpa`.
     pub fn answer(self: *Request, server: *Server, status: std.http.Status, content_type: []const u8, body: []const u8) void {
         self.response = .{
@@ -210,6 +223,8 @@ pub const Request = struct {
 };
 
 pub const Response = struct {
+    /// Answered by turning the connection into `link`'s bytes (`answerUpgrade`).
+    upgrade: ?*Link = null,
     /// Answered by turning the connection into an event stream (`GET /events`): the status and
     /// body are not sent, the connection stays open and `publish` writes to it.
     stream: bool = false,
@@ -483,7 +498,8 @@ fn serve(self: *Server, conn: *Conn) void {
             .method = head.head.method,
             .target = arena.dupe(u8, head.head.target) catch return,
             .content_type = if (head.head.content_type) |t| arena.dupe(u8, t) catch return else null,
-            .mcp_session = mcpSession(&head, arena) catch return,
+            .mcp_session = headerValue(&head, arena, "mcp-session-id") catch return,
+            .upgrade = headerValue(&head, arena, "upgrade") catch return,
             .body = "",
             .conn = conn,
             .arena = arena,
@@ -507,6 +523,12 @@ fn serve(self: *Server, conn: *Conn) void {
         // into a frame that is gone.
         req.done.waitUncancelable(self.io);
         if (req.response.stream) return self.serveStream(&head, &req.stream);
+        if (req.response.upgrade) |link| {
+            self.lock.lockUncancelable(self.io);
+            conn.waiting = false;
+            self.lock.unlock(self.io);
+            return self.serveLink(link, conn.stream, &reader.interface, &writer.interface, req.upgrade orelse "");
+        }
         const body = req.response.body orelse "out of memory\n";
         defer if (req.response.body) |b| self.gpa.free(b);
         const headers = [_]std.http.Header{
@@ -527,11 +549,45 @@ fn serve(self: *Server, conn: *Conn) void {
     }
 }
 
-/// The request's `Mcp-Session-Id`, copied into `arena`, or null.
-fn mcpSession(head: *std.http.Server.Request, arena: std.mem.Allocator) error{OutOfMemory}!?[]const u8 {
+/// The request's header `name` (lowercase), copied into `arena`, or null.
+fn headerValue(head: *std.http.Server.Request, arena: std.mem.Allocator, name: []const u8) error{OutOfMemory}!?[]const u8 {
     var it = head.iterateHeaders();
-    while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, "mcp-session-id")) return try arena.dupe(u8, h.value);
+    while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, name)) return try arena.dupe(u8, h.value);
     return null;
+}
+
+/// The connection is `link`'s from here: the `101`, then what the peer sends into the link while a
+/// task of its own writes what the app queues on it. Ends when the peer goes, the app closes the
+/// link, or the server stops; the link is finished last, whichever, and not touched after.
+fn serveLink(self: *Server, link: *Link, stream: Io.net.Stream, reader: *Io.Reader, writer: *Io.Writer, token: []const u8) void {
+    defer link.finish();
+    writer.print("HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: {s}\r\n\r\n", .{token}) catch return;
+    writer.flush() catch return;
+    var sender = self.io.concurrent(writeLink, .{ self, link, stream, writer }) catch return;
+    defer sender.cancel(self.io);
+    while (!self.stopping.load(.acquire)) {
+        const bytes = reader.peekGreedy(1) catch return;
+        link.push(bytes) catch return;
+        reader.toss(bytes.len);
+    }
+}
+
+/// Write what the app queues on `link` until it closes it or a write fails, then shut the socket
+/// down, which ends the read that `serveLink` is blocked in.
+fn writeLink(self: *Server, link: *Link, stream: Io.net.Stream, writer: *Io.Writer) void {
+    while (true) {
+        // Read first: what was queued before `close` is still written.
+        const closing = link.closing.load(.acquire);
+        if (link.drain() catch break) |bytes| {
+            defer link.gpa.free(bytes);
+            writer.writeAll(bytes) catch break;
+            writer.flush() catch break;
+            continue;
+        }
+        if (closing) break;
+        link.out_ready.wait(self.io) catch break;
+    }
+    stream.shutdown(self.io, .both) catch {};
 }
 
 /// Write events to the connection until the client goes, falls too far behind, or the server
@@ -1090,4 +1146,124 @@ test "a stopped server ends a keep-alive connection waiting for its next request
     // Its task is back reading the next request when the server stops: that read ends.
     io.sleep(.fromMilliseconds(50), .awake) catch {};
     server.stop();
+}
+
+/// A client that asks for `GET /remote` to become a byte stream: reads the `101`, writes `ping`
+/// right behind its request, reads four bytes, then reads to the end unless `leave`, which closes
+/// the socket as soon as it has the head.
+const UpgradePeer = struct {
+    io: Io,
+    path: []const u8,
+    leave: bool = false,
+    head: [160]u8 = undefined,
+    head_len: usize = 0,
+    reply: [4]u8 = undefined,
+    ended: bool = false,
+
+    fn run(self: *UpgradePeer) void {
+        const addr = Io.net.UnixAddress.init(self.path) catch return;
+        const stream = addr.connect(self.io) catch return;
+        defer stream.close(self.io);
+        var wbuf: [256]u8 = undefined;
+        var w = stream.writer(self.io, &wbuf);
+        w.interface.writeAll("GET /remote HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: fizzy-remote-view/1\r\n\r\nping") catch return;
+        w.interface.flush() catch return;
+        var rbuf: [256]u8 = undefined;
+        var r = stream.reader(self.io, &rbuf);
+        while (self.head_len < self.head.len) {
+            const n = r.interface.readSliceShort(self.head[self.head_len..][0..1]) catch return;
+            if (n == 0) return;
+            self.head_len += 1;
+            if (std.mem.endsWith(u8, self.head[0..self.head_len], "\r\n\r\n")) break;
+        }
+        if (self.leave) return;
+        r.interface.readSliceAll(&self.reply) catch return;
+        var more: [1]u8 = undefined;
+        self.ended = if (r.interface.readSliceShort(&more)) |n| n == 0 else |_| true;
+    }
+};
+
+/// Frames, as the UI thread's, until `taken` holds a request.
+fn takeOne(server: *Server, taken: *std.ArrayListUnmanaged(*Request)) !*Request {
+    var waited: usize = 0;
+    while (taken.items.len == 0 and waited < 2000) : (waited += 1) {
+        _ = server.take(taken);
+        if (taken.items.len == 0) server.io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 1), taken.items.len);
+    return taken.items[0];
+}
+
+test "an upgraded connection carries bytes both ways until the app closes it" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    defer server.stop();
+
+    var peer: UpgradePeer = .{ .io = io, .path = path };
+    const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(gpa);
+    const req = try takeOne(&server, &taken);
+    try std.testing.expectEqualStrings("fizzy-remote-view/1", req.upgrade.?);
+    var link: Link = .init(gpa, io, noWake);
+    defer link.deinit();
+    req.answerUpgrade(&server, &link);
+
+    // What the client wrote behind its request is the link's.
+    var got: std.ArrayListUnmanaged(u8) = .empty;
+    defer got.deinit(gpa);
+    var waited: usize = 0;
+    while (got.items.len < 4 and waited < 2000) : (waited += 1) {
+        try link.take(&got);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqualStrings("ping", got.items);
+    try link.send("pong");
+    // Closing ends the client's read, after what was queued is written.
+    link.close();
+    thread.join();
+    try std.testing.expect(std.mem.startsWith(u8, peer.head[0..peer.head_len], "HTTP/1.1 101 Switching Protocols\r\n"));
+    try std.testing.expect(std.mem.find(u8, peer.head[0..peer.head_len], "upgrade: fizzy-remote-view/1\r\n") != null);
+    try std.testing.expectEqualStrings("pong", &peer.reply);
+    try std.testing.expect(peer.ended);
+    waited = 0;
+    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    try std.testing.expect(link.isGone());
+}
+
+test "a client that leaves an upgraded connection finishes its link" {
+    if (!Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testSocket(gpa, &tmp);
+    defer gpa.free(path);
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    defer server.stop();
+
+    var peer: UpgradePeer = .{ .io = io, .path = path, .leave = true };
+    const thread = try std.Thread.spawn(.{}, UpgradePeer.run, .{&peer});
+    var taken: std.ArrayListUnmanaged(*Request) = .empty;
+    defer taken.deinit(gpa);
+    const req = try takeOne(&server, &taken);
+    var link: Link = .init(gpa, io, noWake);
+    defer link.deinit();
+    req.answerUpgrade(&server, &link);
+    thread.join();
+    var waited: usize = 0;
+    while (!link.isGone() and waited < 2000) : (waited += 1) io.sleep(.fromMilliseconds(1), .awake) catch {};
+    try std.testing.expect(link.isGone());
+}
+
+test {
+    _ = Link;
 }

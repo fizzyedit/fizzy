@@ -115,6 +115,9 @@ pub fn wireAppModule(
     app_module.addImport("tape", core_module.import_table.get("tape").?);
     app_module.addImport("replay", core_module.import_table.get("replay").?);
     app_module.addImport("crash", crashModule(b, target, optimize));
+    // The remote-view protocol (`sdk/remote/`): std-only, so a host application's adapter links the
+    // same files.
+    app_module.addImport("remote", b.createModule(.{ .target = target, .optimize = optimize, .root_source_file = b.path("sdk/remote/root.zig") }));
     if (consumer) |c| {
         c.addImport("app", app_module);
         // The bundled demos' scripts (`src/editor/demos/`) need only `tape`, so they build on the

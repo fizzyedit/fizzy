@@ -59,6 +59,7 @@ fizzy with its own Windows target must set it too, or its server logs that it ca
 | `GET /openapi.json` | all of this as OpenAPI 3.1, generated from what is registered now |
 | `POST /mcp` | the Model Context Protocol, its tools the commands |
 | `DELETE /mcp` | ends the MCP session its `Mcp-Session-Id` names |
+| `GET /remote` | upgrades to the remote-view protocol: a client opens views of the app and gets frames |
 
 **Bodies are JSON**, converted to the ZON commands take at the server's edge: an object of
 arguments keyed by the command's parameter names, a string where the parameter is an enumeration
@@ -175,6 +176,26 @@ made a step. A request without the header is made as one shared author ("An agen
 session that is not open gets `404`, and the client initializes again. A session ends at
 `DELETE /mcp`, after an hour with no request, or when the server stops, and
 `fizzy.mcp.session_ended` (`.{ .session, .label, .plugin }`) says so.
+
+## Remote views
+
+`GET /remote` with `Connection: Upgrade` and `Upgrade: fizzy-remote-view/1` answers `101
+Switching Protocols`, and the connection then carries the remote-view protocol (`sdk/remote/`,
+its README): the client says hello, creates views, sends pointer, key and text input, and asks for
+frames; fizzy answers each request from the UI thread. Without the `Upgrade` header the answer is
+`426`, with another method `405`. The socket is the control socket, so the same rules apply: mode
+`0600`, the same user.
+
+Each view is a `RemoteViewHost` (`app/remote/`), a window like a pop-out that the OS never shows.
+Keys and text reach a view only while the client says it has focus. A view the client closes, or
+that goes with a dropped connection, closes its window; fizzy carries on. The only tier served
+so far is the draw list, and its frame is a stub, one quad filling the view.
+
+`fizzy.remote.views` (internal) lists the open views: `.connection`, `.view`, `.kind`, `.target`,
+`.width`, `.height`, `.focused`. It exists once a client has connected.
+
+The frame loop does not draw remote views yet: until it does, input waits in the host and a frame
+request is answered with the stub's fill (`app/remote/Service.zig` lists the calls an app makes).
 
 ## The description
 

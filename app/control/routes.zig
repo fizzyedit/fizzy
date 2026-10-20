@@ -10,6 +10,8 @@
 //!   POST /mcp              the Model Context Protocol, its tools the commands (`app/mcp.zig`)
 //!   GET  /events           the app's events as Server-Sent Events, `?topics=a,b` to choose
 //!                          (a name, or a prefix ending in `*`); every event when absent
+//!   GET  /remote           upgrades to the remote-view protocol (`Upgrade: fizzy-remote-view/1`):
+//!                          a client opens views of the app and gets frames (`app/remote/`)
 //!
 //! Bodies are JSON, converted at this edge (`json.zig`). A request sent as `application/zon` is
 //! passed through as ZON and answered in ZON. Errors are HTTP's: 404 for an unknown command, 400
@@ -22,6 +24,7 @@ const json = @import("json.zig");
 const openapi = @import("openapi.zig");
 const mcp = @import("../mcp.zig");
 const Server = @import("Server.zig");
+const Service = @import("../remote/Service.zig");
 
 pub const Answer = struct {
     /// Stream the app's events to this connection instead (`GET /events`).
@@ -45,6 +48,10 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
     defer taken.deinit(server.gpa);
     var streaming = server.take(&taken) > 0;
     for (taken.items) |req| {
+        if (std.mem.eql(u8, std.mem.trimEnd(u8, req.path(), "/"), "/remote")) {
+            upgradeRemote(server, state, host, req);
+            continue;
+        }
         var arena: std.heap.ArenaAllocator = .init(server.gpa);
         defer arena.deinit();
         // Ready for a command that answers later; let go of when it answers now.
@@ -90,6 +97,7 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
             req.answer(server, a.status, a.content_type, a.body);
         }
     }
+    if (state.remote) |*remote| remote.pump();
     if (state.sessions.list.items.len > 0) state.sessions.expire(server.gpa, host, std.Io.Clock.awake.now(server.io).nanoseconds);
     state.follow(host, server, streaming);
 }
@@ -107,8 +115,35 @@ pub fn stop(server: *Server, state: *State, host: *sdk.Host) void {
     state.sessions.endAll(server.gpa, host);
     state.sessions.deinit(server.gpa);
     state.sessions = .{};
+    if (state.remote) |*remote| {
+        remote.closeAll();
+        remote.deinit(host);
+        state.remote = null;
+    }
     state.follow(host, server, false);
     server.stop();
+}
+
+/// `GET /remote`: the connection becomes the remote-view protocol's stream (`Service`).
+fn upgradeRemote(server: *Server, state: *State, host: *sdk.Host, req: *Server.Request) void {
+    if (req.method != .GET) return req.answer(server, .method_not_allowed, "application/json", "{\"error\":\"use GET\"}");
+    const wants = req.upgrade orelse "";
+    if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, wants, " "), Service.upgrade_token))
+        return req.answer(server, .upgrade_required, "application/json", "{\"error\":\"send Upgrade: " ++ Service.upgrade_token ++ "\"}");
+    const oom = "{\"error\":\"out of memory\"}";
+    const link = server.gpa.create(Server.Link) catch return req.answer(server, .internal_server_error, "application/json", oom);
+    link.* = .init(server.gpa, server.io, server.wake);
+    if (state.remote == null) state.remote = Service.init(server.gpa, .{
+        .app_id = AppInfo.current.name,
+        .app_version = AppInfo.current.version,
+        .tiers_offered = .{ .draw_list = true },
+        .mode = .standalone,
+    });
+    state.remote.?.accept(host, link) catch {
+        server.gpa.destroy(link);
+        return req.answer(server, .internal_server_error, "application/json", oom);
+    };
+    req.answerUpgrade(server, link);
 }
 
 /// A request whose command answers in a later frame: answered by the host's call to `done`
@@ -164,6 +199,8 @@ pub const State = struct {
     waiters: std.ArrayListUnmanaged(*Waiter) = .empty,
     /// The MCP clients that initialized (`mcp.Sessions`). UI thread.
     sessions: mcp.Sessions = .{},
+    /// The remote-view clients (`GET /remote`), once one has connected. UI thread.
+    remote: ?Service = null,
 
     const relay_vtable: sdk.Plugin.VTable = .{};
 

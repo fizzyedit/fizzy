@@ -1,0 +1,127 @@
+//! The two byte queues between a connection the server upgraded (`GET /remote`) and the app: what
+//! the peer sent, and what the app wants sent. The connection's tasks fill the first and empty the
+//! second; the UI thread does the opposite, once a frame, so a connection costs the frame no
+//! blocking read or write (`Server.serveLink`).
+//!
+//! std-only, like the server that carries it.
+const std = @import("std");
+const Io = std.Io;
+
+const Link = @This();
+
+/// The most that may wait to be sent: a peer that reads slower than the app writes is cut off
+/// rather than buffered without end.
+pub const max_backlog = 8 * 1024 * 1024;
+
+gpa: std.mem.Allocator,
+io: Io,
+/// Wakes the app so its next frame reads what arrived. Safe from any thread.
+wake: *const fn () void,
+lock: Io.Mutex = .init,
+/// From the peer, under `lock`.
+inbox: std.ArrayListUnmanaged(u8) = .empty,
+/// To the peer, under `lock`.
+outbox: std.ArrayListUnmanaged(u8) = .empty,
+out_ready: Io.Event = .unset,
+/// The app is done with the link: its tasks end, and the socket with them. Set by `close`.
+closing: std.atomic.Value(bool) = .init(false),
+/// The connection's tasks are done with the link: the peer left, or `close` was answered. Only
+/// then may the app `deinit` it; the tasks touch nothing after setting this.
+gone: std.atomic.Value(bool) = .init(false),
+
+pub fn init(gpa: std.mem.Allocator, io: Io, wake: *const fn () void) Link {
+    return .{ .gpa = gpa, .io = io, .wake = wake };
+}
+
+/// Free the queues. Only once `isGone`, or if the server never served it.
+pub fn deinit(self: *Link) void {
+    self.inbox.deinit(self.gpa);
+    self.outbox.deinit(self.gpa);
+}
+
+/// Move what the peer has sent so far onto the end of `out`. UI thread.
+pub fn take(self: *Link, out: *std.ArrayListUnmanaged(u8)) error{OutOfMemory}!void {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    try out.appendSlice(self.gpa, self.inbox.items);
+    self.inbox.clearRetainingCapacity();
+}
+
+/// Queue `bytes` for the peer. A peer too far behind is closed instead. UI thread.
+pub fn send(self: *Link, bytes: []const u8) error{OutOfMemory}!void {
+    if (self.closing.load(.acquire) or self.gone.load(.acquire)) return;
+    {
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        if (self.outbox.items.len + bytes.len <= max_backlog) {
+            try self.outbox.appendSlice(self.gpa, bytes);
+            self.out_ready.set(self.io);
+            return;
+        }
+    }
+    self.close();
+}
+
+/// End the connection once what is queued is written. UI thread.
+pub fn close(self: *Link) void {
+    self.closing.store(true, .release);
+    self.out_ready.set(self.io);
+}
+
+pub fn isGone(self: *const Link) bool {
+    return self.gone.load(.acquire);
+}
+
+/// From the connection's reader task: bytes arrived.
+pub fn push(self: *Link, bytes: []const u8) error{OutOfMemory}!void {
+    {
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        try self.inbox.appendSlice(self.gpa, bytes);
+    }
+    self.wake();
+}
+
+/// From the connection's writer task: everything queued so far, which the caller frees; null when
+/// there is nothing and the link is not closing.
+pub fn drain(self: *Link) error{OutOfMemory}!?[]u8 {
+    self.lock.lockUncancelable(self.io);
+    defer self.lock.unlock(self.io);
+    self.out_ready.reset();
+    if (self.outbox.items.len == 0) return null;
+    return try self.outbox.toOwnedSlice(self.gpa);
+}
+
+/// From the connection's task, last: it will not touch the link again.
+pub fn finish(self: *Link) void {
+    self.gone.store(true, .release);
+    self.wake();
+}
+
+fn noWake() void {}
+
+test "bytes cross in both directions, and a link too far behind is closed" {
+    const gpa = std.testing.allocator;
+    var link: Link = .init(gpa, std.testing.io, noWake);
+    defer link.deinit();
+    try link.push("ab");
+    try link.push("cd");
+    var got: std.ArrayListUnmanaged(u8) = .empty;
+    defer got.deinit(gpa);
+    try link.take(&got);
+    try std.testing.expectEqualStrings("abcd", got.items);
+
+    try std.testing.expect((try link.drain()) == null);
+    try link.send("xy");
+    const out = (try link.drain()).?;
+    defer gpa.free(out);
+    try std.testing.expectEqualStrings("xy", out);
+
+    var big: std.ArrayListUnmanaged(u8) = .empty;
+    defer big.deinit(gpa);
+    try big.appendNTimes(gpa, 0, max_backlog);
+    try link.send(big.items);
+    try link.send("z");
+    try std.testing.expect(link.closing.load(.acquire));
+    link.outbox.clearRetainingCapacity();
+}
