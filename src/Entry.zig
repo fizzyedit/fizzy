@@ -36,14 +36,17 @@ root_path: [:0]const u8 = undefined,
 should_close: bool = false,
 window: *dvui.Window = undefined,
 
-// Wasm must not declare DebugAllocator at all — the type itself pulls in stack-trace
-// capture → Threaded Io → posix.getrandom, even if never called.
-const NativeGpa = std.heap.DebugAllocator(.{});
-var gpa: if (builtin.target.cpu.arch == .wasm32) void else NativeGpa =
-    if (builtin.target.cpu.arch == .wasm32) {} else .init;
+// SafeAllocator only where the safety checks are on (Debug, ReleaseSafe): its per-allocation footer
+// and checksum cost frames in ReleaseFast/Small, which use smp_allocator. Wasm must not declare
+// the type at all (DebugAllocator pulled in stack-trace capture → Threaded Io → posix.getrandom
+// even if never called; SafeAllocator is kept off wasm the same way).
+const checked = builtin.target.cpu.arch != .wasm32 and std.debug.runtime_safety;
+var gpa: if (checked) std.heap.SafeAllocator else void =
+    if (checked) .init(std.heap.page_allocator, .{}) else {};
 
 fn appAllocator() std.mem.Allocator {
     if (comptime builtin.target.cpu.arch == .wasm32) return std.heap.page_allocator;
+    if (comptime !checked) return std.heap.smp_allocator;
     return gpa.allocator();
 }
 
@@ -247,8 +250,8 @@ pub fn main(main_init: std.process.Init) !u8 {
         const status = try dvui.App.main(main_init);
         if (comptime builtin.target.cpu.arch == .wasm32) return status;
         if (!verdict.on()) return status;
-        // Everything the app allocated is freed by now: what the debug allocator still holds leaked.
-        const leaks: ?bool = if (comptime std.debug.runtime_safety) gpa.deinit() == .leak else null;
+        // Everything the app allocated is freed by now: what the safe allocator still holds leaked.
+        const leaks: ?bool = if (comptime std.debug.runtime_safety) gpa.deinit() != 0 else null;
         return verdict.finish(leaks);
     }
     try dvui.App.main();
