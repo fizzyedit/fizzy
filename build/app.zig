@@ -9,6 +9,8 @@ const core_mod = fizzy_sdk.core_module;
 const dvui = fizzy_sdk.dvui;
 const velopack = @import("velopack.zig");
 const rehome_fixture = @import("rehome_fixture.zig");
+const FizzyExecutable = @import("exe.zig").FizzyExecutable;
+const web = @import("web.zig");
 
 /// A plugin checkout for the web build, with the modules its own `build.zig` would have added
 /// beside the SDK's (a bundled library under `src/`, say) — the web build has no way to run that
@@ -492,27 +494,41 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
 
 /// Phase two of `build`: the executables, the web build, tests, packaging.
 pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config) !void {
-    const common = @import("common.zig");
-    const plugins = @import("plugins.zig");
-    const sdk = @import("sdk.zig");
+    const assetpack = @import("assetpack");
+    const assets_module = assetpack.pack(b, b.path("assets"), .{});
+    // The window's icon, apart from `assets` so an app built on fizzy can give its own.
+    const app_icon_files = b.addWriteFiles();
+    _ = app_icon_files.addCopyFile(cfg.branding.png, "icon.png");
+    const app_icon_module = b.createModule(.{
+        .root_source_file = app_icon_files.add("app_icon.zig", b.fmt(
+            \\pub const png = @embedFile("icon.png");
+            \\/// Fizzy's icon is pixel art, kept sharp; an app's is smoothed.
+            \\pub const pixel_art = {};
+            \\
+        , .{cfg.branding.pixel_art})),
+    });
+
+    // `zig build web` produces `zig-out/web/{web.wasm, web.js, index.html, NotoSansKR-Regular.ttf}`,
+    // deployable as-is to a static host.
+    const w = web.build(b, optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
+    const built = try native(b, target, optimize, opts, cfg, assets_module, app_icon_module);
+    install(b, target, optimize, cfg, w, built);
+    try addTests(b, target, optimize, cfg, built, assets_module, app_icon_module);
+}
+
+/// What `native` made: the executable, and the one `package` packs.
+const Native = struct {
+    main: FizzyExecutable,
+    /// `main`, unless it has no Velopack and the target supports it: then a second, with it.
+    package: FizzyExecutable,
+};
+
+fn native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, opts: Options, cfg: Config, assets_module: *std.Build.Module, app_icon_module: *std.Build.Module) !Native {
     const fizzy_exe = @import("exe.zig");
-    const web = @import("web.zig");
-    const package = @import("package.zig");
-    const msvc = @import("msvc.zig");
-    const workbench_plugin = plugins.workbench;
-    const text_plugin = plugins.text;
-    const image_plugin = plugins.image;
-    const FizzyExecutable = fizzy_exe.FizzyExecutable;
     const vz = cfg.vz;
     const macos_sdl_paths = cfg.macos_sdl_paths;
-    const zig_out_subdir = cfg.zig_out_subdir;
-    const zig_out_install_dir = cfg.zig_out_install_dir;
-    const target_is_windows_msvc = cfg.target_is_windows_msvc;
-    const effective_win_libc = cfg.effective_win_libc;
     const velopack_supported_for_target = cfg.velopack_supported_for_target;
     const velopack_enabled = cfg.velopack_enabled;
-    const velopack_required_fail = cfg.velopack_required_fail;
-    const no_emit = cfg.no_emit;
     const app_version = cfg.app_version;
     const build_opts = cfg.build_opts;
     const app_name = cfg.app_name;
@@ -528,39 +544,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const static_image = cfg.static_image;
     const dynamic_plugins = cfg.dynamic_plugins;
     const workbench_opts = cfg.workbench_opts;
-    const msvcup_before_compile = cfg.msvcup_before_compile;
     const accesskit = cfg.accesskit;
     const native_backend = cfg.native_backend;
-    const test_filters = cfg.test_filters;
-    const macos_sign_app_identity = cfg.macos_sign_app_identity;
-    const macos_sign_install_identity = cfg.macos_sign_install_identity;
-    const macos_notary_profile = cfg.macos_notary_profile;
-    const win_libc = cfg.win_libc;
-
-    const assetpack = @import("assetpack");
-    const assets_module = assetpack.pack(b, b.path("assets"), .{});
-    // The window's icon, apart from `assets` so an app built on fizzy can give its own.
-    const app_icon_files = b.addWriteFiles();
-    _ = app_icon_files.addCopyFile(cfg.branding.png, "icon.png");
-    const app_icon_module = b.createModule(.{
-        .root_source_file = app_icon_files.add("app_icon.zig", b.fmt(
-            \\pub const png = @embedFile("icon.png");
-            \\/// Fizzy's icon is pixel art, kept sharp; an app's is smoothed.
-            \\pub const pixel_art = {};
-            \\
-        , .{cfg.branding.pixel_art})),
-    });
-
-    // ---------------------------------------------------------------
-    // Web (wasm) build — entirely separate from the native exe so it can't disturb
-    // packaging / SDL / Velopack paths. `zig build web` produces `zig-out/web/{web.wasm,
-    // web.js, index.html, NotoSansKR-Regular.ttf}`, deployable as-is to a static host.
-    // ---------------------------------------------------------------
-
-    web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
 
     const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
-    const exe = main_fizzy.exe;
 
     const package_fizzy: FizzyExecutable = package_blk: {
         if (velopack_enabled) break :package_blk main_fizzy;
@@ -588,26 +575,33 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
         break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, pack_opts, workbench_opts, assets_module, app_icon_module, cfg.branding.rc, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins, dynamic_plugins);
     };
-    const exe_for_package = package_fizzy.exe;
 
+    return .{ .main = main_fizzy, .package = package_fizzy };
+}
+
+/// The steps over what `web.build` and `native` made: the installs, `run`, the dylib steps, packaging.
+fn install(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, cfg: Config, w: web.Web, built: Native) void {
+    const common = @import("common.zig");
+    const package = @import("package.zig");
+    const vz = cfg.vz;
+    const zig_out_subdir = cfg.zig_out_subdir;
+    const zig_out_install_dir = cfg.zig_out_install_dir;
+    const velopack_required_fail = cfg.velopack_required_fail;
+    const no_emit = cfg.no_emit;
+    const app_version = cfg.app_version;
+    const app_name = cfg.app_name;
+    const app_bundle_id = cfg.app_bundle_id;
+    const macos_sign_app_identity = cfg.macos_sign_app_identity;
+    const macos_sign_install_identity = cfg.macos_sign_install_identity;
+    const macos_notary_profile = cfg.macos_notary_profile;
+
+    web.install(b, w);
+
+    const exe = built.main.exe;
+    const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
     if (no_emit) {
         b.getInstallStep().dependOn(&exe.step);
-        if (main_fizzy.workbench_dylib) |workbench_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), workbench_dylib, "workbench", plugins_install_dir);
-        }
-        if (main_fizzy.text_dylib) |text_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), text_dylib, "text", plugins_install_dir);
-        }
-        if (main_fizzy.markdown_dylib) |markdown_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), markdown_dylib, "markdown", plugins_install_dir);
-        }
-        if (main_fizzy.image_dylib) |image_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), image_dylib, "image", plugins_install_dir);
-        }
+        for (built.main.dylibs) |dylib| common.attachBuiltinPluginInstall(b, b.getInstallStep(), dylib.compile, dylib.id, plugins_install_dir);
     } else {
         const install_artifact = b.addInstallArtifact(exe, .{
             .dest_dir = .{ .override = zig_out_install_dir },
@@ -638,66 +632,18 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         run_step.dependOn(&run_cmd.step);
         b.getInstallStep().dependOn(&install_artifact.step);
 
-        if (main_fizzy.workbench_dylib) |workbench_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), workbench_dylib, "workbench", plugins_install_dir);
-            common.attachBuiltinPluginInstall(b, &run_cmd.step, workbench_dylib, "workbench", plugins_install_dir);
-        }
-        if (main_fizzy.text_dylib) |text_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), text_dylib, "text", plugins_install_dir);
-            common.attachBuiltinPluginInstall(b, &run_cmd.step, text_dylib, "text", plugins_install_dir);
-        }
-        if (main_fizzy.markdown_dylib) |markdown_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), markdown_dylib, "markdown", plugins_install_dir);
-            common.attachBuiltinPluginInstall(b, &run_cmd.step, markdown_dylib, "markdown", plugins_install_dir);
-        }
-        if (main_fizzy.image_dylib) |image_dylib| {
-            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-            common.attachBuiltinPluginInstall(b, b.getInstallStep(), image_dylib, "image", plugins_install_dir);
-            common.attachBuiltinPluginInstall(b, &run_cmd.step, image_dylib, "image", plugins_install_dir);
+        for (built.main.dylibs) |dylib| {
+            common.attachBuiltinPluginInstall(b, b.getInstallStep(), dylib.compile, dylib.id, plugins_install_dir);
+            common.attachBuiltinPluginInstall(b, &run_cmd.step, dylib.compile, dylib.id, plugins_install_dir);
         }
     }
 
-    if (main_fizzy.workbench_dylib) |workbench_dylib| {
-        const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-        const install_workbench = plugin.installBuiltinPlugin(b, workbench_dylib, "workbench", plugins_install_dir);
-        const workbench_dylib_step = b.step(
-            "workbench-dylib",
-            "Build the workbench plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
-        );
-        workbench_dylib_step.dependOn(&install_workbench.step);
-    }
-
-    if (main_fizzy.text_dylib) |text_dylib| {
-        const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-        const install_text = plugin.installBuiltinPlugin(b, text_dylib, "text", plugins_install_dir);
-        const text_dylib_step = b.step(
-            "text-dylib",
-            "Build the text plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
-        );
-        text_dylib_step.dependOn(&install_text.step);
-    }
-
-    if (main_fizzy.markdown_dylib) |markdown_dylib| {
-        const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-        const install_markdown = plugin.installBuiltinPlugin(b, markdown_dylib, "markdown", plugins_install_dir);
-        const markdown_dylib_step = b.step(
-            "markdown-dylib",
-            "Build the markdown plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
-        );
-        markdown_dylib_step.dependOn(&install_markdown.step);
-    }
-
-    if (main_fizzy.image_dylib) |image_dylib| {
-        const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
-        const install_image = plugin.installBuiltinPlugin(b, image_dylib, "image", plugins_install_dir);
-        const image_dylib_step = b.step(
-            "image-dylib",
-            "Build the image plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
-        );
-        image_dylib_step.dependOn(&install_image.step);
+    for (built.main.dylibs) |dylib| {
+        const install_dylib = plugin.installBuiltinPlugin(b, dylib.compile, dylib.id, plugins_install_dir);
+        b.step(
+            b.fmt("{s}-dylib", .{dylib.id}),
+            b.fmt("Build the {s} plugin as a dynamic library into zig-out/<target>/plugins/ (native only)", .{dylib.id}),
+        ).dependOn(&install_dylib.step);
     }
 
     if (vz) |v| _ = package.addSteps(.{
@@ -713,12 +659,40 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .zig_out_install_dir = zig_out_install_dir,
         .no_emit = no_emit,
         .velopack_required_fail = velopack_required_fail,
-        .exe_for_package = exe_for_package,
-        .package_fizzy = package_fizzy,
+        .exe_for_package = built.package.exe,
+        .package_fizzy = built.package,
         .macos_sign_app_identity = macos_sign_app_identity,
         .macos_sign_install_identity = macos_sign_install_identity,
         .macos_notary_profile = macos_notary_profile,
     });
+}
+
+/// The unit and integration tests, the benchmarks, and the checks over them.
+fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode, cfg: Config, built: Native, assets_module: *std.Build.Module, app_icon_module: *std.Build.Module) !void {
+    const plugins = @import("plugins.zig");
+    const sdk = @import("sdk.zig");
+    const fizzy_exe = @import("exe.zig");
+    const msvc = @import("msvc.zig");
+    const workbench_plugin = plugins.workbench;
+    const text_plugin = plugins.text;
+    const image_plugin = plugins.image;
+    const vz = cfg.vz;
+    const macos_sdl_paths = cfg.macos_sdl_paths;
+    const target_is_windows_msvc = cfg.target_is_windows_msvc;
+    const effective_win_libc = cfg.effective_win_libc;
+    const velopack_supported_for_target = cfg.velopack_supported_for_target;
+    const velopack_enabled = cfg.velopack_enabled;
+    const velopack_required_fail = cfg.velopack_required_fail;
+    const build_opts = cfg.build_opts;
+    const workbench_opts = cfg.workbench_opts;
+    const msvcup_before_compile = cfg.msvcup_before_compile;
+    const accesskit = cfg.accesskit;
+    const test_filters = cfg.test_filters;
+    const win_libc = cfg.win_libc;
+    const main_fizzy = built.main;
+    const package_fizzy = built.package;
+    const exe = main_fizzy.exe;
+    const exe_for_package = package_fizzy.exe;
 
     // ---------------------------------------------------------------
     // Tests
@@ -1058,11 +1032,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         "test-sdk-version",
         "Verify SDK version ↔ ABI fingerprint lock (compiles SDK + plugin dylib)",
     );
-    if (main_fizzy.workbench_dylib) |dylib| {
-        test_sdk_version_step.dependOn(&dylib.step);
-    } else {
-        test_sdk_version_step.dependOn(&exe.step);
-    }
+    const sdk_probe = for (main_fizzy.dylibs) |dylib| {
+        if (std.mem.eql(u8, dylib.id, "workbench")) break dylib.compile;
+    } else exe;
+    test_sdk_version_step.dependOn(&sdk_probe.step);
     test_all_step.dependOn(test_sdk_version_step);
 
     if (velopack_required_fail) |fail_step| {
@@ -1158,7 +1131,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     }
 
     const sdk_module_test = sdk.wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), dvui_test_proxy_bridge, core_module_test, fizzy_test_module);
-    if (opts.own != null) {
+    if (cfg.app_is_fizzy) {
         const fixture = rehome_fixture.graph(b, target, optimize);
         const consumer = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
         const module = @import("plugins.zig").rehome(b, .{
@@ -1677,10 +1650,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         integration_tests.step.dependOn(&msvcup.step);
         for (unit_test_artifacts.items) |unit_test| unit_test.step.dependOn(&msvcup.step);
         inline for (.{ main_fizzy, package_fizzy }) |fizzy_exe_result| {
-            if (fizzy_exe_result.workbench_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
-            if (fizzy_exe_result.text_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
-            if (fizzy_exe_result.markdown_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
-            if (fizzy_exe_result.image_dylib) |dylib| dylib.step.dependOn(&msvcup.step);
+            for (fizzy_exe_result.dylibs) |dylib| dylib.compile.step.dependOn(&msvcup.step);
         }
     };
 
@@ -1705,20 +1675,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // `applyMsvcIncludesToReachableTranslateC` dedup reachable TranslateC steps
         // via their own `seen` set, so passing the same root twice is harmless.
         inline for (.{ main_fizzy, package_fizzy }) |fizzy_exe_result| {
-            if (fizzy_exe_result.workbench_dylib) |dylib| {
-                roots[n] = dylib;
-                n += 1;
-            }
-            if (fizzy_exe_result.text_dylib) |dylib| {
-                roots[n] = dylib;
-                n += 1;
-            }
-            if (fizzy_exe_result.markdown_dylib) |dylib| {
-                roots[n] = dylib;
-                n += 1;
-            }
-            if (fizzy_exe_result.image_dylib) |dylib| {
-                roots[n] = dylib;
+            for (fizzy_exe_result.dylibs) |dylib| {
+                roots[n] = dylib.compile;
                 n += 1;
             }
         }

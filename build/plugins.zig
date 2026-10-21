@@ -266,7 +266,7 @@ const Rehome = struct {
         for (src.c_macros.items) |macro| {
             // `addCMacro` stores `-Dname=value`.
             const body = macro["-D".len..];
-            const eq = std.mem.indexOfScalar(u8, body, '=') orelse body.len;
+            const eq = std.mem.findScalar(u8, body, '=') orelse body.len;
             m.addCMacro(body[0..eq], if (eq < body.len) body[eq + 1 ..] else "");
         }
         for (src.lib_paths.items) |p| m.addLibraryPath(p);

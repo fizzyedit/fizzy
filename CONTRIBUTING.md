@@ -8,6 +8,11 @@ once, and these rules are what keep their work from colliding.
 would need adds it to this file in a PR. Agent memory is for one person's context: their
 preferences, findings still in flight.
 
+Agent adapters use the single worker contract in [`docs/AGENT_WORK.md`](docs/AGENT_WORK.md).
+`scripts/agent-prepare <branch>` creates the isolated checkout; `scripts/agent-finish <issue>`
+verifies and publishes a draft with evidence. Keep worker rules there rather than copying them
+into kickoff prompts, wrappers or runners.
+
 ## One plan step, one branch, one PR
 
 - **A plan is an issue** with a checklist of steps, or a plan doc merged on its own and linked

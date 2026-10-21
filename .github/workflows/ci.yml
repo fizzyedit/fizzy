@@ -110,6 +110,10 @@ jobs:
         run: zig run scripts/lint.zig
       - name: scripts/zb (build lock)
         run: sh scripts/test-zb.sh
+      - name: scripts/check-kickoff
+        run: python3 scripts/test-check-kickoff.py
+      - name: scripts/agent-prepare, agent-finish
+        run: bash scripts/test-agent-work.sh
 
   test:
     name: Tests (${{ matrix.name }})

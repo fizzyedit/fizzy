@@ -77,13 +77,16 @@ Source: `lib/std/mem/Allocator.zig` ("Call `destroy` with the result to free the
 ## Errors
 
 - Return errors; do not hide them. A private function uses an inferred set; anything across
-  the SDK boundary names its set.
+  the SDK boundary names its set. Do not use `anyerror` in a function or function-type return
+  type (`anyerror!T`, `anyerror`); vtable slots that must erase the set are marked
+  `// lint-allow(anyerror): <reason>`, and existing `anyerror!` returns sit on the
+  `scripts/lint-allow.zon` ratchet, which holds the count.
 - `catch unreachable` and `catch @panic` need a comment saying why the failure cannot happen.
   `catch {}` needs one saying why dropping the error is right.
 - No `std.debug.print` outside tests and scratch tools. Use `std.log`.
 
-Source: `lib/std` practice; Style Guide "Doc Comment Guidance" on unchecked and checked
-illegal behavior.
+Source: `lib/std` practice (`std` uses named error sets rather than `anyerror!`); Style Guide
+"Doc Comment Guidance" on unchecked and checked illegal behavior.
 
 ## anytype
 

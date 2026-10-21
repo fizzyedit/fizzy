@@ -849,7 +849,7 @@ const MaterialDropdown = struct {
 /// chosen, and saying why. The row shows the kind drawn, and says which is saved where that
 /// differs; the saved kind is never rewritten. Null when nothing was picked; else the pick, null
 /// being "Same as window".
-fn materialDropdown(src: std.builtin.SourceLocation, m: MaterialDropdown) ??fizzy.core.material.Kind {
+fn materialDropdown(src: std.lang.SourceLocation, m: MaterialDropdown) ??fizzy.core.material.Kind {
     const Kind = fizzy.core.material.Kind;
     var dropdown: core.widgets.DropdownWidget = undefined;
     // With `follows`, choice 0 is the window's and each kind is one further down.
