@@ -27,10 +27,14 @@ def log_path():
     return Path(os.environ.get("FIZZY_AGENT_LOG") or "~/.cache/fizzy-agent-record.txt").expanduser()
 
 
+class Skip(Exception):
+    """A PR that cannot be recorded now; the message says why."""
+
+
 def gh(*args):
     out = subprocess.run(["gh", *args], capture_output=True, text=True)
     if out.returncode != 0:
-        sys.exit(f"agent-record: gh {' '.join(args)} failed: {out.stderr.strip()}")
+        raise Skip(f"gh {' '.join(args)} failed: {out.stderr.strip()}")
     return json.loads(out.stdout) if out.stdout.strip() else None
 
 
@@ -62,11 +66,15 @@ def threads(pr):
 def measure(pr):
     """The recorded line for a PR, or None when it does not reference fizzyedit/work."""
     info = gh("api", f"repos/{REPO}/pulls/{pr}")
+    if not info.get("merged_at") and info.get("state") != "closed":
+        raise Skip("not merged or closed yet, so its numbers are not final")
     ref = re.search(r"Part of fizzyedit/work#(\d+)", info.get("body") or "")
     if not ref:
         return None
     issue = gh("api", f"repos/{WORK}/issues/{ref[1]}")
     workers = sorted(l["name"][len("running:"):] for l in issue["labels"] if l["name"].startswith("running:"))
+    if not workers:
+        raise Skip(f"{WORK}#{ref[1]} has no running:* label, so no worker to credit")
 
     commits = pages(f"repos/{REPO}/pulls/{pr}/commits")
     reds = {}
@@ -86,7 +94,7 @@ def measure(pr):
 
     comments = len(pages(f"repos/{REPO}/pulls/{pr}/comments"))
     findings = f"{comments}c/{threads(pr)}t"
-    return f"#{pr} | {'+'.join(workers) or 'unknown'} | {rounds} | {findings} | {len(reds)}"
+    return f"#{pr} | {'+'.join(workers)} | {rounds} | {findings} | {len(reds)}"
 
 
 def recorded(path):
@@ -111,14 +119,25 @@ def record(pr, path):
 def main(argv):
     path = log_path()
     if len(argv) == 1 and argv[0].isdigit():
-        line = record(int(argv[0]), path)
+        try:
+            line = record(int(argv[0]), path)
+        except Skip as why:
+            sys.exit(f"agent-record: PR {argv[0]} skipped: {why}")
         if line is None:
             sys.exit(f"agent-record: PR {argv[0]} does not say 'Part of {WORK}#N'")
         print(line)
     elif len(argv) == 2 and argv[0] == "--all":
         query = f'repo:{REPO} is:pr is:merged merged:>={argv[1]} "{WORK}"'
-        for item in pages("search/issues", "--method", "GET", "-f", f"q={query}"):
-            line = record(item["number"], path)
+        try:
+            found = pages("search/issues", "--method", "GET", "-f", f"q={query}")
+        except Skip as why:
+            sys.exit(f"agent-record: search failed: {why}")
+        for item in found:
+            try:
+                line = record(item["number"], path)
+            except Skip as why:
+                print(f"agent-record: PR {item['number']} skipped: {why}", file=sys.stderr)
+                continue
             if line:
                 print(line)
     else:

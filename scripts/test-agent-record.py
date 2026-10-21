@@ -14,7 +14,11 @@ FAKE_GH = """#!/usr/bin/env python3
 import os, sys
 args = [a for a in sys.argv[1:] if not a.startswith("-")]
 key = [a for a in args if a.startswith(("repos/", "search/")) or a == "graphql"][0].replace("/", "_")
-print(open(os.path.join(os.environ["FIXTURES"], key + ".json")).read())
+path = os.path.join(os.environ["FIXTURES"], key + ".json")
+if not os.path.exists(path):
+    sys.stderr.write("HTTP 404: " + key)
+    sys.exit(1)
+print(open(path).read())
 """
 
 
@@ -26,8 +30,12 @@ def fixtures():
     c = lambda n, date: {"sha": sha(n), "commit": {"committer": {"date": date}}}
     run = lambda i, conclusion, at: {"id": i, "conclusion": conclusion, "completed_at": at}
     return {
-        "repos_fizzyedit_fizzy_pulls_7": {"body": "ci: thing\n\nPart of fizzyedit/work#14\n"},
-        "repos_fizzyedit_fizzy_pulls_8": {"body": "no reference here"},
+        "repos_fizzyedit_fizzy_pulls_7": {"body": "ci: thing\n\nPart of fizzyedit/work#14\n", "state": "closed", "merged_at": "2026-10-03T00:00:00Z"},
+        "repos_fizzyedit_fizzy_pulls_8": {"body": "no reference here", "state": "closed", "merged_at": "x"},
+        "repos_fizzyedit_fizzy_pulls_9": {"body": "Part of fizzyedit/work#14", "state": "open", "merged_at": None},
+        "repos_fizzyedit_fizzy_pulls_10": {"body": "Part of fizzyedit/work#99", "state": "closed", "merged_at": "x"},
+        "repos_fizzyedit_fizzy_pulls_11": {"body": "Part of fizzyedit/work#15", "state": "closed", "merged_at": "x"},
+        "repos_fizzyedit_work_issues_15": {"labels": [{"name": "agent"}]},
         "repos_fizzyedit_work_issues_14": {"labels": [{"name": "agent"}, {"name": "running:codex"}]},
         "repos_fizzyedit_fizzy_pulls_7_commits": [[
             c(1, "2026-10-01T10:00:00Z"), c(2, "2026-10-01T11:00:00Z"),
@@ -42,7 +50,7 @@ def fixtures():
         "repos_fizzyedit_fizzy_pulls_7_comments": [[{"id": 1}, {"id": 2}, {"id": 3}]],
         "graphql": {"data": {"repository": {"pullRequest": {"reviewThreads": {
             "nodes": [{"id": "a"}, {"id": "b"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}},
-        "search_issues": [{"items": [{"number": 7}, {"number": 8}]}],
+        "search_issues": [{"items": [{"number": 9}, {"number": 10}, {"number": 11}, {"number": 7}, {"number": 8}]}],
     }
 
 
@@ -77,8 +85,16 @@ def main():
         assert out.returncode != 0 and "Part of" in out.stderr, out
 
         log.unlink()
+        # 9 is still open, 10's work issue is a 404, 11 has no running label: each is skipped, 7 still lands.
         out = run(["--all", "2026-10-01"], env)
         assert out.returncode == 0 and out.stdout.strip() == want and log.read_text() == want + "\n", out
+        for n in ("PR 9 skipped", "PR 10 skipped", "PR 11 skipped"):
+            assert n in out.stderr, out.stderr
+
+        for n in ("9", "10", "11"):
+            out = run([n], env)
+            assert out.returncode != 0 and "skipped" in out.stderr, out
+        assert log.read_text() == want + "\n", "a skipped PR was recorded"
 
         assert run([], env).returncode != 0
     print("ok")
