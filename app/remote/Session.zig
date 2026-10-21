@@ -86,7 +86,11 @@ fn flush(self: *Session) void {
         };
     }
     self.endpoint.consume(out.len);
-    if (self.dead) self.link.close();
+    // `close` lets the bye out; `reapStuck` cuts a peer that will not read it.
+    if (self.dead) {
+        self.link.close();
+        _ = self.link.reapStuck();
+    }
 }
 
 fn receive(self: *Session) void {

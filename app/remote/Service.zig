@@ -21,7 +21,11 @@ const Service = @This();
 /// The `Upgrade` token of `GET /remote`, with the protocol's major version.
 pub const upgrade_token = "fizzy-remote-view/1";
 
-/// The most connections at once: each may hold `Link.max_backlog` in either direction.
+/// The most connections at once. Worst case per connection is about three `Link.max_backlog`s:
+/// the inbox, the outbox, and what the writer task has taken from the outbox to write (up to the
+/// same again), plus the capacity those lists retain. A connection that never says hello is not
+/// timed out: the socket is the user's own (0600), and a handshake deadline would hook in
+/// `Session.pump`, where a session with no peer hello after a time could be marked `dead`.
 pub const max_sessions = 8;
 
 gpa: std.mem.Allocator,
@@ -79,7 +83,11 @@ pub fn pump(self: *Service) void {
 pub fn closeAll(self: *Service) void {
     for (self.sessions.items) |s| s.link.close();
     for (self.sessions.items) |s| {
-        while (!s.link.isGone()) s.link.io.sleep(.fromMilliseconds(1), .awake) catch break;
+        // Bounded: a peer that does not read is cut off after `Link.close_grace_ms`.
+        while (!s.link.isGone()) {
+            _ = s.link.reapStuck();
+            s.link.io.sleep(.fromMilliseconds(1), .awake) catch break;
+        }
         s.destroy();
     }
     self.sessions.clearRetainingCapacity();

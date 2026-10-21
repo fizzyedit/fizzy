@@ -15,6 +15,9 @@ const Link = @This();
 /// std-only, so `remote/Session.zig` asserts that at comptime.
 pub const max_backlog = 64 * 1024 * 1024;
 
+/// How long a closing link may take to write what is queued before `reapStuck` cuts it off.
+pub const close_grace_ms = 2000;
+
 gpa: std.mem.Allocator,
 io: Io,
 /// Wakes the app so its next frame reads what arrived. Safe from any thread.
@@ -25,6 +28,8 @@ inbox: std.ArrayListUnmanaged(u8) = .empty,
 /// To the peer, under `lock`.
 outbox: std.ArrayListUnmanaged(u8) = .empty,
 out_ready: Io.Event = .unset,
+/// When `close` was first called (awake-clock ns + 1), 0 before: `reapStuck` measures from it.
+closed_at: std.atomic.Value(u64) = .init(0),
 /// The app is done with the link: its tasks end, and the socket with them. Set by `close`.
 closing: std.atomic.Value(bool) = .init(false),
 /// The connection's tasks are done with the link: the peer left, or `close` was answered. Only
@@ -68,6 +73,8 @@ pub fn send(self: *Link, bytes: []const u8) error{OutOfMemory}!void {
 
 /// End the connection once what is queued is written. UI thread.
 pub fn close(self: *Link) void {
+    const now: u64 = @intCast(Io.Clock.awake.now(self.io).nanoseconds + 1);
+    _ = self.closed_at.cmpxchgStrong(0, now, .acq_rel, .acquire);
     self.closing.store(true, .release);
     self.out_ready.set(self.io);
 }
@@ -79,6 +86,17 @@ pub fn abort(self: *Link) void {
     self.lock.lockUncancelable(self.io);
     defer self.lock.unlock(self.io);
     if (self.stream) |s| s.shutdown(self.io, .both) catch {};
+}
+
+/// A `close` that nobody heard (the writer is blocked on a peer that does not read) is made an
+/// `abort` once it has waited `close_grace_ms`. True when it did. UI thread, once a frame.
+pub fn reapStuck(self: *Link) bool {
+    const at = self.closed_at.load(.acquire);
+    if (at == 0 or self.gone.load(.acquire)) return false;
+    const now: u64 = @intCast(Io.Clock.awake.now(self.io).nanoseconds + 1);
+    if (now -| at < close_grace_ms * std.time.ns_per_ms) return false;
+    self.abort();
+    return true;
 }
 
 pub fn isGone(self: *const Link) bool {

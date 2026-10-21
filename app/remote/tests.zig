@@ -536,3 +536,132 @@ test "queued text is bounded in bytes, and a connection holds a bounded number o
     try h.step();
     try std.testing.expectEqual(@as(usize, Session.max_views), h.session.views.count());
 }
+
+test "a service takes max_sessions connections, refuses the next, and a connection whose tasks are done frees a slot" {
+    const gpa = std.testing.allocator;
+    var svc: Service = .init(gpa, hello_fizzy);
+    // The command is registered once and not needed here: no host is touched.
+    svc.registered = true;
+    const host: *sdk.Host = undefined;
+    defer {
+        // The connections' tasks would set this; there are none, and `closeAll` waits for it.
+        for (svc.sessions.items) |s| s.link.finish();
+        svc.closeAll();
+        svc.sessions.deinit(gpa);
+    }
+    for (0..Service.max_sessions) |_| {
+        const link = try gpa.create(Link);
+        link.* = .init(gpa, std.testing.io, noWake);
+        try svc.accept(host, link);
+    }
+    const extra = try gpa.create(Link);
+    extra.* = .init(gpa, std.testing.io, noWake);
+    try std.testing.expectError(error.TooManySessions, svc.accept(host, extra));
+    // The caller keeps a refused link.
+    extra.deinit();
+    gpa.destroy(extra);
+
+    // A connection whose tasks are done is dropped by the next pump.
+    const first = svc.sessions.items[0].link;
+    first.close();
+    first.finish();
+    svc.pump();
+    try std.testing.expectEqual(@as(usize, Service.max_sessions - 1), svc.sessions.items.len);
+    const again = try gpa.create(Link);
+    again.* = .init(gpa, std.testing.io, noWake);
+    try svc.accept(host, again);
+    try std.testing.expectEqual(@as(usize, Service.max_sessions), svc.sessions.items.len);
+}
+
+/// A raw upgraded connection that never reads past the `101`: all a stuck peer is.
+fn upgradeRaw(path: []const u8) !std.Io.net.Stream {
+    const io = std.testing.io;
+    const stream = try (try std.Io.net.UnixAddress.init(path)).connect(io);
+    errdefer stream.close(io);
+    var wbuf: [256]u8 = undefined;
+    var w = stream.writer(io, &wbuf);
+    try w.interface.writeAll(Peer.request);
+    try w.interface.flush();
+    return stream;
+}
+
+fn refusedStatus(path: []const u8, out: *[128]u8, result: *[]const u8) void {
+    result.* = statusOf(path, Peer.request, out) catch "error";
+}
+
+test "on the socket, the ninth client is refused with 503, and a peer that stops reading is cut off to free its slot" {
+    if (!std.Io.net.has_unix_sockets) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var host: sdk.Host = .init(gpa);
+    defer host.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fs.path.join(gpa, &.{ dir, "c.sock" });
+    defer gpa.free(path);
+    var server: Server = .{ .gpa = gpa, .io = io, .socket_path = path, .wake = noWake };
+    try server.start();
+    var state: routes.State = .{};
+    var stopped = false;
+    defer if (!stopped) routes.stop(&server, &state, &host);
+
+    var streams: [Service.max_sessions]std.Io.net.Stream = undefined;
+    var opened: usize = 0;
+    defer for (streams[0..opened]) |s| s.close(io);
+    for (&streams) |*s| {
+        s.* = try upgradeRaw(path);
+        opened += 1;
+    }
+    var frames: usize = 0;
+    const svc_ptr = blk: {
+        while (state.remote == null and frames < 5000) : (frames += 1) {
+            routes.answerPending(&server, &state, &host);
+            io.sleep(.fromMilliseconds(1), .awake) catch {};
+        }
+        break :blk &state.remote.?;
+    };
+    while (svc_ptr.sessions.items.len < Service.max_sessions and frames < 5000) : (frames += 1) {
+        routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, Service.max_sessions), svc_ptr.sessions.items.len);
+
+    // The next is refused with a plain 503, not a 101.
+    var head: [128]u8 = undefined;
+    var status: []const u8 = "";
+    const t = try std.Thread.spawn(.{}, refusedStatus, .{ path, &head, &status });
+    frames = 0;
+    var done = false;
+    while (!done and frames < 5000) : (frames += 1) {
+        routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+        done = status.len > 0;
+    }
+    t.join();
+    try std.testing.expectEqualStrings("HTTP/1.1 503 Service Unavailable", status);
+    try std.testing.expectEqual(@as(usize, Service.max_sessions), svc_ptr.sessions.items.len);
+
+    // Fill the first peer's way until its writer blocks, then close: the grace period ends in an
+    // abort, and the next pump frees the slot.
+    const link = svc_ptr.sessions.items[0].link;
+    const big = try gpa.alloc(u8, 8 * 1024 * 1024);
+    defer gpa.free(big);
+    @memset(big, 0);
+    try link.send(big);
+    try link.send(big);
+    io.sleep(.fromMilliseconds(200), .awake) catch {};
+    try std.testing.expect(!link.isGone());
+    link.close();
+    frames = 0;
+    while (svc_ptr.sessions.items.len == Service.max_sessions and frames < 10000) : (frames += 1) {
+        _ = link.reapStuck();
+        routes.answerPending(&server, &state, &host);
+        io.sleep(.fromMilliseconds(1), .awake) catch {};
+    }
+    try std.testing.expectEqual(@as(usize, Service.max_sessions - 1), svc_ptr.sessions.items.len);
+
+    routes.stop(&server, &state, &host);
+    stopped = true;
+}
