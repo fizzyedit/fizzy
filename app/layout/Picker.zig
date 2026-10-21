@@ -754,7 +754,12 @@ fn drawLifted(self: *Picker, f: *Layout) void {
 /// Delete wears the theme's error colour. Disabled, it keeps its place (dimmed, no hover).
 fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
-    const tint = if (c.action == .delete) theme.color(.err, .text) else theme.color(.control, .text);
+    const destructive = c.action == .delete;
+    // Destructive controls wear the error fill lightened as `core.dialogs`' close does; `.err`'s
+    // text colour is not red in every theme.
+    const tint = if (destructive) theme.color(.err, .fill).lighten(if (theme.dark) -10 else 10) else theme.color(.control, .text);
+    // Disabled keeps the place's slot but dimmer; delete stays red enough to read as delete.
+    const dim: f32 = if (destructive) 0.6 else 0.35;
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{
         .id_extra = id_extra,
@@ -769,7 +774,9 @@ fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place:
     bw.processEvents();
     bw.drawBackground();
     core.icon.icon(@src(), c.id, c.icon, .{
-        .stroke_color = .{ .color = if (enabled) tint else tint.opacity(0.35) },
+        .stroke_color = .{ .color = if (enabled) tint else tint.opacity(dim) },
+        // Clear fill takes the single-colour path, so the stroke shows in the tint as given.
+        .fill_color = if (destructive) .{ .color = .transparent } else .white,
     }, .{
         .min_size_content = .{ .w = 14, .h = 14 },
         .gravity_x = 0.5,
