@@ -6,6 +6,7 @@
 //! `platformModule` gives the platform pieces to an app on this backend or on dvui's own SDL3 one.
 //! dvui is the caller's and never pinned here, so the backend compiles against the app's dvui.
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -162,10 +163,11 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
     const sdl_optimize: std.lang.OptimizeMode = if (opts.optimize == .debug) .fast else opts.optimize;
     const sdl_dep = sdlDependency(b, opts.target, sdl_optimize, opts.macos_sdk);
 
-    const sdl_translate_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/sdl3-c.h"),
+    const sdl_translate_c: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.path("src/sdl3-c.h"),
         .target = opts.target,
         .optimize = opts.optimize,
+        .default_init = true,
     });
     if (sdl_dep) |sdl| sdl_translate_c.addIncludePath(sdl.artifact("SDL3").getEmittedIncludeTree());
 
@@ -176,7 +178,7 @@ pub fn backendModule(dep: *std.Build.Dependency, dvui_mod: *std.Build.Module, op
         .sanitize_c = .full,
         .link_libc = true,
         .imports = &.{
-            .{ .name = "sdl3-c", .module = sdl_translate_c.createModule() },
+            .{ .name = "sdl3-c", .module = sdl_translate_c.mod },
             .{ .name = "dvui", .module = dvui_mod },
         },
     });

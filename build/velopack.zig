@@ -4,6 +4,7 @@
 //! Vendored rather than `@import("velopack_zig")`, which would make the lazy dependency eager in
 //! every consumer (AGENTS.md, "Keep the plugin build free of app-only dependencies").
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 const builtin = @import("builtin");
 const common = @import("common.zig");
 
@@ -79,12 +80,13 @@ pub fn addVpkRun(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget) !*std
 /// `Velopack.h` as a Zig module, through translate-c: Zig 0.17 removed `@cImport`. Imported as
 /// `velopack_c` by the modules `linkVelopack` is given.
 fn velopackCModule(b: *std.Build, vz: Dep, target: std.Build.ResolvedTarget, optimize: std.lang.OptimizeMode) *std.Build.Module {
-    const tc = b.addTranslateC(.{
-        .root_source_file = vz.builder.dependency("velopack", .{}).path("include/Velopack.h"),
+    const tc: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = vz.builder.dependency("velopack", .{}).path("include/Velopack.h"),
         .target = target,
         .optimize = optimize,
+        .default_init = true,
     });
-    return tc.createModule();
+    return tc.mod;
 }
 
 pub const LinkVelopackOptions = struct {

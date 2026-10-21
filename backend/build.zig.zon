@@ -24,6 +24,12 @@
             .hash = "patch-0.0.0-WCKjsxixAADfwXQv4Vugyxo6PFbDFuuyM7ly3OiqZRYR",
             .lazy = true,
         },
+        // The translate-c package replaces `std.Build.addTranslateC` (removed in Zig 0.18). The
+        // pin dvui makes (`sdk/build.zig.zon`); keep them the same.
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c?ref=zig-0.17.x#02ff0c523fb92a38939b04d0145c4a9602a74d56",
+            .hash = "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5",
+        },
         // AppKit from Zig, for the macOS platform pieces (and an app's own, `objcModule`).
         .zig_objc = .{
             .url = "https://github.com/foxnne/zig-objc/archive/f90394bce753153e387117cff6bf5536cd08f0c5.tar.gz",

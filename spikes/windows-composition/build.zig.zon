@@ -2,7 +2,7 @@
     .name = .windows_composition_spike,
     .version = "0.0.0",
     .fingerprint = 0x28d1b8a12c4276b6,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",
@@ -15,6 +15,12 @@
         .sdl = .{
             .url = "https://github.com/fizzyedit/sdl_zig/archive/58abe388d4200b0f66701c0701acc6d1910bc55f.tar.gz",
             .hash = "sdl-1.0.3+3.4.16-i4QD0c0KqgB_riMOO7mEHunTksg6ofuVCDPkOoYd3A4I",
+        },
+        // The translate-c package replaces `std.Build.addTranslateC` (removed in Zig 0.18). The
+        // pin dvui makes (`sdk/build.zig.zon`).
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c?ref=zig-0.17.x#02ff0c523fb92a38939b04d0145c4a9602a74d56",
+            .hash = "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5",
         },
         .zigwin32 = .{
             .url = "https://github.com/marlersoft/zigwin32/archive/ec98bb4d9eea532320a8551720a9e3ec6de64994.tar.gz",
