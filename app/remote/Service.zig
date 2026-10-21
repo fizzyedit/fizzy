@@ -79,6 +79,12 @@ pub fn pump(self: *Service) void {
     }
 }
 
+/// Some connection has been closed and is not yet gone (`Link.reapStuck` is waiting on it).
+pub fn anyClosing(self: *const Service) bool {
+    for (self.sessions.items) |s| if (s.link.closed_at.load(.acquire) != 0) return true;
+    return false;
+}
+
 /// End every connection, waiting for their tasks: at quit, or when the control server stops.
 pub fn closeAll(self: *Service) void {
     for (self.sessions.items) |s| s.link.close();
@@ -86,7 +92,9 @@ pub fn closeAll(self: *Service) void {
         // Bounded: a peer that does not read is cut off after `Link.close_grace_ms`.
         while (!s.link.isGone()) {
             _ = s.link.reapStuck();
-            s.link.io.sleep(.fromMilliseconds(1), .awake) catch break;
+            // Keep waiting if the sleep is cancelled: the link's tasks may still run, and the
+            // session is not ours to free until they are done.
+            s.link.io.sleep(.fromMilliseconds(1), .awake) catch {};
         }
         s.destroy();
     }

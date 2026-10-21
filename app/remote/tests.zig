@@ -585,8 +585,9 @@ fn upgradeRaw(path: []const u8) !std.Io.net.Stream {
     return stream;
 }
 
-fn refusedStatus(path: []const u8, out: *[128]u8, result: *[]const u8) void {
+fn refusedStatus(path: []const u8, out: *[128]u8, result: *[]const u8, replied: *std.atomic.Value(bool)) void {
     result.* = statusOf(path, Peer.request, out) catch "error";
+    replied.store(true, .release);
 }
 
 test "on the socket, the ninth client is refused with 503, and a peer that stops reading is cut off to free its slot" {
@@ -631,13 +632,12 @@ test "on the socket, the ninth client is refused with 503, and a peer that stops
     // The next is refused with a plain 503, not a 101.
     var head: [128]u8 = undefined;
     var status: []const u8 = "";
-    const t = try std.Thread.spawn(.{}, refusedStatus, .{ path, &head, &status });
+    var replied: std.atomic.Value(bool) = .init(false);
+    const t = try std.Thread.spawn(.{}, refusedStatus, .{ path, &head, &status, &replied });
     frames = 0;
-    var done = false;
-    while (!done and frames < 5000) : (frames += 1) {
+    while (!replied.load(.acquire) and frames < 5000) : (frames += 1) {
         routes.answerPending(&server, &state, &host);
         io.sleep(.fromMilliseconds(1), .awake) catch {};
-        done = status.len > 0;
     }
     t.join();
     try std.testing.expectEqualStrings("HTTP/1.1 503 Service Unavailable", status);

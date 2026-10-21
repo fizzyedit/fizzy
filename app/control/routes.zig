@@ -97,7 +97,12 @@ pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
             req.answer(server, a.status, a.content_type, a.body);
         }
     }
-    if (state.remote) |*remote| remote.pump();
+    if (state.remote) |*remote| {
+        remote.pump();
+        // A close waits `Link.close_grace_ms` for a peer to read; an idle app has no frame to cut
+        // it off, so ask for one until none is waiting.
+        if (remote.anyClosing()) server.wake();
+    }
     if (state.sessions.list.items.len > 0) state.sessions.expire(server.gpa, host, std.Io.Clock.awake.now(server.io).nanoseconds);
     state.follow(host, server, streaming);
 }
