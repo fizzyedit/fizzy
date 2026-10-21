@@ -197,3 +197,19 @@ test "a dropped stream closes the client and reconnect opens it again" {
     try roundTrip(&client, 1);
     try t.expectEqual(@as(usize, 1), fx.starts());
 }
+
+test "polling after a bye closes the client instead of crashing" {
+    var fx = try Fixture.init("bye");
+    defer fx.deinit();
+    var client: Client = .init(t.allocator, t.io, fx.options());
+    defer client.deinit();
+    try client.connect();
+    var arena_state: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena_state.deinit();
+    try client.send(.{ .create_view = .{ .view = 1, .width = 1, .height = 1 } });
+    const bye = (try client.poll(arena_state.allocator(), 5000)).?.bye;
+    try t.expectEqualStrings("going away", bye.text);
+    try t.expect(!client.connected());
+    try t.expectError(error.Closed, client.poll(arena_state.allocator(), 100));
+    try t.expectError(error.Closed, client.send(.{ .create_view = .{ .view = 2, .width = 1, .height = 1 } }));
+}

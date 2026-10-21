@@ -8,6 +8,7 @@
 //!   * `crash` — exit 3 before listening.
 //!   * `old` — hello with versions the client lacks.
 //!   * `noremote` — answer `GET /remote` with 404, as a fizzy without a remote view does.
+//!   * `bye` — answer `create_view` with a bye.
 //!   * `drop` — close the first connection right after the hellos; the second is served.
 //!
 //! Each `--quiet` start appends a line to `<profile>/launches`. It answers `create_view` with
@@ -19,7 +20,7 @@ const Client = remote.Client;
 const Endpoint = remote.Endpoint;
 const message = remote.message;
 
-const Mode = enum { serve, slow, crash, old, noremote, drop };
+const Mode = enum { serve, slow, crash, old, noremote, drop, bye };
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
@@ -106,7 +107,7 @@ fn talk(gpa: std.mem.Allocator, io: Io, stream: Io.net.Stream, mode: Mode, n: us
                 try Client.writeAll(io, stream, ep.pending());
                 return;
             },
-            .create_view => |cv| try ep.send(.{ .view_created = .{ .view = cv.view, .tier = .draw_list, .width = cv.width, .height = cv.height } }),
+            .create_view => |cv| if (mode == .bye) try ep.send(.{ .bye = .{ .reason = .shutdown, .text = "going away" } }) else try ep.send(.{ .view_created = .{ .view = cv.view, .tier = .draw_list, .width = cv.width, .height = cv.height } }),
             .bye => return,
             else => {},
         };

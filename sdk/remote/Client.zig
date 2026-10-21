@@ -135,7 +135,7 @@ pub fn deinit(self: *Client) void {
     if (self.socket_path) |p| self.gpa.free(p);
 }
 
-/// Where fizzy would be installed on `env.os`, likeliest first. Touches nothing.
+/// Where fizzy would be installed on `env.os`, likeliest first; not `$PATH` (`onPath`). Touches nothing.
 pub fn candidates(arena: std.mem.Allocator, identity: Identity, env: Env) error{OutOfMemory}![]const Install {
     var list: std.ArrayList(Install) = .empty;
     const sep: []const u8 = if (env.os == .windows) "\\" else "/";
@@ -161,11 +161,18 @@ pub fn candidates(arena: std.mem.Allocator, identity: Identity, env: Env) error{
             try list.append(arena, .{ .exe = try join(arena, sep, &.{ h, "Applications", image }) });
         },
     }
-    if (env.path) |path| {
-        const exe = if (env.os == .windows) try std.fmt.allocPrint(arena, "{s}.exe", .{identity.name}) else identity.name;
-        var dirs = std.mem.tokenizeScalar(u8, path, if (env.os == .windows) ';' else ':');
-        while (dirs.next()) |dir| try list.append(arena, .{ .exe = try join(arena, sep, &.{ dir, exe }) });
-    }
+    return list.items;
+}
+
+/// `identity.name` in each `$PATH` directory. Tried after everything else: a bare `fizzy` on the
+/// path may be a build or a stray copy, not the install.
+fn onPath(arena: std.mem.Allocator, identity: Identity, env: Env) error{OutOfMemory}![]const Install {
+    var list: std.ArrayList(Install) = .empty;
+    const path = env.path orelse return list.items;
+    const sep: []const u8 = if (env.os == .windows) "\\" else "/";
+    const exe = if (env.os == .windows) try std.fmt.allocPrint(arena, "{s}.exe", .{identity.name}) else identity.name;
+    var dirs = std.mem.tokenizeScalar(u8, path, if (env.os == .windows) ';' else ':');
+    while (dirs.next()) |dir| try list.append(arena, .{ .exe = try join(arena, sep, &.{ dir, exe }) });
     return list.items;
 }
 
@@ -180,7 +187,11 @@ pub fn locate(io: Io, arena: std.mem.Allocator, identity: Identity, env: Env) Er
     for (try candidates(arena, identity, env)) |install| {
         if (exists(io, install.exe)) return install;
     }
-    return lookupSystem(io, arena, identity, env) orelse notFound(env);
+    if (lookupSystem(io, arena, identity, env)) |install| return install;
+    for (try onPath(arena, identity, env)) |install| {
+        if (exists(io, install.exe)) return install;
+    }
+    return notFound(env);
 }
 
 fn notFound(env: Env) Error {
@@ -288,6 +299,26 @@ const Started = struct {
 
     const Status = enum { running, exited_clean, failed };
 
+    /// A started fizzy that is not `open`'s runs on after we connect, and its exit would leave a
+    /// zombie until the host quits: wait for it on a thread of its own. If the thread cannot be
+    /// made the child is left, as before.
+    fn reapInBackground(self: *Started) void {
+        if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return;
+        if (self.via_open) return;
+        const pid = self.child.id orelse return;
+        const thread = std.Thread.spawn(.{}, reap, .{pid}) catch return;
+        thread.detach();
+        self.child.id = null;
+    }
+
+    fn reap(pid: std.posix.pid_t) void {
+        var wait_status: i32 = 0;
+        while (true) {
+            const rc = std.posix.system.waitpid(pid, &wait_status, 0);
+            if (std.posix.errno(rc) != .INTR) return;
+        }
+    }
+
     fn status(self: *Started) Status {
         if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return .running;
         const pid = self.child.id orelse return .running;
@@ -365,6 +396,9 @@ pub fn connect(self: *Client) Error!void {
     const addr = Io.net.UnixAddress.init(socket) catch return error.Protocol;
 
     var started: ?Started = null;
+    // Whatever ends `connect`, a fizzy we started is waited for when it exits. It is not killed:
+    // a slow one may still come up and be found by a later `connect`.
+    defer if (started) |*st| st.reapInBackground();
     var pause_ms: u32 = 10;
     while (true) {
         if (addr.connect(self.io)) |stream| {
@@ -471,12 +505,13 @@ fn flush(self: *Client, ep: *Endpoint) Error!void {
 
 /// Whether a stream is open (a drop shows on the next `poll` or `send`).
 pub fn connected(self: *const Client) bool {
-    return self.endpoint != null;
+    return self.endpoint != null and self.stream != null;
 }
 
 /// Check `msg` against the conversation's rules and send it.
 pub fn send(self: *Client, msg: message.Message) Error!void {
     const ep = &(self.endpoint orelse return error.Closed);
+    if (self.stream == null) return self.closeStale();
     ep.send(msg) catch |err| return epError(err);
     self.flush(ep) catch |err| {
         self.close();
@@ -485,18 +520,21 @@ pub fn send(self: *Client, msg: message.Message) Error!void {
 }
 
 /// The next message from fizzy, waiting up to `wait_ms` (null: forever); null when that passes.
-/// Lists are allocated from `arena`; strings borrow the client until the next `poll`. Whatever
-/// ends the stream closes the client, and `reconnect` opens it again.
+/// Lists are allocated from `arena`; strings borrow the client until the next `poll`, `send`,
+/// `reconnect` or `close`, after which they dangle (a `bye`'s too: it borrows the endpoint, which
+/// outlives the stream until then). Whatever ends the stream closes the client, and `reconnect`
+/// opens it again.
 pub fn poll(self: *Client, arena: std.mem.Allocator, wait_ms: ?u32) Error!?message.Message {
     const ep = &(self.endpoint orelse return error.Closed);
-    const stream = self.stream.?;
+    const stream = self.stream orelse return self.closeStale();
     const deadline: ?Deadline = if (wait_ms) |ms| .init(self.io, ms) else null;
     var buf: [16 * 1024]u8 = undefined;
     while (true) {
         const got = ep.poll(arena) catch |err| {
             self.flush(ep) catch {};
+            const failure = skewError(ep, err);
             self.close();
-            return skewError(ep, err);
+            return failure;
         };
         if (got) |msg| {
             if (msg == .bye) self.closeAfterBye();
@@ -516,9 +554,17 @@ pub fn poll(self: *Client, arena: std.mem.Allocator, wait_ms: ?u32) Error!?messa
 }
 
 fn closeAfterBye(self: *Client) void {
-    // The peer ended the conversation; its bye is the caller's to read, the stream is done.
+    // The peer ended the conversation; its bye is the caller's to read, the stream is done. The
+    // endpoint stays until the next `poll`, `send`, `reconnect` or `close`, because the bye's
+    // strings borrow it and dangle once it is gone.
     if (self.stream) |s| s.close(self.io);
     self.stream = null;
+}
+
+/// The stream ended with a bye already delivered: finish closing.
+fn closeStale(self: *Client) error{Closed} {
+    self.close();
+    return error.Closed;
 }
 
 /// Open again after a drop, finding and starting fizzy as `connect` does. Views are gone with
@@ -544,16 +590,20 @@ test candidates {
     try std.testing.expectEqualStrings("/Applications/Fizzy.app/Contents/MacOS/fizzy", mac[0].exe);
     try std.testing.expectEqualStrings("/Applications/Fizzy.app", mac[0].bundle.?);
     try std.testing.expectEqualStrings("/Users/a/Applications/Fizzy.app", mac[1].bundle.?);
-    try std.testing.expectEqualStrings("/opt/bin/fizzy", mac[mac.len - 1].exe);
+    try std.testing.expectEqual(@as(usize, 2), mac.len);
+    const mac_path = try onPath(arena, id, .{ .os = .macos, .path = "/usr/bin:/opt/bin" });
+    try std.testing.expectEqualStrings("/opt/bin/fizzy", mac_path[1].exe);
 
     const win = try candidates(arena, id, .{ .os = .windows, .local_app_data = "C:\\Users\\a\\AppData\\Local", .path = "C:\\bin;D:\\tools" });
     try std.testing.expectEqualStrings("C:\\Users\\a\\AppData\\Local\\fizzy\\current\\fizzy.exe", win[0].exe);
-    try std.testing.expectEqualStrings("D:\\tools\\fizzy.exe", win[win.len - 1].exe);
+    const win_path = try onPath(arena, id, .{ .os = .windows, .path = "C:\\bin;D:\\tools" });
+    try std.testing.expectEqualStrings("D:\\tools\\fizzy.exe", win_path[1].exe);
 
     const linux = try candidates(arena, .{ .name = "paint" }, .{ .os = .linux, .home = "/home/a", .path = "/usr/bin" });
     try std.testing.expectEqualStrings("/home/a/.local/share/paint/current/paint", linux[0].exe);
     try std.testing.expectEqualStrings("/home/a/Applications/paint.AppImage", linux[2].exe);
-    try std.testing.expectEqualStrings("/usr/bin/paint", linux[3].exe);
+    try std.testing.expectEqual(@as(usize, 3), linux.len);
+    try std.testing.expectEqualStrings("/usr/bin/paint", (try onPath(arena, .{ .name = "paint" }, .{ .os = .linux, .path = "/usr/bin" }))[0].exe);
 }
 
 test parseRegValue {
