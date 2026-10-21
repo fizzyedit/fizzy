@@ -563,7 +563,16 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         }
     }
 
+    // A card's corner is round only where it meets the edge of the cards' area (`State.cardCorners`).
+    const wears_card = (box_opts.background orelse false) and box_opts.corners != null;
+    if (wears_card) box_opts.corners = self.state.cardCorners(box_opts.corners.?, dvui.dataGet(null, id, "_card", dvui.Rect.Physical));
+
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
+    if (wears_card) {
+        const r = box.data().borderRectScale().r;
+        dvui.dataSet(null, id, "_card", r);
+        self.state.noteCard(r);
+    }
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
     if (init_opts.name.len > 0) {
         self.state.setPlaceMetrics(init_opts.name, box.data());

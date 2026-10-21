@@ -1075,6 +1075,7 @@ test {
     _ = @import("Drop.zig");
     _ = @import("ViewDrag.zig");
     _ = @import("Picker.zig");
+    _ = @import("State.zig");
 }
 /// Declare a region — the verb form of `Region.init`, so a shape writes `f.region(...)` beside
 /// `f.split(...)` and never names the type. Same arrangement as `dvui.box` over `BoxWidget.init`.

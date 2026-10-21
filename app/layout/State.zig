@@ -171,6 +171,11 @@ floats: Floats = .{},
 /// The window the regions registering now are drawn in: 0 the main window, `n` the `n`th float
 /// (`Region.layer`). Set by `Floats.draw` around each float's contents.
 layer_building: u16 = 0,
+/// The area the cards of each window cover, last frame's and the one being built (`cardCorners`):
+/// the union of their border boxes in physical pixels, a float's cards in its own slot. Layers
+/// past the last share it.
+card_area: [card_layers]dvui.Rect.Physical = @splat(.{}),
+card_area_building: [card_layers]dvui.Rect.Physical = @splat(.{}),
 /// Explorer/panel split ratios — "window shape" state persisted in `window.zon`, not
 /// `settings.zon` (dragging a splitter fires every frame; keeping it out of the settings file
 /// means normal window use never dirties a git-tracked settings.zon). Loaded once at startup
@@ -475,6 +480,8 @@ pub fn registerRegion(self: *State, gpa: std.mem.Allocator, entry: Region) void 
 
 /// The shape has finished declaring: make this frame's regions the ones `regionFor` answers with.
 pub fn publishRegions(self: *State) void {
+    self.card_area = self.card_area_building;
+    self.card_area_building = @splat(.{});
     std.mem.swap(@TypeOf(self.regions), &self.regions, &self.regions_building);
     self.regions_building.clearRetainingCapacity();
 }
@@ -858,6 +865,44 @@ pub fn forgetWidgetSize(id: dvui.Id) void {
     dvui.dataRemove(null, id, "_chooser_press");
 }
 
+const card_layers = Floats.max + 1;
+
+/// A card's corners where each is round only if it meets the edge of the area the cards cover:
+/// a corner against another card, or against chrome that is not a card, is square, so a split's
+/// panes round off the window's outline and not their own seams. `card` is the box's rect last
+/// frame (null before it has drawn once: `corners` stand), judged against last frame's area, so the
+/// two move together and a resize does not flicker.
+pub fn cardCorners(self: *const State, corners: dvui.CornerRect, card: ?dvui.Rect.Physical) dvui.CornerRect {
+    const r = card orelse return corners;
+    const a = self.card_area[@min(self.layer_building, card_layers - 1)];
+    if (a.w <= 0 or a.h <= 0) return corners;
+    const tol: f32 = 2;
+    const left = @abs(r.x - a.x) <= tol;
+    const top = @abs(r.y - a.y) <= tol;
+    const right = @abs(r.x + r.w - (a.x + a.w)) <= tol;
+    const bottom = @abs(r.y + r.h - (a.y + a.h)) <= tol;
+    var out = corners;
+    if (!(left and top)) out.tl = .square;
+    if (!(right and top)) out.tr = .square;
+    if (!(right and bottom)) out.br = .square;
+    if (!(left and bottom)) out.bl = .square;
+    return out;
+}
+
+/// A card drawn this frame at `r` (physical): part of the area `cardCorners` judges by next frame.
+pub fn noteCard(self: *State, r: dvui.Rect.Physical) void {
+    const a = &self.card_area_building[@min(self.layer_building, card_layers - 1)];
+    if (a.w <= 0 or a.h <= 0) {
+        a.* = r;
+        return;
+    }
+    const x1 = @min(a.x, r.x);
+    const y1 = @min(a.y, r.y);
+    const x2 = @max(a.x + a.w, r.x + r.w);
+    const y2 = @max(a.y + a.h, r.y + r.h);
+    a.* = .{ .x = x1, .y = y1, .w = x2 - x1, .h = y2 - y1 };
+}
+
 /// Where place `name` was drawn this frame, from the box it was drawn in: its border box, in
 /// points and in physical pixels. The border box, not the content: a split's extent is the whole
 /// reach of the place it opens, padding included, so a split measured from the content rect gave
@@ -931,4 +976,66 @@ pub fn setExtent(self: *State, gpa: std.mem.Allocator, name: []const u8, value: 
     };
     gop.value_ptr.* = value;
     return true;
+}
+
+fn testCorners(s: *const State, r: dvui.Rect.Physical) [4]bool {
+    const c = s.cardCorners(.round(10), r);
+    return .{ c.tl.kind == .round, c.tr.kind == .round, c.br.kind == .round, c.bl.kind == .round };
+}
+
+fn testPublish(s: *State) void {
+    s.card_area = s.card_area_building;
+    s.card_area_building = @splat(.{});
+}
+
+test "a single card stays round on every corner" {
+    var s: State = .{};
+    const r: dvui.Rect.Physical = .{ .x = 10, .y = 20, .w = 300, .h = 200 };
+    s.noteCard(r);
+    testPublish(&s);
+    try std.testing.expectEqual([4]bool{ true, true, true, true }, testCorners(&s, r));
+}
+
+test "a 2x2 split rounds only the outer corner of each card" {
+    var s: State = .{};
+    const tl: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 100, .h = 100 };
+    const tr: dvui.Rect.Physical = .{ .x = 110, .y = 0, .w = 100, .h = 100 };
+    const bl: dvui.Rect.Physical = .{ .x = 0, .y = 110, .w = 100, .h = 100 };
+    const br: dvui.Rect.Physical = .{ .x = 110, .y = 110, .w = 100, .h = 100 };
+    for ([_]dvui.Rect.Physical{ tl, tr, bl, br }) |r| s.noteCard(r);
+    testPublish(&s);
+    try std.testing.expectEqual([4]bool{ true, false, false, false }, testCorners(&s, tl));
+    try std.testing.expectEqual([4]bool{ false, true, false, false }, testCorners(&s, tr));
+    try std.testing.expectEqual([4]bool{ false, false, false, true }, testCorners(&s, bl));
+    try std.testing.expectEqual([4]bool{ false, false, true, false }, testCorners(&s, br));
+}
+
+test "the area grows to cover every card noted" {
+    var s: State = .{};
+    s.noteCard(.{ .x = 50, .y = 50, .w = 10, .h = 10 });
+    s.noteCard(.{ .x = 0, .y = 70, .w = 20, .h = 30 });
+    s.noteCard(.{ .x = 40, .y = 10, .w = 100, .h = 5 });
+    const a = s.card_area_building[0];
+    try std.testing.expectEqual(@as(f32, 0), a.x);
+    try std.testing.expectEqual(@as(f32, 10), a.y);
+    try std.testing.expectEqual(@as(f32, 140), a.w);
+    try std.testing.expectEqual(@as(f32, 90), a.h);
+}
+
+test "an edge within two pixels counts as the edge, three does not" {
+    var s: State = .{};
+    s.noteCard(.{ .x = 0, .y = 0, .w = 200, .h = 100 });
+    testPublish(&s);
+    try std.testing.expectEqual([4]bool{ true, true, true, true }, testCorners(&s, .{ .x = 2, .y = 0, .w = 198, .h = 100 }));
+    try std.testing.expectEqual([4]bool{ false, true, true, false }, testCorners(&s, .{ .x = 3, .y = 0, .w = 197, .h = 100 }));
+}
+
+test "no area yet, or a card not yet drawn, leaves the corners as given" {
+    var s: State = .{};
+    try std.testing.expectEqual([4]bool{ true, true, true, true }, testCorners(&s, .{ .x = 0, .y = 0, .w = 10, .h = 10 }));
+    s.noteCard(.{ .x = 0, .y = 0, .w = 0, .h = 50 });
+    testPublish(&s);
+    try std.testing.expectEqual([4]bool{ true, true, true, true }, testCorners(&s, .{ .x = 5, .y = 5, .w = 10, .h = 10 }));
+    const c = s.cardCorners(.round(10), null);
+    try std.testing.expect(c.tl.kind == .round);
 }
