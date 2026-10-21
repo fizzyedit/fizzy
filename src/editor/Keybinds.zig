@@ -300,18 +300,18 @@ fn setWindowMaterial(editor: *Editor, kind: fizzy.core.material.Kind) void {
 }
 
 const DemoSpeed = sdk.Command.Params(struct {
-    rate: sdk.Command.Arg(f32, .{ .description = "How many times the tape's own pace: 0.25, 0.5, 1, 2 or 4. 0 steps to the next.", .min = 0, .max = 4 }) = .init(0),
+    rate: sdk.Command.Arg(f32, .{ .description = "How many times the tape's own pace: 0.5 to 4 (0.5, 0.75, 1, 1.5, 2, 3, 4 on the transport); anything between 0 and 0.5 plays at 0.5. 0 steps to the next.", .min = 0, .max = 4 }) = .init(0),
 });
 
 fn cmdDemoSpeedStep(state: *anyopaque) anyerror!void {
-    editorFromState(state).demo.player.stepRate();
+    editorFromState(state).demo.player.seq.stepSpeed();
 }
 
 /// How fast the loaded tape plays, as the transport's speed does.
 fn cmdDemoSpeed(state: *anyopaque, args: DemoSpeed.Args, call: *sdk.Command.Call) anyerror!void {
     const player = &editorFromState(state).demo.player;
-    if (args.rate == 0) player.stepRate() else player.setRate(args.rate);
-    try call.returns(.{ .rate = player.rate });
+    if (args.rate == 0) player.seq.stepSpeed() else player.seq.setSpeed(args.rate);
+    try call.returns(.{ .rate = player.seq.speed });
 }
 
 fn demoCatalogCommands() [Editor.Demo.catalog.entries.len]FizzyCommand {

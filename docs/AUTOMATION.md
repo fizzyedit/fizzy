@@ -243,7 +243,15 @@ pub fn build(s: *Script) !void {
 `Script` keeps a pen (`s.t`) and moves it at an unhurried person's pace (`Script.Pace`: an 800 ms
 glide, a hover before the press, a beat after each action, 12 characters a second). `pause`,
 `caption(.., .{ .hold = true })` and every option's `ms` adjust it. A caption shows for as long as
-it takes to read (`Script.readingMs`) unless given `ms`.
+it takes to read unless given `ms`: `Script.readingMs`, 0.3 s a word of title and text at 1x
+(`reading_ms_per_word`) and between 2 s (`reading_min_ms`) and 12 s (`reading_max_ms`).
+
+**Playback speed** is `Sequencer.speed`, a plain `f32` in 0.5…4 (default 1; the transport steps
+`Sequencer.speeds`: 0.5, 0.75, 1, 1.5, 2, 3, 4). It divides every demo time on the wall clock —
+`playUntil` turns a frame's wall time into the demo time to advance to. A caption's `ms` is demo
+time too, so it is up for `ms / speed` of the wall clock with no conversion of its own — the
+captions and the demo around them speed up together. A seek asks `advance` for a demo time, which
+no speed enters, so it lands exactly at any speed.
 
 A caption that narrates what the pointer does is a **callout beside the action**, where the viewer
 is looking: next to what the pointer is aimed at while it shows (or `.near`, an anchor), to its

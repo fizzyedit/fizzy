@@ -131,7 +131,7 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const text = std.mem.trim(u8, line[comment + 2 ..], " \t\r");
         const prefix = "lint-allow(";
         if (!std.mem.startsWith(u8, text, prefix)) continue;
-        const close = std.mem.indexOfScalar(u8, text, ')') orelse text.len;
+        const close = std.mem.findScalar(u8, text, ')') orelse text.len;
         const tail = if (close < text.len) std.mem.trim(u8, text[close + 1 ..], " \t\r") else "";
         if (tail.len < 2 or tail[0] != ':' or std.mem.trim(u8, tail[1..], " \t\r").len == 0) {
             try findings.append(allocator, .{ .rule = .@"lint-allow-reason", .line = line_number, .message = "lint-allow requires a reason after ':'" });

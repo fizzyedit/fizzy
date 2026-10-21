@@ -8,6 +8,11 @@ once, and these rules are what keep their work from colliding.
 would need adds it to this file in a PR. Agent memory is for one person's context: their
 preferences, findings still in flight.
 
+Agent adapters use the single worker contract in [`docs/AGENT_WORK.md`](docs/AGENT_WORK.md).
+`scripts/agent-prepare <branch>` creates the isolated checkout; `scripts/agent-finish <issue>`
+verifies and publishes a draft with evidence. Keep worker rules there rather than copying them
+into kickoff prompts, wrappers or runners.
+
 ## One plan step, one branch, one PR
 
 - **A plan is an issue** with a checklist of steps, or a plan doc merged on its own and linked
@@ -148,6 +153,11 @@ turns.
   (`pip install ziglang`) and unpacks that cache into `~/.cache/zig/p`. The environment's setup
   script is the one line `curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash`.
   A dependency bump reaches cloud sessions when the workflow has run on the merge.
+  The same asset holds the current `fizzy-sdk` package and the dependencies of each store plugin
+  (`scripts/store-plugin-repos.sh`), so a session sourced from a plugin repo builds too: put the
+  variable on the `bash` side of the pipe, `curl -fsSL <url> | PLUGIN_REPO=<checkout> bash` (before `curl` it
+  reaches only curl), and it checks that repo's `zig build --fetch` against the cache. `1` means the
+  current directory, which may not be the checkout, so pass the checkout's path.
 - **A plugin's plain `zig build` also installs** into the real plugins directory. For a sandbox
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its

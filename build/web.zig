@@ -6,7 +6,24 @@ const plugins = @import("plugins.zig");
 const sdk = @import("sdk.zig");
 const rehome_fixture = @import("rehome_fixture.zig");
 
-pub fn addSteps(
+/// What `build` made: the wasm module, and the site beside it.
+pub const Web = struct {
+    wasm: *std.Build.Step.Compile,
+    /// Everything but the wasm: the stamped `index.html`, `web.js`, the worker, the font, the OAuth
+    /// page, the hosted demo tapes under `demos/` (fizzy's own build) and each plugin's pages
+    /// under `plugins/<id>/`.
+    dir: std.Build.LazyPath,
+    /// Fizzy's own build: a native-built plugin graph re-homed to wasm32 and compiled apart from
+    /// the app, for `check-web`.
+    rehome_fixture: ?*std.Build.Step.Compile,
+    /// The hosted demo tapes alone (fizzy's own build), which the `demos` step installs without
+    /// building the rest of the site.
+    demos: ?std.Build.LazyPath,
+};
+
+/// The web (wasm) build, apart from the native exe so it cannot disturb packaging, SDL or
+/// Velopack. Adds no step of its own; `install` puts it under `zig-out/web/`.
+pub fn build(
     b: *std.Build,
     optimize: std.lang.OptimizeMode,
     build_opts: *std.Build.Step.Options,
@@ -20,7 +37,7 @@ pub fn addSteps(
     /// Fizzy's own build (`Options.own`): the hosted demo tapes come from `docs/demos/` and
     /// `scripts/`, which fizzy's package leaves out, so an app built on fizzy has none.
     own: bool,
-) void {
+) Web {
     const web_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
@@ -248,11 +265,6 @@ pub fn addSteps(
     const app_module_web = sdk.wireAppModule(b, web_target, optimize, dvui_web, core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
     app_module_web.addImport("bundled_plugins", bundled_web);
 
-    const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
-    const install_wasm = b.addInstallArtifact(web_exe, .{
-        .dest_dir = .{ .override = web_install_dir },
-    });
-
     // Cache-buster: stamps a 64-char hash into the index.html / web.js placeholders so
     // the browser picks up new wasm builds without manual hard-reloads. Re-implements
     // upstream DVUI's `addWebExample` machinery so we don't have to invoke its step.
@@ -270,46 +282,18 @@ pub fn addSteps(
     cb_run.addFileArg(web_exe.getEmittedBin());
     const index_html_with_hash = cb_run.captureStdOut(.{});
 
-    const web_step = b.step("web", "Build the fizzy web (wasm) app into zig-out/web/");
-    web_step.dependOn(&install_wasm.step);
-    web_step.dependOn(&b.addInstallFileWithDir(
-        index_html_with_hash,
-        web_install_dir,
-        "index.html",
-    ).step);
-    web_step.dependOn(&b.addInstallFileWithDir(
-        b.path("web/web.js"),
-        web_install_dir,
-        "web.js",
-    ).step);
+    const dir = b.addWriteFiles();
+    _ = dir.addCopyFile(index_html_with_hash, "index.html");
+    _ = dir.addCopyFile(b.path("web/web.js"), "web.js");
     // Worker mode (`?worker=1`): the editor in a worker, drawing through an OffscreenCanvas.
-    web_step.dependOn(&b.addInstallFileWithDir(
-        b.path("web/fizzy-worker.js"),
-        web_install_dir,
-        "fizzy-worker.js",
-    ).step);
-    web_step.dependOn(&b.addInstallFileWithDir(
-        dvui_web_dep.path("src/fonts/NotoSansKR-Regular.ttf"),
-        web_install_dir,
-        "NotoSansKR-Regular.ttf",
-    ).step);
+    _ = dir.addCopyFile(b.path("web/fizzy-worker.js"), "fizzy-worker.js");
+    _ = dir.addCopyFile(dvui_web_dep.path("src/fonts/NotoSansKR-Regular.ttf"), "NotoSansKR-Regular.ttf");
     // The far end of a web OAuth round trip (`core.transport.WebOAuth`): the page a provider
     // redirects back to, which posts its location to the opener and closes.
-    web_step.dependOn(&b.addInstallFileWithDir(
-        b.path("web/oauth-callback.html"),
-        web_install_dir,
-        "oauth-callback.html",
-    ).step);
+    _ = dir.addCopyFile(b.path("web/oauth-callback.html"), "oauth-callback.html");
     // The tapes the page can fetch (`?demo=demos/<name>.tape`), built from this commit's scripts.
-    if (own) {
-        const install_demos = b.addInstallDirectory(.{
-            .source_dir = demoTapes(b),
-            .install_dir = web_install_dir,
-            .install_subdir = "demos",
-        });
-        web_step.dependOn(&install_demos.step);
-        b.step("demos", "Build every hosted demo tape into zig-out/web/demos/").dependOn(&install_demos.step);
-    }
+    const demos: ?std.Build.LazyPath = if (own) demoTapes(b) else null;
+    if (demos) |tapes| _ = dir.addCopyDirectory(tapes, "demos", .{});
     for (web_pages.items) |page| {
         const web_dir = b.pathJoin(&.{ page.dir, "web" });
         var d = b.root.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch {
@@ -321,12 +305,48 @@ pub fn addSteps(
         var it = d.iterate();
         while (it.next(b.graph.io) catch null) |entry| {
             if (entry.kind != .file) continue;
-            web_step.dependOn(&b.addInstallFileWithDir(
+            _ = dir.addCopyFile(
                 b.path(b.pathJoin(&.{ web_dir, entry.name })),
-                web_install_dir,
                 b.pathJoin(&.{ "plugins", page.id, entry.name }),
-            ).step);
+            );
         }
+    }
+
+    const rehome_check: ?*std.Build.Step.Compile = if (own) blk: {
+        const fixture = rehome_fixture.graph(b, b.resolveTargetQuery(.{}), optimize);
+        var fixture_wiring = wiring;
+        fixture_wiring.consumer = b.createModule(.{ .target = web_target, .optimize = optimize, .link_libc = false, .single_threaded = true });
+        const module = plugins.rehome(b, fixture_wiring, "rehome_fixture", fixture);
+        rehome_fixture.check(b, fixture, module, false);
+        break :blk b.addObject(.{ .name = "rehome-fixture-web", .root_module = module });
+    } else null;
+
+    return .{ .wasm = web_exe, .dir = dir.getDirectory(), .rehome_fixture = rehome_check, .demos = demos };
+}
+
+/// The steps over `build`'s result: `web` installs it into `zig-out/web/`, and the ones that
+/// serve, copy or only compile it.
+pub fn install(b: *std.Build, web: Web) void {
+    const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
+    const install_wasm = b.addInstallArtifact(web.wasm, .{
+        .dest_dir = .{ .override = web_install_dir },
+    });
+    const install_site = b.addInstallDirectory(.{
+        .source_dir = web.dir,
+        .install_dir = web_install_dir,
+        .install_subdir = "",
+    });
+
+    const web_step = b.step("web", "Build the fizzy web (wasm) app into zig-out/web/");
+    web_step.dependOn(&install_wasm.step);
+    web_step.dependOn(&install_site.step);
+    if (web.demos) |tapes| {
+        const install_demos = b.addInstallDirectory(.{
+            .source_dir = tapes,
+            .install_dir = web_install_dir,
+            .install_subdir = "demos",
+        });
+        b.step("demos", "Build every hosted demo tape into zig-out/web/demos/").dependOn(&install_demos.step);
     }
 
     // Compile-only smoke check for the wasm target. Pairs with `check` (unit
@@ -334,16 +354,8 @@ pub fn addSteps(
     // code path (thread spawn, std.posix surface, missing module import)
     // from the wasm root. No install — just compile.
     const check_web_step = b.step("check-web", "Compile fizzy web (wasm) without installing artifacts");
-    check_web_step.dependOn(&web_exe.step);
-    if (own) {
-        // Re-home a native-built plugin graph to wasm32 and compile it, apart from the app.
-        const fixture = rehome_fixture.graph(b, b.resolveTargetQuery(.{}), optimize);
-        var fixture_wiring = wiring;
-        fixture_wiring.consumer = b.createModule(.{ .target = web_target, .optimize = optimize, .link_libc = false, .single_threaded = true });
-        const module = plugins.rehome(b, fixture_wiring, "rehome_fixture", fixture);
-        rehome_fixture.check(b, fixture, module, false);
-        check_web_step.dependOn(&b.addObject(.{ .name = "rehome-fixture-web", .root_module = module }).step);
-    }
+    check_web_step.dependOn(&web.wasm.step);
+    if (web.rehome_fixture) |fixture| check_web_step.dependOn(&fixture.step);
 
     // Copy zig-out/web into web/app/ for local preview at the production
     // `/app/` path: `cd web && python3 -m http.server` then open

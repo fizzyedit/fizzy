@@ -48,6 +48,16 @@ pressed: u8 = 0,
 /// Set by whoever plays the tape while it replays to a moment rather than plays live (a seek):
 /// a carried glide then takes a frame per step of its path (`path_step_ms`).
 replaying: bool = false,
+/// Demo time per wall time while a tape plays live: a plain value in `min_speed`...`max_speed`
+/// (`setSpeed`). Only `playUntil` reads it, so a seek, which replays to a demo time,
+/// lands exactly at any speed.
+speed: f32 = default_speed,
+
+pub const min_speed: f32 = 0.5;
+pub const max_speed: f32 = 4.0;
+pub const default_speed: f32 = 1.0;
+/// The speeds a transport steps through.
+pub const speeds = [_]f32{ 0.5, 0.75, 1, 1.5, 2, 3, 4 };
 
 pub const Point = struct {
     x: f32 = 0,
@@ -154,6 +164,24 @@ pub fn restoreTo(self: *Sequencer, cursor: usize, now: f64, pointer: Point) void
     self.held_ms = 0;
     // A moment is calm with no button held (`Player.keepSnapshot`).
     self.pressed = 0;
+}
+
+/// Play at `speed` times the tape's own pace, kept within `min_speed`...`max_speed`.
+pub fn setSpeed(self: *Sequencer, speed: f32) void {
+    self.speed = std.math.clamp(speed, min_speed, max_speed);
+}
+
+/// The next of `speeds` above the current one, round to the slowest.
+pub fn stepSpeed(self: *Sequencer) void {
+    for (speeds) |sp| {
+        if (sp > self.speed + 0.001) return self.setSpeed(sp);
+    }
+    self.setSpeed(speeds[0]);
+}
+
+/// The demo time `wall_ms` of live playing reaches: what to ask `advance` for.
+pub fn playUntil(self: Sequencer, wall_ms: f64) f64 {
+    return self.now + wall_ms * self.speed;
 }
 
 /// Every op has been applied and nothing is in flight.
@@ -912,4 +940,64 @@ test "a trace runs ruled: on the line between, evenly" {
     const op: Tape.Op = .{ .at = 0, .ms = 100, .do = .{ .trace = .{} } };
     try testing.expectEqual(@as(f32, 0), pathPoint(op, a, b, 0.5).y);
     try testing.expectEqual(@as(f32, 100), pathPoint(op, a, b, 0.25).x);
+}
+
+test "speed is clamped, steps through its notches and divides demo time" {
+    const tape: Tape = .{ .name = "t", .ops = &.{} };
+    var seq = Sequencer.init(&tape);
+    try testing.expectEqual(@as(f32, 1), seq.speed);
+    seq.setSpeed(0.1);
+    try testing.expectEqual(min_speed, seq.speed);
+    seq.setSpeed(40);
+    try testing.expectEqual(max_speed, seq.speed);
+
+    // Every notch: a frame of wall time reaches `speed` times as much demo time.
+    for (speeds) |sp| {
+        seq.setSpeed(sp);
+        try testing.expectEqual(sp, seq.speed);
+        seq.now = 100;
+        try testing.expectEqual(100 + 16 * @as(f64, sp), seq.playUntil(16));
+    }
+
+    // The transport steps through them in order and wraps to the slowest.
+    seq.setSpeed(min_speed);
+    for (speeds[1..]) |sp| {
+        seq.stepSpeed();
+        try testing.expectEqual(sp, seq.speed);
+    }
+    seq.stepSpeed();
+    try testing.expectEqual(speeds[0], seq.speed);
+}
+
+test "a rewind and seek land on the same moment at every speed" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .ms = 100, .do = .{ .move = .{ .tag = "ok" } } },
+        .{ .at = 100, .do = .{ .press = .left } },
+        .{ .at = 150, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+
+    var expected: ?[]u8 = null;
+    defer if (expected) |e| testing.allocator.free(e);
+    for (speeds) |sp| {
+        var log: Log = .{};
+        defer log.deinit();
+        try log.tags.put(testing.allocator, "ok", .{ .x = 100, .y = 0 });
+
+        var seq: Sequencer = .init(&tape);
+        seq.setSpeed(sp);
+        // Play on a way, then go back and replay to a moment, as a seek does.
+        _ = seq.advance(seq.playUntil(40), 40, log.sink());
+        seq.rewind(0);
+        log.out.clearRetainingCapacity();
+        seq.replaying = true;
+        while (seq.advance(120, 0, log.sink()) != .reached) {}
+        try testing.expectEqual(@as(f64, 120), seq.now);
+        const landed = try landings(log.out.items);
+        if (expected) |e| {
+            defer testing.allocator.free(landed);
+            try testing.expectEqualStrings(e, landed);
+        } else expected = landed;
+    }
 }

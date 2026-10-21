@@ -69,3 +69,29 @@ while (try ep.poll(arena)) |msg| { ... }   // arena for lists; strings borrow un
 ```
 
 `Endpoint.pump(a, b, chunk)` moves one end's bytes to the other for a loopback in tests.
+
+## Finding fizzy (`Client`, `fizzy_remote.h`)
+
+`Client.zig` is what an adapter calls first: find the installed fizzy, start it without taking
+focus when nothing listens, connect to its control socket and upgrade to this stream. `capi.zig`
+exports it as the C API in `fizzy_remote.h` (open, reconnect, send/recv whole frames, close).
+
+- **Where fizzy is:** `FIZZY_EXE`, else per OS: macOS `/Applications/Fizzy.app`,
+  `~/Applications`, then Launch Services by bundle id (`mdfind`); Windows the Velopack folder
+  under `%LOCALAPPDATA%\<pack id>\current`, then the registry's App Paths; Linux Velopack under
+  `~/.local/share`, `~/.local/bin`, an AppImage in `~/Applications`; then `PATH`. An app built on
+  fizzy passes its own name, display name and bundle id (`Identity`).
+- **Its socket:** `fizzy --control-path` (with `--profile`, or `FIZZY_PROFILE`), unless the host
+  names it.
+- **Starting it:** `fizzy --quiet` (macOS: `open -g -j <bundle> --args --quiet`), then dialing
+  with a pause growing from 10 to 250 ms until `timeout_ms`.
+- **Errors say what the person does:** `NotInstalled`, `FizzyTooOld` (update fizzy: no `/remote`,
+  or older versions), `ClientTooOld` (update the add-on), `TimedOut`, `StartFailed` (the start
+  exited with a failure), and `Sandboxed`: an App Sandbox, Flatpak or Snap host that sees neither
+  fizzy nor its socket, or may not start it. It never starts a private second fizzy to get around
+  that; the host asks the person for the socket (or an entitlement) instead.
+- **After a drop** `poll`/`send` return `Closed` and `reconnect` runs the same steps again.
+
+Tested against `fake_fizzy.zig`, an executable that listens on a test socket (Linux CI). Discovery on a real
+macOS or Windows install (`candidates` is tested as strings; `mdfind`, `reg query` and `open -g -j`
+are not) has not been tried by hand.

@@ -167,7 +167,7 @@ pub const CaptionOptions = struct {
 
 /// Words over the app, starting now.
 pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
-    const ms = opts.ms orelse readingMs(opts.title.len + text.len);
+    const ms = opts.ms orelse readingMs(opts.title, text);
     try self.captions.append(self.arena.allocator(), .{
         .at = self.t,
         .ms = ms,
@@ -181,10 +181,27 @@ pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
     if (opts.hold) self.t += ms;
 }
 
-/// Long enough to read at an unhurried pace and still look at the app, never shorter than a
-/// glance: about fourteen characters a second, after a couple of seconds to find it.
-pub fn readingMs(chars: usize) u32 {
-    return std.math.clamp(@as(u32, @intCast(chars)) * 70 + 1800, 3200, 12_000);
+/// Demo time a caption shows for per word at 1x (`readingMs`).
+pub const reading_ms_per_word: u32 = 300;
+/// The least a caption shows for at 1x, however short: long enough to find and take in.
+pub const reading_min_ms: u32 = 2000;
+/// The most a caption shows for at 1x, however long: past this a caption should be split.
+pub const reading_max_ms: u32 = 12_000;
+
+/// The words in `text`: runs of non-whitespace.
+pub fn wordCount(text: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, text, " \t\r\n");
+    while (it.next()) |_| n += 1;
+    return n;
+}
+
+/// How long a caption shows for at 1x: `reading_ms_per_word` for each word of its title and text,
+/// between `reading_min_ms` and `reading_max_ms`. It is demo time, so playback speed (which
+/// advances demo time faster) shortens the caption and the demo around it together.
+pub fn readingMs(title: []const u8, text: []const u8) u32 {
+    const words: u32 = @intCast(wordCount(title) + wordCount(text));
+    return std.math.clamp(words * reading_ms_per_word, reading_min_ms, reading_max_ms);
 }
 
 /// Nothing for a while.
@@ -469,4 +486,21 @@ test "a stroke presses once, traces each point, and releases" {
     try testing.expectEqual(1, presses);
     try testing.expectEqual(2, traces);
     try testing.expect(released_last);
+}
+
+test "a caption shows for a time per word, never under the floor" {
+    try testing.expectEqual(@as(usize, 0), wordCount(""));
+    try testing.expectEqual(@as(usize, 0), wordCount("  \n\t "));
+    try testing.expectEqual(@as(usize, 1), wordCount("Hi"));
+    try testing.expectEqual(@as(usize, 4), wordCount("  one two\tthree\nfour "));
+    // Under the floor: a glance is still 2 s.
+    try testing.expectEqual(reading_min_ms, readingMs("", "Hi"));
+    try testing.expectEqual(reading_min_ms, readingMs("", ""));
+    // Six words is exactly the floor; the seventh is past it.
+    try testing.expectEqual(@as(u32, 2000), readingMs("", "a b c d e f"));
+    try testing.expectEqual(@as(u32, 2100), readingMs("", "a b c d e f g"));
+    // Title and text both count, and a long caption is not cut short.
+    try testing.expectEqual(@as(u32, 300 * 30), readingMs("one two three four five", "a b c d e f g h i j k l m n o p q r s t u v w x y"));
+    // Past the ceiling a caption stops growing.
+    try testing.expectEqual(reading_max_ms, readingMs("", "w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w"));
 }

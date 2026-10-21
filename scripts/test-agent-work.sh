@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# Exercise worker mechanics with fake tools; no network, builds or repository writes.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source_root=$PWD
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+fail() { echo "FAIL: $*" >&2; exit 1; }
+mkdir -p "$tmp/repo/scripts" "$tmp/bin"
+cp scripts/agent-{prepare,finish} "$tmp/repo/scripts/"
+export AGENT_TEST_DIR=$tmp
+export AGENT_PREPARE_ALLOW_TMP=1  # the test checkout may itself sit under /tmp
+export PATH="$tmp/bin:$PATH"
+cat >"$tmp/bin/jj" <<'FAKE'
+#!/usr/bin/env bash
+set -e
+printf '%s\n' "$*" >>"$AGENT_TEST_DIR/calls"
+if [[ ${AGENT_TEST_GIT:-} == 1 && $1 == root ]]; then exit 1; fi
+case "$1 $2" in
+    'workspace add')
+        destination=${*: -1}
+        mkdir -p "$destination/docs" "$destination/scripts"
+        if [[ -e $AGENT_TEST_DIR/cloud-setup.sh ]]; then
+            cp "$AGENT_TEST_DIR/cloud-setup.sh" "$destination/scripts/"
+        fi
+        ;;
+    'log -r')
+        if [[ $* == *description* ]]; then
+            [[ -e $AGENT_TEST_DIR/no-desc ]] || echo 'ci: worker title'
+        else echo ci/example; fi ;;
+    'diff --from') echo ' scripts/example | 1 +' ;;
+esac
+FAKE
+cat >"$tmp/bin/gh" <<'FAKE'
+#!/usr/bin/env bash
+set -e
+printf '%s\n' "$*" >>"$AGENT_TEST_DIR/calls"
+if [[ $1 == pr && $2 == list && ${AGENT_TEST_EXISTING:-} == 1 ]]; then echo 12; fi
+if [[ $1 == pr && ( $2 == create || $2 == edit ) ]]; then
+    while [[ $# -gt 0 ]]; do
+        if [[ $1 == --body-file ]]; then cp "$2" "$AGENT_TEST_DIR/body"; break; fi
+        shift
+    done
+fi
+FAKE
+cat >"$tmp/repo/scripts/check-fmt.sh" <<'FAKE'
+#!/usr/bin/env bash
+if [[ -e $AGENT_TEST_DIR/fail ]]; then exit 1; fi
+echo formatted
+FAKE
+cat >"$tmp/repo/scripts/zb" <<'FAKE'
+#!/usr/bin/env bash
+if [[ -e $AGENT_TEST_DIR/no-summary ]]; then exit 0; fi
+echo "Build Summary: 1/1 steps succeeded$(cat "$AGENT_TEST_DIR/suffix" 2>/dev/null)"
+if [[ -e $AGENT_TEST_DIR/long ]]; then seq 1 200; echo 'Build Summary: 1/1 steps succeeded'; fi
+FAKE
+chmod +x "$tmp/bin/"* "$tmp/repo/scripts/"*
+prepare=$tmp/repo/scripts/agent-prepare
+finish=$tmp/repo/scripts/agent-finish
+"$prepare" ci/example >"$tmp/output"
+grep -qx "$tmp/repo-ci-example/docs/AGENT_WORK.md" "$tmp/output" || fail 'rules path'
+if "$prepare" ci/example >"$tmp/output" 2>&1; then fail 'existing workspace accepted'; fi
+if "$prepare" ../bad >"$tmp/output" 2>&1; then fail 'unsafe branch accepted'; fi
+if "$finish" bad >"$tmp/output" 2>&1; then fail 'invalid issue accepted'; fi
+"$finish" fizzyedit/work#42 >"$tmp/output"
+grep -q 'Part of fizzyedit/work#42' "$tmp/body" || fail 'issue reference'
+grep -q 'scripts/example' "$tmp/body" || fail 'diff evidence'
+grep -q '1/1 steps succeeded' "$tmp/body" || fail 'gate evidence'
+grep -q 'pr create --draft' "$tmp/calls" || fail 'draft PR'
+grep -q -- '--title ci: worker title' "$tmp/calls" || fail 'PR title from description'
+! grep -q 'describe -r' "$tmp/calls" || fail 'worker description overwritten on first finish'
+printf ' (3/3 tests passed)' >"$tmp/suffix"
+"$finish" 42 >"$tmp/output"
+grep -q 'tests passed' "$tmp/body" || fail 'tests suffix gate'
+rm "$tmp/suffix"
+touch "$tmp/long"
+"$finish" 42 >"$tmp/output"
+! grep -qx 100 "$tmp/body" || fail 'gate output not tailed'
+grep -qx 200 "$tmp/body" || fail 'gate output tail missing'
+! grep -qx 150 "$tmp/body" || fail 'gate output tail longer than 50 lines'
+grep -q 'earlier output omitted' "$tmp/body" || fail 'tail marker'
+rm "$tmp/long"
+: >"$tmp/calls"
+touch "$tmp/no-desc"
+"$finish" 42 >"$tmp/output"
+grep -q 'describe -r @ -m ci: example' "$tmp/calls" || fail 'empty description filled'
+rm "$tmp/no-desc"
+: >"$tmp/calls"
+"$finish" 42 >"$tmp/output"
+! grep -q 'describe' "$tmp/calls" || fail 'worker description overwritten'
+touch "$tmp/fail"
+: >"$tmp/calls"
+"$finish" --claim 42 >"$tmp/output"
+grep -q 'pr create --draft' "$tmp/calls" || fail 'claim draft PR'
+grep -q 'Gates not run yet' "$tmp/body" || fail 'claim body'
+rm "$tmp/fail"
+rm "$tmp/body"
+touch "$tmp/fail"
+if "$finish" 42 >"$tmp/output" 2>&1; then fail 'failed gate accepted'; fi
+[[ ! -e $tmp/body ]] || fail 'published after failed gate'
+grep -q '^agent-finish: gate failed:' "$tmp/output" || fail 'failure reason'
+! grep -q 'scripts/zb zig build' "$source_root/docs/AGENT_WORK.md" || fail 'invalid zb invocation'
+rm "$tmp/fail"
+touch "$tmp/no-summary"
+if "$finish" 42 >"$tmp/output" 2>&1; then fail 'missing summary accepted'; fi
+[[ ! -e $tmp/body ]] || fail 'published without Build Summary'
+rm "$tmp/no-summary"
+bad=$(mktemp -d /tmp/agent-test.XXXXXX)
+mkdir "$bad/scripts"
+cp "$tmp/repo/scripts/agent-prepare" "$bad/scripts/"
+if AGENT_PREPARE_ALLOW_TMP= "$bad/scripts/agent-prepare" ci/example >"$tmp/output" 2>&1; then rm -rf "$bad"; fail 'tmp workspace accepted'; fi
+rm -rf "$bad"
+cat >"$tmp/bin/git" <<'FAKE'
+#!/usr/bin/env bash
+set -e
+printf 'git %s\n' "$*" >>"$AGENT_TEST_DIR/calls"
+case "$1 $2" in
+    'worktree add') mkdir -p "${*: -2:1}" ;;
+    'symbolic-ref --quiet') echo ci/git ;;
+    'rev-list --count') echo "${AGENT_TEST_AHEAD:-1}" ;;
+    'diff origin/main') echo ' scripts/git-example | 1 +' ;;
+esac
+FAKE
+chmod +x "$tmp/bin/git"
+AGENT_TEST_GIT=1 "$prepare" ci/git >"$tmp/output"
+grep -q 'git worktree add -b ci/git' "$tmp/calls" || fail 'git worktree fallback'
+AGENT_TEST_GIT=1 "$finish" 42 >"$tmp/output"
+grep -q 'git push --set-upstream origin ci/git' "$tmp/calls" || fail 'git push fallback'
+: >"$tmp/calls"
+AGENT_TEST_GIT=1 AGENT_TEST_AHEAD=0 "$finish" --claim 42 >"$tmp/output"
+grep -q 'git commit --allow-empty -m ci: git: claim' "$tmp/calls" || fail 'git claim empty commit'
+: >"$tmp/calls"
+AGENT_TEST_GIT=1 "$finish" --claim 42 >"$tmp/output"
+! grep -q 'allow-empty' "$tmp/calls" || fail 'empty commit despite commits ahead'
+AGENT_TEST_EXISTING=1 "$finish" 42 >"$tmp/output"
+grep -q 'pr edit 12 --body-file' "$tmp/calls" || fail 'existing PR refresh'
+cat >"$tmp/bin/uname" <<'FAKE'
+#!/usr/bin/env bash
+echo Linux
+FAKE
+cat >"$tmp/cloud-setup.sh" <<'FAKE'
+#!/usr/bin/env bash
+touch "$AGENT_TEST_DIR/setup-ran"
+FAKE
+chmod +x "$tmp/bin/uname" "$tmp/cloud-setup.sh"
+# System bins provide the shell and basic tools, without the developer's Zig launcher.
+PATH="$tmp/bin:/usr/bin:/bin" "$prepare" ci/cloud >"$tmp/output"
+[[ -e $tmp/setup-ran ]] || fail 'Linux without Zig did not run cloud setup'
+echo ok

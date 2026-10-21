@@ -11839,9 +11839,9 @@ test "settings: an untouched in-app material is not written; a chosen one is" {
     var s: Settings = .{};
     const plain = try s.serialize(gpa);
     defer gpa.free(plain);
-    try std.testing.expect(std.mem.indexOf(u8, plain, "in_app_material") == null);
+    try std.testing.expect(std.mem.find(u8, plain, "in_app_material") == null);
     s.in_app_material = .frost;
     const chosen = try s.serialize(gpa);
     defer gpa.free(chosen);
-    try std.testing.expect(std.mem.indexOf(u8, chosen, ".in_app_material = .frost") != null);
+    try std.testing.expect(std.mem.find(u8, chosen, ".in_app_material = .frost") != null);
 }

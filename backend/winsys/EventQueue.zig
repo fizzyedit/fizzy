@@ -848,7 +848,7 @@ test "fuzz: no stuck input, balanced downs and ups, time that only goes forward"
             const w: usize = if (e.window) |win| win.id - 1 else 0;
             switch (e.payload) {
                 .key => |k| {
-                    const c = std.mem.indexOfScalar(Event.Code, &codes, k.physical).?;
+                    const c = std.mem.findScalar(Event.Code, &codes, k.physical).?;
                     switch (k.action) {
                         .down => {
                             try std.testing.expect(!m.keys[w][c]);
@@ -862,7 +862,7 @@ test "fuzz: no stuck input, balanced downs and ups, time that only goes forward"
                     }
                 },
                 .pointer => |p| {
-                    const b = std.mem.indexOfScalar(Event.Button, &buttons, p.button).?;
+                    const b = std.mem.findScalar(Event.Button, &buttons, p.button).?;
                     switch (p.kind) {
                         .press => {
                             try std.testing.expect(!m.buttons[w][b]);

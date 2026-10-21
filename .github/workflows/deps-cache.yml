@@ -7,9 +7,20 @@ name: Deps cache
 # session. The asset is replaced when a dependency changes; a push that moves none leaves it
 # alone. The setup script itself rides on the same release, so an environment can fetch it
 # before it has a checkout.
+#
+# A session sourced from a plugin repo needs more: the fizzy-sdk tarball its build.zig.zon pins
+# (the proxy resets that download, so the package must already be in the cache) and the
+# dependencies of each store plugin. The asset therefore also carries the current SDK release's
+# package, the packages of every plugins/* build, and those of each store plugin's repo
+# (scripts/store-plugin-repos.sh). Plugins release on their own, so a daily run catches up.
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_run:
+    workflows: ["SDK tag"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       force:
@@ -33,12 +44,14 @@ env:
 jobs:
   publish:
     name: Publish the dependency cache
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # The manifest is every package hash the build.zig.zon files name, a digest of the build
-      # scripts that choose which of them get fetched, and the Zig version.
+      # The manifest is every package hash the build.zig.zon files name (fizzy's, and each store
+      # plugin's), the SDK release the asset holds, a digest of the build scripts that choose which
+      # of them get fetched, and the Zig version.
       # If the release already carries the same one, the asset is current.
       - name: Manifest
         id: manifest
@@ -48,13 +61,37 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
+          block=$(awk '/pub const sdk_version = std\.SemanticVersion\{/,/\};/' sdk/sdk_version.zig)
+          sdk_version=$(for f in major minor patch; do grep -oE "\.$f = [0-9]+" <<<"$block" | grep -oE '[0-9]+'; done | paste -sd. -)
+          sdk_tag="sdk-v$sdk_version"
+          sdk_asset="fizzy-sdk-v$sdk_version.tar.gz"
+          # A push that moves sdk_version runs this before sdk-tag.yml has published the tarball;
+          # the run that follows that workflow adds it.
+          if gh release view "$sdk_tag" --json assets --jq '.assets[].name' 2>/dev/null | grep -qxF "$sdk_asset"; then
+            sdk_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/$sdk_tag/$sdk_asset"
+          else
+            echo "::warning::$sdk_tag has no $sdk_asset yet: the SDK package is left out of this asset"
+            sdk_url=""
+          fi
+          echo "sdk_url=$sdk_url" >> "$GITHUB_OUTPUT"
+          bash scripts/store-plugin-repos.sh > "$RUNNER_TEMP/store-plugins.txt"
+          echo "store plugin repos:"; cat "$RUNNER_TEMP/store-plugins.txt"
           {
             echo "zig $ZIG_VERSION"
+            echo "sdk ${sdk_url:+$sdk_tag}"
+            # A store plugin's own zon, as its default branch holds it now.
+            while read -r repo; do
+              { gh api "repos/$repo/git/trees/HEAD?recursive=1" --jq '.tree[] | select(.path | test("(^|/)build\\.zig\\.zon$")) | .path' 2>/dev/null || true; } |
+                while read -r path; do
+                  gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$path" 2>/dev/null |
+                    { grep -o -E '\.hash = "[^"]+"' || true; } | sed -E 's/.*"([^"]+)"/\1/' || true
+                done
+            done < "$RUNNER_TEMP/store-plugins.txt" | sort -u
             find . -name build.zig.zon -print0 |
               xargs -0 grep -h -o -E '\.hash = "[^"]+"' | sed -E 's/.*"([^"]+)"/\1/' | sort -u
             # What a build reaches (a lazy dependency named by a build script) can change
             # without a hash moving.
-            git ls-files 'build.zig' 'build/*' 'sdk/*.zig' 'plugins/*/build.zig' |
+            git ls-files 'build.zig' 'build/*' 'sdk/*.zig' 'plugins/*/build.zig' 'scripts/store-plugin-repos.sh' |
               xargs sha256sum | sha256sum
           } > "$RUNNER_TEMP/$MANIFEST"
           cat "$RUNNER_TEMP/$MANIFEST"
@@ -87,6 +124,53 @@ jobs:
           (cd sdk && bash ../scripts/ci-retry.sh zig build --fetch)
           bash scripts/ci-retry.sh zig build check check-web
           bash scripts/ci-retry.sh zig build test-integration
+
+      # What a session sourced from a plugin repo builds from. A plugin whose fetch fails (a repo
+      # that moved, a pin that is gone) is reported and left out; it must not keep the rest of
+      # the cache from being published.
+      - name: Fetch what plugin repos build from
+        if: steps.manifest.outputs.current != 'true'
+        shell: bash
+        env:
+          SDK_URL: ${{ steps.manifest.outputs.sdk_url }}
+        run: |
+          set -uo pipefail
+          export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-global"
+          export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-local"
+          # The package the proxy resets when a session fetches it by URL. `zig fetch` leaves a
+          # tarball in the cache that a build then unpacks with its top folder kept (a hash
+          # mismatch, docs/PITFALLS.md), so it only names the pin: the tarball goes, and a build
+          # fetches the package itself.
+          if [ -n "$SDK_URL" ]; then
+            seed="$RUNNER_TEMP/sdk-seed"
+            mkdir -p "$seed"
+            (
+              cd "$seed" || exit 1
+              printf 'pub fn build(b: *@import("std").Build) void {\n    _ = b;\n}\n' > build.zig
+              printf '.{\n    .name = .seed,\n    .version = "0.0.0",\n    .fingerprint = 0x4487e3060c5bcba6,\n    .paths = .{ "build.zig", "build.zig.zon" },\n}\n' > build.zig.zon
+              bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig fetch --save=fizzy "$SDK_URL" || exit 1
+              hash="$(grep -o -E 'fizzy-[0-9][^"]*' build.zig.zon | head -n 1)"
+              rm -f "$ZIG_GLOBAL_CACHE_DIR/p/$hash.tar.gz"
+              bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --fetch
+            ) || exit 1
+          fi
+          for dir in plugins/*/; do
+            [ -f "$dir/build.zig.zon" ] || continue
+            (cd "$dir" && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --fetch) || exit 1
+          done
+          clones="$RUNNER_TEMP/store-plugins"
+          mkdir -p "$clones"
+          while read -r repo; do
+            dir="$clones/${repo//\//__}"
+            if ! git clone -q --depth 1 "https://github.com/$repo" "$dir"; then
+              echo "::warning::could not clone $repo"
+              continue
+            fi
+            while read -r zon; do
+              (cd "$(dirname "$zon")" && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --fetch) ||
+                echo "::warning::zig build --fetch failed in $zon"
+            done < <(find "$dir" -maxdepth 3 -name build.zig.zon -not -path '*/.git/*')
+          done < "$RUNNER_TEMP/store-plugins.txt"
 
       - name: Pack and publish
         if: steps.manifest.outputs.current != 'true'

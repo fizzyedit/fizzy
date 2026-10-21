@@ -3,8 +3,8 @@
 //! Pure data and a vtable: no dvui, no SDL, nothing that allocates on its own, so it compiles for
 //! every target including wasm32 and can be built into a test without a window. Event queueing
 //! and normalisation is `EventQueue`; `Sim` is a platform in memory, for tests. Recording and
-//! replay (5), the conformance suite (6) and the SDL3 adapter (7) are built on this and live
-//! beside it later; none of those is here.
+//! replay (5) and the SDL3 adapter (7) are built on this and live
+//! beside it later; neither is here. The conformance suite (`conformance/`) is.
 //!
 //! The decisions that apply to everything, one line each (the reason is at the type):
 //!
@@ -44,6 +44,8 @@ pub const Sim = @import("Sim.zig");
 pub const EventQueue = @import("EventQueue.zig");
 pub const TouchSlots = @import("TouchSlots.zig");
 pub const geometry = @import("geometry.zig");
+/// What every platform must do, written once; `zig build conformance` runs it on a real one.
+pub const conformance = @import("conformance/root.zig");
 
 /// A platform that does nothing, for tests of the interface itself: one window, no events.
 const Stub = struct {

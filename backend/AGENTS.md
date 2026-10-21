@@ -30,6 +30,14 @@ how an app wires it).
   it works. `docs/MACOS_LIVE_RESIZE.md` and `docs/WINDOWS_LIVE_RESIZE.md` show how a resize
   was measured.
 
+- **`winsys/conformance/` is the contract for platforms.** One comptime-generic suite over a
+  driver type (`root.zig` lists what a driver declares); cases are tagged `.all`, `.needs_display`
+  or an OS, and a case whose injection hook the driver lacks is skipped. Every adapter must pass
+  `.all` before it is selectable. `Sim` runs it in `zig build test`; `zig build conformance`
+  (`-Dconformance-tag`, `-Dconformance-filter`, `-Dconformance-list`) is the binary a real
+  platform's driver is added to. A case asserts what the interface and `docs/window-notes/`
+  promise, never what Sim happens to do.
+
 ## macOS pitfalls
 
 The `.m` files in `src/platform/macos/` are built **without ARC**, under a frame loop that is Zig.

@@ -34,14 +34,14 @@ Builds on: <PRs/branches, or main>
 Branch: <area>/<slug>
 Files/area: <paths to start in>
 Gates: scripts/check-fmt.sh; scripts/zb build, scripts/zb build test, scripts/zb build test-integration, scripts/zb build check-web, scripts/zb build test-sdk-version (read "N/N steps succeeded")
-Rules: follow AGENTS.md, CONTRIBUTING.md, docs/STYLE.md and the AGENTS.md of each directory touched. One PR, <=800 lines outside tests/docs. PRs say "Part of fizzyedit/work#N". If the SDK fingerprint moves, record it and leave sdk_version alone.
+Rules: docs/AGENT_WORK.md (the shared worker contract). PRs say "Part of fizzyedit/work#N".
 Done: draft PR on first push; gates pass; PR body says what was run and how verified (test, tape, measurement).
 Notes: <only what code and plans don't say>
 ```
 
 Before assigning a worker, run `scripts/check-kickoff <file|issue-number>` (issue numbers
 are read from `fizzyedit/work` through `gh`). It reports every missing or empty template
-field, bodies over 1,600 characters, invalid branch names, `scripts/zb zig build` in Gates,
+field, bodies over 1,600 characters, invalid branch names, a `zig` command wrapped in `scripts/zb` in Gates,
 and Rules without a `fizzyedit/work#N` reference. It accepts the template above and GitHub
 issue-form `### Field` headings. The template is the source of the required field list.
 Run `python3 scripts/test-check-kickoff.py` for the validator tests.
@@ -57,7 +57,45 @@ Run `python3 scripts/test-check-kickoff.py` for the validator tests.
 - The workflow reads labels and events only. It never checks out code, uses no secrets, calls
   no model, and never puts issue text in a shell.
 
-## Worker rules
+## Shared worker contract
+
+Every adapter (cloud kickoff, Codex/agy/Jules wrapper, workflow or runner) points the worker
+at this file. Adapters carry task data and invoke the helpers; they do not copy these rules.
+An explicit run restriction, such as an edit-only sandbox, still applies: its trusted harness
+runs the publishing helper after collecting the edits.
+
+1. Run `scripts/agent-prepare <area>/<slug>` from the source checkout. It creates a sibling
+   jj workspace at `main@origin`, or a git worktree at `origin/main` when jj is unavailable,
+   and prints the absolute rules path. Read that file and work in its checkout. Existing
+   destinations and invalid branch names fail rather than reusing another worker's work.
+   It also refuses a temp-like destination (`/tmp`, `/private/tmp`, `/var/tmp`, a scratchpad),
+   which the OS clears, and fetches `origin` first so the checkout starts at current `main`;
+   `AGENT_PREPARE_ALLOW_TMP=1` lifts the temp refusal for tests only.
+   On Linux without Zig it runs `scripts/cloud-setup.sh`; later shells may need
+   `$HOME/.local/bin` added to `PATH` as setup reports.
+2. Read `AGENTS.md`, `CONTRIBUTING.md`, `docs/STYLE.md` and each touched directory's
+   `AGENTS.md`. Follow the issue's scope. Keep one PR and at most 800 changed lines outside
+   tests and docs. Record a moved SDK fingerprint; leave `sdk_version` alone.
+3. Verify with `scripts/check-fmt.sh`, `scripts/zb build`, `scripts/zb build test`,
+   `scripts/zb build test-integration`, `scripts/zb build check-web` and
+   `scripts/zb build test-sdk-version`, plus the issue's gates. Let the build lock wait.
+   Read each Build Summary: only `N/N steps succeeded` is a pass. Never launch a window
+   unless the run explicitly authorizes it.
+4. After the first push, run `scripts/agent-finish --claim <issue>` (a number or
+   `fizzyedit/work#N`): it pushes the branch and opens the draft PR saying
+   `Part of fizzyedit/work#N` with "gates not run yet", so the claim is visible early.
+5. When the work is done run `scripts/agent-finish <issue>` in the worker checkout. It checks
+   formatting and the build gates, records the current change (keeping your description; it
+   only fills in an empty one), pushes, and updates the PR body, creating the draft if the
+   claim step was skipped. The body always includes `Part of fizzyedit/work#N`, the diff stat
+   and the last 50 lines of each gate's output, even if the worker supplied no final message.
+   Additional gate evidence and explanations belong in the PR before review.
+
+Both helpers exit non-zero and print a one-line reason on failure. A failed prepare can leave
+its workspace for inspection; a failed finish can leave a published branch if GitHub refused
+PR creation. Fix the reported problem and retry finish. Neither helper merges or marks ready.
+
+## Review
 
 - Draft PR on the first push; take it to ready only when the gates pass and CI is green.
 - A different worker than the author reviews the PR.
@@ -73,3 +111,92 @@ commits pushed after the PR left draft or first went red, whichever was first; r
 `<review comments>c/<review threads>t`; CI reds are failed or timed-out check runs across every commit of the
 head's history. `agent-record --all <YYYY-MM-DD>` backfills merged PRs since then. `python3
 scripts/test-agent-record.py` checks it against saved `gh` JSON.
+
+## Self-hosted runner
+
+On a dedicated Ubuntu 24.04 or newer machine with systemd (x86_64 or aarch64), run the
+bootstrap from a trusted checkout. It creates the non-sudo `fizzy-worker` account, installs
+Zig at the version in `scripts/cloud-setup.sh`, jj, gh, git, zstd and Linux build/test libraries,
+restores the published Zig dependencies, and registers an Actions runner with the `fizzy`
+label. It installs the runner's systemd service as `fizzy-worker`, plus a daily cleanup timer.
+macOS and Windows provisioning are separate follow-up work.
+
+```sh
+# Preview on any machine: no root, token, downloads or system changes needed.
+scripts/runner-setup.sh --dry-run
+
+# Read a short-lived registration token from GitHub's Settings > Actions > Runners.
+# The token enters neither shell history nor command arguments.
+read -rs -p 'Runner registration token: ' RUNNER_TOKEN; echo
+export RUNNER_TOKEN
+sudo --preserve-env=RUNNER_TOKEN bash scripts/runner-setup.sh
+unset RUNNER_TOKEN
+```
+
+**Private repositories only. Never register this runner on a public repository, and never let it
+run fork PRs:** a workflow there would execute a stranger's code as `fizzy-worker`. `RUNNER_URL`
+defaults to the private `https://github.com/fizzyedit/work` and must be a
+`https://github.com/<owner>/<repo>` URL. The script confirms it is private with
+`gh api repos/<owner>/<repo> --jq .private` and refuses otherwise, including when `gh` is missing
+or not logged in; after checking by hand, `FIZZY_RUNNER_ALLOW_UNCHECKED=1` skips the check.
+`RUNNER_NAME` defaults to the hostname and
+`RUNNER_LABELS` to `fizzy` (comma-separated additional labels). Preserve these variables through
+sudo when overriding them. The registration token is passed to `config.sh` through
+`ACTIONS_RUNNER_INPUT_TOKEN`; it is never written by the bootstrap. The runner stores its own
+service credentials in `/home/fizzy-worker/actions-runner`, outside the checkout.
+
+The runner's `.env` sets `FIZZY_BUILD_SLOTS` (default 2) and `FIZZY_BUILD_MAX_LOAD` (default
+the CPU count) for every job, so `scripts/zb` bounds concurrent builds on the box; override either in
+the environment when running the bootstrap, through sudo like the others.
+
+Reruns preserve an existing registration and service identity; they refresh tools, dependencies
+and cleanup units. Stop jobs and builds before rerunning. `ZIG_VERSION`, `JJ_VERSION` and
+`RUNNER_VERSION` can pin versions (without a leading `v`); jj and an unconfigured runner default
+to GitHub's latest releases. `DEPS_CACHE_URL` can select another trusted cache archive. The jj, runner and deps-cache
+downloads are not checksummed (the box is trusted), and `latest` is resolved when the script runs,
+so two runs can install different versions; pin the versions for a reproducible box. Keep
+both scripts beside `cloud-setup.sh` when copying the bootstrap to the box. A live installation
+requires a maintainer's machine and token; local dry-run and shellcheck checks do not prove
+registration or service startup.
+
+Use this only for trusted workflows: jobs execute with the worker account's access. The account
+has no sudo or container-admin group membership. Runner installation does not provide a model
+API credential or a GitHub push token. Configure any worker harness separately, keeping its
+push credentials outside the model's reach as described under Trust boundary above.
+
+The runner uses `/home/fizzy-worker/actions-runner/_work`. Put additional jj workspaces in
+`/home/fizzy-worker/workspaces`; keep their shared repo outside any disposable workspace.
+Cleanup runs as `fizzy-worker`, retains the global `~/.cache/zig/p` archive cache, and removes
+untracked `.zig-cache`, `zig-out` and `zig-pkg` trees in these two roots, including runaway
+`zig-pkg/.tmp-*` trees. A successful jj or git tracked-file query is required before deleting
+a cache. Any live Zig, ZLS or Actions job process vetoes the whole sweep; inspection failures
+also retain the data. Builds started manually should be stopped before manual cleanup.
+
+Deleting a whole workspace is opt-in. As `fizzy-worker`, enroll a disposable workspace with a
+file named `<workspace-name>.pr` containing only its PR URL:
+
+```sh
+mkdir -p ~/.config/fizzy/workspaces
+printf '%s\n' 'https://github.com/fizzyedit/fizzy/pull/123' > ~/.config/fizzy/workspaces/ci-example.pr
+# This authorizes removing ~/workspaces/ci-example after that PR merges.
+/usr/local/sbin/fizzy-runner-clean --dry-run
+```
+
+Enrollment authorizes deleting the clean merged checkout, including its tracked source and
+ignored files. Keep valuable ignored files elsewhere. The cleaner checks GitHub reports
+`MERGED`, and that a clean standalone git clone's HEAD, or an empty jj workspace's parent,
+matches the PR head commit. Linked jj workspaces are forgotten before removal; the shared
+repo is retained. Standalone jj repositories and git worktrees are retained. Dirty, divergent,
+unregistered and unsupported workspaces are retained. Failed GitHub lookups retain workspaces;
+authenticate gh separately as `fizzy-worker` if private PRs need checking. The runner registration
+token is not a gh API token.
+
+```sh
+systemctl status fizzy-runner-clean.timer
+journalctl -u fizzy-runner-clean.service
+sudo -u fizzy-worker -H /usr/local/sbin/fizzy-runner-clean --dry-run
+```
+
+Each removal logs its estimated freed KiB and the sweep logs a total. The timer skips active
+jobs rather than stopping them; the next daily sweep retries. It never sweeps unrelated users'
+projects or deletes unregistered workspace directories.
