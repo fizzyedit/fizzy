@@ -206,7 +206,7 @@ const fizzyImports = (target) => ({
         const sha256 = shaLen ? str(shaPtr, shaLen) : "";
         loadPlugin(req, url, id, sha256).then(render).catch((err) => {
             console.error("fizzy: plugin load failed:", url, err);
-            inst.exports.FizzyWebPluginFailed(req);
+            reportPluginFailed(inst, req, err);
             render();
         });
     },
@@ -459,18 +459,63 @@ function readDylinkNeeds(module) {
     return needs;
 }
 
+// fetchPluginBytes and reportPluginFailed have a matching copy in web/index.html; change both.
 async function fetchPluginBytes(url) {
+  // Each fetch (the body included) gets a deadline: a request the network swallows would
+  // otherwise leave the store's row on "Updating..." for good, with nothing to say why.
+  const timeoutMs = 30000;
+  const attempt = async (target) => {
     try {
-        const direct = await fetch(url, { cache: "no-store" });
-        if (direct.ok) return await direct.arrayBuffer();
-        if (direct.status === 404) throw new Error("not found: " + url);
+      return await fetch(target, { cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
     } catch (err) {
-        if (String(err).includes("not found")) throw err;
+      if (err && err.name === "TimeoutError") throw new Error("timed out after " + timeoutMs / 1000 + " s");
+      throw err;
     }
-    if (!pluginFingerprint) throw new Error("cannot reach " + url + " and no catalog shard to ask the proxy for");
-    const viaProxy = await fetch(pluginProxy + pluginFingerprint + "/" + encodeURIComponent(url), { cache: "no-store" });
-    if (!viaProxy.ok) throw new Error("could not fetch " + url + " (proxy said " + viaProxy.status + ")");
-    return await viaProxy.arrayBuffer();
+  };
+  // The bytes of a response whose headers arrived: the body is under the same deadline. Worst case before a failure shows is three asks (direct, proxy, proxy again), 90 s.
+  const body = async (response) => {
+    try {
+      return await response.arrayBuffer();
+    } catch (err) {
+      if (err && err.name === "TimeoutError") throw new Error("timed out after " + timeoutMs / 1000 + " s");
+      throw err;
+    }
+  };
+  let directWhy = "";
+  try {
+    const direct = await attempt(url);
+    if (direct.ok) return await body(direct);
+    // A real 404 is worth reporting as itself; anything else is worth a second try.
+    if (direct.status === 404) { console.error("fizzy: plugin not found (404):", url); throw new Error("not found (404)"); }
+    directWhy = "status " + direct.status;
+  } catch (err) {
+    if (String(err).includes("not found (404)")) throw err;
+    directWhy = String(err && err.message ? err.message : err);
+  }
+  if (!pluginFingerprint) throw new Error(directWhy + " (and no catalog shard to ask the proxy)");
+  // The proxy is asked twice: one dropped or stalled request should not cost the user the update.
+  let why = "";
+  for (let tries = 0; tries < 2; tries++) {
+    try {
+      const viaProxy = await attempt(pluginProxy + pluginFingerprint + "/" + encodeURIComponent(url));
+      if (viaProxy.ok) return await body(viaProxy);
+      why = "proxy said " + viaProxy.status;
+      // Another ask cannot change a refusal of this URL; only a server-side hiccup is retried.
+      if (viaProxy.status < 500 && viaProxy.status !== 408 && viaProxy.status !== 429) break;
+    } catch (err) {
+      why = String(err && err.message ? err.message : err);
+    }
+  }
+  throw new Error(why); // the cause alone: the store shows it in a narrow row, the URL is in the console
+}
+
+// Tell the host a load failed, and why: the store shows the text beside Retry. The text is
+// copied into the host's heap, and the host frees it.
+function reportPluginFailed(inst, req, err) {
+    const msg = new TextEncoder().encode(String(err && err.message ? err.message : err).slice(0, 300));
+    const ptr = msg.length ? inst.exports.FizzyWebPluginAlloc(msg.length, 1) : 0;
+    if (ptr) new Uint8Array(inst.exports.memory.buffer, ptr, msg.length).set(msg);
+    inst.exports.FizzyWebPluginFailed(req, ptr, ptr ? msg.length : 0);
 }
 
 async function sha256Hex(bytes) {
@@ -491,7 +536,7 @@ async function loadPlugin(req, url, id, sha256) {
         bytes = await fetchPluginBytes(new URL(url, env.baseURI).href);
         if (sha256) {
             const got = await sha256Hex(bytes);
-            if (got !== sha256.toLowerCase()) throw new Error("sha256 mismatch for " + id + ": expected " + sha256 + ", got " + got);
+            if (got !== sha256.toLowerCase()) { console.error("fizzy: sha256 mismatch for " + id + ": expected " + sha256 + ", got " + got); throw new Error("download did not match the published checksum"); }
         }
         if (keepablePluginUrl(url)) unkeptPluginBytes.set(url, bytes);
     }

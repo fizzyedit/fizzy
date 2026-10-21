@@ -110,7 +110,8 @@ const Job = struct {
     /// This job's download worker, as a cancelable `Io` task group rather than a detached
     /// `std.Thread`. The worker writes `err_buf`/`err_len`/`status` back into the `Job`, so the
     /// `Job` must not be freed while it is alive — and a detached thread gave `freeJob` no way to
-    /// know. Nothing in the download path sets a network timeout either, so a stalled or
+    /// know. Nothing in the native download path sets a network timeout (the web's fetches
+    /// have one, `web/index.html`'s `fetchPluginBytes`), so a stalled or
     /// blackholed release host keeps that worker running arbitrarily long: quitting mid-download
     /// left a live thread writing into freed memory. `Group.cancel` both interrupts the blocked
     /// syscall (the worker returns `error.Canceled`) *and* awaits the task, so `freeJob` is
@@ -874,6 +875,13 @@ pub const PendingUpdate = struct {
     /// The last attempt failed (the download, not the load — see `tick`). The row stays on the
     /// offer with its button back, labelled Retry.
     failed: bool = false,
+    /// Why the last web attempt failed, shown beside Retry (`webLoadFailed`); empty when unknown.
+    reason_buf: [160]u8 = undefined,
+    reason_len: usize = 0,
+
+    pub fn reason(self: *const PendingUpdate) []const u8 {
+        return self.reason_buf[0..self.reason_len];
+    }
 };
 
 var pending_updates: std.ArrayListUnmanaged(PendingUpdate) = .empty;
@@ -1014,12 +1022,17 @@ pub fn webLoadSucceeded(id: []const u8) void {
 /// It did not: the fetch failed, the module was refused, or the plugin it would have replaced
 /// has unsaved documents. The offer stays, wearing Retry — the running plugin was never torn
 /// down, so there is something to go back to.
-pub fn webLoadFailed(id: []const u8) void {
+pub fn webLoadFailed(id: []const u8, reason: []const u8) void {
     clearWebInFlight(id);
     removeId(&web_startup_waiting, id);
     if (pendingRowFor(id)) |row| {
         row.started = false;
         row.failed = true;
+        // Cut on a codepoint boundary, so a multi-byte character is never left half-drawn.
+        var n = @min(reason.len, row.reason_buf.len);
+        while (n > 0 and n < reason.len and (reason[n] & 0xC0) == 0x80) n -= 1;
+        row.reason_len = n;
+        @memcpy(row.reason_buf[0..row.reason_len], reason[0..row.reason_len]);
     }
     dvui.refresh(null, @src(), null);
 }
@@ -1037,6 +1050,7 @@ fn applyWebUpdate(id: []const u8, url: []const u8, sha256: []const u8) void {
     if (pendingRowFor(id)) |row| {
         row.started = true;
         row.failed = false;
+        row.reason_len = 0;
     }
     app.updateFromUrl(id, url, sha256) catch |err| {
         clearWebInFlight(id);
@@ -1064,6 +1078,7 @@ pub fn applyPendingUpdate(id: []const u8) void {
     });
     row.started = true;
     row.failed = false;
+    row.reason_len = 0;
 }
 
 /// One-line progress for `id` as the update window shows it, or null while the row still has an
@@ -1125,6 +1140,20 @@ fn drawUpdateCardControls(entry: StoreEntry) void {
         return;
     }
     const failed = if (pendingRowFor(entry.id)) |row| row.failed else false;
+    if (pendingRowFor(entry.id)) |row| if (row.failed and row.reason_len != 0) {
+        // Wrapped and capped, so a long reason grows the row downward and never pushes the
+        // Retry button out of the card.
+        var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+            .background = false,
+            .gravity_y = 0.5,
+            .max_size_content = .{ .w = 240, .h = std.math.floatMax(f32) },
+            .margin = dvui.Rect.all(0),
+            .color_text = .{ .color = theme.color(.window, .text).opacity(0.7) },
+            .font = dvui.Font.theme(.mono).larger(-1.0),
+        });
+        tl.addText(row.reason(), .{});
+        tl.deinit();
+    };
     if (dvui.button(@src(), if (failed) "Retry" else "Update", .{}, .{ .gravity_y = 0.5, .font = body.larger(-1.0) }))
         applyPendingUpdate(entry.id);
 }

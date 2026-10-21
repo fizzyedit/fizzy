@@ -1613,7 +1613,10 @@ pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8, sha256: [
 fn beginWebPluginLoad(editor: *Editor, id: []const u8, url: []const u8, sha256: []const u8, replace: bool) WebLoadError!void {
     // Two requests for one id before the first lands (the page's remembered list and a
     // `?plugin=` of the same id, say) would register it twice; the second one waits for nothing.
-    // The first one's `arrived` reports for both, so the store's spinner still ends.
+    // The first one's `arrived` reports for both, so the store's spinner still ends: every
+    // request ends in exactly one `arrived` (the page's fetches have a deadline, `index.html`'s
+    // `fetchPluginBytes`, and its `.catch` reports a failure), and `arrived` settles the store's
+    // row by id, so this early return cannot leave a row on "Updating…".
     if (web_loads_in_flight.contains(id)) return;
     const gpa = editor.app.gpa;
     try web_loads_in_flight.put(gpa, try gpa.dupe(u8, id), {});
@@ -1636,10 +1639,12 @@ const WebPluginRequest = struct {
         const editor = req.editor;
         const gpa = editor.app.gpa;
         var registered = false;
+        // What the update window shows beside Retry; each refusal below sets it.
+        var why: []const u8 = "the plugin did not load";
         defer {
             if (web_loads_in_flight.fetchRemove(req.id)) |kv| gpa.free(kv.key);
             if (!registered) {
-                PluginStore.webLoadFailed(req.id);
+                PluginStore.webLoadFailed(req.id, why);
                 _ = takeWebFileTypePrompt(gpa, req.id);
             }
             gpa.free(req.id);
@@ -1649,6 +1654,7 @@ const WebPluginRequest = struct {
         const lib = arrival.lib orelse {
             dvui.log.err("web plugin '{s}' ({s}): the page could not load it", .{ req.id, req.url });
             req.failed("the page could not fetch or link the plugin's module (offline, a changed download, or not a plugin)", null);
+            why = if (arrival.why.len != 0) arrival.why else "could not fetch or link the module";
             gpa.free(req.url);
             return;
         };
@@ -1658,6 +1664,7 @@ const WebPluginRequest = struct {
         const ready = PluginLoader.prepare(req.url, req.id, lib) catch |err| {
             dvui.log.err("web plugin '{s}' ({s}): refused: {s}", .{ req.id, req.url, @errorName(err) });
             req.failed(App.pluginLoadFailureReason(err), lib);
+            why = App.pluginLoadFailureReason(err);
             gpa.free(req.url);
             return;
         };
@@ -1669,6 +1676,7 @@ const WebPluginRequest = struct {
             // the user nothing.
             editor.unloadPlugin(req.id, .{}) catch |err| {
                 dvui.log.err("web plugin '{s}': cannot take over: {s}", .{ req.id, @errorName(err) });
+                why = "could not hand over from the running build (unsaved documents?)";
                 gpa.free(req.url);
                 return;
             };
@@ -1681,6 +1689,7 @@ const WebPluginRequest = struct {
         }) catch |err| {
             dvui.log.err("web plugin '{s}' ({s}): register failed: {s}", .{ req.id, req.url, @errorName(err) });
             req.failed(App.pluginLoadFailureReason(err), lib);
+            why = App.pluginLoadFailureReason(err);
             gpa.free(req.url);
             return;
         };

@@ -135,6 +135,9 @@ pub const Arrival = struct {
     req: u32,
     /// Null when the page could not load it (fetch failed, not a side module, missing entry).
     lib: ?WebDynLib,
+    /// Why the page could not load it, when it said (`lib` null): borrowed, valid only during the
+    /// callback.
+    why: []const u8 = "",
 };
 
 pub const ArrivedFn = *const fn (ctx: ?*anyopaque, arrival: Arrival) void;
@@ -144,6 +147,8 @@ const Pending = struct {
     cb: ArrivedFn,
     ctx: ?*anyopaque,
     result: ?Arrival = null,
+    /// The page's reason for a failure, owned until the callback has run.
+    why: ?[]u8 = null,
 };
 
 var pending: std.ArrayListUnmanaged(Pending) = .empty;
@@ -189,7 +194,10 @@ pub fn pump() void {
         const p = pending.items[i];
         if (p.result) |arrival| {
             _ = pending.orderedRemove(i);
-            p.cb(p.ctx, arrival);
+            defer if (p.why) |w| pending_gpa.?.free(w);
+            var delivered = arrival;
+            if (p.why) |w| delivered.why = w;
+            p.cb(p.ctx, delivered);
             continue;
         }
         i += 1;
@@ -220,10 +228,21 @@ export fn FizzyWebPluginReady(req: u32, list: [*]const u32, count: usize) void {
     }
 }
 
-export fn FizzyWebPluginFailed(req: u32) void {
+/// The page could not load request `req`. `why_ptr[0..why_len]` is its reason, allocated with
+/// `FizzyWebPluginAlloc` (null/0 for none); it is copied here and the page's block freed.
+export fn FizzyWebPluginFailed(req: u32, why_ptr: ?[*]u8, why_len: usize) void {
+    const gpa = pending_gpa;
+    const copy: ?[]u8 = if (gpa != null and why_ptr != null and why_len != 0) gpa.?.dupe(u8, why_ptr.?[0..why_len]) catch null else null;
+    if (gpa != null and why_ptr != null) gpa.?.rawFree(why_ptr.?[0..@max(why_len, 1)], .@"1", @returnAddress());
+    var taken = false;
     for (pending.items) |*p| {
-        if (p.req == req) p.result = .{ .req = req, .lib = null };
+        if (p.req == req) {
+            p.result = .{ .req = req, .lib = null };
+            if (!taken) p.why = copy;
+            taken = taken or copy != null;
+        }
     }
+    if (copy != null and !taken) gpa.?.free(copy.?);
 }
 
 // ---- the synchronous half: the desktop loader's sequence over table indices --------------------
