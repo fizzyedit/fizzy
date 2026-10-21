@@ -35,6 +35,9 @@ def fixtures():
         "repos_fizzyedit_fizzy_pulls_9": {"body": "Part of fizzyedit/work#14", "state": "open", "merged_at": None},
         "repos_fizzyedit_fizzy_pulls_10": {"body": "Part of fizzyedit/work#99", "state": "closed", "merged_at": "x"},
         "repos_fizzyedit_fizzy_pulls_11": {"body": "Part of fizzyedit/work#15", "state": "closed", "merged_at": "x"},
+        "repos_fizzyedit_fizzy_pulls_11_commits": [[]],
+        "repos_fizzyedit_fizzy_issues_11_timeline": [[]],
+        "repos_fizzyedit_fizzy_pulls_11_comments": [[]],
         "repos_fizzyedit_work_issues_15": {"labels": [{"name": "agent"}]},
         "repos_fizzyedit_work_issues_14": {"labels": [{"name": "agent"}, {"name": "running:codex"}]},
         "repos_fizzyedit_fizzy_pulls_7_commits": [[
@@ -50,7 +53,7 @@ def fixtures():
         "repos_fizzyedit_fizzy_pulls_7_comments": [[{"id": 1}, {"id": 2}, {"id": 3}]],
         "graphql": {"data": {"repository": {"pullRequest": {"reviewThreads": {
             "nodes": [{"id": "a"}, {"id": "b"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}},
-        "search_issues": [{"items": [{"number": 9}, {"number": 10}, {"number": 11}, {"number": 7}, {"number": 8}]}],
+        "search_issues": [{"items": [{"number": 9}, {"number": 10}, {"number": 11}, {"number": 12}, {"number": 7}, {"number": 8}]}],
     }
 
 
@@ -65,6 +68,7 @@ def main():
         (tmp / "bin").mkdir()
         for name, body in fixtures().items():
             (tmp / "fx" / f"{name}.json").write_text(json.dumps(body))
+        (tmp / "fx" / "repos_fizzyedit_fizzy_pulls_12.json").write_text("")  # gh printed nothing
         gh = tmp / "bin" / "gh"
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
@@ -85,16 +89,19 @@ def main():
         assert out.returncode != 0 and "Part of" in out.stderr, out
 
         log.unlink()
-        # 9 is still open, 10's work issue is a 404, 11 has no running label: each is skipped, 7 still lands.
+        # 9 is still open, 10's work issue is a 404, 12 gets empty output: each is skipped.
+        # 11 has no running label: recorded as unknown, with a warning. 7 still lands.
+        unknown = "#11 | unknown | 0 | 0c/2t | 0"
         out = run(["--all", "2026-10-01"], env)
-        assert out.returncode == 0 and out.stdout.strip() == want and log.read_text() == want + "\n", out
-        for n in ("PR 9 skipped", "PR 10 skipped", "PR 11 skipped"):
+        assert out.returncode == 0 and out.stdout.split("\n")[:-1] == [unknown, want], out
+        assert log.read_text() == unknown + "\n" + want + "\n", out
+        for n in ("PR 9 skipped", "PR 10 skipped", "PR 12 skipped", "PR 11: "):
             assert n in out.stderr, out.stderr
 
-        for n in ("9", "10", "11"):
+        for n in ("9", "10", "12"):
             out = run([n], env)
             assert out.returncode != 0 and "skipped" in out.stderr, out
-        assert log.read_text() == want + "\n", "a skipped PR was recorded"
+        assert log.read_text() == unknown + "\n" + want + "\n", "a skipped PR was recorded"
 
         assert run([], env).returncode != 0
     print("ok")

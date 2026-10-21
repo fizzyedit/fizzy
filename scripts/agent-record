@@ -35,7 +35,9 @@ def gh(*args):
     out = subprocess.run(["gh", *args], capture_output=True, text=True)
     if out.returncode != 0:
         raise Skip(f"gh {' '.join(args)} failed: {out.stderr.strip()}")
-    return json.loads(out.stdout) if out.stdout.strip() else None
+    if not out.stdout.strip():
+        raise Skip(f"gh {' '.join(args)} printed nothing")
+    return json.loads(out.stdout)
 
 
 def pages(path, *extra):
@@ -74,7 +76,7 @@ def measure(pr):
     issue = gh("api", f"repos/{WORK}/issues/{ref[1]}")
     workers = sorted(l["name"][len("running:"):] for l in issue["labels"] if l["name"].startswith("running:"))
     if not workers:
-        raise Skip(f"{WORK}#{ref[1]} has no running:* label, so no worker to credit")
+        print(f"agent-record: PR {pr}: {WORK}#{ref[1]} has no running:* label, worker recorded as unknown", file=sys.stderr)
 
     commits = pages(f"repos/{REPO}/pulls/{pr}/commits")
     reds = {}
@@ -94,7 +96,7 @@ def measure(pr):
 
     comments = len(pages(f"repos/{REPO}/pulls/{pr}/comments"))
     findings = f"{comments}c/{threads(pr)}t"
-    return f"#{pr} | {'+'.join(workers)} | {rounds} | {findings} | {len(reds)}"
+    return f"#{pr} | {'+'.join(workers) or 'unknown'} | {rounds} | {findings} | {len(reds)}"
 
 
 def recorded(path):
