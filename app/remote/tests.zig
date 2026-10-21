@@ -519,3 +519,20 @@ test "a flood of motion keeps the last, and a release survives a full queue" {
     try std.testing.expect(!v.input.items[2].key.down);
     try std.testing.expectEqual(@as(u32, 100), v.width);
 }
+
+test "queued text is bounded in bytes, and a connection holds a bounded number of views" {
+    var h: Harness = undefined;
+    try h.init();
+    defer h.deinit();
+    const v = try h.openView(1, 100, 100);
+    v.focused = true;
+    const chunk = RemoteViewHost.max_text_bytes / 2 + 1;
+    for (0..3) |_| try v.queue(.{ .text = try std.testing.allocator.alloc(u8, chunk) });
+    // The second would pass the cap, so only the first waits.
+    try std.testing.expectEqual(@as(usize, 1), v.input.items.len);
+    try std.testing.expectEqual(chunk, v.text_bytes);
+
+    for (2..Session.max_views + 3) |i| try h.client.send(.{ .create_view = .{ .view = @intCast(i), .width = 10, .height = 10 } });
+    try h.step();
+    try std.testing.expectEqual(@as(usize, Session.max_views), h.session.views.count());
+}

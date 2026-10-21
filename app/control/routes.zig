@@ -140,8 +140,9 @@ fn upgradeRemote(server: *Server, state: *State, host: *sdk.Host, req: *Server.R
         .tiers_offered = .{ .draw_list = true },
         .mode = .standalone,
     });
-    state.remote.?.accept(host, link) catch {
+    state.remote.?.accept(host, link) catch |err| {
         server.gpa.destroy(link);
+        if (err == error.TooManySessions) return req.answer(server, .service_unavailable, "application/json", "{\"error\":\"too many remote clients\"}");
         return req.answer(server, .internal_server_error, "application/json", oom);
     };
     req.answerUpgrade(server, link);

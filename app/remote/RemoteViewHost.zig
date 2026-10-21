@@ -26,9 +26,12 @@ pub const Input = union(enum) {
     text: []u8,
 };
 
-/// A client sending faster than frames run loses motion past this, and everything past twice it,
-/// rather than grow without end.
+/// A client sending faster than frames run loses motion past this, and everything past twice it
+/// (and text past `max_text_bytes`), rather than grow without end.
 pub const max_queued = 1024;
+
+/// The most text that may wait for a frame, in bytes; past it, text is dropped.
+pub const max_text_bytes = 1024 * 1024;
 
 gpa: std.mem.Allocator,
 session: *Session,
@@ -53,6 +56,8 @@ close_asked: bool = false,
 wanted: u64 = 0,
 answered: u64 = 0,
 input: std.ArrayListUnmanaged(Input) = .empty,
+/// The bytes of the `text` items in `input`.
+text_bytes: usize = 0,
 
 pub fn create(gpa: std.mem.Allocator, session: *Session, cv: message.CreateView) error{OutOfMemory}!*RemoteViewHost {
     const self = try gpa.create(RemoteViewHost);
@@ -148,11 +153,14 @@ pub fn queue(self: *RemoteViewHost, item: Input) error{OutOfMemory}!void {
         }
         if (last >= max_queued) return;
     }
-    if (self.input.items.len >= 2 * max_queued) {
+    if (self.input.items.len >= 2 * max_queued or
+        (item == .text and self.text_bytes + item.text.len > max_text_bytes))
+    {
         if (item == .text) self.gpa.free(item.text);
         return;
     }
     try self.input.append(self.gpa, item);
+    if (item == .text) self.text_bytes += item.text.len;
 }
 
 /// Hand what is waiting to `win` as dvui events, at this view's place in the frame, before the
@@ -187,4 +195,5 @@ pub fn inject(self: *RemoteViewHost, win: *dvui.Window) error{OutOfMemory}!void 
 fn clearInput(self: *RemoteViewHost) void {
     for (self.input.items) |item| if (item == .text) self.gpa.free(item.text);
     self.input.clearRetainingCapacity();
+    self.text_bytes = 0;
 }

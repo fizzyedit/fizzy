@@ -5,6 +5,14 @@
 const std = @import("std");
 const remote = @import("remote");
 const Link = @import("../control/Link.zig");
+
+/// The most views one connection may hold open.
+pub const max_views = 64;
+
+comptime {
+    // A link must hold a whole protocol frame (`Link.max_backlog`).
+    std.debug.assert(Link.max_backlog >= remote.codec.default_max_frame);
+}
 const RemoteViewHost = @import("RemoteViewHost.zig");
 const encoder = @import("encoder.zig");
 
@@ -150,6 +158,17 @@ fn createView(self: *Session, cv: message.CreateView) error{OutOfMemory}!void {
     }
     if (cv.width == 0 or cv.height == 0) {
         self.refuse(cv.view, .create_failed, "a view has a size");
+        return;
+    }
+    if (self.views.contains(cv.view)) {
+        // The protocol layer already ends a stream that does this; this only guards the map.
+        // Not `refuse`: its `view_closed` would make the client forget the view that is open.
+        self.say(.{ .bye = .{ .reason = .protocol_error, .text = "that view id is already open" } });
+        self.dead = true;
+        return;
+    }
+    if (self.views.count() >= max_views) {
+        self.refuse(cv.view, .create_failed, "too many views");
         return;
     }
     const v = try RemoteViewHost.create(self.gpa, self, cv);

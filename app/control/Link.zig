@@ -9,9 +9,11 @@ const Io = std.Io;
 
 const Link = @This();
 
-/// The most that may wait to be sent: a peer that reads slower than the app writes is cut off
-/// rather than buffered without end.
-pub const max_backlog = 8 * 1024 * 1024;
+/// The most that may wait on either side: a peer that reads slower than the app writes, or sends
+/// faster than the app takes, is cut off rather than buffered without end. It must hold a whole
+/// frame of the remote-view protocol (32 MiB) with room for the traffic behind it; this file is
+/// std-only, so `remote/Session.zig` asserts that at comptime.
+pub const max_backlog = 64 * 1024 * 1024;
 
 gpa: std.mem.Allocator,
 io: Io,
@@ -141,4 +143,24 @@ test "bytes cross in both directions, and a link too far behind is closed" {
     try link.send("z");
     try std.testing.expect(link.closing.load(.acquire));
     link.outbox.clearRetainingCapacity();
+}
+
+test "a frame between 8 and 32 MiB crosses in both directions" {
+    const gpa = std.testing.allocator;
+    var link: Link = .init(gpa, std.testing.io, noWake);
+    defer link.deinit();
+    const frame = try gpa.alloc(u8, 20 * 1024 * 1024);
+    defer gpa.free(frame);
+    @memset(frame, 7);
+    try link.push(frame);
+    var got: std.ArrayListUnmanaged(u8) = .empty;
+    defer got.deinit(gpa);
+    try link.take(&got);
+    try std.testing.expectEqual(frame.len, got.items.len);
+
+    try link.send(frame);
+    try std.testing.expect(!link.closing.load(.acquire));
+    const out = (try link.drain()).?;
+    defer gpa.free(out);
+    try std.testing.expectEqual(frame.len, out.len);
 }

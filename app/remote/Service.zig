@@ -21,6 +21,9 @@ const Service = @This();
 /// The `Upgrade` token of `GET /remote`, with the protocol's major version.
 pub const upgrade_token = "fizzy-remote-view/1";
 
+/// The most connections at once: each may hold `Link.max_backlog` in either direction.
+pub const max_sessions = 8;
+
 gpa: std.mem.Allocator,
 /// What fizzy says first to each client.
 hello: remote.message.Hello,
@@ -48,7 +51,8 @@ pub fn deinit(self: *Service, host: *sdk.Host) void {
 
 /// Take a connection the control server upgraded. The link is the service's from here: it frees it
 /// once the connection's tasks are done with it.
-pub fn accept(self: *Service, host: *sdk.Host, link: *Link) error{OutOfMemory}!void {
+pub fn accept(self: *Service, host: *sdk.Host, link: *Link) error{ OutOfMemory, TooManySessions }!void {
+    if (self.sessions.items.len >= max_sessions) return error.TooManySessions;
     try self.ensureCommand(host);
     // The link is the caller's until this succeeds: nothing after the session fails.
     try self.sessions.ensureUnusedCapacity(self.gpa, 1);
