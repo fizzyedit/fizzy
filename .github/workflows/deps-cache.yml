@@ -137,8 +137,23 @@ jobs:
           set -uo pipefail
           export ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zig-global"
           export ZIG_LOCAL_CACHE_DIR="$RUNNER_TEMP/zig-local"
-          # The package the proxy resets when a session fetches it by URL.
-          if [ -n "$SDK_URL" ]; then bash scripts/ci-retry.sh zig fetch "$SDK_URL" || exit 1; fi
+          # The package the proxy resets when a session fetches it by URL. `zig fetch` leaves a
+          # tarball in the cache that a build then unpacks with its top folder kept (a hash
+          # mismatch, docs/PITFALLS.md), so it only names the pin: the tarball goes, and a build
+          # fetches the package itself.
+          if [ -n "$SDK_URL" ]; then
+            seed="$RUNNER_TEMP/sdk-seed"
+            mkdir -p "$seed"
+            (
+              cd "$seed" || exit 1
+              printf 'pub fn build(b: *@import("std").Build) void {\n    _ = b;\n}\n' > build.zig
+              printf '.{\n    .name = .seed,\n    .version = "0.0.0",\n    .fingerprint = 0x4487e3060c5bcba6,\n    .paths = .{ "build.zig", "build.zig.zon" },\n}\n' > build.zig.zon
+              bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig fetch --save=fizzy "$SDK_URL" || exit 1
+              hash="$(grep -o -E 'fizzy-[0-9][^"]*' build.zig.zon | head -n 1)"
+              rm -f "$ZIG_GLOBAL_CACHE_DIR/p/$hash.tar.gz"
+              bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --fetch
+            ) || exit 1
+          fi
           for dir in plugins/*/; do
             [ -f "$dir/build.zig.zon" ] || continue
             (cd "$dir" && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --fetch) || exit 1
