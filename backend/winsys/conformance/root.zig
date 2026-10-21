@@ -32,6 +32,24 @@ pub const SimDriver = @import("SimDriver.zig");
 /// Where a case applies. `all` is the bar every adapter must clear.
 pub const Tag = enum { all, needs_display, macos, windows, linux };
 
+/// What a case may fail with: the platform's errors, `std.testing`'s, and the named ones a case
+/// raises when an event it waits for never arrives.
+pub const Error = Platform.Error || error{
+    HookMissing,
+    WindowHasNoDisplay,
+    NoResizedEvent,
+    NoComposition,
+    NoClear,
+    NoText,
+    EmptyClipboard,
+    NoClipboardEvent,
+    NoEnter,
+    NoMove,
+    NoDrop,
+    TestUnexpectedResult,
+    TestExpectedEqual,
+};
+
 pub const Outcome = enum { passed, failed, skipped };
 
 pub const Result = struct {
@@ -69,7 +87,7 @@ pub fn Case(comptime Driver: type) type {
         /// The hooks it uses; `available` is whether the driver has them all.
         needs: []const hooks.Hook = &.{},
         available: bool = true,
-        run: *const fn (*Driver, std.mem.Allocator) anyerror!void,
+        run: *const fn (*Driver, std.mem.Allocator) Error!void,
     };
 }
 

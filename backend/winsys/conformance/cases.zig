@@ -305,13 +305,13 @@ fn Outside(comptime D: type) type {
     };
 }
 
-fn gate(comptime D: type, comptime Group: type, comptime needs: []const root.hooks.Hook, comptime name: []const u8) *const fn (*D, std.mem.Allocator) anyerror!void {
+fn gate(comptime D: type, comptime Group: type, comptime needs: []const root.hooks.Hook, comptime name: []const u8) *const fn (*D, std.mem.Allocator) root.Error!void {
     return if (comptime hasAll(D, needs)) &@field(Group, name) else unavailable(D);
 }
 
-fn unavailable(comptime D: type) *const fn (*D, std.mem.Allocator) anyerror!void {
+fn unavailable(comptime D: type) *const fn (*D, std.mem.Allocator) root.Error!void {
     return struct {
-        fn run(_: *D, _: std.mem.Allocator) anyerror!void {
+        fn run(_: *D, _: std.mem.Allocator) root.Error!void {
             return error.HookMissing;
         }
     }.run;
