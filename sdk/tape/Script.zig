@@ -185,6 +185,8 @@ pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
 pub const reading_ms_per_word: u32 = 300;
 /// The least a caption shows for at 1x, however short: long enough to find and take in.
 pub const reading_min_ms: u32 = 2000;
+/// The most a caption shows for at 1x, however long: past this a caption should be split.
+pub const reading_max_ms: u32 = 12_000;
 
 /// The words in `text`: runs of non-whitespace.
 pub fn wordCount(text: []const u8) usize {
@@ -195,11 +197,11 @@ pub fn wordCount(text: []const u8) usize {
 }
 
 /// How long a caption shows for at 1x: `reading_ms_per_word` for each word of its title and text,
-/// never under `reading_min_ms`. Playback speed divides it (`Sequencer.wallMs`), so the caption
-/// and the demo around it speed up together.
+/// between `reading_min_ms` and `reading_max_ms`. It is demo time, so playback speed (which
+/// advances demo time faster) shortens the caption and the demo around it together.
 pub fn readingMs(title: []const u8, text: []const u8) u32 {
     const words: u32 = @intCast(wordCount(title) + wordCount(text));
-    return @max(reading_min_ms, words * reading_ms_per_word);
+    return std.math.clamp(words * reading_ms_per_word, reading_min_ms, reading_max_ms);
 }
 
 /// Nothing for a while.
@@ -499,4 +501,6 @@ test "a caption shows for a time per word, never under the floor" {
     try testing.expectEqual(@as(u32, 2100), readingMs("", "a b c d e f g"));
     // Title and text both count, and a long caption is not cut short.
     try testing.expectEqual(@as(u32, 300 * 30), readingMs("one two three four five", "a b c d e f g h i j k l m n o p q r s t u v w x y"));
+    // Past the ceiling a caption stops growing.
+    try testing.expectEqual(reading_max_ms, readingMs("", "w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w w"));
 }

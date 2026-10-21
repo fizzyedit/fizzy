@@ -49,7 +49,7 @@ pressed: u8 = 0,
 /// a carried glide then takes a frame per step of its path (`path_step_ms`).
 replaying: bool = false,
 /// Demo time per wall time while a tape plays live: a plain value in `min_speed`...`max_speed`
-/// (`setSpeed`). Only `playUntil` and `wallMs` read it, so a seek, which replays to a demo time,
+/// (`setSpeed`). Only `playUntil` reads it, so a seek, which replays to a demo time,
 /// lands exactly at any speed.
 speed: f32 = default_speed,
 
@@ -182,11 +182,6 @@ pub fn stepSpeed(self: *Sequencer) void {
 /// The demo time `wall_ms` of live playing reaches: what to ask `advance` for.
 pub fn playUntil(self: Sequencer, wall_ms: f64) f64 {
     return self.now + wall_ms * self.speed;
-}
-
-/// How long `demo_ms` of demo time (a caption's `ms`, say) lasts on the wall clock.
-pub fn wallMs(self: Sequencer, demo_ms: f64) f64 {
-    return demo_ms / self.speed;
 }
 
 /// Every op has been applied and nothing is in flight.
@@ -956,14 +951,12 @@ test "speed is clamped, steps through its notches and divides demo time" {
     seq.setSpeed(40);
     try testing.expectEqual(max_speed, seq.speed);
 
-    // Every notch: a frame of wall time reaches `speed` times as much demo time, and a caption
-    // of 2 s is up for 2 s / speed of the wall clock.
+    // Every notch: a frame of wall time reaches `speed` times as much demo time.
     for (speeds) |sp| {
         seq.setSpeed(sp);
         try testing.expectEqual(sp, seq.speed);
         seq.now = 100;
         try testing.expectEqual(100 + 16 * @as(f64, sp), seq.playUntil(16));
-        try testing.expectEqual(2000 / @as(f64, sp), seq.wallMs(2000));
     }
 
     // The transport steps through them in order and wraps to the slowest.
