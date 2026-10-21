@@ -174,7 +174,7 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const end = tree.tokenLocation(0, tree.lastToken(node)).line + 1;
         const length = end - line + 1;
         if (length > 150 and !silenced(suppressions.items, .@"fn-length", line)) {
-            try findings.append(allocator, .{ .rule = .@"fn-length", .line = line, .message = try std.fmt.allocPrint(allocator, "function {s} is {d} lines (limit 150)", .{ name, length }) });
+            try findings.append(allocator, .{ .rule = .@"fn-length", .line = line, .message = try allocator.print("function {s} is {d} lines (limit 150)", .{ name, length }) });
         }
     }
     if (create_line != null and !has_destroy) try findings.append(allocator, .{
@@ -206,7 +206,7 @@ fn fileAlias(allocator: std.mem.Allocator, source: [:0]const u8, stem: []const u
         try findings.append(allocator, .{
             .rule = .@"file-alias",
             .line = tree.tokenLocation(0, decl.ast.mut_token).line + 1,
-            .message = try std.fmt.allocPrint(allocator, "@This() alias is {s}; name it for the file ({s})", .{ name, stem }),
+            .message = try allocator.print("@This() alias is {s}; name it for the file ({s})", .{ name, stem }),
         });
     }
     return findings.toOwnedSlice(allocator);
@@ -274,10 +274,10 @@ test "function length includes declaration and closing brace at 150 and 151" {
     for ([_]usize{ 150, 151 }) |length| {
         const blanks = try a.alloc(u8, length - 2);
         @memset(blanks, '\n');
-        const source = try std.fmt.allocPrintSentinel(a, "fn long() void {{\n{s}}}", .{blanks}, 0);
+        const source = try a.printSentinel("fn long() void {{\n{s}}}", .{blanks}, 0);
         const findings = try analyze(a, source);
         try std.testing.expectEqual(@as(usize, if (length > 150) 1 else 0), findings.len);
-        const allowed = try std.fmt.allocPrintSentinel(a, "// lint-allow(fn-length): generated fixture\n{s}", .{source}, 0);
+        const allowed = try a.printSentinel("// lint-allow(fn-length): generated fixture\n{s}", .{source}, 0);
         try std.testing.expectEqual(@as(usize, 0), (try analyze(a, allowed)).len);
     }
 }
