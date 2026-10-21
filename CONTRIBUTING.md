@@ -153,6 +153,9 @@ turns.
   (`pip install ziglang`) and unpacks that cache into `~/.cache/zig/p`. The environment's setup
   script is the one line `curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash`.
   A dependency bump reaches cloud sessions when the workflow has run on the merge.
+  The same asset holds the current `fizzy-sdk` package and the dependencies of each store plugin
+  (`scripts/store-plugin-repos.sh`), so a session sourced from a plugin repo builds too: run the
+  line with `PLUGIN_REPO=1` and it checks that repo's `zig build --fetch` against the cache.
 - **A plugin's plain `zig build` also installs** into the real plugins directory. For a sandbox
   run, set `FIZZY_PROFILE` to a directory of its own, for the build and for the fizzy you start
   (or `fizzy --profile <dir>`): the plugin installs into `<dir>/plugins`, and that fizzy keeps its
