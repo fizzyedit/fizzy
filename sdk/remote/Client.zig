@@ -508,7 +508,8 @@ pub fn connected(self: *const Client) bool {
     return self.endpoint != null and self.stream != null;
 }
 
-/// Check `msg` against the conversation's rules and send it.
+/// Check `msg` against the conversation's rules and send it. A message the rules refuse is the
+/// caller's mistake: it is not sent and the stream stays open. A write that fails closes the client.
 pub fn send(self: *Client, msg: message.Message) Error!void {
     const ep = &(self.endpoint orelse return error.Closed);
     if (self.stream == null) return self.closeStale();
@@ -549,14 +550,17 @@ pub fn poll(self: *Client, arena: std.mem.Allocator, wait_ms: ?u32) Error!?messa
             self.close();
             return error.Closed;
         }
-        try ep.feed(buf[0..n]);
+        ep.feed(buf[0..n]) catch |err| {
+            self.close();
+            return err;
+        };
     }
 }
 
+/// The peer ended the conversation; its bye is the caller's to read, the stream is done. The
+/// endpoint stays until the next `poll`, `send`, `reconnect` or `close`, because the bye's
+/// strings borrow it and dangle once it is gone.
 fn closeAfterBye(self: *Client) void {
-    // The peer ended the conversation; its bye is the caller's to read, the stream is done. The
-    // endpoint stays until the next `poll`, `send`, `reconnect` or `close`, because the bye's
-    // strings borrow it and dangle once it is gone.
     if (self.stream) |s| s.close(self.io);
     self.stream = null;
 }
