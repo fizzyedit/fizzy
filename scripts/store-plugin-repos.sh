@@ -12,5 +12,5 @@ gh api "repos/$registry/contents/registry" --jq '.[] | select(.name | endswith("
     while read -r url; do
         curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors "$url" |
             jq -r '[.homepage, .manifest_url][] | select(. != null) | capture("^https://github.com/(?<repo>[^/]+/[^/]+)") | .repo' |
-            head -n 1
+            sed -n 1p
     done | { grep -v -x -i "fizzyedit/fizzy" || true; } | sort -u

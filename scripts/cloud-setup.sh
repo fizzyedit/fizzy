@@ -13,7 +13,8 @@
 # A session sourced from a plugin repo (fizzyedit/chat, ...) runs the same line. The cache holds the
 # fizzy-sdk package those plugins pin, which the proxy resets if a build fetches it by URL, and
 # the dependencies of each store plugin. Set PLUGIN_REPO to that repo's checkout (or `1` for the
-# current directory) and the script ends by running `zig build --fetch` there, so a package the
+# current directory, which under curl|bash may not be the checkout; so pass the path), on the bash
+# side of the pipe (`curl ... | PLUGIN_REPO=/path/to/repo bash`), and the script ends by running `zig build --fetch` there, so a package the
 # cache lacks shows up at setup time rather than as a build failure; it never fails the setup.
 #
 # jj is not needed here: the script never calls it, so a machine without it is fine.
