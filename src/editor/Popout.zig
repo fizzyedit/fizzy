@@ -1385,9 +1385,28 @@ fn menuFrame() void {
             frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) } });
         }
         dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
+        // What opened from it and stays above it (a tooltip on one of its buttons) is drawn in its
+        // window, over it: left to the main window's replay it lay under this OS window, unseen.
+        // The stack keeps a parent before its children.
+        for (cw.subwindows.stack.items) |*child| {
+            if (child != sw and ownedBy(cw, child, sw.id)) cw.renderSubwindow(child, .{ .take = true });
+        }
         picture.end();
         viewports.present(m.viewport, target);
     }
+}
+
+/// Whether `sw` is a subwindow that stays above `root` (`stay_above_parent_window`), directly or
+/// through others that do: a tooltip over a menu's button, a menu over that tooltip's own.
+fn ownedBy(cw: *dvui.Window, sw: *const dvui.Subwindows.Subwindow, root: dvui.Id) bool {
+    var at = sw.stay_above_parent_window;
+    var depth: u8 = 0;
+    while (at) |id| : (depth += 1) {
+        if (id == root) return true;
+        if (depth >= 8) return false;
+        at = (cw.subwindows.get(id) orelse return false).stay_above_parent_window;
+    }
+    return false;
 }
 
 /// A dialog opened in a float that is out goes with it, as a dialog belongs to the window it opened
