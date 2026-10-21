@@ -10,9 +10,15 @@
 //! **What is compared.** Everything else the Sim answers with (focus, resized, moved, state,
 //! occluded, a pointer leaving, clipboard) against the events the stream polled, in order, by
 //! their stream form, so a window or display is the stream's name for it and not the Sim's.
-//! Composition, touch, drops, close requests, background and quit have no input on the Sim yet, so
-//! they are neither fed nor compared (`Report.skipped`). TODO(seam): `Sim` injectors for those,
-//! which turns them from skipped to compared.
+//! **Unverified.** Composition (`ime`), `touch`, `drop`, `close_requested`, `background`,
+//! `foreground` and `quit` events are neither fed nor compared: a stream holding them replays
+//! "clean" without any of them having been checked, and `Report.skipped` counts them so a caller
+//! can see how much went unchecked. (`Sim` has `imeCompose` and the like, but no injector for
+//! the rest.) TODO(seam): `Sim` injectors for these, which turns them from skipped to compared.
+//!
+//! A redacted stream (`Recorder.Options.redact`) has no key characters and `*` for text: a key
+//! whose stream form has no `logical` is compared on everything but it, and the text replays as
+//! the `*` it holds.
 //!
 //! A stream a Sim recorded replays clean, which is what the golden streams pin. One a real
 //! platform recorded replays into the Sim's idea of that platform, and the differences are the
@@ -307,7 +313,10 @@ fn compare(r: *Replayer, report: *Report) Allocator.Error!void {
     }
 }
 
-fn same(r: *Replayer, a: Event, b: Event) Allocator.Error!bool {
+fn same(r: *Replayer, a: Event, b_in: Event) Allocator.Error!bool {
+    var b = b_in;
+    // A redacted key has no character to compare.
+    if (a.payload == .key and b.payload == .key and a.payload.key.logical == .none) b.payload.key.logical = .none;
     var wa = try stream.Writer.init(r.gpa);
     defer wa.deinit();
     var wb = try stream.Writer.init(r.gpa);

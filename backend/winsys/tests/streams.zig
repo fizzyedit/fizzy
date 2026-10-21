@@ -19,9 +19,14 @@ const Rig = struct {
     rec: Recorder,
 
     fn init(options: Sim.Options) !Rig {
+        // The goldens hold the text they record, so they record it plainly.
+        return initWith(options, .{ .redact = false, .read_clipboard = true });
+    }
+
+    fn initWith(options: Sim.Options, recording: Recorder.Options) !Rig {
         var rig: Rig = undefined;
         rig.sim = .init(std.testing.allocator, options);
-        rig.rec = try .init(std.testing.allocator, rig.sim.platform());
+        rig.rec = try .init(std.testing.allocator, rig.sim.platform(), recording);
         return rig;
     }
 
@@ -205,6 +210,61 @@ test "a stream of touches and drops is read and left alone" {
     rig.sim.movePointer(rig.sim.desktopPoint(w, .{ .x = 10, .y = 10 }));
     _ = rig.sim.dragRelease();
     rig.drain();
+    const report = try expectReplaysClean(rig.rec.bytes());
+    try std.testing.expect(report.skipped >= 2);
+}
+
+test "the default recording holds no text, keys' characters, titles or clipboard" {
+    var rig = try Rig.initWith(.{ .displays = &.{.{ .top_inset = 24 }} }, .{});
+    defer rig.deinit();
+    try typing(&rig);
+    rig.sim.copyFromOutside("hunter2-secret");
+    rig.drain();
+    try rig.app().setClipboardText("hunter2-secret");
+    for ([_][]const u8{ "editor", "saved", "hunter2", "é" }) |plain| {
+        try std.testing.expect(std.mem.indexOf(u8, rig.rec.bytes(), plain) == null);
+    }
+    _ = try expectReplaysClean(rig.rec.bytes());
+}
+
+test "the clipboard is read only when asked" {
+    var rig = try Rig.initWith(.{}, .{ .redact = false });
+    defer rig.deinit();
+    const p = rig.app();
+    _ = try p.openWindow(.{ .size = .{ .w = 200, .h = 100 } });
+    rig.drain();
+    rig.sim.copyFromOutside("seen");
+    rig.drain();
+    try std.testing.expect(std.mem.indexOf(u8, rig.rec.bytes(), "seen") == null);
+    _ = try expectReplaysClean(rig.rec.bytes());
+}
+
+test "a recording stops at its cap, whole, and still replays" {
+    var rig = try Rig.initWith(.{ .displays = &.{.{ .top_inset = 24 }} }, .{ .max_bytes = 200 });
+    defer rig.deinit();
+    try typing(&rig);
+    try std.testing.expect(rig.rec.full);
+    try std.testing.expect(rig.rec.bytes().len < 200 + 64);
+    var replay = try Replayer.init(std.testing.allocator, rig.rec.bytes());
+    defer replay.deinit();
+    _ = try replay.run();
+}
+
+test "the default recording holds no dropped paths or text" {
+    var rig = try Rig.initWith(.{}, .{});
+    defer rig.deinit();
+    const w = try rig.app().openWindow(.{});
+    rig.drain();
+    rig.sim.dragBegin(.{ .files = &.{ "/Users/someone/taxes.pdf", "/Users/someone/b.png" } });
+    rig.sim.movePointer(rig.sim.desktopPoint(w, .{ .x = 10, .y = 10 }));
+    _ = rig.sim.dragRelease();
+    rig.sim.dragBegin(.{ .text = "dragged-secret" });
+    rig.sim.movePointer(rig.sim.desktopPoint(w, .{ .x = 12, .y = 12 }));
+    _ = rig.sim.dragRelease();
+    rig.drain();
+    for ([_][]const u8{ "someone", "taxes", "dragged" }) |plain| {
+        try std.testing.expect(std.mem.indexOf(u8, rig.rec.bytes(), plain) == null);
+    }
     const report = try expectReplaysClean(rig.rec.bytes());
     try std.testing.expect(report.skipped >= 2);
 }

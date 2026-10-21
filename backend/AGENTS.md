@@ -31,6 +31,12 @@ how an app wires it).
   type a record holds moves the bytes: bump `stream.version`, then replace the hex a failing
   test prints. A stream must carry no platform identity (window, display, touch ids are renamed
   by `stream.Ids`) so one recorded on a Mac replays on Linux CI.
+- **A stream is a transcript of the session.** Unredacted it holds typed text, key characters,
+  IME input, clipboard contents, window titles and dropped file paths and text. `Recorder.Options.redact` is on by default
+  (those become `*` of the same length, so lengths still leak; key characters dropped; physical keys and
+  timing stay, so it is not anonymous), the clipboard is read only with `read_clipboard`, and the
+  stream stops at `max_bytes` (`Recorder.full`). Never commit or share a `redact = false` stream
+  that was not made from scripted input.
 - **Verify on the platform you changed.** CI's Windows cross-compile proves fizzy links, not that
   it works. `docs/MACOS_LIVE_RESIZE.md` and `docs/WINDOWS_LIVE_RESIZE.md` show how a resize
   was measured.

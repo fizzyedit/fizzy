@@ -14,6 +14,11 @@
 //! *request* it made (windows opened, closed, titled, sized, …). Queries (`windowSize`, …) are
 //! not: a replay answers those itself.
 //!
+//! **Privacy.** Unredacted, a stream holds what the person typed (`text`, `key`, `ime`), copied
+//! (`clipboard_text`, `set_clipboard_text`), dragged in (`drop`) and named their windows. `Recorder` redacts those by
+//! default (lengths still leak) and says what it keeps (its doc); a stream made with `redact = false` is as sensitive
+//! as a keylogger's output and is not for sharing.
+//!
 //! **No platform identity.** A window is a number the platform picked, a display, a finger and a
 //! touch screen the same, and on one machine they are pointers or counters that mean nothing on
 //! another. The recorder renames each, in order of first sight, to 1, 2, 3 …, so a stream a

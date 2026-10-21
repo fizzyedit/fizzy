@@ -7,9 +7,21 @@
 //! only ask (`windowSize`, `windowScale`, …) pass through unrecorded, and so does `wake`: a replay
 //! answers its own questions and has no thread to wake.
 //!
-//! TODO(seam): `bytes` only grows. A long-running black box wants the stream drained to a ring
-//! or a file as it goes (`sdk/tape`'s `ring`), which is a sink the writer would hand finished
-//! records to.
+//! **Privacy.** A stream is a transcript of the session: typed text, keys, input-method
+//! composition, the clipboard, window titles and dragged-in file paths and text would all be in
+//! it. By default the recorder redacts them (`Options.redact`): text, composition, clipboard,
+//! titles and what a drop carries (file paths, dragged text) become `*` of the
+//! same byte length (so the lengths still leak), and a key's character (`Key.logical`) is dropped. What stays is what a
+//! replay needs: which physical keys went down (so a redacted stream still shows *where* someone
+//! typed, though not what the layout made of it), pointer moves, sizes, timing. Do not treat a
+//! redacted stream as anonymous; treat an unredacted one (`redact = false`) as holding
+//! everything the person typed and copied. The clipboard is read only when asked
+//! (`Options.read_clipboard`), since reading it is a side effect on a real platform.
+//!
+//! **Size.** The stream stops at `Options.max_bytes`: past it nothing more is written, `full` is
+//! set, and what is there is whole records and replays. TODO(seam): a long-running black box
+//! wants the stream drained to a ring or a file as it goes (`sdk/tape`'s `ring`), a sink the
+//! writer would hand finished records to, instead of stopping.
 const std = @import("std");
 const Platform = @import("Platform.zig");
 const Window = @import("Window.zig");
@@ -25,6 +37,7 @@ const Allocator = std.mem.Allocator;
 
 const Recorder = @This();
 
+options: Options,
 gpa: Allocator,
 inner: Platform,
 writer: stream.Writer,
@@ -35,9 +48,25 @@ base_ns: u64,
 last_displays: []Display = &.{},
 /// Set after a write fails: recording stops and the stream ends at the last whole record.
 failed: bool = false,
+/// Set when the stream reached `Options.max_bytes`: recording stopped, the stream ends at the
+/// last whole record.
+full: bool = false,
 
-pub fn init(gpa: Allocator, inner: Platform) Allocator.Error!Recorder {
+pub const Options = struct {
+    /// Replace typed text, composition, clipboard text, titles, dropped file paths and dragged
+    /// text with `*` of the same byte length (the lengths still leak), and drop keys'
+    /// characters (see the doc above). On unless someone turns it off.
+    redact: bool = true,
+    /// Read the clipboard (`Platform.clipboardText`) when a clipboard event arrives and record
+    /// it. Off: the event is recorded with empty text behind it and the platform is not asked.
+    read_clipboard: bool = false,
+    /// The stream stops growing past this many bytes.
+    max_bytes: usize = 64 * 1024 * 1024,
+};
+
+pub fn init(gpa: Allocator, inner: Platform, options: Options) Allocator.Error!Recorder {
     return .{
+        .options = options,
         .gpa = gpa,
         .inner = inner,
         .writer = try .init(gpa),
@@ -87,10 +116,7 @@ fn noteDisplays(r: *Recorder, list: []const Display, at_ns: ?u64) void {
     if (sameDisplays(named, r.last_displays)) return r.freeDisplays(named);
     r.freeDisplays(r.last_displays);
     r.last_displays = named;
-    if (r.failed) return;
-    r.writer.write(.{ .t_ns = r.since(at_ns orelse r.inner.now()), .body = .{ .displays = named } }) catch {
-        r.failed = true;
-    };
+    r.emit(.{ .t_ns = r.since(at_ns orelse r.inner.now()), .body = .{ .displays = named } });
 }
 
 fn renamed(r: *Recorder, list: []const Display) ?[]Display {
@@ -132,10 +158,33 @@ fn since(r: *const Recorder, ns: u64) u64 {
 
 /// Reads the inner clock and writes `body` at that time.
 fn write(r: *Recorder, body: stream.Body) void {
+    if (r.failed or r.full) return;
+    r.emit(.{ .t_ns = r.since(r.inner.now()), .body = body });
+}
+
+/// Appends a record unless recording has stopped; the one place a record is written.
+fn emit(r: *Recorder, record: stream.Record) void {
     if (r.failed) return;
-    r.writer.write(.{ .t_ns = r.since(r.inner.now()), .body = body }) catch {
+    if (r.writer.bytes.items.len >= r.options.max_bytes) {
+        r.full = true;
+        return;
+    }
+    r.writer.write(record) catch {
         r.failed = true;
     };
+}
+
+/// `text` as the stream should hold it: itself, or `*` for each byte when redacting. Free it
+/// with `freeText`; null on out of memory, in which case nothing is recorded.
+fn textFor(r: *Recorder, text: []const u8) ?[]const u8 {
+    if (!r.options.redact) return text;
+    const out = r.gpa.alloc(u8, text.len) catch return null;
+    @memset(out, '*');
+    return out;
+}
+
+fn freeText(r: *Recorder, original: []const u8, used: []const u8) void {
+    if (used.ptr != original.ptr) r.gpa.free(used);
 }
 
 fn request(r: *Recorder, req: stream.Request) void {
@@ -159,10 +208,8 @@ fn now(ctx: *anyopaque) u64 {
 
 /// A clock record only when the clock moved past the last record: a replay is already there.
 fn noteClock(r: *Recorder, t_ns: u64) void {
-    if (r.failed or t_ns <= r.writer.last_ns) return;
-    r.writer.write(.{ .t_ns = t_ns, .body = .clock }) catch {
-        r.failed = true;
-    };
+    if (t_ns <= r.writer.last_ns) return;
+    r.emit(.{ .t_ns = t_ns, .body = .clock });
 }
 
 fn poll(ctx: *anyopaque) ?Event {
@@ -170,17 +217,80 @@ fn poll(ctx: *anyopaque) ?Event {
     const e = r.inner.poll() orelse return null;
     switch (e.payload) {
         .resized, .moved => r.snapshotDisplaysAt(e.time_ns),
-        .clipboard => if (r.inner.clipboardText(r.gpa) catch null) |text| {
-            defer r.gpa.free(text);
-            r.write(.{ .clipboard_text = text });
-        },
+        .clipboard => r.noteClipboard(),
         else => {},
     }
     const named = r.ids.event(e) catch return e;
     var rel = named;
     rel.time_ns = r.since(e.time_ns);
-    r.write(.{ .event = rel });
+    switch (rel.payload) {
+        .text => |t| {
+            const used = r.textFor(t) orelse return e;
+            defer r.freeText(t, used);
+            rel.payload = .{ .text = used };
+            r.write(.{ .event = rel });
+        },
+        .ime => |ime| {
+            const used = r.textFor(ime.text) orelse return e;
+            defer r.freeText(ime.text, used);
+            var redacted = ime;
+            redacted.text = used;
+            rel.payload = .{ .ime = redacted };
+            r.write(.{ .event = rel });
+        },
+        .key => |k| {
+            if (r.options.redact) {
+                var redacted = k;
+                redacted.logical = .none;
+                rel.payload = .{ .key = redacted };
+            }
+            r.write(.{ .event = rel });
+        },
+        .drop => |d| {
+            if (!r.options.redact) {
+                r.write(.{ .event = rel });
+                return e;
+            }
+            switch (d.data) {
+                .unsupported => r.write(.{ .event = rel }),
+                .text => |t| {
+                    const used = r.textFor(t) orelse return e;
+                    defer r.freeText(t, used);
+                    rel.payload = .{ .drop = .{ .phase = d.phase, .at = d.at, .data = .{ .text = used } } };
+                    r.write(.{ .event = rel });
+                },
+                .files => |files| {
+                    const stars = r.gpa.alloc([]u8, files.len) catch return e;
+                    var made: usize = 0;
+                    defer {
+                        for (stars[0..made]) |f| r.gpa.free(f);
+                        r.gpa.free(stars);
+                    }
+                    for (files) |f| {
+                        stars[made] = r.gpa.alloc(u8, f.len) catch return e;
+                        @memset(stars[made], '*');
+                        made += 1;
+                    }
+                    rel.payload = .{ .drop = .{ .phase = d.phase, .at = d.at, .data = .{ .files = @ptrCast(stars) } } };
+                    r.write(.{ .event = rel });
+                },
+            }
+        },
+        else => r.write(.{ .event = rel }),
+    }
     return e;
+}
+
+/// The text behind a clipboard event, which the event does not carry: empty unless the recorder
+/// was asked to read the clipboard.
+fn noteClipboard(r: *Recorder) void {
+    if (!r.options.read_clipboard) return r.write(.{ .clipboard_text = "" });
+    const read = r.inner.clipboardText(r.gpa) catch return;
+    const text = read orelse return;
+    defer r.gpa.free(text);
+    const used = r.textFor(text) orelse return;
+    defer r.freeText(text, used);
+    r.write(.{ .clipboard_text = used });
 }
 
 fn wait(ctx: *anyopaque, timeout_ns: ?u64) void {
@@ -202,6 +312,9 @@ fn openWindow(ctx: *anyopaque, options: Window.Options) Platform.Error!Window {
     if (r.last_displays.len == 0) r.snapshotDisplays();
     var named = options;
     if (options.parent) |p| named.parent = r.name(p);
+    const title = r.textFor(options.title) orelse return r.inner.openWindow(options);
+    defer r.freeText(options.title, title);
+    named.title = title;
     const opened = r.inner.openWindow(options) catch |err| {
         r.request(.{ .open_window = .{ .options = named, .result = null } });
         return err;
@@ -218,7 +331,10 @@ fn closeWindow(ctx: *anyopaque, window: Window) void {
 
 fn setTitle(ctx: *anyopaque, window: Window, title: []const u8) void {
     const r = me(ctx);
-    r.request(.{ .set_title = .{ .window = r.name(window), .title = title } });
+    if (r.textFor(title)) |used| {
+        defer r.freeText(title, used);
+        r.request(.{ .set_title = .{ .window = r.name(window), .title = used } });
+    }
     r.inner.setTitle(window, title);
 }
 
@@ -323,7 +439,10 @@ fn clipboardText(ctx: *anyopaque, allocator: Allocator) Platform.Error!?[]u8 {
 
 fn setClipboardText(ctx: *anyopaque, text: []const u8) Platform.Error!void {
     const r = me(ctx);
-    r.request(.{ .set_clipboard_text = text });
+    if (r.textFor(text)) |used| {
+        defer r.freeText(text, used);
+        r.request(.{ .set_clipboard_text = used });
+    }
     return r.inner.setClipboardText(text);
 }
 
