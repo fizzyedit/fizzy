@@ -755,9 +755,9 @@ fn drawLifted(self: *Picker, f: *Layout) void {
 fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place: []const u8, enabled: bool, id_extra: usize) bool {
     const theme = dvui.themeGet();
     const destructive = c.action == .delete;
-    // Destructive controls wear the error fill lightened as `core.dialogs`' close does; `.err`'s
-    // text colour is not red in every theme.
-    const tint = if (destructive) theme.color(.err, .fill).lighten(if (theme.dark) -10 else 10) else theme.color(.control, .text);
+    // Destructive controls wear the error fill as it is (lightening it in dark darkened it);
+    // `.err`'s text colour is not red in every theme.
+    const tint = if (destructive) theme.color(.err, .fill) else theme.color(.control, .text);
     // Disabled keeps the place's slot but dimmer; delete stays red enough to read as delete.
     const dim: f32 = if (destructive) 0.6 else 0.35;
     var bw: dvui.ButtonWidget = undefined;

@@ -526,8 +526,12 @@ pub fn init(
             .text = fizzy_dark.window.fill,
         };
 
+        // Bright enough to read on the window and control fills (5.4:1 fill, 6.6:1 text on the
+        // window; an icon needs 3:1, text 4.5:1). `.text` is named because the fallback is the
+        // content text, which is not red.
         fizzy_dark.err = .{
-            .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
+            .fill = .{ .r = 255, .g = 85, .b = 95, .a = 255 },
+            .text = .{ .r = 255, .g = 120, .b = 125, .a = 255 },
         };
 
         // theme.content
@@ -598,8 +602,10 @@ pub fn init(
             .text = fizzy_light.window.fill,
         };
 
+        // Darker than the dark theme's, against the light window (5.5:1 fill, 6.6:1 text).
         fizzy_light.err = .{
-            .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
+            .fill = .{ .r = 190, .g = 25, .b = 45, .a = 255 },
+            .text = .{ .r = 170, .g = 15, .b = 35, .a = 255 },
         };
 
         // theme.content
