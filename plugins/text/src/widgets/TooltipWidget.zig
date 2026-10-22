@@ -232,7 +232,7 @@ pub fn shown(self: *TooltipWidget) bool {
         r.y -= r.h + 10;
     }
     // On the screen it opens on (`core.screens`): a float's own window, when that is out.
-    self.data().rect = .cast(dvui.placeOnScreen(core.screens.screenFor(r), .{}, .none, r));
+    self.data().rect = .cast(dvui.placeOnScreen(core.screens.screenFor(r).insetAll(core.widgets.FloatingTooltipWidget.margin), .{}, .none, r));
 
     self.install();
 
