@@ -121,6 +121,23 @@ jobs:
       - name: scripts/runner-setup.ps1 (private-repo check, dry run under pwsh)
         run: sh scripts/test-runner-setup-windows.sh
 
+  windows-doctor:
+    name: Windows worker doctor (PowerShell 5.1)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and check Windows PowerShell compatibility
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Expected Windows PowerShell 5.1' }
+          & ./scripts/test-runner-setup.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Runner script checks failed' }
+      - name: Doctor fixtures and hosted VM read-only probes
+        shell: powershell
+        run: ./scripts/test-windows-doctor.ps1
+
   test:
     name: Tests (${{ matrix.name }})
     needs: changes
@@ -673,7 +690,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, format, test, examples, integration, verdict, windows-fizzy-backend, sdl]
+    needs: [changes, format, test, examples, integration, verdict, windows-fizzy-backend, sdl, windows-doctor]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped

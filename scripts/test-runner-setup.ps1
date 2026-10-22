@@ -64,6 +64,11 @@ $pwsh7Only = 'AsHashtable', 'NoEmphasis', 'Parallel', 'ThrottleLimit', 'SkipCert
     'StatusCodeVariable', 'ResponseHeadersVariable', 'AllowUnencryptedAuthentication', 'PreserveAuthorizationOnRedirect',
     'Resume', 'UseQuotes'
 $allowed = @{
+    'Import-PowerShellDataFile' = 'Path', 'LiteralPath'
+    'Get-CimInstance' = 'ClassName', 'Filter'
+    'Get-WinEvent' = 'FilterHashtable'
+    'Get-ItemPropertyValue' = 'Path', 'LiteralPath', 'Name'
+    'Get-HotFix' = 'Id', 'Description', 'ComputerName', 'Credential'
     'New-LocalUser' = 'Name', 'Password', 'FullName', 'Description', 'PasswordNeverExpires', 'UserMayNotChangePassword', 'AccountNeverExpires', 'AccountExpires', 'Disabled', 'NoPassword'
     'Set-LocalUser' = 'Name', 'Password', 'FullName', 'Description', 'PasswordNeverExpires', 'UserMayChangePassword', 'AccountNeverExpires'
     'Get-LocalUser' = 'Name', 'SID'
@@ -77,7 +82,7 @@ $allowed = @{
     'Get-ScheduledTaskInfo' = 'TaskName', 'TaskPath'
     'Add-MpPreference' = 'ExclusionPath', 'ExclusionExtension', 'ExclusionProcess'
 }
-foreach ($name in 'runner-setup.ps1', 'runner-clean.ps1') {
+foreach ($name in 'runner-setup.ps1', 'runner-clean.ps1', '../ci/worker-box/windows/doctor.ps1', '../ci/worker-box/windows/config.psd1', 'test-windows-doctor.ps1') {
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile("$dir/$name", [ref]$tokens, [ref]$errors)
     if ($errors.Count) { Fail "$name does not parse: $($errors[0].Message)" }
@@ -104,4 +109,6 @@ $env:PATH = $origPath
 $out = & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File "$dir/runner-clean.ps1" -DryRun 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { Fail "runner-clean dry run failed: $out" }
 Remove-Item -Recurse -Force $tmp
+& $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File "$dir/test-windows-doctor.ps1"
+if ($LASTEXITCODE -ne 0) { throw 'Doctor tests failed' }
 Write-Host 'ok'
