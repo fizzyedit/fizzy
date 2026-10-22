@@ -1313,9 +1313,12 @@ fn menuFrame() void {
     const s = dvui.windowNaturalScale();
     const theme = dvui.themeGet();
     const radius = fizzy.core.dialogs.surfaceCorners().finalize(&theme).tl.radius();
+    const menus_out = nativeMenus();
     for (cw.subwindows.stack.items) |*sw| {
         const as_dialog = fizzy.core.screens.dialog(sw.id);
-        if (as_dialog == null and !fizzy.core.screens.isMenu(sw.id)) continue;
+        // A menu is a window of its own only while menus are (`nativeMenus`), as the float
+        // replay decides: with only dialogs on, a menu stays in the window it opened in.
+        if (as_dialog == null and !(menus_out and fizzy.core.screens.isMenu(sw.id))) continue;
         const corner = if (as_dialog) |d| d.radius else radius;
         const frame = sw.rect_pixels;
         if (frame.w < 1 or frame.h < 1) continue;
@@ -1389,7 +1392,14 @@ fn menuFrame() void {
         // window, over it: left to the main window's replay it lay under this OS window, unseen.
         // The stack keeps a parent before its children.
         for (cw.subwindows.stack.items) |*child| {
-            if (child != sw and ownedBy(cw, child, sw.id)) cw.renderSubwindow(child, .{ .take = true });
+            if (child == sw or !ownedBy(cw, child, sw.id)) continue;
+            // Another window's to draw: a carried view, one shown everywhere, the main window's, or
+            // a menu or dialog of its own (a dropdown out of this menu), which `menuFrame` reaches
+            // in turn; drawn here it would be cut at this menu's edge.
+            const id = child.id;
+            if (fizzy.core.screens.isCarried(id) or fizzy.core.screens.isEverywhere(id) or fizzy.core.screens.isMain(id)) continue;
+            if ((menus_out and fizzy.core.screens.isMenu(id)) or fizzy.core.screens.dialog(id) != null) continue;
+            cw.renderSubwindow(child, .{ .take = true });
         }
         picture.end();
         viewports.present(m.viewport, target);
