@@ -498,8 +498,6 @@ pub fn reapSplits(self: *State, gpa: std.mem.Allocator) void {
 
 /// The shape has finished declaring: make this frame's regions the ones `regionFor` answers with.
 pub fn publishRegions(self: *State) void {
-    // The shape's walk of the split trees is over: places dropped during it can be freed now.
-    self.splits.reap(self.gpa_for_reap());
     self.publishCardArea();
     std.mem.swap(@TypeOf(self.regions), &self.regions, &self.regions_building);
     self.regions_building.clearRetainingCapacity();
