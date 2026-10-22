@@ -57,9 +57,9 @@ on: bool = false,
 /// The tracks of open documents, by document id.
 open: std.AutoArrayHashMapUnmanaged(u64, *Track) = .empty,
 /// Tracks that ended this session: their document closed, or its history started over.
-ended: std.ArrayListUnmanaged(*Track) = .empty,
+ended: std.ArrayList(*Track) = .empty,
 /// Which document the person was working in, each time it changed, as steps landed.
-focus: std.ArrayListUnmanaged(Focus) = .empty,
+focus: std.ArrayList(Focus) = .empty,
 /// Some track wants its document's state taken at the next frame's top.
 due: bool = false,
 /// A document being replayed into: its own steps are not recorded meanwhile.
@@ -117,10 +117,10 @@ pub const Track = struct {
     /// Where the document's history stood when the base was taken (`HistoryLine`'s step id, 0
     /// before any): what an export rewinds the document to for its file (`exportTape`).
     base_top: u64 = 0,
-    steps: std.ArrayListUnmanaged(Rec) = .empty,
+    steps: std.ArrayList(Rec) = .empty,
     /// Every step's effect and motion, one after another.
-    bytes: std.ArrayListUnmanaged(u8) = .empty,
-    checkpoints: std.ArrayListUnmanaged(State) = .empty,
+    bytes: std.ArrayList(u8) = .empty,
+    checkpoints: std.ArrayList(State) = .empty,
     checkpoint_due: bool = false,
     /// The size of the last checkpoint kept as a delta: about what the next will cost. 0 after a
     /// whole state, whose next delta starts small.
@@ -242,7 +242,7 @@ pub fn keepOpen(self: *Tracks) void {
 /// a restart's does. Taken on the frame the documents' states are, so each ends where its state
 /// does. A saved document opens from its file after a crash, with nothing to recover. Owned.
 pub fn takeChanged(self: *Tracks) []KeptFile {
-    var out: std.ArrayListUnmanaged(KeptFile) = .empty;
+    var out: std.ArrayList(KeptFile) = .empty;
     for (self.open.values()) |t| {
         if (t.steps.items.len == t.kept_steps or !t.owner.isDirty(t.doc)) continue;
         const k = self.encodeKept(t) orelse continue;
@@ -346,7 +346,7 @@ pub fn sweep(self: *Tracks) void {
     var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(dvui.io);
     const Kept = struct { name: []const u8, size: u64, written: i96 };
-    var files: std.ArrayListUnmanaged(Kept) = .empty;
+    var files: std.ArrayList(Kept) = .empty;
     var total: u64 = 0;
     var it = dir.iterate();
     while (it.next(dvui.io) catch null) |e| {
@@ -862,7 +862,7 @@ pub const ExportError = error{
 /// known: an undo or redo reached an entry from before the track began.
 pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{OutOfMemory}!?u64 {
     // The entries added since the track began, and how many of them are done.
-    var line: std.ArrayListUnmanaged(u64) = .empty;
+    var line: std.ArrayList(u64) = .empty;
     defer line.deinit(gpa);
     var at: usize = 0;
     for (t.steps.items[0..@min(count, t.steps.items.len)]) |r| switch (r.kind) {
@@ -886,8 +886,8 @@ pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{Out
 /// known (an undo or redo reaching an entry from before the track began, or a restart), or where
 /// a step's effect was not kept. The parts are `t`'s bytes: they last as long as it does.
 pub fn historyOf(t: *const Track, arena: std.mem.Allocator) error{OutOfMemory}!?sdk.Plugin.RestoredHistory {
-    const Building = struct { id: u64, parts: std.ArrayListUnmanaged([]const u8) = .empty };
-    var line: std.ArrayListUnmanaged(Building) = .empty;
+    const Building = struct { id: u64, parts: std.ArrayList([]const u8) = .empty };
+    var line: std.ArrayList(Building) = .empty;
     var at: usize = 0;
     for (t.steps.items) |r| switch (r.kind) {
         .added => {
@@ -947,7 +947,7 @@ pub fn summarize(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, arena
     };
 
     var timing: Timing = .init(t, base, first, opts.real_time);
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    var authors: std.ArrayList(sdk.Author) = .empty;
     for (t.steps.items[first..to]) |r| {
         out.played_ms = timing.place(r) + r.ms;
         const who = host.stepAuthor(doc.id, r.id);
@@ -1085,7 +1085,7 @@ fn fileAt(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, arena: std.mem.All
 fn lineSteps(t: *const Track, arena: std.mem.Allocator, line: sdk.Plugin.HistoryLine, lo: usize, hi: usize) ExportError![]Track.Rec {
     var want: std.AutoHashMapUnmanaged(u64, bool) = .empty;
     for (line.entries[lo..hi]) |e| try want.put(arena, e.id, false);
-    var out: std.ArrayListUnmanaged(Track.Rec) = .empty;
+    var out: std.ArrayList(Track.Rec) = .empty;
     for (t.steps.items) |r| switch (r.kind) {
         .added, .joined => if (want.getPtr(r.id)) |seen| {
             if (r.kind == .added) seen.* = true;
@@ -1108,7 +1108,7 @@ pub fn lineSummary(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, are
     if (recs.len == 0) return null;
     var timing: Timing = .{ .recorded_end = recs[0].at, .real_time = false };
     var out: Summary = .{ .from = lo, .to = hi, .steps = hi - lo, .recorded_ms = 0, .played_ms = 0, .authors = &.{} };
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    var authors: std.ArrayList(sdk.Author) = .empty;
     for (recs) |r| {
         out.played_ms = timing.place(r) + r.ms;
         const who = host.stepAuthor(doc.id, r.id);

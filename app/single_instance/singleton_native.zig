@@ -44,7 +44,7 @@ const State = struct {
     /// Resolved argv from `earlyStartup`, consumed in `AppInit`.
     resolved_argv: ?[]const []const u8 = null,
     mutex: std.Io.Mutex = .init,
-    pending: std.ArrayListUnmanaged(PendingOpen) = .empty,
+    pending: std.ArrayList(PendingOpen) = .empty,
     window: ?*dvui.Window = null,
 };
 
@@ -364,7 +364,7 @@ pub fn resolveArgs(
     raw: []const []const u8,
     env_profile: ?[]const u8,
 ) !struct { argv: []const []const u8, profile: ?[]u8, quiet: bool } {
-    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    var out: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (out.items) |s| gpa.free(s);
         out.deinit(gpa);

@@ -226,7 +226,7 @@ fn smoothstep(t: f32) f32 {
 }
 
 /// Bottom to top: the last is the float in front.
-items: std.ArrayListUnmanaged(Float) = .empty,
+items: std.ArrayList(Float) = .empty,
 /// The last serial handed out (`Float.serial`).
 serial: u64 = 0,
 

@@ -160,13 +160,13 @@ card: ?dvui.Options = null,
 extents_changed: bool = false,
 /// Every surface `draw` ran this frame, so `captureUnplaced` knows which ones genuinely drew
 /// nowhere — as opposed to drew before the picker asked. Arena-backed, per frame.
-drawn: std.ArrayListUnmanaged(*Surface) = .empty,
+drawn: std.ArrayList(*Surface) = .empty,
 /// Views a plugin asked to put away during this frame (`hideLater`), put away once it has drawn
 /// (`applyHides`). Arena-backed, per frame.
-hides: std.ArrayListUnmanaged([]const u8) = .empty,
+hides: std.ArrayList([]const u8) = .empty,
 /// Surfaces drawn this frame in a place with no room, so not captured (`drawCaptured`): no frame
 /// is asked for them until they have some. Arena-backed, per frame.
-unsized: std.ArrayListUnmanaged(*Surface) = .empty,
+unsized: std.ArrayList(*Surface) = .empty,
 
 /// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
 /// `split` know which axis it divides and which neighbour it resizes, without a shape having to
@@ -201,7 +201,7 @@ pub const Container = struct {
     base_min: f32 = 0,
     /// Every resizable region in this container. A split needs them all so `push_out` can
     /// shrink the trays behind the one being dragged. Arena-backed, this frame only — no count cap.
-    resizables: std.ArrayListUnmanaged(dvui.Id) = .empty,
+    resizables: std.ArrayList(dvui.Id) = .empty,
     /// Packed splits in this container, each `Split.handle_size`. The drag
     /// budget subtracts this so a handle is never eaten by a tray.
     handles: f32 = 0,
@@ -383,7 +383,7 @@ fn containsId(ids: []const []const u8, id: []const u8) bool {
 }
 
 fn matchingWith(self: *Layout, keywords: []const []const u8, assigned: ?[]const []const u8, require_fit: bool, order_name: []const u8) []const *Surface {
-    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    var out: std.ArrayList(*Surface) = .empty;
     const a = self.arena;
     if (assigned) |ids| {
         for (ids) |id| {
@@ -426,7 +426,7 @@ fn visibleNow(self: *Layout, s: *const Surface) bool {
 /// `matchingIn` with takeovers left out — the list a *trigger* is chosen from.
 fn plainMatchingIn(self: *Layout, r: *const Region) []const *Surface {
     const assigned = if (r.by_name) self.state.assignment(r.name) else self.assignedFor(r.keywords);
-    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    var out: std.ArrayList(*Surface) = .empty;
     const a = self.arena;
     if (assigned) |ids| {
         for (ids) |id| {
@@ -676,7 +676,7 @@ pub fn applyHides(self: *Layout) bool {
 /// attracted by keywords to an unassigned one. Never silently lost: the settings UI lists these
 /// so a user (or the plugin author) can see the gap and fix it.
 pub fn unplaced(self: *Layout) []const *Surface {
-    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    var out: std.ArrayList(*Surface) = .empty;
     const a = self.arena;
     outer: for (self.host.surfaces.items) |*s| {
         if (s.hidden) continue;

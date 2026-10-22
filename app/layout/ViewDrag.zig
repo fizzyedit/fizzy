@@ -2277,12 +2277,12 @@ pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) 
     // The whole list it goes into: the assignment, ids of plugins not loaded now included so they
     // keep their slots; or what the place shows by keyword, then — moving along an order —
     // whatever an earlier order named that is not showing now.
-    var base: std.ArrayListUnmanaged([]const u8) = .empty;
+    var base: std.ArrayList([]const u8) = .empty;
     base.appendSlice(l.arena, held) catch return;
     if (assigned == null and along) if (l.state.order(dest)) |ids| for (ids) |id| {
         if (!containsId(base.items, id)) base.append(l.arena, id) catch return;
     };
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var list: std.ArrayList([]const u8) = .empty;
     for (base.items) |id| if (!std.mem.eql(u8, id, moved)) list.append(l.arena, id) catch return;
     const index = switch (at) {
         .before => |id| indexOfId(list.items, id) orelse list.items.len,
@@ -2306,7 +2306,7 @@ pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) 
 
 /// Put `view`, new and in no place yet, into `dest`'s list at `at`, and show it there.
 fn insertView(l: *Layout, dest: []const u8, view: []const u8, at: Insert) void {
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var list: std.ArrayList([]const u8) = .empty;
     list.appendSlice(l.arena, holding(l, dest)) catch return;
     const index = switch (at) {
         .before => |id| indexOfId(list.items, id) orelse list.items.len,
@@ -2325,7 +2325,7 @@ fn insertView(l: *Layout, dest: []const u8, view: []const u8, at: Insert) void {
 fn others(l: *Layout, r: Region) []const []const u8 {
     const d = &l.state.view_drag;
     if (!d.active() or d.with_n <= 1) return &.{};
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for (d.with[1..d.with_n]) |it| {
         if (it.id.len == 0 or !accepts(r, keywordsOf(l, it.id))) continue;
         ids.append(l.arena, it.id) catch break;
@@ -2481,7 +2481,7 @@ fn landView(l: *Layout, from: []const u8, dest: []const u8, plan: Drop.Plan, vie
 /// The application's new view holding `moved` and what was carried with it (`State.documents`).
 fn houseView(l: *Layout, moved: []const u8) ?[]const u8 {
     const docs = l.state.documents orelse return null;
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     ids.append(l.arena, moved) catch return null;
     const d = &l.state.view_drag;
     if (d.active() and d.with_n > 1) for (d.with[1..d.with_n]) |it| {
@@ -2659,7 +2659,7 @@ pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
     // Every view out of the float's places first, so what a place's keywords show is read with
     // them all free: a view written into a place its keywords fill takes the rest of what they
     // show there with it, and would leave behind one of the float's still held by it.
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for (leaves) |leaf| {
         for (state.assignment(leaf) orelse continue) |raw| {
             ids.append(l.arena, ownId(l.arena, raw) orelse continue) catch {};
@@ -2815,7 +2815,7 @@ fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
 /// dropped once it has (`shutIfEmptied`).
 fn join(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) void {
     const pair = l.state.joinable(source, dest) orelse return swap(l, source, dest, moved);
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for ([_][]const u8{ dest, source }) |name| {
         for (holding(l, name)) |id| {
             const own = ownId(l.arena, id) orelse continue;
@@ -2843,7 +2843,7 @@ fn holding(l: *Layout, name: []const u8) []const []const u8 {
     if (l.state.assignment(name)) |ids| return ids;
     const r = regionNamed(l.state, name) orelse return &.{};
     const items = l.matchingIn(r);
-    var out = std.ArrayListUnmanaged([]const u8).initCapacity(l.arena, items.len) catch return &.{};
+    var out = std.ArrayList([]const u8).initCapacity(l.arena, items.len) catch return &.{};
     for (items) |s| out.appendAssumeCapacity(s.id);
     return out.items;
 }
@@ -3011,7 +3011,7 @@ fn idsWith(arena: std.mem.Allocator, ids: []const []const u8, add: []const u8) [
 }
 
 fn idsWithout(arena: std.mem.Allocator, ids: []const []const u8, drop: []const u8) []const []const u8 {
-    var out = std.ArrayListUnmanaged([]const u8).initCapacity(arena, ids.len) catch return &.{};
+    var out = std.ArrayList([]const u8).initCapacity(arena, ids.len) catch return &.{};
     for (ids) |id| {
         if (!std.mem.eql(u8, id, drop)) out.appendAssumeCapacity(id);
     }
@@ -3019,7 +3019,7 @@ fn idsWithout(arena: std.mem.Allocator, ids: []const []const u8, drop: []const u
 }
 
 fn idsReplacing(arena: std.mem.Allocator, ids: []const []const u8, drop: []const u8, add: []const u8) []const []const u8 {
-    var out = std.ArrayListUnmanaged([]const u8).initCapacity(arena, ids.len + 1) catch return &.{add};
+    var out = std.ArrayList([]const u8).initCapacity(arena, ids.len + 1) catch return &.{add};
     var replaced = false;
     for (ids) |id| {
         if (std.mem.eql(u8, id, drop)) {

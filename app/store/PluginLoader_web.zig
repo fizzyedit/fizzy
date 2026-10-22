@@ -151,7 +151,7 @@ const Pending = struct {
     why: ?[]u8 = null,
 };
 
-var pending: std.ArrayListUnmanaged(Pending) = .empty;
+var pending: std.ArrayList(Pending) = .empty;
 var pending_gpa: ?std.mem.Allocator = null;
 var next_req: u32 = 1;
 

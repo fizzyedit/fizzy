@@ -128,7 +128,7 @@ pub fn listPluginBlocks(gpa: Allocator, source: ?[:0]const u8) Allocator.Error![
         else => return &.{},
     };
 
-    var out: std.ArrayListUnmanaged(Entry) = .empty;
+    var out: std.ArrayList(Entry) = .empty;
     errdefer {
         for (out.items) |e| {
             gpa.free(e.id);
@@ -208,7 +208,7 @@ pub fn composeMergedText(
     const existing = try listPluginBlocks(gpa, existing_full_source);
     defer freeEntries(gpa, existing);
 
-    var order: std.ArrayListUnmanaged([]const u8) = .empty;
+    var order: std.ArrayList([]const u8) = .empty;
     defer order.deinit(gpa);
     var by_id: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     defer by_id.deinit(gpa);
@@ -348,7 +348,7 @@ pub const Reserved = struct {
 /// that does not parse as a list of strings yields an empty slice rather than an error. Free
 /// with `freeExtensions`.
 pub fn parseExtensions(gpa: Allocator, text: []const u8) ![]const []const u8 {
-    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    var out: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (out.items) |e| gpa.free(e);
         out.deinit(gpa);

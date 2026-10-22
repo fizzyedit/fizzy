@@ -136,7 +136,7 @@ const PendingAction = union(enum) {
     dismiss: struct { id: []u8 },
 };
 
-var pending_actions: std.ArrayListUnmanaged(PendingAction) = .empty;
+var pending_actions: std.ArrayList(PendingAction) = .empty;
 
 /// Last-known display name per plugin id (app-allocator owned). A sideloaded plugin only exposes
 /// its display name while loaded — once disabled it is unloaded and we'd otherwise fall back to the
@@ -167,7 +167,7 @@ var manifest_cache: std.StringArrayHashMapUnmanaged(PluginLoader.ProbedManifest)
 /// what is actually on disk, which is the only thing that guarantees a broken plugin always has
 /// a card to uninstall or reinstall from — even one that arrived in a state nothing recorded
 /// (a half-finished install, a sideloaded directory, a build fizzy never tried to load).
-var disk_ids: std.ArrayListUnmanaged([]u8) = .empty;
+var disk_ids: std.ArrayList([]u8) = .empty;
 /// Set when the plugins directory may have changed (first draw, Refresh, and after any install /
 /// uninstall / enable-disable applied in `tick`) so `draw` rescans once instead of listing the
 /// directory on every frame the tab is open.
@@ -195,7 +195,7 @@ pub fn uninstalledCatalog(arena: std.mem.Allocator) []const CatalogOffer {
     const snap = c.acquire();
     defer c.release();
     const s = snap orelse return &.{};
-    var out: std.ArrayListUnmanaged(CatalogOffer) = .empty;
+    var out: std.ArrayList(CatalogOffer) = .empty;
     for (s.summary.plugins) |p| {
         if (presentLocally(p.id)) continue;
         const rel = s.shard.releaseFor(p.id) orelse continue;
@@ -884,7 +884,7 @@ pub const PendingUpdate = struct {
     }
 };
 
-var pending_updates: std.ArrayListUnmanaged(PendingUpdate) = .empty;
+var pending_updates: std.ArrayList(PendingUpdate) = .empty;
 
 /// Where the once-per-session update check has got to.
 const AutoPhase = enum {
@@ -2000,7 +2000,7 @@ fn entryScoreLess(_: void, lhs: StoreEntry, rhs: StoreEntry) bool {
 
 /// Drop non-matching entries and order what's left. With no query this is the plain A→Z list the
 /// store has always shown; with one, the best match is the first card.
-fn rankEntries(entries: *std.ArrayListUnmanaged(StoreEntry), query: *const fuzzy.Query) void {
+fn rankEntries(entries: *std.ArrayList(StoreEntry), query: *const fuzzy.Query) void {
     if (query.isEmpty()) {
         std.sort.pdq(StoreEntry, entries.items, {}, entryLess);
         return;
@@ -2056,7 +2056,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
 
     // Store entries (STORE tab): one row per registry plugin, independent of local install
     // state — a pure "what does the store publish" list. See `drawStoreCard`.
-    var store_entries: std.ArrayListUnmanaged(StoreEntry) = .empty;
+    var store_entries: std.ArrayList(StoreEntry) = .empty;
     if (maybe_snapshot) |snap| {
         for (snap.summary.plugins) |entry| {
             rememberName(entry.id, entry.name);
@@ -2074,7 +2074,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // Installed entries (INSTALLED tab): everything genuinely present locally — loaded,
     // disabled-on-disk, sideloaded, or a failed/rejected build — enriched with a matching
     // registry row (for "store vX" / Update-availability) wherever the registry knows the id too.
-    var installed_entries: std.ArrayListUnmanaged(StoreEntry) = .empty;
+    var installed_entries: std.ArrayList(StoreEntry) = .empty;
     for (app.host.plugins.items) |plugin| {
         // The app's own registrations (the store page owner) are plugins to the document
         // machinery and nothing a user manages: no version, no update, nothing to uninstall.

@@ -135,10 +135,10 @@ pub const Watches = struct {
     cancel: *const std.atomic.Value(bool),
     /// Every folder watched, sorted, so a folder and what is below it are found by binary
     /// search. Owned.
-    paths: std.ArrayListUnmanaged([]u8) = .empty,
+    paths: std.ArrayList([]u8) = .empty,
     /// Watched by the walk in progress, merged into `paths` in one pass when it ends: a walk
     /// adds folders by the thousand, and inserting each into a sorted list is quadratic. Owned.
-    fresh: std.ArrayListUnmanaged([]u8) = .empty,
+    fresh: std.ArrayList([]u8) = .empty,
     /// The limit reached, until a watch is freed or added again.
     blocked: ?Blocked = null,
     /// The limit last said, until caught up: said once per time behind, not per retry.
@@ -594,7 +594,7 @@ pub const Watches = struct {
         // Renaming a common prefix keeps the run in order, so it merges back in one pass.
         const start, const end = self.below(src);
         const at = self.indexOf(src);
-        var run: std.ArrayListUnmanaged([]u8) = .empty;
+        var run: std.ArrayList([]u8) = .empty;
         defer run.deinit(self.gpa);
         run.ensureTotalCapacity(self.gpa, end - start + 1) catch {
             if (self.drop(src, true, dst, ctx) > 0) self.blocked = null;

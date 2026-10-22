@@ -149,7 +149,7 @@ fn start(io: std.Io, gpa: std.mem.Allocator, handover_to: ?[]const u8, log: ?std
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = try std.process.executablePath(io, &buf);
     var argv_buf: [6][]const u8 = undefined;
-    var argv: std.ArrayListUnmanaged([]const u8) = .initBuffer(&argv_buf);
+    var argv: std.ArrayList([]const u8) = .initBuffer(&argv_buf);
     argv.appendAssumeCapacity(buf[0..n]);
     if (profile_dir) |dir| argv.appendSliceAssumeCapacity(&.{ profile.flag, dir });
     // A flag, not `FIZZY_QUIET`: on macOS the new instance gets a fixed environment.

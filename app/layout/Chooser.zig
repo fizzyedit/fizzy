@@ -80,8 +80,8 @@ all: []const *Layout.Surface,
 selected_id: ?[]const u8,
 /// Views in the order their items were drawn, and where each item was: where along the chooser a
 /// carried view goes in (`insertAt`), and what a lift carries.
-drawn: std.ArrayListUnmanaged([]const u8) = .empty,
-drawn_rects: std.ArrayListUnmanaged(dvui.Rect.Physical) = .empty,
+drawn: std.ArrayList([]const u8) = .empty,
+drawn_rects: std.ArrayList(dvui.Rect.Physical) = .empty,
 picked_id: ?[]const u8 = null,
 picked_again_id: ?[]const u8 = null,
 /// One of the place's views is in the view drag's hand: not on the chooser while it is carried,
@@ -136,7 +136,7 @@ pub fn init(src: std.lang.SourceLocation, f: *Layout, place: Region, opts: Optio
             carried = s.id;
         };
         if (carried) |c| {
-            var rest: std.ArrayListUnmanaged(*Layout.Surface) = .empty;
+            var rest: std.ArrayList(*Layout.Surface) = .empty;
             for (all) |s| if (!std.mem.eql(u8, s.id, c)) rest.append(f.arena, s) catch {};
             all = rest.items;
         }

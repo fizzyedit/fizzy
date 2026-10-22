@@ -138,9 +138,9 @@ pending_store_plugin: []const u8 = "",
 /// its shape's `@src()`, so it is the same id this frame will declare. The one case it cannot
 /// help is a command dispatched before the *first* shape has ever run — there is genuinely no
 /// region yet — which is why this is a swap rather than a claim that ordering no longer matters.
-regions: std.ArrayListUnmanaged(Region) = .empty,
+regions: std.ArrayList(Region) = .empty,
 /// The set the shape currently running is declaring. Swapped into `regions` when it finishes.
-regions_building: std.ArrayListUnmanaged(Region) = .empty,
+regions_building: std.ArrayList(Region) = .empty,
 /// Every region's remembered extent in **points** — width under a horizontal parent, height
 /// under a vertical one — by the name its shape declared, loaded from
 /// `layout.zon` at startup and written back debounced.
@@ -203,9 +203,9 @@ center_transition: core.anim.Transition = .{},
 /// `discard`ed on teardown.
 swaps: std.AutoHashMapUnmanaged(u64, *core.anim.Transition) = .empty,
 /// Surfaces to draw once, unseen, in a place before they are shown there (`warmIn`).
-warm: std.ArrayListUnmanaged(Warm) = .empty,
+warm: std.ArrayList(Warm) = .empty,
 /// Keyword sets qualified by the region enclosing theirs, interned. See `qualify`.
-qualified: std.ArrayListUnmanaged(Qualified) = .empty,
+qualified: std.ArrayList(Qualified) = .empty,
 /// Region names interned. The shape's own names are literals; a plugin's are formatted per
 /// frame ("Pane 3") into memory that is gone by the time the registry is read.
 names: std.StringHashMapUnmanaged(void) = .empty,
@@ -542,7 +542,7 @@ fn setAssignment(self: *State, gpa: std.mem.Allocator, name: []const u8, surface
 }
 
 fn evictIdFromOthers(self: *State, gpa: std.mem.Allocator, keep: []const u8, id: []const u8) !void {
-    var names: std.ArrayListUnmanaged([]const u8) = .empty;
+    var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(gpa);
     var it = self.assignments.iterator();
     while (it.next()) |e| {
@@ -552,7 +552,7 @@ fn evictIdFromOthers(self: *State, gpa: std.mem.Allocator, keep: []const u8, id:
             break;
         };
     }
-    var kept: std.ArrayListUnmanaged([]const u8) = .empty;
+    var kept: std.ArrayList([]const u8) = .empty;
     defer kept.deinit(gpa);
     for (names.items) |region| {
         const ids = self.assignment(region) orelse continue;

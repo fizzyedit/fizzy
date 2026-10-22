@@ -170,7 +170,7 @@ pub const Forest = struct {
     };
 
     pub fn collectLinks(self: *const Forest, gpa: std.mem.Allocator) []const SavedLink {
-        var out: std.ArrayListUnmanaged(SavedLink) = .empty;
+        var out: std.ArrayList(SavedLink) = .empty;
         var it = self.roots.valueIterator();
         while (it.next()) |n| collectFrom(n.*, gpa, &out);
         return out.toOwnedSlice(gpa) catch {
@@ -179,7 +179,7 @@ pub const Forest = struct {
         };
     }
 
-    fn collectFrom(node: *const Node, gpa: std.mem.Allocator, out: *std.ArrayListUnmanaged(SavedLink)) void {
+    fn collectFrom(node: *const Node, gpa: std.mem.Allocator, out: *std.ArrayList(SavedLink)) void {
         switch (node.kind) {
             .leaf => {},
             .branch => |b| {
@@ -289,12 +289,12 @@ pub const Forest = struct {
             one[0] = root_name;
             return one;
         };
-        var out: std.ArrayListUnmanaged([]const u8) = .empty;
+        var out: std.ArrayList([]const u8) = .empty;
         leavesIn(node, arena, &out);
         return out.items;
     }
 
-    fn leavesIn(node: *const Node, arena: std.mem.Allocator, out: *std.ArrayListUnmanaged([]const u8)) void {
+    fn leavesIn(node: *const Node, arena: std.mem.Allocator, out: *std.ArrayList([]const u8)) void {
         switch (node.kind) {
             .leaf => |n| out.append(arena, n) catch {},
             .branch => |b| {
@@ -330,7 +330,7 @@ pub const Forest = struct {
             one[0] = name;
             return one;
         };
-        var out: std.ArrayListUnmanaged([]const u8) = .empty;
+        var out: std.ArrayList([]const u8) = .empty;
         leavesIn(node, arena, &out);
         return out.items;
     }

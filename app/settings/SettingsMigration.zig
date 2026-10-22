@@ -86,7 +86,7 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
     const blocks = SettingsPluginsZon.listPluginBlocks(allocator, data) catch return;
     defer SettingsPluginsZon.freeEntries(allocator, blocks);
 
-    var overlay: std.ArrayListUnmanaged(SettingsPluginsZon.Entry) = .empty;
+    var overlay: std.ArrayList(SettingsPluginsZon.Entry) = .empty;
     defer {
         for (overlay.items) |e| {
             // overlay ids are borrowed (from blocks / dupe below); texts we allocate are freed here.

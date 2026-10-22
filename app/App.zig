@@ -70,7 +70,7 @@ arena: std.heap.ArenaAllocator,
 /// Positions to reveal once their not-yet-open path finishes loading. Set by `revealPosition`
 /// when the target is not open yet and drained once per frame. Rare and short-lived (usually at
 /// most one, from a single goto-definition), so a linear per-frame scan is fine.
-pending_reveals: std.ArrayListUnmanaged(PendingReveal) = .empty,
+pending_reveals: std.ArrayList(PendingReveal) = .empty,
 
 config_folder: []const u8,
 
@@ -86,10 +86,10 @@ plugin_data_folders: std.StringHashMapUnmanaged(PluginDataFolder) = .empty,
 plugin_data_lock: std.Io.Mutex = .init,
 /// Registered plugins whose entry could not be made when they registered (out of memory), by
 /// lowercased id, owned: only these get one made on their next ask. An unknown id never does.
-plugin_data_pending: std.ArrayListUnmanaged([]u8) = .empty,
+plugin_data_pending: std.ArrayList([]u8) = .empty,
 /// Ids that asked for a data folder they cannot have (not a plain identifier), owned: each is
 /// said once.
-plugin_data_refused: std.ArrayListUnmanaged([]u8) = .empty,
+plugin_data_refused: std.ArrayList([]u8) = .empty,
 
 /// Plugin registry + service locator exposed to plugins
 host: Host,
@@ -115,13 +115,13 @@ file_table: core.FileTable,
 secrets: Secrets,
 
 /// Keeps plugin dylibs mapped while their vtables are live (native only).
-loaded_plugin_libs: std.ArrayListUnmanaged(PluginLoader.LoadedLib) = .empty,
+loaded_plugin_libs: std.ArrayList(PluginLoader.LoadedLib) = .empty,
 
 /// Runtime bookkeeping of user-plugin ids that are present on disk but not loaded
 /// (explicitly disabled, or freshly dropped into `plugins/` with no `.enabled = true`).
 /// Persistence lives per-plugin as `.plugins.<id>.enabled` in `settings.zon` (R12) — this
 /// list is only the UI/skip-load set for the current session. Freed in `deinit`.
-disabled_plugin_ids: std.ArrayListUnmanaged([]const u8) = .empty,
+disabled_plugin_ids: std.ArrayList([]const u8) = .empty,
 
 /// Subset of `disabled_plugin_ids`: on disk with **no `.plugins.<id>.enabled` field on record at
 /// all** — i.e. a build the user dropped in (or `zig build install`ed from a plugin repo) that
@@ -131,7 +131,7 @@ disabled_plugin_ids: std.ArrayListUnmanaged([]const u8) = .empty,
 /// file-association prompt on its first load (see `setPluginEnabled`). Runtime-only, like
 /// `disabled_plugin_ids`; a decision either way (or an uninstall) drops the entry. Freed in
 /// `deinit`.
-undecided_plugin_ids: std.ArrayListUnmanaged([]const u8) = .empty,
+undecided_plugin_ids: std.ArrayList([]const u8) = .empty,
 
 /// Runtime bookkeeping of user-plugin ids the user opted **out** of store updates for
 /// (`.plugins.<id>.auto_update = false` in `settings.zon`). Stored as the opt-out set rather than
@@ -139,7 +139,7 @@ undecided_plugin_ids: std.ArrayListUnmanaged([]const u8) = .empty,
 /// common case and must not need a list membership to be right. Whether an update the pass finds
 /// is applied silently or offered in the update window is `Settings.plugin_update_mode`, one
 /// app-wide choice. Seeded by `seedPluginFlags`; freed in `deinit`.
-auto_update_off_ids: std.ArrayListUnmanaged([]const u8) = .empty,
+auto_update_off_ids: std.ArrayList([]const u8) = .empty,
 
 /// Fizzy-only pending `.plugins.<id>` reserved-field writes (id → changed fields), drained by
 /// `writeMergedSettings` alongside `host.plugin_settings_pending`. Never touched by a
@@ -165,7 +165,7 @@ extension_owner: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 /// `.extensions` entries fizzy could not honor as written, rebuilt alongside `extension_owner`
 /// and surfaced in Settings > File Types exactly as `keybind_conflicts` is surfaced in Keyboard
 /// Shortcuts. Owned duped strings, freed on the next rebuild.
-extension_conflicts: std.ArrayListUnmanaged(ExtensionConflict) = .empty,
+extension_conflicts: std.ArrayList(ExtensionConflict) = .empty,
 
 /// Snapshot of dvui's *built-in* keybinds (`char_left`, `copy`, `next_widget`, …), taken in
 /// `init` before fizzy adds its own. `Window.init` installs these once and never again,
@@ -191,7 +191,7 @@ keybind_conflicts: ?[]Keymap.Conflict = null,
 /// went wrong instead of failing silently into the log. Populated by `loadUserPlugins`;
 /// strings are owned here and freed in `deinit`. Surfaced in the Plugins store tab
 /// (`PluginStore.zig`), not a startup dialog.
-failed_user_plugins: std.ArrayListUnmanaged(FailedPlugin) = .empty,
+failed_user_plugins: std.ArrayList(FailedPlugin) = .empty,
 
 /// Each user plugin's loads this run, by id, for the `plugins` service (`pluginStatus`): a
 /// generation every load moves, why the last attempt failed, and the last load's timings. Kept
@@ -214,7 +214,7 @@ folder: ?[]const u8 = null,
 /// there is a use-after-free in every caller still holding the slice, so the old string is
 /// parked here and released at the top of the next frame instead (the same shape as the
 /// workbench's retired directory listings).
-folder_retired: std.ArrayListUnmanaged([]const u8) = .empty,
+folder_retired: std.ArrayList([]const u8) = .empty,
 
 /// Set by `closeProjectFolder`; the teardown itself runs at the top of the next frame so the
 /// ignore-rule teardown never runs mid-draw.
@@ -245,7 +245,7 @@ pending_close_after_save: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
 /// queue into `quit_saves_in_flight` when their save kicks off, then drop out when
 /// their save completes and the file closes. Non-empty (or in-flight non-empty) ⇒
 /// save-all quit in progress.
-quit_save_all_ids: std.ArrayListUnmanaged(u64) = .empty,
+quit_save_all_ids: std.ArrayList(u64) = .empty,
 
 /// Files whose async save was started as part of save-all quit and we're waiting on.
 /// When this AND `quit_save_all_ids` are both empty, the quit completes.
@@ -1051,7 +1051,7 @@ pub fn pluginHasDirtyDocs(app: *App, plugin: *sdk.Plugin) bool {
 /// to reopen them. Returned ids are stable across the call; the slice is caller-owned.
 pub fn staleOpenDocsForExtension(app: *App, gpa: std.mem.Allocator, ext: []const u8) ![]u64 {
     const want = app.host.pluginForExtension(ext) orelse return &.{};
-    var out: std.ArrayListUnmanaged(u64) = .empty;
+    var out: std.ArrayList(u64) = .empty;
     errdefer out.deinit(gpa);
     for (app.open_files.values()) |doc| {
         if (doc.owner == want) continue;
@@ -1234,7 +1234,7 @@ pub fn closeProjectFolder(app: *App) void {
 /// the iterator that's still walking it. Best-effort: a single failed rename is logged and
 /// skipped rather than aborting the rest.
 pub fn migrateFlatPluginLayout(allocator: std.mem.Allocator, plugins_dir: []const u8, ext_suffix: []const u8) void {
-    var flat_ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var flat_ids: std.ArrayList([]const u8) = .empty;
     defer {
         for (flat_ids.items) |id| allocator.free(id);
         flat_ids.deinit(allocator);
