@@ -114,6 +114,8 @@ jobs:
         run: python3 scripts/test-check-kickoff.py
       - name: scripts/agent-prepare, agent-finish
         run: bash scripts/test-agent-work.sh
+      - name: superfans (fan-dedupe, fan-route, fan-lint on seeded input)
+        run: bash scripts/test-fan.sh
       - name: scripts/runner-setup.sh (private-repo check)
         run: sh scripts/test-runner-setup.sh
       - name: scripts/runner-setup.ps1 (private-repo check, dry run under pwsh)

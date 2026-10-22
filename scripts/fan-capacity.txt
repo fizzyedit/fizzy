@@ -1,0 +1,9 @@
+# Where superfans may run, one runner per line: scripts/fan-route.sh reads this (or the file in
+# FIZZY_FAN_CAPACITY, e.g. ~/.claude/fizzy-pm/capacity.txt once self-hosted boxes register).
+#
+# name | needs it offers (comma list) | gpu/display | slots | schedule window | online
+#
+# slots and schedule window are for the router's reader and the routine's own schedule: the
+# router skips a runner with 0 slots or offline but tracks no running jobs and reads no clock.
+# Needs: cloud-linux, linux-gpu, macos, windows, app-window.
+cloud | cloud-linux | no | 1 | any | yes
