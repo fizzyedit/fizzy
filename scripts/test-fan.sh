@@ -34,6 +34,19 @@ grep -q '#13' "$tmp/out" || fail "regression names old number"
 
 [ "$(code scripts/fan-dedupe.sh --check fan:boundary/a/one)" = 10 ] || fail "batch first fingerprint"
 
+# Known and accepted, read from the fan's skill; a fixed batch is not a regression.
+mkdir -p "$tmp/ka/fan-boundary"
+printf '## 4. Known and accepted\n\n- `fan:boundary/x/accepted.zig`\nfan:boundary/<id>/<path>\n\n## 5. Sev\nfan:boundary/y/not-accepted\n' > "$tmp/ka/fan-boundary/SKILL.md"
+[ "$(FIZZY_FAN_SKILLS="$tmp/ka" code scripts/fan-dedupe.sh --check fan:boundary/x/accepted.zig)" = 10 ] || fail "known and accepted"
+[ "$(FIZZY_FAN_SKILLS="$tmp/ka" code scripts/fan-dedupe.sh --check fan:boundary/y/not-accepted)" = 0 ] || fail "other section not accepted"
+cat > "$tmp/batch.json" <<'JSON'
+[{"number":31,"state":"CLOSED","stateReason":"COMPLETED","labels":[],"body":"fingerprint: fan:boundary/l/a\nfingerprint: fan:boundary/l/b"}]
+JSON
+[ "$(FAN_ISSUES_JSON="$tmp/batch.json" code scripts/fan-dedupe.sh --check fan:boundary/l/a)" = 10 ] || fail "closed batch is not a regression"
+# A relative prompt file resolves against the caller's directory.
+echo 'Run /fan-boundary' > "$tmp/p.txt"
+(cd "$tmp" && "$OLDPWD/scripts/fan-lint.sh" p.txt) || fail "relative prompt file"
+
 # Router.
 [ "$(scripts/fan-route.sh boundary)" = "boundary cloud-linux cloud" ] || fail "route boundary"
 mkdir -p "$tmp/skills/fan-look"

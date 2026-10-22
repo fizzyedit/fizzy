@@ -10,6 +10,11 @@
 # Also checks each fan skill has frontmatter `name` and `needs:`, and that a routine prompt is the
 # one line `Run /fan-<name>`.
 set -euo pipefail
+# Argument files are relative to where the caller stands, so resolve them before the cd to the root.
+args=()
+for a in "$@"; do
+  if [ "$a" = - ] || [[ "$a" = /* ]]; then args+=("$a"); else args+=("$PWD/$a"); fi
+done
 cd "$(dirname "$0")/.."
 
 bad='do not (post|file|report|create|open|change anything)|don.t (post|file|report)|never (post|file|report) (a |any |the )?(summary|issue|finding)|post nothing|nothing is posted|read-only run'
@@ -28,7 +33,7 @@ for f in .claude/skills/fan-*/SKILL.md; do
   head -n 12 "$f" | grep -q '^name: fan-' || { echo "$f: frontmatter name is not fan-*"; status=1; }
 done
 
-for p in "$@"; do
+for p in ${args[@]+"${args[@]}"}; do
   if [ "$p" = - ]; then tmp=$(mktemp); cat > "$tmp"; src=stdin; else tmp="$p"; src="$p"; fi
   lint_text "$src" "$tmp"
   lines=$(grep -c . "$tmp" || true)

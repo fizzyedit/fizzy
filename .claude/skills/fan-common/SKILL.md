@@ -17,13 +17,14 @@ posted: a run that finds something and files nothing is a failed run.
 
 ## 1. Setup
 
-1. On a cloud machine run
-   `curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash`
-   (the repo's `scripts/cloud-setup.sh`), which installs Zig and unpacks the dependency cache.
-   Elsewhere `zig version` and `gh auth status` are enough.
-2. Find where this fan runs: `scripts/fan-route.sh <name>`. A line ending `no-runner` means no
+1. Find where this fan runs: `scripts/fan-route.sh <name>`. A line ending `no-runner` means no
    runner offers a need: write the run record (section 6) with `gate: no runner` and stop; that
    is not an error and not an issue.
+2. Only then, on a cloud machine run the repo's `scripts/cloud-setup.sh` (it is the release
+   asset `deps-cache/cloud-setup.sh`, so a fresh machine without a checkout can run
+   `curl -fsSL https://github.com/fizzyedit/fizzy/releases/download/deps-cache/cloud-setup.sh | bash`),
+   which installs Zig and unpacks the dependency cache. Elsewhere `zig version` and
+   `gh auth status` are enough.
 3. If setup or the fan's gate cannot run (cache missing, no network), file exactly one issue
    `fan:<name>: cannot run`, fingerprint `fan:<name>/setup/<what failed>`, deduped like any
    finding, write the run record, and stop. No retries beyond 2.
@@ -53,7 +54,10 @@ Before filing, `scripts/fan-dedupe.sh --check <fingerprint>`:
   `regression:` and `Regression of #N` in the body.
 
 `scripts/fan-dedupe.sh <name>` lists what is already filed. A fingerprint listed under the
-fan's "Known and accepted" is a duplicate too, whatever the issues say.
+fan's "Known and accepted" is a duplicate too, whatever the issues say: `--check` reads that
+section of the fan's `SKILL.md` itself (exit 10, `duplicate: known and accepted`). A closed-completed
+batch of lows counts as a duplicate of each low, not a regression; a regression is only a fixed
+issue with the same fingerprint.
 
 Stale check: an open `fan:<name>` issue not touched for 14 days is re-checked by this fan on
 its next run; if its fingerprint no longer reproduces, close it with one line saying so.
