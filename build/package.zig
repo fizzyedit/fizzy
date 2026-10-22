@@ -203,6 +203,8 @@ pub fn addSteps(opts: Options) *std.Build.Step {
         vpk_pkg_sh.stdio = .inherit;
         vpk_pkg_sh.step.dependOn(pack_stage_tail);
 
+        // Consuming apps can install the native installers without building a disk image.
+        b.addNamedLazyPath("package-installers", vpk_pkg_out_dir);
         if (target.result.os.tag != .macos) break :vpk vpk_pkg_out_dir;
 
         // Beside the .pkg, a drag-to-Applications .dmg of the same signed bundle, named as vpk

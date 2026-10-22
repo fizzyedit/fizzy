@@ -34,6 +34,21 @@ Fizzy offers a SDK for developing plugins and several plugins already exist that
 - [agent](https://github.com/fizzyedit/agent) - have an agent drive fizzy over MCP
 - [atlas](https://github.com/fizzyedit/atlas) - Obsidian-styled markdown links and backlinks, and an interactive map for document links
 
+## Minimal app measurements
+
+The [measurement job](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml)
+records example-app's minimal shape on macOS and Linux in ReleaseFast and ReleaseSmall.
+Download `hello-numbers-<OS>-<arch>` from a run for the exact JSON lines and source revisions.
+
+| Measurement | macOS and Linux results |
+| --- | --- |
+| Stripped executable and installer bytes | [`binary_bytes`, `installer_bytes` in the JSONL artifacts](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml) |
+| First frame and idle RSS after 30 seconds | [`first_frame_ms`, `idle_rss_bytes` in the JSONL artifacts](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml) |
+| Gzipped wasm bytes | [`wasm_gzip_bytes` in the JSONL artifacts](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml) |
+
+See the [method and manual Electron/Tauri comparison](docs/HELLO_NUMBERS.md) before comparing
+samples: runner hardware, OS caches, packaged resources and startup clocks affect the results.
+
 ## User Interface
 - The user interface is driven by [DVUI](https://github.com/david-vanderson/dvui).
 - The general layout takes many ideas from VSCode or IDE's, as well as general project setup using folders.

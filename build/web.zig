@@ -31,6 +31,7 @@ pub fn build(
     assets_module: *std.Build.Module,
     /// The window's icon (`app.Branding.png`); `src/Entry.zig` imports it.
     app_icon_module: *std.Build.Module,
+    app_layout: ?std.Build.LazyPath,
     app_plugins: []const sdk.BundledPlugin,
     web_plugin_deps: []const []const u8,
     web_plugin_dirs: []const @import("app.zig").WebPluginDir,
@@ -265,6 +266,7 @@ pub fn build(
     // it — one helper, so the two cannot drift.
     const app_module_web = sdk.wireAppModule(b, web_target, optimize, dvui_web, core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
     app_module_web.addImport("bundled_plugins", bundled_web);
+    sdk.wireAppLayout(b, web_target, optimize, app_layout, dvui_web, app_module_web, core_module_web, sdk_module_web, web_exe.root_module);
 
     // Cache-buster: stamps a 64-char hash into the index.html / web.js placeholders so
     // the browser picks up new wasm builds without manual hard-reloads. Re-implements
@@ -326,8 +328,9 @@ pub fn build(
 }
 
 /// The steps over `build`'s result: `web` installs it into `zig-out/web/`, and the ones that
-/// serve, copy or only compile it.
+/// serve, copy or only compile it. Exposes `web-wasm` for consuming apps to install the module.
 pub fn install(b: *std.Build, web: Web) void {
+    b.addNamedLazyPath("web-wasm", web.wasm.getEmittedBin());
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
     const install_wasm = b.addInstallArtifact(web.wasm, .{
         .dest_dir = .{ .override = web_install_dir },

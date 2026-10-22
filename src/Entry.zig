@@ -442,6 +442,8 @@ fn revealOnceDrawn(at_end: bool) void {
     switch (reveal) {
         .first_frame => if (at_end) {
             fizzy.core.profile.phase(dvui.io, "first frame");
+            if (fizzy.core.profile.phases()) |ph|
+                std.log.info("startup: first frame {d:.3} ms after main", .{ph.ms(ph.len - 1)});
             reveal = .next_frame;
             dvui.refresh(null, @src(), null);
         },
