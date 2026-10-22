@@ -88,6 +88,7 @@ pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 /// Fizzy's own shape. A consumer that wants another one passes `-Dapp-layout=`.
 const fizzy_layout = @import("layout.zig");
+const mobile_layout = @import("layout_mobile.zig");
 pub const Layout = @import("app").layout.Layout;
 pub const Region = @import("app").layout.Region;
 const AppInfo = @import("app").AppInfo;
@@ -3637,6 +3638,28 @@ pub fn markWindowRatiosDirty(editor: *Editor) void {
     editor.app.layout.save_deadline_ns = fizzy.core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
 }
 
+/// Switch to the arrangement `shape` keeps in `layout.zon` (`Layout.State.shape`), when the shape
+/// drawing the window changed: a rotation or a resize across the phone threshold. The one being
+/// left is written first if it has unsaved changes. A no-op while the shape is the same.
+///
+/// Limit: it replaces the in-memory arrangement outright, floats included, whatever else is
+/// happening, a demo playing among it. The phone form factor comes from the screen's short side,
+/// not the window, so it changes with the device and not with a resize, and nothing guards
+/// against a flip mid-demo; none is expected.
+pub fn useShape(editor: *Editor, shape: []const u8) void {
+    const state = &editor.app.layout;
+    if (std.mem.eql(u8, state.shape, shape)) return;
+    if (state.dirty) editor.saveRegions();
+    state.resetLayout(editor.app.gpa);
+    // `resetLayout` is also Reset Layout, which asks the next save to clear the file's tree. A
+    // switch only empties the state in memory; what the file holds for either shape stays.
+    state.tree_cleared = false;
+    state.shape = shape;
+    state.dirty = false;
+    editor.loadSavedLayout();
+    dvui.refresh(null, @src(), null);
+}
+
 /// Forget extents, assignments and runtime splits, write an empty region list,
 /// and redraw. Window geometry in `layout.zon` is left alone.
 pub fn resetLayout(editor: *Editor) void {
@@ -4799,6 +4822,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.processPendingSaveAs();
             editor.processPendingShow();
 
+            // fizzy's own shapes: a phone gets the mobile one (`Layout.form_factor` is this same
+            // value). An app supplying its own layout chooses for itself, and keeps
+            // `layout.zon`'s first arrangement. Before the `Layout` is made over the state, since
+            // switching replaces what is in it.
+            const own_shapes = comptime !build_opts.has_app_layout;
+            const mobile = own_shapes and fizzy.core.platform.formFactor() == .phone;
+            if (own_shapes) editor.useShape(if (mobile) mobile_layout.shape_key else "");
             var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
             // Published for the duration of the shape, so a plugin drawing inside a region can
             // declare one of its own through `Host.region`. Cleared below: a `*Layout` that
@@ -4814,6 +4844,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             layout.ctx = ctx;
             const shell_result = if (comptime build_opts.has_app_layout)
                 @import("app_layout").layout(ctx, &layout)
+            else if (mobile)
+                mobile_layout.layout(ctx, &layout)
             else
                 fizzy_layout.layout(ctx, &layout);
 
@@ -5071,13 +5103,13 @@ fn saveRegions(editor: *Editor) void {
             if (withoutSessionMounts(arena.allocator(), ids)) |kept| field.* = kept;
         };
     }
-    fizzy.backend.saveRegions(editor.app.config_folder, regions);
+    fizzy.backend.saveRegions(editor.app.config_folder, editor.app.layout.shape, regions);
     if (editor.app.layout.dock) |*d| {
         const snap = d.snapshot(gpa) catch return;
         defer snap.deinit(gpa);
-        fizzy.backend.saveTree(editor.app.config_folder, snap);
+        fizzy.backend.saveTree(editor.app.config_folder, editor.app.layout.shape, snap);
     } else if (editor.app.layout.tree_cleared) {
-        fizzy.backend.saveTree(editor.app.config_folder, null);
+        fizzy.backend.saveTree(editor.app.config_folder, editor.app.layout.shape, null);
         editor.app.layout.tree_cleared = false;
     }
 }
@@ -5153,10 +5185,10 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
 /// top of the layout as it stands. At launch, and when a demo gives the window back.
 pub fn loadSavedLayout(editor: *Editor) void {
     const gpa = editor.app.gpa;
-    const saved = fizzy.backend.loadRegions(gpa, editor.app.config_folder);
+    const saved = fizzy.backend.loadRegions(gpa, editor.app.config_folder, editor.app.layout.shape);
     defer fizzy.backend.freeRegions(gpa, saved);
     editor.applySavedRegions(saved);
-    if (fizzy.backend.loadTree(gpa, editor.app.config_folder)) |d| {
+    if (fizzy.backend.loadTree(gpa, editor.app.config_folder, editor.app.layout.shape)) |d| {
         editor.app.layout.pending_dock = d;
     }
 }

@@ -79,7 +79,42 @@ pub const SavedFrame = struct {
     /// Live seed-tree arrangement (`DockLayout.snapshot`). Absent in files written before
     /// the seed form, and while a shape still declares regions by call order.
     tree: ?core.widgets.DockLayout.Snapshot = null,
+    /// The arrangement of every shape after the first, by its key (`Layout.State.shape`). The
+    /// first shape's stays in `regions` and `tree` above, so a file written before shapes had
+    /// keys reads as it always did, and one written now reads in a fizzy that has none.
+    shapes: []const SavedShape = &.{},
 };
+
+/// What one shape keeps in `layout.zon`: its places and its seed tree.
+pub const SavedShape = struct {
+    key: []const u8,
+    regions: []const SavedRegion = &.{},
+    tree: ?core.widgets.DockLayout.Snapshot = null,
+};
+
+fn shapeOf(f: SavedFrame, key: []const u8) ?SavedShape {
+    if (key.len == 0) return .{ .key = "", .regions = f.regions, .tree = f.tree };
+    for (f.shapes) |s| if (std.mem.eql(u8, s.key, key)) return s;
+    return null;
+}
+
+/// Put `s` in `f` under its key, in `arena` memory for a shape of its own.
+fn setShape(arena: std.mem.Allocator, f: *SavedFrame, s: SavedShape) !void {
+    if (s.key.len == 0) {
+        f.regions = s.regions;
+        f.tree = s.tree;
+        return;
+    }
+    const grown = try arena.alloc(SavedShape, f.shapes.len + 1);
+    var n: usize = 0;
+    for (f.shapes) |other| {
+        if (std.mem.eql(u8, other.key, s.key)) continue;
+        grown[n] = other;
+        n += 1;
+    }
+    grown[n] = s;
+    f.shapes = grown[0 .. n + 1];
+}
 const layout_file = "layout.zon";
 /// Geometry plus a line or two per region; far more than this is a corrupt file, not a layout.
 const max_layout_file: usize = 64 * 1024;
@@ -134,56 +169,56 @@ pub fn writeWindowFile(dir: []const u8, f: SavedFrame) void {
     };
 }
 
-/// Read-modify-write: preserves whatever frame geometry is already on disk, overrides only the
-/// explorer/panel split ratios. Cross-platform (called from `Editor`'s debounced autosave on
-/// every OS, not just macOS).
-/// Read-modify-write: keeps whatever frame geometry is on disk, replaces the region list.
-pub fn saveRegions(dir: []const u8, regions: []const SavedRegion) void {
+/// Read-modify-write: keeps frame geometry and every other shape's arrangement, replaces the
+/// region list of `shape` (`Layout.State.shape`). Cross-platform (called from `Editor`'s debounced
+/// autosave on every OS, not just macOS).
+pub fn saveRegions(dir: []const u8, shape: []const u8, regions: []const SavedRegion) void {
     const gpa = std.heap.page_allocator;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     var f = loadWindowFile(gpa, arena.allocator(), dir);
-    const keep = f.regions;
-    f.regions = regions;
+    var mine = shapeOf(f, shape) orelse SavedShape{ .key = shape };
+    mine.regions = regions;
+    setShape(arena.allocator(), &f, mine) catch return;
     writeWindowFile(dir, f);
-    f.regions = keep;
 }
 
-/// Read-modify-write: keeps frame geometry and the region list, replaces the seed-tree snapshot.
-/// Pass `null` to clear it (Reset Layout). Shapes that never call `Layout.tree` should not call
-/// this, so an existing tree on disk is left alone.
-pub fn saveTree(dir: []const u8, tree: ?core.widgets.DockLayout.Snapshot) void {
+/// Read-modify-write: keeps frame geometry and the region lists, replaces the seed-tree snapshot
+/// of `shape`. Pass `null` to clear it (Reset Layout). Shapes that never call `Layout.tree` should
+/// not call this, so an existing tree on disk is left alone.
+pub fn saveTree(dir: []const u8, shape: []const u8, tree: ?core.widgets.DockLayout.Snapshot) void {
     const gpa = std.heap.page_allocator;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     var f = loadWindowFile(gpa, arena.allocator(), dir);
-    const keep = f.tree;
-    f.tree = tree;
+    var mine = shapeOf(f, shape) orelse SavedShape{ .key = shape };
+    mine.tree = tree;
+    setShape(arena.allocator(), &f, mine) catch return;
     writeWindowFile(dir, f);
-    f.tree = keep;
 }
 
-/// The saved seed-tree, rebuilt as a live `DockLayout`, or null when the file has none.
+/// The saved seed-tree of `shape`, rebuilt as a live `DockLayout`, or null when the file has none.
 /// Caller owns the result (`DockLayout.deinit`).
-pub fn loadTree(gpa: std.mem.Allocator, dir: []const u8) ?core.widgets.DockLayout {
+pub fn loadTree(gpa: std.mem.Allocator, dir: []const u8, shape: []const u8) ?core.widgets.DockLayout {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const f = loadWindowFile(gpa, arena.allocator(), dir);
-    const snap = f.tree orelse return null;
+    const snap = (shapeOf(f, shape) orelse return null).tree orelse return null;
     var dock = core.widgets.DockLayout.fromSnapshot(gpa, snap) catch return null;
     dock.animated = true;
     return dock;
 }
 
-/// Every region `layout.zon` remembers, in `gpa`-owned memory. Call once at startup; free with
-/// `freeRegions`.
-pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
+/// Every region `layout.zon` remembers for `shape`, in `gpa`-owned memory. Call at startup and
+/// when the shape changes; free with `freeRegions`.
+pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8, shape: []const u8) []SavedRegion {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const f = loadWindowFile(gpa, arena.allocator(), dir);
-    const out = gpa.alloc(SavedRegion, f.regions.len) catch return &.{};
+    const saved = (shapeOf(f, shape) orelse return &.{}).regions;
+    const out = gpa.alloc(SavedRegion, saved.len) catch return &.{};
     var n: usize = 0;
-    for (f.regions) |r| {
+    for (saved) |r| {
         const name = gpa.dupe(u8, r.name) catch continue;
         var surfaces: ?[]const []const u8 = null;
         if (r.surfaces) |all| {
