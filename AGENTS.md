@@ -199,8 +199,9 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 
 ## When you need more than this file
 
-New and changed code and comments follow [`docs/STYLE.md`](docs/STYLE.md): Zig names, file layout,
-memory, errors, `anytype`, invariants, tests, comments.
+New and changed code and comments follow [`docs/STYLE.md`](docs/STYLE.md) (Zig names, file layout,
+memory, errors, `anytype`, invariants, tests, comments) and [`docs/ZIG.md`](docs/ZIG.md) (writing Zig
+on purpose: ownership, errors, cost per frame, tests that prove the fix).
 
 **Plans live in a private repo, [`fizzyedit/plans`](https://github.com/fizzyedit/plans)**, open to
 the `fizzyedit` organization. A path written `plans/X.md` — here, in the code's comments, in

@@ -73,7 +73,7 @@ runs the publishing helper after collecting the edits.
    `AGENT_PREPARE_ALLOW_TMP=1` lifts the temp refusal for tests only.
    On Linux without Zig it runs `scripts/cloud-setup.sh`; later shells may need
    `$HOME/.local/bin` added to `PATH` as setup reports.
-2. Read `AGENTS.md`, `CONTRIBUTING.md`, `docs/STYLE.md` and each touched directory's
+2. Read `AGENTS.md`, `CONTRIBUTING.md`, `docs/STYLE.md`, `docs/ZIG.md` and each touched directory's
    `AGENTS.md`. Follow the issue's scope. Keep one PR and at most 800 changed lines outside
    tests and docs. Record a moved SDK fingerprint; leave `sdk_version` alone.
 3. Verify with `scripts/check-fmt.sh`, `scripts/zb build`, `scripts/zb build test`,
