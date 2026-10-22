@@ -1033,19 +1033,28 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     const x1 = r.x + r.w - pad;
     const small_font = dvui.Font.theme(.body).larger(-2);
 
-    // The speed, top right of the capsule: a press steps it (`Sequencer.stepSpeed`).
+    // The speed, top right of the capsule: its value, then a line with a notch for each of
+    // `Sequencer.speeds`, which a press or drag snaps to (`Player.transportTakes`) and the arrow
+    // keys step (`Player.speedKey`).
     var speed_buf: [8]u8 = undefined;
-    const speed = std.mem.print(&speed_buf, "{d}\u{00D7}", .{player.seq.speed}) catch "";
-    const speed_w = small_font.textSize(speed).w;
-    const speed_r: dvui.Rect = .{ .x = x1 - speed_w, .y = r.y + 5, .w = speed_w, .h = small_font.lineHeight() };
+    const speed = std.mem.print(&speed_buf, "{d}x", .{player.seq.speed}) catch "";
+    const value_w = small_font.textSize("0.75x").w;
+    const slider_w: f32 = 64;
+    const slider_h = small_font.lineHeight();
+    const line_r: dvui.Rect = .{ .x = x1 - slider_w - 6, .y = r.y + 5, .w = slider_w, .h = slider_h };
+    const value_r: dvui.Rect = .{ .x = line_r.x - 8 - value_w, .y = r.y + 5, .w = value_w, .h = slider_h };
     dvui.labelNoFmt(@src(), speed, .{}, .{
-        .rect = .{ .x = speed_r.x - bounds.x, .y = speed_r.y - bounds.y, .w = speed_r.w + 2, .h = speed_r.h },
+        .rect = .{ .x = value_r.x - bounds.x, .y = value_r.y - bounds.y, .w = value_r.w + 2, .h = value_r.h },
         .padding = .{},
         .margin = .{},
         .font = small_font,
         .color_text = .{ .color = ink.opacity(if (player.seq.speed == 1) 0.65 else 0.95) },
     });
-    player.transport.speed = wrs.rectToPhysical(speed_r.outsetAll(4));
+    const line_p = wrs.rectToPhysical(line_r);
+    player.transport.speed = wrs.rectToPhysical(line_r.outsetAll(4));
+    player.transport.speed_line = line_p;
+    paintSpeed(line_p, player.seq.speedIndex(), player.transport.speed_focus, ink, wrs.s);
+    const speed_w = value_w + slider_w + 14;
     const chapter = if (tape.chapterAt(now)) |i| tape.chapters[i].title else tape.title;
     const ch = small_font.lineHeight();
     if (x1 - x0 > 8) {
@@ -1101,6 +1110,28 @@ fn paintTrack(r: dvui.Rect.Physical, tape: *const Tape, total: f64, ink: dvui.Co
         const tick: dvui.Rect.Physical = .{ .x = x - 1 * s, .y = r.y + 1 * s, .w = 2 * s, .h = r.h - 2 * s };
         tick.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(0.35) } });
     }
+}
+
+/// The speed slider's line in `r`: a notch for each of `Sequencer.speeds`, the knob on the chosen
+/// one, ringed while the arrow keys are its.
+fn paintSpeed(r: dvui.Rect.Physical, at: usize, focused: bool, ink: dvui.Color, s: f32) void {
+    const n = Sequencer.speeds.len;
+    const line_h = 2 * s;
+    const mid = r.y + r.h / 2;
+    const knob_d = 9 * s;
+    const inset = knob_d / 2;
+    const span = r.w - 2 * inset;
+    const line: dvui.Rect.Physical = .{ .x = r.x + inset, .y = mid - line_h / 2, .w = span, .h = line_h };
+    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.2) } });
+    for (0..n) |i| {
+        const x = line.x + span * @as(f32, @floatFromInt(i)) / @as(f32, n - 1);
+        const notch: dvui.Rect.Physical = .{ .x = x - 1 * s, .y = mid - 3 * s, .w = 2 * s, .h = 6 * s };
+        notch.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(if (i == at) 0 else 0.4) } });
+    }
+    const kx = line.x + span * @as(f32, @floatFromInt(at)) / @as(f32, n - 1);
+    const knob: dvui.Rect.Physical = .{ .x = kx - knob_d / 2, .y = mid - knob_d / 2, .w = knob_d, .h = knob_d };
+    if (focused) knob.outsetAll(2 * s).fill(.all(knob_d), .{ .color = .{ .color = ink.opacity(0.25) } });
+    knob.fill(.all(knob_d / 2), .{ .color = .{ .color = ink } });
 }
 
 const Glyph = enum { play, pause, replay, prev, next, close };
