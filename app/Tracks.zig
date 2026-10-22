@@ -98,6 +98,11 @@ pub const checkpoint_steps = 256;
 pub const checkpoint_max_steps = 8192;
 pub const checkpoint_gap_ms = 30_000;
 pub const state_share = 1;
+/// And a checkpoint is a capture of the whole document (`take`, on a frame) whatever it keeps, so
+/// the steps since must also be worth a `capture_share`th of the document's state: a seek then
+/// replays at most that much step data to be spared a restore of the whole, and a big document is
+/// not captured again for the first step after a pause.
+pub const capture_share = 64;
 
 pub const Focus = struct {
     /// ms since the session's start.
@@ -130,6 +135,11 @@ pub const Track = struct {
     since_bytes: usize = 0,
     /// How many steps its kept file holds (`keep`, `pickUp`): one written since, it moved on from.
     kept_steps: usize = 0,
+
+    /// What taking a state costs: the size of the document's state (the base's).
+    fn captureLen(t: *const Track) usize {
+        return if (t.base) |b| b.bytes.len else 0;
+    }
 
     pub const Rec = struct {
         kind: sdk.Step.Kind,
@@ -784,7 +794,7 @@ fn step(ctx: *anyopaque, doc_id: u64, st: sdk.Step) void {
     if (self.held > self.cap) self.shed();
     // After a pause the state is taken just after the step that ended it: near enough the
     // pause's start for a seek, and taken where nothing is half applied.
-    const worth = t.since_bytes * state_share >= t.state_len;
+    const worth = t.since_bytes * state_share >= @max(t.state_len, t.captureLen() / capture_share);
     if (t.since_steps >= checkpoint_max_steps or (worth and (t.since_steps >= checkpoint_steps or at -| last_at >= checkpoint_gap_ms))) {
         t.checkpoint_due = true;
         self.due = true;
@@ -1300,6 +1310,56 @@ test "a checkpoint is what differs from the whole state, taken once the steps si
     try testing.expectEqualSlices(u8, &want, &Stand.bytes);
     // And through the one before the whole state.
     try t.replayInto(1, Stand.doc(2), track.checkpoints.items[1].step);
+}
+
+/// A stand-in whose document is a big buffer, counting the states taken from it.
+const BigStand = struct {
+    const size = 32 << 20;
+    var bytes: [size]u8 = @splat(0);
+    var captures: usize = 0;
+
+    fn capture(_: *anyopaque, _: sdk.DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
+        captures += 1;
+        return allocator.dupe(u8, &bytes);
+    }
+    fn fingerprint(_: *anyopaque, _: sdk.DocHandle) u64 {
+        return 0;
+    }
+    var state: u8 = 0;
+    const vtable: sdk.Plugin.VTable = .{ .captureDocumentState = capture, .documentFingerprint = fingerprint };
+    var plugin: sdk.Plugin = .{ .state = &state, .vtable = &vtable, .id = "bigstand", .display_name = "BigStand", .step_format = 1 };
+
+    fn doc(id: u64) sdk.DocHandle {
+        return .{ .ptr = &state, .owner = &plugin, .id = id };
+    }
+};
+
+test "a big document is not captured again for a step after a pause, but still checkpoints in a long session" {
+    BigStand.captures = 0;
+    var t: Tracks = .init(testing.allocator);
+    defer t.deinit();
+    t.clock = Stand.clock;
+    Stand.clock_ns = 0;
+    t.on = true;
+    t.opened(BigStand.doc(1));
+    t.tick();
+    try testing.expectEqual(@as(usize, 1), BigStand.captures); // the base
+    const rec = t.recorder();
+    // One small step after a pause of a minute: nothing taken, no work on the frame.
+    Stand.clock_ns += 60 * std.time.ns_per_s;
+    const small: [100]u8 = @splat(1);
+    rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1, .effect = &small });
+    t.tick();
+    try testing.expectEqual(@as(usize, 1), BigStand.captures);
+    try testing.expectEqual(@as(usize, 0), t.trackOf(1).?.checkpoints.items.len);
+    // Steps worth a share of the document, then a pause: one is taken.
+    const chunk: [64 << 10]u8 = @splat(2);
+    for (0..BigStand.size / capture_share / chunk.len + 1) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 2 + i, .effect = &chunk });
+    Stand.clock_ns += 60 * std.time.ns_per_s;
+    rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1000, .effect = &small });
+    t.tick();
+    try testing.expectEqual(@as(usize, 2), BigStand.captures);
+    try testing.expectEqual(@as(usize, 1), t.trackOf(1).?.checkpoints.items.len);
 }
 
 test "checkpoints older than an hour thin to one per sparse_steps" {
