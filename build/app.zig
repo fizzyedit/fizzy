@@ -748,6 +748,9 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // The login-shell PATH cache: it owns its string whatever allocator the first caller
         // passed, and threads that ask at once resolve once. The shell spawn itself is not run.
         .{ "fizzy-shell-env-tests", "core/shell_env.zig" },
+        // The environment a macOS spawn hands its child: the fixed allowlist plus only the names a
+        // caller opted in. The test skips off macOS; the root keeps it reached.
+        .{ "fizzy-darwin-spawn-tests", "core/darwin_spawn.zig" },
         // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.
         .{ "fizzy-secrets-tests", "app/Secrets.zig" },
         .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
