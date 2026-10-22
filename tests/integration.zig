@@ -3407,6 +3407,7 @@ const FizzySplitFrame = struct {
             defer main.deinit();
         }
         e.app.layout.publishRegions();
+        e.app.layout.reapSplits(e.app.gpa);
         return .ok;
     }
 };
@@ -3573,6 +3574,65 @@ test "a fizzy Main split keeps the workspace on the leftover side" {
     try std.testing.expect(editor.app.layout.splits.canForget("Main/r1"));
     const created = editor.app.layout.assignment("Main/r1") orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, 0), created.len);
+}
+
+/// Frees the state a `FizzySplitFrame` test builds up, so `std.testing.allocator` sees every leak
+/// and every use after free.
+fn deinitSplitState(editor: *fizzy.Editor) void {
+    editor.app.layout.regions.deinit(editor.app.gpa);
+    editor.app.layout.regions_building.deinit(editor.app.gpa);
+    editor.app.layout.deinitExtents(editor.app.gpa);
+    editor.app.layout.deinitAssignments(editor.app.gpa);
+    editor.app.layout.deinitQualified(editor.app.gpa);
+}
+
+test "a leading empty split dropped onto the trash does not draw freed nodes" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer deinitSplitState(editor);
+    FizzySplitFrame.editor = editor;
+    defer FizzySplitFrame.editor = null;
+
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        // `.left`: the new half is the tree's first child, the original `Main` leaf its last.
+        try std.testing.expectEqualStrings("Main/l1", layout.splitOn("Main", .left) orelse return error.TestExpectedEqual);
+    }
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try std.testing.expect(editor.app.layout.splits.root("Main") != null);
+
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, "Main/l1", "Main/l1", .remove);
+    }
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try std.testing.expect(editor.app.layout.splits.root("Main/l1") == null);
+}
+
+test "a saved layout holding an empty runtime split draws without crashing" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer deinitSplitState(editor);
+    FizzySplitFrame.editor = editor;
+    defer FizzySplitFrame.editor = null;
+
+    // What `Editor.applySavedRegions` rebuilds from a file: Main/l1 from the left of Main, an
+    // extent of nothing (what a drop leaves behind), and no view in it.
+    const saved = [_]fizzy.backend.SavedRegion{
+        .{ .name = "Main/l1", .extent = 0, .parent = "Main", .from = "left" },
+    };
+    editor.applySavedRegions(&saved);
+    try std.testing.expect(editor.app.layout.splits.root("Main") != null);
+
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try std.testing.expect(editor.app.layout.splits.root("Main/l1") == null);
 }
 
 /// fizzy's own Main: a carded place that hands its card to its panes, in a column of the window.
