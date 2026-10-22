@@ -229,7 +229,9 @@ never writes anywhere but the service's own credential store) and grants it the 
 the daily task needs. It lays out `C:\fizzy` with inheritance removed, so only SYSTEM and
 Administrators have access by default; `fizzy-worker` gets Modify only on `actions-runner`,
 `workspaces` and `zig-cache`, and read/execute on `tools` (Zig, jj; on the machine PATH, so
-admin-write only) and `bin`. It enables long paths, excludes `C:\fizzy` from Defender scanning
+admin-write only) and `bin`. The root `C:\fizzy` itself is granted read/execute to `fizzy-worker`
+on that folder only (the runner checks every parent directory); nothing below it inherits that.
+It enables long paths, excludes `C:\fizzy` from Defender scanning
 (`FIZZY_RUNNER_NO_DEFENDER_EXCLUSION=1` skips), installs Zig and jj, restores the deps cache into
 `C:\fizzy\zig-cache`, registers the runner as a service, and installs the task `FizzyRunnerClean`
 (daily 04:00 plus up to 30 minutes, as `fizzy-worker`), which it runs once and checks. The runner's
@@ -249,6 +251,10 @@ anonymous GitHub API (60 an hour); the script says so if it is rate limited. The
 is unpacked with `tar.exe`; if that fails (paths, symlinks) setup stops, unless
 `FIZZY_RUNNER_DEPS_PARTIAL_OK=1` accepts a reported partial restore. A failed run can be repeated
 with a fresh token: a half-registered runner is cleared and registered again with `--replace`.
+
+The batch-logon grant uses `LsaAddAccountRights` and is verified with `LsaEnumerateAccountRights`;
+it sees the account's own rights and a local deny, but not a deny applied later by group policy,
+which would still stop the cleanup task (the setup's own run of it would fail).
 
 **Service, not an interactive session.** The runner is a Windows service running as
 `fizzy-worker`: it survives reboots and logouts with no stored logon, and the account has no

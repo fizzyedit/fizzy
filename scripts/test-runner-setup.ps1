@@ -53,6 +53,53 @@ $r = Setup @{ FIZZY_RUNNER_ALLOW_UNCHECKED = '1' }
 if ($r.Code -ne 0) { Fail "override refused: $($r.Out)" }
 if ($r.Out -notmatch 'skip the private-repo check') { Fail 'override not reported' }
 
+# Static checks: pwsh parses these files, so the Windows PowerShell 5.1 rules are enforced here.
+# (a) no pwsh-7-only syntax or parameter names (a denylist: only known-bad names fail);
+# (b) for the module cmdlets below, whose full parameter lists are written out, every named
+# parameter must exist in Windows PowerShell 5.1. A dry run under pwsh 7 cannot catch either, and a wrong parameter only fails on
+# the Windows box (-UserCannotChangePassword did). Add a cmdlet here when a script starts using it.
+$common = 'ErrorAction', 'ErrorVariable', 'WarningAction', 'Verbose', 'Debug', 'OutVariable', 'InformationAction'
+$pwsh7Only = 'AsHashtable', 'NoEmphasis', 'Parallel', 'ThrottleLimit', 'SkipCertificateCheck', 'SkipHttpErrorCheck',
+    'SkipHeaderValidation', 'Authentication', 'Token', 'Form', 'NoProxy', 'MaximumRetryCount', 'RetryIntervalSec',
+    'StatusCodeVariable', 'ResponseHeadersVariable', 'AllowUnencryptedAuthentication', 'PreserveAuthorizationOnRedirect',
+    'Resume', 'UseQuotes'
+$allowed = @{
+    'New-LocalUser' = 'Name', 'Password', 'FullName', 'Description', 'PasswordNeverExpires', 'UserMayNotChangePassword', 'AccountNeverExpires', 'AccountExpires', 'Disabled', 'NoPassword'
+    'Set-LocalUser' = 'Name', 'Password', 'FullName', 'Description', 'PasswordNeverExpires', 'UserMayChangePassword', 'AccountNeverExpires'
+    'Get-LocalUser' = 'Name', 'SID'
+    'Register-ScheduledTask' = 'TaskName', 'Action', 'Trigger', 'Principal', 'Settings', 'Description', 'Force', 'TaskPath', 'User', 'Password', 'RunLevel'
+    'New-ScheduledTaskAction' = 'Execute', 'Argument', 'WorkingDirectory'
+    'New-ScheduledTaskTrigger' = 'Daily', 'Weekly', 'Once', 'AtLogOn', 'AtStartup', 'At', 'RandomDelay', 'DaysInterval'
+    'New-ScheduledTaskPrincipal' = 'UserId', 'LogonType', 'RunLevel', 'GroupId', 'Id'
+    'New-ScheduledTaskSettingsSet' = 'StartWhenAvailable', 'ExecutionTimeLimit', 'MultipleInstances', 'AllowStartIfOnBatteries', 'DontStopIfGoingOnBatteries', 'Hidden'
+    'Start-ScheduledTask' = 'TaskName', 'TaskPath'
+    'Get-ScheduledTask' = 'TaskName', 'TaskPath'
+    'Get-ScheduledTaskInfo' = 'TaskName', 'TaskPath'
+    'Add-MpPreference' = 'ExclusionPath', 'ExclusionExtension', 'ExclusionProcess'
+}
+foreach ($name in 'runner-setup.ps1', 'runner-clean.ps1') {
+    $tokens = $null; $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile("$dir/$name", [ref]$tokens, [ref]$errors)
+    if ($errors.Count) { Fail "$name does not parse: $($errors[0].Message)" }
+    foreach ($t in $tokens) {
+        if ("$($t.Kind)" -in 'AndAnd', 'OrOr', 'QuestionQuestion', 'QuestionDot', 'QuestionMark') { Fail "$name uses $($t.Kind) at line $($t.Extent.StartLineNumber): pwsh 7 only" }
+    }
+    $bad = $ast.FindAll({ param($n) $n.GetType().Name -in 'TernaryExpressionAst', 'PipelineChainAst', 'NullConditionalMemberExpressionAst' }, $true)
+    if ($bad) { Fail "$name uses pwsh 7 syntax at line $($bad[0].Extent.StartLineNumber)" }
+    foreach ($c in $ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true)) {
+        $cmd = $c.GetCommandName()
+        foreach ($e in $c.CommandElements) {
+            if ($e -isnot [Management.Automation.Language.CommandParameterAst]) { continue }
+            if ($pwsh7Only -contains $e.ParameterName) {
+                Fail "$name line $($e.Extent.StartLineNumber): -$($e.ParameterName) exists only in pwsh 7"
+            }
+            if ($cmd -and $allowed.ContainsKey($cmd) -and (@($allowed[$cmd]) + $common) -notcontains $e.ParameterName) {
+                Fail "$name line $($e.Extent.StartLineNumber): $cmd has no parameter -$($e.ParameterName) in Windows PowerShell 5.1"
+            }
+        }
+    }
+}
+
 $env:PATH = $origPath
 $out = & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File "$dir/runner-clean.ps1" -DryRun 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { Fail "runner-clean dry run failed: $out" }

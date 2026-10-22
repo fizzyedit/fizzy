@@ -17,7 +17,7 @@ param([switch]$DryRun)
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 # Registration credentials must not enter traces, command arguments, or generated files:
 # take the token out of the environment now; it goes back only into the one child that needs it.
@@ -172,7 +172,14 @@ if (-not $DryRun -and -not $configured -and -not $registrationToken) {
 # Pause the listener during a rerun so a queued job cannot start while tools are replaced.
 if ($configured) {
     $serviceName = (Get-Content "$runner\.service" -Raw).Trim()
-    Step "stop service $serviceName" { Stop-Service -Name $serviceName -ErrorAction SilentlyContinue }
+    Step "stop service $serviceName and wait for it to stop" {
+        $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -ne 'Stopped') {
+            Stop-Service -Name $serviceName -ErrorAction Stop
+            try { $svc.WaitForStatus('Stopped', (New-TimeSpan -Seconds 60)) }
+            catch { Fail "Service $serviceName did not stop within 60 seconds; not replacing tools under a live listener." }
+        }
+    }
 }
 
 # --- the dedicated, unprivileged account ------------------------------------------------------
@@ -186,7 +193,7 @@ Step "create local user $worker (not an administrator) if missing" {
     if (-not (Get-LocalUser -Name $worker -ErrorAction SilentlyContinue)) {
         $script:password = New-Password
         New-LocalUser -Name $worker -Password (ConvertTo-SecureString $script:password -AsPlainText -Force) `
-            -FullName 'Fizzy Actions worker' -PasswordNeverExpires -UserCannotChangePassword -AccountNeverExpires | Out-Null
+            -FullName 'Fizzy Actions worker' -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires | Out-Null
     }
     # Refuse a privileged existing account rather than silently repurposing it. `net localgroup`
     # lists members as text, where Get-LocalGroupMember throws on an orphaned SID in 5.1.
@@ -199,30 +206,73 @@ Step "create local user $worker (not an administrator) if missing" {
     }
 }
 # The scheduled cleanup runs as the worker without a stored password (S4U), which needs this right.
-Step "grant $worker the right to log on as a batch job" {
+Step "grant $worker the right to log on as a batch job (LsaAddAccountRights, then LsaEnumerateAccountRights to verify)" {
+    if (-not ('FizzyLsa' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class FizzyLsa {
+    [StructLayout(LayoutKind.Sequential)]
+    struct LSA_OBJECT_ATTRIBUTES { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public int Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct LSA_UNICODE_STRING { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+    [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr systemName, ref LSA_OBJECT_ATTRIBUTES attrs, uint access, out IntPtr policy);
+    [DllImport("advapi32.dll")] static extern uint LsaAddAccountRights(IntPtr policy, byte[] sid, ref LSA_UNICODE_STRING rights, uint count);
+    [DllImport("advapi32.dll")] static extern uint LsaEnumerateAccountRights(IntPtr policy, byte[] sid, out IntPtr rights, out uint count);
+    [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr p);
+    [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr p);
+    [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint status);
+    static IntPtr Open() {
+        LSA_OBJECT_ATTRIBUTES attrs = new LSA_OBJECT_ATTRIBUTES();
+        attrs.Length = Marshal.SizeOf(typeof(LSA_OBJECT_ATTRIBUTES));
+        IntPtr policy;
+        uint st = LsaOpenPolicy(IntPtr.Zero, ref attrs, 0x810, out policy); // LOOKUP_NAMES | CREATE_ACCOUNT
+        if (st != 0) throw new Exception("LsaOpenPolicy failed: win32 " + LsaNtStatusToWinError(st));
+        return policy;
+    }
+    static byte[] Sid(string sid) {
+        byte[] b = new byte[new SecurityIdentifier(sid).BinaryLength];
+        new SecurityIdentifier(sid).GetBinaryForm(b, 0);
+        return b;
+    }
+    public static void Add(string sid, string right) {
+        IntPtr policy = Open();
+        IntPtr text = Marshal.StringToHGlobalUni(right);
+        try {
+            LSA_UNICODE_STRING s = new LSA_UNICODE_STRING();
+            s.Length = (ushort)(right.Length * 2);
+            s.MaximumLength = (ushort)(s.Length + 2);
+            s.Buffer = text;
+            uint st = LsaAddAccountRights(policy, Sid(sid), ref s, 1);
+            if (st != 0) throw new Exception("LsaAddAccountRights failed: win32 " + LsaNtStatusToWinError(st));
+        } finally { Marshal.FreeHGlobal(text); LsaClose(policy); }
+    }
+    public static string[] Rights(string sid) {
+        IntPtr policy = Open();
+        try {
+            IntPtr arr; uint count;
+            uint st = LsaEnumerateAccountRights(policy, Sid(sid), out arr, out count);
+            if (st == 0xC0000034) return new string[0]; // no rights at all
+            if (st != 0) throw new Exception("LsaEnumerateAccountRights failed: win32 " + LsaNtStatusToWinError(st));
+            string[] result = new string[count];
+            int size = Marshal.SizeOf(typeof(LSA_UNICODE_STRING));
+            try {
+                for (int i = 0; i < count; i++) {
+                    LSA_UNICODE_STRING s = (LSA_UNICODE_STRING)Marshal.PtrToStructure(new IntPtr(arr.ToInt64() + i * size), typeof(LSA_UNICODE_STRING));
+                    result[i] = Marshal.PtrToStringUni(s.Buffer, s.Length / 2);
+                }
+            } finally { LsaFreeMemory(arr); }
+            return result;
+        } finally { LsaClose(policy); }
+    }
+}
+'@
+    }
     $sid = (Get-LocalUser -Name $worker).SID.Value
-    $cfg = Join-Path ([IO.Path]::GetTempPath()) ('fizzy-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
-    try {
-        $null = Native { & secedit /export /cfg $cfg /areas USER_RIGHTS /quiet 2>&1 }
-        if ($nativeExit -ne 0) { Fail "secedit export failed ($nativeExit)" }
-        $lines = @(Get-Content $cfg)
-        $found = $false
-        $lines = @($lines | ForEach-Object {
-            if ($_ -match '^SeBatchLogonRight\s*=') {
-                $found = $true
-                if ($_ -notlike "*$sid*") { $_ + ",*$sid" } else { $_ }
-            } else { $_ }
-        })
-        if (-not $found) { $lines = @($lines | ForEach-Object { $_; if ($_ -match '^\[Privilege Rights\]') { "SeBatchLogonRight = *$sid" } }) }
-        Set-Content -Path $cfg -Value $lines -Encoding Unicode
-        $db = "$cfg.sdb"
-        $null = Native { & secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet 2>&1 }
-        if ($nativeExit -ne 0) { Fail "secedit configure failed ($nativeExit)" }
-        $null = Native { & secedit /export /cfg $cfg /areas USER_RIGHTS /quiet 2>&1 }
-        if (-not ((Get-Content $cfg | Where-Object { $_ -match '^SeBatchLogonRight' }) -like "*$sid*")) {
-            Fail "$worker did not get SeBatchLogonRight"
-        }
-    } finally { Remove-Item "$cfg*" -Force -ErrorAction SilentlyContinue }
+    [FizzyLsa]::Add($sid, 'SeBatchLogonRight')
+    if ([FizzyLsa]::Rights($sid) -notcontains 'SeBatchLogonRight') { Fail "$worker did not get SeBatchLogonRight (LsaEnumerateAccountRights does not list it)" }
+    if ([FizzyLsa]::Rights($sid) -contains 'SeDenyBatchLogonRight') { Fail "$worker is denied batch logon (SeDenyBatchLogonRight); remove it in local policy" }
 }
 
 # --- the directory layout and its access rules ------------------------------------------------
@@ -236,6 +286,10 @@ Step "create $root with only SYSTEM and Administrators, then grant $worker per d
     foreach ($d in $runner, $workspaces, $tools, "$tools\bin", $bin, $zigCache) {
         New-Item -ItemType Directory -Force -Path $d | Out-Null
     }
+    # The runner checks execute permission on every parent directory, so the service account must
+    # be able to open the root itself: read/execute on this folder only (no inheritance flag), so the
+    # children stay locked.
+    Grant $root "${worker}:(RX)"
     foreach ($d in $runner, $workspaces, $zigCache) { Grant $d "${worker}:(OI)(CI)M" }
     foreach ($d in $tools, $bin) { Grant $d "${worker}:(OI)(CI)RX" }
 }
@@ -363,10 +417,22 @@ try {
         Get-Verified $depsUrl "$scratch\deps.tar.zst" $dsha 'deps cache (set DEPS_CACHE_SHA256 for a non-default DEPS_CACHE_URL)' (-not $depsDefault)
         $null = Native { & $zstd.FullName -d -q "$scratch\deps.tar.zst" -o "$scratch\deps.tar" 2>&1 }
         if ($nativeExit -ne 0) { Fail "zstd failed ($nativeExit)" }
-        $log = Native { & "$env:SystemRoot\System32\tar.exe" -xf "$scratch\deps.tar" -C $zigCache 2>&1 }
+        # The archive is `p/<hash>/...` (deps-cache.yml: tar -C <cache> -cf - p). List it first so the
+        # expected package count is known, and extract where its layout says, not where it is assumed.
+        $tar = "$env:SystemRoot\System32\tar.exe"
+        $listing = @(Native { & $tar -tf "$scratch\deps.tar" 2>$null } | ForEach-Object { "$_".Replace('\', '/') })
+        if ($nativeExit -ne 0 -or $listing.Count -eq 0) { Fail "tar cannot list the deps archive (exit $nativeExit, $($listing.Count) entries, $((Get-Item "$scratch\deps.tar").Length) bytes)" }
+        $under = if ($listing[0] -match '^(\./)?p(/|$)') { $zigCache } else { "$zigCache\p" }
+        New-Item -ItemType Directory -Force -Path $under | Out-Null
+        $expected = @($listing | Where-Object { $_ -match '^(\./)?(p/)?[^/]+/?$' -and $_ -notmatch '^(\./)?p/?$' }).Count
+        $log = Native { & $tar -xf "$scratch\deps.tar" -C $under 2>&1 }
         $tarExit = $nativeExit
-        $count = @(Get-ChildItem "$zigCache\p" -Directory -ErrorAction SilentlyContinue).Count
-        if ($tarExit -ne 0 -or $count -eq 0) {
+        $target = "$zigCache\p"
+        $count = 0
+        # Entries are package archives (p/<hash>.tar.gz files) or unpacked directories: count both.
+        if (Test-Path $target) { $count = @([IO.Directory]::GetFileSystemEntries($target)).Count }
+        Write-Host "  archive: $($listing.Count) entries ($expected packages), first '$($listing[0])'; extracted with -C $under; $count package entries in $target"
+        if ($tarExit -ne 0 -or $count -eq 0 -or $count -lt $expected) {
             $log | Select-Object -First 10 | ForEach-Object { [Console]::Error.WriteLine("tar: $_") }
             if ($count -gt 0 -and (Get-Setting 'FIZZY_RUNNER_DEPS_PARTIAL_OK' '') -eq '1') {
                 Write-Warning "PARTIAL RESTORE: $count packages in $zigCache\p, tar exited $tarExit; zig will fetch the rest"
@@ -420,7 +486,15 @@ try {
 }
 
 Step 'start the runner service' {
-    Start-Service -Name (Get-Content "$runner\.service" -Raw).Trim()
+    $svc = (Get-Content "$runner\.service" -Raw).Trim()
+    try {
+        Start-Service -Name $svc -ErrorAction Stop
+        (Get-Service -Name $svc).WaitForStatus('Running', (New-TimeSpan -Seconds 60))
+    } catch {
+        $log = Get-ChildItem "$runner\_diag" -Filter '*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $where = if ($log) { $log.FullName } else { "$runner\_diag" }
+        Fail "Service $svc did not start ($_). Read $where (the Runner_*.log files in _diag) and the System event log for the service."
+    }
 }
 
 # --- daily cleanup ----------------------------------------------------------------------------
