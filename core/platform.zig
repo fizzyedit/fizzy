@@ -23,6 +23,21 @@ const dvui = @import("dvui");
 /// on wasm `cacheFromWindow` updates it once the DVUI window is initialized.
 var cached_is_macos: bool = builtin.target.os.tag.isDarwin();
 
+pub const form_factor = @import("form_factor.zig");
+pub const FormFactor = form_factor.FormFactor;
+
+/// Native is always `.desktop` until Android and iOS read their own; the web backend writes it
+/// with `form_factor.classify`. A module global, so a dylib plugin sees its own copy: that is
+/// right while native is constant and web plugins link statically. Once native sets it, it must
+/// travel through the host instead.
+pub var cached_form_factor: FormFactor = .desktop;
+
+/// Whether the device is a phone, a tablet or a desktop. Read it where a shape is chosen; it
+/// changes on rotation or a resize across the threshold, so ask each frame rather than once.
+pub inline fn formFactor() FormFactor {
+    return cached_form_factor;
+}
+
 /// Call once after `dvui.Window.init`. On native this is a no-op (the comptime
 /// `builtin.target.os.tag` default is already correct). On wasm this probes DVUI's
 /// `"ctrl/cmd"` binding to discover whether the browser's `navigator.platform`

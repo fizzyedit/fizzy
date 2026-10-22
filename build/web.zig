@@ -105,6 +105,7 @@ pub fn build(
         "FizzyWebTrackpadMagnification",
         "FizzyWebKeyBuffer",
         "FizzyWebKeyBound",
+        "FizzyWebSetFormFactor",
         "FizzyWebImageAlloc",
         "FizzyWebImageReady",
         "FizzyWebImageFailed",

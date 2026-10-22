@@ -147,6 +147,9 @@ arena: std.mem.Allocator,
 state: *State,
 /// Long-lived allocations the state makes (a remembered extent's name).
 gpa: std.mem.Allocator,
+/// What the device is, read from `core.platform` when the frame's layout is made: a shape reads
+/// this to choose its arrangement (a phone's single place, a desktop's rail and splits).
+form_factor: core.platform.FormFactor = .desktop,
 /// The card a place wears when it asks for one (`Region.InitOptions.card`): its fill, corners and
 /// padding. Set by the shape before it declares its places, and worn by the floats' places too,
 /// which are drawn after the shape — so a view, and the places a split makes, look the same in a
@@ -251,7 +254,7 @@ pub const slot_keywords: []const []const u8 = &.{"slot"};
 /// a split's arrow.
 pub fn init(host: *sdk.Host, state: *State, gpa: std.mem.Allocator, arena: std.mem.Allocator) Layout {
     if (state.view_drag.active()) dvui.cursorSetPriority(ViewDrag.cursor, .drag);
-    return .{ .host = host, .state = state, .gpa = gpa, .arena = arena };
+    return .{ .host = host, .state = state, .gpa = gpa, .arena = arena, .form_factor = core.platform.formFactor() };
 }
 
 fn innermost(self: *Layout) ?*Container {

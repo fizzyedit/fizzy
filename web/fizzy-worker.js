@@ -666,6 +666,7 @@ async function start(init) {
     wasmInstance = result.instance;
     app.setInstance(result.instance);
     app.setCanvas(env.canvas);
+    applyForm();
     app.run();
     dvuiApp = app;
     app.requestRender();
@@ -674,6 +675,17 @@ async function start(init) {
         requestUrlPlugins();
         postBoundKeys();
     }, 0);
+}
+
+// The page's device measurement (`env.size.form`) into `core.platform.formFactor()`.
+let appliedForm = "";
+function applyForm() {
+    const f = env.size.form;
+    if (!f || !wasmInstance || !wasmInstance.exports.FizzyWebSetFormFactor) return;
+    const key = `${f.coarse}|${f.w}|${f.h}`;
+    if (key === appliedForm) return;
+    appliedForm = key;
+    wasmInstance.exports.FizzyWebSetFormFactor(f.coarse, f.w, f.h);
 }
 
 // ---- from the page ----------------------------------------------------------------------------
@@ -699,6 +711,7 @@ onmessage = (e) => {
             break;
         case "size":
             env.size = m.size;
+            applyForm();
             if (dvuiApp) dvuiApp.requestRender();
             break;
         case "prefs":

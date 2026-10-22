@@ -924,8 +924,13 @@
         const post = (msg, transfer) => worker.postMessage(msg, transfer || []);
         const reply = (request, value, transfer) => post({ type: "reply", request, value }, transfer);
 
-        const size = () => ({ w: canvas.clientWidth, h: canvas.clientHeight, dpr: window.devicePixelRatio });
         const media = (q) => window.matchMedia(q).matches;
+        // `form` is the device, in CSS px, for `core.platform.formFactor()`: a finger with no
+        // hover as the primary pointer, and the screen (not the viewport or canvas, which the soft keyboard and sheets shrink).
+        const size = () => ({
+          w: canvas.clientWidth, h: canvas.clientHeight, dpr: window.devicePixelRatio,
+          form: { coarse: media("(pointer: coarse)") && media("(hover: none)"), w: screen.width, h: screen.height },
+        });
         const prefs = () => ({
           dark: media("(prefers-color-scheme: dark)"),
           light: media("(prefers-color-scheme: light)"),
@@ -991,6 +996,10 @@
 
         new ResizeObserver(() => post({ type: "size", size: size() })).observe(canvas);
         window.addEventListener("resize", () => post({ type: "size", size: size() }));
+        window.addEventListener("orientationchange", () => post({ type: "size", size: size() }));
+        for (const q of ["(pointer: coarse)", "(hover: none)"]) {
+          window.matchMedia(q).addEventListener("change", () => post({ type: "size", size: size() }));
+        }
         for (const q of ["(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)"]) {
           window.matchMedia(q).addEventListener("change", () => post({ type: "prefs", prefs: prefs() }));
         }

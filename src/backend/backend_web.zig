@@ -175,6 +175,14 @@ export fn FizzyWebTrackpadMagnification(delta: f32) void {
     pending_pinch_ratio *= (1.0 + delta);
 }
 
+/// Called by the page (through the worker) on load, resize and rotation: whether the primary
+/// pointer is a finger with no hover, and the screen in CSS px. `core.platform.formFactor()`
+/// is the answer; the page never sniffs the user agent.
+export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32) void {
+    const platform = fizzy.core.platform;
+    platform.cached_form_factor = platform.form_factor.classify(coarse, w_css, h_css);
+}
+
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires
 /// the wheel listener at page load.
 pub fn installTrackpadGestureMonitor() void {}
