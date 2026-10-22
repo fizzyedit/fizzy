@@ -116,6 +116,8 @@ jobs:
         run: bash scripts/test-agent-work.sh
       - name: scripts/runner-setup.sh (private-repo check)
         run: sh scripts/test-runner-setup.sh
+      - name: scripts/runner-setup.ps1 (private-repo check, dry run under pwsh)
+        run: sh scripts/test-runner-setup-windows.sh
 
   test:
     name: Tests (${{ matrix.name }})

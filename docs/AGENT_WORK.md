@@ -108,7 +108,7 @@ bootstrap from a trusted checkout. It creates the non-sudo `fizzy-worker` accoun
 Zig at the version in `scripts/cloud-setup.sh`, jj, gh, git, zstd and Linux build/test libraries,
 restores the published Zig dependencies, and registers an Actions runner with the `fizzy`
 label. It installs the runner's systemd service as `fizzy-worker`, plus a daily cleanup timer.
-macOS and Windows provisioning are separate follow-up work.
+macOS provisioning is separate follow-up work; Windows is below.
 
 ```sh
 # Preview on any machine: no root, token, downloads or system changes needed.
@@ -189,3 +189,89 @@ sudo -u fizzy-worker -H /usr/local/sbin/fizzy-runner-clean --dry-run
 Each removal logs its estimated freed KiB and the sweep logs a total. The timer skips active
 jobs rather than stopping them; the next daily sweep retries. It never sweeps unrelated users'
 projects or deletes unregistered workspace directories.
+
+### Self-hosted runner (Windows)
+
+`scripts/runner-setup.ps1` does for a dedicated **Windows 11** machine (x64 or arm64) what
+`runner-setup.sh` does for Ubuntu, with the same rules: private repositories only (checked with
+`gh api`, refused otherwise, `FIZZY_RUNNER_ALLOW_UNCHECKED=1` to skip), **never fork PRs**, label
+`fizzy`, `RUNNER_URL`/`RUNNER_NAME`/`RUNNER_LABELS`/`ZIG_VERSION`/`JJ_VERSION`/`RUNNER_VERSION`/
+`DEPS_CACHE_URL` as for Ubuntu, and the Zig version read from `cloud-setup.sh`.
+
+**Prerequisites** (installed by you, once): Git for Windows (its `bash` is what workflows use) and
+the GitHub CLI logged in as someone who can read `fizzyedit/work`. A real run needs the login for
+the private check; `-DryRun` does not (without one it prints that a real run would refuse).
+
+```powershell
+winget install Git.Git GitHub.cli
+gh auth login
+```
+
+**Run** from an elevated PowerShell (Windows PowerShell 5.1 or pwsh) in a trusted checkout, keeping
+`runner-setup.ps1`, `runner-clean.ps1` and `cloud-setup.sh` together. Windows' default Restricted
+execution policy refuses script files, so every run names the policy for that one process:
+
+```powershell
+# Preview: no elevation, token, downloads or changes.
+powershell -ExecutionPolicy Bypass -File .\scripts\runner-setup.ps1 -DryRun
+
+# Token: Settings > Actions > Runners > New self-hosted runner in fizzyedit/work, the value after
+# `--token` in the configure step. It lasts about an hour. Reading it as a secure string keeps it
+# out of history and command arguments.
+$s = Read-Host 'Runner registration token' -AsSecureString
+$env:RUNNER_TOKEN = [Net.NetworkCredential]::new('', $s).Password
+powershell -ExecutionPolicy Bypass -File .\scripts\runner-setup.ps1
+Remove-Item Env:\RUNNER_TOKEN
+```
+
+What it does: creates the local user `fizzy-worker` (not an administrator, random password it
+never writes anywhere but the service's own credential store) and grants it the batch-logon right
+the daily task needs. It lays out `C:\fizzy` with inheritance removed, so only SYSTEM and
+Administrators have access by default; `fizzy-worker` gets Modify only on `actions-runner`,
+`workspaces` and `zig-cache`, and read/execute on `tools` (Zig, jj; on the machine PATH, so
+admin-write only) and `bin`. It enables long paths, excludes `C:\fizzy` from Defender scanning
+(`FIZZY_RUNNER_NO_DEFENDER_EXCLUSION=1` skips), installs Zig and jj, restores the deps cache into
+`C:\fizzy\zig-cache`, registers the runner as a service, and installs the task `FizzyRunnerClean`
+(daily 04:00 plus up to 30 minutes, as `fizzy-worker`), which it runs once and checks. The runner's
+`.env` carries `FIZZY_BUILD_SLOTS`, `FIZZY_BUILD_MAX_LOAD`, `ZIG_GLOBAL_CACHE_DIR` and a job `PATH`
+with Git for Windows' `bash` ahead of System32's WSL launcher (a service reads the machine PATH only
+when Windows boots, hence `.env`). `runner-clean.ps1 -DryRun` previews the sweep: it removes only
+untracked `.zig-cache`, `zig-out` and `zig-pkg` trees under `C:\fizzy\workspaces` and
+`actions-runner\_work`, vetoed by any running zig, zls or Runner.Worker, never following symlinks
+or junctions. The enrolled-merged-PR workspace deletion of the Ubuntu cleaner is not ported.
+
+Downloads run as an administrator, so they are checked: Zig against the sha256 in
+ziglang.org's `index.json` (or `ZIG_SHA256`), the Actions runner against the digest GitHub
+publishes, jj and the default deps cache against the asset digest GitHub records where there is one
+(otherwise a warning says so), zstd pinned in the script (v1.5.7; it publishes no digest; `ZSTD_VERSION` and `ZSTD_SHA256` override), and Zig and the runner
+refused unverified. A `DEPS_CACHE_URL` other than the default needs `DEPS_CACHE_SHA256`. `latest` lookups use the
+anonymous GitHub API (60 an hour); the script says so if it is rate limited. The Linux deps archive
+is unpacked with `tar.exe`; if that fails (paths, symlinks) setup stops, unless
+`FIZZY_RUNNER_DEPS_PARTIAL_OK=1` accepts a reported partial restore. A failed run can be repeated
+with a fresh token: a half-registered runner is cleared and registered again with `--replace`.
+
+**Service, not an interactive session.** The runner is a Windows service running as
+`fizzy-worker`: it survives reboots and logouts with no stored logon, and the account has no
+administrator rights. A service runs in session 0, with no desktop, so tests that open a real
+window cannot run on it. The headless gates (`zig build test`, `test-integration`) do not need
+one. If GUI tests become a job, the way is an auto-logon of a dedicated user and the runner started
+by a logon Scheduled Task instead of the service (`config.cmd` without `--runasservice`); that
+keeps a password in the registry and an always-logged-in desktop, so it is not done here until
+there is such a job.
+
+**Verify** (the maintainer; nothing here has run on real Windows):
+
+1. `gh api repos/fizzyedit/work/actions/runners --jq '.runners[]|[.name,.status,([.labels[].name]|join(","))]|@tsv'`
+   shows the machine `online` with the `fizzy` label (or Settings > Actions > Runners).
+2. `Get-Service actions.runner.*` is `Running`; `whoami /groups` as `fizzy-worker` lacks
+   Administrators; `icacls C:\fizzy\tools` shows no `Users` or `fizzy-worker` write.
+3. In a new shell, `zig version` equals the default in `cloud-setup.sh`; `jj --version` works.
+4. Run one `zig build test` through the runner: a workflow in `fizzyedit/work` with
+   `runs-on: [self-hosted, Windows, fizzy]` and `scripts/zb build test` (bash from Git for
+   Windows). It should find the dependencies in the cache without refetching.
+5. `Get-ScheduledTaskInfo FizzyRunnerClean` gives `LastTaskResult` 0 (setup already checks once).
+
+Known unknowns: `scripts/zb` is POSIX `sh` using symlinks and `/proc/loadavg`; under Git Bash the
+slot symlinks and the load ceiling may not work (the slot count still bounds builds if they do).
+CI runs the dry-run test under pwsh 7 only; Windows PowerShell 5.1 (native-command stderr, no
+`??`) is handled by pattern, not tested.
