@@ -78,7 +78,7 @@ pub fn leftover(original: Place) Leftover {
 /// `/Applications/<name>.app` for `bundle`, written into `buf`. The bundle keeps its own name, so
 /// each app built on fizzy lands under its own.
 pub fn destination(buf: []u8, bundle: []const u8) error{NoSpaceLeft}![]const u8 {
-    return std.fmt.bufPrint(buf, "/Applications/{s}", .{std.fs.path.basename(bundle)});
+    return std.mem.print(buf, "/Applications/{s}", .{std.fs.path.basename(bundle)});
 }
 
 fn under(path: []const u8, dir: []const u8) bool {
