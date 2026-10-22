@@ -1352,6 +1352,34 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         check_integration_step.dependOn(&demo_tests.step);
     }
 
+    {
+        const fuzz_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/fuzz_tapes.zig"),
+        });
+        fuzz_module.addImport("fizzy", fizzy_test_module);
+        fuzz_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        fuzz_module.addImport("app", app_module_test);
+        fuzz_module.addImport("workbench", workbench_module_test);
+        fuzz_module.addAnonymousImport("hello", .{ .root_source_file = b.path("docs/demos/hello.zon") });
+        const fuzz_tests = b.addTest(.{
+            .name = "fizzy-fuzz-tapes",
+            .root_module = fuzz_module,
+            .filters = test_filters,
+        });
+        if (target.result.os.tag == .windows) fuzz_tests.root_module.linkSystemLibrary("comctl32", .{});
+        fuzz_tests.root_module.link_libcpp = !target_is_windows_msvc;
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, fuzz_tests, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
+        };
+        // Its output is the report, so a cached run must not hide it.
+        const fuzz_run = b.addRunArtifact(fuzz_tests);
+        fuzz_run.has_side_effects = true;
+        b.step("fuzz-tapes", "Explore seeded tape interruptions and print shrunk findings")
+            .dependOn(&fuzz_run.step);
+    }
+
     // The `app` framework module's own tests — the split trees, seeds, drop plans and view drag
     // under `app/layout/` (`Layout.zig`'s `test` block). `addTest` collects from its root module
     // only, so the integration tests above, which import `app`, never ran them. Against dvui's
