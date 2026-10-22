@@ -345,7 +345,7 @@ fn cmdDemoRestart(state: *anyopaque) anyerror!void {
 }
 
 fn cmdDemoStop(state: *anyopaque) anyerror!void {
-    editorFromState(state).demo.player.unload();
+    editorFromState(state).demo.player.stop();
 }
 
 /// Debug builds only: see `Editor.dvui_demo`.

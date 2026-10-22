@@ -788,6 +788,7 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         tr.next = .{};
         tr.track = .{};
         tr.close = .{};
+        tr.revert = .{};
         tr.tab = .{};
         // Run back into its corner and gone: the demo can go (`Player.frame`), on the next frame.
         if (tr.closing and !tr.shut) {
@@ -907,7 +908,35 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         knob.addArc(.{ .x = knob_x, .y = mid }, 6 * s, std.math.tau, 0, true);
         knob.build().fillConvex(.{ .color = .{ .color = accent }, .fade = 1 });
     }
+    drawRevert(player, whole, p);
     return std.math.lerp(floor_rest, tab.y - 8, std.math.clamp(p * 1.6, 0, 1));
+}
+
+/// The pill over the bar's right end that gives the person back the session the demo set aside
+/// (`Player.revert`): the one way back, since closing the player always leaves the app as it is. Shown while the tape is paused or
+/// has ended, and the bar is all the way out. Records its rect on `player.transport` to be pressed.
+fn drawRevert(player: *Player, whole: dvui.Rect, p: f32) void {
+    const tr = &player.transport;
+    const shown = p >= 1 and !tr.closing and (player.state == .paused or player.state == .ended or player.diverged);
+    if (!shown) {
+        tr.revert = .{};
+        return;
+    }
+    const w: f32 = 156;
+    const h: f32 = 30;
+    const rect: dvui.Rect = .{ .x = whole.x + whole.w - w, .y = whole.y - h - 6, .w = w, .h = h };
+    const fw = layer(@src(), .{ .rect = rect, .name = "DemoRevert" }, .{});
+    defer fw.deinit();
+    var pill = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(.{ .x = 12, .y = 5, .w = 12, .h = 5 }));
+    defer pill.deinit();
+    pillGlass(pill.data(), .{ .x = 0.5, .y = 0.5 }, .{});
+    dvui.labelNoFmt(@src(), "Revert to before", .{}, .{
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+        .color_text = .{ .color = theme().color(.content, .text) },
+    });
+    tr.revert = pill.data().borderRectScale().r;
+    core.anchor.markRect(fw.data().id, tr.revert, true, "demo.revert", .{});
 }
 
 /// How far up from `place` (natural) the tape's bar stands to clear the bars out under it this

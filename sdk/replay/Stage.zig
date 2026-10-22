@@ -37,6 +37,10 @@ pub const VTable = struct {
     begin: ?*const fn (ctx: *anyopaque, tape: *const Tape) void = null,
     /// The demo was unloaded. Put the user's session back.
     end: ?*const fn (ctx: *anyopaque) void = null,
+    /// The demo was unloaded, and the app stays as the tape left it: nothing of the demo's is torn
+    /// down. Give back only what was never the demo's to keep (the user's settings, their set-aside
+    /// documents beside the demo's), and stop treating the app as a stage. Null: `end`.
+    keep: ?*const fn (ctx: *anyopaque) void = null,
     /// Put the app into `kf` outright, discarding what the demo did before. May leave work in
     /// flight (files loading); `idle` reports when it has landed. Null: a keyframe changes
     /// nothing, and a demo plays on the app as it is.
@@ -76,6 +80,10 @@ pub fn begin(self: Stage, tape: *const Tape) void {
 }
 pub fn end(self: Stage) void {
     if (self.vtable.end) |f| f(self.ctx);
+}
+/// Unload leaving the app as it is; an app with no `keep` puts the user's session back, as `end`.
+pub fn keep(self: Stage) void {
+    if (self.vtable.keep) |f| f(self.ctx) else self.end();
 }
 pub fn keyframe(self: Stage, kf: *const Tape.Keyframe) void {
     if (self.vtable.keyframe) |f| f(self.ctx, kf);

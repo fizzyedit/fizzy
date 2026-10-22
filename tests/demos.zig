@@ -376,6 +376,78 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     try std.testing.expectEqual(docs_before, app.editor.app.open_files.count());
     try std.testing.expect(app.editor.app.host.files.?.isMounted(site));
     try std.testing.expectEqualStrings(active_before, activePath(app.editor));
+
+    // Closing the player keeps the app as it is once the tape has ended or a person has stepped
+    // in; only "Revert to before" gives the person's session back.
+    {
+        const wb = &app.editor.workbench;
+        const draft = try gpa.print("{s}/keep.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
+        defer gpa.free(draft);
+        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = draft, .data = "# Keep\n" });
+        _ = try app.editor.openFilePath(draft, wb.currentGroupingID());
+        frames = 0;
+        while (host.docFromPath(draft) == null and frames < 200) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try dvui.testing.settle(headlessFrame);
+        const mine = host.docFromPath(draft) orelse return error.TestUnexpectedResult;
+
+        // A tape that ended: stopping leaves its documents and its folder, and the person's own
+        // document is back among the tabs of the pane it ended in.
+        try app.editor.demo.playTape(glassy);
+        frames = 0;
+        while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        const demo_active = activePath(app.editor);
+        try std.testing.expect(std.mem.startsWith(u8, demo_active, "demo://"));
+        const demo_folder = try gpa.dupe(u8, app.editor.app.folder orelse "");
+        defer gpa.free(demo_folder);
+        p.stop();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!app.editor.demo.active());
+        try std.testing.expectEqualStrings(demo_active, activePath(app.editor));
+        try std.testing.expectEqualStrings(demo_folder, app.editor.app.folder orelse "");
+        try std.testing.expect(wb.held_tabs.items.len == 0 and wb.held_workspaces.count() == 0 and !wb.holding);
+        const id = try sdk.document.surfaceId(host.arena(), mine.owner.id, mine.owner.documentPath(mine));
+        var seated = false;
+        for (wb.workspaces.values()) |*ws| seated = seated or ws.hasTab(id);
+        try std.testing.expect(seated);
+
+        // What the kept demo left in the layout is not written: no later launch could open it.
+        app.editor.app.layout.dirty = true;
+        app.editor.flushLayout();
+        {
+            const path = try std.fs.path.join(gpa, &.{ app.editor.app.config_folder, "layout.zon" });
+            defer gpa.free(path);
+            const written = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(1 << 20));
+            defer gpa.free(written);
+            try std.testing.expect(std.mem.find(u8, written, "demo://") == null);
+        }
+
+        // A person stepping in, then playing on: a new branch, not a replay over their work, and
+        // the history before it still there to seek back into.
+        try app.editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+        frames = 0;
+        while ((p.state != .playing or p.seq.now < 3000) and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqual(automation.Player.State.playing, p.state);
+        p.pause();
+        p.diverged = true;
+        const snaps = p.snapshots.items.len;
+        p.play();
+        try std.testing.expect(p.branched and !p.diverged);
+        try std.testing.expectEqual(automation.Player.State.playing, p.state);
+        frames = 0;
+        while (p.state != .ended and frames < 2_000) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqual(snaps, p.snapshots.items.len);
+        p.seek(0);
+        frames = 0;
+        while (p.state == .seeking and frames < 400) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expect(!p.branched);
+
+        // Reverting is the way back to the session set aside.
+        p.revert();
+        try dvui.testing.settle(headlessFrame);
+        try std.testing.expect(!app.editor.demo.active());
+        try std.testing.expect(host.docFromPath(draft) != null);
+        try std.testing.expect(!std.mem.startsWith(u8, activePath(app.editor), "demo://"));
+    }
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:

@@ -5062,6 +5062,15 @@ fn saveRegions(editor: *Editor) void {
     const gpa = editor.app.gpa;
     const regions = editor.collectSavedRegions(gpa);
     defer gpa.free(regions);
+    // A demo's documents live in memory (`demo://`) and a kept demo (`Demo.keep`) leaves them in
+    // the layout: they are not written, for no later launch could open them.
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    for (regions) |*r| {
+        inline for (.{ &r.surfaces, &r.order }) |field| if (field.*) |ids| {
+            if (withoutSessionMounts(arena.allocator(), ids)) |kept| field.* = kept;
+        };
+    }
     fizzy.backend.saveRegions(editor.app.config_folder, regions);
     if (editor.app.layout.dock) |*d| {
         const snap = d.snapshot(gpa) catch return;
@@ -5071,6 +5080,22 @@ fn saveRegions(editor: *Editor) void {
         fizzy.backend.saveTree(editor.app.config_folder, null);
         editor.app.layout.tree_cleared = false;
     }
+}
+
+/// `ids` less the documents of a mount only a demo or a recording makes, or null when it holds none.
+fn withoutSessionMounts(arena: std.mem.Allocator, ids: []const []const u8) ?[]const []const u8 {
+    const session = struct {
+        fn is(id: []const u8) bool {
+            const path = sdk.document.pathOfSurfaceId(id) orelse return false;
+            return std.mem.startsWith(u8, path, "demo://") or std.mem.startsWith(u8, path, "tape://");
+        }
+    }.is;
+    for (ids) |id| if (session(id)) {
+        var out: std.ArrayList([]const u8) = .empty;
+        for (ids) |other| if (!session(other)) out.append(arena, other) catch return null;
+        return out.items;
+    };
+    return null;
 }
 
 /// Every place `layout.zon` should remember, as it stands: extents, assignments, splits,

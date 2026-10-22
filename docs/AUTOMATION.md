@@ -46,9 +46,20 @@ While a demo plays:
 - **A click, tap, scroll or key pauses it.** A pointer event goes on to do what the person meant;
   the first key is only taken as "stop". Real pointer *motion* is ignored — the tape owns the
   pointer while it plays.
-- **Play resumes it.** If the person did anything to the app while it was paused, the demo first
-  replays to where it was, so it carries on from its own state rather than from whatever was left
-  behind.
+- **Play resumes it.** If the person did anything to the app while it was paused, play carries on
+  from there as a new branch (`Player.branched`): the tape does not replay over their work. The
+  tape's history up to the interruption stays, and the scrubber or a chapter step rewinds into it
+  (leaving the branch). While branched no snapshot is taken or checked. Play at the *end* is a
+  restart: the first keyframe replaces what is on screen. A kept demo's `demo://` documents are
+  left out of `layout.zon`, which no later launch could open them from.
+- **Closing always keeps what is on screen**
+  (the bar's close and **Demo: Stop**, even while the demo still plays): the app stays exactly where the tape and
+  the person left it (`Stage.keep`, fizzy's `Demo.keep`). The demo's documents and its in-memory
+  folder (`demo://`) stay open, the person's settings come back, and their own documents, until
+  then set aside, join the open pane as tabs. Nothing of the demo's is torn down. A demo closed
+  while playing just stops where it is.
+- **"Revert to before"** is the one way back to the session the demo set aside (`Player.revert`): a pill over the bar, shown while paused, after an interruption and
+  when the tape has ended; it restores the person's panes, documents, folder and focus (`Stage.end`).
 - **The transport bar** (bottom) has chapter back / play-pause / chapter forward, the time, a
   scrubber with chapter ticks, and close. Scrubbing backwards rewinds; forwards fast-forwards.
   While the demo plays it rests in the window's own bottom-right corner, in the corner glass a

@@ -376,6 +376,34 @@ pub fn restorePanes(wb: *Workbench) void {
     if (wb.workspaces.contains(wb.held_open)) wb.open_workspace_grouping = wb.held_open;
 }
 
+/// The person's panes, let go of rather than put back: a demo is leaving the window as it is
+/// (`Demo.keep`), so what it made stays and the person's open documents join its open pane as
+/// tabs, in the order they held them. Their panes themselves, and the arrangement set aside with
+/// them, are dropped; saving resumes with what is on screen.
+pub fn keepPanes(wb: *Workbench) void {
+    if (!wb.holding) return;
+    wb.holding = false;
+    const host = runtime.host();
+    var buf: [32]u8 = undefined;
+    const into = wb.workspaces.getPtr(wb.open_workspace_grouping) orelse if (wb.workspaces.count() > 0) &wb.workspaces.values()[0] else null;
+    for (wb.held_tabs.items) |t| {
+        host.assignSurfaces(Workspace.name(&buf, t.grouping), null) catch {};
+        if (into) |ws| for (t.ids) |id| {
+            const path = sdk.document.pathOfSurfaceId(id) orelse continue;
+            if (host.docFromPath(path) != null) ws.addTab(id, false);
+        };
+        freeIds(wb.allocator, t.ids);
+    }
+    wb.held_tabs.clearAndFree(wb.allocator);
+    for (wb.held_workspaces.values()) |*ws| ws.deinit();
+    wb.held_workspaces.deinit(wb.allocator);
+    wb.held_workspaces = .empty;
+    if (wb.held_panes) |*held| {
+        held.deinit();
+        wb.held_panes = null;
+    }
+}
+
 /// The panes as they stand, for a demo's snapshot to put back (`arrange`): which there are, in
 /// row order, the one in front, and the tree they sit in as ZON (`Panes.Snapshot`). What each
 /// holds is the app's assignment under its name, which the app's layout keeps. All in `arena`.

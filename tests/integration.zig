@@ -5459,6 +5459,8 @@ const DemoStage = struct {
     commands: usize = 0,
     fast: bool = false,
     begun: bool = false,
+    /// The demo was let go with the app left as it was (`Stage.keep`).
+    kept: bool = false,
     /// Off, the player seeks from keyframes alone.
     snapshots: bool = true,
     restores: usize = 0,
@@ -5475,6 +5477,7 @@ const DemoStage = struct {
         return .{ .ctx = self, .vtable = &.{
             .begin = begin,
             .end = end,
+            .keep = keep,
             .keyframe = keyframe,
             .idle = idle,
             .command = command,
@@ -5495,6 +5498,10 @@ const DemoStage = struct {
     }
     fn end(ctx: *anyopaque) void {
         from(ctx).begun = false;
+    }
+    fn keep(ctx: *anyopaque) void {
+        from(ctx).begun = false;
+        from(ctx).kept = true;
     }
     /// The whole of this app's state is the field's text and the button's count.
     fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
@@ -6211,7 +6218,7 @@ test "demo: a replay that does not reach what playing did is caught" {
     try std.testing.expect(demo_player.mismatches > 0);
 }
 
-test "demo: a person's click pauses it, and resuming undoes what they did first" {
+test "demo: a person's click pauses it, and resuming carries on from what they did as a new branch" {
     var t = try demoCtx();
     defer deinitDemo(&t);
 
@@ -6238,14 +6245,74 @@ test "demo: a person's click pauses it, and resuming undoes what they did first"
     try std.testing.expectEqual(@as(usize, 2), demo_clicks);
     try std.testing.expect(demo_player.seq.now <= paused_at + 200);
 
-    // Resume: the replay puts the tape's own state back before carrying on.
+    // Resume: the tape carries on from what the person did, not replaying over it.
     demo_player.play();
-    try std.testing.expectEqual(automation.Player.State.seeking, demo_player.state);
-    try stepDemoUntil(.playing, 200);
-    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+    try std.testing.expect(demo_player.branched);
     try std.testing.expect(!demo_player.diverged);
+    try std.testing.expectEqual(@as(usize, 2), demo_clicks);
+    // Rewinding is into the tape's own history, and leaves the branch.
+    demo_player.pause();
+    demo_player.seek(0);
+    try stepDemoUntil(.paused, 400);
+    try std.testing.expect(!demo_player.branched);
+}
+
+/// A real press at the middle of `r`, between frames, as a backend adds it.
+fn pressAt(r: dvui.Rect.Physical) !void {
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = r.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(demoFrame);
+}
+
+test "demo: play at the end restarts the tape over what a person did" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    demo_player.load(try demoTape(), .{});
     try stepDemoUntil(.ended, 400);
-    try std.testing.expectEqualStrings("> hello world", demo_text.items);
+    demo_player.diverged = true;
+    demo_player.play();
+    try stepDemoUntil(.playing, 400);
+    try std.testing.expect(!demo_player.diverged and !demo_player.branched);
+}
+
+test "demo: the Revert to before pill gives the session back, and the bar's close keeps what is on screen" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    // The pill: where the overlay drew it, a press reverts at once (the bar being out of view).
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    const bar: dvui.Rect.Physical = .{ .x = 100, .y = 500, .w = 400, .h = 44 };
+    demo_player.transport.bar = bar;
+    demo_player.transport.revert = .{ .x = 340, .y = 460, .w = 150, .h = 30 };
+    try pressAt(demo_player.transport.revert);
+    try std.testing.expectEqual(automation.Player.State.idle, demo_player.state);
+    try std.testing.expect(!demo_stage.begun and !demo_stage.kept);
+
+    // The bar's close, with the bar out: it runs back, and only once shut is the demo let go,
+    // leaving the app as it is because the tape ended.
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    demo_player.transport.bar = bar;
+    demo_player.transport.openness = 1;
+    demo_player.transport.close = .{ .x = 450, .y = 506, .w = 32, .h = 32 };
+    try pressAt(demo_player.transport.close);
+    try std.testing.expect(demo_player.transport.closing);
+    try std.testing.expectEqual(automation.Player.State.ended, demo_player.state);
+    demo_player.transport.shut = true;
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.idle, demo_player.state);
+    try std.testing.expect(demo_stage.kept and !demo_stage.begun);
+
+    // Closed while still playing, the demo just stops where it is: the app stays as it is.
+    demo_stage.kept = false;
+    demo_player.load(try demoTape(), .{});
+    for (0..6) |_| _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+    demo_player.stop();
+    try std.testing.expect(demo_stage.kept and !demo_stage.begun);
 }
 
 test "demo: real pointer motion does not move the tape's pointer while it plays" {

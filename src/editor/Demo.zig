@@ -378,6 +378,7 @@ fn listWindows(ctx: *anyopaque, _: std.mem.Allocator) []const automation.Snapsho
 const stage_vtable: automation.Stage.VTable = .{
     .begin = begin,
     .end = end,
+    .keep = keep,
     .keyframe = keyframe,
     .idle = idle,
     .command = command,
@@ -471,7 +472,11 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     editor.flushSettings();
     self.saveSettings();
     // The one they are in, before their panes go: the demo's has none.
-    const in_front = if (editor.activeDoc()) |d| d.id else null;
+    // (Not a document of a demo kept before (`keep`): that one closes with the next keyframe.)
+    const in_front = if (editor.activeDoc()) |d|
+        (if (std.mem.startsWith(u8, d.owner.documentPath(d), "demo://")) null else d.id)
+    else
+        null;
     // Their panes go aside whole, the demo playing in one of its own.
     editor.workbench.holdPanes();
 
@@ -497,7 +502,7 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     self.saved = .{
         .folder = if (folder.len > 0 and !std.mem.startsWith(u8, folder, "demo://")) gpa.dupe(u8, folder) catch null else null,
         .docs = held,
-        .active = in_front,
+        .active = in_front orelse if (held.len > 0) held[held.len - 1] else null,
         .branches = branches,
         .root_opened = editor.workbench.file_tree_root_opened,
         .focus = dvui.focusedWidgetId() orelse .zero,
@@ -563,6 +568,24 @@ fn end(ctx: *anyopaque) void {
     }
     if (saved.focus != .zero) dvui.focusWidget(saved.focus, saved.focus_subwindow, null);
     self.freeSaved();
+    dvui.refresh(null, @src(), null);
+}
+
+/// The demo is let go and the app stays as it is (`Player.keep`): its documents, folder (still
+/// mounted in memory), layout and focus are now simply the app's. What was never the demo's comes
+/// back: the person's settings, and their documents, unhidden and seated as tabs in the pane the
+/// demo has open (`Workbench.keepPanes`) beside the demo's. Persistence resumes (`active`) with
+/// what is on screen.
+fn keep(ctx: *anyopaque) void {
+    const self = from(ctx);
+    const editor = self.editor;
+    self.fast = false;
+    if (self.quitting) return end(ctx);
+    self.restoreSettings();
+    editor.workbench.keepPanes();
+    for (editor.app.open_files.keys()) |id| self.hideDocument(id, false);
+    self.freeSaved();
+    editor.app.layout.dirty = true;
     dvui.refresh(null, @src(), null);
 }
 

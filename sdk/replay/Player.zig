@@ -42,11 +42,14 @@
 //! and the backend's clock is moved on by as much (`frames`' `clock`) so dvui's stays monotonic
 //! and continuous after. The player's own chrome (the transport bar) runs on the wall (`wallNs`).
 //!
+//! **Closing** always leaves the app as it is (`Stage.keep`), and "Revert to before" (`revert`) is the one way back to the session
+//! the demo set aside. `play` after a person changed things carries on from there as a new branch
+//! (`branched`) rather than replaying over their work; seeking back is the history.
+//!
 //! **Interruption**: while playing, a real click, tap, scroll or key pauses the demo — a pointer
 //! event goes on to do what the person meant, the first key is only taken as "stop". Real pointer
 //! motion is held off (the tape owns the pointer while it plays). Anything real that reaches the app
-//! while paused marks the app `diverged` from the tape; resuming then replays to the paused moment
-//! first, so the demo carries on from its own state, not from whatever the person left behind.
+//! while paused marks the app `diverged` from the tape.
 const Player = @This();
 
 const std = @import("std");
@@ -76,6 +79,13 @@ seek_target: f64 = 0,
 seek_from: f64 = 0,
 /// Real input reached the app since the tape last put it in a known state.
 diverged: bool = false,
+/// The tape went on from a state the person had changed (`play` after a divergence) rather than
+/// replaying over it: a new branch. What it does is no longer the tape's own history, so no
+/// snapshot is taken of it or checked against it. A seek back into the history (`restoreSnapshot`,
+/// `rewind`) is the way out.
+branched: bool = false,
+/// How the bar's close ends the demo, decided when it was pressed (`close`, `revert`).
+leave: Leave = .keep,
 /// Wall time one displayed frame may spend on silent frames while a seek catches up (`frames`).
 budget_ns: i128 = 8 * std.time.ns_per_ms,
 /// How far the app's clock is ahead of the wall: the demo time silent frames covered that the
@@ -209,6 +219,8 @@ pub const Transport = struct {
     next: dvui.Rect.Physical = .{},
     track: dvui.Rect.Physical = .{},
     close: dvui.Rect.Physical = .{},
+    /// "Revert to before", while the overlay shows it (`drawRevert`); empty otherwise.
+    revert: dvui.Rect.Physical = .{},
     /// The tab on the bar that sends it into where it rests (`tucked`).
     tab: dvui.Rect.Physical = .{},
     /// Where the bar rests was drawn last frame (fizzy: corner glass in the window's own corner),
@@ -298,6 +310,10 @@ pub fn driving(self: *const Player) bool {
     };
 }
 
+/// How a demo is let go of: `keep` leaves the app as the tape and the person have it; `revert`
+/// gives the person back the session the demo set aside.
+pub const Leave = enum { keep, revert };
+
 pub const LoadOptions = struct {
     autoplay: bool = true,
 };
@@ -312,6 +328,7 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     const win = dvui.windowRectPixels();
     self.seq.pointer = .{ .x = win.x + win.w / 2, .y = win.y + win.h / 2 };
     self.diverged = false;
+    self.branched = false;
     self.transport = .{};
     self.mismatches = 0;
     self.timeouts = 0;
@@ -320,11 +337,27 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
 }
 
 /// Close the demo from its bar: the bar runs its pieces back together and goes, as it does when it
-/// gets out of the way of a playing demo, and only then is the demo let go (`frame` → `unload`).
+/// gets out of the way of a playing demo, and only then is the demo let go (`frame` → `release`).
 /// Unloaded at once, the bar vanished under the pointer that closed it. Paused meanwhile, where
-/// it is. A bar not showing has nothing to close: the demo goes at once.
+/// it is. A bar not showing has nothing to close: the demo goes at once. The demo stops where
+/// it is and the app stays as it is, always; `revert` is the way back.
 pub fn close(self: *Player) void {
-    if (self.transport.openness <= 0.001) return self.unload();
+    self.dismiss(.keep);
+}
+
+/// Close the demo from its bar and give the person the session it set aside (`Leave.revert`).
+pub fn revert(self: *Player) void {
+    self.dismiss(.revert);
+}
+
+/// Stop at once and keep the app as it is, as `close` does: the command's way, with no bar to run back.
+pub fn stop(self: *Player) void {
+    self.release(.keep);
+}
+
+fn dismiss(self: *Player, how: Leave) void {
+    self.leave = how;
+    if (self.transport.openness <= 0.001) return self.release(how);
     self.pause();
     self.transport.closing = true;
     dvui.refresh(null, @src(), null);
@@ -332,11 +365,18 @@ pub fn close(self: *Player) void {
 
 /// Stop and let go of the demo; the stage gives the user their session back.
 pub fn unload(self: *Player) void {
+    self.release(.revert);
+}
+
+fn release(self: *Player, how: Leave) void {
     if (self.owned == null) return;
     self.input.releaseHeld();
     if (self.state == .seeking) self.stage.fastForward(false);
     self.dropSnapshots();
-    self.stage.end();
+    switch (how) {
+        .keep => self.stage.keep(),
+        .revert => self.stage.end(),
+    }
     self.owned.?.deinit();
     self.owned = null;
     self.state = .idle;
@@ -345,15 +385,25 @@ pub fn unload(self: *Player) void {
     self.settling = null;
     self.live = false;
     self.last_press = null;
+    self.diverged = false;
+    self.branched = false;
     self.transport = .{};
     if (dvui.current_window != null) dvui.refresh(null, @src(), null);
 }
 
 pub fn play(self: *Player) void {
     switch (self.state) {
-        .paused => if (self.diverged) self.seekTo(self.seq.now, .play) else {
+        // Carrying on from what the person did is a new branch: the tape's own history up to here
+        // stays to be rewound to, and is not replayed over their work.
+        .paused => {
+            if (self.diverged) {
+                self.diverged = false;
+                self.branched = true;
+            }
             self.state = .playing;
         },
+        // A restart: the tape's first keyframe replaces whatever is on screen, so nothing of a
+        // person's is left to branch from (`seekTo` clears `diverged` as it cuts).
         .ended => self.seekTo(0, .play),
         .seeking => self.after_seek = .play,
         .playing, .idle => {},
@@ -466,6 +516,7 @@ fn rewind(self: *Player, kf: usize) void {
     self.scene = null;
     self.last_press = null;
     self.diverged = false;
+    self.branched = false;
     self.checked_cursor = null;
 }
 
@@ -512,6 +563,7 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
     }
     self.last_press = null;
     self.diverged = false;
+    self.branched = false;
     // The moment is checked again: a restore is a replay too.
     self.checked_cursor = null;
     self.seek_from = s.at;
@@ -576,7 +628,7 @@ fn nearestSnapshot(self: *const Player, t: f64, kf: usize) ?usize {
 /// At a calm moment while the tape drives, take a snapshot if one is due — or, where one was
 /// taken on an earlier pass, check the replay reached the same model.
 fn keepSnapshot(self: *Player) void {
-    if (!self.stage.snapshots()) return;
+    if (!self.stage.snapshots() or self.branched) return;
     const t = self.tape() orelse return;
     if (self.seq.cursor == 0 or !self.seq.calm() or self.input.held.count() > 0) return;
     if (!self.stage.idle()) return;
@@ -657,7 +709,7 @@ pub fn frame(self: *Player) void {
     // Widgets name themselves for the tape while one is loaded (`anchor`).
     anchor.want();
     // The bar has closed itself shut (`close`): the demo goes now.
-    if (self.transport.shut) return self.unload();
+    if (self.transport.shut) return self.release(self.leave);
     self.takeRealInput();
     if (self.owned == null) return; // the bar's close button, with no bar showing
     self.claimCursor();
@@ -850,7 +902,9 @@ fn takeRealInput(self: *Player) void {
                     // A replay in progress takes nothing from anyone.
                     .seeking => e.handle(@src(), wd),
                     .paused, .ended => switch (me.action) {
-                        .focus, .press, .wheel_x, .wheel_y => self.diverged = true,
+                        .focus, .press, .wheel_x, .wheel_y => {
+                            self.diverged = true;
+                        },
                         else => {},
                     },
                     .idle => {},
@@ -862,7 +916,9 @@ fn takeRealInput(self: *Player) void {
                     self.pause();
                 },
                 .seeking => e.handle(@src(), wd),
-                .paused, .ended => self.diverged = true,
+                .paused, .ended => {
+                    self.diverged = true;
+                },
                 .idle => {},
             },
             .window, .app => {},
@@ -907,7 +963,7 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     };
     const bar = tr.bar orelse return false;
     const on_tab = tr.tab.contains(me.p);
-    if (!bar.contains(me.p) and !on_tab) return false;
+    if (!bar.contains(me.p) and !on_tab and !tr.revert.contains(me.p)) return false;
     if (!tr.tucked) tr.stirred_ns = self.wallNs();
     // Closing, the bar is on its way out: what is pressed on it on the way does nothing.
     if (tr.closing) {
@@ -931,6 +987,10 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
             self.stepChapter(-1);
         } else if (tr.next.contains(me.p)) {
             self.stepChapter(1);
+        } else if (tr.revert.contains(me.p)) {
+            e.handle(@src(), wd);
+            self.revert();
+            return true;
         } else if (tr.close.contains(me.p)) {
             e.handle(@src(), wd);
             self.close();
@@ -949,11 +1009,11 @@ fn claimCursor(self: *Player) void {
     const tr = &self.transport;
     if (tr.scrub != null) return dvui.cursorSet(.hand);
     if (tr.pointer) |p| {
-        if (tr.tab.contains(p)) return dvui.cursorSet(.hand);
+        if (tr.tab.contains(p) or tr.revert.contains(p)) return dvui.cursorSet(.hand);
         if (tr.rest) |d| if (d.contains(p)) return dvui.cursorSet(.hand);
         if (tr.bar) |bar| {
             if (bar.contains(p)) {
-                for ([_]dvui.Rect.Physical{ tr.play, tr.prev, tr.next, tr.track, tr.close }) |r| {
+                for ([_]dvui.Rect.Physical{ tr.play, tr.prev, tr.next, tr.track, tr.close, tr.revert }) |r| {
                     if (r.contains(p)) return dvui.cursorSet(.hand);
                 }
                 return dvui.cursorSet(.arrow);

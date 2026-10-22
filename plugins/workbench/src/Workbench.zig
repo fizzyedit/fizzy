@@ -450,6 +450,11 @@ pub fn restorePanes(self: *Workbench) void {
     workbench_layout.restorePanes(self);
 }
 
+/// The person's panes let go of, their documents joining the open pane (`workbench_layout.keepPanes`).
+pub fn keepPanes(self: *Workbench) void {
+    workbench_layout.keepPanes(self);
+}
+
 /// The panes as they stand, for a demo's snapshot (`workbench_layout.arrangement`).
 pub const Arrangement = struct { open: u64, groupings: []const u64, tree: [:0]const u8 };
 
