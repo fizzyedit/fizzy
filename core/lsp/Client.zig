@@ -400,7 +400,7 @@ pending_negative_wake: ?std.Io.Clock.Timestamp = null,
 unconfirmed_negative_keys: std.AutoHashMapUnmanaged(CacheKey, void) = .empty,
 
 queue_lock: SpinLock = .{},
-queue: std.ArrayListUnmanaged(HoverJob) = .empty,
+queue: std.ArrayList(HoverJob) = .empty,
 
 completion_cache_lock: SpinLock = .{},
 completion_cache: std.AutoHashMapUnmanaged(CacheKey, CompletionCacheEntry) = .empty,
@@ -426,12 +426,12 @@ resolve_cache_seq: u64 = 0,
 /// Plain FIFO, not a debounced `Pending*` slot like completion/signature-help — see
 /// `ResolveJob`'s doc comment for why.
 resolve_queue_lock: SpinLock = .{},
-resolve_queue: std.ArrayListUnmanaged(ResolveJob) = .empty,
+resolve_queue: std.ArrayList(ResolveJob) = .empty,
 
 /// Scratch buffer for the path returned from `gotoDefinition` — valid only until the next
 /// `gotoDefinition` call, which matches how the caller (`TextEditor.drawEditor`) uses it:
 /// synchronously, immediately after the call returns, in the same frame.
-def_path_buf: std.ArrayListUnmanaged(u8) = .empty,
+def_path_buf: std.ArrayList(u8) = .empty,
 
 /// Owned copies of the most recently returned cache-hit results, kept alive until the *next*
 /// call to the same function — safe because `hover`/`completion`/`signatureHelp` are only
@@ -452,7 +452,7 @@ def_path_buf: std.ArrayListUnmanaged(u8) = .empty,
 /// out *while still holding the lock* (see `setHoverReturnScratch` etc.), so eviction — which
 /// needs that same lock — can't race the copy.
 hover_return_scratch: ?[]u8 = null,
-completion_return_scratch: std.ArrayListUnmanaged(CompletionItem) = .empty,
+completion_return_scratch: std.ArrayList(CompletionItem) = .empty,
 signature_help_return_scratch: ?[]u8 = null,
 /// Owned copy of the most recently returned `format` result — same lifetime convention as
 /// `hover_return_scratch` above, but `format` has no cache to race against (it's a direct,
@@ -1994,7 +1994,7 @@ fn runCompletionJob(self: *Client, io: std.Io, pc: PendingCompletion) !void {
             return a.index < b.index;
         }
     };
-    var scored: std.ArrayListUnmanaged(Scored) = .empty;
+    var scored: std.ArrayList(Scored) = .empty;
     defer scored.deinit(gpa);
     for (raw_items, 0..) |item_obj, i| {
         const r = resolveCompletionItem(item_obj, pc.bytes, pc.byte_offset) orelse continue;
@@ -2008,7 +2008,7 @@ fn runCompletionJob(self: *Client, io: std.Io, pc: PendingCompletion) !void {
     // keeps its own original JSON, serialized back to text — see `CachedCompletionItem`'s doc
     // comment for why — needed later if `resolveCompletionDocumentation` asks zls to fill in
     // the `documentation` this initial response left empty (zls's usual lazy-load convention).
-    var resolved: std.ArrayListUnmanaged(CachedCompletionItem) = .empty;
+    var resolved: std.ArrayList(CachedCompletionItem) = .empty;
     defer resolved.deinit(gpa);
     errdefer for (resolved.items) |c| {
         gpa.free(c.item.label);
@@ -2583,7 +2583,7 @@ const TextEditSpan = struct { start: usize, end: usize, new_text: []const u8 };
 /// edit's byte range (computed against the *original* `bytes`/positions) stays valid — an
 /// earlier edit's insert/delete would otherwise shift every later offset.
 fn applyTextEdits(gpa: std.mem.Allocator, bytes: []const u8, edits: []const std.json.Value, encoding: Protocol.PositionEncoding) ?[]u8 {
-    var spans: std.ArrayListUnmanaged(TextEditSpan) = .empty;
+    var spans: std.ArrayList(TextEditSpan) = .empty;
     defer spans.deinit(gpa);
 
     for (edits) |edit| {

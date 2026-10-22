@@ -135,7 +135,7 @@ env: Env = .{},
 /// rather than stored: a `FileTable` is moved into its final home after `init`.
 local: LocalFs,
 /// Prefix-claimed filesystems, longest prefix wins. See `mount`.
-mounts: std.ArrayListUnmanaged(Mount) = .empty,
+mounts: std.ArrayList(Mount) = .empty,
 /// Directories asked of a mount whose answer has not landed yet, keyed by full path (owned by
 /// the job). A second `listDir` for one of these waits rather than asking twice.
 pending: std.StringArrayHashMapUnmanaged(*ListJob) = .empty,
@@ -151,7 +151,7 @@ listings: std.StringArrayHashMapUnmanaged(*Listing) = .empty,
 /// inside the row it belongs to, several recursion levels deep, each of which is iterating a
 /// listing. Freeing eagerly there is a use-after-free in the enclosing loops, so an unlinked
 /// listing is parked here and released at the top of the next frame instead.
-retired: std.ArrayListUnmanaged(*Listing) = .empty,
+retired: std.ArrayList(*Listing) = .empty,
 
 // ---- the flat path index, for search ---------------------------------------------------------
 //
@@ -161,9 +161,9 @@ retired: std.ArrayListUnmanaged(*Listing) = .empty,
 // each keystroke only re-ranks strings already in memory.
 
 /// Full paths of every non-ignored file under every indexed root. Owned.
-index: std.ArrayListUnmanaged([]u8) = .empty,
+index: std.ArrayList([]u8) = .empty,
 /// The roots the index covers — a tree drawing the disk beside a mount searches both. Owned.
-index_roots: std.ArrayListUnmanaged([]u8) = .empty,
+index_roots: std.ArrayList([]u8) = .empty,
 /// Set when a search session ends, so the next one rebuilds rather than ranking a snapshot that
 /// may be minutes old. Also set by every invalidation below.
 index_stale: bool = true,
@@ -176,7 +176,7 @@ index_generation: u64 = 0,
 
 /// Last ranking, reused while neither the query nor the index has changed. Without this the
 /// whole index is re-scored on every frame the caller draws, not just on each keystroke.
-results: std.ArrayListUnmanaged(Entry) = .empty,
+results: std.ArrayList(Entry) = .empty,
 results_query: []u8 = &.{},
 results_root: []u8 = &.{},
 results_generation: u64 = 0,
@@ -476,7 +476,7 @@ const ListJob = struct {
 /// Screen, sort and cache a listing that just arrived for `directory`.
 fn install(self: *FileTable, directory: []const u8, raw: []const vfs.Entry, read_at_ms: i64) void {
     const gpa = self.gpa;
-    var entries: std.ArrayListUnmanaged(Entry) = .empty;
+    var entries: std.ArrayList(Entry) = .empty;
     const proj_root = self.env.root(self.env.ctx);
     // The ignore check wants a full path but doesn't keep it, so it's built into a stack
     // buffer: joining through an allocator here would mean one allocation per entry on a listing
@@ -564,7 +564,7 @@ pub fn search(
 
     const gpa = self.gpa;
     const Hit = fuzzy.Ranked(usize);
-    var hits: std.ArrayListUnmanaged(Hit) = .empty;
+    var hits: std.ArrayList(Hit) = .empty;
 
     for (self.index.items, 0..) |abs_path, i| {
         // Only what sits under this root; the index may cover others too.
@@ -640,7 +640,7 @@ fn ensureIndex(self: *FileTable, root: []const u8) void {
 const IndexJob = struct {
     table: *FileTable,
     /// Directories asked and not yet answered.
-    in_flight: std.ArrayListUnmanaged(*DirReq) = .empty,
+    in_flight: std.ArrayList(*DirReq) = .empty,
     /// Listings answered since the last `drive` iteration — how it knows the disk is still
     /// answering inline.
     answered: usize = 0,
@@ -873,11 +873,11 @@ const MoveJob = struct {
     ctx: ?*anyopaque,
     /// Pairs still to copy, in discovery order (a directory's children are appended when it
     /// is listed).
-    queue: std.ArrayListUnmanaged(Pair) = .empty,
+    queue: std.ArrayList(Pair) = .empty,
     /// Source paths to remove once everything is copied, files first, then directories
     /// deepest-first (they were pushed as they were entered, so reverse order).
-    remove_files: std.ArrayListUnmanaged([]u8) = .empty,
-    remove_dirs: std.ArrayListUnmanaged([]u8) = .empty,
+    remove_files: std.ArrayList([]u8) = .empty,
+    remove_dirs: std.ArrayList([]u8) = .empty,
     /// The entry in flight, and the bytes being carried for a file.
     current: ?Pair = null,
     bytes: ?[]u8 = null,

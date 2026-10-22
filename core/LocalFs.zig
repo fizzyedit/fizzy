@@ -175,7 +175,7 @@ fn listImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8) vfs.
     var dir = std.Io.Dir.cwd().openDir(io, path, .{ .access_sub_paths = true, .iterate = true }) catch |err| return mapErr(err);
     defer dir.close(io);
 
-    var entries: std.ArrayListUnmanaged(vfs.Entry) = .empty;
+    var entries: std.ArrayList(vfs.Entry) = .empty;
     errdefer {
         for (entries.items) |e| allocator.free(e.name);
         entries.deinit(allocator);
@@ -331,7 +331,7 @@ fn pump(ptr: *anyopaque) void {
     const self: *LocalFs = @ptrCast(@alignCast(ptr));
     // Reads that have landed, collected under the lock and delivered outside it: a callback may
     // start another read or cancel one.
-    var done: std.ArrayListUnmanaged(*ReadJob) = .empty;
+    var done: std.ArrayList(*ReadJob) = .empty;
     defer done.deinit(self.gpa);
     {
         self.lock.acquire();

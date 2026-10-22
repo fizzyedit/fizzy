@@ -158,7 +158,7 @@ pub const Painter = struct {
 allocator: std.mem.Allocator,
 
 /// All registered plugins (statically compiled in, or loaded from a runtime dylib).
-plugins: std.ArrayListUnmanaged(*Plugin) = .empty,
+plugins: std.ArrayList(*Plugin) = .empty,
 
 /// The plugin whose "new document" dialog is currently open, set by `requestNewDocument`
 /// right before running that plugin's New File command (`<id>.new`) and consumed
@@ -179,7 +179,7 @@ pending_new_document_owner: ?*Plugin = null,
 /// registers an implementation, and the app calls each in turn (`servicesNamed`). A map silently
 /// dropped all but the last, which is a fine answer for "who provides X" and a wrong one for
 /// "who is listening to X".
-services: std.ArrayListUnmanaged(ServiceEntry) = .empty,
+services: std.ArrayList(ServiceEntry) = .empty,
 
 /// The project's file set — one cached, searchable view of what is on disk, owned by the app and
 /// shared by every plugin that draws files. Null in a headless host.
@@ -227,19 +227,19 @@ plugin_settings_pending: PluginSettings = .empty,
 plugins_dir: ?[]const u8 = null,
 
 /// File-tree row fill tints (workbench asks the Host; editor plugins register).
-file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
-file_row_decorators: std.ArrayListUnmanaged(FileRowDecorator) = .empty,
+file_row_fill_colors: std.ArrayList(FileRowFillColor) = .empty,
+file_row_decorators: std.ArrayList(FileRowDecorator) = .empty,
 
 /// File-tree row icon drawers (workbench asks the Host; plugins register for their file types).
-painters: std.ArrayListUnmanaged(Painter) = .empty,
+painters: std.ArrayList(Painter) = .empty,
 /// Extension -> kind declarations; see `FileKind`.
-file_kinds: std.ArrayListUnmanaged(FileKind) = .empty,
+file_kinds: std.ArrayList(FileKind) = .empty,
 
 /// Loaded plugins' settings schemas (`sdk.settings.Schema(...)`), drawn by fizzy's settings
 /// pane while each owner stays registered — see `settings.zig`'s "loaded-only" module doc note.
 /// Cleared for `plugin`'s entries in `unregisterPlugin`; there is no on-disk/embedded fallback
 /// for a disabled or failed-to-load plugin.
-settings_schemas: std.ArrayListUnmanaged(SettingsSchema) = .empty,
+settings_schemas: std.ArrayList(SettingsSchema) = .empty,
 
 // ---- fizzy region registries -----------------------------------------------
 // Fizzy iterates these instead of hardcoded enums/switches. Items keep their
@@ -249,37 +249,37 @@ settings_schemas: std.ArrayListUnmanaged(SettingsSchema) = .empty,
 /// Bottom-panel views (shown as a tab strip).
 /// Center ("main window") providers; the active one draws the whole center.
 /// Menubar contributions (non-macOS in-app menu bar).
-menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
+menus: std.ArrayList(MenuContribution) = .empty,
 /// Nested items contributed into an open parent menu (e.g. View > Example).
-menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
+menu_sections: std.ArrayList(MenuSectionContribution) = .empty,
 /// What the context menu being drawn is about — set by `drawMenuSections` for exactly as long as
 /// its sections draw, and read back through `menuContext`. On the Host rather than the app so
 /// that whoever opens a menu can set it: the workbench opens the tab and tree menus, and it is a
 /// plugin with no way to reach an app global.
 menu_context: ?EditorAPI.MenuContext = null,
 /// Plugin-drawn items at the bottom of the rail (`RailItemContribution`).
-rail_items: std.ArrayListUnmanaged(RailItemContribution) = .empty,
+rail_items: std.ArrayList(RailItemContribution) = .empty,
 /// More ways to open something, listed beside fizzy's own (`OpenAction`).
-open_actions: std.ArrayListUnmanaged(OpenAction) = .empty,
+open_actions: std.ArrayList(OpenAction) = .empty,
 /// Plugins' demos (`registerDemo`), each string and tape the host's own copy.
-demos: std.ArrayListUnmanaged(Demo) = .empty,
+demos: std.ArrayList(Demo) = .empty,
 /// Moves whenever `demos` changes, so the app lists them again only then.
 demos_generation: u32 = 0,
 /// Who the user is signed in as, per service (`accounts.Provider`). The host draws the disc.
-account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
+account_providers: std.ArrayList(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
 /// `NativeMenuItem`.
-native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
+native_menu_items: std.ArrayList(NativeMenuItem) = .empty,
 /// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`. One
 /// per id, the active one (`CommandSlot`), in the order the ids were first registered.
-commands: std.ArrayListUnmanaged(Command) = .empty,
+commands: std.ArrayList(Command) = .empty,
 /// Each registered id's registrations and where its active command sits in `commands`. Keys are
 /// the host's own copies, so an id outlives the plugin that registered it.
 command_slots: std.StringHashMapUnmanaged(CommandSlot) = .empty,
 /// The commands run on documents lately, oldest first and at most `activity_cap`, for each
 /// document's panes to show as they run: by whoever ran them (a person, a tape, an agent). Titles
 /// are copies, so an entry outlives the plugin that ran it.
-activity: std.ArrayListUnmanaged(Activity) = .empty,
+activity: std.ArrayList(Activity) = .empty,
 activity_seq: u64 = 0,
 /// No activity is noted while set: a tape seeking replays its commands where nobody watches.
 activity_muted: bool = false,
@@ -298,13 +298,13 @@ command_runs: u64 = 0,
 activity_run: u64 = 0,
 
 /// Documents held by a plugin while it works on them (`Claim`).
-claims: std.ArrayListUnmanaged(Claim) = .empty,
+claims: std.ArrayList(Claim) = .empty,
 /// Who records documents' steps (`recordStep`): the app's tracks. Null, nobody does, and owners
 /// encode nothing.
 recorder: ?Recorder = null,
 /// Every author that has acted, interned by identity (`Author.same`); `Acting` and the step map
 /// hold indices into it. Strings are copies, so a label outlives the plugin that gave it.
-authors: std.ArrayListUnmanaged(Author) = .empty,
+authors: std.ArrayList(Author) = .empty,
 /// Who is acting now (`act`): an index into `authors`, and the run it belongs to. Null: nobody.
 acting: Acting = .{},
 /// The frame's input author, set by the app where input is consumed (`setInputAuthor`): the
@@ -320,28 +320,28 @@ step_authors: std.AutoHashMapUnmanaged(u64, DocAuthors) = .empty,
 unattributed_steps: u64 = 0,
 next_claim_id: u32 = 1,
 /// Commands answering in a later frame (`Command.Call.later`), until `finishCall`. UI thread.
-calls_pending: std.ArrayListUnmanaged(PendingCall) = .empty,
+calls_pending: std.ArrayList(PendingCall) = .empty,
 next_call_ticket: u32 = 1,
 /// The `runWith` call running now, innermost (`callResolved`): `finishCall` on its ticket answers
 /// it before it returns.
 running_call: ?*Command.Call = null,
 /// Pluggable language/format support (syntax highlighting, preview panes).
-language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
+language_support: std.ArrayList(LanguageSupport) = .empty,
 /// Who listens for which events (`subscribe`), and what plugins say they announce
 /// (`declareEvent`). See `events.zig`.
-subscriptions: std.ArrayListUnmanaged(events.Subscription) = .empty,
-event_declarations: std.ArrayListUnmanaged(events.Declaration) = .empty,
+subscriptions: std.ArrayList(events.Subscription) = .empty,
+event_declarations: std.ArrayList(events.Declaration) = .empty,
 /// Emitted and not yet delivered (`emit`, `deliverEvents`), under `event_lock`: `emit` may come
 /// from any thread. `listening` is whether anyone subscribes, read without the lock so an event no
 /// one hears costs nothing.
-event_queue: std.ArrayListUnmanaged(events.Queued) = .empty,
+event_queue: std.ArrayList(events.Queued) = .empty,
 event_lock: std.atomic.Mutex = .unlocked,
 listening: std.atomic.Value(bool) = .init(false),
 
 /// Every UI a plugin contributes, of every kind. A `Surface` carries keywords rather than a
 /// region name, so the app's layout decides where it lands and the SDK never has to grow a new
 /// registry for a new kind of place.
-surfaces: std.ArrayListUnmanaged(Surface) = .empty,
+surfaces: std.ArrayList(Surface) = .empty,
 /// Titles given after registration (`setSurfaceTitle`), by surface id: the Host's own copies,
 /// which those surfaces' `title` points at. Freed with the surface.
 surface_titles: std.StringHashMapUnmanaged([]u8) = .empty,
@@ -1157,7 +1157,7 @@ fn removeEventsOf(self: *Host, plugin: *Plugin) void {
     self.listening.store(self.subscriptions.items.len > 0, .release);
 }
 
-fn removeOwned(comptime T: type, list: *std.ArrayListUnmanaged(T), plugin: *Plugin) void {
+fn removeOwned(comptime T: type, list: *std.ArrayList(T), plugin: *Plugin) void {
     var w: usize = 0;
     for (list.items) |item| {
         const owned = if (item.owner) |o| o == plugin else false;
@@ -1172,7 +1172,7 @@ fn removeOwned(comptime T: type, list: *std.ArrayListUnmanaged(T), plugin: *Plug
 /// `removeOwned`'s counterpart for `SettingsSchema`, whose `owner` is a required (non-optional)
 /// `*Plugin` — every schema belongs to exactly one plugin, unlike fizzy-ownable
 /// contribution structs `removeOwned` handles.
-fn removeOwnedSettingsSchemas(list: *std.ArrayListUnmanaged(SettingsSchema), plugin: *Plugin) void {
+fn removeOwnedSettingsSchemas(list: *std.ArrayList(SettingsSchema), plugin: *Plugin) void {
     var w: usize = 0;
     for (list.items) |item| {
         if (item.owner != plugin) {
@@ -1683,8 +1683,8 @@ const CommandSlot = struct {
     index: usize,
     /// The base first; the later registrations without `replaces`, ignored while it stands, in
     /// reserve after it, in order, so the next takes its place when its plugin goes.
-    bases: std.ArrayListUnmanaged(Command) = .empty,
-    overrides: std.ArrayListUnmanaged(Command) = .empty,
+    bases: std.ArrayList(Command) = .empty,
+    overrides: std.ArrayList(Command) = .empty,
     /// How many runs of an override of this id are in progress, or of what one reached through
     /// `callReplaced`: while one is, running the id by id from inside would run the override
     /// again, and is refused. A plain command running itself is not counted.

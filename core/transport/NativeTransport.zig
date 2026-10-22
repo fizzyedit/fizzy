@@ -85,7 +85,7 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, wake: ?*const fn () void) Native
 /// Waits for every worker still running (the one place that does — the transport's memory
 /// is about to go away under them); their responses are dropped.
 pub fn deinit(self: *NativeTransport) void {
-    var threads: std.ArrayListUnmanaged(std.Thread) = .empty;
+    var threads: std.ArrayList(std.Thread) = .empty;
     defer threads.deinit(self.gpa);
     {
         self.mutex.lock();
@@ -257,7 +257,7 @@ fn cancel(ptr: *anyopaque, handle: vfs.http.Job) void {
 
 fn pump(ptr: *anyopaque) void {
     const self: *NativeTransport = @ptrCast(@alignCast(ptr));
-    var done: std.ArrayListUnmanaged(*Job) = .empty;
+    var done: std.ArrayList(*Job) = .empty;
     defer done.deinit(self.gpa);
     {
         self.mutex.lock();
