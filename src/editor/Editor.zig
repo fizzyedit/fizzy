@@ -4856,6 +4856,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
             editor.app.layout.publishRegions();
+            editor.app.layout.reapSplits(editor.app.allocator);
             // Over every place: a drag's join spans two of them.
             layout.drawDragOverlay();
             // The picker photographs surfaces that drew nowhere this frame, and floats above
