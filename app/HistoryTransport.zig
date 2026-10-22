@@ -327,7 +327,10 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // Out: where, for a bar that would cover it to stand clear (`dome.barsOut`).
     if (self.place(area, now)) |pl| dome.publishBar(pl);
     const arena = dvui.currentWindow().arena();
-    const line = doc.owner.historyLine(doc, arena) orelse return pressed;
+    const prof_line = core.profile.begin("fizzy", "history.line");
+    const line_opt = doc.owner.historyLine(doc, arena);
+    prof_line.end();
+    const line = line_opt orelse return pressed;
     const n = line.entries.len;
     // The first stop a part can begin at: where `export_from` is on the line. Gone from it (undone
     // past and edited over), nothing can be exported.

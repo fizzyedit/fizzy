@@ -632,6 +632,7 @@ pub fn tick(self: *Tracks) void {
             var s = self.take(t.doc, t.steps.items.len) orelse continue;
             // As what differs from the latest whole state, unless that is half the document or
             // more: then whole, and the next ones differ from it.
+            const prof_delta = core.profile.begin("fizzy", "tracks.delta");
             if (state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes)) |delta| {
                 if (delta.len * 2 < s.bytes.len) {
                     self.gpa.free(s.bytes);
@@ -639,6 +640,7 @@ pub fn tick(self: *Tracks) void {
                     s.whole = false;
                 } else self.gpa.free(delta);
             } else |_| {}
+            prof_delta.end();
             t.checkpoints.append(self.gpa, s) catch {
                 self.gpa.free(s.bytes);
                 continue;
@@ -726,6 +728,8 @@ fn historyTop(doc: sdk.DocHandle, gpa: std.mem.Allocator) ?u64 {
 }
 
 fn take(self: *Tracks, doc: sdk.DocHandle, count: usize) ?Track.State {
+    const prof = core.profile.begin("fizzy", "tracks.take");
+    defer prof.end();
     const bytes = doc.owner.captureDocumentState(doc, self.gpa) orelse return null;
     return .{ .at = self.now(), .step = count, .bytes = bytes, .fingerprint = doc.owner.documentFingerprint(doc) };
 }
