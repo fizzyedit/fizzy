@@ -189,6 +189,7 @@ const fizzy_commands = [_]FizzyCommand{
     // For programs, answered a frame or more later (`Command.Call.later`): a test or a script on the
     // control server reads the screen as text, and waits for a load to land before it looks.
     .{ .id = "fizzy.screen", .title = "What Is on Screen", .bind = null, .params = ScreenArgs.params, .runWith = ScreenArgs.bind(cmdScreen), .visibility = .internal },
+    .{ .id = "fizzy.frames.dump", .title = "Dump the Frame Record", .bind = null, .params = FramesDump.params, .runWith = FramesDump.bind(cmdFramesDump), .visibility = .internal },
     .{ .id = "fizzy.settled", .title = "Wait Until Settled", .bind = null, .params = SettledArgs.params, .runWith = SettledArgs.bind(cmdSettled), .visibility = .internal },
 } ++ open_folder_commands ++ demo_commands ++ automation_commands;
 
@@ -737,6 +738,20 @@ fn cmdCaptureWith(state: *anyopaque, args: CaptureArgs.Args, call: *sdk.Command.
     try call.returns(written);
 }
 
+const FramesDump = sdk.Command.Params(struct {
+    last: sdk.Command.Arg(u32, .{ .description = "How many of the newest frames to answer, newest first (at most the record's capacity, `fizzy.core.profile.FrameRecord.capacity`).", .min = 1, .max = fizzy.core.profile.FrameRecord.capacity }) = .init(16),
+});
+
+/// The frame record as ZON (`fizzy.core.profile.writeFrames`): the newest frames, each with its number,
+/// work time, the input events that caused it (kinds), and its costliest scopes. Always kept, so a
+/// frame an input caused (the pen coming up) can be read after the fact: do the input, then ask.
+fn cmdFramesDump(_: *anyopaque, args: FramesDump.Args, call: *sdk.Command.Call) !void {
+    const p = fizzy.core.profile.current() orelse return call.fail("the profiler is not running", .{});
+    var out: std.Io.Writer.Allocating = .init(call.arena);
+    try fizzy.core.profile.writeFrames(p, &out.writer, args.last);
+    call.result = out.written();
+}
+
 const ScreenArgs = sdk.Command.Params(struct {
     since: sdk.Command.Arg(u32, .{ .description = "The `seq` of a screen already read: answered with what changed since it (added, removed, changed nodes) while it is one of the last few, else in full.", .min = 0, .max = std.math.maxInt(u32) }) = .init(0),
 });
@@ -896,9 +911,9 @@ const TraceArgs = sdk.Command.Params(struct {
     ms: sdk.Command.Arg(u32, .{ .description = "Only the spans that ended in the last this many milliseconds; 0 for every one kept." }) = .init(0),
 });
 
-/// The spans the profiler kept (`core.profile.span`: the UI thread's frames and work on other
+/// The spans the profiler kept (`fizzy.core.profile.span`: the UI thread's frames and work on other
 /// threads) as a Chrome trace that Perfetto (ui.perfetto.dev) opens. They are kept while the
-/// profiler records: its window open, or someone asked (`core.profile.want`).
+/// profiler records: its window open, or someone asked (`fizzy.core.profile.want`).
 fn cmdWriteTrace(state: *anyopaque) anyerror!void {
     _ = try writeTraceFile(editorFromState(state), "", 0);
 }
@@ -911,7 +926,7 @@ fn cmdWriteTraceTo(state: *anyopaque, args: TraceArgs.Args, call: *sdk.Command.C
 /// Write the trace to `path`, or a new file under `<config>/traces/` when it is empty; the path
 /// written, in the frame's arena.
 fn writeTraceFile(editor: *Editor, path: []const u8, ms: u32) ![]const u8 {
-    // The web has no file to write it to; its spans are read through `core.profile.report`.
+    // The web has no file to write it to; its spans are read through `fizzy.core.profile.report`.
     if (comptime is_web) return error.NoFileSystem;
     const arena = dvui.currentWindow().arena();
     var out: std.Io.Writer.Allocating = .init(arena);

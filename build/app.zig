@@ -745,6 +745,7 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // written as a Chrome trace that reads back as JSON.
         .{ "fizzy-profile-spans-tests", "core/profile/Spans.zig" },
         .{ "fizzy-profile-causes-tests", "core/profile/FrameCauses.zig" },
+        .{ "fizzy-profile-frame-record-tests", "core/profile/FrameRecord.zig" },
         // The login-shell PATH cache: it owns its string whatever allocator the first caller
         // passed, and threads that ask at once resolve once. The shell spawn itself is not run.
         .{ "fizzy-shell-env-tests", "core/shell_env.zig" },
@@ -1397,6 +1398,8 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
             .root_source_file = b.path("core/profile.zig"),
         });
         profile_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        // `core/profile.zig` times the in-app glass through `glass.prof`.
+        profile_module.addImport("glass", core_module_test.import_table.get("glass").?);
         const profile_tests = b.addTest(.{
             .name = "fizzy-profile-tests",
             .root_module = profile_module,

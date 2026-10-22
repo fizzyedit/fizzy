@@ -30,6 +30,8 @@ pub const Lookback = @import("profile/Lookback.zig");
 /// Why each frame happened: its events, the `dvui.refresh` calls before it by place, or something
 /// else (a timer, an animation), kept while the profiler records (`frameCauses`).
 pub const FrameCauses = @import("profile/FrameCauses.zig");
+/// The last frames in order, each with its input events and costliest scopes: always kept.
+pub const FrameRecord = @import("profile/FrameRecord.zig");
 /// Spans on any thread, each occurrence kept, while the profiler records (`span`, `spans`,
 /// `writeTrace`).
 pub const Spans = @import("profile/Spans.zig");
@@ -39,7 +41,7 @@ pub const Gpu = @import("profile/Gpu.zig");
 /// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
 /// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
 /// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
-pub const abi: u32 = 5;
+pub const abi: u32 = 6;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -112,6 +114,11 @@ pub const Profiler = struct {
     /// This frame records: the window is open or someone asked. Decided once, at the frame's
     /// start, so a scope costs one branch either way.
     active: bool = false,
+    /// Scopes are timed: always, so the frame record (`FrameRecord`) has the costliest scopes of
+    /// every frame, the pen-up frame no one thought to profile included. A scope costs two clock
+    /// reads and a few writes; what `active` adds (windows, history, lookback, refresh records)
+    /// still costs nothing while nobody looks.
+    timing: bool = true,
 
     /// The last `history_len` frames: each one's work and submit, and each entry's time and
     /// calls in it.
@@ -176,6 +183,7 @@ pub const Profiler = struct {
         self.frame_inputs = 0;
         self.recorded_slot = null;
         self.stats = .{};
+        host_record.reset();
         self.history_head = 0;
         self.history_filled = 0;
         self.history_work = @splat(0);
@@ -293,7 +301,19 @@ pub const Profiler = struct {
         self.depth = 0;
     }
 
+    /// The frame's costliest scopes into the frame record, before the entries' times are cleared.
+    fn noteScopes(self: *Profiler) void {
+        for (self.slice(), 0..) |e, i| {
+            if (e.frame_calls == 0) continue;
+            host_record.noteScope(@intCast(i), e.frame_ns -| e.frame_child_ns);
+        }
+    }
+
     fn frameEnd(self: *Profiler) void {
+        const ended = now();
+        const work_ns: u64 = @intCast(@max(0, ended - self.frame_start));
+        if (!self.paused and !self.frozen) self.noteScopes();
+        host_record.end(work_ns);
         if (!self.active or self.paused or self.frozen) {
             // Still clear the frame's times, or a held frame's add to the next one recorded.
             for (self.slice()) |*e| {
@@ -390,6 +410,8 @@ var host_lookback: ?*Lookback = null;
 /// The host's frame causes, made like `host_lookback`, and started over each time the profiler
 /// starts recording, so they say what happened while someone looked.
 var host_causes: ?*FrameCauses = null;
+/// The host's frame record: always kept, in the image's own data (no allocation, per frame or at all).
+var host_record: FrameRecord = .{};
 var was_active = false;
 /// The host's spans, made like `host_lookback`.
 var host_spans: ?*Spans = null;
@@ -400,6 +422,7 @@ var frame_span: OpenSpan = .{};
 const publish_id: dvui.Id = @fromBackingInt(@intCast(0x6669_7a7a_7970_7266)); // "fizzyprf"
 const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
 const lookback_key = std.fmt.comptimePrint("_profiler_lookback{d}", .{Lookback.abi});
+const record_key = std.fmt.comptimePrint("_profiler_record{d}", .{FrameRecord.abi});
 const causes_key = std.fmt.comptimePrint("_profiler_causes{d}", .{FrameCauses.abi});
 const phases_key = std.fmt.comptimePrint("_profiler_phases{d}", .{Phases.abi});
 const spans_key = std.fmt.comptimePrint("_profiler_spans{d}", .{Spans.abi});
@@ -461,6 +484,26 @@ pub fn frameCauses() ?*FrameCauses {
     return @ptrFromInt(addr);
 }
 
+/// The last frames, each with the input events it handled and its costliest scopes, from any
+/// image. Always kept from the host's first frame.
+pub fn frameRecord() ?*FrameRecord {
+    if (is_host) return &host_record;
+    if (dvui.current_window == null) return null;
+    const addr = dvui.dataGet(null, publish_id, record_key, usize) orelse return null;
+    return @ptrFromInt(addr);
+}
+
+fn recordScopeName(p: *const Profiler, entry: u16) ?[2][]const u8 {
+    if (entry >= p.count) return null;
+    return .{ p.entries[entry].owner, p.entries[entry].name };
+}
+
+/// The newest `last` frames of the record as ZON (`FrameRecord.write`), scopes named from `p`'s entries.
+pub fn writeFrames(p: *const Profiler, w: *std.Io.Writer, last: usize) std.Io.Writer.Error!void {
+    const rec = frameRecord() orelse return w.writeAll(".{}\n");
+    try rec.write(w, last, p, recordScopeName);
+}
+
 /// Whether frame causes are being recorded: the host's profiler is. The app turns dvui's refresh
 /// records on while it is (`dvui.debug.logRefresh`) and hands each to `noteRefresh` (`interceptLog`).
 pub fn recordingCauses() bool {
@@ -509,14 +552,32 @@ pub fn interceptPluginLine(level: std.log.Level, message: []const u8) bool {
 }
 
 /// The events this frame has to handle, less the one dvui adds to every frame (the pointer's
-/// `position`, so hover follows it): it causes nothing.
-fn causingEvents() usize {
-    var n: usize = 0;
+/// `position`, so hover follows it): it causes nothing. Counted, and by kind.
+fn causingEvents() struct { n: u16, kinds: FrameRecord.Kinds } {
+    var n: u16 = 0;
+    var kinds: FrameRecord.Kinds = .{};
     for (dvui.events()) |e| {
-        if (e.evt == .mouse and e.evt.mouse.action == .position) continue;
-        n += 1;
+        switch (e.evt) {
+            .mouse => |m| switch (m.action) {
+                .position => continue,
+                .press => kinds.press = true,
+                .release => kinds.release = true,
+                .motion => kinds.motion = true,
+                .wheel_x, .wheel_y => kinds.wheel = true,
+                .focus => kinds.focus = true,
+            },
+            .key => |k| if (k.action == .up) {
+                kinds.key_up = true;
+            } else {
+                kinds.key_down = true;
+            },
+            .text => kinds.text = true,
+            .window => kinds.window = true,
+            .app => kinds.app = true,
+        }
+        n +|= 1;
     }
-    return n;
+    return .{ .n = n, .kinds = kinds };
 }
 
 /// Host only: the app's start has reached `name` (a string literal). The first call is time zero.
@@ -557,11 +618,14 @@ pub fn hostFrameBegin(prev_submit_ns: ?u64, gpu_total: ?Gpu) void {
     if (host_lookback == null and host_profiler.active) host_lookback = Lookback.create(std.heap.page_allocator, max_entries) catch null;
     if (host_lookback) |lb| dvui.dataSet(null, publish_id, lookback_key, @as(usize, @intFromPtr(lb)));
     dvui.dataSet(null, publish_id, phases_key, @as(usize, @intFromPtr(&host_phases)));
+    const caused = causingEvents();
+    host_record.begin(host_profiler.frame_start, caused.n, caused.kinds);
+    dvui.dataSet(null, publish_id, record_key, @as(usize, @intFromPtr(&host_record)));
     const active = host_profiler.active;
     if (host_causes == null and active) host_causes = std.heap.page_allocator.create(FrameCauses) catch null;
     if (host_causes) |c| {
         if (active and !was_active) c.* = .{};
-        if (active) c.frameBegin(causingEvents());
+        if (active) c.frameBegin(caused.n);
         dvui.dataSet(null, publish_id, causes_key, @as(usize, @intFromPtr(c)));
     }
     was_active = active;
@@ -636,7 +700,7 @@ pub const Scope = struct {
 /// scope already open. What the host wraps each call into a plugin with.
 pub fn begin(owner: []const u8, name: []const u8) Scope {
     const p = current() orelse return .{};
-    if (!p.active or p.paused) return .{};
+    if (!p.timing or p.paused) return .{};
     const idx = p.open(owner, name) orelse return .{};
     return .{ .p = p, .idx = idx };
 }
@@ -645,7 +709,7 @@ pub fn begin(owner: []const u8, name: []const u8) Scope {
 /// how a plugin marks the parts of a hook.
 pub fn section(name: []const u8) Scope {
     const p = current() orelse return .{};
-    if (!p.active or p.paused) return .{};
+    if (!p.timing or p.paused) return .{};
     const owner = if (p.depth > 0) p.entries[p.stack[p.depth - 1]].owner else "?";
     const idx = p.open(owner, name) orelse return .{};
     return .{ .p = p, .idx = idx };
@@ -969,4 +1033,52 @@ test "a frame's GPU counts land in its own slot and the window's average, not be
     p.win_start -= window_ns;
     p.frameEnd();
     try std.testing.expectEqual(@as(f64, 2), p.stats.gpu.?.targets);
+}
+
+fn recordedFrame() !dvui.App.Result {
+    hostFrameBegin(null, null);
+    defer hostFrameEnd();
+    // Work the way the app's frames time it, whether or not anyone asked the profiler to record.
+    const s = begin("fizzy", "pen");
+    defer s.end();
+    var spin: u64 = 0;
+    const until = now() + 200 * std.time.ns_per_us;
+    while (now() < until) spin +%= 1;
+    std.mem.doNotOptimizeAway(spin);
+    return .ok;
+}
+
+test "the frame a pointer release caused is in the record, with its cause and its scope times" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 200, .h = 200 } });
+    defer t.deinit();
+    host_record.reset();
+    try dvui.testing.settle(recordedFrame);
+    const cw = dvui.currentWindow();
+
+    // Through dvui's input path, as a backend hands the app a pen going down and coming up.
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(recordedFrame);
+    const before = host_record.newest();
+    _ = try cw.addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(recordedFrame);
+    _ = try dvui.testing.step(recordedFrame);
+
+    try std.testing.expect(host_record.latestWith(.{ .press = true }, before) == null);
+    const f = host_record.latestWith(.{ .release = true }, before) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(f.events >= 1);
+    try std.testing.expect(!f.kinds.press);
+    try std.testing.expect(f.work_ns >= 200 * std.time.ns_per_us);
+    try std.testing.expect(f.scoped);
+    const top = f.costliest()[0];
+    try std.testing.expect(top.self_ns >= 200 * std.time.ns_per_us);
+    try std.testing.expectEqualStrings("pen", host_profiler.entries[top.entry].name);
+
+    // The frame after it was drawn for nothing the input did.
+    try std.testing.expect(!host_record.get(0).?.kinds.any());
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try writeFrames(&host_profiler, &out.writer, 4);
+    try std.testing.expect(std.mem.find(u8, out.written(), "\"release\"") != null);
+    try std.testing.expect(std.mem.find(u8, out.written(), "fizzy.pen") != null);
 }

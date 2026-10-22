@@ -140,6 +140,7 @@ pub fn draw(host: *sdk.Host) void {
                 drawStats(p);
                 drawControls(p);
                 drawHitchChips();
+                drawInputFrames(p);
             }
             // At least its share; more where the table's columns need it (`claim_width`).
             var right = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .min_size_content = .{ .w = table_w } });
@@ -155,6 +156,7 @@ pub fn draw(host: *sdk.Host) void {
             drawExplanation();
             const picked = drawGraphPicked(p, false);
             drawHitchChips();
+            drawInputFrames(p);
             const shown = whatToShow(p, arena, picked);
             var lower = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both, .min_size_content = .{ .h = 280 } });
             defer lower.deinit();
@@ -168,6 +170,7 @@ pub fn draw(host: *sdk.Host) void {
             drawControls(p);
             const picked = drawGraphPicked(p, false);
             drawHitchChips();
+            drawInputFrames(p);
             const shown = whatToShow(p, arena, picked);
             var lower = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .min_size_content = .{ .h = 280 } });
             defer lower.deinit();
@@ -451,6 +454,40 @@ fn drawHitchChips() void {
         if (dvui.button(@src(), text, .{}, .{ .id_extra = ago, .style = if (is_held) .highlight else .control, .margin = .all(2), .padding = .{ .x = 6, .w = 6, .y = 2, .h = 2 } })) {
             held_hitch = if (is_held) null else h.at_ns;
         }
+    }
+}
+
+/// The newest frames an input event other than a pointer move caused (the pen coming down or up, a
+/// key, a wheel), from the always-kept frame record (`profile.FrameRecord`): its number, what it
+/// handled, its work and the scope that cost the most in it. A frame no profiler window was open
+/// for is here too. One row, as many as fit.
+fn drawInputFrames(p: *const profile.Profiler) void {
+    const rec = profile.frameRecord() orelse return;
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 4 } });
+    defer row.deinit();
+    const prev_clip = dvui.clip(row.data().contentRectScale().r);
+    defer dvui.clipSet(prev_clip);
+    const dim = dvui.themeGet().color(.control, .text).opacity(0.6);
+    dvui.labelNoFmt(@src(), "input frames:", .{}, .{ .color_text = .{ .color = dim }, .gravity_y = 0.5 });
+    var shown: usize = 0;
+    var ago: usize = 0;
+    while (rec.get(ago)) |f| : (ago += 1) {
+        if (shown == 6) break;
+        const k = f.kinds;
+        if (!(k.press or k.release or k.key_down or k.key_up or k.text or k.wheel)) continue;
+        var buf: [160]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        w.print("#{d} ", .{f.number}) catch {};
+        inline for (.{ "press", "release", "key_down", "key_up", "text", "wheel" }) |name| {
+            if (@field(k, name)) w.print("{s} ", .{name}) catch {};
+        }
+        w.print("{d:.1} ms", .{@as(f64, @floatFromInt(f.work_ns)) / std.time.ns_per_ms}) catch {};
+        if (f.costliest().len > 0) {
+            const top = f.costliest()[0];
+            if (top.entry < p.count) w.print(" ({s} {d:.1})", .{ p.entries[top.entry].name, @as(f64, @floatFromInt(top.self_ns)) / std.time.ns_per_ms }) catch {};
+        }
+        dvui.labelNoFmt(@src(), w.buffered(), .{}, .{ .id_extra = shown, .margin = .{ .x = 6 }, .gravity_y = 0.5 });
+        shown += 1;
     }
 }
 
