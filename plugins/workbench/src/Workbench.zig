@@ -29,7 +29,7 @@ pub const Panes = core.widgets.DockLayout;
 pub const HeldTabs = struct { grouping: u64, ids: [][]u8 };
 
 allocator: std.mem.Allocator,
-decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
+decorators: std.ArrayList(BranchDecorator) = .empty,
 
 /// The panes, keyed by grouping, in row order. What each one *holds* is not here: it is the
 /// app's assignment under the pane's name (`Workspace.name`), which is also how last session's
@@ -51,7 +51,7 @@ held_open: u64 = 0,
 /// assignment, copied): set aside whole, with their documents, which stay open and are never
 /// seated in the demo's panes (`workbench_layout.holdPanes`).
 held_workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
-held_tabs: std.ArrayListUnmanaged(HeldTabs) = .empty,
+held_tabs: std.ArrayList(HeldTabs) = .empty,
 /// Where the panes are arranged when the app arranges them instead of `panes`: each pane a view
 /// of the app's, in a place of the app's, beside another by a split of the app's (fizzy's
 /// `Workspaces`, behind `FIZZY_WORKSPACES=1`). Null: the panes are this tree's leaves, as before.
@@ -389,7 +389,7 @@ pub fn swapTabId(self: *Workbench, old_id: []const u8, new_id: []const u8) ?*Wor
         for (existing) |e| if (std.mem.eql(u8, e, new_id)) {
             has_new = true;
         };
-        var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+        var ids: std.ArrayList([]const u8) = .empty;
         var found = false;
         for (existing) |e| {
             if (std.mem.eql(u8, e, old_id)) {

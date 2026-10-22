@@ -94,7 +94,7 @@ pub const BlockSample = struct {
     text_layouts: u32,
     add_text_bytes: u64,
 };
-pub var block_profile: ?*std.ArrayListUnmanaged(BlockSample) = null;
+pub var block_profile: ?*std.ArrayList(BlockSample) = null;
 pub var block_profile_gpa: ?std.mem.Allocator = null;
 
 /// Where a block sits and how much its height can be believed — see `block_heights.zig`. That
@@ -1032,7 +1032,7 @@ fn parseFileUri(arena: std.mem.Allocator, url: []const u8) ?ParsedFileUri {
 
 /// Percent-decodes the path portion of a `file://` URI into a native filesystem path.
 fn decodeFileUriPath(arena: std.mem.Allocator, encoded: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(arena);
     var i: usize = 0;
     while (i < encoded.len) {

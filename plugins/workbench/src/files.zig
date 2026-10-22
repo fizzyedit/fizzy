@@ -1285,7 +1285,7 @@ fn appendRowOrder(
     arena: std.mem.Allocator,
     tree_id: dvui.Id,
     directory: []const u8,
-    out: *std.ArrayListUnmanaged(FileVisRow),
+    out: *std.ArrayList(FileVisRow),
 ) void {
     const listing = (table() orelse return).listDir(directory) orelse return;
     for (listing.entries) |e| {
@@ -1307,7 +1307,7 @@ fn flushPendingFileShiftRange(
     pending_file_shift_range = null;
 
     const arena = dvui.currentWindow().arena();
-    var rows: std.ArrayListUnmanaged(FileVisRow) = .empty;
+    var rows: std.ArrayList(FileVisRow) = .empty;
 
     if (ranked) |list| {
         // A filter is active: row order is the ranked list, not the tree.
@@ -1380,7 +1380,7 @@ fn selectionPathExcludedByAncestor(path: []const u8) bool {
 
 /// Selected paths with no selected ancestor folder, sorted lexically (same set as multi-drag).
 fn selectionPathsSorted(arena: std.mem.Allocator) ![]const []const u8 {
-    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
+    var paths: std.ArrayList([]const u8) = .empty;
     var it = selected_paths.iterator();
     while (it.next()) |e| {
         const src = e.value_ptr.*;
@@ -1410,7 +1410,7 @@ fn openablePath(abs_path: []const u8) bool {
 /// Every openable file beneath `root_abs`, through the table's listings so a mount walks the
 /// same way the disk does. A directory a slow mount has not answered yet contributes nothing
 /// this time — the same files the tree could not have shown either.
-fn appendOpenableFilesInTree(arena: std.mem.Allocator, root_abs: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+fn appendOpenableFilesInTree(arena: std.mem.Allocator, root_abs: []const u8, out: *std.ArrayList([]const u8)) !void {
     const files = table() orelse return;
     const listing = files.listDir(root_abs) orelse return;
     for (listing.entries) |entry| {
@@ -1430,7 +1430,7 @@ fn joinChild(arena: std.mem.Allocator, dir: []const u8, name: []const u8) ![]u8 
 /// plus all openable descendants of selected directories. Sorted lexically. Not used for delete.
 fn selectionTopMostOpenableFilesForOpenActions(arena: std.mem.Allocator) ![]const []const u8 {
     const top = try selectionPathsSorted(arena);
-    var files: std.ArrayListUnmanaged([]const u8) = .empty;
+    var files: std.ArrayList([]const u8) = .empty;
     errdefer files.deinit(arena);
     for (top) |p| {
         if (pathIsDirAbsolute(p)) {
@@ -1453,7 +1453,7 @@ fn selectionBranchIdsForMultiDrag(arena: std.mem.Allocator) ![]const usize {
         id: usize,
         path: []const u8,
     };
-    var tmp: std.ArrayListUnmanaged(IdPath) = .empty;
+    var tmp: std.ArrayList(IdPath) = .empty;
     defer tmp.deinit(arena);
 
     var it = selected_paths.iterator();
@@ -1522,7 +1522,7 @@ fn carryOut(tree: *core.widgets.TreeWidget, path: []const u8, from: dvui.Rect.Ph
     // The rest of the selection it was lifted with, in the order a move takes them
     // (`selectionPathsSorted`) — read before the tree's drag, which says it was lifted with them,
     // is put down.
-    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
+    var paths: std.ArrayList([]const u8) = .empty;
     paths.append(arena, path) catch return;
     if (tree.drag_branch_ids != null) {
         const rest = selectionPathsSorted(arena) catch &.{};

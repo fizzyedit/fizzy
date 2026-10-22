@@ -565,7 +565,7 @@ pub fn addTab(self: *Workspace, id: []const u8, focus: bool) void {
     self.expecting = false;
     var buf: [32]u8 = undefined;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     if (runtime.host().assignedSurfaces(name(&buf, self.grouping))) |existing| {
         for (existing) |e| {
             if (std.mem.eql(u8, e, id)) {
@@ -584,7 +584,7 @@ pub fn removeTab(self: *Workspace, id: []const u8) void {
     var buf: [32]u8 = undefined;
     const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var found = false;
     for (existing) |e| {
         if (std.mem.eql(u8, e, id)) {
@@ -601,7 +601,7 @@ pub fn removeTabsForPath(self: *Workspace, path: []const u8) bool {
     var buf: [32]u8 = undefined;
     const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return false;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var found = false;
     for (existing) |e| {
         if (sdk.document.pathOfSurfaceId(e)) |p| if (std.mem.eql(u8, p, path)) {
@@ -708,7 +708,7 @@ pub fn insertTab(self: *Workspace, id: []const u8, index: usize) void {
     self.expecting = false;
     var buf: [32]u8 = undefined;
     const arena = runtime.host().arena();
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     var at = index;
     if (runtime.host().assignedSurfaces(name(&buf, self.grouping))) |existing| {
         for (existing, 0..) |e, k| {
@@ -1174,7 +1174,7 @@ fn drawTabMenu(tabs: []const *const sdk.Surface, index: usize, doc: sdk.DocHandl
     menu.close();
 
     // Collected before any close runs: closing edits the list these indices point into.
-    var ids: std.ArrayListUnmanaged(u64) = .empty;
+    var ids: std.ArrayList(u64) = .empty;
     const arena = host.arena();
     for (tabs, 0..) |surface, i| {
         const other = documentOf(surface) orelse continue;
