@@ -5281,6 +5281,67 @@ test "dragging a view over its own place shows that place's drop zones" {
     try std.testing.expect(fizzy.core.widgets.DropZones.showing(center.id));
 }
 
+// A bubble lights only for a drop that reaches it: carried over the corners of a place, far from
+// its wheel, the drag lights none, and over its middle, the middle's — with the view carried in a
+// window of its own, as on Windows and macOS (`core.dialogs.carry_windows`).
+test "dragging a view over a place lights a bubble only where the drop reaches it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+    fizzy.core.dialogs.carry_windows = true;
+    defer fizzy.core.dialogs.carry_windows = false;
+
+    try editor.app.host.registerSurface(.{ .id = "test.view", .title = "View", .keywords = &.{"slot"}, .draw = centerADraw });
+    try dvui.testing.settle(EndlessFrame.frame);
+    var center: fizzy.Editor.Layout.Region = undefined;
+    for (editor.app.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center")) center = r;
+    }
+    const cw = dvui.currentWindow();
+    const b = center.bounds;
+    const button: dvui.Point.Physical = .{ .x = b.x + b.w - 16, .y = b.y + 16 };
+    _ = try cw.addEventMouseMotion(.{ .pt = button });
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    const d = &editor.app.layout.view_drag;
+
+    const mid = b.center();
+    const corners = [_]dvui.Point.Physical{
+        .{ .x = b.x + b.w * 0.04, .y = b.y + b.h * 0.06 },
+        .{ .x = b.x + b.w * 0.96, .y = b.y + b.h * 0.94 },
+        .{ .x = b.x + b.w * 0.04, .y = b.y + b.h * 0.94 },
+    };
+    // From the button across to each point, as a hand moves.
+    for (corners) |pt| {
+        for (1..13) |i| {
+            const t: f32 = @as(f32, @floatFromInt(i)) / 12;
+            _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = button.x + (pt.x - button.x) * t, .y = button.y + (pt.y - button.y) * t } });
+            _ = try dvui.testing.step(EndlessFrame.frame);
+        }
+        for (0..8) |_| _ = try dvui.testing.step(EndlessFrame.frame);
+        try std.testing.expect(d.active());
+        for (d.pending[0..d.pending_count]) |q| try std.testing.expect(q.look.hovered == null);
+    }
+    _ = try cw.addEventMouseMotion(.{ .pt = mid });
+    for (0..8) |_| _ = try dvui.testing.step(EndlessFrame.frame);
+    var lit: ?DZ.Zone = null;
+    for (d.pending[0..d.pending_count]) |q| {
+        if (q.look.target) lit = q.look.hovered;
+    }
+    try std.testing.expect(lit != null and lit.?.eql(.center));
+}
+
 // `core` is not a test root, so its widgets' pure rules are tested here.
 const DZ = fizzy.core.widgets.DropZones;
 

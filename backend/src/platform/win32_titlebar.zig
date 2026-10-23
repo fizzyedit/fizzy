@@ -688,3 +688,27 @@ fn viewportSubclassProc(
     if (uMsg == wm.WM_NCDESTROY) _ = win32.ui.shell.RemoveWindowSubclass(hWnd, viewportSubclassProc, viewport_subclass_id);
     return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
+
+/// The top-level window under the cursor, as the OS stacks them, as an opaque handle: the window a
+/// pointer is over, whichever of the app's windows lie beneath it. A window that lets the pointer
+/// through (`viewportCarryChrome`) is not it. Null off Windows, or over nothing.
+pub fn rootWindowAtCursor() ?*anyopaque {
+    if (builtin.target.os.tag != .windows) return null;
+    const wm = win32.ui.windows_and_messaging;
+    var pt: win32.foundation.POINT = undefined;
+    if (wm.GetCursorPos(&pt) == 0) return null;
+    const hit = wm.WindowFromPoint(pt) orelse return null;
+    return wm.GetAncestor(hit, wm.GA_ROOT);
+}
+
+/// Whether window `lower` lies under window `upper` among the top-level windows. Walks up from
+/// `lower` through the windows above it, which is as far as the stack is deep.
+pub fn isUnder(lower: *anyopaque, upper: *anyopaque) bool {
+    if (builtin.target.os.tag != .windows) return false;
+    const wm = win32.ui.windows_and_messaging;
+    var above = wm.GetWindow(@ptrCast(lower), wm.GW_HWNDPREV);
+    while (above) |h| : (above = wm.GetWindow(h, wm.GW_HWNDPREV)) {
+        if (@as(*anyopaque, @ptrCast(h)) == upper) return true;
+    }
+    return false;
+}

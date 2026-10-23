@@ -2367,6 +2367,11 @@ fn heldAcrossWindows(self: *SDLBackend, event: c.SDL_Event) bool {
     return false;
 }
 
+/// `window`'s handle in the OS's stacking (Windows: its `HWND`).
+fn win32Handle(window: *c.SDL_Window) ?*anyopaque {
+    return c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null);
+}
+
 /// Where in the frame the pointer is, by the window of fizzy's it is over on the desktop: a
 /// viewport's part of the frame over its window, the main window's own otherwise. Over both — a
 /// viewport is kept over the main window — the viewport's.
@@ -2410,6 +2415,19 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
             return .{ .x = (gx - at.x) * d, .y = (gy - at.y) * d };
         }
         for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (cocoaWindow(vp.window) == front and !vp.passive and !vp.see_through) return self.viewportPoint(vp);
+    };
+    // Windows: the same, from the OS's stacking (`win32_titlebar.rootWindowAtCursor`). Its windows
+    // are stacked as any are, so a float's window clicked behind the main window lies under it
+    // wherever the two overlap, and the rect test below read a pointer over the main window there
+    // as in the float's band: the view carried was over the float, and the places that showed their
+    // drops were the float's, behind the main window's.
+    if (comptime builtin.target.os.tag == .windows) if (platform.win32_titlebar.rootWindowAtCursor()) |front| {
+        if (front == win32Handle(self.window)) {
+            const at = self.mainOnScreen();
+            const d = self.density();
+            return .{ .x = (gx - at.x) * d, .y = (gy - at.y) * d };
+        }
+        for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (win32Handle(vp.window) == front and !vp.passive and !vp.see_through and !vp.held) return self.viewportPoint(vp);
     };
     // Over the main window, a window under it in the stacking (`Viewport.under_main`) is not
     // what the pointer is over: the main window is.
@@ -2912,6 +2930,11 @@ pub fn renderPresent(self: *SDLBackend) void {
             }
         }
     }
+    // Windows: the same from the OS's stacking, read each present (nothing says when it changes).
+    if (comptime builtin.target.os.tag == .windows) if (win32Handle(self.window)) |main_h| for (&self.viewport_slots) |*slot| {
+        const vp = if (slot.*) |*v| v else continue;
+        vp.under_main = vp.mapped and !vp.passive and !vp.menu and if (win32Handle(vp.window)) |h| platform.win32_titlebar.isUnder(h, main_h) else false;
+    };
     self.manage_backend_tracking.check(.renderPresent);
 }
 
