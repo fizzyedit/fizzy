@@ -58,6 +58,9 @@ def prepare(work, example, plugin):
     pin(app / 'build.zig.zon', 'hello', hello)
     for zon in (app / 'plugins').glob('*/build.zig.zon'):
         pin(zon, 'fizzy', fizzy / 'sdk')
+    # `dotnet vpk` resolves the local tool from the manifest above its cwd, which is the app's
+    # directory; the build restores it only beside fizzy.
+    shutil.copytree(fizzy / '.config', app / '.config', dirs_exist_ok=True)
     # Velopack rejects the library default 0.0.0; use a fixed, unpublished benchmark version.
     replace_once(app / 'build.zig', '        .@"defer-app" = true,',
                  '        .@"defer-app" = true,\n        .app_version = @as([]const u8, "0.1.0"),')
