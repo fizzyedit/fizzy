@@ -2369,6 +2369,8 @@ fn heldAcrossWindows(self: *SDLBackend, event: c.SDL_Event) bool {
 
 /// `window`'s handle in the OS's stacking (Windows: its `HWND`).
 fn win32Handle(window: *c.SDL_Window) ?*anyopaque {
+    // Sound: SDL stores the window's `HWND` in this property as a plain pointer, null off Windows
+    // or once the window is gone; the handle is only compared and handed back to Win32, never read.
     return c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null);
 }
 
@@ -2419,15 +2421,25 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     // Windows: the same, from the OS's stacking (`win32_titlebar.rootWindowAtCursor`). Its windows
     // are stacked as any are, so a float's window clicked behind the main window lies under it
     // wherever the two overlap, and the rect test below read a pointer over the main window there
-    // as in the float's band: the view carried was over the float, and the places that showed their
-    // drops were the float's, behind the main window's.
+    // as in the float's band: the view carried was over the float, and the places that showed
+    // their drops were the float's, behind the main window's (`viewport_map.frontWindow`).
     if (comptime builtin.target.os.tag == .windows) if (platform.win32_titlebar.rootWindowAtCursor()) |front| {
-        if (front == win32Handle(self.window)) {
-            const at = self.mainOnScreen();
-            const d = self.density();
-            return .{ .x = (gx - at.x) * d, .y = (gy - at.y) * d };
+        var cands: [max_viewports]viewport_map.Candidate = undefined;
+        for (&self.viewport_slots, &cands) |*slot, *cand| {
+            cand.* = if (slot.*) |*vp|
+                .{ .handle = win32Handle(vp.window), .usable = !vp.passive and !vp.see_through and !vp.held }
+            else
+                .{ .handle = null, .usable = false };
         }
-        for (&self.viewport_slots) |*slot| if (slot.*) |*vp| if (win32Handle(vp.window) == front and !vp.passive and !vp.see_through and !vp.held) return self.viewportPoint(vp);
+        switch (viewport_map.frontWindow(front, win32Handle(self.window), &cands)) {
+            .main => {
+                const at = self.mainOnScreen();
+                const d = self.density();
+                return .{ .x = (gx - at.x) * d, .y = (gy - at.y) * d };
+            },
+            .float => |i| return self.viewportPoint(&self.viewport_slots[i].?),
+            .unknown => {},
+        }
     };
     // Over the main window, a window under it in the stacking (`Viewport.under_main`) is not
     // what the pointer is over: the main window is.
@@ -2931,9 +2943,16 @@ pub fn renderPresent(self: *SDLBackend) void {
         }
     }
     // Windows: the same from the OS's stacking, read each present (nothing says when it changes).
-    if (comptime builtin.target.os.tag == .windows) if (win32Handle(self.window)) |main_h| for (&self.viewport_slots) |*slot| {
-        const vp = if (slot.*) |*v| v else continue;
-        vp.under_main = vp.mapped and !vp.passive and !vp.menu and if (win32Handle(vp.window)) |h| platform.win32_titlebar.isUnder(h, main_h) else false;
+    if (comptime builtin.target.os.tag == .windows) if (win32Handle(self.window)) |main_h| {
+        var handles: [max_viewports]?*anyopaque = undefined;
+        var under: [max_viewports]bool = undefined;
+        for (&self.viewport_slots, &handles) |*slot, *h| {
+            h.* = if (slot.*) |*vp| win32Handle(vp.window) else null;
+        }
+        platform.win32_titlebar.markUnder(main_h, &handles, &under);
+        for (&self.viewport_slots, under) |*slot, is_under| if (slot.*) |*vp| {
+            vp.under_main = is_under and vp.mapped and !vp.passive and !vp.menu;
+        };
     };
     self.manage_backend_tracking.check(.renderPresent);
 }

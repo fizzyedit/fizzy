@@ -701,14 +701,28 @@ pub fn rootWindowAtCursor() ?*anyopaque {
     return wm.GetAncestor(hit, wm.GA_ROOT);
 }
 
-/// Whether window `lower` lies under window `upper` among the top-level windows. Walks up from
-/// `lower` through the windows above it, which is as far as the stack is deep.
-pub fn isUnder(lower: *anyopaque, upper: *anyopaque) bool {
-    if (builtin.target.os.tag != .windows) return false;
+/// Most top-level windows `markUnder` visits: a desktop has a few hundred at the very most, and
+/// the walk runs every present, so a pathological or cyclic-looking list must not stall a frame.
+const max_stack_walk = 2048;
+
+/// Sets `under[i]` for each `lowers[i]` that lies under window `upper` among the top-level windows.
+/// One walk down the stack from `upper`, for all of them, ending when each is found or after
+/// `max_stack_walk` windows (the rest are then read as not under: the main window in front, the
+/// rect test in `heldPoint` decides).
+pub fn markUnder(upper: *anyopaque, lowers: []const ?*anyopaque, under: []bool) void {
+    @memset(under, false);
+    if (builtin.target.os.tag != .windows) return;
     const wm = win32.ui.windows_and_messaging;
-    var above = wm.GetWindow(@ptrCast(lower), wm.GW_HWNDPREV);
-    while (above) |h| : (above = wm.GetWindow(h, wm.GW_HWNDPREV)) {
-        if (@as(*anyopaque, @ptrCast(h)) == upper) return true;
+    var left: usize = 0;
+    for (lowers) |l| left += @intFromBool(l != null);
+    var below = wm.GetWindow(@ptrCast(upper), wm.GW_HWNDNEXT);
+    var steps: usize = 0;
+    while (below) |h| : (below = wm.GetWindow(h, wm.GW_HWNDNEXT)) {
+        if (left == 0 or steps >= max_stack_walk) break;
+        steps += 1;
+        for (lowers, 0..) |l, i| if (l == @as(?*anyopaque, @ptrCast(h)) and !under[i]) {
+            under[i] = true;
+            left -= 1;
+        };
     }
-    return false;
 }
