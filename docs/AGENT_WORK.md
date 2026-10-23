@@ -146,6 +146,15 @@ Both helpers exit non-zero and print a one-line reason on failure. A failed prep
 its workspace for inspection; a failed finish can leave a published branch if GitHub refused
 PR creation. Fix the reported problem and retry finish. Neither helper merges or marks ready.
 
+## Where verification happens
+
+Three places, in order: the worker's **local gates** (step 3), which decide whether the PR is
+worth pushing; **cross-review** by a different worker; and **CI at ready**. A draft PR runs only
+the light `changes` job (`ci.yml`), so pushing to a draft costs almost nothing and proves nothing;
+`gh pr ready` starts the full matrix, and `ci-ok` is the required check on that run. A reviewer
+waits for finished checks, so review a PR once it is ready, or read a draft's diff and the
+worker's gate output in its body.
+
 ## Review
 
 The stages and markers above are the review. Reviewer and author both answer the four questions
