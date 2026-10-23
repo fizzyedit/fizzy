@@ -213,6 +213,9 @@ const fizzyImports = (target) => ({
     fizzy_web_toggle_fullscreen() {
         postMessage({ type: "fullscreen" });
     },
+    fizzy_web_fullscreen_supported() {
+        return env.fullscreenSupported ? 1 : 0;
+    },
     fizzy_web_now_real_ms() {
         return Date.now();
     },
@@ -616,7 +619,7 @@ function postBoundKeys() {
 
 // ---- start -------------------------------------------------------------------------------
 async function start(init) {
-    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, search: init.search, baseURI: init.baseURI });
+    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, search: init.search, baseURI: init.baseURI, fullscreenSupported: init.fullscreenSupported });
     adoptCanvas(init.canvas);
     warmRememberedPlugins();
 

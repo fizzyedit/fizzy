@@ -38,3 +38,8 @@ The page and its JavaScript (`index.html`, `web.js`, workers). The Zig half is
   dispatch `MouseEvent`s at the canvas ~1 s apart. dvui on the web draws only on request.
 - After `zig build web`, a hand-edited copy of `index.html` keeps a stale cache-buster hash and
   the browser serves the old `web.js`. Regenerate the copy.
+- **A new file the page names goes in `build/web.zig`'s copy list** (`manifest.webmanifest` and its
+  icons are there). Their paths are relative so the one build serves /app/ and /testapp/; keep
+  `start_url` and `scope` at `./`. The page hides View > Toggle Full Screen where the browser has no
+  Fullscreen API (iPhone Safari) through `fizzy_web_fullscreen_supported`, which the worker
+  answers from a flag in its `init` message.

@@ -292,6 +292,11 @@ pub fn build(
     // The far end of a web OAuth round trip (`core.transport.WebOAuth`): the page a provider
     // redirects back to, which posts its location to the opener and closes.
     _ = dir.addCopyFile(b.path("web/oauth-callback.html"), "oauth-callback.html");
+    // The installable page (relative paths, so /app/ and /testapp/ both work) and the icons it
+    // and the iOS home-screen entry name.
+    for ([_][]const u8{ "manifest.webmanifest", "icon-192.png", "icon-512.png" }) |name| {
+        _ = dir.addCopyFile(b.path(b.pathJoin(&.{ "web", name })), name);
+    }
     // The tapes the page can fetch (`?demo=demos/<name>.tape`), built from this commit's scripts.
     const demos: ?std.Build.LazyPath = if (own) demoTapes(b) else null;
     if (demos) |tapes| _ = dir.addCopyDirectory(tapes, "demos", .{});

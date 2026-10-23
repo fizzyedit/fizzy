@@ -47,6 +47,11 @@ pub const setTitlebarColor = platform.window.setBackground;
 pub const raiseWindow = platform.window.raise;
 pub const toggleFullscreen = platform.window.toggleFullscreen;
 
+/// Every desktop window can; only a browser page may not (`backend_web.zig`).
+pub fn fullscreenSupported() bool {
+    return true;
+}
+
 /// Whether fizzy draws its own title bar here (Windows, Linux): widgets in its strip register
 /// as interactive so the strip's drag does not take their clicks.
 pub const custom_titlebar = platform.titlebar.active;
