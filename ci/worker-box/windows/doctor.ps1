@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $config = Import-PowerShellDataFile -LiteralPath $ConfigPath
 # RunnerRoot and ZigCache come from Root unless a config names them (the test fixtures do).
 $runnerRoot = ''; $zigCache = ''
-if ($config.ContainsKey('Root')) { $runnerRoot = Join-Path $config.Root 'actions-runner'; $zigCache = Join-Path $config.Root 'zig-cache' }
+if ($config.ContainsKey('Root')) { $runnerRoot = $config.Root.TrimEnd('\') + '\actions-runner'; $zigCache = $config.Root.TrimEnd('\') + '\zig-cache' }
 if ($config.ContainsKey('RunnerRoot')) { $runnerRoot = $config.RunnerRoot }
 if ($config.ContainsKey('ZigCache')) { $zigCache = $config.ZigCache }
 $results = New-Object 'Collections.Generic.List[object]'
@@ -300,7 +300,7 @@ if ($config.ContainsKey('Worker')) {
         }
     }
     Check 'heartbeat' {
-        $file = Join-Path $config.Root 'state\heartbeat.txt'
+        $file = ($config.Root.TrimEnd('\') + '\state\heartbeat.txt')
         if (-not (Test-Path -LiteralPath $file)) { Result AMBER 'heartbeat' 'no heartbeat recorded yet'; return }
         $age = [int]((Get-Date) - (Get-Item -LiteralPath $file).LastWriteTime).TotalMinutes
         $status = 'GREEN'; if ($age -gt 30) { $status = 'AMBER' }
