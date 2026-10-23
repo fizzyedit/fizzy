@@ -710,7 +710,7 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
 /// pixel for one (`history_transport.oneToOne`), its middle in the column's, so across the strip
 /// the steps read as the actions themselves, as crisp as the pane. A stop with no picture shows the
 /// nearest that has one; none at all, the stretch stays glass. Where the document is, `at`, a line
-/// across the strip says, as a recorder's playhead does, over the middle of its stop's column where
+/// across the strip says, as a recorder's playhead does, over its stop's column where
 /// the knob below it is.
 fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
