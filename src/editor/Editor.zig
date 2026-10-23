@@ -3199,9 +3199,9 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const recorded = if (editor.app.tracks) |*t| t.trackOf(doc.id) else null;
     if (recorded != null) {
         const pane = canvas.data().borderRectScale().r;
-        // Above the bar as it stands, its strip and the feed over it included.
-        const under = if (ds.transport.place(pane, dvui.frameTimeNS())) |bar| pane.y + pane.h - bar.y + 40 * dvui.windowRectScale().s else 0;
-        ds.frames.take(editor.app.gpa, pane, @max(76 * dvui.windowRectScale().s, under), @import("app").HistoryTransport.stripPixels(pane));
+        // Above where the bar can reach, whether or not it shows or its strip is open: a
+        // size that followed the bar would make each kept picture another view of the pane.
+        ds.frames.take(editor.app.gpa, pane, @import("app").HistoryTransport.cover * dvui.windowRectScale().s, @import("app").HistoryTransport.stripPixels(pane));
     }
 
     const focus_before = dvui.lastFocusedIdInFrame();

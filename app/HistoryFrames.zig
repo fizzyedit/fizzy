@@ -411,3 +411,19 @@ test "only a step being made or joined takes its picture again" {
     recs[2].kind = .added;
     try std.testing.expectEqual(Change.made, changeOf(&recs, 8));
 }
+
+test "a scrub keeps every picture while the pane's source holds, and retakes one when it changes" {
+    const gpa = std.testing.allocator;
+    var hf: HistoryFrames = .{ .pane_source = .{ 100, 80 } };
+    defer hf.deinit(gpa);
+    for (0..3) |i| try hf.frames.put(gpa, i, .{ .tex = undefined, .source = .{ 100, 80 }, .change = .{ .x = 0.25, .y = 0.5, .w = 0.1, .h = 0.1 } });
+    for ([_]u64{ 2, 0, 1, 2, 1 }) |top| {
+        hf.moved(gpa, top, null, .visited);
+        try std.testing.expectEqual(@as(?Step, null), hf.due);
+    }
+    for (hf.frames.values()) |pic| try std.testing.expectEqual(@as(f32, 0.25), pic.change.?.x);
+    // The source the pane is taken from moved (the old bar-height bug): the visit is retaken.
+    hf.pane_source = .{ 100, 60 };
+    hf.moved(gpa, 1, null, .visited);
+    try std.testing.expect(hf.due != null);
+}

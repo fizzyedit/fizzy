@@ -168,6 +168,13 @@ fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
     return .{ .x = nat.x + nat.w / 2 - w / 2, .y = bottom - h, .w = w, .h = h };
 }
 
+/// How far up from a pane's bottom edge the bar can reach, in natural units, at any openness of
+/// its strip: the fully grown strip, the bar's outset, the tab over it, and the feed above that. A
+/// constant, so the part of the pane a history picture is taken from (`HistoryFrames.take`) does
+/// not change size while the strip opens or closes, which would make every kept picture another
+/// view of the pane.
+pub const cover: f32 = 14 + bar_h + strip_h + 4 + tab_d + tab_gap + 40;
+
 /// The strip's size over `pane` (physical) fully grown, in physical pixels, at its widest (no
 /// export button): what each step's picture is cut to (`HistoryFrames.take`), so the strip draws
 /// it one pixel for one. Null when the pane is too narrow for the bar.
@@ -824,4 +831,14 @@ fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32
     defer knob.deinit();
     knob.addArc(.{ .x = knob_x, .y = line.y + h / 2 }, 6 * s, std.math.tau, 0, true);
     knob.build().fillConvex(.{ .color = .{ .color = accent }, .fade = 1 });
+}
+
+test "the bar never reaches higher than the cover, whatever its strip's openness" {
+    const pane: dvui.Rect.Natural = .{ .x = 0, .y = 0, .w = 800, .h = 600 };
+    var g: f32 = 0;
+    while (g <= 1.0) : (g += 0.125) {
+        const r = geometry(pane, g).?;
+        const reach = pane.h - r.y + 4 + tab_d + tab_gap;
+        try std.testing.expect(reach <= cover);
+    }
 }
