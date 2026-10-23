@@ -643,14 +643,15 @@ pub fn tick(self: *Tracks) void {
             // As what differs from the latest whole state, unless that is half the document or
             // more: then whole, and the next ones differ from it.
             const prof_delta = core.profile.begin("fizzy", "tracks.delta");
-            if (state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes)) |delta| {
+            const encoded = state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes);
+            prof_delta.end();
+            if (encoded) |delta| {
                 if (delta.len * 2 < s.bytes.len) {
                     self.gpa.free(s.bytes);
                     s.bytes = delta;
                     s.whole = false;
                 } else self.gpa.free(delta);
             } else |_| {}
-            prof_delta.end();
             t.checkpoints.append(self.gpa, s) catch {
                 self.gpa.free(s.bytes);
                 continue;
