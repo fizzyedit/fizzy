@@ -677,15 +677,20 @@ async function start(init) {
     }, 0);
 }
 
-// The page's device measurement (`env.size.form`) into `core.platform.formFactor()`.
+// The page's device measurement (`env.size.form`) into `core.platform.formFactor()`, and one
+// console line saying what was measured and chosen (at startup, and whenever it changes).
 let appliedForm = "";
 function applyForm() {
     const f = env.size.form;
     if (!f || !wasmInstance || !wasmInstance.exports.FizzyWebSetFormFactor) return;
-    const key = `${f.coarse}|${f.w}|${f.h}`;
+    const key = `${f.coarse}|${f.w}|${f.h}|${f.override}`;
     if (key === appliedForm) return;
     appliedForm = key;
-    wasmInstance.exports.FizzyWebSetFormFactor(f.coarse, f.w, f.h);
+    const chosen = wasmInstance.exports.FizzyWebSetFormFactor(f.coarse, f.w, f.h, f.override);
+    console.log(
+        `form-factor: coarse=${f.pointerCoarse} hover=${f.hoverHover} w=${f.w} h=${f.h} ` +
+        `override=${f.overrideName || "none"} -> ${["desktop", "tablet", "phone"][chosen]}`,
+    );
 }
 
 // ---- from the page ----------------------------------------------------------------------------

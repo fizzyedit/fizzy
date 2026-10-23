@@ -910,6 +910,41 @@
         }
       }, { capture: true, passive: false });
 
+      // ---- form factor ----------------------------------------------------------------------
+      //
+      // The device as `core.platform.formFactor()` sees it, for both the worker and the page's
+      // own loop: a finger with no hover as the primary pointer, and the screen in CSS px (not
+      // the viewport or canvas, which the soft keyboard and sheets shrink). `?form=phone|tablet|
+      // desktop` overrides the rule for this visit only (read from the URL each load, never
+      // stored); anything else is ignored. The extra fields are for the console readout.
+      const formParam = new URLSearchParams(location.search).get("form");
+      const formNames = ["desktop", "tablet", "phone"]; // the order of `FormFactor` in core/form_factor.zig
+      const formOverride = formNames.indexOf(formParam); // -1: none
+      function formMeasure() {
+        const mq = (q) => window.matchMedia(q).matches;
+        return {
+          coarse: mq("(pointer: coarse)") && mq("(hover: none)"), w: screen.width, h: screen.height,
+          override: formOverride, overrideName: formOverride >= 0 ? formParam : "",
+          pointerCoarse: mq("(pointer: coarse)"), hoverHover: mq("(hover: hover)"),
+        };
+      }
+      // The main-thread loop's twin of the worker's `applyForm`.
+      let appliedForm = "";
+      function applyFormMain() {
+        const f = formMeasure();
+        const exp = dvuiApp && dvuiApp.instance.exports.FizzyWebSetFormFactor;
+        if (!exp) return;
+        const key = `${f.coarse}|${f.w}|${f.h}|${f.override}`;
+        if (key === appliedForm) return;
+        appliedForm = key;
+        const chosen = exp(f.coarse, f.w, f.h, f.override);
+        console.log(
+          `form-factor: coarse=${f.pointerCoarse} hover=${f.hoverHover} w=${f.w} h=${f.h} ` +
+          `override=${f.overrideName || "none"} -> ${formNames[chosen]}`,
+        );
+        dvuiApp.requestRender();
+      }
+
       // ---- worker mode: the editor runs in `fizzy-worker.js` --------------------------------
       //
       // Chrome on Android throttles a page's own frames to 60 Hz on a 120 Hz screen unless input
@@ -929,7 +964,7 @@
         // hover as the primary pointer, and the screen (not the viewport or canvas, which the soft keyboard and sheets shrink).
         const size = () => ({
           w: canvas.clientWidth, h: canvas.clientHeight, dpr: window.devicePixelRatio,
-          form: { coarse: media("(pointer: coarse)") && media("(hover: none)"), w: screen.width, h: screen.height },
+          form: formMeasure(),
         });
         const prefs = () => ({
           dark: media("(prefers-color-scheme: dark)"),
@@ -1256,6 +1291,13 @@
             // Late-bind the app reference so the capture-phase wheel listener above can
             // forward pinch deltas into the trackpad accumulator and kick a render.
             dvuiApp = app;
+            // The main-thread loop never sent the device to the editor, so Firefox and Safari
+            // (which take this path) were always `.desktop`: send it now and on change.
+            applyFormMain();
+            for (const ev of ["resize", "orientationchange"]) window.addEventListener(ev, applyFormMain);
+            for (const q of ["(pointer: coarse)", "(hover: none)"]) {
+              window.matchMedia(q).addEventListener("change", applyFormMain);
+            }
             window.dispatchEvent(new Event("resize"));
             app.requestRender();
             hideLoading();

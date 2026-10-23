@@ -20,6 +20,23 @@ pub fn classify(coarse: bool, w: f32, h: f32) FormFactor {
     return if (@min(w, h) < phone_short_side) .phone else .tablet;
 }
 
+/// The page's `?form=` override as a number (`FormFactor`'s order: desktop 0, tablet 1, phone 2);
+/// anything else, the page sends -1 for "none", and a value this build does not know is ignored.
+pub fn overrideFromCode(code: i32) ?FormFactor {
+    return switch (code) {
+        0 => .desktop,
+        1 => .tablet,
+        2 => .phone,
+        else => null,
+    };
+}
+
+/// The form factor for this visit: `override` (`?form=`, per visit, never stored) when there is
+/// one, else the measured rule.
+pub fn resolve(coarse: bool, w: f32, h: f32, override: ?FormFactor) FormFactor {
+    return override orelse classify(coarse, w, h);
+}
+
 test "a fine pointer is a desktop at any size" {
     try std.testing.expectEqual(FormFactor.desktop, classify(false, 1440, 900));
     try std.testing.expectEqual(FormFactor.desktop, classify(false, 375, 812));
@@ -39,4 +56,26 @@ test "a coarse pointer under 600 CSS px on its short side is a phone, either way
 test "a coarse pointer at 600 or more on its short side is a tablet" {
     try std.testing.expectEqual(FormFactor.tablet, classify(true, 600, 900));
     try std.testing.expectEqual(FormFactor.tablet, classify(true, 1024, 768));
+}
+
+test "an override wins over what was measured, either way" {
+    try std.testing.expectEqual(FormFactor.phone, resolve(false, 1440, 900, .phone));
+    try std.testing.expectEqual(FormFactor.tablet, resolve(false, 1440, 900, .tablet));
+    try std.testing.expectEqual(FormFactor.desktop, resolve(true, 375, 812, .desktop));
+    try std.testing.expectEqual(FormFactor.phone, resolve(false, 0, 0, .phone));
+}
+
+test "no override leaves the measured rule unchanged" {
+    try std.testing.expectEqual(classify(true, 375, 812), resolve(true, 375, 812, null));
+    try std.testing.expectEqual(classify(false, 375, 812), resolve(false, 375, 812, null));
+    try std.testing.expectEqual(classify(true, 1024, 768), resolve(true, 1024, 768, null));
+}
+
+test "an override code names a form factor; an unknown one is ignored" {
+    try std.testing.expectEqual(@as(?FormFactor, .desktop), overrideFromCode(0));
+    try std.testing.expectEqual(@as(?FormFactor, .tablet), overrideFromCode(1));
+    try std.testing.expectEqual(@as(?FormFactor, .phone), overrideFromCode(2));
+    try std.testing.expectEqual(@as(?FormFactor, null), overrideFromCode(-1));
+    try std.testing.expectEqual(@as(?FormFactor, null), overrideFromCode(3));
+    for (std.enums.values(FormFactor)) |f| try std.testing.expectEqual(@as(?FormFactor, f), overrideFromCode(@backingInt(f)));
 }
