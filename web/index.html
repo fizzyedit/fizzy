@@ -159,7 +159,7 @@
       };
       // iPhone Safari has no Fullscreen API for pages (iPad does); there, "Add to Home Screen"
       // is the way to lose the address bar (manifest.webmanifest).
-      const fullscreenSupported = !!(document.documentElement.requestFullscreen);
+      const fullscreenSupported = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
       const loadingEl = document.getElementById("loading");
       const errorPanel = document.getElementById("error-panel");
       const errorMessage = document.getElementById("error-message");

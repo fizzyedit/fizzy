@@ -42,4 +42,5 @@ The page and its JavaScript (`index.html`, `web.js`, workers). The Zig half is
   icons are there). Their paths are relative so the one build serves /app/ and /testapp/; keep
   `start_url` and `scope` at `./`. The page hides View > Toggle Full Screen where the browser has no
   Fullscreen API (iPhone Safari) through `fizzy_web_fullscreen_supported`, which the worker
-  answers from a flag in its `init` message.
+  answers from a flag in its `init` message. An embed (an iframe) gets fullscreen only with
+  `allow="fullscreen"`; without it `document.fullscreenEnabled` is false and the command is hidden.
