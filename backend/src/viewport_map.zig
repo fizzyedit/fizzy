@@ -239,45 +239,7 @@ fn contains(r: Rect, p: Point) bool {
     return p.x >= r.x and p.y >= r.y and p.x < r.x + r.w and p.y < r.y + r.h;
 }
 
-/// A float's window as `frontWindow` weighs it: its OS handle, and whether the pointer may be read
-/// in it at all (not passive, see-through or held under a drag).
-pub const Candidate = struct { handle: ?*const anyopaque, usable: bool };
-
-/// Which of the app's windows the pointer is in, by the window the OS has in front under it
-/// (`front`, from the OS's stacking, null over none of ours): the main window, a float by its
-/// index, or `.unknown` when `front` is none of them, for the caller's rect test. The OS's
-/// stacking is the truth where a float's window lies behind the main window's: the rects overlap
-/// there and say nothing of which is in front.
-pub const Front = union(enum) { main, float: usize, unknown };
-
-pub fn frontWindow(front: ?*const anyopaque, main: ?*const anyopaque, floats: []const Candidate) Front {
-    const f = front orelse return .unknown;
-    if (f == main) return .main;
-    for (floats, 0..) |w, i| if (w.usable and w.handle == f) return .{ .float = i };
-    return .unknown;
-}
-
 const testing = std.testing;
-
-test "a float's window behind the main window does not take the pointer over their overlap" {
-    var main_win: u8 = 0;
-    var behind: u8 = 0;
-    var other: u8 = 0;
-    const floats = [_]Candidate{
-        .{ .handle = &behind, .usable = true },
-        .{ .handle = &other, .usable = true },
-    };
-    // The OS has the main window in front under the pointer: it is read in the main window, though
-    // the float's window lies there too.
-    try testing.expectEqual(Front.main, frontWindow(&main_win, &main_win, &floats));
-    // In front, a float's window is read in its own band.
-    try testing.expectEqual(Front{ .float = 1 }, frontWindow(&other, &main_win, &floats));
-    // A window that takes no pointer (the carry window, one held under a drag), or one that is not
-    // ours, is no answer: the rect test decides.
-    const held = [_]Candidate{.{ .handle = &behind, .usable = false }};
-    try testing.expectEqual(Front.unknown, frontWindow(&behind, &main_win, &held));
-    try testing.expectEqual(Front.unknown, frontWindow(null, &main_win, &floats));
-}
 
 test "a window is never put where SDL's display search overflows" {
     const far = place(.{ .x = 100000, .y = 0 }, .{ .x = 300, .y = 200 }, 2, .{ .x = -1e9, .y = 3e9, .w = 1e9, .h = 10 });
