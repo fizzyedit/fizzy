@@ -332,7 +332,7 @@ fn recordingDot() void {
     defer b.deinit();
 
     const r = b.data().borderRectScale().r;
-    r.fill(.all(r.h / 2), .{ .color = .{ .color = dvui.themeGet().color(.err, .fill) } });
+    r.fill(.all(r.h / 2), .{ .color = .{ .color = dvui.themeGet().color(.err, .fill) }, .fade = 1 });
 }
 
 fn drawConflicts(editor: *fizzy.Editor, theme: dvui.Theme) void {

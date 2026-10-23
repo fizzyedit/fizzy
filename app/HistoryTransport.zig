@@ -694,13 +694,13 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
     const right = xt + handle_w * s;
     if (left > r.x) (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = left - r.x, .h = r.h }).fill(.{ .tl = outer, .bl = outer, .tr = ri, .br = ri }, .{ .color = .{ .color = dim }, .fade = 1 });
     if (right < r.x + r.w) (dvui.Rect.Physical{ .x = right, .y = r.y, .w = r.x + r.w - right, .h = r.h }).fill(.{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = dim }, .fade = 1 });
-    (dvui.Rect.Physical{ .x = xf, .y = r.y, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
-    (dvui.Rect.Physical{ .x = xf, .y = r.y + r.h - edge, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
+    (dvui.Rect.Physical{ .x = xf, .y = r.y, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow }, .fade = 1 });
+    (dvui.Rect.Physical{ .x = xf, .y = r.y + r.h - edge, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow }, .fade = 1 });
     for ([_]f32{ left, xt }, [_]bool{ true, false }) |x, is_left| {
         const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y, .w = handle_w * s, .h = r.h };
         hr.fill(if (is_left) .{ .tl = outer, .bl = outer, .tr = ri, .br = ri } else .{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = yellow }, .fade = 1 });
         const notch: dvui.Rect.Physical = .{ .x = x + handle_w * s / 2 - 0.75 * s, .y = r.y + r.h / 2 - 6 * s, .w = 1.5 * s, .h = 12 * s };
-        notch.fill(.round(0.75 * s), .{ .color = .{ .color = .black } });
+        notch.fill(.round(0.75 * s), .{ .color = .{ .color = .black }, .fade = 1 });
     }
 }
 
@@ -735,12 +735,12 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
         };
         const plain: dvui.Color = ink.opacity(0.06 * grown);
         const pic = nearestPicture(frames, line, c.stop) orelse {
-            col.fill(corners, .{ .color = .{ .color = plain } });
+            col.fill(corners, .{ .color = .{ .color = plain }, .fade = 1 });
             continue;
         };
         const fit = rules.oneToOne(.{ .x = col.x, .y = col.y, .w = col.w, .h = col.h }, .{ pic.tex.width, pic.tex.height }) orelse continue;
         // A picture smaller than its column (taken from a narrower pane): the rest plain.
-        if (fit.dest.w < col.w or fit.dest.h < col.h) col.fill(corners, .{ .color = .{ .color = plain } });
+        if (fit.dest.w < col.w or fit.dest.h < col.h) col.fill(corners, .{ .color = .{ .color = plain }, .fade = 1 });
         const dest: dvui.Rect.Physical = .{ .x = fit.dest.x, .y = fit.dest.y, .w = fit.dest.w, .h = fit.dest.h };
         // The strip's round ends only where the picture reaches them.
         const fills = dest.x == col.x and dest.w == col.w and dest.y == col.y and dest.h == col.h;
@@ -752,8 +752,8 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
     const hx = rules.stopX(at, r.x, r.x + r.w, n);
     const over = 3 * s;
     const head: dvui.Rect.Physical = .{ .x = hx - 1 * s, .y = r.y - over, .w = 2 * s, .h = r.h + 2 * over };
-    head.outsetAll(0.75 * s).fill(.round(1.75 * s), .{ .color = .{ .color = dvui.Color.black.opacity(0.4 * grown) } });
-    head.fill(.round(1 * s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
+    head.outsetAll(0.75 * s).fill(.round(1.75 * s), .{ .color = .{ .color = dvui.Color.black.opacity(0.4 * grown) }, .fade = 1 });
+    head.fill(.round(1 * s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) }, .fade = 1 });
 }
 
 /// The trim bracket's gap to what it holds, the width of its yellow and of its handles, in points;
@@ -805,14 +805,14 @@ const LineLiquid = struct {
 fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32, liquid: LineLiquid) void {
     const h = 4 * s;
     const line: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + (r.h - h) / 2, .w = r.w, .h = h };
-    line.fill(.round(h / 2), .{ .color = .{ .color = ink.opacity(0.15) } });
+    line.fill(.round(h / 2), .{ .color = .{ .color = ink.opacity(0.15) }, .fade = 1 });
     const accent = dvui.themeGet().color(.highlight, .fill);
     const knob_x = rules.stopX(at, r.x, r.x + r.w, n);
     // A tick per step while they stand 6 points apart; past that the line is its own scale.
     if (n > 0 and r.w / @as(f32, @floatFromInt(n)) >= 6 * s) for (1..n) |i| {
         const x = rules.stopX(i, r.x, r.x + r.w, n);
         const tick: dvui.Rect.Physical = .{ .x = x - 0.5 * s, .y = r.y + 1 * s, .w = 1 * s, .h = r.h - 2 * s };
-        tick.fill(.{}, .{ .color = .{ .color = ink.opacity(0.25) } });
+        tick.fill(.{}, .{ .color = .{ .color = ink.opacity(0.25) }, .fade = 1 });
     };
     // The applied part, a liquid in a tube a little thicker than the line, its head tipped by the
     // slosh; growing, it runs out of the grip's pool along the line.

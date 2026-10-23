@@ -84,7 +84,7 @@ pub fn line(src: std.lang.SourceLocation, series: []const Series, opts: LineOpti
     const box = dvui.box(src, .{}, defaults.override(wopts));
     const rs = box.data().contentRectScale();
     const r = rs.r;
-    r.fill(.all(4 * rs.s), .{ .color = .{ .color = dvui.themeGet().color(.control, .fill).opacity(0.35) }, .fade = 0 });
+    r.fill(.all(4 * rs.s), .{ .color = .{ .color = dvui.themeGet().color(.control, .fill).opacity(0.35) }, .fade = 1 });
 
     var filled: usize = 0;
     for (series) |s| filled = @max(filled, s.values.len);
@@ -244,7 +244,7 @@ pub fn bar(src: std.lang.SourceLocation, fraction: f32, opts: BarOptions, wopts:
     r.w *= std.math.clamp(fraction, 0, 1);
     if (r.w < 1) return;
     const c = opts.color orelse dvui.themeGet().color(.highlight, .fill);
-    r.fill(.all(2 * rs.s), .{ .color = .{ .color = c.opacity(if (opts.strong) 1 else 0.75) }, .fade = 0 });
+    r.fill(.all(2 * rs.s), .{ .color = .{ .color = c.opacity(if (opts.strong) 1 else 0.75) }, .fade = 1 });
 }
 
 pub const StatOptions = struct {

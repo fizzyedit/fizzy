@@ -1045,14 +1045,14 @@ fn drawCornerGlyph(c: dvui.Point.Physical, scale: f32, size: f32, color: dvui.Co
         }
     }.f;
     // The one that slides right.
-    at(slide, 0, x0, y0, step, cell).fill(corner, .{ .color = .{ .color = color }, .fade = 0 });
+    at(slide, 0, x0, y0, step, cell).fill(corner, .{ .color = .{ .color = color }, .fade = 1 });
     // The one that slides up.
-    at(0, 1 - lift, x0, y0, step, cell).fill(corner, .{ .color = .{ .color = color }, .fade = 0 });
+    at(0, 1 - lift, x0, y0, step, cell).fill(corner, .{ .color = .{ .color = color }, .fade = 1 });
     // The one that grows left, its right side where it was.
     var bar = at(1, 1, x0, y0, step, cell);
     bar.x -= step * widen;
     bar.w += step * widen;
-    bar.fill(corner, .{ .color = .{ .color = color }, .fade = 0 });
+    bar.fill(corner, .{ .color = .{ .color = color }, .fade = 1 });
 }
 /// Where in the glyph's opening (0…1) the top-left cell slides right, the bottom-left slides up
 /// into the room it left, and the bottom-right grows left into the room that one left: each a

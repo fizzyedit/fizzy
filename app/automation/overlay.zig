@@ -190,7 +190,7 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
         const pc = c.scale(s, dvui.CornerRect.Physical);
         const shadow = rect.insetAll(s * bs.shrink).offsetPoint(bs.offset.scale(s, dvui.Point.Physical));
         shadow.fill(pc, .{ .color = .{ .color = bs.color.opacity(bs.alpha * r.alpha) }, .fade = s * bs.fade });
-        rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) } });
+        rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) }, .fade = 1 });
     }
     dvui.clipSet(dvui.clipGet().intersect(rect));
 }
@@ -1094,12 +1094,12 @@ fn seconds(ms: f64) u32 {
 fn paintTrack(r: dvui.Rect.Physical, tape: *const Tape, total: f64, ink: dvui.Color, s: f32) void {
     const line_h = 4 * s;
     const line: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + (r.h - line_h) / 2, .w = r.w, .h = line_h };
-    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.15) } });
+    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.15) }, .fade = 1 });
     for (tape.chapters) |c| {
         if (c.at == 0 or total <= 0) continue;
         const x = r.x + r.w * @as(f32, @floatCast(@as(f64, @floatFromInt(c.at)) / total));
         const tick: dvui.Rect.Physical = .{ .x = x - 1 * s, .y = r.y + 1 * s, .w = 2 * s, .h = r.h - 2 * s };
-        tick.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(0.35) } });
+        tick.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(0.35) }, .fade = 1 });
     }
 }
 
@@ -1124,8 +1124,8 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
     dvui.labelNoFmt(@src(), "Catching up\u{2026}", .{}, .{ .color_text = .{ .color = theme().color(.content, .text) } });
     const wd = dvui.spacer(@src(), .{ .expand = .horizontal, .min_size_content = .{ .w = 120, .h = 3 } });
     const r = wd.rectScale().r;
-    r.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.content, .text).opacity(0.15) } });
+    r.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.content, .text).opacity(0.15) }, .fade = 1 });
     var done = r;
     done.w *= f;
-    done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) } });
+    done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) }, .fade = 1 });
 }
