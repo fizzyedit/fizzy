@@ -1210,15 +1210,18 @@ const Stand = struct {
     fn clock() i128 {
         return clock_ns;
     }
+    // lint-allow(anyerror): the vtable's signature
     fn capture(_: *anyopaque, _: sdk.DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
         return allocator.dupe(u8, &bytes);
     }
+    // lint-allow(anyerror): the vtable's signature
     fn restore(_: *anyopaque, _: sdk.DocHandle, saved: []const u8) anyerror!void {
         @memcpy(&bytes, saved);
     }
     fn fingerprint(_: *anyopaque, _: sdk.DocHandle) u64 {
         return std.hash.Wyhash.hash(0, &bytes);
     }
+    // lint-allow(anyerror): the vtable's signature
     fn apply(_: *anyopaque, _: sdk.DocHandle, effect: []const u8, _: []const u8, _: u32) anyerror!void {
         @memcpy(bytes[0..effect.len], effect);
     }
@@ -1318,6 +1321,7 @@ const BigStand = struct {
     var bytes: [size]u8 = @splat(0);
     var captures: usize = 0;
 
+    // lint-allow(anyerror): the vtable's signature
     fn capture(_: *anyopaque, _: sdk.DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
         captures += 1;
         return allocator.dupe(u8, &bytes);
