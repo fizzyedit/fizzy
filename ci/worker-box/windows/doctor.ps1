@@ -9,6 +9,11 @@ Set-StrictMode -Version 2
 if (-not $ConfigPath) { $ConfigPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'config.psd1' }
 $ErrorActionPreference = 'Stop'
 $config = Import-PowerShellDataFile -LiteralPath $ConfigPath
+# RunnerRoot and ZigCache come from Root unless a config names them (the test fixtures do).
+$runnerRoot = ''; $zigCache = ''
+if ($config.ContainsKey('Root')) { $runnerRoot = Join-Path $config.Root 'actions-runner'; $zigCache = Join-Path $config.Root 'zig-cache' }
+if ($config.ContainsKey('RunnerRoot')) { $runnerRoot = $config.RunnerRoot }
+if ($config.ContainsKey('ZigCache')) { $zigCache = $config.ZigCache }
 $results = New-Object 'Collections.Generic.List[object]'
 function Result($status, $item, $detail) {
     $results.Add([pscustomobject]@{ status = $status; item = $item; detail = ("$detail" -replace '[\r\n]+', ' ') })
@@ -34,7 +39,10 @@ foreach ($spec in $config.Services) {
         $s = $services[0]
         $account = $s.StartName -replace "^$([regex]::Escape([Environment]::MachineName))\\", '.\'
         $status = 'RED'
-        if ($s.State -eq 'Running' -and $s.StartMode -eq 'Auto' -and $account -ieq $spec.Account) { $status = 'GREEN' }
+        $wantMode = 'Auto'; if ($spec.ContainsKey('StartMode')) { $wantMode = $spec.StartMode }
+        # State = 'Any' is the worker switch's own service: Running (On) and Stopped (Off) are both healthy.
+        $stateOk = ($s.State -eq 'Running'); if ($spec.ContainsKey('State') -and $spec.State -eq 'Any') { $stateOk = ($s.State -eq 'Running' -or $s.State -eq 'Stopped') }
+        if ($stateOk -and $s.StartMode -eq $wantMode -and $account -ieq $spec.Account) { $status = 'GREEN' }
         $delayed = 'unknown'
         if ($s.PSObject.Properties['DelayedAutoStart']) { $delayed = "$($s.DelayedAutoStart)" }
         Result $status $item "state=$($s.State); start=$($s.StartMode); delayed=$delayed; account=$($s.StartName)"
@@ -48,6 +56,11 @@ Check 'runner Online' {
     $runners = @($pages | ForEach-Object { $_.runners } | Where-Object { $_.name -eq $config.RunnerName })
     $status = 'RED'
     if ($runners.Count -eq 1 -and $runners[0].status -eq 'online') { $status = 'GREEN' }
+    if ($status -eq 'RED') {
+        # An Off worker is offline on purpose.
+        $svc = @(Get-CimInstance -ClassName Win32_Service | Where-Object { $_.Name -like 'actions.runner.*' })
+        if ($svc.Count -eq 1 -and $svc[0].State -eq 'Stopped') { Result GREEN 'runner Online' 'worker is Off (service stopped), so offline is expected'; return }
+    }
     Result $status 'runner Online' "repo=$($config.RunnerRepo); name=$($config.RunnerName); matching online=$(@($runners | Where-Object { $_.status -eq 'online' }).Count)"
 }
 Check 'power plan' {
@@ -120,6 +133,14 @@ Check 'disk inventory' {
     foreach ($d in $disks) {
         $free = [math]::Round($d.FreeSpace / 1GB, 1)
         $status = 'GREEN'; if ($free -lt $config.MinDiskFreeGiB) { $status = 'RED' }
+        # With a Root, only its drive is the agents' home: low space there is RED (AMBER within 50% of
+        # the minimum); another drive is the person's own.
+        if ($config.ContainsKey('Root')) {
+            if ($d.DeviceID -ieq [IO.Path]::GetPathRoot($config.Root).TrimEnd('\')) {
+                if ($free -ge $config.MinDiskFreeGiB) { $status = 'GREEN' } else { $status = 'RED' }
+                if ($status -eq 'GREEN' -and $free -lt $config.MinDiskFreeGiB * 1.5) { $status = 'AMBER' }
+            } elseif ($free -lt $config.MinDiskFreeGiB) { $status = 'AMBER' }
+        }
         Result $status "disk $($d.DeviceID)" "free=$free GiB; minimum=$($config.MinDiskFreeGiB) GiB"
     }
 }
@@ -131,10 +152,10 @@ Check 'RAM' {
     Result $status 'RAM' "available=$free GiB; total=$total GiB; slots=$($config.BuildSlots)"
 }
 Check 'zig-cache' {
-    if (-not (Test-Path -LiteralPath $config.ZigCache -PathType Container)) { Result RED 'zig-cache' 'configured directory missing'; return }
+    if (-not (Test-Path -LiteralPath $zigCache -PathType Container)) { Result RED 'zig-cache' 'configured directory missing'; return }
     # Never follow junctions, even when they occur inside a cache.
     $stack = New-Object 'Collections.Generic.Stack[string]'
-    $stack.Push($config.ZigCache)
+    $stack.Push($zigCache)
     $bytes = [long]0
     while ($stack.Count) {
         $path = $stack.Pop()
@@ -147,11 +168,11 @@ Check 'zig-cache' {
     }
     $size = [math]::Round($bytes / 1GB, 2)
     $status = 'GREEN'; if ($size -gt $config.MaxCacheGiB) { $status = 'AMBER' }
-    Result $status 'zig-cache' "$($config.ZigCache); size=$size GiB; limit=$($config.MaxCacheGiB) GiB"
+    Result $status 'zig-cache' "$zigCache; size=$size GiB; limit=$($config.MaxCacheGiB) GiB"
 }
 $runnerPath = $null
 Check 'runner PATH' {
-    $lines = @(Get-Content -LiteralPath (Join-Path $config.RunnerRoot '.env') | Where-Object { $_ -match '^PATH=' })
+    $lines = @(Get-Content -LiteralPath (Join-Path $runnerRoot '.env') | Where-Object { $_ -match '^PATH=' })
     if ($lines.Count -ne 1) { throw 'runner PATH missing or ambiguous' }
     $script:runnerPath = $lines[0].Substring(5)
     if (-not $runnerPath -or $runnerPath -match '%|\$') { $script:runnerPath = $null; throw 'unexpanded PATH' }
@@ -189,6 +210,130 @@ Check 'local users' {
     $strays = @(Get-LocalUser | Where-Object { $_.SID.Value -notmatch '-(500|501|503|504)$' -and $config.AllowedUsers -notcontains $_.Name })
     $status = 'GREEN'; if ($strays.Count) { $status = 'AMBER' }
     Result $status 'local users' "unexpected=$(@($strays | ForEach-Object { $_.Name }) -join ','); includes disabled accounts"
+}
+# --- the worker switch and the agents' home (policy in config.psd1; absent from minimal fixtures) ---
+function ConvertTo-Sid($name) {
+    return (New-Object Security.Principal.NTAccount($name)).Translate([Security.Principal.SecurityIdentifier])
+}
+$readRights = [Security.AccessControl.FileSystemRights]::ListDirectory
+# Whether the worker could read $path, from its ACL: a deny for the worker (or a broad group) first,
+# then any allow for the worker, Users, Authenticated Users or Everyone. Effective access also depends
+# on group policy, so this is the file system's half of the answer.
+function Test-WorkerRead($path, $workerSid) {
+    $broad = @($workerSid.Value, 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0')
+    foreach ($rule in (Get-Acl -LiteralPath $path).Access) {
+        try { $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }
+        if ($broad -notcontains $sid) { continue }
+        if (-not ($rule.FileSystemRights -band $readRights)) { continue }
+        if ($rule.AccessControlType -eq 'Deny' -and $sid -eq $workerSid.Value) { return $false }
+        if ($rule.AccessControlType -eq 'Allow') { return $true }
+    }
+    return $false
+}
+if ($config.ContainsKey('Worker')) {
+    Check 'worker switch' {
+        $svc = @(Get-CimInstance -ClassName Win32_Service | Where-Object { $_.Name -like 'actions.runner.*' })
+        if ($svc.Count -ne 1) { throw 'runner service not found' }
+        $jobs = @(Get-Process -Name Runner.Worker -ErrorAction SilentlyContinue).Count
+        $state = 'ON'; if ($svc[0].State -eq 'Stopped') { $state = 'OFF' } elseif ($svc[0].State -ne 'Running') { $state = $svc[0].State }
+        # On and Off are both policy: report which, GREEN either way.
+        $status = 'GREEN'; if ($state -notin 'ON', 'OFF') { $status = 'AMBER' }
+        Result $status 'worker switch' "worker=$state; service=$($svc[0].State); running jobs=$jobs"
+    }
+    $workerSid = $null
+    Check 'worker account' {
+        $script:workerSid = ConvertTo-Sid $config.Worker
+        Result GREEN 'worker account' "$($config.Worker) = $($script:workerSid.Value)"
+    }
+    # Tasks run as SYSTEM, in a folder the worker cannot write; the maintainer may run all three,
+    # the worker the drain only. Write-like rights: DELETE, WRITE_DAC, WRITE_OWNER, FILE_WRITE_DATA, GW, GA.
+    $writeMask = 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x2 -bor 0x40000000 -bor 0x10000000
+    foreach ($t in @(
+        @{ Name = 'FizzyWorkerOn'; Maintainer = $true; Worker = $false },
+        @{ Name = 'FizzyWorkerOff'; Maintainer = $true; Worker = $true },
+        @{ Name = 'FizzyWorkerForceOff'; Maintainer = $true; Worker = $false }
+    )) {
+        $item = "task access $($t.Name)"
+        Check $item {
+            if (-not $script:workerSid) { Result AMBER $item 'worker account unknown'; return }
+            $maintainerSid = ConvertTo-Sid $config.Maintainer
+            $com = New-Object -ComObject 'Schedule.Service'
+            $com.Connect()
+            $folder = $com.GetFolder($config.WorkerTaskPath.TrimEnd('\'))
+            $sd = New-Object Security.AccessControl.RawSecurityDescriptor ($folder.GetTask($t.Name).GetSecurityDescriptor(4))
+            $canRun = @{}; $canWrite = $false; $runsAsSystem = $true
+            foreach ($ace in $sd.DiscretionaryAcl) {
+                if ($ace.AceType -ne 'AccessAllowed') { continue }
+                $sid = $ace.SecurityIdentifier.Value
+                if ($sid -in $script:workerSid.Value, 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0') {
+                    $canRun[$sid] = $true
+                    if ($ace.AccessMask -band $writeMask) { $canWrite = $true }
+                }
+                if ($sid -eq $maintainerSid.Value) { $canRun['maintainer'] = $true }
+            }
+            $workerRuns = [bool]$canRun[$script:workerSid.Value] -or [bool]$canRun['S-1-5-32-545'] -or [bool]$canRun['S-1-5-11'] -or [bool]$canRun['S-1-1-0']
+            $info = $folder.GetTask($t.Name).Definition.Principal
+            if ($info.UserId -notin 'SYSTEM', 'S-1-5-18', 'NT AUTHORITY\SYSTEM') { $runsAsSystem = $false }
+            $ok = $runsAsSystem -and -not $canWrite -and ($workerRuns -eq $t.Worker)
+            $status = 'RED'; if ($ok) { $status = 'GREEN' }
+            Result $status $item "runs as SYSTEM=$runsAsSystem; worker can trigger=$workerRuns (want $($t.Worker)); worker can write=$canWrite"
+        }
+    }
+    Check 'task folder not writable by worker' {
+        if (-not $script:workerSid) { Result AMBER 'task folder not writable by worker' 'worker account unknown'; return }
+        $com = New-Object -ComObject 'Schedule.Service'
+        $com.Connect()
+        $sd = New-Object Security.AccessControl.RawSecurityDescriptor ($com.GetFolder($config.WorkerTaskPath.TrimEnd('\')).GetSecurityDescriptor(4))
+        $bad = @($sd.DiscretionaryAcl | Where-Object {
+            $_.AceType -eq 'AccessAllowed' -and ($_.AccessMask -band $writeMask) -and
+            $_.SecurityIdentifier.Value -in $script:workerSid.Value, 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0'
+        })
+        $status = 'GREEN'; if ($bad.Count) { $status = 'RED' }
+        Result $status 'task folder not writable by worker' "folder=$($config.WorkerTaskPath); writable ACEs=$($bad.Count)"
+    }
+    foreach ($exe in 'Runner.Listener.exe', 'Runner.Worker.exe') {
+        $item = "priority $exe"
+        Check $item {
+            $v = Get-ItemPropertyValue -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe\PerfOptions" -Name CpuPriorityClass
+            $status = 'RED'; if ($v -eq 5) { $status = 'GREEN' }
+            Result $status $item "CpuPriorityClass=$v; expected 5 (BelowNormal); children inherit it; core cap=$($config.CoreCap) applied by the switch"
+        }
+    }
+    Check 'heartbeat' {
+        $file = Join-Path $config.Root 'state\heartbeat.txt'
+        if (-not (Test-Path -LiteralPath $file)) { Result AMBER 'heartbeat' 'no heartbeat recorded yet'; return }
+        $age = [int]((Get-Date) - (Get-Item -LiteralPath $file).LastWriteTime).TotalMinutes
+        $status = 'GREEN'; if ($age -gt 30) { $status = 'AMBER' }
+        Result $status 'heartbeat' "last written $age minutes ago"
+    }
+    Check 'root access' {
+        if (-not $script:workerSid) { Result AMBER 'root access' 'worker account unknown'; return }
+        # The root is closed to everyone but SYSTEM and Administrators, and to the worker's read but
+        # for the traversal grant; no broad group may appear on it.
+        $broad = @((Get-Acl -LiteralPath $config.Root).Access | Where-Object {
+            try { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -in 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0' } catch { $false }
+        })
+        $status = 'GREEN'; if ($broad.Count) { $status = 'RED' }
+        Result $status 'root access' "root=$($config.Root); entries for Users/Authenticated Users/Everyone=$($broad.Count)"
+    }
+    Check 'worker isolation' {
+        if (-not $script:workerSid) { Result AMBER 'worker isolation' 'worker account unknown'; return }
+        $homeDrive = [IO.Path]::GetPathRoot($config.Root).TrimEnd('\')
+        $reachable = @()
+        foreach ($d in @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3')) {
+            if ($d.DeviceID -ieq $homeDrive -or $d.DeviceID -ieq $env:SystemDrive) { continue }
+            if (Test-WorkerRead ($d.DeviceID + '\') $script:workerSid) { $reachable += "drive $($d.DeviceID)" }
+        }
+        $users = Join-Path $env:SystemDrive 'Users'
+        foreach ($p in @(Get-ChildItem -LiteralPath $users -Directory -Force -ErrorAction Stop)) {
+            if ($p.Name -in 'Public', 'Default', 'Default User', 'All Users', $config.Worker) { continue }
+            if ($p.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+            if (Test-WorkerRead $p.FullName $script:workerSid) { $reachable += 'a user profile' }
+        }
+        $status = 'GREEN'; if ($reachable.Count) { $status = 'RED' }
+        # Profiles are not named: this output may end up in a public place.
+        Result $status 'worker isolation' "other fixed drives and user profiles readable by the worker=$($reachable.Count): $(($reachable | Sort-Object -Unique) -join ', ')"
+    }
 }
 if ($Json) { ConvertTo-Json -InputObject @($results.ToArray()) -Depth 4 }
 else { foreach ($r in $results) { Write-Output "$($r.status) $($r.item): $($r.detail)" } }

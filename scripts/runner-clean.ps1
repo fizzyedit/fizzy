@@ -2,10 +2,10 @@
 # jj/git checkouts do not track. Mirrors scripts/runner-clean.sh; the opt-in deletion of merged
 # PR workspaces (the *.pr enrollment) is not ported to Windows.
 [CmdletBinding()]
-param([switch]$DryRun)
+param([switch]$DryRun, [string]$Root)
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
-$root = if ($env:FIZZY_WORKER_ROOT) { $env:FIZZY_WORKER_ROOT } else { 'C:\fizzy' }
+$root = if ($Root) { $Root } elseif ($env:FIZZY_WORKER_ROOT) { $env:FIZZY_WORKER_ROOT } else { 'C:\fizzy' }
 $cacheNames = @('.zig-cache', 'zig-out', 'zig-pkg')
 
 if ($DryRun -and $env:OS -ne 'Windows_NT') {

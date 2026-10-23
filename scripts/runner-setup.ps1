@@ -6,7 +6,7 @@
 # Environment (all optional except RUNNER_TOKEN on first run): RUNNER_TOKEN, RUNNER_URL,
 # RUNNER_NAME, RUNNER_LABELS, FIZZY_BUILD_SLOTS, FIZZY_BUILD_MAX_LOAD, ZIG_VERSION, ZIG_SHA256,
 # JJ_VERSION, RUNNER_VERSION, DEPS_CACHE_URL, DEPS_CACHE_SHA256, ZSTD_VERSION, ZSTD_SHA256, FIZZY_RUNNER_ALLOW_UNCHECKED,
-# FIZZY_RUNNER_DEPS_PARTIAL_OK, FIZZY_RUNNER_NO_DEFENDER_EXCLUSION.
+# FIZZY_RUNNER_DEPS_PARTIAL_OK, FIZZY_RUNNER_NO_DEFENDER_EXCLUSION, FIZZY_WORKER_ROOT (default C:\fizzy).
 #
 # Windows PowerShell 5.1 pitfall: with $ErrorActionPreference = 'Stop', a native command that
 # writes anything to stderr (even `2>$null`) raises a terminating NativeCommandError. Every native
@@ -40,7 +40,9 @@ function Native([scriptblock]$cmd) {
 }
 
 $worker = 'fizzy-worker'
-$root = 'C:\fizzy'
+$root = (Get-Setting 'FIZZY_WORKER_ROOT' 'C:\fizzy').TrimEnd('\')
+# The agents' home: a folder, never a bare drive root (its ACL is rewritten below).
+if ($root -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|]+(\\[^\\/:*?"<>|]+)*$') { Fail "FIZZY_WORKER_ROOT must be an absolute folder path such as C:\fizzy, not a drive root: $root" }
 $runner = "$root\actions-runner"
 $workspaces = "$root\workspaces"
 $tools = "$root\tools"
@@ -450,7 +452,11 @@ try {
         if (Test-Path "$runner\.env") {
             $keep = @(Get-Content "$runner\.env" | Where-Object { $_ -notmatch '^(FIZZY_BUILD_SLOTS|FIZZY_BUILD_MAX_LOAD|ZIG_GLOBAL_CACHE_DIR|PATH)=' })
         }
-        $jobPath = "$gitRoot\cmd;$gitRoot\bin;$tools\zig;$tools\bin;" + [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        # gh (Git for Windows does not ship it) is found where it is installed, so workflows can call it.
+        $ghDir = ''
+        $gh = Get-Command gh.exe -ErrorAction SilentlyContinue
+        if ($gh) { $ghDir = (Split-Path -Parent $gh.Source) + ';' } else { Write-Warning 'gh.exe not found: workflows cannot call gh until it is installed and setup is rerun' }
+        $jobPath = "$gitRoot\cmd;$gitRoot\bin;$ghDir$tools\zig;$tools\bin;" + [Environment]::GetEnvironmentVariable('Path', 'Machine')
         $lines = $keep + @("FIZZY_BUILD_SLOTS=$buildSlots", "FIZZY_BUILD_MAX_LOAD=$buildMaxLoad", "ZIG_GLOBAL_CACHE_DIR=$zigCache", "PATH=$jobPath")
         [IO.File]::WriteAllText("$runner\.env", (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding $false))
     }
@@ -501,7 +507,7 @@ Step 'start the runner service' {
 Step "install runner-clean.ps1 to $bin and register the daily task FizzyRunnerClean (as $worker, S4U: no stored password)" {
     Copy-Item (Join-Path $sourceDir 'runner-clean.ps1') "$bin\runner-clean.ps1" -Force
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$bin\runner-clean.ps1`""
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$bin\runner-clean.ps1`" -Root `"$root`""
     $trigger = New-ScheduledTaskTrigger -Daily -At 4am -RandomDelay (New-TimeSpan -Minutes 30)
     $principal = New-ScheduledTaskPrincipal -UserId "$([Environment]::MachineName)\$worker" -LogonType S4U -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew

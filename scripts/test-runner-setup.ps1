@@ -83,7 +83,7 @@ $allowed = @{
     'Get-LocalUser' = 'Name', 'SID'
     'Register-ScheduledTask' = 'TaskName', 'Action', 'Trigger', 'Principal', 'Settings', 'Description', 'Force', 'TaskPath', 'User', 'Password', 'RunLevel'
     'New-ScheduledTaskAction' = 'Execute', 'Argument', 'WorkingDirectory'
-    'New-ScheduledTaskTrigger' = 'Daily', 'Weekly', 'Once', 'AtLogOn', 'AtStartup', 'At', 'RandomDelay', 'DaysInterval'
+    'New-ScheduledTaskTrigger' = 'Daily', 'Weekly', 'Once', 'AtLogOn', 'AtStartup', 'At', 'RandomDelay', 'DaysInterval', 'DaysOfWeek', 'WeeksInterval', 'RepetitionInterval', 'RepetitionDuration'
     'New-ScheduledTaskPrincipal' = 'UserId', 'LogonType', 'RunLevel', 'GroupId', 'Id'
     'New-ScheduledTaskSettingsSet' = 'StartWhenAvailable', 'ExecutionTimeLimit', 'MultipleInstances', 'AllowStartIfOnBatteries', 'DontStopIfGoingOnBatteries', 'Hidden'
     'Start-ScheduledTask' = 'TaskName', 'TaskPath'
@@ -91,7 +91,7 @@ $allowed = @{
     'Get-ScheduledTaskInfo' = 'TaskName', 'TaskPath'
     'Add-MpPreference' = 'ExclusionPath', 'ExclusionExtension', 'ExclusionProcess'
 }
-foreach ($name in 'runner-setup.ps1', 'runner-clean.ps1', '../ci/worker-box/windows/doctor.ps1', '../ci/worker-box/windows/config.psd1', 'test-windows-doctor.ps1') {
+foreach ($name in 'runner-setup.ps1', 'runner-clean.ps1', '../ci/worker-box/windows/doctor.ps1', '../ci/worker-box/windows/config.psd1', 'test-windows-doctor.ps1', '../ci/worker-box/windows/setup.ps1', '../ci/worker-box/windows/worker-switch.ps1') {
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile("$dir/$name", [ref]$tokens, [ref]$errors)
     if ($errors.Count) { Fail "$name does not parse: $($errors[0].Message)" }
@@ -114,7 +114,17 @@ foreach ($name in 'runner-setup.ps1', 'runner-clean.ps1', '../ci/worker-box/wind
     }
 }
 
+# setup.ps1 -DryRun: the runner dry run, every convergence step printed, nothing changed. The
+# private-repo check is skipped (it is covered above), so no gh or network is needed.
 $env:PATH = $origPath
+$env:FIZZY_RUNNER_ALLOW_UNCHECKED = '1'
+$out = Invoke-Child "$dir/../ci/worker-box/windows/setup.ps1"
+$code = $LASTEXITCODE
+Remove-Item Env:\FIZZY_RUNNER_ALLOW_UNCHECKED -ErrorAction SilentlyContinue
+if ($code -ne 0) { Fail "setup.ps1 dry run failed: $out" }
+foreach ($want in 'FIZZY_WORKER_ROOT=', 'FizzyWorkerOff', 'Fast Startup off', 'BelowNormal', 'Dry run complete') {
+    if ($out -notmatch [regex]::Escape($want)) { Fail "setup.ps1 dry run did not mention '$want': $out" }
+}
 $out = Invoke-Child "$dir/runner-clean.ps1"
 if ($LASTEXITCODE -ne 0) { Fail "runner-clean dry run failed: $out" }
 Remove-Item -Recurse -Force $tmp

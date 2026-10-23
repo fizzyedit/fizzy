@@ -276,6 +276,38 @@ by a logon Scheduled Task instead of the service (`config.cmd` without `--runass
 keeps a password in the registry and an always-logged-in desktop, so it is not done here until
 there is such a job.
 
+**The whole box, and the worker switch.** `ci/worker-box/windows/setup.ps1` (elevated, idempotent,
+`-DryRun`) runs `runner-setup.ps1` with the root from `ci/worker-box/windows/config.psd1` (`Root`, the
+agents' home, normally a drive of its own; `FIZZY_WORKER_ROOT` is the same value for `runner-setup.ps1`
+alone), then converges the rest: Fast Startup and hibernation off, never sleep, `sshd` and Tailscale
+automatic, the runner and its children at BelowNormal (`CoreCap` logical cores at most), `gh` on the
+runner's PATH, a deny for `fizzy-worker` on every other fixed drive, and the SYSTEM tasks below. It
+reports (never deletes) accounts outside `AllowedUsers`, and ends by running `doctor.ps1`; any RED
+fails it. Every item has a doctor check, so `doctor.ps1` alone tells you whether the box still matches.
+
+The runner service is **Manual**; the tasks in `\Fizzy\` (a folder `fizzy-worker` cannot write) start
+and stop it, run as SYSTEM, and need nobody logged in:
+
+| Task | Does | Who may run it |
+|---|---|---|
+| `FizzyWorkerOn` | start the runner (also at every boot, so the worker is **On** by default) | maintainer |
+| `FizzyWorkerOff` | drain: no new job once the running one ends, then stop (up to 12 h) | maintainer, `fizzy-worker` |
+| `FizzyWorkerForceOff` | stop now and kill the job's process tree | maintainer |
+| `FizzyHeartbeat`, `FizzyUpdate` | every 5 minutes re-apply the priority and core cap; weekly refresh Git and gh with winget when idle | schedule |
+
+Remote on/off, from anywhere the box is reachable over SSH (Tailscale), with nobody logged in:
+
+```sh
+ssh foxnn@<box> schtasks /run /tn "\Fizzy\FizzyWorkerOn"
+ssh foxnn@<box> schtasks /run /tn "\Fizzy\FizzyWorkerOff"       # waits for the running job
+ssh foxnn@<box> schtasks /run /tn "\Fizzy\FizzyWorkerForceOff"   # kills it
+ssh foxnn@<box> powershell -Command "(Get-Service actions.runner.*).Status; Get-Content <root>\state\worker.log -Tail 5"
+```
+
+A drain polls for `Runner.Worker` (the runner has no drain command); a job the listener accepts in the
+two seconds between polls is cancelled by the stop. The doctor reports On and Off both GREEN
+(`worker switch`), and a stopped worker's runner being offline as expected.
+
 **Verify** (the maintainer; nothing here has run on real Windows):
 
 1. `gh api repos/fizzyedit/work/actions/runners --jq '.runners[]|[.name,.status,([.labels[].name]|join(","))]|@tsv'`
