@@ -3,11 +3,18 @@ $ErrorActionPreference = 'Stop'
 $doctor = [IO.Path]::GetFullPath("$PSScriptRoot/../ci/worker-box/windows/doctor.ps1")
 $engine = (Get-Process -Id $PID).Path
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
+# Windows PowerShell 5.1 emits a JSON array as ONE object (pwsh 7 unrolls it), and joins nothing
+# from piped lines, so join first and enumerate the parsed array explicitly.
+function ConvertFrom-JsonRows($lines) {
+    $parsed = ConvertFrom-Json -InputObject (@($lines) -join "`n")
+    $rows = @(); foreach ($row in $parsed) { $rows += $row }
+    return , $rows
+}
 $preview = & $engine -NoProfile -ExecutionPolicy Bypass -File $doctor -DryRun
 Assert ($LASTEXITCODE -eq 0) 'DryRun must have no reds'
 Assert (@($preview).Count -ge 25) 'DryRun omitted checks'
 foreach ($line in $preview) { Assert ($line -match '^AMBER [^:]+: .+$') "Invalid preview line: $line" }
-$previewJson = & $engine -NoProfile -ExecutionPolicy Bypass -File $doctor -DryRun -Json | ConvertFrom-Json
+$previewJson = ConvertFrom-JsonRows (& $engine -NoProfile -ExecutionPolicy Bypass -File $doctor -DryRun -Json)
 Assert ($previewJson.Count -eq @($preview).Count) 'JSON and text checks differ'
 Assert (@($previewJson | Where-Object { $_.status -ne 'AMBER' }).Count -eq 0) 'DryRun queried a probe'
 
@@ -56,7 +63,7 @@ exit $LASTEXITCODE
     Set-Content -LiteralPath "$tmp/harness.ps1" -Value $harness
     $raw = & $engine -NoProfile -ExecutionPolicy Bypass -File "$tmp/harness.ps1" $doctor "$tmp/config.psd1" json
     $code = $LASTEXITCODE
-    $rows = @($raw | ConvertFrom-Json)
+    $rows = ConvertFrom-JsonRows $raw
     $reds = @($rows | Where-Object { $_.status -eq 'RED' }).Count
     Assert ($reds -ge 5 -and $code -eq $reds) "Fixture exit=$code; reds=$reds"
     foreach ($pair in @(
@@ -79,7 +86,7 @@ if ($env:OS -eq 'Windows_NT') {
     $raw = & $engine -NoProfile -ExecutionPolicy Bypass -File $doctor -Json
     $code = $LASTEXITCODE
     Write-Output $raw
-    $rows = @($raw | ConvertFrom-Json)
+    $rows = ConvertFrom-JsonRows $raw
     Assert ($code -eq @($rows | Where-Object { $_.status -eq 'RED' }).Count) 'Hosted VM exit count differs'
     Assert ($rows.Count -ge 25) 'Hosted VM omitted checks'
     Write-Output "ok: hosted VM read-only probes; exit=$code (worker policy reds are expected here)"

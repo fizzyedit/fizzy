@@ -3,8 +3,10 @@
 # Exit status is the number of RED results. JSON is an array of status/item/detail objects.
 #requires -Version 5.1
 [CmdletBinding()]
-param([switch]$Json, [switch]$DryRun, [string]$ConfigPath = "$PSScriptRoot\config.psd1")
+param([switch]$Json, [switch]$DryRun, [string]$ConfigPath)
 Set-StrictMode -Version 2
+# $PSScriptRoot is empty inside a param() default in Windows PowerShell 5.1, so resolve it here.
+if (-not $ConfigPath) { $ConfigPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'config.psd1' }
 $ErrorActionPreference = 'Stop'
 $config = Import-PowerShellDataFile -LiteralPath $ConfigPath
 $results = New-Object 'Collections.Generic.List[object]'

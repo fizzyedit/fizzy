@@ -14,10 +14,19 @@ if ($IsWindows -or $env:OS -eq 'Windows_NT') {
     chmod +x "$tmp/gh"
 }
 $sep = [IO.Path]::PathSeparator
+# Windows PowerShell 5.1 turns a native command's stderr under 2>&1 into an ErrorRecord, which
+# terminates when the caller runs with $ErrorActionPreference = 'Stop' (GitHub's powershell shell
+# does). The child's refusal text is data here, so capture it with the preference relaxed.
+function Invoke-Child($script) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { return (& $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $script -DryRun 2>&1 | Out-String) }
+    finally { $ErrorActionPreference = $old }
+}
 function Setup($extraEnv) {
     $env:PATH = "$tmp$sep$script:origPath"
     foreach ($k in $extraEnv.Keys) { Set-Item "Env:$k" $extraEnv[$k] }
-    $out = & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File "$dir/runner-setup.ps1" -DryRun 2>&1 | Out-String
+    $out = Invoke-Child "$dir/runner-setup.ps1"
     $code = $LASTEXITCODE
     foreach ($k in $extraEnv.Keys) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
     return @{ Out = $out; Code = $code }
@@ -106,7 +115,7 @@ foreach ($name in 'runner-setup.ps1', 'runner-clean.ps1', '../ci/worker-box/wind
 }
 
 $env:PATH = $origPath
-$out = & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File "$dir/runner-clean.ps1" -DryRun 2>&1 | Out-String
+$out = Invoke-Child "$dir/runner-clean.ps1"
 if ($LASTEXITCODE -ne 0) { Fail "runner-clean dry run failed: $out" }
 Remove-Item -Recurse -Force $tmp
 & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File "$dir/test-windows-doctor.ps1"
