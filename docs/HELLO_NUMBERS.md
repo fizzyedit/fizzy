@@ -11,7 +11,9 @@ Fizzy dependencies to this tree, and builds example-app's **minimal shape with i
 plugin list**. Minimal describes the layout, not a plugin-free executable. The scratch build
 adds package/web output steps using the dependency's `web-wasm` and `package-installers`
 named outputs, and sets the unpublished package version to `0.1.0` (Velopack rejects the library
-default `0.0.0`). Source checkouts remain untouched. Build commands go through `scripts/zb`. Scratch sources and build outputs are deleted even on failure.
+default `0.0.0`).
+Source checkouts remain untouched. Build commands go through `scripts/zb`.
+Scratch sources and build outputs are deleted even on failure.
 
 On a machine where opening a window is acceptable (not a window-free worker session):
 
@@ -33,7 +35,7 @@ runner image, compiler version, all three source revisions and executable SHA-25
 | `binary_bytes` | Installed `minimalapp`, after host `strip` (and ad-hoc signing on macOS). Excludes resources and plugin libraries. Packaging may link a separate executable with Velopack support. |
 | `installer_bytes` | Unsigned macOS `.pkg` or Linux `.AppImage` from the `package-installers` output; includes packaged resources/libraries. A missing or ambiguous installer fails. |
 | `first_frame_ms` | `core.profile`'s `main` to `first frame` phase at the end of the first `AppFrame`. Excludes loader work before Zig main; GPU submission, display presentation and window reveal may follow. |
-| `idle_rss_bytes` | Sum of `ps` RSS (KiB × 1024) for the process and descendants, sampled 30 seconds after spawn. Shared pages may be counted more than once. |
+| `idle_rss_bytes` | Sum of `ps` RSS (KiB x 1024) for the process and descendants, sampled 30 seconds after spawn. Shared pages may be counted more than once. |
 | `wasm_gzip_bytes` | Installed `web.wasm`, gzip with mtime zero, default compression level 9. Excludes JS, fonts and runtime plugin downloads. |
 
 Each run uses a fresh `FIZZY_PROFILE` and a fresh process, with `FIZZY_QUIET=1` to avoid focus
