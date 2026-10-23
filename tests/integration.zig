@@ -5281,10 +5281,12 @@ test "dragging a view over its own place shows that place's drop zones" {
     try std.testing.expect(fizzy.core.widgets.DropZones.showing(center.id));
 }
 
-// A bubble lights only for a drop that reaches it: carried over the corners of a place, far from
+// General hover coverage, not a regression test for the Windows stacking fix (`heldPoint`'s
+// front-window read needs real OS windows and is covered only by `viewport_map.frontWindow`'s test):
+// a bubble lights only for a drop that reaches it: carried over the corners of a place, far from
 // its wheel, the drag lights none, and over its middle, the middle's — with the view carried in a
 // window of its own, as on Windows and macOS (`core.dialogs.carry_windows`).
-test "dragging a view over a place lights a bubble only where the drop reaches it" {
+test "hover rule: dragging a view over a place lights a bubble only where the drop reaches it" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;

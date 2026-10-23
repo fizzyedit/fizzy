@@ -708,8 +708,10 @@ const max_stack_walk = 2048;
 /// Sets `under[i]` for each `lowers[i]` that lies under window `upper` among the top-level windows.
 /// One walk down the stack from `upper`, for all of them, ending when each is found or after
 /// `max_stack_walk` windows (the rest are then read as not under: the main window in front, the
-/// rect test in `heldPoint` decides).
+/// rect test in `heldPoint` decides). Precondition: `lowers.len == under.len`, `under[i]` answering
+/// `lowers[i]`.
 pub fn markUnder(upper: *anyopaque, lowers: []const ?*anyopaque, under: []bool) void {
+    std.debug.assert(lowers.len == under.len);
     @memset(under, false);
     if (builtin.target.os.tag != .windows) return;
     const wm = win32.ui.windows_and_messaging;
