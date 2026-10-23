@@ -72,7 +72,7 @@ pub const Forest = struct {
     /// pointers into the tree it is drawing, and a place dropped mid-walk (a bubble dropped on
     /// the trash, an emptied place closing) must not free them under it: they are freed by `reap`
     /// once the frame's walk is done.
-    buried: std.ArrayListUnmanaged(Buried) = .empty,
+    buried: std.ArrayList(Buried) = .empty,
 
     const Buried = struct { node: *Node, deep: bool };
 
@@ -85,14 +85,15 @@ pub const Forest = struct {
     /// `node` and what hangs under it, out of the tree but still readable until `reap`.
     /// `deep` frees the children too; a branch whose children live on is buried shallow.
     fn bury(self: *Forest, gpa: std.mem.Allocator, node: *Node, deep: bool) void {
-        self.buried.append(gpa, .{ .node = node, .deep = deep }) catch {
-            if (deep) freeNode(gpa, node) else gpa.destroy(node);
-        };
+        // Out of memory: leak the node rather than free it. A walk may still hold it, and a
+        // leaked node costs bytes where a freed one is a use after free.
+        self.buried.append(gpa, .{ .node = node, .deep = deep }) catch {};
     }
 
     pub fn deinit(self: *Forest, gpa: std.mem.Allocator) void {
         self.reap(gpa);
         self.buried.deinit(gpa);
+        // Tests deinit a State twice (a defer, then the editor's own); the second reap must see an empty list.
         self.buried = .empty;
         var it = self.roots.iterator();
         while (it.next()) |e| {

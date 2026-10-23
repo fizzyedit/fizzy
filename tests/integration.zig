@@ -3610,7 +3610,9 @@ test "a leading empty split dropped onto the trash does not draw freed nodes" {
     }
     try dvui.testing.settle(FizzySplitFrame.frame);
     try dvui.testing.settle(FizzySplitFrame.frame);
-    try std.testing.expect(editor.app.layout.splits.root("Main/l1") == null);
+    // The collapse took the whole tree down to the origin leaf, and the frame's reap freed it.
+    try std.testing.expect(editor.app.layout.splits.root("Main") == null);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.splits.buried.items.len);
 }
 
 test "a saved layout holding an empty runtime split draws without crashing" {
@@ -3632,7 +3634,9 @@ test "a saved layout holding an empty runtime split draws without crashing" {
 
     try dvui.testing.settle(FizzySplitFrame.frame);
     try dvui.testing.settle(FizzySplitFrame.frame);
-    try std.testing.expect(editor.app.layout.splits.root("Main/l1") == null);
+    // The collapse took the whole tree down to the origin leaf, and the frame's reap freed it.
+    try std.testing.expect(editor.app.layout.splits.root("Main") == null);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.splits.buried.items.len);
 }
 
 /// fizzy's own Main: a carded place that hands its card to its panes, in a column of the window.
