@@ -76,6 +76,7 @@ fn build(self: *Demos) void {
     for (&Demo.catalog.entries) |*e| {
         var script: automation.Script = .init(gpa, e.name, e.title);
         script.check = automation.Input.check;
+        script.compact = fizzy.core.platform.formFactor() == .phone;
         e.build(&script) catch |err| {
             script.deinit();
             dvui.log.warn("demos: '{s}' did not build: {t}", .{ e.name, err });
