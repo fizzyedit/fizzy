@@ -689,7 +689,7 @@ function applyForm() {
     const chosen = wasmInstance.exports.FizzyWebSetFormFactor(f.coarse, f.w, f.h, f.override);
     console.log(
         `form-factor: coarse=${f.pointerCoarse} hover=${f.hoverHover} w=${f.w} h=${f.h} ` +
-        `override=${f.overrideName || "none"} -> ${["desktop", "tablet", "phone"][chosen]}`,
+        `override=${f.overrideName || "none"} -> ${["desktop", "tablet", "mobile"][chosen]}`,
     );
 }
 

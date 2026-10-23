@@ -32,7 +32,7 @@ pub const FormFactor = form_factor.FormFactor;
 /// travel through the host instead.
 pub var cached_form_factor: FormFactor = .desktop;
 
-/// Whether the device is a phone, a tablet or a desktop. Read it where a shape is chosen; it
+/// Whether the device is mobile, a tablet or a desktop. Read it where a shape is chosen; it
 /// changes on rotation or a resize across the threshold, so ask each frame rather than once.
 pub inline fn formFactor() FormFactor {
     return cached_form_factor;

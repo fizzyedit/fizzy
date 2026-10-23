@@ -1820,7 +1820,7 @@ export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
     if (relative.len == 0) return;
     const full = editor.app.gpa.print("{s}/{s}", .{ std.mem.trimEnd(u8, root, "/"), relative }) catch return;
     // Not opened here: the page can call before the app has drawn a frame (a tab opened in the
-    // background, a phone slow to its first frame), when there are no places yet to open it in
+    // background, a mobile device slow to its first frame), when there are no places yet to open it in
     // or to close round it. The first frame that has them does it (`processPendingShow`).
     if (editor.pending_show) |old_path| editor.app.gpa.free(old_path);
     editor.pending_show = full;
@@ -3645,11 +3645,11 @@ pub fn markWindowRatiosDirty(editor: *Editor) void {
 }
 
 /// Switch to the arrangement `shape` keeps in `layout.zon` (`Layout.State.shape`), when the shape
-/// drawing the window changed: a rotation or a resize across the phone threshold. The one being
+/// drawing the window changed: a rotation or a resize across the mobile threshold. The one being
 /// left is written first if it has unsaved changes. A no-op while the shape is the same.
 ///
 /// Limit: it replaces the in-memory arrangement outright, floats included, whatever else is
-/// happening, a demo playing among it. The phone form factor comes from the screen's short side,
+/// happening, a demo playing among it. The mobile form factor comes from the screen's short side,
 /// not the window, so it changes with the device and not with a resize, and nothing guards
 /// against a flip mid-demo; none is expected.
 pub fn useShape(editor: *Editor, shape: []const u8) void {
@@ -3675,7 +3675,7 @@ pub fn resetLayout(editor: *Editor) void {
     dvui.refresh(null, @src(), null);
 }
 
-/// Hand the center region the whole viewport on a collapsed (phone / narrow web) layout: close
+/// Hand the center region the whole viewport on a collapsed (mobile / narrow web) layout: close
 /// the explorer peek and swing the bottom panel shut. Call it right after a tap has put
 /// something worth reading in the center — e.g. selecting a plugin in the store, whose detail
 /// page renders as a center provider behind the peeked-open explorer.
@@ -4828,12 +4828,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.processPendingSaveAs();
             editor.processPendingShow();
 
-            // fizzy's own shapes: a phone gets the mobile one (`Layout.form_factor` is this same
+            // fizzy's own shapes: a mobile device gets the mobile one (`Layout.form_factor` is this same
             // value). An app supplying its own layout chooses for itself, and keeps
             // `layout.zon`'s first arrangement. Before the `Layout` is made over the state, since
             // switching replaces what is in it.
             const own_shapes = comptime !build_opts.has_app_layout;
-            const mobile = own_shapes and fizzy.core.platform.formFactor() == .phone;
+            const mobile = own_shapes and fizzy.core.platform.formFactor() == .mobile;
             if (own_shapes) editor.useShape(if (mobile) mobile_layout.shape_key else "");
             var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
             // Published for the duration of the shape, so a plugin drawing inside a region can

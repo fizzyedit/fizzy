@@ -798,7 +798,7 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
         .{ "fizzy-reveal-tests", "core/reveal.zig" },
-        // Phone, tablet or desktop from the page's pointer and viewport. std-only (see
+        // Mobile, tablet or desktop from the page's pointer and viewport. std-only (see
         // form_factor.zig); `platform.zig` holds the live value.
         .{ "fizzy-form-factor-tests", "core/form_factor.zig" },
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock

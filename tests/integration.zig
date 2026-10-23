@@ -2981,11 +2981,11 @@ test "a takeover surface appears only while its trigger is selected, and then an
     try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
 }
 
-// -- the phone shape ----------------------------------------------------------------------------
-// `layout_mobile.zig` under a forced `.phone` form factor: which places it declares, what it
-// draws, and that a phone's arrangement is kept apart from a desktop's in `layout.zon`.
+// -- the mobile shape ----------------------------------------------------------------------------
+// `layout_mobile.zig` under a forced `.mobile` form factor: which places it declares, what it
+// draws, and that mobile's arrangement is kept apart from a desktop's in `layout.zon`.
 
-const PhoneFrame = struct {
+const MobileFrame = struct {
     var editor: ?*fizzy.Editor = null;
     var explorer: fizzy.Explorer = .{};
 
@@ -2993,7 +2993,7 @@ const PhoneFrame = struct {
         const e = editor.?;
         fizzy.core.anchor.want();
         var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
-        if (layout.form_factor != .phone) return error.TestUnexpectedResult;
+        if (layout.form_factor != .mobile) return error.TestUnexpectedResult;
         const result = try fizzy.layout_mobile.layout(e, &layout);
         e.app.layout.publishRegions();
         return result;
@@ -3013,13 +3013,13 @@ fn tapAt(r: dvui.Rect.Physical, comptime frame: anytype) !void {
     try dvui.testing.settle(frame);
 }
 
-fn phoneCase(ctx: *shim.Ctx) !void {
+fn mobileCase(ctx: *shim.Ctx) !void {
     const editor = ctx.editor;
     editor.app.gpa = std.testing.allocator;
-    PhoneFrame.explorer = .{};
-    editor.explorer = &PhoneFrame.explorer;
-    fizzy.core.platform.cached_form_factor = .phone;
-    PhoneFrame.editor = editor;
+    MobileFrame.explorer = .{};
+    editor.explorer = &MobileFrame.explorer;
+    fizzy.core.platform.cached_form_factor = .mobile;
+    MobileFrame.editor = editor;
     const kw = fizzy.sdk.keywords.ide;
     try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
     try editor.app.host.registerSurface(.{ .id = "test.search", .title = "Search", .keywords = kw.sidebar, .draw = TabsFrame.draw });
@@ -3027,7 +3027,7 @@ fn phoneCase(ctx: *shim.Ctx) !void {
     try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = kw.panel, .draw = TabsFrame.draw });
 }
 
-test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a command button" {
+test "mobile's shape is Main, two shut sheets, a bar of the rail's views and a command button" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;
@@ -3038,10 +3038,10 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
 
-    fizzy.core.platform.cached_form_factor = .phone;
+    fizzy.core.platform.cached_form_factor = .mobile;
     defer fizzy.core.platform.cached_form_factor = .desktop;
-    PhoneFrame.editor = editor;
-    defer PhoneFrame.editor = null;
+    MobileFrame.editor = editor;
+    defer MobileFrame.editor = null;
 
     const kw = fizzy.sdk.keywords.ide;
     try editor.app.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = kw.sidebar, .draw = TabsFrame.draw });
@@ -3049,7 +3049,7 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     try editor.app.host.registerSurface(.{ .id = "test.workspace", .title = "Workspace", .keywords = kw.main, .draw = TabsFrame.draw });
     try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = kw.panel, .draw = TabsFrame.draw });
 
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
 
     // The places: one Main, a sheet each for the sidebar's views and the panel's, nothing else.
     var names: std.ArrayList([]const u8) = .empty;
@@ -3090,7 +3090,7 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     // Opening the panel sheet gives it height, and shutting it takes it away again.
     const panel = editor.regionFor(kw.panel) orelse return error.TestUnexpectedResult;
     panel.open();
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(!placeShut(editor, "Panel"));
     var panel_h: f32 = 0;
     for (editor.app.layout.regions.items) |r| if (std.mem.eql(u8, r.name, "Panel")) {
@@ -3098,7 +3098,7 @@ test "a phone's shape is Main, two shut sheets, a bar of the rail's views and a 
     };
     try std.testing.expect(panel_h > 100);
     panel.close();
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Panel"));
 }
 
@@ -3106,26 +3106,26 @@ test "a tap on the scrim shuts the open sheet, and a tap on Main with none open 
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;
-    try phoneCase(&ctx);
+    try mobileCase(&ctx);
     defer fizzy.core.platform.cached_form_factor = .desktop;
-    defer PhoneFrame.editor = null;
+    defer MobileFrame.editor = null;
     defer editor.app.layout.regions.deinit(editor.app.gpa);
     defer editor.app.layout.regions_building.deinit(editor.app.gpa);
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
 
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     const panel = editor.regionFor(fizzy.sdk.keywords.ide.panel) orelse return error.TestUnexpectedResult;
     panel.open();
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(!placeShut(editor, "Panel"));
 
     // Just under the title strip: over Main, above the sheet.
     const title = dvui.tagGet("fizzy.mobile.title").?.rect;
     const scrim: dvui.Rect.Physical = .{ .x = title.x, .y = title.y + title.h + 60, .w = 10, .h = 10 };
-    try tapAt(scrim, PhoneFrame.frame);
-    try dvui.testing.settle(PhoneFrame.frame);
+    try tapAt(scrim, MobileFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Panel"));
 }
 
@@ -3133,20 +3133,20 @@ test "a bar tab opens the explorer sheet on its view, and picking the showing on
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;
-    try phoneCase(&ctx);
+    try mobileCase(&ctx);
     defer fizzy.core.platform.cached_form_factor = .desktop;
-    defer PhoneFrame.editor = null;
+    defer MobileFrame.editor = null;
     defer editor.app.layout.regions.deinit(editor.app.gpa);
     defer editor.app.layout.regions_building.deinit(editor.app.gpa);
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
 
-    try dvui.testing.settle(PhoneFrame.frame);
+    try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Explorer"));
 
     const search = dvui.tagGet("fizzy.mobile.tab:test.search").?.rect;
-    try tapAt(search, PhoneFrame.frame);
+    try tapAt(search, MobileFrame.frame);
     try std.testing.expect(!placeShut(editor, "Explorer"));
     {
         var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
@@ -3154,7 +3154,7 @@ test "a bar tab opens the explorer sheet on its view, and picking the showing on
     }
 
     // The tab showing, tapped again: the sheet goes.
-    try tapAt(dvui.tagGet("fizzy.mobile.tab:test.search").?.rect, PhoneFrame.frame);
+    try tapAt(dvui.tagGet("fizzy.mobile.tab:test.search").?.rect, MobileFrame.frame);
     try std.testing.expect(placeShut(editor, "Explorer"));
 }
 
@@ -3179,10 +3179,10 @@ test "a form-factor flip saves the shape it leaves and loads the other's, leavin
     // The desktop, with a sidebar the user dragged and not yet saved.
     _ = state.setExtent(gpa, "Sidebar", 300);
     state.dirty = true;
-    editor.useShape("phone");
-    try std.testing.expectEqualStrings("phone", state.shape);
+    editor.useShape("mobile");
+    try std.testing.expectEqualStrings("mobile", state.shape);
     try std.testing.expect(!state.dirty);
-    // The desktop's was written, and none of it is in the phone's state.
+    // The desktop's was written, and none of it is in the mobile's state.
     try std.testing.expectEqual(@as(?f32, null), state.extents.get("Sidebar"));
     {
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
@@ -3191,7 +3191,7 @@ test "a form-factor flip saves the shape it leaves and loads the other's, leavin
         try std.testing.expectEqual(@as(?f32, 300), desktop[0].extent);
     }
 
-    // The phone's sheet, then back: the phone's is written, the desktop's is read again.
+    // The mobile's sheet, then back: the mobile's is written, the desktop's is read again.
     _ = state.setExtent(gpa, "Explorer", 400);
     state.dirty = true;
     editor.useShape("");
@@ -3199,10 +3199,10 @@ test "a form-factor flip saves the shape it leaves and loads the other's, leavin
     try std.testing.expectEqual(@as(?f32, 300), state.extents.get("Sidebar"));
     try std.testing.expectEqual(@as(?f32, null), state.extents.get("Explorer"));
     {
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 1), phone.len);
-        try std.testing.expectEqualStrings("Explorer", phone[0].name);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 1), mobile.len);
+        try std.testing.expectEqualStrings("Explorer", mobile[0].name);
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 1), desktop.len);
@@ -3235,36 +3235,36 @@ test "layout.zon keeps each shape's regions apart, and a file with no shapes rea
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 1), desktop.len);
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 0), phone.len);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 0), mobile.len);
     }
 
-    // The phone saves its own; the desktop's is where it was.
-    fizzy.backend.saveRegions(dir, "phone", &.{.{ .name = "Explorer", .extent = 400 }});
+    // The mobile saves its own; the desktop's is where it was.
+    fizzy.backend.saveRegions(dir, "mobile", &.{.{ .name = "Explorer", .extent = 400 }});
     {
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 1), desktop.len);
         try std.testing.expectEqualStrings("Sidebar", desktop[0].name);
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 1), phone.len);
-        try std.testing.expectEqualStrings("Explorer", phone[0].name);
-        try std.testing.expectEqual(@as(?f32, 400), phone[0].extent);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 1), mobile.len);
+        try std.testing.expectEqualStrings("Explorer", mobile[0].name);
+        try std.testing.expectEqual(@as(?f32, 400), mobile[0].extent);
     }
 
-    // The desktop saves again, and again the phone's stays; a second phone save replaces the first.
+    // The desktop saves again, and again the mobile's stays; a second mobile save replaces the first.
     fizzy.backend.saveRegions(dir, "", &.{ .{ .name = "Sidebar", .extent = 300 }, .{ .name = "Panel", .extent = 200 } });
-    fizzy.backend.saveRegions(dir, "phone", &.{.{ .name = "Panel", .extent = 150 }});
+    fizzy.backend.saveRegions(dir, "mobile", &.{.{ .name = "Panel", .extent = 150 }});
     {
         const desktop = fizzy.backend.loadRegions(gpa, dir, "");
         defer fizzy.backend.freeRegions(gpa, desktop);
         try std.testing.expectEqual(@as(usize, 2), desktop.len);
-        const phone = fizzy.backend.loadRegions(gpa, dir, "phone");
-        defer fizzy.backend.freeRegions(gpa, phone);
-        try std.testing.expectEqual(@as(usize, 1), phone.len);
-        try std.testing.expectEqualStrings("Panel", phone[0].name);
+        const mobile = fizzy.backend.loadRegions(gpa, dir, "mobile");
+        defer fizzy.backend.freeRegions(gpa, mobile);
+        try std.testing.expectEqual(@as(usize, 1), mobile.len);
+        try std.testing.expectEqualStrings("Panel", mobile[0].name);
     }
 }
 
