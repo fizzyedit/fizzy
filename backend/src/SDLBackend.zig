@@ -1524,7 +1524,7 @@ pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, r
         .macos => {
             _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
             // Gone while the app is left (a quiet run is never active: its menus stay).
-            if (!dialog and !quiet) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
+            if (platform.window_layout.hidesWhenAppLeft(dialog, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
             vp.ride = switch (ride) {
                 .none => null,
                 .main => self.window,
@@ -1777,12 +1777,19 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
     if (menu) return vp;
     if (role == .overlay) {
-        if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+        if (comptime builtin.target.os.tag == .macos) {
+            fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+            // Its bubbles and zones stood over other apps' windows while fizzy was in the background.
+            if (platform.window_layout.hidesWhenAppLeft(false, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(window));
+        }
         return vp;
     }
     if (carry) {
         switch (comptime builtin.target.os.tag) {
-            .macos => fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material),
+            .macos => {
+                fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
+                if (platform.window_layout.hidesWhenAppLeft(false, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(window));
+            },
             .windows => if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd| {
                 platform.win32_titlebar.viewportCarryChrome(hwnd);
             },
