@@ -94,6 +94,31 @@ pub const Error = error{
     Failed,
 };
 
+/// `err` as the `Error` it already is, or null when it is anything else, which the app reports
+/// as `Failed` after logging the cause.
+pub fn preserved(err: anyerror) ?Error {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.DirtyDocuments => error.DirtyDocuments,
+        error.NotUnloadable => error.NotUnloadable,
+        error.Unsupported => error.Unsupported,
+        else => null,
+    };
+}
+
+test "an action's own error comes through unchanged" {
+    try std.testing.expectEqual(error.OutOfMemory, preserved(error.OutOfMemory).?);
+    try std.testing.expectEqual(error.DirtyDocuments, preserved(error.DirtyDocuments).?);
+    try std.testing.expectEqual(error.NotUnloadable, preserved(error.NotUnloadable).?);
+    try std.testing.expectEqual(error.Unsupported, preserved(error.Unsupported).?);
+}
+
+test "any other error is not preserved, so the app reports Failed" {
+    try std.testing.expectEqual(@as(?Error, null), preserved(error.FileNotFound));
+    try std.testing.expectEqual(@as(?Error, null), preserved(error.AccessDenied));
+    try std.testing.expectEqual(@as(?Error, null), preserved(error.Failed));
+}
+
 pub const VTable = struct {
     // ---- decisions the app persists -------------------------------------------------------
     isDisabled: *const fn (ctx: *anyopaque, id: []const u8) bool,

@@ -7513,18 +7513,15 @@ fn pmSelf(ctx: *anyopaque) *Editor {
 
 /// The store's `PluginManager.Error` for what fizzy's own code raised; the cause of `Failed` is logged.
 fn pmError(err: anyerror) PluginManager.Error {
-    return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.DirtyDocuments => error.DirtyDocuments,
-        error.NotUnloadable => error.NotUnloadable,
-        error.Unsupported => error.Unsupported,
-        else => {
-            dvui.log.err("plugin action failed: {s}", .{@errorName(err)});
-            return error.Failed;
-        },
+    return PluginManager.preserved(err) orelse {
+        dvui.log.err("plugin action failed: {s}", .{@errorName(err)});
+        return error.Failed;
     };
 }
 
+/// `anytype` because the call sites return different `void` error unions (the loader's, the
+/// installer's, `Allocator.Error`), and a named type for them would be `anyerror!void`, which
+/// says less; each is only `catch`ed and translated by `pmError`.
 fn pmResult(result: anytype) PluginManager.Error!void {
     result catch |err| return pmError(err);
 }
