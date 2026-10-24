@@ -1743,6 +1743,8 @@ test "extension mappings are case insensitive" {
         .{ "file.tar", Extension.tar },
         .{ "file.txt", Extension.txt },
         .{ "dir.with.dots/file.jpeg", Extension.jpg },
+        .{ "dir.with.dots/file", Extension.hidden },
+        .{ "dir.with.dots/.hidden", Extension.hidden },
         .{ "file.tar.zip", Extension.zip },
         .{ "", Extension.hidden },
         .{ "file", Extension.hidden },
