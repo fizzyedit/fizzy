@@ -2367,6 +2367,13 @@ fn heldAcrossWindows(self: *SDLBackend, event: c.SDL_Event) bool {
     return false;
 }
 
+/// `window`'s handle in the OS's stacking (Windows: its `HWND`).
+fn win32Handle(window: *c.SDL_Window) ?*anyopaque {
+    // SDL keeps the `HWND` in this property as a plain pointer; it is compared and handed back to
+    // Win32, never read through.
+    return c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null);
+}
+
 /// Where in the frame the pointer is, by the window of fizzy's it is over on the desktop: a
 /// viewport's part of the frame over its window, the main window's own otherwise. Over both — a
 /// viewport is kept over the main window — the viewport's.
@@ -2911,6 +2918,20 @@ pub fn renderPresent(self: *SDLBackend) void {
                 vp.under_main = vp.mapped and !vp.passive and !vp.menu and fizzy_macos_viewport_under_main(cocoaWindow(vp.window), main_ns) != 0;
             }
         }
+    }
+    // Windows: the same from the OS's stacking, read each present (nothing says when it changes).
+    // Over the main window, `heldPoint` skips a float's window that lies under it: their rects
+    // overlap there and say nothing of which is in front.
+    if (comptime builtin.target.os.tag == .windows) {
+        var handles: [max_viewports]?*anyopaque = undefined;
+        var under: [max_viewports]bool = undefined;
+        for (&self.viewport_slots, &handles) |*slot, *h| {
+            h.* = if (slot.*) |*vp| win32Handle(vp.window) else null;
+        }
+        if (win32Handle(self.window)) |main_h| platform.win32_stack.markUnder(main_h, &handles, &under) else @memset(&under, false);
+        for (&self.viewport_slots, under) |*slot, is_under| if (slot.*) |*vp| {
+            vp.under_main = is_under and vp.mapped and !vp.passive and !vp.menu;
+        };
     }
     self.manage_backend_tracking.check(.renderPresent);
 }

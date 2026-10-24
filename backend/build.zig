@@ -13,10 +13,11 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const test_step = b.step("test", "Run the backend's std-only tests");
     for (unit_tests) |t| {
-        const compile = b.addTest(.{
-            .name = t.name,
-            .root_module = b.createModule(.{ .root_source_file = b.path(t.root), .target = target, .optimize = optimize }),
-        });
+        const module = b.createModule(.{ .root_source_file = b.path(t.root), .target = target, .optimize = optimize });
+        if (t.win32 and target.result.os.tag == .windows) {
+            if (b.lazyDependency("zigwin32", .{})) |dep| module.addImport("win32", dep.module("win32"));
+        }
+        const compile = b.addTest(.{ .name = t.name, .root_module = module });
         test_step.dependOn(&b.addRunArtifact(compile).step);
     }
 
@@ -92,7 +93,7 @@ pub fn build(b: *std.Build) void {
 
 /// The backend's std-only files with tests of their own, relative to this package: run by
 /// `zig build test` here, and by an app's own test step through `dependency.path(root)`.
-pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
+pub const unit_tests = [_]struct { name: []const u8, root: []const u8, win32: bool = false }{
     .{ .name = "backend-window-layout-tests", .root = "src/platform/window_layout.zig" },
     // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
     .{ .name = "backend-titlebar-tests", .root = "src/platform/titlebar.zig" },
@@ -102,6 +103,8 @@ pub const unit_tests = [_]struct { name: []const u8, root: []const u8 }{
     .{ .name = "backend-blur-region-tests", .root = "src/platform/blur_region.zig" },
     // Where a viewport's OS window is on the desktop and where its part of the frame lies.
     .{ .name = "backend-viewport-map-tests", .root = "src/viewport_map.zig" },
+    // The OS's stacking of windows, on real windows (Windows only; skipped elsewhere): needs zigwin32.
+    .{ .name = "backend-win32-stack-tests", .root = "src/platform/win32_stack.zig", .win32 = true },
     // The backend's health counters: frame-time percentiles, per-frame counts, SDL's log counted
     // from any thread, a snapshot as ZON.
     .{ .name = "backend-health-tests", .root = "src/Health.zig" },

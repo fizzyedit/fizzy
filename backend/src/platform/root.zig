@@ -11,6 +11,7 @@ pub const gestures = @import("gestures.zig");
 pub const window = @import("window.zig");
 pub const titlebar = @import("titlebar.zig");
 pub const win32_titlebar = @import("win32_titlebar.zig");
+pub const win32_stack = @import("win32_stack.zig");
 pub const linux_titlebar = @import("linux_titlebar.zig");
 pub const geometry = @import("geometry.zig");
 pub const macos_monitor = @import("macos_monitor.zig");

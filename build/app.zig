@@ -892,15 +892,15 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
     // here still runs them.
     const backend_dep = fizzy_exe.backendDependency(b);
     for (@import("fizzy_backend").unit_tests) |t| {
-        try unit_test_artifacts.append(b.allocator, b.addTest(.{
-            .name = t.name,
-            .root_module = b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = backend_dep.path(t.root),
-            }),
-            .filters = test_filters,
-        }));
+        const module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = backend_dep.path(t.root),
+        });
+        if (t.win32 and target.result.os.tag == .windows) {
+            if (@import("fizzy_backend").win32Module(backend_dep)) |win32| module.addImport("win32", win32);
+        }
+        try unit_test_artifacts.append(b.allocator, b.addTest(.{ .name = t.name, .root_module = module, .filters = test_filters }));
     }
 
     // The single-instance listener (`libs/dvui-singleton-app`): its shutdown wakes the thread

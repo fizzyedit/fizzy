@@ -278,7 +278,7 @@ pub fn carryLens(vp: *Viewport, lens: bool) void {
 }
 
 /// Whether `vp`'s window lies under the main window in the OS's stacking — a float's, clicked
-/// behind it — as last read (macOS; never elsewhere, where floats stay over it).
+/// behind it — as last read (macOS and Windows; never elsewhere, where floats stay over it).
 pub fn underMain(vp: *Viewport) bool {
     return dvui.currentWindow().backend.impl.viewportUnderMain(vp);
 }
