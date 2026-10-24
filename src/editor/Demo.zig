@@ -385,6 +385,7 @@ const stage_vtable: automation.Stage.VTable = .{
     .command = command,
     .chordFor = chordFor,
     .commandTitle = commandTitle,
+    .resolveRole = resolveRole,
     .fastForward = fastForward,
     .capture = capture,
     .restore = restore,
@@ -842,6 +843,22 @@ fn chordFor(ctx: *anyopaque, id: []const u8) ?@import("app").keymap.chord.Stroke
 fn commandTitle(ctx: *anyopaque, id: []const u8) ?[]const u8 {
     const c = from(ctx).editor.app.host.command(id) orelse return null;
     return c.title;
+}
+
+/// The place a role names, by what it is rather than what the person's layout calls it.
+fn resolveRole(ctx: *anyopaque, role: []const u8, buf: []u8) ?[]const u8 {
+    const keywords = if (std.mem.eql(u8, role, "documents"))
+        sdk.keywords.ide.main
+    else if (std.mem.eql(u8, role, "explorer"))
+        sdk.keywords.ide.sidebar
+    else if (std.mem.eql(u8, role, "panel"))
+        sdk.keywords.ide.panel
+    else
+        return null;
+    const name = (from(ctx).editor.regionFor(keywords) orelse return null).name;
+    if (name.len > buf.len) return null;
+    @memcpy(buf[0..name.len], name);
+    return buf[0..name.len];
 }
 
 fn fastForward(ctx: *anyopaque, on: bool) void {

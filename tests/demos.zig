@@ -93,6 +93,12 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     for (fizzy.Editor.Demo.catalog.entries) |e| {
         try app.editor.demo.play(e.name);
 
+        // A role in an anchor's name is the place of that kind in the layout as it is.
+        for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+        try std.testing.expectEqualStrings("region:Main", automation.Input.resolve(fizzy.Editor.Demo.catalog.documents));
+        try std.testing.expectEqualStrings("region:Sidebar", automation.Input.resolve("region:role:explorer"));
+        try std.testing.expect(automation.Input.tagData(fizzy.Editor.Demo.catalog.documents) != null);
+
         // Straight through, on the testing backend's clock (100 ms a step), keeping every moment
         // a seek could be asked to reproduce.
         moments.clearRetainingCapacity();

@@ -195,7 +195,7 @@ user's motion settings, timed in demo time.
 | `history.export:<abs path>`, `history.collapse:<abs path>` | the transport's export button, and the chevron that sends it back into the grip |
 | `fizzy.window:main` | the main window |
 | `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
-| `region:<name>` | a layout region (`Main`, `Panel`, …) |
+| `region:<name>` | a layout region (`Main`, `Panel`, …). The name may be a role (`region:role:documents`, `role:explorer`, `role:panel`): the place of that kind in the person's layout now, resolved at each step through `Stage.resolveRole`, so a demo works on a layout the person rearranged. Any anchor named for a place takes one (`region.arrange:role:explorer`) |
 | `region.arrange:<name>` | a region's arrange button, where it grows in the region's corner (move to the corner first to bring it up) |
 | `drop:center`, `drop:left`, `:right`, `:top`, `:bottom`, `:remove` | a bubble of the drop a carried view would land in, while it is carried over a place: only once the drag is under way, so `drag` carries it there `via` the place first |
 | `float-header:<place>`, `float-close:<place>` | a float's header, to carry it by, and its close button: `float-close:Float 1` |

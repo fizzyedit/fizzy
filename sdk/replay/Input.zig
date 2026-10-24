@@ -14,15 +14,44 @@ const dvui = @import("dvui");
 const Tape = @import("tape").Tape;
 const Sequencer = @import("tape").Sequencer;
 const chord = @import("tape").chord;
+const Stage = @import("Stage.zig");
 
 /// The buttons this input has pressed and not let go of.
 held: std.EnumSet(Tape.Button) = .empty,
+
+/// The stage a playing demo is on, which answers a `role` in a tag's name (`Stage.resolveRole`).
+/// Set while a `Player` holds a tape; null otherwise, and a role then names nothing.
+pub var stage: ?Stage = null;
+
+/// What stands in an anchor's name for a place by what it is: `region:role:documents` is the
+/// region the documents are in, wherever the person has put it.
+pub const role_marker = ":role:";
+
+threadlocal var role_buf: [128]u8 = undefined;
+
+/// `tag` with its role, if it names one, replaced by the live place's name. Valid until the next
+/// call. A role the stage cannot answer (or no stage) is a tag nothing publishes, so a wait on
+/// it holds off and a glide to it finds nothing, as for any widget not on screen.
+pub fn resolve(tag: []const u8) []const u8 {
+    const at = std.mem.indexOf(u8, tag, role_marker) orelse return tag;
+    const head = tag[0 .. at + 1];
+    const name = (stage orelse return "").resolveRole(tag[at + role_marker.len ..], role_buf[head.len..]) orelse return "";
+    @memcpy(role_buf[0..head.len], head);
+    return role_buf[0 .. head.len + name.len];
+}
+
+/// A tag's widget, resolved through its role if it has one.
+pub fn tagData(tag: []const u8) ?dvui.TagData {
+    const real = resolve(tag);
+    if (real.len == 0) return null;
+    return dvui.tagGet(real);
+}
 
 /// A target's point in physical pixels: a fraction of the tagged rect (or the window), nudged by
 /// natural pixels. Only a visible tag has a point.
 pub fn targetPoint(target: Tape.Target) ?Sequencer.Point {
     const r: dvui.Rect.Physical = if (target.tag.len == 0) dvui.windowRectPixels() else blk: {
-        const td = dvui.tagGet(target.tag) orelse return null;
+        const td = tagData(target.tag) orelse return null;
         if (!td.visible) return null;
         break :blk td.rect;
     };
@@ -84,8 +113,8 @@ pub fn text(bytes: []const u8) void {
 pub fn tagHolds(until: Tape.Until) ?bool {
     return switch (until) {
         .idle => null,
-        .shown => |tag| if (dvui.tagGet(tag)) |td| td.visible else false,
-        .gone => |tag| if (dvui.tagGet(tag)) |td| !td.visible else true,
+        .shown => |tag| if (tagData(tag)) |td| td.visible else false,
+        .gone => |tag| if (tagData(tag)) |td| !td.visible else true,
     };
 }
 
@@ -196,4 +225,29 @@ test "a tape's key reads as the tape's, a person's as theirs" {
     _ = try dvui.testing.step(testKeysFrame);
     try std.testing.expectEqual(@as(usize, 1), test_seen.tape);
     try std.testing.expectEqual(@as(usize, 1), test_seen.person);
+}
+
+fn testRole(_: *anyopaque, role: []const u8, buf: []u8) ?[]const u8 {
+    if (!std.mem.eql(u8, role, "documents")) return null;
+    @memcpy(buf[0..6], "Centre");
+    return buf[0..6];
+}
+
+test "a role in an anchor's name is the place the stage says it is now" {
+    const vtable: Stage.VTable = .{
+        .idle = undefined,
+        .command = undefined,
+        .resolveRole = testRole,
+    };
+    var ctx: u8 = 0;
+    stage = .{ .ctx = &ctx, .vtable = &vtable };
+    defer stage = null;
+
+    try std.testing.expectEqualStrings("region:Centre", resolve("region:role:documents"));
+    try std.testing.expectEqualStrings("region.arrange:Centre", resolve("region.arrange:role:documents"));
+    try std.testing.expectEqualStrings("region:Main", resolve("region:Main"));
+    // A role the app has no place for names nothing, so a wait on it holds off.
+    try std.testing.expectEqualStrings("", resolve("region:role:nowhere"));
+    stage = null;
+    try std.testing.expectEqualStrings("", resolve("region:role:documents"));
 }

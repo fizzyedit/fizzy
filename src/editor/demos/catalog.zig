@@ -67,7 +67,8 @@ pub fn aboutWriting(s: *Script, rel: []const u8) !Script.CaptionOptions {
     return .{ .near = try end(s, rel), .clear = clear };
 }
 
-/// A place by name (`Sidebar`, `Main`, `Float 1`): the whole of it.
+/// A place by name (`Sidebar`, `Main`, `Float 1`) or by role (`role:documents`, `role:explorer`,
+/// `role:panel`: what the place is, wherever the person's layout has it): the whole of it.
 pub fn place(s: *Script, name: []const u8) ![]const u8 {
     return s.print("region:{s}", .{name});
 }
@@ -104,7 +105,7 @@ pub fn tab(s: *Script, rel: []const u8) ![]const u8 {
 
 /// The documents' place: where the work is, and so where a demo's popups gather when they are
 /// about no one thing (`Script.home`).
-pub const documents = "region:Main";
+pub const documents = "region:role:documents";
 
 /// The command palette's text field.
 pub const palette = "fizzy.palette";

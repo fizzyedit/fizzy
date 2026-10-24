@@ -355,6 +355,7 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     self.transport = .{};
     self.mismatches = 0;
     self.timeouts = 0;
+    Input.stage = self.stage;
     self.stage.begin(t);
     self.seekTo(0, if (opts.autoplay) .play else .pause);
 }
@@ -394,6 +395,7 @@ pub fn unload(self: *Player) void {
 fn release(self: *Player, how: Leave) void {
     if (self.owned == null) return;
     self.input.releaseHeld();
+    Input.stage = null;
     if (self.state == .seeking) self.stage.fastForward(false);
     self.dropSnapshots();
     switch (how) {

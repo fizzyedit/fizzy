@@ -565,7 +565,7 @@ fn pointRect(p: Sequencer.Point) dvui.Rect {
 
 /// A tag's rect, natural, when it is drawn and visible.
 fn tagRect(tag: []const u8) ?dvui.Rect {
-    const td = dvui.tagGet(tag) orelse return null;
+    const td = Input.tagData(tag) orelse return null;
     if (!td.visible) return null;
     return dvui.windowRectScale().rectFromPhysical(td.rect);
 }

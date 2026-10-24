@@ -92,18 +92,18 @@ pub fn build(s: *Script) !void {
         try s.waitFor(try catalog.file(s, "README.md"), .{});
         s.pause(900);
         try s.caption("Every place has a corner. Its button chooses what the place shows…", .{});
-        try catalog.cornerButton(s, "Sidebar");
-        try s.click(try catalog.corner(s, "Sidebar"), .{ .move_ms = 0 });
-        try s.waitFor("region.menu.split-down:Sidebar", .{});
+        try catalog.cornerButton(s, "role:explorer");
+        try s.click(try catalog.corner(s, "role:explorer"), .{ .move_ms = 0 });
+        try s.waitFor("region.menu.split-down:role:explorer", .{});
         s.pause(1200);
-        try s.caption("…and splits it, for two views one above the other.", .{ .near = "region.menu.split-down:Sidebar" });
-        try s.click(.{ .tag = "region.menu.split-down:Sidebar" }, .{});
+        try s.caption("…and splits it, for two views one above the other.", .{ .near = "region.menu.split-down:role:explorer" });
+        try s.click(.{ .tag = "region.menu.split-down:role:explorer" }, .{});
         s.pause(1200);
 
         try s.chapter("Floats");
         try s.caption("Carry a view from its corner and drop it on the middle of its own place: it floats.", .{});
-        try catalog.cornerButton(s, "Sidebar");
-        try s.drag(try catalog.corner(s, "Sidebar"), .{ .tag = try catalog.place(s, "Sidebar") }, .{ .ms = 900 });
+        try catalog.cornerButton(s, "role:explorer");
+        try s.drag(try catalog.corner(s, "role:explorer"), .{ .tag = try catalog.place(s, "role:explorer") }, .{ .ms = 900 });
         try s.waitFor(try catalog.place(s, "Float 1"), .{});
         try s.caption("A float goes wherever you carry it by its header.", .{ .near = "float-header:Float 1" });
         try s.drag(.{ .tag = "float-header:Float 1" }, .{ .tag = catalog.documents, .x = 0.45, .y = 0.15 }, .{ .ms = 1000 });
