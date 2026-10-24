@@ -63,6 +63,7 @@ pub fn submenu(
         var anim = dvui.animate(src, .{ .kind = .alpha, .duration = 250_000 }, .{ .expand = .both });
         defer anim.deinit();
 
+        // lint-allow(raw-transient-surface): TODO(seam): a plugin flyout cannot reach core's frosted floatingMenu from sdk; fix with an sdk release
         var fw = dvui.floatingMenu(src, .{ .from = r }, .{});
         defer fw.deinit();
 

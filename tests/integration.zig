@@ -12241,6 +12241,7 @@ var live_float: dvui.Rect = .{ .x = 300, .y = 200, .w = 240, .h = 160 };
 
 fn liveDragFrame() !dvui.App.Result {
     live_driver.frame();
+    // lint-allow(raw-transient-surface): headless test fixture, not a shown surface
     var fw = dvui.floatingWindow(@src(), .{ .rect = &live_float }, .{ .tag = "live.float" });
     defer fw.deinit();
     fw.dragAreaSet(dvui.windowHeader("Drag me", "", null));
