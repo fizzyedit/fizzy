@@ -1,7 +1,7 @@
 //! Repository lint with per-file budgets for existing findings.
 const std = @import("std");
 
-const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror, @"deprecated-names-replacement" };
+const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror, @"deprecated-names-replacement", @"raw-transient-surface" };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
 const Suppression = struct { rule: []const u8, line: usize };
@@ -140,6 +140,7 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
             try suppressions.append(allocator, .{ .rule = text[prefix.len..close], .line = line_number });
         }
     }
+    try rawTransientSurfaces(allocator, tree, suppressions.items, &findings);
     var create_line: ?usize = null;
     var has_destroy = false;
     for (0..tree.nodes.len) |index| {
@@ -184,6 +185,42 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         .message = "file has pub fn create* but no destroy function",
     });
     return findings.toOwnedSlice(allocator);
+}
+
+/// dvui's own entry points for a transient surface. Each paints its background inside `init`, where
+/// the app's glass cannot get beneath it, so a surface made with one is a different material from
+/// every other popup. `core.widgets` (and `core.dialogs` for toasts and dialogs) wrap the same
+/// widgets with the shared surface; an exception says why in a `lint-allow` comment.
+const raw_surface_names = [_][]const u8{
+    "tooltip", "FloatingTooltipWidget", "floatingMenu",   "FloatingMenuWidget",
+    "popup",   "PopupWidget",           "floatingWindow", "FloatingWindowWidget",
+    "dialog",  "toast",                 "contextMenu",    "dropdown",
+};
+
+fn rawTransientSurfaces(
+    allocator: std.mem.Allocator,
+    tree: std.zig.Ast,
+    suppressions: []const Suppression,
+    findings: *std.ArrayList(Finding),
+) !void {
+    const tags = tree.tokens.items(.tag);
+    if (tags.len < 3) return;
+    for (0..tags.len - 2) |i| {
+        if (tags[i] != .identifier or tags[i + 1] != .period or tags[i + 2] != .identifier) continue;
+        if (!std.mem.eql(u8, tree.tokenSlice(@intCast(i)), "dvui")) continue;
+        const name = tree.tokenSlice(@intCast(i + 2));
+        for (raw_surface_names) |banned| {
+            if (!std.mem.eql(u8, name, banned)) continue;
+            const line = tree.tokenLocation(0, @intCast(i)).line + 1;
+            if (silenced(suppressions, .@"raw-transient-surface", line)) break;
+            try findings.append(allocator, .{
+                .rule = .@"raw-transient-surface",
+                .line = line,
+                .message = try allocator.print("dvui.{s} paints its own surface; use the core.widgets / core.dialogs wrapper", .{name}),
+            });
+            break;
+        }
+    }
 }
 
 /// A file-level `const X = @This();` is named for the file, as in std (`const Writer = @This();`).
@@ -566,4 +603,24 @@ test "deprecated marker honors lint-allow suppression and a file budget" {
     try std.testing.expect(!try reportFile(&output.writer, "sdk/src/allowed.zig", hit, &allowances, &seen, false));
     try std.testing.expect(try reportFile(&output.writer, "sdk/src/under.zig", hit, &allowances, &seen, false));
     try std.testing.expect(seen[0] and seen[1]);
+}
+
+test "raw transient surface: dvui entry points are findings, wrappers and suppressed lines are not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "fn f() void { dvui.tooltip(@src(), .{}, \"x\", .{}, .{}); }",
+        "fn f() void { var m = dvui.floatingMenu(@src(), .{}, .{}); _ = m; }",
+        "const W = dvui.FloatingWindowWidget;",
+    }) |source| {
+        const findings = try analyze(a, source);
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(Rule.@"raw-transient-surface", findings[0].rule);
+    }
+    for ([_][:0]const u8{
+        "fn f() void { core.widgets.tooltip(@src(), .{}, \"x\", .{}, .{}); }",
+        "fn f() void { const s = \"dvui.tooltip\"; _ = s; } // dvui.popup",
+        "// lint-allow(raw-transient-surface): a fixture\nconst W = dvui.FloatingWindowWidget;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
 }
