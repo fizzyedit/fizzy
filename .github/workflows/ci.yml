@@ -23,8 +23,14 @@ name: CI
 # skipped jobs; `gh pr ready` is therefore what makes the required check mean something, and
 # `main`'s ruleset still requires it. Pushes to main and the merge queue are unchanged.
 #
+# A green `ci-ok` on a draft means "nothing was built", and that is safe only because a draft
+# cannot be merged and the merge queue reruns the whole matrix on the `merge_group` ref. Turning
+# a ready PR back into a draft is not a trigger, so its last full result stays on it; push or
+# mark it ready again for a fresh one.
+#
 # The Zig compiler is restored from the Actions cache by every job: setup-zig keeps the verified
-# tarball under the key `setup-zig-tarball-<tarball name>` (the version is pinned by ZIG_VERSION),
+# tarball under the key `setup-zig-tarball-<tarball name>` (the version is pinned by ZIG_VERSION;
+# a job's log shows `Cache hit for: setup-zig-tarball-zig-x86_64-linux-0.17.0`),
 # independent of the `use-cache: false` the jobs set for the Zig *package* cache, which has the
 # per-job key `zig-<ZIG_VERSION>-<job>-<os>-<arch>-<hash of every build.zig.zon>`.
 on:
