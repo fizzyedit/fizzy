@@ -106,7 +106,7 @@ worker's gate output in its body.
 
 ## Review
 
-- Draft PR on the first push; take it to ready only when the gates pass and CI is green.
+- Draft PR on the first push; take it to ready when the local gates pass. A draft's CI is only the light `changes` job, so the full CI runs at ready and must be green before the merge question.
 - A different worker than the author reviews the PR.
 - No auto-merge. Merging is the maintainer's (`CONTRIBUTING.md`).
 
