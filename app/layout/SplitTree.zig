@@ -95,8 +95,6 @@ pub const Forest = struct {
     pub fn deinit(self: *Forest, gpa: std.mem.Allocator) void {
         self.reap(gpa);
         self.buried.deinit(gpa);
-        // Tests deinit a State twice (a defer, then the editor's own); the second reap must see an empty list.
-        self.buried = .empty;
         var it = self.roots.iterator();
         while (it.next()) |e| {
             gpa.free(e.key_ptr.*);

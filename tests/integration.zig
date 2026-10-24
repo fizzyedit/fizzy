@@ -3458,7 +3458,6 @@ test "picker: each header control runs its command, the button and the palette a
     defer editor.app.layout.deinitExtents(editor.app.gpa);
     defer editor.app.layout.deinitAssignments(editor.app.gpa);
     defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.splits.deinit(editor.app.gpa);
     defer editor.app.layout.picker.close(editor.app.gpa);
 
     PickerFrame.editor = editor;
