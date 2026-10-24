@@ -10,7 +10,7 @@ it, and the dashboard and the recaps read it. Nothing keeps a private file of it
 store is the repo `fizzyedit/perf-data` (private, like `fizzyedit/plans`), holding only:
 
 ```
-history/YYYY-MM.jsonl     one file per month, append-only
+YYYY-MM.jsonl     one file per month, append-only
 ```
 
 Monthly files keep each one small (a full `perf-compile` run is 17 lines), bound a clone's cost to
@@ -18,7 +18,7 @@ what is read, and make a write a plain append. A line is never edited or deleted
 answered by a later line, or by dropping the file's tail in a PR to that repo.
 
 Until that repo exists, the PM machine's `perf/history.jsonl` is the only copy and is imported
-as-is into `history/` (its lines already fit the format below).
+as-is into the store (its lines already fit the format below).
 
 ## Format
 
@@ -30,7 +30,7 @@ JSON Lines, UTF-8, one object per line, keys in this order:
 
 | key | meaning |
 |---|---|
-| `date` | UTC, ISO 8601, to the second: when the run started. Names the file (`history/YYYY-MM.jsonl`) |
+| `date` | UTC, ISO 8601, to the second: when the run started. Names the file (`YYYY-MM.jsonl`) |
 | `commit` | short hash of the tree measured |
 | `machine` | `host/<N>cpu/<M>GiB`: numbers are only comparable on one machine |
 | `os` | `uname -sr` (or the OS name and version off Linux) |
@@ -52,7 +52,7 @@ good so a series stays one series.
   to `fizzyedit/perf-data` (a rebase-and-push of an append never conflicts on content). A fan
   files its findings as issues as before, and records the numbers behind them as lines here.
 - **Readers** take the store as read-only text: the dashboard (`plugins/devtools`) and the
-  recaps read `history/*.jsonl`, group by `machine`, `scenario` and `metric`, and order by `date`.
+  recaps read `*.jsonl`, group by `machine`, `scenario` and `metric`, and order by `date`.
   A trend compares like with like only: the same machine and the same scenario.
 
 # Measuring compile time
