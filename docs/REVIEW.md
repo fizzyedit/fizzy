@@ -17,16 +17,21 @@ off. The same four questions, the same format. Zig and comment rules are not rep
 ## The answer format
 
 ```
-VERDICT: approve | changes requested | blocked
-Q1 met | partly | not met: <evidence>
-Q2: <findings, or "none found">
-Q3 keep | consider: <the alternative, if any>
-Q4 aligned | drift: <what drifted from which plan step>
+VERDICT: clean | changes | unable
+Q1 Goal: met | partly | not met: <evidence>
+Q2 Lean and Zig: <findings, or "none found">
+Q3 Approach: keep | consider: <the alternative, if any>
+Q4 Fit: aligned | drift: <what drifted from which plan step>
+Risk: <what the change could break, or "none">
 Net lines: +<added> -<removed>
-
+Findings:
 F1 [blocker|major|minor|nit] [Q1-Q4] file:line: what and why
 F2 ...
+Not checked: <what was not verified, or "nothing">
 ```
+
+The harness checks the first line and the four `Q` lines by these exact prefixes. Only blocker
+and major make the verdict `changes`; `unable` means the review could not be done.
 
 Findings are numbered `F<n>` in one list, most severe first. A writer answering for their own
 PR uses the same shape, with `VERDICT` replaced by what they changed after answering.
