@@ -85,8 +85,8 @@ motion_speed: f32 = core.motion.default_speed,
 /// What the app's windows are made of (`core.material`): opaque (`none`), clear (`transparent`),
 /// blurred, frosted, or Liquid Glass. A kind the platform cannot draw is drawn as the richest glass
 /// below it that it can, else opaque (`Material.effective`), and stays saved for a machine that
-/// can. Applied at once; `FIZZY_GLASS` overrides it.
-window_material: core.material.Kind = .liquid,
+/// can. Opaque until a person turns glass on. Applied at once; `FIZZY_GLASS` overrides it.
+window_material: core.material.Kind = .none,
 
 /// What the glass the app draws itself is made of (`core.material.inApp`): dialogs, menus, toasts
 /// and floats drawn in the window. Null, the window's (`window_material`), as drawn; a kind, that one wherever the
