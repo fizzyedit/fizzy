@@ -9752,7 +9752,7 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // The testing backend reports its size from these fields, so writing them *is* a resize.
         t.backend.size = .{ .w = 390, .h = 844 };
         t.backend.size_pixels = .{ .w = 390, .h = 844 };
-        fizzy.core.platform.cached_form_factor = .phone;
+        fizzy.core.platform.cached_form_factor = .mobile;
         defer {
             fizzy.core.platform.cached_form_factor = .desktop;
             t.backend.size = desktop_size;

@@ -66,7 +66,7 @@ fn generation(ctx: *anyopaque) u32 {
 
 fn list(ctx: *anyopaque) []const Api.Info {
     const self = from(ctx);
-    const phone = fizzy.core.platform.formFactor() == .phone;
+    const phone = fizzy.core.platform.formFactor() == .mobile;
     if (self.built_for != self.editor.app.host.demos_generation or self.built_phone != phone) self.build();
     return self.infos.items;
 }
@@ -75,7 +75,7 @@ fn build(self: *Demos) void {
     _ = self.arena.reset(.retain_capacity);
     self.infos = .empty;
     self.built_for = self.editor.app.host.demos_generation;
-    self.built_phone = fizzy.core.platform.formFactor() == .phone;
+    self.built_phone = fizzy.core.platform.formFactor() == .mobile;
     const gpa = self.editor.app.gpa;
     for (&Demo.catalog.entries) |*e| {
         var script: automation.Script = .init(gpa, e.name, e.title);
