@@ -555,8 +555,9 @@ to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
   rewinds to exactly the live state, a seek lands in the frame that asked for it with the app's
   clock following the demo, a seek back restores the nearest snapshot instead of the keyframe and
   the moments after it match the first pass, the scrubber follows as it is dragged, a replay that
-  differs is caught, a real release does not end the tape's drag, a person's click pauses it and is
-  undone on resume, real motion cannot move the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
+  differs is caught, a real release does not end the tape's drag, a seek or pause mid-drag lets go of
+  the held button, a person's click pauses it and is undone on resume, real motion cannot move the
+  tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
   round-trips.
 - `zig build test-integration` — `fizzy-demo-tests` (`tests/demos.zig`): every bundled demo, in
   the whole editor through fizzy's own stage. It plays to the end with no wait giving up and no

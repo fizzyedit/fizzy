@@ -528,6 +528,12 @@ fn arrive(self: *Player) void {
         .play => .playing,
         .pause => .paused,
     };
+    // Landing paused mid-drag is the same cut-short drag `pause` drops: nothing stays held for
+    // later real motion to drag with.
+    if (self.state == .paused and self.input.held.count() > 0) {
+        self.input.releaseHeld();
+        self.diverged = true;
+    }
 }
 
 /// Back to the keyframe op `kf`, to replay from there.
