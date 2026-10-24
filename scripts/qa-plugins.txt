@@ -1,0 +1,8 @@
+# The store plugins scripts/qa-build adds to every QA build: <id> <repo> <ref>.
+# A ref is a tag or a branch of github.com/<repo>. Each is built against the SDK of the fizzy
+# tree being built (`zig build --fork=<tree>/sdk`), whatever SDK its own build.zig.zon pins, so
+# a ref that no longer builds against main's SDK shows as a failed plugin in the QA build's
+# report; bump the ref here (or fix the plugin) in a PR.
+pixi fizzyedit/pixi v0.1.51
+drive fizzyedit/drive v0.1.20
+example-plugin fizzyedit/example-plugin main
