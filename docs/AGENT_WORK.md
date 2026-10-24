@@ -104,30 +104,38 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 ### Review routing
 
 Cross-review is routed by label and recorded by a marker comment, so the PM gate can read it.
+Each team (`linux`, `macos`, `windows`) runs one worker loop per kind (`claude`, `codex`,
+`agy`); the `Agent-Team` and `Worker` trailers on a PR's commits say who authored it.
 
 1. **Route.** When a PR goes ready, the author's harness labels it `review:<other team>`
    (`review:linux`, `review:windows`, `review:macos`). The PM creates these labels once the
    maintainer says yes; a worker never creates one.
-2. **Pick up.** A worker's poll loop lists open PRs labelled `review:<its team>` that it did not
-   author. The reviewer's `Worker:` trailer must differ from the author's. With only one team
-   online, a different worker (model) on the same team counts as the other team; a second
-   Claude cannot review Claude, so the reviewer is a worker of another kind.
+2. **Pick up.** In review mode a worker's poll loop lists open, ready PRs labelled
+   `review:<its team>` and skips its own. A reviewer is eligible when it is a different team
+   or a different kind than the author. With only one team online, a different kind on the same
+   team counts as the other team; a second Claude cannot review Claude on the same team, so
+   that reviewer is Codex or agy.
 3. **Verify.** The reviewer checks out the PR head in a fresh workspace (`scripts/agent-prepare`
    style, never the author's), reads the diff, and runs the gates the PR claims.
-4. **Record.** The reviewer posts one PR comment, posted by its own team App identity, whose
-   first line is exactly one of:
+4. **Record.** The reviewer posts one PR comment, from its own team App identity. The first
+   line is exactly one of:
 
    ```
    REVIEW: clean @<full 40-hex sha>
    REVIEW: changes @<full 40-hex sha>
    ```
 
-   For `changes`, the following lines name the failing gate or finding. Then the reviewer
-   removes the `review:<team>` label.
+   The second line is `Reviewer: <team>/<kind>`. The rest lists what was checked and which
+   gates the reviewer re-ran itself; for `changes`, it names the failing gate or finding. Then
+   the reviewer removes the `review:<team>` label.
 5. **A push invalidates it.** A marker counts only while its sha equals the PR's current head;
    a mismatch means unreviewed, and the author's harness relabels the PR.
-6. **Limits.** A review never merges, marks ready, or applies `merge-ok` or `pm-approval`. Until a
-   reviewer worker of another kind exists, the PM reads the diff and posts the marker; the
+6. **How many.** A PR touching the SDK or plugin ABI (`sdk/`), build scripts (`build/`,
+   `build.zig`) or CI (`.github/`, `scripts/`) needs two `clean` markers at its head, from two
+   different kinds or teams. Every other PR needs one. The PM does not approve until the
+   required markers are present.
+7. **Limits.** A review never merges, marks ready, or applies `merge-ok` or `pm-approval`. Until
+   a reviewer worker of another kind exists, the PM reads the diff and posts the marker; the
    dashboard shows who posted it.
 
 ## Which worker suits which work
