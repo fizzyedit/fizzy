@@ -168,12 +168,15 @@ fn geometry(nat: dvui.Rect.Natural, grown: f32) ?dvui.Rect {
     return .{ .x = nat.x + nat.w / 2 - w / 2, .y = bottom - h, .w = w, .h = h };
 }
 
+/// The room kept above the tab for the feed, in natural units.
+const feed_h: f32 = 40;
+
 /// How far up from a pane's bottom edge the bar can reach, in natural units, at any openness of
 /// its strip: the fully grown strip, the bar's outset, the tab over it, and the feed above that. A
 /// constant, so the part of the pane a history picture is taken from (`HistoryFrames.take`) does
 /// not change size while the strip opens or closes, which would make every kept picture another
 /// view of the pane.
-pub const cover: f32 = 14 + bar_h + strip_h + 4 + tab_d + tab_gap + 40;
+pub const cover: f32 = 14 + bar_h + strip_h + 4 + tab_d + tab_gap + feed_h;
 
 /// The strip's size over `pane` (physical) fully grown, in physical pixels, at its widest (no
 /// export button): what each step's picture is cut to (`HistoryFrames.take`), so the strip draws
@@ -838,6 +841,6 @@ test "the bar, its tab and the feed stay inside the cover, whatever the strip's 
     var g: f32 = 0;
     while (g <= 1.0) : (g += 0.125) {
         const r = geometry(pane, g).?;
-        try std.testing.expect(pane.h - r.y + 4 + tab_d + tab_gap + 40 <= cover);
+        try std.testing.expect(pane.h - r.y + 4 + tab_d + tab_gap + feed_h <= cover);
     }
 }
