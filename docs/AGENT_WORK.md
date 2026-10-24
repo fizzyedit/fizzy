@@ -39,16 +39,16 @@ A PR carries one stage label at a time; each names whose turn it is.
 | Label | Whose turn | Set by |
 |---|---|---|
 | `pm:triage` | the PM reads the PR and the thread | the worker's finish step |
-| `review` | the reviewers named by `reviewer:<team>/<tool>` labels | the PM |
-| `ruling` | the PM sorts the findings | the last reviewer |
-| `fixes` | the author | the PM |
-| `verify` | a reviewer checks the fixes | the author, after posting `FIXES` |
-| `approve` | the maintainer's yes (foxnne's, for agent-rule changes) | the PM |
+| `pm:review` | the reviewers named by `reviewer:<team>-<kind>` labels | the PM |
+| `pm:ruling` | the PM sorts the findings | the PM |
+| `pm:fixes` | the author | the PM, or the PM's rework router (blocker and major findings on non-risky PRs route back automatically) |
+| `pm:verify` | a reviewer checks the fixes | the PM, after the author posts `FIXES` |
+| `pm:approve` | the maintainer's yes (foxnne's, for agent-rule changes) | the PM |
 | `pm:fast` | the PM alone: a change too small or too mechanical to review | the PM |
 
-`reviewer:<team>/<tool>` assigns a review; a reviewer adds `reviewing:<team>/<tool>` while it
-is in progress and removes it when its `REVIEW` is posted. A different worker than the author
-reviews. Not every reviewer reviews every PR: the PM names who.
+`reviewer:<team>-<kind>` (for example `reviewer:linux-codex`) assigns a review; a reviewer adds
+`reviewing:<team>-<kind>` while it is in progress and removes it when its `REVIEW` is posted.
+A different worker than the author reviews. Not every reviewer reviews every PR: the PM names who.
 
 ### Markers
 
@@ -63,9 +63,9 @@ A comment on the thread starts with its marker, so the harness and the next read
 - `VERIFY`: a reviewer's check that each fix holds, and that nothing else moved.
 - `APPROACH` and `APPROACH-OK`: above.
 
-At most two fix rounds (`RULING`, `FIXES`, `VERIFY`, twice). If `VERIFY` still finds a must-fix
-after the second, stop patching: the PM rules a different approach and the author rebuilds
-from it rather than adding a third patch to the same mechanism.
+At most two fix rounds (`RULING`, `FIXES`, `VERIFY`, twice). `VERIFY` checks only the must-fix
+list of the `RULING`. After the second round the PM decides once: merge with follow-ups, split
+the PR, or close it and restart. [`REVIEW.md`](REVIEW.md) carries the detail.
 
 Nothing auto-merges (see Review).
 
@@ -143,7 +143,7 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 
 The stages and markers above are the review. Reviewer and author both answer the four questions
 in [`REVIEW.md`](REVIEW.md). A worker working an issue leaves its PR draft and never merges it:
-marking it ready (once the gates pass and CI is green), the merge and the `approve` yes are the
+marking it ready (once the gates pass and CI is green), the merge and the `pm:approve` yes are the
 maintainer's. `CONTRIBUTING.md`'s "take it to ready yourself" is for a person's own session, not
 for a worker on this contract.
 
