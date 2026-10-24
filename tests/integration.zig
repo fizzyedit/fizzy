@@ -9747,6 +9747,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     // The tour again, in a phone's shape: its anchors differ (no rail, no Sidebar place), and the
     // tape still has to reach its last chapter rather than wait on one that is not there.
     {
+        const desktop_api = editor.demos.api;
+        const desktop_generation = desktop_api.generation();
         const desktop_size = t.backend.size;
         const desktop_pixels = t.backend.size_pixels;
         // The testing backend reports its size from these fields, so writing them *is* a resize.
@@ -9761,6 +9763,8 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // `step` re-reads the size at its end, so the first frame still runs at the old one.
         _ = try dvui.testing.step(headlessFrame);
         try dvui.testing.settle(headlessFrame);
+        // The list differs by form factor, so its generation moves and a retained one is stale.
+        try std.testing.expect(desktop_api.generation() != desktop_generation);
         try editor.demo.play("tour");
         const player = &editor.demo.player;
         var phone_frames: usize = 0;
