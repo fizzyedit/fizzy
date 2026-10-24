@@ -70,7 +70,7 @@ its next run; if its fingerprint no longer reproduces, close it with one line sa
 - Title `fan:<name>: <what is wrong>`, at most 72 characters.
 - Body: severity; one paragraph on why it matters; **Repro** (the exact command or tape,
   expected against actual); `file:line` at the commit examined (`main@<sha>`); for medium and
-  high a filled kickoff block (the template in the fizzy-pm skill); last line the fingerprint.
+  high a filled kickoff block (the template in `docs/AGENT_WORK.md`); last line the fingerprint.
 - Cap: at most 5 new issues per run, highest severity first. Overflow is one line in the run
   record. Lows go into one `fan:<name>: low-severity batch` issue per run, not one each, with one
   `fingerprint:` line per low at the end of the body (dedupe indexes every such line); the batch

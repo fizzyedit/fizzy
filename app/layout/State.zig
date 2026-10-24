@@ -155,8 +155,8 @@ splits: SplitTree.Forest = .{},
 /// declare regions by call order.
 dock: ?core.widgets.DockLayout = null,
 /// Which shape's arrangement this state holds, and so which part of `layout.zon` it is saved to
-/// and loaded from: a phone's one place and a desktop's rail and splits name different places,
-/// and one overwriting the other would lose both. Empty is the app's first shape, whose
+/// and loaded from: the mobile shape's one place and a desktop's rail and splits name different
+/// places, and one overwriting the other would lose both. Empty is the app's first shape, whose
 /// arrangement keeps the file's top level (so an existing file reads as it always did). Set by
 /// whoever chooses the shape (`Editor.useShape`); a literal, never freed.
 shape: []const u8 = "",

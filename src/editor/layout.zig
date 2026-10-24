@@ -71,7 +71,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     switch (rail_action) {
         .open => {
             editor.explorer.open(editor);
-            // One pane at a time while there is only room for one. On a phone-width window the
+            // One pane at a time while there is only room for one. On a mobile-width window the
             // explorer covers the width it opens into, so leaving the panel open below it would
             // split the little space left between two things and show neither.
             if (f.state.regionFor(bottom)) |panel| {

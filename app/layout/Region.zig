@@ -154,7 +154,7 @@ pub fn open(self: Region) void {
 /// icon, or by dragging its split back out. That answer is the peek, and it lives under the
 /// region's id beside `_size`.
 ///
-/// Without it, the collapse ran every frame and won every argument: on a phone-width window the
+/// Without it, the collapse ran every frame and won every argument: on a mobile-width window the
 /// explorer shut itself the instant it was opened, and a drag moved the split for exactly as
 /// long as the button was held. The peek is forgotten again when the region is shut, or when the
 /// window grows back past `collapse_below` — so making the window small again collapses it, as
@@ -194,14 +194,14 @@ fn collapseTarget(id: dvui.Id, chosen: f32, available: f32) f32 {
 /// it back where it was, and `isClosed` is false the whole time it is invisible.
 ///
 /// A rail button that toggles a region has to ask this one. Reading `isClosed` there makes the
-/// first tap on a phone-width window report "close" for something already off the screen.
+/// first tap on a mobile-width window report "close" for something already off the screen.
 pub fn isFolded(self: Region) bool {
     if (!(dvui.dataGet(null, self.id, "_narrow", bool) orelse false)) return false;
     return !(dvui.dataGet(null, self.id, "_peek", bool) orelse false);
 }
 
 /// Whether this region is only open because the user asked for it on a container too narrow to
-/// hold it — the state a phone-width layout draws a "close this" button for, and the one where a
+/// hold it — the state a mobile-width layout draws a "close this" button for, and the one where a
 /// shape may want to shut its other regions to make room.
 ///
 /// False on a window with room for the region: there the answer is just "open", and nothing

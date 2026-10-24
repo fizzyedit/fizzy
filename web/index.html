@@ -914,11 +914,12 @@
       //
       // The device as `core.platform.formFactor()` sees it, for both the worker and the page's
       // own loop: a finger with no hover as the primary pointer, and the screen in CSS px (not
-      // the viewport or canvas, which the soft keyboard and sheets shrink). `?form=phone|tablet|
+      // the viewport or canvas, which the soft keyboard and sheets shrink). `?form=mobile|tablet|
       // desktop` overrides the rule for this visit only (read from the URL each load, never
       // stored); anything else is ignored. The extra fields are for the console readout.
-      const formParam = new URLSearchParams(location.search).get("form");
-      const formNames = ["desktop", "tablet", "phone"]; // the order of `FormFactor` in core/form_factor.zig
+      const formParam0 = new URLSearchParams(location.search).get("form");
+      const formParam = formParam0 === "phone" ? "mobile" : formParam0; // `phone` is the old name for `mobile`
+      const formNames = ["desktop", "tablet", "mobile"]; // the order of `FormFactor` in core/form_factor.zig
       const formOverride = formNames.indexOf(formParam); // -1: none
       function formMeasure() {
         const mq = (q) => window.matchMedia(q).matches;

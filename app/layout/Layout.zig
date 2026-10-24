@@ -148,7 +148,7 @@ state: *State,
 /// Long-lived allocations the state makes (a remembered extent's name).
 gpa: std.mem.Allocator,
 /// What the device is, read from `core.platform` when the frame's layout is made: a shape reads
-/// this to choose its arrangement (a phone's single place, a desktop's rail and splits).
+/// this to choose its arrangement (mobile's single place, a desktop's rail and splits).
 form_factor: core.platform.FormFactor = .desktop,
 /// The card a place wears when it asks for one (`Region.InitOptions.card`): its fill, corners and
 /// padding. Set by the shape before it declares its places, and worn by the floats' places too,

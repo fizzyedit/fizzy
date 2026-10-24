@@ -1,6 +1,6 @@
-//! Fizzy's phone shape: one full-screen place, a bottom bar, and sheets over it.
+//! Fizzy's mobile shape: one full-screen place, a bottom bar, and sheets over it.
 //!
-//! Chosen by `Editor` in place of `layout.zig` when `Layout.form_factor` is `.phone` (a coarse
+//! Chosen by `Editor` in place of `layout.zig` when `Layout.form_factor` is `.mobile` (a coarse
 //! pointer on a screen under 600 CSS px); copy it the way `layout.zig` is copied. Nothing here
 //! reaches past the public `Layout` API.
 //!
@@ -37,8 +37,8 @@ const Layout = app.layout.Layout;
 const Chooser = Layout.Chooser;
 
 /// The key this shape's regions persist under in `layout.zon` (`Layout.State.shape`), apart from
-/// `layout.zig`'s, so a phone's arrangement never overwrites a desktop's.
-pub const shape_key = "phone";
+/// `layout.zig`'s, so mobile's arrangement never overwrites a desktop's.
+pub const shape_key = "mobile";
 
 const sidebar = sdk.keywords.ide.sidebar;
 const bottom = sdk.keywords.ide.panel;
