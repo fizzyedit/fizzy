@@ -17,9 +17,16 @@
 # a clean release. A record, not a tag: pointing a ref at a release commit whose workflows differ
 # from main's counts as changing workflows, which this workflow's token may never do.
 #
+# - **fizzyed.it/testapp/debug/ is `main` as a Debug build that loads its plugins through the
+#   store's test channel** (`-Dapp-registry-url=<test root>`; design/store.md in fizzyedit/plans),
+#   so find, install, update and load are tried end to end without going live. Nothing is compiled
+#   in: the web cannot load plugin libraries, but it can fetch the store's wasm builds. Its
+#   storage name is its own too.
+#
 # Each copy goes to a release in fizzyedit/website (`web-main` for the app, `web-preview` for the
-# test copy), its zip replaced every time, and the website is asked to redeploy. Pull requests
-# publish nothing: ci.yml compiles them for the web (`check-web`).
+# test copy, `web-debug` for the debug copy), its zip replaced every time, and the website is asked
+# to redeploy. Pull requests publish nothing here: ci.yml compiles them for the web
+# (`check-web`), and web-pr.yml previews the ones labelled `qa:needed`.
 #
 # A release published here asks for a redeploy too, without a build: the site links releases.
 #
@@ -107,14 +114,19 @@ jobs:
           live_tag=$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=web-live&per_page=1" --jq '.[0].description // ""')
           live=""
           if [ -n "$live_tag" ]; then live=$(git show "$live_tag:sdk/src/version.zig" 2>/dev/null | fingerprint || true); fi
-          copies='[{"channel":"testapp","release":"web-preview","storage":"fizzy-testapp","ref":"'"$GITHUB_SHA"'"}'
+          # `optimize` and `registry` per copy: the live store for the real ones, the test channel
+          # (plugins built against main's SDK) for the Debug copy.
+          live_reg=https://plugins.fizzyed.it/catalog
+          test_reg=https://plugins.fizzyed.it/test/catalog
+          copies='[{"channel":"testapp","release":"web-preview","storage":"fizzy-testapp","optimize":"ReleaseSmall","registry":"'"$live_reg"'","ref":"'"$GITHUB_SHA"'"}'
+          copies="$copies"',{"channel":"debug","release":"web-debug","storage":"fizzy-testapp-debug","optimize":"Debug","registry":"'"$test_reg"'","ref":"'"$GITHUB_SHA"'"}'
           if [ -n "$live" ] && [ "$here" = "$live" ]; then
             echo "main is on the live plugin SDK ($live): the app goes up from it."
-            copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","ref":"'"$GITHUB_SHA"'"}'
+            copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","optimize":"ReleaseSmall","registry":"'"$live_reg"'","ref":"'"$GITHUB_SHA"'"}'
           elif [ -n "${{ inputs.go_live }}" ]; then
             ref=$(git rev-parse "$live_tag^{commit}")
             echo "main has moved past the live SDK: the app goes up from its release commit ($ref)."
-            copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","ref":"'"$ref"'"}'
+            copies="$copies"',{"channel":"app","release":"web-main","storage":"fizzy","optimize":"ReleaseSmall","registry":"'"$live_reg"'","ref":"'"$ref"'"}'
           else
             why="main's plugin SDK fingerprint ($here) is not the live one (${live_tag:-nothing live yet}: ${live:-none})"
             echo "::notice title=fizzyed.it/app held::$why. It goes up when that SDK goes live (go_live)."
@@ -169,9 +181,13 @@ jobs:
       # class* into its plugin ABI fingerprint — Debug/ReleaseSafe are "safe", ReleaseFast and
       # ReleaseSmall are "fast" — and the plugin store publishes "fast" builds only. Built
       # ReleaseSafe, the app asks the registry for a shard nobody publishes under, so every
-      # plugin in a healthy store reads "No store build" and nothing can be installed.
+      # plugin in a healthy store reads "No store build" and nothing can be installed. The debug
+      # copy is the exception on purpose: a Debug host's class is "safe", and the test channel
+      # publishes ReleaseSafe builds against main's SDK for it.
       - name: Build web app
-        run: bash scripts/ci-retry.sh zig build web -Doptimize=ReleaseSmall -Dweb-storage="${{ matrix.storage }}"
+        run: |
+          bash scripts/ci-retry.sh zig build web -Doptimize="${{ matrix.optimize }}" \
+            -Dweb-storage="${{ matrix.storage }}" -Dapp-registry-url="${{ matrix.registry }}"
 
       - name: Save Zig cache
         if: success() && steps.zig-cache.outputs.cache-matched-key == ''
@@ -226,6 +242,8 @@ jobs:
         run: |
           if [ "$CHANNEL" = app ]; then
             notes="The app at https://fizzyed.it/app/, the live plugin SDK, built from $GITHUB_REPOSITORY@$SHA"
+          elif [ "$CHANNEL" = debug ]; then
+            notes="main as Debug with the store's test channel, at https://fizzyed.it/testapp/debug/, built from $GITHUB_REPOSITORY@$SHA"
           else
             notes="main, at https://fizzyed.it/testapp/, built from $GITHUB_REPOSITORY@$SHA"
           fi
