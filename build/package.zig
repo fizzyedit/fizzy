@@ -21,6 +21,10 @@ pub const Options = struct {
     velopack_required_fail: ?*std.Build.Step,
     exe_for_package: *std.Build.Step.Compile,
     package_fizzy: exe.FizzyExecutable,
+    /// Directories whose files go beside the executable, after it and the plugin dylibs.
+    package_dirs: []const std.Build.LazyPath,
+    /// Passed to `vpk pack` after fizzy's own arguments.
+    vpk_args: []const []const u8,
     macos_sign_app_identity: ?[]const u8,
     macos_sign_install_identity: ?[]const u8,
     macos_notary_profile: ?[]const u8,
@@ -133,7 +137,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
         // so vpk ships plugins/ next to the main binary.
         const pack_input_subdir = b.fmt("{s}/.pack-input", .{zig_out_subdir});
         const pack_plugins_subdir = b.fmt("{s}/.pack-input/plugins", .{zig_out_subdir});
-        const pack_stage_tail = exe.addVelopackPackDirInstall(
+        var pack_stage_tail = exe.addVelopackPackDirInstall(
             b,
             exe_for_package,
             package_fizzy,
@@ -141,6 +145,15 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             pack_plugins_subdir,
             &strip_release_sh.step,
         );
+        for (opts.package_dirs) |dir| {
+            const install_dir = b.addInstallDirectory(.{
+                .source_dir = dir,
+                .install_dir = .{ .custom = pack_input_subdir },
+                .install_subdir = "",
+            });
+            install_dir.step.dependOn(pack_stage_tail);
+            pack_stage_tail = &install_dir.step;
+        }
         vpk_pkg_sh.addArg("--packDir");
         vpk_pkg_sh.addDirectoryArg(build_common.installDirPath(.{ .custom = pack_input_subdir }));
         switch (target.result.os.tag) {
@@ -196,6 +209,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             },
             else => unreachable,
         }
+        vpk_pkg_sh.addArgs(opts.vpk_args);
         // Stream vpk's stdout/stderr live so failures surface their actual
         // diagnostic instead of just an exit-code-N message from the build
         // runner. With `addOutputDirectoryArg` in play, `infer_from_args`

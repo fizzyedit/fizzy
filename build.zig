@@ -88,7 +88,8 @@ pub fn build(b: *std.Build) !void {
         deferred = .{ .target = target, .optimize = optimize, .base = base, .cfg = cfg };
         return;
     }
-    try app.construct(b, target, optimize, base, cfg);
+    var frameworks: app.Frameworks = .{};
+    _ = try app.construct(b, target, optimize, base, cfg, &frameworks);
     // On the configure pass that fetches Velopack there is no `package` step to run.
     if (cfg.vz != null) @import("build/package.zig").addPackageAllStep(b, cfg.no_emit);
 }
@@ -102,6 +103,8 @@ var deferred: ?struct {
     cfg: @import("build/app.zig").Config,
     /// `buildApp` has run (`addPackageSteps` needs its steps).
     built: bool = false,
+    /// What `framework` made before `buildApp`, which builds the executables with it.
+    frameworks: @import("build/app.zig").Frameworks = .{},
 } = null;
 
 pub const BundledPlugin = @import("build/sdk.zig").BundledPlugin;
@@ -111,6 +114,41 @@ pub const BundledPlugin = @import("build/sdk.zig").BundledPlugin;
 /// `workbench` must be listed for now, because the editor still holds its state
 /// (fizzyedit/plans#13).
 pub const plugins = @import("build/plugins.zig").entries;
+
+/// One of the app's executables as the plugins it links see it: its target and framework modules
+/// (`framework`).
+pub const Framework = plugin.Framework;
+
+pub const Platform = @import("build/sdk.zig").Platform;
+
+/// The framework modules the app's `platform` executables link, to build a plugin against before
+/// `buildApp` lists it. A plugin module built against them is linked as it is: its dependencies
+/// keep the modules, target and C sources its own build gave them, so a plugin can bring a C
+/// library of its own, such as a tree-sitter grammar. A module that is not (the
+/// unwired `"plugin"` module a plugin package exports) is copied for each executable instead.
+///
+/// ```zig
+/// const hello = b.dependency("hello", .{});
+/// try fizzy.buildApp(fizzy_dep, &.{
+///     fizzy.plugins.workbench,
+///     .{ .name = "hello", .module = @import("hello").staticModule(hello.builder, fizzy.framework(fizzy_dep, .native)) },
+/// });
+/// ```
+pub fn framework(fizzy_dep: *std.Build.Dependency, platform: Platform) Framework {
+    if (deferred == null) @panic("fizzy.framework: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
+    const d = &deferred.?;
+    const b = fizzy_dep.builder;
+    switch (platform) {
+        .native => {
+            const fw = d.frameworks.getNative(b, d.target, d.optimize, d.cfg);
+            return .{ .target = d.target, .optimize = d.optimize, .dvui = fw.native.dvui, .core = fw.core, .sdk = fw.sdk, .icons = fw.icons };
+        },
+        .web => {
+            const fw = d.frameworks.getWeb(b, d.optimize);
+            return .{ .target = @import("build/web.zig").target(b), .optimize = d.optimize, .dvui = fw.dvui, .core = fw.core, .sdk = fw.sdk, .icons = fw.icons };
+        },
+    }
+}
 
 /// Build the application in a consumer's graph, with the plugins the consumer bundles.
 ///
@@ -136,17 +174,60 @@ pub const plugins = @import("build/plugins.zig").entries;
 /// (its root's `plugin_id`) and `module` its static module, which the plugin package exports and
 /// which fizzy wires to `dvui`, `core`, `fizzy_sdk` and `icons`.
 pub fn buildApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !void {
-    const d = deferred orelse @panic("fizzy.buildApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
+    _ = try addApp(fizzy_dep, linked);
+}
+
+/// What `addApp` made, for steps of the app's own: `b.installArtifact(app.exe)`, say.
+pub const App = struct {
+    /// The desktop executable `zig build run` runs.
+    exe: *std.Build.Step.Compile,
+    /// The one `package` packs: `exe`, or the same linked with Velopack where the target has it.
+    packaged: *std.Build.Step.Compile,
+    /// The web executable, `web.wasm`.
+    wasm: *std.Build.Step.Compile,
+    /// The web build, a directory to deploy as it is: `web_page` and `web_files`.
+    web: std.Build.LazyPath,
+    /// Its `index.html`, and everything else in it, for an app that serves a page of its own.
+    web_page: std.Build.LazyPath,
+    web_files: std.Build.LazyPath,
+};
+
+/// `buildApp`, giving back what it made. An entry's `targets` names the kinds of executable that
+/// link it, each with the module built against that kind's framework; a plugin the browser cannot
+/// run names only `.native`.
+///
+/// ```zig
+/// const app = try fizzy.addApp(fizzy_dep, &.{
+///     fizzy.plugins.workbench,
+///     .{ .name = "hello", .targets = &.{
+///         .{ .target = .native, .module = hello.staticModule(hello_dep.builder, fizzy.framework(fizzy_dep, .native)) },
+///         .{ .target = .web, .module = hello.staticModule(hello_dep.builder, fizzy.framework(fizzy_dep, .web)) },
+///     } },
+///     .{ .name = "shell", .module = shell_dep.module("plugin"), .targets = &.{.{ .target = .native }} },
+/// });
+/// ```
+pub fn addApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !App {
+    const d = deferred orelse @panic("fizzy.addApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
     var opts = d.base;
-    // Until fizzyedit/example-app lists fizzy's plugins itself (its CI and fizzy's build each
-    // other's main): a list naming none of fizzy's gets all of them ahead of its own, as before.
-    // Goes in fizzyedit/plans#13 step 2.
-    const names_fizzys = for (linked) |p| {
-        if (p.module == null) break true;
-    } else false;
-    opts.app_plugins = if (names_fizzys) linked else try std.mem.concat(fizzy_dep.builder.allocator, BundledPlugin, &.{ &plugins.all, linked });
-    try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg);
+    opts.app_plugins = try withFizzys(fizzy_dep.builder, linked);
+    const built = try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg, &deferred.?.frameworks);
     deferred.?.built = true;
+    return .{
+        .exe = built.native.main.exe,
+        .packaged = built.native.package.exe,
+        .wasm = built.web.wasm,
+        .web = built.web.site,
+        .web_page = built.web.page,
+        .web_files = built.web.files,
+    };
+}
+
+/// Until fizzyedit/example-app lists fizzy's plugins itself (its CI and fizzy's build each other's
+/// main): a list naming none of fizzy's gets all of them ahead of its own, as before. Goes in
+/// fizzyedit/plans#13 step 2.
+fn withFizzys(b: *std.Build, linked: []const BundledPlugin) ![]const BundledPlugin {
+    for (linked) |p| if (p.isFizzys()) return linked;
+    return std.mem.concat(b.allocator, BundledPlugin, &.{ &plugins.all, linked });
 }
 
 /// `zig build package` (and its alias `desktop`) and `zig build packageall` for an app built with
@@ -167,7 +248,19 @@ pub fn buildApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin)
 /// `repo-url` (the update feed; none by default), `app-package-title`, `app-icon` (PNG: the
 /// window, the infobar, Linux), `app-icon-ico`, `app-windows-rc`, `app-icon-icns`,
 /// `app-macos-plist`. The icons default to fizzy's art; the resource script is generated and
-/// vpk writes the plist.
+/// vpk writes the plist. `package-dirs` (a `[]const LazyPath`) adds each directory's files beside
+/// the executable, and `vpk-args` (a `[]const []const u8`) is passed to `vpk pack` after fizzy's
+/// own arguments:
+///
+/// ```zig
+/// const helpers = b.addWriteFiles();
+/// _ = helpers.addCopyFile(helper_exe.getEmittedBin(), helper_exe.out_filename);
+/// const fizzy_dep = b.dependency("fizzy", .{
+///     // …
+///     .@"package-dirs" = &[_]std.Build.LazyPath{helpers.getDirectory()},
+///     .@"vpk-args" = &[_][]const u8{ "--releaseNotes", "notes.md" },
+/// });
+/// ```
 ///
 /// `packageall` passes each run the options the app's own command line was given, so the
 /// Windows MSVC ones reach fizzy only if the app declares `windows-msvc-libc` / `fetch-msvc` and
@@ -195,6 +288,28 @@ pub fn addPackageSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
     }).step);
     b.step("desktop", "Alias for `zig build package`").dependOn(step);
     @import("build/package.zig").addPackageAllStep(b, d.cfg.no_emit);
+}
+
+/// `zig build web` for an app built with `buildApp`, as a step of the app's own build `b`: fizzy's
+/// web build installed into the app's `zig-out/web`. An app that already has a `web` step gets
+/// `error.WebStepTaken`.
+///
+/// ```zig
+/// try fizzy.buildApp(fizzy_dep, &.{ … });
+/// try fizzy.addWebSteps(b, fizzy_dep);
+/// ```
+pub fn addWebSteps(b: *std.Build, fizzy_dep: *std.Build.Dependency) !void {
+    if (b.top_level_steps.contains("web")) {
+        std.log.err("fizzy.addWebSteps: this build already has a `web` step", .{});
+        return error.WebStepTaken;
+    }
+    const d = deferred orelse @panic("fizzy.addWebSteps: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) and call fizzy.buildApp first");
+    if (!d.built) @panic("fizzy.addWebSteps: call fizzy.buildApp first");
+    b.step("web", "Build the web (wasm) app into zig-out/web/").dependOn(&b.addInstallDirectory(.{
+        .source_dir = fizzy_dep.namedLazyPath("web"),
+        .install_dir = .{ .custom = "web" },
+        .install_subdir = "",
+    }).step);
 }
 
 /// What a dvui app of its own builds on (`addDvui`): fizzy's backend, with OS windows besides the
