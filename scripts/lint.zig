@@ -163,7 +163,8 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
                 if (start + word.len > text.len) break;
                 if (start > 0 and (std.ascii.isAlphanumeric(text[start - 1]) or text[start - 1] == '_')) continue;
                 const end = start + word.len;
-                if (end < text.len and (std.ascii.isAlphanumeric(text[end]) or text[end] == '_')) continue;
+                if (std.ascii.isAlphanumeric(word[word.len - 1]) and end < text.len and
+                    (std.ascii.isAlphanumeric(text[end]) or text[end] == '_')) continue;
                 if (!std.ascii.eqlIgnoreCase(text[start..end], word)) continue;
                 try findings.append(allocator, .{
                     .rule = .@"changelog-words",
@@ -621,7 +622,7 @@ test "changelog words report hits, honor line allows, and never fail the runner"
         "const s =\n    \\\\// now fixed\n;",
         "// Unknown prefix and renewed storage.\nconst n = 1;",
     }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
-    for ([_][]const u8{ "fixed", "NOW", "used to", "previously", "formerly", "no longer", "New:" }) |word| {
+    for ([_][]const u8{ "fixed", "NOW", "used to", "previously", "formerly", "no longer", "New:", "new:behavior" }) |word| {
         const source = try a.printSentinel("//! {s} works.\n", .{word}, 0);
         try std.testing.expectEqual(@as(usize, 1), (try analyze(a, source)).len);
     }
@@ -631,4 +632,16 @@ test "changelog words report hits, honor line allows, and never fail the runner"
         "hit.zig:1: changelog-words: comment contains 'previously': Previously used a different buffer. (report-only)\n",
         output.written(),
     );
+}
+
+test "report-only findings preserve failures from enforced rules" {
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    const findings = [_]Finding{
+        .{ .rule = .@"changelog-words", .line = 1, .message = "history" },
+        .{ .rule = .anyerror, .line = 2, .message = "explicit error set" },
+    };
+    try std.testing.expect(try reportFile(&output.writer, "mixed.zig", &findings, &.{}, &.{}, false));
+    try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "changelog-words: history (report-only)"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, output.written(), 1, "anyerror: count 1 exceeds allowance 0"));
 }
