@@ -7028,6 +7028,36 @@ test "float: closing it sends its view home" {
     try std.testing.expect(editor.app.layout.assignment("Float 1") == null);
 }
 
+test "float: a float in an OS window with its own buttons still has a close a tape can press" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    // As Popout makes it on macOS: its OS window draws the close button, so the header draws none.
+    floats[0].viewport = .{ .rect = floats[0].rect, .os_buttons = true, .buttons_w = 60 };
+
+    const WantFrame = struct {
+        fn frame() !dvui.App.Result {
+            fizzy.core.anchor.want();
+            return ManyPanelFrame.frame();
+        }
+    };
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+
+    const td = dvui.tagGet("float-close:Float 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(td.visible);
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = td.rect.x + td.rect.w / 2, .y = td.rect.y + td.rect.h / 2 } });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(WantFrame.frame);
+    try dvui.testing.settle(WantFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+}
+
 test "float: closing it loses no view its keywords would show nowhere" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
