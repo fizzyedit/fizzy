@@ -5,8 +5,17 @@ const fizzy = @import("fizzy");
 const automation = @import("app").automation;
 const workbench = @import("workbench");
 
+/// The observation a frame feeds while `Observation.frame` steps. The player runs the app's frame
+/// several times inside one step while it seeks, so a press is checked after the run it landed in
+/// (`headlessFrame`), not after the step.
+var watching: ?struct { obs: *Observation, player: *automation.Player } = null;
+
 fn headlessFrame() !dvui.App.Result {
-    return fizzy.Entry.AppFrame();
+    const w = watching orelse return fizzy.Entry.AppFrame();
+    const before = w.player.seq.cursor;
+    const res = try fizzy.Entry.AppFrame();
+    if (!w.obs.corrupted and pointerNotAtTargetOnPress(w.player, before)) w.obs.verdict.insert(.pointer_target);
+    return res;
 }
 
 const BundledApp = struct {
@@ -15,12 +24,20 @@ const BundledApp = struct {
     root_buf: [std.fs.max_path_bytes]u8,
     entry: *fizzy.Entry,
     editor: *fizzy.Editor,
+    /// What `up` opened the window at; `reset` puts it back.
+    size: dvui.Size.Natural,
+    size_pixels: dvui.Size.Physical,
+    /// A button the `real_press` action holds on the window, outside the player's own input.
+    real_held: bool = false,
 
     // The app's own lifetime, whose exit leaks by design (`Editor.unloadPluginLibs`).
     const gpa = std.heap.smp_allocator;
 
     fn up(self: *BundledApp) !void {
         self.t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 1280, .h = 800 } });
+        self.size = self.t.backend.size;
+        self.size_pixels = self.t.backend.size_pixels;
+        self.real_held = false;
         self.tmp = std.testing.tmpDir(.{});
         const len = try self.tmp.dir.realPath(dvui.io, self.root_buf[0 .. self.root_buf.len - 1]);
         self.root_buf[len] = 0;
@@ -35,6 +52,19 @@ const BundledApp = struct {
         self.editor.* = try fizzy.Editor.init(self.entry);
         workbench.runtime.setWorkbench(&self.editor.workbench);
         try self.editor.postInit();
+        try dvui.testing.settle(headlessFrame);
+    }
+
+    /// A run starts from the window `up` left: its size, no button held, the pointer off any widget
+    /// and nothing focused. Without it one run's `resize` or `real_press` shows up as a hole in the next.
+    fn reset(self: *BundledApp) !void {
+        const cw = dvui.currentWindow();
+        if (self.real_held) _ = try cw.addEventMouseButton(.left, .release);
+        self.real_held = false;
+        self.t.backend.size = self.size;
+        self.t.backend.size_pixels = self.size_pixels;
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 0, .y = 0 } });
+        dvui.focusWidget(null, null, null);
         try dvui.testing.settle(headlessFrame);
     }
 
@@ -116,15 +146,15 @@ const Observation = struct {
     corrupted: bool = false,
 
     fn frame(self: *Observation, p: *automation.Player) !void {
-        const before = p.seq.cursor;
         const timeouts = p.timeouts;
         const seeking = p.state == .seeking;
         const start = std.Io.Clock.awake.now(dvui.io).nanoseconds;
+        watching = .{ .obs = self, .player = p };
+        defer watching = null;
         _ = try dvui.testing.step(headlessFrame);
         const elapsed = std.Io.Clock.awake.now(dvui.io).nanoseconds - start;
         if (heldButton(p)) self.verdict.insert(.held_button);
         if (captionNotTopLayer()) self.verdict.insert(.caption_layer);
-        if (!self.corrupted and pointerNotAtTargetOnPress(p, before)) self.verdict.insert(.pointer_target);
         if (p.timeouts > timeouts) self.timeout_cursor = p.seq.cursor;
         if (timedOutWaitThenOpsRan(p, self.timeout_cursor)) self.verdict.insert(.timeout_then_ops);
         if (seeking) {
@@ -141,6 +171,7 @@ const Observation = struct {
 fn load(app: *BundledApp, name: []const u8) !void {
     app.editor.demo.player.unload();
     try dvui.testing.settle(headlessFrame);
+    try app.reset();
     if (std.mem.eql(u8, name, "hello")) {
         try app.editor.demo.playTape(@embedFile("hello"));
     } else try app.editor.demo.play(name);
@@ -180,9 +211,11 @@ fn apply(app: *BundledApp, step: Step, obs: *Observation) !void {
             _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = @floatFromInt(step.value % 900), .y = 200 } });
         },
         .real_press => {
+            app.real_held = true;
             _ = try cw.addEventMouseButton(.left, .press);
         },
         .real_release => {
+            app.real_held = false;
             _ = try cw.addEventMouseButton(.left, .release);
         },
         .real_key => try dvui.testing.pressKey(.a, .none),
