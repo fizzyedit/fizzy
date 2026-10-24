@@ -8169,7 +8169,7 @@ const KeyFoldTree = struct {
             body_drawn = true;
             dvui.labelNoFmt(@src(), "child", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
         }
-        open = branch.expanded;
+        if (branch.requested) |r| open = r;
         return .ok;
     }
 };
@@ -8196,6 +8196,52 @@ test "tree: a key fold stays folded when the caller passes its open state back" 
     try std.testing.expect(KeyFoldTree.open and KeyFoldTree.body_drawn);
     _ = try dvui.testing.step(KeyFoldTree.frame);
     try std.testing.expect(KeyFoldTree.open);
+}
+
+const OutsideOpenTree = struct {
+    const TW = fizzy.core.widgets.TreeWidget;
+
+    var open = true;
+    var shown = false;
+    var body_drawn = false;
+
+    // lint-allow(anyerror): the signature of dvui.App.frameFunction
+    fn frame() anyerror!dvui.App.Result {
+        var tree = TW.tree(@src(), .{}, .{ .expand = .both });
+        defer tree.deinit();
+        const branch = tree.branch(@src(), .{ .expanded = open, .animation_duration = 400_000 }, .{ .expand = .horizontal });
+        defer branch.deinit();
+        dvui.labelNoFmt(@src(), "row", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        body_drawn = false;
+        if (branch.expander(@src(), .{}, .{ .expand = .horizontal })) {
+            body_drawn = true;
+            dvui.labelNoFmt(@src(), "child", .{}, .{ .min_size_content = .{ .w = 120, .h = 20 } });
+        }
+        shown = branch.expanded;
+        if (branch.requested) |r| open = r;
+        return .ok;
+    }
+};
+
+test "tree: the caller's open state set mid-close wins over the running animation" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    OutsideOpenTree.open = true;
+    try dvui.testing.settle(OutsideOpenTree.frame);
+    try std.testing.expect(OutsideOpenTree.shown and OutsideOpenTree.body_drawn);
+
+    // Start the close, then restore the open state from outside while it is still running.
+    OutsideOpenTree.open = false;
+    _ = try dvui.testing.step(OutsideOpenTree.frame);
+    try std.testing.expect(OutsideOpenTree.body_drawn);
+    OutsideOpenTree.open = true;
+    try dvui.testing.settle(OutsideOpenTree.frame);
+    try std.testing.expect(OutsideOpenTree.open and OutsideOpenTree.shown and OutsideOpenTree.body_drawn);
+
+    // And the other way: an open branch closed from outside ends closed.
+    OutsideOpenTree.open = false;
+    try dvui.testing.settle(OutsideOpenTree.frame);
+    try std.testing.expect(!OutsideOpenTree.open and !OutsideOpenTree.shown and !OutsideOpenTree.body_drawn);
 }
 
 test "a frost never captures more than the picture it reads" {
