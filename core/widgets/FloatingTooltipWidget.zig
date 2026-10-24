@@ -28,7 +28,7 @@ pub const Side = enum { right, below };
 
 /// `screen` less `margin` all round; never negative in size, so a screen smaller than twice the
 /// margin (a minimized or zero-size window) leaves an empty rect rather than an inverted one.
-fn innerOf(screen: Rect.Natural) Rect.Natural {
+pub fn innerOf(screen: Rect.Natural) Rect.Natural {
     var inner = screen.insetAll(margin);
     inner.w = @max(inner.w, 0);
     inner.h = @max(inner.h, 0);
@@ -107,11 +107,12 @@ pub fn placeAtPoint(screen: Rect.Natural, p: dvui.Point.Natural, w_in: f32, h_in
     return keepInside(inner, r);
 }
 
-/// `r` slid so it is inside `inner`; `r` is no larger than it.
+/// `r` slid so it is inside `inner`; `r` is no larger than it. The upper bounds are raised to the
+/// lower ones: when `r` fills `inner` the f32 difference can round below them.
 fn keepInside(inner: Rect.Natural, r_in: Rect.Natural) Rect.Natural {
     var r = r_in;
-    r.x = std.math.clamp(r.x, inner.x, inner.x + inner.w - r.w);
-    r.y = std.math.clamp(r.y, inner.y, inner.y + inner.h - r.h);
+    r.x = std.math.clamp(r.x, inner.x, @max(inner.x, inner.x + inner.w - r.w));
+    r.y = std.math.clamp(r.y, inner.y, @max(inner.y, inner.y + inner.h - r.h));
     return r;
 }
 
@@ -533,4 +534,10 @@ pub fn deinit(self: *FloatingTooltipWidget) void {
 // Return 0 until 80% of time then fade in remaining 20% linearly.
 pub fn easing(t: f32) f32 {
     return @max(0, (t - 0.8) / 0.2);
+}
+
+test "a rect that fills the inner rect on an axis is kept, whatever the f32 rounding" {
+    const inner: Rect.Natural = .{ .x = 0.1, .y = 1e7 + 0.5, .w = 0.7, .h = 3.3 };
+    const r = keepInside(inner, .{ .x = -5, .y = 1e7, .w = inner.w, .h = inner.h });
+    try std.testing.expect(r.x >= inner.x and r.y >= inner.y);
 }
