@@ -59,14 +59,15 @@ else
 fi
 reason='could not look up pull request'
 pr=$(gh pr list --head "$branch" --base main --json number --jq '.[0].number // empty')
+pr_body=
+[[ -n $pr ]] && pr_body=$(gh pr view "$pr" --json body --jq .body | tr -d '\r')
 reason='could not write the pull request summary'
 # The writer's summary: PR_SUMMARY.md, else what the PR body already holds above the marker,
 # else the headings with "(to fill)" so a missing summary shows.
 if [[ -f $summary_file ]]; then
     cat "$summary_file" >"$tmp/summary"
-elif [[ -n $pr ]] && gh pr view "$pr" --json body --jq .body | tr -d '\r' | grep -qxF "$marker"; then
-    gh pr view "$pr" --json body --jq .body | tr -d '\r' |
-        awk -v m="$marker" '$0 == m { exit } NR == 1 && /^Part of / { next } !started && /^$/ { next } { started = 1; print }' >"$tmp/summary"
+elif grep -qxF "$marker" <<<"$pr_body"; then
+    awk -v m="$marker" '$0 == m { exit } NR == 1 && /^Part of / { next } !started && /^$/ { next } { started = 1; print }' <<<"$pr_body" >"$tmp/summary"
 elif $claim; then
     printf "$headings\n" '' '' '' 'Draft: work in progress' >"$tmp/summary"
 else
