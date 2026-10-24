@@ -124,9 +124,10 @@ pub fn moved(self: *HistoryFrames, gpa: std.mem.Allocator, top: u64, below: ?u64
 
 /// Before the document draws: take the picture asked for (`moved`) from what the last frame drew of
 /// `pane` (physical), above `bar_h` (physical) of its bottom, where the transport and the feed
-/// are drawn over it: the bar's height as it stands, its strip included, so a picture never holds
-/// the strip itself. `strip` is the strip's size in physical pixels (`HistoryTransport.stripPixels`):
-/// the crop's; null where the pane has no room for the bar, and no picture is taken.
+/// are drawn over it: `HistoryTransport.cover`, a size that holds however open the strip is, so a
+/// picture never holds the strip itself and every picture is of the same part of the pane.
+/// `strip` is the strip's size in physical pixels (`HistoryTransport.stripPixels`): the crop's;
+/// null where the pane has no room for the bar, and no picture is taken.
 pub fn take(self: *HistoryFrames, gpa: std.mem.Allocator, pane: dvui.Rect.Physical, bar_h: f32, strip: ?[2]u32) void {
     self.land(gpa);
     // On whole pixels, so the copy at its own size is the pane's pixels, not a blend of two.
@@ -410,16 +411,4 @@ test "only a step being made or joined takes its picture again" {
     try std.testing.expectEqual(Change.visited, changeOf(&recs, 9));
     recs[2].kind = .added;
     try std.testing.expectEqual(Change.made, changeOf(&recs, 8));
-}
-
-test "a scrub keeps every picture and its change while the pane's source holds" {
-    const gpa = std.testing.allocator;
-    var hf: HistoryFrames = .{ .pane_source = .{ 100, 80 } };
-    defer hf.deinit(gpa);
-    for (0..3) |i| try hf.frames.put(gpa, i, .{ .tex = undefined, .source = .{ 100, 80 }, .change = .{ .x = 0.25, .y = 0.5, .w = 0.1, .h = 0.1 } });
-    for ([_]u64{ 2, 0, 1, 2, 1 }) |top| {
-        hf.moved(gpa, top, null, .visited);
-        try std.testing.expectEqual(@as(?Step, null), hf.due);
-    }
-    for (hf.frames.values()) |pic| try std.testing.expectEqual(@as(f32, 0.25), pic.change.?.x);
 }

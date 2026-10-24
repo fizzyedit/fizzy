@@ -833,12 +833,11 @@ fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32
     knob.build().fillConvex(.{ .color = .{ .color = accent }, .fade = 1 });
 }
 
-test "the bar never reaches higher than the cover, whatever its strip's openness" {
+test "the bar, its tab and the feed stay inside the cover, whatever the strip's openness" {
     const pane: dvui.Rect.Natural = .{ .x = 0, .y = 0, .w = 800, .h = 600 };
     var g: f32 = 0;
     while (g <= 1.0) : (g += 0.125) {
         const r = geometry(pane, g).?;
-        const reach = pane.h - r.y + 4 + tab_d + tab_gap;
-        try std.testing.expect(reach <= cover);
+        try std.testing.expect(pane.h - r.y + 4 + tab_d + tab_gap + 40 <= cover);
     }
 }
