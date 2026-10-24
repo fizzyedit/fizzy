@@ -17,6 +17,8 @@ wait for a slot would count), waits for the 1-minute load average to drop under 
 cache dir and install prefix, so it never touches your `.zig-cache` or `zig-out`; the global
 cache keeps the fetched dependencies, so **no number includes a download**. Plugin builds install
 into a scratch `FIZZY_PROFILE`. The files a rebuild changes are restored on exit.
+`FIZZY_PERF_TMP` names the directory the scratch space is made under; the script creates and
+deletes its own child there and never touches the rest.
 
 ## Scenarios and metrics
 
@@ -44,16 +46,14 @@ dylib build is where the time goes.
 ## Does incremental compilation work here?
 
 Yes, on Zig 0.17.0 and this build graph: `zig build -fincremental --watch` rebuilds the app, and
-each plugin, and reports `84/84 steps succeeded` after an edit, with the recompiled steps taking
-tens of milliseconds (the `compile exe fizzy` step in 38 ms in one check). The script fails the
-run if a watched build does not end in `succeeded`. The cost of the first build under
+each plugin, and reports a successful summary after an edit; `incr_core` and `incr_plugin` give
+the edit-to-summary times. The script fails the
+run if a watched build's summary reports a failed step. Watched builds run with `--summary line`
+(the default prints nothing on success), and each edit is one write after the watcher has gone
+idle, so the next summary is the build that edit caused. The cost of the first build under
 `-fincremental` and `--watch`'s inotify use on a tree this size are not measured separately.
 What is not yet known is how it behaves for edits that change analyzed code (see the probe
 note above); extend the probe before relying on incremental numbers as a target.
 
 See a run's numbers in the PR that last changed this file, and append new runs there rather than
 here: they depend on the machine.
-
-`incr_plugin` reads about 10 ms: the plugin build's Build Summary arrives that fast after the
-edit, which suggests the probe costs the incremental plugin build almost nothing. Its
-run-to-run spread (about 10%) is the resolution of the 50 ms poll, not instability.
