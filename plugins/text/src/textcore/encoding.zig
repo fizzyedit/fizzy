@@ -21,7 +21,7 @@ pub fn looksBinary(bytes: []const u8) bool {
     while (i < sample.len) {
         const n = std.unicode.utf8ByteSequenceLength(sample[i]) catch return true;
         if (i + n > sample.len) break;
-        _ = std.unicode.utf8Decode(sample[i..][0..n]) catch return true;
+        if (!std.unicode.utf8ValidateSlice(sample[i..][0..n])) return true;
         i += n;
     }
     return false;
@@ -61,10 +61,10 @@ pub fn appendLossy(list: *std.ArrayList(u8), gpa: std.mem.Allocator, bytes: []co
             try list.appendSlice(gpa, replacement);
             break;
         }
-        if (std.unicode.utf8Decode(bytes[i..][0..n])) |_| {
+        if (std.unicode.utf8ValidateSlice(bytes[i..][0..n])) {
             try list.appendSlice(gpa, bytes[i .. i + n]);
             i += n;
-        } else |_| {
+        } else {
             try list.appendSlice(gpa, replacement);
             i += 1;
         }
