@@ -138,13 +138,7 @@ pub const plugins = @import("build/plugins.zig").entries;
 pub fn buildApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !void {
     const d = deferred orelse @panic("fizzy.buildApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
     var opts = d.base;
-    // Until fizzyedit/example-app lists fizzy's plugins itself (its CI and fizzy's build each
-    // other's main): a list naming none of fizzy's gets all of them ahead of its own, as before.
-    // Goes in fizzyedit/plans#13 step 2.
-    const names_fizzys = for (linked) |p| {
-        if (p.module == null) break true;
-    } else false;
-    opts.app_plugins = if (names_fizzys) linked else try std.mem.concat(fizzy_dep.builder.allocator, BundledPlugin, &.{ &plugins.all, linked });
+    opts.app_plugins = linked;
     try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg);
     deferred.?.built = true;
 }

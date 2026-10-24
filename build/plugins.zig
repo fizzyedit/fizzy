@@ -7,6 +7,7 @@
 //! an application gives into modules for one executable.
 const std = @import("std");
 const BundledPlugin = @import("sdk.zig").BundledPlugin;
+const plugin_list = @import("plugin_list.zig");
 
 pub const workbench = @import("../plugins/workbench/static/integration.zig");
 pub const text = @import("../plugins/text/static/integration.zig");
@@ -30,13 +31,6 @@ pub const entries = struct {
     /// What fizzy itself links, in its sidebar order.
     pub const all = [_]BundledPlugin{ @This().workbench, @This().text, @This().image, @This().archive, @This().markdown, @This().devtools, @This().guides };
 };
-
-/// Whether `plugins` links fizzy's own `name`, rather than leaving it out or bringing a module of
-/// its own under that id.
-pub fn linksFizzys(plugins: []const BundledPlugin, name: []const u8) bool {
-    for (plugins) |p| if (p.module == null and std.mem.eql(u8, p.name, name)) return true;
-    return false;
-}
 
 /// What one executable gives the plugins it links.
 pub const Wiring = struct {
@@ -69,7 +63,7 @@ pub const Linked = struct {
 /// re-homed onto it. workbench must be listed, because the editor still holds its state
 /// (fizzyedit/plans#13).
 pub fn link(b: *std.Build, w: Wiring, plugins: []const BundledPlugin) Linked {
-    if (!linksFizzys(plugins, "workbench")) std.debug.panic("fizzy: the plugin list must include `fizzy.plugins.workbench`; the editor still holds its state (fizzyedit/plans#13)", .{});
+    plugin_list.check(plugins) catch std.debug.panic("fizzy: the plugin list must include `fizzy.plugins.workbench`; the editor still holds its state (fizzyedit/plans#13)", .{});
 
     const workbench_mod = workbench.addStaticModule(b, w.target, w.optimize, .{
         .dvui = w.dvui,
