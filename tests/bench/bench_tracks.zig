@@ -140,6 +140,26 @@ test "bench tracks: a step, a frame's top, a replay, what a session holds" {
         std.debug.print("a checkpoint of a {d} KB document at a frame's top: {d:.3} ms\n", .{ size >> 10, @as(f64, @floatFromInt(best)) / std.time.ns_per_ms });
     }
 
+    // The first small step after a pause, at a frame's top: the stall a checkpoint taken for it
+    // costs, by the document's size.
+    for ([_]usize{ 1 << 20, 8 << 20, 32 << 20 }) |size| {
+        var best: i96 = std.math.maxInt(i96);
+        var taken: usize = 0;
+        for (0..runs) |_| {
+            var tracks = try fresh(size);
+            defer tracks.deinit();
+            const rec = tracks.recorder();
+            var effect: [100]u8 = @splat(1);
+            clock_ns += 60 * std.time.ns_per_s;
+            rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1, .effect = &effect });
+            const t0 = nowNs();
+            tracks.tick();
+            best = @min(best, nowNs() - t0);
+            taken = tracks.trackOf(1).?.checkpoints.items.len;
+        }
+        std.debug.print("one small step after a pause, a {d} KB document, a frame's top: {d:.3} ms ({d} checkpoints)\n", .{ size >> 10, @as(f64, @floatFromInt(best)) / std.time.ns_per_ms, taken });
+    }
+
     std.debug.print("* each step with its share of the checkpoints it asks for\n", .{});
 
     // A frame's top with nothing asked of it: what every frame pays.
