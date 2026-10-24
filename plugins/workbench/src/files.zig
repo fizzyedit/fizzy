@@ -1697,24 +1697,69 @@ pub fn createFolderInteractive(parent: []const u8) void {
     };
 }
 
+const extensions = std.StaticStringMapWithEql(Extension, std.ascii.eqlIgnoreCase).initComptime(.{
+    .{ ".fiz", .fizzy },
+    .{ ".pixi", .fizzy },
+    .{ ".atlas", .atlas },
+    .{ ".png", .png },
+    .{ ".gif", .gif },
+    .{ ".jpg", .jpg },
+    .{ ".jpeg", .jpg },
+    .{ ".pdf", .pdf },
+    .{ ".psd", .psd },
+    .{ ".aseprite", .aseprite },
+    .{ ".pyxel", .pyxel },
+    .{ ".json", .json },
+    .{ ".zig", .zig },
+    .{ ".zip", .zip },
+    .{ ".7z", ._7z },
+    .{ ".tar", .tar },
+    .{ ".txt", .txt },
+});
+
 pub fn extension(file: []const u8) Extension {
     const ext = std.fs.path.extension(file);
-    if (std.mem.eql(u8, ext, "")) return .hidden;
-    if (std.ascii.eqlIgnoreCase(ext, ".fiz")) return .fizzy;
-    if (std.ascii.eqlIgnoreCase(ext, ".pixi")) return .fizzy;
-    if (std.ascii.eqlIgnoreCase(ext, ".atlas")) return .atlas;
-    if (std.ascii.eqlIgnoreCase(ext, ".png")) return .png;
-    if (std.ascii.eqlIgnoreCase(ext, ".gif")) return .gif;
-    if (std.ascii.eqlIgnoreCase(ext, ".jpg") or std.ascii.eqlIgnoreCase(ext, ".jpeg")) return .jpg;
-    if (std.ascii.eqlIgnoreCase(ext, ".pdf")) return .pdf;
-    if (std.ascii.eqlIgnoreCase(ext, ".psd")) return .psd;
-    if (std.ascii.eqlIgnoreCase(ext, ".aseprite")) return .aseprite;
-    if (std.ascii.eqlIgnoreCase(ext, ".pyxel")) return .pyxel;
-    if (std.ascii.eqlIgnoreCase(ext, ".json")) return .json;
-    if (std.ascii.eqlIgnoreCase(ext, ".zig")) return .zig;
-    if (std.ascii.eqlIgnoreCase(ext, ".zip")) return .zip;
-    if (std.ascii.eqlIgnoreCase(ext, ".7z")) return ._7z;
-    if (std.ascii.eqlIgnoreCase(ext, ".tar")) return .tar;
-    if (std.ascii.eqlIgnoreCase(ext, ".txt")) return .txt;
-    return .unsupported;
+    if (ext.len == 0) return .hidden;
+    return extensions.get(ext) orelse .unsupported;
+}
+
+test "extension mappings are case insensitive" {
+    const cases = .{
+        .{ "file.fiz", Extension.fizzy },
+        .{ "file.pixi", Extension.fizzy },
+        .{ "file.atlas", Extension.atlas },
+        .{ "file.png", Extension.png },
+        .{ "file.gif", Extension.gif },
+        .{ "file.jpg", Extension.jpg },
+        .{ "file.jpeg", Extension.jpg },
+        .{ "file.pdf", Extension.pdf },
+        .{ "file.psd", Extension.psd },
+        .{ "file.aseprite", Extension.aseprite },
+        .{ "file.pyxel", Extension.pyxel },
+        .{ "file.json", Extension.json },
+        .{ "file.zig", Extension.zig },
+        .{ "file.zip", Extension.zip },
+        .{ "file.7z", Extension._7z },
+        .{ "file.tar", Extension.tar },
+        .{ "file.txt", Extension.txt },
+        .{ "dir.with.dots/file.jpeg", Extension.jpg },
+        .{ "file.tar.zip", Extension.zip },
+        .{ "", Extension.hidden },
+        .{ "file", Extension.hidden },
+        .{ ".hidden", Extension.hidden },
+        .{ "file.fizzy", Extension.unsupported },
+        .{ "file.xyz", Extension.unsupported },
+        .{ "file.unknown", Extension.unsupported },
+        .{ "file.", Extension.unsupported },
+    };
+    inline for (cases) |case| {
+        try std.testing.expectEqual(case[1], extension(case[0]));
+        var upper: [case[0].len]u8 = undefined;
+        _ = std.ascii.upperString(&upper, case[0]);
+        try std.testing.expectEqual(case[1], extension(&upper));
+        for (&upper, 0..) |*char, i| {
+            if (i % 2 == 0) char.* = std.ascii.toLower(char.*);
+        }
+        try std.testing.expectEqual(case[1], extension(&upper));
+    }
 }

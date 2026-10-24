@@ -1655,6 +1655,26 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         check_integration_step.dependOn(&text_plugin_tests.step);
     }
 
+    // Give the file extension tests a root; the plugin's lazy exports do not collect them.
+    {
+        const files_tests_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("plugins/workbench/src/files.zig"),
+        });
+        var imports = workbench_module_test.import_table.iterator();
+        while (imports.next()) |entry| {
+            files_tests_module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        const workbench_tests = b.addTest(.{
+            .name = "fizzy-workbench-plugin-tests",
+            .root_module = files_tests_module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(workbench_tests).step);
+        check_integration_step.dependOn(&workbench_tests.step);
+    }
+
     // Every `test` block in the repo is in a binary some step builds (`scripts/tests_reached.zig`):
     // `test`, `test-integration`, a `bench-*`. The binaries come from the steps themselves, so a
     // test root added to any of them is counted without being listed here.
