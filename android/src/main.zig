@@ -9,15 +9,9 @@ pub const dvui_app: dvui.App = .{
             .size = .{ .w = 800.0, .h = 600.0 },
             .min_size = .{ .w = 250.0, .h = 350.0 },
             .title = "Fizzy",
-            .window_init_options = .{
-                // Could set a default theme here
-                // .theme = dvui.Theme.builtin.dracula,
-            },
         },
     },
     .frameFn = appFrame,
-    .initFn = appInit,
-    .deinitFn = appDeinit,
 };
 pub const main = dvui.App.main;
 
@@ -40,7 +34,8 @@ fn runDvuiMain(argc: c_int, argv: [*][*:0]u8) !u8 {
     defer arena_allocator.deinit();
 
     const args_vector: std.process.Args.Vector = argv[0..@intCast(argc)];
-    const environ_block: std.process.Environ.Block = .{ .slice = std.mem.span(environ orelse @as([*:null]?[*:0]u8, @ptrFromInt(@alignOf(?[*:0]u8)))) };
+    const no_environ: [0:null]?[*:0]u8 = .{};
+    const environ_block: std.process.Environ.Block = .{ .slice = std.mem.span(environ orelse &no_environ) };
 
     var threaded: std.Io.Threaded = .init(gpa, .{
         .argv0 = .init(.{ .vector = args_vector }),
@@ -68,10 +63,6 @@ pub const std_options: std.Options = .{
 };
 
 var taps: u32 = 0;
-
-fn appInit(_: *dvui.Window) !void {}
-
-fn appDeinit(_: *dvui.Window) void {}
 
 fn appFrame() !dvui.App.Result {
     var root = dvui.box(@src(), .{}, .{ .expand = .both, .style = .window, .background = true });

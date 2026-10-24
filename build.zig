@@ -79,6 +79,8 @@ pub fn build(b: *std.Build) !void {
         } else null,
     };
 
+    if (b.pkg_hash.len == 0) @import("build/android.zig").add(b);
+
     // A consumer that bundles plugins of its own cannot say so through `b.dependency`
     // options (a plugin is a module from another package, not a value), so it passes
     // `defer-app` here and calls `buildApp` below with its plugin modules instead.
