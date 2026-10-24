@@ -12430,6 +12430,11 @@ test "mobile sheets: a dragged or kept side sheet never shows wider than the cap
     // A drag to 900 writes the extent and what is shown together.
     dvui.dataSet(null, sheet.id, "_size", @as(f32, 900));
     dvui.dataSet(null, sheet.id, "_shown", @as(f32, 900));
+    // Every frame on the way back, not only the settled one: the ease starts at 900.
+    for (0..4) |_| {
+        _ = try dvui.testing.step(MobileFrame.frame);
+        try std.testing.expect(regionRect(editor, "Explorer").?.w <= 560 + 0.5);
+    }
     try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expect(regionRect(editor, "Explorer").?.w <= 560 + 0.5);
     try std.testing.expect(dvui.dataGet(null, sheet.id, "_size", f32).? <= 560);

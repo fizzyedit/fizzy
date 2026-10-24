@@ -465,6 +465,9 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         // different speeds is the kind of wrongness nobody can name but everybody feels. It also
         // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
         extent = Split.eased(id, target);
+        // The ease starts from the last shown extent, which a drag or a wider window may have
+        // left above the cap: bound what is drawn, so motion stays within it.
+        if (init_opts.max_extent) |cap| extent = @min(extent, cap);
         dvui.dataSet(null, id, "_size", chosen);
         // A leaf draws on regardless: it walks no tree node.
         if (init_opts.name.len > 0) _ = persistExtent(self, init_opts, id, chosen, extent);
