@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# The QA build: Debug fizzy with every plugin, a seeded QA profile, builds of main and of pull
+# requests side by side, all under one directory that is not the person's fizzy.
+#
+#   scripts/qa-build main          build origin/main if it moved (incremental), install it
+#   scripts/qa-build pr <N>        build pull request N beside main's, for before/after
+#   scripts/qa-build run [main|pr-N]   start that build on its QA profile (default: main)
+#   scripts/qa-build reseed [main|pr-N]  give a build a fresh QA profile (fixtures regenerated)
+#   scripts/qa-build list          the builds kept
+#   scripts/qa-build watch [secs]  `main` every <secs> (default 300): the trigger after a merge
+#
+# Layout under $FIZZY_QA_HOME (default ~/fizzy-qa):
+#   repo/                  a clone of the origin; trees/ are its worktrees, one per build kind,
+#                          so each keeps its own .zig-cache and the next build is incremental
+#   plugins/<id>/          clones of the store plugins pinned in scripts/qa-plugins.txt
+#   fixtures/              sample content, shared by every profile (text, pixi, big folder, history)
+#   builds/<name>-<sha>/   fizzy + plugins/ (in-tree dylibs) + profile/ (QA profile, store plugins)
+#   main, pr-<N>           symlinks to the newest build of each: the fixed paths to run
+# The last 3 builds of main and the last 3 of PR builds are kept. Every run passes --profile, and
+# every plugin build sets FIZZY_PROFILE, so nothing here touches the person's config or plugins.
+set -euo pipefail
+
+qa="${FIZZY_QA_HOME:-$HOME/fizzy-qa}"
+origin="${FIZZY_QA_ORIGIN:-https://github.com/fizzyedit/fizzy}"
+keep=3
+here="$(cd "$(dirname "$0")" && pwd)"
+pins="${FIZZY_QA_PINS:-$here/qa-plugins.txt}"
+zb="$here/zb"
+os_arch="$(uname -m | sed 's/aarch64/arm64/')-$(uname -s | tr A-Z a-z | sed 's/darwin/macos/')"
+
+die() { echo "qa-build: $*" >&2; exit 1; }
+log() { echo "== $*"; }
+
+ensure_repo() {
+  mkdir -p "$qa"
+  if [[ ! -d $qa/repo/.git ]]; then
+    git clone --quiet "$origin" "$qa/repo"
+  fi
+}
+
+# tree <name> <ref>: the worktree for a build kind, at the commit <ref> names. Prints the sha.
+tree() {
+  local name=$1 ref=$2 dir="$qa/repo/trees/$1"
+  git -C "$qa/repo" fetch --quiet origin "$ref" || return 1
+  local sha
+  sha=$(git -C "$qa/repo" rev-parse FETCH_HEAD) || return 1
+  if [[ -d $dir ]]; then
+    git -C "$dir" checkout --quiet --detach "$sha" || return 1
+  else
+    mkdir -p "$qa/repo/trees"
+    git -C "$qa/repo" worktree add --quiet --detach "$dir" "$sha" || return 1
+  fi
+  echo "$sha"
+}
+
+# fixtures: sample content the QA profile points at. Made once; `reseed` makes it again.
+make_fixtures() {
+  local f="$qa/fixtures"
+  rm -rf "$f"
+  mkdir -p "$f/notes" "$f/big" "$f/history"
+  printf '# Notes\n\nA short text file.\n\n- one\n- two\n' > "$f/notes/hello.md"
+  printf 'const std = @import("std");\n\npub fn main() void {\n    std.debug.print("qa\\n", .{});\n}\n' > "$f/notes/hello.zig"
+  # A large folder: 200 directories of 100 small files.
+  local d i
+  for d in $(seq 1 200); do
+    mkdir -p "$f/big/dir-$d"
+    for i in $(seq 1 100); do echo "file $d/$i" > "$f/big/dir-$d/file-$i.txt"; done
+  done
+  # A document with a long history: one file, 300 commits, in a repository of its own.
+  git -C "$f/history" init --quiet
+  git -C "$f/history" config user.email qa@example.invalid
+  git -C "$f/history" config user.name qa
+  for i in $(seq 1 300); do
+    echo "line $i: $(printf '%0.s-' $(seq 1 $((i % 40 + 10))))" >> "$f/history/log.txt"
+    git -C "$f/history" add log.txt
+    git -C "$f/history" commit --quiet -m "edit $i"
+  done
+  # A pixi document, from the pinned pixi checkout's own assets.
+  local pixi="$qa/plugins/pixi/assets/src/misc.pixi"
+  if [[ -f $pixi ]]; then mkdir -p "$f/pixi" && cp "$pixi" "$f/pixi/"; fi
+}
+
+# seed_profile <dir>: a fresh QA profile whose recents are the fixtures.
+seed_profile() {
+  local p=$1 f="$qa/fixtures"
+  rm -rf "$p"
+  mkdir -p "$p/plugins"
+  [[ -d $f ]] || make_fixtures
+  local folders="" opened="" now d
+  now=$(date +%s)
+  for d in history big notes pixi; do
+    [[ -d $f/$d ]] || continue
+    folders+="\"$f/$d\", "
+    opened+="$now, "
+  done
+  printf '.{ .folders = .{ %s}, .folders_opened = .{ %s} }\n' "$folders" "$opened" > "$p/recents.zon"
+}
+
+# plugin_sources: clone or update each pinned store plugin.
+plugin_sources() {
+  local id repo ref
+  while read -r id repo ref; do
+    [[ -z ${id:-} || $id == \#* ]] && continue
+    local dir="$qa/plugins/$id"
+    if [[ ! -d $dir/.git ]]; then
+      mkdir -p "$qa/plugins"
+      git clone --quiet "https://github.com/$repo" "$dir"
+    fi
+    git -C "$dir" fetch --quiet --tags origin
+    git -C "$dir" checkout --quiet --detach "$ref" 2>/dev/null || git -C "$dir" checkout --quiet --detach "origin/$ref"
+  done < "$pins"
+}
+
+# build_plugins <tree> <profile>: each pinned plugin, Debug, against the tree's SDK, installed
+# into the build's profile. A plugin that fails is reported and left out.
+build_plugins() {
+  local tree=$1 profile=$2 id repo ref failed=()
+  while read -r id repo ref; do
+    [[ -z ${id:-} || $id == \#* ]] && continue
+    log "plugin $id @ $ref"
+    if ! (cd "$qa/plugins/$id" && FIZZY_PROFILE="$profile" "$zb" build --fork="$tree/sdk" install 2>&1 | tail -n 15); then
+      failed+=("$id")
+    fi
+  done < "$pins"
+  if ((${#failed[@]})); then
+    echo "qa-build: plugins that did not build against this SDK: ${failed[*]}" >&2
+    printf '%s\n' "${failed[@]}" > "$profile/../plugins-failed.txt"
+  fi
+}
+
+# enable_plugins <profile>: a store plugin installed in a fresh profile stays off until enabled.
+enable_plugins() {
+  local p=$1 d id body=""
+  for d in "$p"/plugins/*/; do
+    [[ -d $d ]] || continue
+    id=$(basename "$d")
+    body+=".@\"$id\" = .{ .enabled = true }, "
+  done
+  printf '.{ .plugins = .{ %s} }\n' "$body" > "$p/settings.zon"
+}
+
+# build <kind> <name> <ref>: build and install; no-op when that commit is already installed.
+build() {
+  local kind=$1 name=$2 ref=$3
+  ensure_repo
+  local sha short out
+  sha=$(tree "$kind" "$ref")
+  short=${sha:0:9}
+  out="$qa/builds/$name-$short"
+  if [[ -x $out/fizzy && ! -f $out/plugins-failed.txt ]]; then
+    log "$name is already at $short"
+    link "$name" "$out"
+    return
+  fi
+  local t="$qa/repo/trees/$kind"
+  log "fizzy $name @ $short (Debug)"
+  (cd "$t" && "$zb" build -Doptimize=Debug)
+  rm -rf "$out"
+  mkdir -p "$out"
+  cp -R "$t/zig-out/$os_arch/." "$out/"
+  plugin_sources
+  seed_profile "$out/profile"
+  build_plugins "$t" "$out/profile"
+  enable_plugins "$out/profile"
+  link "$name" "$out"
+  prune "$name"
+  log "$name ready: $qa/$name -> $out"
+}
+
+link() { ln -sfn "$2" "$qa/$1"; }
+
+prune() {
+  local kind=${1%%-*}
+  local old
+  # shellcheck disable=SC2012
+  ls -1dt "$qa"/builds/"$kind"-* 2>/dev/null | tail -n +$((keep + 1)) | while read -r old; do rm -rf "$old"; done
+}
+
+resolve() {
+  local b=${1:-main}
+  [[ -L $qa/$b ]] || die "no build named $b (qa-build list)"
+  readlink "$qa/$b"
+}
+
+case "${1:-}" in
+main) build main main main ;;
+pr)
+  [[ ${2:-} =~ ^[0-9]+$ ]] || die "usage: qa-build pr <number>"
+  build pr "pr-$2" "refs/pull/$2/head"
+  ;;
+run)
+  b=$(resolve "${2:-}")
+  exec "$b/fizzy" --profile "$b/profile"
+  ;;
+reseed)
+  b=$(resolve "${2:-}")
+  make_fixtures
+  seed_profile "$b/profile.new"
+  # Keep the store plugins installed in the old profile.
+  cp -R "$b/profile/plugins/." "$b/profile.new/plugins/" 2>/dev/null || true
+  enable_plugins "$b/profile.new"
+  rm -rf "$b/profile" && mv "$b/profile.new" "$b/profile"
+  ;;
+list) ls -1dt "$qa"/builds/* 2>/dev/null || echo "no builds" ;;
+watch)
+  while true; do
+    "$0" main || echo "qa-build: main failed; retrying" >&2
+    sleep "${2:-300}"
+  done
+  ;;
+*) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
