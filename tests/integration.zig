@@ -5955,11 +5955,19 @@ fn demoRun() !dvui.App.Result {
         te.draw();
         te.deinit();
     }
+    if (demo_float) |*r| {
+        var fw = dvui.floatingWindow(@src(), .{ .rect = r }, .{ .tag = "demo.float" });
+        defer fw.deinit();
+        dvui.labelNoFmt(@src(), "Float", .{}, .{});
+    }
     if (demo_other_bar) |b| @import("app").dome.publishBar(b);
     automation.overlay.draw(&demo_player);
     demo_callout_main = if (dvui.tagGet(automation.overlay.callout_anchor)) |td| fizzy.core.screens.isMain(td.id) else null;
     return .ok;
 }
+
+/// A float the harness draws under the overlay, as the app's are, while set (natural rect).
+var demo_float: ?dvui.Rect = null;
 
 /// Whether the callout was the main window's in the frame just run (`core.screens.markMain`).
 var demo_callout_main: ?bool = null;
@@ -5987,6 +5995,7 @@ fn demoCtx() !dvui.testing {
     demo_clicks = 0;
     demo_commands = 0;
     demo_stage = .{};
+    demo_float = null;
     demo_player = .init(std.testing.allocator, demo_stage.stage());
     // No wall-time budget: a seek lands in the step that asked for it, whatever the machine.
     demo_player.budget_ns = std.math.maxInt(i64);
@@ -6013,6 +6022,121 @@ fn stepDemoUntil(state: automation.Player.State, max: usize) !void {
     if (demo_player.state != state) {
         std.debug.print("player is {t} at {d:.0}ms, wanted {t}\n", .{ demo_player.state, demo_player.seq.now, state });
         return error.TestUnexpectedResult;
+    }
+}
+
+/// Where the subwindow `tag` marks sits in dvui's stack of them, later being above; null when it
+/// has none. A floating window's tag is on its frame, which its subwindow shares the rect of.
+fn subwindowIndex(tag: []const u8) ?usize {
+    const td = dvui.tagGet(tag) orelse return null;
+    for (dvui.currentWindow().subwindows.stack.items, 0..) |sw, i| {
+        if (sw.id == td.id) return i;
+        const r = sw.rect_pixels;
+        if (@abs(r.x - td.rect.x) < 1 and @abs(r.y - td.rect.y) < 1 and @abs(r.w - td.rect.w) < 1 and @abs(r.h - td.rect.h) < 1) return i;
+    }
+    return null;
+}
+
+/// A tape that only moves the pointer: over a float, across the field and back to the float's
+/// header, with no press anywhere in it.
+fn moveOnlyTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "moves", "Moves");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://moves", .files = &.{.{ .path = "field", .text = "" }} });
+    try s.moveTo(.{ .tag = "demo.float", .x = 0.5, .y = 0.5 }, .{});
+    try s.moveTo(.{ .tag = "demo.field", .x = 0.8, .y = 0.8 }, .{});
+    try s.moveTo(.{ .tag = "demo.float", .x = 0.5, .y = 0.05 }, .{});
+    try s.moveTo(.{ .tag = "demo.count" }, .{});
+    s.pause(300);
+    return s.finish();
+}
+
+test "demo: a tape with no press drags nothing, even over a float's header" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    demo_float = .{ .x = 200, .y = 150, .w = 300, .h = 200 };
+    const home = demo_float.?;
+    try dvui.testing.settle(demoFrame);
+
+    demo_player.load(try moveOnlyTape(), .{});
+    for (0..600) |_| {
+        if (demo_player.state == .ended) break;
+        _ = try dvui.testing.step(demoFrame);
+        try std.testing.expect(dvui.currentWindow().dragging.state == .none);
+        try std.testing.expectEqual(home, demo_float.?);
+    }
+    try std.testing.expectEqual(automation.Player.State.ended, demo_player.state);
+}
+
+/// A tape that drags the float by its header.
+fn dragTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "drags", "Drags");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://drags", .files = &.{.{ .path = "field", .text = "" }} });
+    try s.drag(.{ .tag = "demo.float", .x = 0.5, .y = 0.05 }, .{ .tag = "demo.count" }, .{});
+    return s.finish();
+}
+
+test "demo: a press in the tape does drag a float by its header" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+    demo_float = .{ .x = 200, .y = 150, .w = 300, .h = 200 };
+    const home = demo_float.?;
+    try dvui.testing.settle(demoFrame);
+
+    demo_player.load(try dragTape(), .{});
+    try stepDemoUntil(.ended, 600);
+    try std.testing.expect(demo_float.?.x != home.x or demo_float.?.y != home.y);
+}
+
+/// Three captions about no one thing, each starting while the one before shows.
+fn threeCaptionsTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "captions", "Captions");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://captions", .files = &.{.{ .path = "field", .text = "" }} });
+    try s.caption("First.", .{ .ms = 8000 });
+    s.pause(600);
+    try s.caption("Second.", .{ .ms = 8000 });
+    s.pause(600);
+    try s.caption("Third.", .{ .ms = 8000 });
+    s.pause(1500);
+    return s.finish();
+}
+
+test "demo: captions come in the tape's order, newest lowest, above every float" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try threeCaptionsTape(), .{});
+
+    // The frame each first shows in: never one before the one ahead of it in the tape.
+    var first_seen: [3]?usize = .{ null, null, null };
+    for (0..400) |frame| {
+        _ = try dvui.testing.step(demoFrame);
+        inline for (0..3) |i| {
+            if (first_seen[i] == null and dvui.tagGet(std.fmt.comptimePrint("automation.caption:{d}", .{i})) != null) first_seen[i] = frame;
+        }
+        if (first_seen[2] != null) break;
+    }
+    try std.testing.expect(first_seen[0] != null and first_seen[1] != null and first_seen[2] != null);
+    try std.testing.expect(first_seen[0].? <= first_seen[1].?);
+    try std.testing.expect(first_seen[1].? <= first_seen[2].?);
+
+    // A float opened while they show, as a dropped view's is, lands under them.
+    demo_float = .{ .x = 100, .y = 100, .w = 300, .h = 300 };
+    for (0..10) |_| _ = try dvui.testing.step(demoFrame);
+
+    const first = dvui.tagGet("automation.caption:0") orelse return error.TestUnexpectedResult;
+    const second = dvui.tagGet("automation.caption:1") orelse return error.TestUnexpectedResult;
+    const third = dvui.tagGet("automation.caption:2") orelse return error.TestUnexpectedResult;
+    // Stacked up from the foot: each older one above those after it.
+    try std.testing.expect(first.rect.y < second.rect.y);
+    try std.testing.expect(second.rect.y < third.rect.y);
+
+    const float_at = subwindowIndex("demo.float") orelse return error.TestUnexpectedResult;
+    inline for (0..3) |i| {
+        const at = subwindowIndex(std.fmt.comptimePrint("automation.caption:{d}", .{i})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(at > float_at);
     }
 }
 
