@@ -773,13 +773,6 @@ pub fn shed(self: *Tracks) void {
     }
     if (self.held <= self.cap) return;
     for (self.open.values()) |t| {
-        // A diff against a state about to go is dropped, and taken again after.
-        if (t.pending != null) {
-            self.held -|= t.pending.?.state.bytes.len;
-            t.cancel(self.gpa);
-            t.checkpoint_due = true;
-            self.due = true;
-        }
         const items = t.checkpoints.items;
         if (items.len < 2) continue;
         const last = items.len - 1;
@@ -1514,7 +1507,7 @@ test "a step asked for a checkpoint while one is pending waits, and is taken aft
     try testing.expectEqual(t.held, track.size());
 }
 
-test "a pending checkpoint is kept when its track ends, and dropped, freed, when its track goes or sheds" {
+test "a pending checkpoint is kept when its track ends or sheds, and freed when its track goes" {
     defer @memset(&BigStand.bytes, 0);
     // Closed: the diff is finished first.
     {
@@ -1533,7 +1526,8 @@ test "a pending checkpoint is kept when its track ends, and dropped, freed, when
         _ = bigAsked(&t);
         t.tick();
     }
-    // Shed over the cap: dropped, and asked for again.
+    // Shed over the cap: the pending diff and its reference stay, and it finishes. Even with a
+    // cap below one track's base, the ticks end.
     {
         var t: Tracks = .init(testing.allocator);
         defer t.deinit();
@@ -1541,8 +1535,15 @@ test "a pending checkpoint is kept when its track ends, and dropped, freed, when
         t.tick();
         t.cap = 0;
         t.shed();
-        try testing.expect(track.pending == null and track.checkpoint_due);
+        try testing.expect(track.pending != null and !track.checkpoint_due);
         try testing.expectEqual(t.held, track.size());
+        var frames: usize = 0;
+        while (t.due) : (frames += 1) {
+            try testing.expect(frames < 2 * BigStand.size / encode_slice + 8);
+            t.tick();
+        }
+        try testing.expect(track.pending == null and !track.checkpoint_due);
+        try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
     }
 }
 
