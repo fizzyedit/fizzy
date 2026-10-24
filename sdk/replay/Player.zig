@@ -927,7 +927,9 @@ fn takeRealInput(self: *Player) void {
                             self.pause();
                             self.diverged = true;
                         },
-                        .release, .position => {},
+                        // A drag the tape is making is the tape's to end.
+                        .release => if (self.input.held.count() > 0) e.handle(@src(), wd),
+                        .position => {},
                     },
                     // A replay in progress takes nothing from anyone.
                     .seeking => e.handle(@src(), wd),
