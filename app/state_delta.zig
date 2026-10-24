@@ -48,7 +48,11 @@ pub const Encoder = struct {
     /// The middles of `ref` and `new` once the prefix and suffix are known.
     it: Runs = .{ .a = &.{}, .b = &.{} },
     runs: std.ArrayList(Run) = .empty,
-    /// The delta so far.
+    /// Where the last run in `runs` ends, and the encoded size of all of them, kept as they are
+    /// found so the header knows the delta's exact length without another pass.
+    runs_end: usize = 0,
+    runs_len: usize = 0,
+    /// The delta so far, allocated at its exact final length by the header.
     out: std.ArrayList(u8) = .empty,
     /// Where the body is up to: the run, and the byte of its bytes (of the middle, when raw).
     out_run: usize = 0,
@@ -95,7 +99,11 @@ pub const Encoder = struct {
         if (self.phase == .runs) {
             // Runs of differing blocks, found in one pass and kept so their count can lead them.
             while (true) switch (self.it.next(budget)) {
-                .run => |r| try self.runs.append(self.gpa, r),
+                .run => |r| {
+                    try self.runs.append(self.gpa, r);
+                    self.runs_len += ulebLen(r.start - self.runs_end) + ulebLen(r.len) + r.len;
+                    self.runs_end = r.start + r.len;
+                },
                 .paused => return false,
                 .done => break,
             };
@@ -106,47 +114,48 @@ pub const Encoder = struct {
             self.phase = .body;
         }
         if (self.phase == .body) {
-            if (!try self.writeBody(budget)) return false;
+            if (!self.writeBody(budget)) return false;
             self.phase = .done;
         }
         return true;
     }
 
-    /// The delta, owned by `gpa`; `step` has returned true. The encoder stays valid for `deinit`.
-    pub fn finish(self: *Encoder) std.mem.Allocator.Error![]u8 {
+    /// The delta, owned by `gpa`; `step` has returned true. Hands over the buffer the header sized,
+    /// with no copy. The encoder stays valid for `deinit`.
+    pub fn finish(self: *Encoder) []u8 {
         std.debug.assert(self.phase == .done);
-        return self.out.toOwnedSlice(self.gpa);
+        std.debug.assert(self.out.items.len == self.out.capacity);
+        const delta = self.out.items;
+        self.out = .empty;
+        return delta;
     }
 
-    fn put(self: *Encoder, n: usize) std.mem.Allocator.Error!void {
+    fn put(self: *Encoder, n: usize) void {
         var buf: [10]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
         w.writeUleb128(n) catch unreachable;
-        try self.out.appendSlice(self.gpa, w.buffered());
+        self.out.appendSliceAssumeCapacity(w.buffered());
     }
 
-    /// The counts and the mode, and room for everything after, so the body copies without growing.
+    /// Allocate the delta at its exact length, then write the counts and the mode.
     fn writeHeader(self: *Encoder) std.mem.Allocator.Error!void {
         const raw = self.it.a.len != self.it.b.len;
-        var body: usize = self.it.b.len;
-        if (!raw) {
-            body = 10;
-            for (self.runs.items) |r| body += 20 + r.len;
-        }
-        try self.out.ensureTotalCapacity(self.gpa, 32 + body);
-        try self.put(self.new.len);
-        try self.put(self.prefix);
-        try self.put(self.suffix);
+        var len = ulebLen(self.new.len) + ulebLen(self.prefix) + ulebLen(self.suffix) + 1;
+        len += if (raw) self.it.b.len else ulebLen(self.runs.items.len) + self.runs_len;
+        try self.out.ensureTotalCapacityPrecise(self.gpa, len);
+        self.put(self.new.len);
+        self.put(self.prefix);
+        self.put(self.suffix);
         self.out.appendAssumeCapacity(@backingInt(if (raw) Mode.raw else Mode.runs));
-        if (!raw) try self.put(self.runs.items.len);
+        if (!raw) self.put(self.runs.items.len);
     }
 
     /// Copy the middle's bytes on, at most `budget` of them; whether all are written.
-    fn writeBody(self: *Encoder, budget: *usize) std.mem.Allocator.Error!bool {
+    fn writeBody(self: *Encoder, budget: *usize) bool {
         const b = self.it.b;
         if (self.it.a.len != b.len) {
             const n = @min(budget.*, b.len - self.out_at);
-            try self.out.appendSlice(self.gpa, b[self.out_at..][0..n]);
+            self.out.appendSliceAssumeCapacity(b[self.out_at..][0..n]);
             self.out_at += n;
             budget.* -= n;
             return self.out_at == b.len;
@@ -160,11 +169,11 @@ pub const Encoder = struct {
                     const last = self.runs.items[self.out_run - 1];
                     end = last.start + last.len;
                 }
-                try self.put(r.start - end);
-                try self.put(r.len);
+                self.put(r.start - end);
+                self.put(r.len);
             }
             const n = @min(budget.*, r.len - self.out_at);
-            try self.out.appendSlice(self.gpa, b[r.start + self.out_at ..][0..n]);
+            self.out.appendSliceAssumeCapacity(b[r.start + self.out_at ..][0..n]);
             self.out_at += n;
             budget.* -= n;
             if (self.out_at < r.len) return false;
@@ -176,6 +185,11 @@ pub const Encoder = struct {
 };
 
 const Run = struct { start: usize, len: usize };
+
+/// The bytes LEB128 takes for `n`.
+fn ulebLen(n: usize) usize {
+    return @max(1, (@bitSizeOf(usize) - @clz(n) + 6) / 7);
+}
 
 /// The runs of `block`-byte blocks where `a` and `b`, of one length, differ.
 const Runs = struct {
@@ -364,7 +378,7 @@ test "an encoder given a few bytes at a time makes the delta encode does" {
                 // Never more than a block over what it was given.
                 try testing.expect(budget <= slice);
             }
-            const sliced = try enc.finish();
+            const sliced = enc.finish();
             defer testing.allocator.free(sliced);
             try testing.expectEqualSlices(u8, whole, sliced);
             if (slice == 1 and new.items.len >= 4 * block) try testing.expect(steps > 1);
@@ -387,7 +401,8 @@ test "a step writes no more than its budget, however much differs" {
     defer testing.allocator.free(shifted);
     @memset(shifted, 1);
     for ([_][]const u8{ dense, shifted }) |new| {
-        var enc: Encoder = .init(testing.allocator, ref, new);
+        var counting: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var enc: Encoder = .init(counting.allocator(), ref, new);
         defer enc.deinit();
         var steps: usize = 0;
         while (true) : (steps += 1) {
@@ -401,9 +416,22 @@ test "a step writes no more than its budget, however much differs" {
         try testing.expect(steps >= size / slice / 2);
         const whole = try encode(testing.allocator, ref, new);
         defer testing.allocator.free(whole);
-        const sliced = try enc.finish();
+        // The header sized the delta exactly, so handing it over allocates, copies and resizes nothing.
+        const calls = .{ counting.alloc_index, counting.resize_index, counting.allocated_bytes, counting.freed_bytes };
+        const sliced = enc.finish();
         defer testing.allocator.free(sliced);
+        try testing.expectEqual(calls, .{ counting.alloc_index, counting.resize_index, counting.allocated_bytes, counting.freed_bytes });
+        try testing.expectEqual(whole.len, sliced.len);
         try testing.expectEqualSlices(u8, whole, sliced);
+    }
+}
+
+test "the length ulebLen counts is the length written" {
+    var buf: [10]u8 = undefined;
+    for ([_]usize{ 0, 1, 127, 128, 16383, 16384, 1 << 21, 1 << 28, 1 << 35, std.math.maxInt(usize) }) |n| {
+        var w: std.Io.Writer = .fixed(&buf);
+        try w.writeUleb128(n);
+        try testing.expectEqual(w.buffered().len, ulebLen(n));
     }
 }
 

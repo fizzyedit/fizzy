@@ -704,7 +704,7 @@ fn advance(self: *Tracks, t: *Track, budget: *usize) void {
     if (!done) return prof_delta.end();
     const encoded = p.encoder.finish();
     prof_delta.end();
-    self.keepPending(t, encoded catch null);
+    self.keepPending(t, encoded);
 }
 
 /// Put `t`'s pending checkpoint among its checkpoints: as `delta`, the diff from the latest whole
@@ -1466,8 +1466,17 @@ test "a big document's checkpoint is diffed a slice a frame, and is the one a wh
     const track = bigAsked(&t);
     const base = track.base.?.bytes;
     var frames: usize = 0;
+    var progress: usize = 0;
     while (t.due) : (frames += 1) {
         t.tick();
+        // No frame compares or writes more than its slice, a block over for where it stopped and
+        // a run's counts for the header; the one that finishes it hands the delta over, which
+        // moves no bytes.
+        if (track.pending) |p| {
+            const worked = p.encoder.prefix + p.encoder.suffix + p.encoder.it.at + p.encoder.out.items.len;
+            try testing.expect(worked - progress <= encode_slice + 2 * state_delta.block + 64);
+            progress = worked;
+        } else try testing.expect(track.checkpoints.items[0].bytes.len < 1024);
         // The first frame took the capture and one slice; nothing is kept until the diff is done.
         if (frames == 0) {
             try testing.expect(track.pending != null);
@@ -1477,6 +1486,7 @@ test "a big document's checkpoint is diffed a slice a frame, and is the one a wh
         }
     }
     try testing.expect(frames >= BigStand.size / encode_slice);
+    try testing.expect(frames <= BigStand.size / encode_slice + 4);
     try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
     try testing.expect(track.pending == null and !track.checkpoint_due);
     const c = track.checkpoints.items[0];
