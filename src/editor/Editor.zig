@@ -4927,6 +4927,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
 
             editor.command_palette.draw(editor);
+            @import("Cards.zig").tick(editor);
         }
 
         // Arms the launch update toast once the background check reports a newer

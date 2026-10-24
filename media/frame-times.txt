@@ -1,0 +1,16 @@
+CARDS open level=1.00 cards=10 frames=68 frame_ms mean=92.42 p95=135.77 max=141.64 | cpu_ms(tick+draw) mean=0.015 max=0.047 | photos=8.34MB sheen=false
+CARDS close level=1.00 cards=10 frames=18 frame_ms mean=107.33 p95=142.56 max=142.56 | cpu_ms(tick+draw) mean=0.013 max=0.022 | photos=8.34MB sheen=false
+CARDS open level=1.00 cards=10 frames=27 frame_ms mean=103.70 p95=134.96 max=135.72 | cpu_ms(tick+draw) mean=0.020 max=0.043 | photos=8.34MB sheen=false
+CARDS pick level=1.00 cards=10 frames=18 frame_ms mean=96.10 p95=132.89 max=132.89 | cpu_ms(tick+draw) mean=0.023 max=0.139 | photos=8.34MB sheen=false
+CARDS open level=1.00 cards=30 frames=61 frame_ms mean=102.32 p95=139.02 max=141.23 | cpu_ms(tick+draw) mean=0.037 max=0.074 | photos=8.34MB sheen=false
+CARDS close level=1.00 cards=30 frames=20 frame_ms mean=108.51 p95=141.85 max=141.85 | cpu_ms(tick+draw) mean=0.032 max=0.045 | photos=8.34MB sheen=false
+CARDS open level=1.00 cards=30 frames=26 frame_ms mean=108.74 p95=140.00 max=144.47 | cpu_ms(tick+draw) mean=0.035 max=0.054 | photos=8.34MB sheen=false
+CARDS pick level=1.00 cards=30 frames=19 frame_ms mean=100.87 p95=142.64 max=142.64 | cpu_ms(tick+draw) mean=0.037 max=0.106 | photos=8.34MB sheen=false
+CARDS open level=1.00 cards=30 frames=60 frame_ms mean=104.87 p95=141.68 max=142.53 | cpu_ms(tick+draw) mean=0.037 max=0.077 | photos=8.34MB sheen=true
+CARDS close level=1.00 cards=30 frames=18 frame_ms mean=120.80 p95=142.62 max=142.62 | cpu_ms(tick+draw) mean=0.046 max=0.079 | photos=8.34MB sheen=true
+CARDS open level=1.00 cards=30 frames=24 frame_ms mean=119.05 p95=138.23 max=138.87 | cpu_ms(tick+draw) mean=0.061 max=0.076 | photos=8.34MB sheen=true
+CARDS pick level=1.00 cards=30 frames=19 frame_ms mean=124.52 p95=139.02 max=139.02 | cpu_ms(tick+draw) mean=0.068 max=0.176 | photos=8.34MB sheen=true
+CARDS open level=0.50 cards=30 frames=60 frame_ms mean=105.62 p95=139.63 max=142.99 | cpu_ms(tick+draw) mean=0.038 max=0.093 | photos=8.34MB sheen=false
+CARDS close level=0.50 cards=30 frames=21 frame_ms mean=92.87 p95=138.53 max=141.53 | cpu_ms(tick+draw) mean=0.033 max=0.048 | photos=8.34MB sheen=false
+CARDS open level=0.50 cards=30 frames=31 frame_ms mean=88.18 p95=137.00 max=139.34 | cpu_ms(tick+draw) mean=0.033 max=0.060 | photos=8.34MB sheen=false
+CARDS pick level=0.50 cards=30 frames=16 frame_ms mean=107.55 p95=137.41 max=137.41 | cpu_ms(tick+draw) mean=0.040 max=0.135 | photos=8.34MB sheen=false
