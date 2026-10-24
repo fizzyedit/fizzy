@@ -108,7 +108,7 @@ fn arm() void {
     mutex.mutex.unlock(dvui.io);
 }
 
-fn dialog(id: dvui.Id) anyerror!bool {
+fn dialog(id: dvui.Id) core.dialogs.Error!bool {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(12) });
     defer outer.deinit();
 
@@ -135,7 +135,7 @@ fn dialog(id: dvui.Id) anyerror!bool {
 }
 
 /// The header's close is Not now.
-fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void {
+fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) core.dialogs.Error!void {
     if (response == .cancel) decline();
 }
 
