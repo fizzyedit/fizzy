@@ -7967,6 +7967,166 @@ test "workbench: restoring panes leaves tape and demo files out of the assignmen
     try std.testing.expect(editor.app.host.assignedSurfaces("Pane 2") == null);
 }
 
+// The Files explorer over a folder of 300,000 notes. The folder is read, indexed and ranked off
+// the frame, and a frame draws only the rows in view, so the work of a frame does not grow with
+// the folder. Budgets are for a Debug build on a busy CI machine: the median idle frame is under
+// `explorer_frame_budget_ns`, and no frame while the folder loads or is searched takes longer than
+// `explorer_stall_budget_ns` (it was 5.5 s to read the folder in one frame, and 3 s to index it).
+const explorer_frame_budget_ns = 16 * std.time.ns_per_ms;
+const explorer_stall_budget_ns = 500 * std.time.ns_per_ms;
+
+var explorer_scroll: dvui.ScrollInfo = .{ .horizontal = .none };
+
+fn explorerFrame() !dvui.App.Result {
+    fizzy.core.anchor.want();
+    // The host pumps the file table once a frame, before anything draws.
+    workbench.runtime.host().files.?.pump();
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &explorer_scroll }, .{ .expand = .both });
+    defer scroll.deinit();
+    try workbench.files.draw();
+    return .ok;
+}
+
+/// Steps frames until `done`, returning the longest one. Gives up after a minute.
+fn explorerStepUntil(comptime done: fn (*fizzy.core.FileTable) bool, table: *fizzy.core.FileTable) !i128 {
+    const perf = fizzy.core.perf;
+    var slowest: i128 = 0;
+    const give_up = perf.nanoTimestamp() + 60 * std.time.ns_per_s;
+    while (!done(table)) {
+        const t0 = perf.nanoTimestamp();
+        _ = try dvui.testing.step(explorerFrame);
+        slowest = @max(slowest, perf.nanoTimestamp() - t0);
+        if (perf.nanoTimestamp() > give_up) return error.NeverSettled;
+        std.Thread.yield() catch {};
+    }
+    return slowest;
+}
+
+fn explorerListed(table: *fizzy.core.FileTable) bool {
+    return table.listings.count() > 0 and table.pending.count() == 0;
+}
+
+fn explorerSearched(table: *fizzy.core.FileTable) bool {
+    return !table.indexing() and !table.ranking() and table.results.items.len > 0;
+}
+
+fn explorerMedianFrameNs(frames: usize) !i128 {
+    var took: [32]i128 = undefined;
+    for (took[0..frames]) |*t| {
+        const t0 = fizzy.core.perf.nanoTimestamp();
+        _ = try dvui.testing.step(explorerFrame);
+        t.* = fizzy.core.perf.nanoTimestamp() - t0;
+    }
+    std.mem.sort(i128, took[0..frames], {}, std.sort.asc(i128));
+    return took[frames / 2];
+}
+
+test "workbench: the Files explorer frame does not grow with a 300k-note folder" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.deinitSwaps(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    editor.app.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy.Editor.fizzy_api_vtable });
+    const prior_chrome = fizzy.core.dialogs.host_chrome;
+    fizzy.sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
+    defer fizzy.core.dialogs.host_chrome = prior_chrome;
+    editor.workbench = .init(gpa);
+    defer editor.workbench.deinit();
+    try editor.workbench.initDefaultWorkspace();
+    defer editor.workbench.panes.deinit();
+    defer editor.workbench.workspaces.deinit(gpa);
+    workbench.runtime.setWorkbench(&editor.workbench);
+    // The selection is a module global the next test shares: freed, and left usable.
+    defer {
+        workbench.files.deinitCaches();
+        workbench.files.selected_paths = .empty;
+        workbench.files.selected_id = null;
+    }
+    editor.app.file_table = fizzy.core.FileTable.init(gpa, dvui.io);
+    defer editor.app.file_table.deinit();
+    const table = &editor.app.file_table;
+    editor.app.host.files = table;
+    // The app has a live folder watcher; without one the table re-reads a listing every second.
+    table.env.watching = struct {
+        fn live(_: ?*anyopaque) bool {
+            return true;
+        }
+    }.live;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const n: usize = 300_000;
+    var name_buf: [32]u8 = undefined;
+    for (0..n) |i| {
+        const name = try std.fmt.bufPrint(&name_buf, "note-{d:0>6}.md", .{i});
+        var f = try tmp.dir.createFile(dvui.io, name, .{});
+        f.close(dvui.io);
+    }
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(dvui.io, &root_buf)];
+    editor.app.folder = try gpa.dupe(u8, root);
+    defer gpa.free(editor.app.folder.?);
+    explorer_scroll = .{ .horizontal = .none };
+
+    const last = try std.fmt.allocPrint(gpa, "{s}/note-{d:0>6}.md", .{ root, n - 1 });
+    defer gpa.free(last);
+    const last_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}", .{last});
+    defer gpa.free(last_tag);
+    const hit_tag = try std.fmt.allocPrint(gpa, "workbench.file:{s}/note-123456.md", .{root});
+    defer gpa.free(hit_tag);
+
+    // Loading the folder: no frame waits for the disk, and the row says so meanwhile.
+    const load_stall = try explorerStepUntil(explorerListed, table);
+    for (0..8) |_| _ = try dvui.testing.step(explorerFrame);
+    std.debug.print("explorer: slowest frame while loading {d} ms\n", .{@divTrunc(load_stall, std.time.ns_per_ms)});
+    try std.testing.expect(load_stall < explorer_stall_budget_ns);
+
+    // Idle, and scrolled to the end: only the rows in view are measured and drawn.
+    try std.testing.expect(dvui.tagGet(last_tag) == null);
+    const idle = try explorerMedianFrameNs(21);
+    std.debug.print("explorer: median idle frame {d} us\n", .{@divTrunc(idle, std.time.ns_per_us)});
+    try std.testing.expect(idle < explorer_frame_budget_ns);
+
+    for (0..12) |_| {
+        explorer_scroll.viewport.y = @max(0, explorer_scroll.virtual_size.h - explorer_scroll.viewport.h);
+        _ = try dvui.testing.step(explorerFrame);
+    }
+    const scrolled = try explorerMedianFrameNs(21);
+    std.debug.print("explorer: median scrolled frame {d} us\n", .{@divTrunc(scrolled, std.time.ns_per_us)});
+    try std.testing.expect(scrolled < explorer_frame_budget_ns);
+
+    // The last note is reachable, and selecting it selects it.
+    try dvui.testing.expectVisible(last_tag);
+    try dvui.testing.moveTo(last_tag);
+    _ = try dvui.testing.step(explorerFrame);
+    try dvui.testing.click(.left);
+    for (0..3) |_| _ = try dvui.testing.step(explorerFrame);
+    try std.testing.expectEqual(@as(usize, 1), workbench.files.selected_paths.count());
+    try std.testing.expectEqualStrings(last, workbench.files.selected_paths.values()[0]);
+
+    // Filtering for a name finds it among all of them, without a frame waiting for the index.
+    explorer_scroll.viewport.y = 0;
+    for (0..3) |_| _ = try dvui.testing.step(explorerFrame);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 80, .y = 14 } });
+    _ = try dvui.testing.step(explorerFrame);
+    try dvui.testing.click(.left);
+    _ = try dvui.testing.step(explorerFrame);
+    try dvui.testing.writeText("note-123456");
+    const search_stall = try explorerStepUntil(explorerSearched, table);
+    for (0..10) |_| _ = try dvui.testing.step(explorerFrame);
+    std.debug.print("explorer: slowest frame while searching {d} ms\n", .{@divTrunc(search_stall, std.time.ns_per_ms)});
+    try std.testing.expect(search_stall < explorer_stall_budget_ns);
+    try dvui.testing.expectVisible(hit_tag);
+    const filtered = try explorerMedianFrameNs(21);
+    try std.testing.expect(filtered < explorer_frame_budget_ns);
+}
+
 // -- rows carried out of a tree and back --------------------------------------------------------
 
 // A tree of two folders and two files, as the explorer draws one: `F` open with `c` inside it, `G`
