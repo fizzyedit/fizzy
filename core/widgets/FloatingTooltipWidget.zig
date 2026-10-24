@@ -26,13 +26,24 @@ const sticky_gap: f32 = 10;
 /// Which side of its anchor a tooltip prefers; it takes another when that one has no room.
 pub const Side = enum { right, below };
 
-/// Where a `w` by `h` tooltip goes, `Side` of `anchor`, kept `margin` inside `screen`: on the
-/// preferred side if it fits there, else the opposite, else the other axis' roomier side, else
-/// whichever side has the most room. Across the anchor it lines up with the anchor's start and
-/// slides back in. A size larger than the screen less its margins is shrunk to it. The result
-/// is always inside `screen` inset by `margin`, wherever `anchor` is.
+/// `screen` less `margin` all round; never negative in size, so a screen smaller than twice the
+/// margin (a minimized or zero-size window) leaves an empty rect rather than an inverted one.
+fn innerOf(screen: Rect.Natural) Rect.Natural {
+    var inner = screen.insetAll(margin);
+    inner.w = @max(inner.w, 0);
+    inner.h = @max(inner.h, 0);
+    return inner;
+}
+
+/// Where a `w` by `h` tooltip goes, `Side` of `anchor`, kept `margin` inside `screen`: it tries
+/// the preferred side, then the opposite, then the other axis' two sides (`.right` tries right,
+/// left, below, above; `.below` tries below, above, right, left), and takes the first where it
+/// fits whole. Where none does, it takes whichever side has the most room, overlapping the
+/// anchor. Across the anchor it lines up with the anchor's start and slides back in. A size
+/// larger than the screen less its margins is shrunk to it. The result is always inside
+/// `screen` inset by `margin`, wherever `anchor` is.
 pub fn place(screen: Rect.Natural, anchor: Rect.Natural, side: Side, w_in: f32, h_in: f32) Rect.Natural {
-    const inner = screen.insetAll(margin);
+    const inner = innerOf(screen);
     const w = @min(w_in, inner.w);
     const h = @min(h_in, inner.h);
     const room_right = inner.x + inner.w - (anchor.x + anchor.w);
@@ -87,7 +98,7 @@ pub fn place(screen: Rect.Natural, anchor: Rect.Natural, side: Side, w_in: f32, 
 /// Where a sticky tooltip goes: up and to the right of the pointer, `sticky_gap` away, flipping
 /// below it and to its left where there is no room, then kept `margin` inside `screen`.
 pub fn placeAtPoint(screen: Rect.Natural, p: dvui.Point.Natural, w_in: f32, h_in: f32) Rect.Natural {
-    const inner = screen.insetAll(margin);
+    const inner = innerOf(screen);
     const w = @min(w_in, inner.w);
     const h = @min(h_in, inner.h);
     var r: Rect.Natural = .{ .x = p.x + sticky_gap, .y = p.y - h - sticky_gap, .w = w, .h = h };
@@ -127,6 +138,43 @@ test "a tooltip stays inside the screen less its margin, wherever its anchor and
         const p: dvui.Point.Natural = .{ .x = a.x, .y = a.y };
         try expectInside(inner, placeAtPoint(screen, p, w, h));
     }
+}
+
+test "a screen smaller than its margins gives an empty rect, not a crash" {
+    const anchor: Rect.Natural = .{ .x = 10, .y = 10, .w = 20, .h = 20 };
+    for ([_]Rect.Natural{
+        .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+        .{ .x = 5, .y = 5, .w = margin, .h = 2 * margin + 50 },
+        .{ .x = 5, .y = 5, .w = 300, .h = 1 },
+    }) |screen| {
+        const inner = innerOf(screen);
+        for ([_]Side{ .right, .below }) |side| {
+            const r = place(screen, anchor, side, 120, 40);
+            try std.testing.expect(r.w <= inner.w and r.h <= inner.h);
+            try std.testing.expect(r.w >= 0 and r.h >= 0);
+        }
+        const r = placeAtPoint(screen, .{ .x = 10, .y = 10 }, 120, 40);
+        try std.testing.expect(r.w <= inner.w and r.h <= inner.h);
+    }
+}
+
+test "fitWidth keeps the caller's narrower cap and wraps at the screen otherwise" {
+    var tt: FloatingTooltipWidget = undefined;
+    tt.scale_val = 2;
+    tt.options = .{};
+    const screen: Rect.Natural = .{ .x = 0, .y = 0, .w = 416, .h = 300 };
+    // (416 - 16) / 2 = 200 content units
+    tt.fitWidth(screen);
+    try std.testing.expectEqual(@as(f32, 200), tt.options.max_size_content.?.w);
+    tt.options.max_size_content = .width(120);
+    tt.fitWidth(screen);
+    try std.testing.expectEqual(@as(f32, 120), tt.options.max_size_content.?.w);
+    tt.options.max_size_content = .width(900);
+    tt.fitWidth(screen);
+    try std.testing.expectEqual(@as(f32, 200), tt.options.max_size_content.?.w);
+    // a screen narrower than its margins still leaves a positive width
+    tt.fitWidth(.{ .x = 0, .y = 0, .w = 4, .h = 4 });
+    try std.testing.expectEqual(@as(f32, 1), tt.options.max_size_content.?.w);
 }
 
 test "a tooltip wider than the small window it is raised in wraps and stays inside it" {
@@ -197,9 +245,9 @@ pub var defaults: Options = .{
 };
 
 pub const Position = enum {
-    /// Beside active_rect: right of it, else left
+    /// Beside active_rect: right of it, else left, else below or above it (`place`)
     horizontal,
-    /// Above or below active_rect: below it, else above
+    /// Above or below active_rect: below it, else above, else left or right of it (`place`)
     vertical,
     /// Starts where mouse is but stays there
     sticky,
@@ -306,7 +354,9 @@ fn fitWidth(self: *FloatingTooltipWidget, screen: Rect.Natural) void {
     const border = self.options.borderGet();
     const pad = self.options.paddingGet();
     const room = (screen.w - 2 * margin) / self.scale_val - border.x - border.w - pad.x - pad.w;
-    self.options.max_size_content = .width(@max(room, 1));
+    const cap = @max(room, 1);
+    const own = if (self.options.max_size_content) |m| m.w else std.math.inf(f32);
+    self.options.max_size_content = .width(@min(own, cap));
 }
 
 pub fn shown(self: *FloatingTooltipWidget) bool {
@@ -343,6 +393,7 @@ pub fn shown(self: *FloatingTooltipWidget) bool {
                 if (dvui.firstFrame(self.data().id)) {
                     const mp = dvui.currentWindow().mouse_pt.toNatural();
                     dvui.dataSet(null, self.data().id, "_sticky_pt", mp);
+                    self.fitWidth(self.screenFor(.fromPoint(mp)));
                 } else {
                     const mp = dvui.dataGet(null, self.data().id, "_sticky_pt", dvui.Point.Natural) orelse dvui.Point.Natural{};
                     const screen = self.screenFor(.fromPoint(mp));
@@ -389,7 +440,10 @@ pub fn install(self: *FloatingTooltipWidget) void {
         dvui.subwindowAdd(self.data().id, self.data().rect, rs.r, false, self.prev_windowInfo.id, true);
         dvui.captureMouseMaintain(.{ .id = self.data().id, .rect = rs.r, .subwindow_id = self.data().id });
         self.prevClip = dvui.clipGet();
-        dvui.clipSet(screens.pixelsFor(.cast(self.data().rect))); // break out of whatever clipping we were in, onto its screen
+        // break out of whatever clipping we were in, onto the screen it is placed on
+        const screen = self.screenFor(.cast(self.data().rect));
+        const m = dvui.windowNaturalScale();
+        dvui.clipSet(.{ .x = screen.x * m, .y = screen.y * m, .w = screen.w * m, .h = screen.h * m });
         self.prev_scroll = dvui.ScrollContainerWidget.scrollSet(null);
     }
 
