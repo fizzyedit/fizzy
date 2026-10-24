@@ -221,11 +221,11 @@ it is sound:
 
 ```zig
 // Bad
-const n = std.fmt.bufPrint(&buf, "{d}", .{id}) catch unreachable;
+const n = std.mem.print(&buf, "{d}", .{id}) catch unreachable;
 
 // Good
 // 20 digits hold any u64, and buf is 32 bytes.
-const n = std.fmt.bufPrint(&buf, "{d}", .{id}) catch unreachable;
+const n = std.mem.print(&buf, "{d}", .{id}) catch unreachable;
 ```
 
 ### TODO names a seam

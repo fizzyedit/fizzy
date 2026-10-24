@@ -52,7 +52,7 @@ a one-line why and a tiny example. Lessons name their source; they are real bugs
    installed `lib/std` (`zig env` prints `lib_dir`), not from memory: `std.mem.print` replaces
    `std.fmt.bufPrint`, `Allocator.print` replaces `allocPrint`, `*std.Io.Writer` is the sink
    (not `anytype` writers). Why: deprecated names are removed without notice. Our own
-   `/// Deprecated` marker says `Deprecated in favor of X`, as std's do; a bare one is a bug.
+   `/// Deprecated` marker says ``Deprecated: use `X` `` (STYLE.md and the lint); a bare one is a bug.
    ```zig
    const s = try std.mem.print(&buf, "{d}", .{n}); // not std.fmt.bufPrint
    ```
@@ -72,9 +72,10 @@ a one-line why and a tiny example. Lessons name their source; they are real bugs
     strokes: std.ArrayList(Stroke) = .empty,
     ```
 12. **Never `for (a, b)` over lists that can differ in length without checking.** Why: Zig
-    panics in Debug on unequal lengths (a pixi crash), and in release it is undefined.
+    panics on unequal lengths in Debug and ReleaseSafe (a pixi crash), and in ReleaseFast and
+    ReleaseSmall it is undefined behaviour.
     ```zig
-    std.debug.assert(a.len == b.len); // or: for (a, b[0..a.len]) when truncating is intended
+    std.debug.assert(a.len == b.len); // or: for (a[0..n], b[0..n]) with `const n = @min(a.len, b.len)` when truncating is intended
     for (a, b) |x, y| ...
     ```
 
@@ -91,7 +92,7 @@ a one-line why and a tiny example. Lessons name their source; they are real bugs
     ```
 14. **No synchronous GPU readback in a step.** Why: it stalls the pipeline until the GPU
     drains; ask once, off-frame, or keep a CPU copy of what changed.
-15. **Measure before and after** with `fizzy_profile` or `sample <pid>`, on main-thread CPU
+15. **Measure before and after** with `fizzy_profile` or a process sampler (`sample <pid>` on macOS, `perf record -p <pid>` on Linux), on main-thread CPU
     (`core/AGENTS.md`). Why: a guess about cost is wrong as often as right.
 
 ## Tests
