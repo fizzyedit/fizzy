@@ -9,22 +9,19 @@ This skill used to turn a Claude session into the project manager, working with 
 maintainer's `gh` login. It no longer does. The PM is **fizzy-pm[bot]**, running on its own
 machine under its own login.
 
-**No other session**, in this repo or any other:
-
-- merges a PR or enqueues one (by any means, the merge queue included);
-- marks a PR ready (from draft to ready);
-- routes, claims for, or launches workers;
-- uses a maintainer's login to do any of the above.
-
-If one of those is needed, ask the maintainer. A worker's job ends at a draft PR with its
-gates passing, as `docs/AGENT_WORK.md` and `CONTRIBUTING.md` say.
+**No session acts as PM.** A session does not use the maintainer's login to route, claim for or
+launch workers, or to merge, enqueue or mark ready a PR it does not own. A worker's own PR
+follows `CONTRIBUTING.md` ("Claim before you build") and `docs/AGENT_WORK.md` ("Review"), which
+govern when it goes ready and who merges. If PM work is needed, ask the maintainer.
 
 ## What replaced it
 
 - The process (issues in `fizzyedit/work`, workers, review, merge on a yes) is
   `docs/AGENT_WORK.md` and `CONTRIBUTING.md`.
 - The nightly health check this skill described is superseded by the superfans
-  (`fan-common`, `fan-boundary`, `fan-zig-std`; `fizzyedit/plans#58`).
+  (`fan-common`, `fan-boundary`, `fan-zig-std`; `fizzyedit/plans#58`). The cloud smoke run and
+  the release steps (plugin tags, SDK go-live) are retired with it; `RELEASING.md` and
+  `CONTRIBUTING.md` ("Changing the SDK") are where releases are written down.
 - The kickoff template is in `docs/AGENT_WORK.md`.
 
 The old text is in the history (`git log -- .claude/skills/fizzy-pm/SKILL.md`).
