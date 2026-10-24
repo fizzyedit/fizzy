@@ -1237,8 +1237,8 @@ fn windowHeaderPaintClose(openflag: ?*bool) void {
 
         if (button.hovered()) {
             icon_tex.icon(@src(), "close", icons.tvg.lucide.x, .{
-                .stroke_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
-                .fill_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
+                .stroke_color = .{ .color = dvui.themeGet().color(.err, .fill) },
+                .fill_color = .{ .color = dvui.themeGet().color(.err, .fill) },
             }, .{
                 .min_size_content = .{ .w = hover_side, .h = hover_side },
                 .expand = .ratio,
