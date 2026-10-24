@@ -11,9 +11,10 @@ pub fn linksFizzys(plugins: []const BundledPlugin, name: []const u8) bool {
     return false;
 }
 
-/// The list links exactly what it names: an empty one links nothing, and a list of an app's own
-/// plugins alone gets none of fizzy's. workbench is the one fizzy must be named, because the
-/// editor still holds its state (fizzyedit/plans#13).
+/// The list links exactly what it names: an empty one links nothing. workbench is the one fizzy
+/// must be named, because the editor still holds its state (fizzyedit/plans#13). `buildApp`
+/// still adds all of fizzy's to a list of an app's own plugins alone, until example-app names
+/// them, so this sees the list after that.
 pub fn check(plugins: []const BundledPlugin) error{WorkbenchNotLinked}!void {
     if (!linksFizzys(plugins, "workbench")) return error.WorkbenchNotLinked;
 }

@@ -138,7 +138,15 @@ pub const plugins = @import("build/plugins.zig").entries;
 pub fn buildApp(fizzy_dep: *std.Build.Dependency, linked: []const BundledPlugin) !void {
     const d = deferred orelse @panic("fizzy.buildApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
     var opts = d.base;
-    opts.app_plugins = linked;
+    // Until fizzyedit/example-app lists fizzy's plugins itself (its CI and fizzy's build each
+    // other's main, and example-app main still lists only its own): a list of an app's own
+    // plugins alone gets all of fizzy's ahead of them, as before. An empty list is not that
+    // case: it links nothing, and `plugins.link` refuses it for lacking workbench. Goes once
+    // fizzyedit/example-app#6 is on main (fizzyedit/plans#13 step 2).
+    const names_fizzys = linked.len == 0 or for (linked) |p| {
+        if (p.module == null) break true;
+    } else false;
+    opts.app_plugins = if (names_fizzys) linked else try std.mem.concat(fizzy_dep.builder.allocator, BundledPlugin, &.{ &plugins.all, linked });
     try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg);
     deferred.?.built = true;
 }
