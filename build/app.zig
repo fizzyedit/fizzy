@@ -1397,6 +1397,8 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
             .root_source_file = b.path("core/profile.zig"),
         });
         profile_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        // `core/profile.zig` times the in-app glass through `glass.prof`.
+        profile_module.addImport("glass", core_module_test.import_table.get("glass").?);
         const profile_tests = b.addTest(.{
             .name = "fizzy-profile-tests",
             .root_module = profile_module,
