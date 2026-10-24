@@ -230,6 +230,13 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build check-web
 
+      # `check-web` sets no `-Dapp-layout`, so the web build's layout wiring is a no-op there; this
+      # builds wasm with an app-owned `.zon` and `.zig` layout, and fails if that wiring is gone.
+      - name: Compile web (wasm) build with a custom layout
+        if: matrix.name != 'Windows'
+        shell: bash
+        run: bash scripts/ci-retry.sh scripts/check-web-layout.sh
+
       # The tapes fizzyed.it serves beside the app: a script or `docs/demos/` tape that no longer
       # builds or reads back fails here, not on the deploy after merge.
       - name: Build the hosted demo tapes

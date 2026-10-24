@@ -62,6 +62,10 @@ issue with the same fingerprint.
 Stale check: an open `fan:<name>` issue not touched for 14 days is re-checked by this fan on
 its next run; if its fingerprint no longer reproduces, close it with one line saying so.
 
+Lint rules are out of scope for every fan: `zig build lint` (`scripts/lint.zig`, the `Rule`
+enum) already checks them and `scripts/lint-allow.zon` ratchets what is known. Read the enum
+and never file what a listed rule covers.
+
 ## 4. Filing
 
 - Repo `fizzyedit/work` (private). Labels `superfan`, `fan:<name>`, one of

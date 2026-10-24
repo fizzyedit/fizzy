@@ -1,0 +1,8 @@
+// The smallest `-Dapp-layout=` data shape: one place, taking any surface. `scripts/check-web-layout.sh`
+// builds the web target with it, so the build's `app_layout` wiring for wasm32 cannot rot unseen.
+.{
+    .dir = .horizontal,
+    .children = .{
+        .{ .name = "Center", .keywords = .{"document"}, .expand = .both },
+    },
+}

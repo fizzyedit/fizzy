@@ -27,7 +27,24 @@ precedent is not a finding: every hit cites the std file and line it is compared
 - Rules as the repo states them: the file-is-a-struct and naming sections of `AGENTS.md`,
   `docs/STYLE.md` if present, `docs/PITFALLS.md`.
 
-## 3. Checks
+## 3. Out of scope: what `zig build lint` already checks
+
+`scripts/lint.zig` enforces these with a per-file ratchet (`scripts/lint-allow.zon`): what the
+allowance holds is known and accepted, so never file a hit for it, new or old. The source of
+truth is the `Rule` enum at the top of `scripts/lint.zig`; read it at the start of each run and
+skip every rule it lists, including ones added after this list was written. Today:
+
+- `fn-length`: a function over 150 lines.
+- `create-needs-destroy`: a file with `pub fn create*` and no `destroy`.
+- `lint-allow-reason`: a `// lint-allow(...)` with no reason.
+- `file-alias`: a top-level `const X = @This();` not named for the file (check 4, naming).
+- `anyerror`: a return type that uses `anyerror` (check 3, error-sets).
+- `deprecated-names-replacement`: a `/// Deprecated` doc comment with no backticked replacement.
+
+Only the part a rule covers is skipped: an `anyerror` that is not a return type, or a
+`catch unreachable`, is still check 3's. If a rule you were about to file is in the enum, drop it.
+
+## 4. Checks
 
 1. **hand-rolled-std**: a helper that re-implements something std has (`std.mem.*`,
    `std.fmt`, `std.ascii`, `std.unicode`, `std.sort`, `std.StaticStringMap`, `std.fs.path`,
@@ -62,14 +79,14 @@ precedent is not a finding: every hit cites the std file and line it is compared
 A hit is only filed after it is verified: the std lines cited exist at the installed version
 (`fan-common` section 4).
 
-## 4. Known and accepted
+## 5. Known and accepted
 
 None yet. The PM adds a line here, as `fan:zig-std/<check-id>/<path>[:<symbol>]`, for each
 issue the maintainer dismissed. Standing exceptions: code under `zig-pkg/` and vendored
 dependencies; `anytype` for dvui-style widget options where dvui itself does that; C-ABI
 `extern` code that must follow the C names (the plugin boundary).
 
-## 5. Severity guide
+## 6. Severity guide
 
 - **high**: a use of an API deprecated or removed in the pinned std (6), a leak on an error
   path (2).
@@ -77,7 +94,7 @@ dependencies; `anytype` for dvui-style widget options where dvui itself does tha
   `catch` (3), an allocator hidden in a library (2).
 - **low**: naming, test style, small idiom drift (4, 5, 7, 8). Lows go in the batch issue.
 
-## 6. Budget
+## 7. Budget
 
 80k tokens, at most 40 files read in full. Diff and grep first; cite, do not paste, std code.
 Nothing is built: reading and grepping only.

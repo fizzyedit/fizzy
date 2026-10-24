@@ -5942,6 +5942,9 @@ fn demoFrame() !dvui.App.Result {
 /// One run of the frame.
 fn demoRun() !dvui.App.Result {
     demo_player.frame();
+    for (dvui.events()) |e| {
+        if (!e.handled and e.evt == .mouse and e.evt.mouse.action == .release) demo_releases += 1;
+    }
     {
         var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
         defer col.deinit();
@@ -5960,6 +5963,9 @@ fn demoRun() !dvui.App.Result {
     demo_callout_main = if (dvui.tagGet(automation.overlay.callout_anchor)) |td| fizzy.core.screens.isMain(td.id) else null;
     return .ok;
 }
+
+/// Pointer releases that got past the player to the app's widgets.
+var demo_releases: usize = 0;
 
 /// Whether the callout was the main window's in the frame just run (`core.screens.markMain`).
 var demo_callout_main: ?bool = null;
@@ -5986,6 +5992,7 @@ fn demoCtx() !dvui.testing {
     demo_text = .empty;
     demo_clicks = 0;
     demo_commands = 0;
+    demo_releases = 0;
     demo_stage = .{};
     demo_player = .init(std.testing.allocator, demo_stage.stage());
     // No wall-time budget: a seek lands in the step that asked for it, whatever the machine.
@@ -6606,6 +6613,65 @@ test "demo: a person's click pauses it, and resuming carries on from what they d
     demo_player.seek(0);
     try stepDemoUntil(.paused, 400);
     try std.testing.expect(!demo_player.branched);
+}
+
+/// One left drag along the Count button, so the pointer is on it the whole way.
+fn dragTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "drag", "Drag");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://drag", .files = &.{.{ .path = "field", .text = "> " }} });
+    try s.drag(.{ .tag = "demo.count", .x = 0.2 }, .{ .tag = "demo.count", .x = 0.8 }, .{});
+    return s.finish();
+}
+
+/// Seeks to the middle of the drag's carry, landing as `after`, and lets the frames settle.
+fn seekIntoDrag(after: automation.Player.After) !void {
+    var press: f64 = 0;
+    var release: f64 = 0;
+    for (demo_player.tape().?.ops) |op| switch (op.do) {
+        .press => press = @floatFromInt(op.at),
+        .release => release = @floatFromInt(op.at),
+        else => {},
+    };
+    demo_player.seek((press + release) / 2);
+    demo_player.after_seek = after;
+    try stepDemoUntil(if (after == .pause) .paused else .playing, 400);
+}
+
+test "demo: a real release does not end the drag the tape is making" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try dragTape(), .{});
+    try seekIntoDrag(.play);
+    try std.testing.expect(demo_player.input.held.count() > 0);
+
+    const before = demo_releases;
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+    try std.testing.expect(demo_player.input.held.count() > 0);
+    try std.testing.expectEqual(before, demo_releases);
+
+    // The tape's own release still lands when it gets there.
+    try stepDemoUntil(.ended, 400);
+    try std.testing.expectEqual(before + 1, demo_releases);
+}
+
+test "demo: pausing mid-drag and resuming sends no release that has no press" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try dragTape(), .{});
+    try seekIntoDrag(.play);
+    demo_player.pause();
+    for (0..2) |_| _ = try dvui.testing.step(demoFrame);
+    const after_pause = demo_releases;
+    try std.testing.expectEqual(@as(usize, 1), after_pause);
+
+    demo_player.play();
+    try stepDemoUntil(.ended, 400);
+    try std.testing.expectEqual(after_pause, demo_releases);
 }
 
 /// A real press at the middle of `r`, between frames, as a backend adds it.
@@ -9743,6 +9809,40 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     editor.demo.player.unload();
     try dvui.testing.settle(headlessFrame);
 
+    // The tour again, in a phone's shape: its anchors differ (no rail, no Sidebar place), and the
+    // tape still has to reach its last chapter rather than wait on one that is not there.
+    {
+        const desktop_api = editor.demos.api;
+        const desktop_generation = desktop_api.generation();
+        const desktop_size = t.backend.size;
+        const desktop_pixels = t.backend.size_pixels;
+        // The testing backend reports its size from these fields, so writing them *is* a resize.
+        t.backend.size = .{ .w = 390, .h = 844 };
+        t.backend.size_pixels = .{ .w = 390, .h = 844 };
+        fizzy.core.platform.cached_form_factor = .mobile;
+        defer {
+            fizzy.core.platform.cached_form_factor = .desktop;
+            t.backend.size = desktop_size;
+            t.backend.size_pixels = desktop_pixels;
+        }
+        // `step` re-reads the size at its end, so the first frame still runs at the old one.
+        _ = try dvui.testing.step(headlessFrame);
+        try dvui.testing.settle(headlessFrame);
+        // The list differs by form factor, so its generation moves and a retained one is stale.
+        try std.testing.expect(desktop_api.generation() != desktop_generation);
+        try editor.demo.play("tour");
+        const player = &editor.demo.player;
+        var phone_frames: usize = 0;
+        while (player.state != .ended and phone_frames < 5000) : (phone_frames += 1) {
+            _ = try dvui.testing.step(headlessFrame);
+        }
+        try std.testing.expectEqual(app.automation.Player.State.ended, player.state);
+        // No wait gave up: every anchor the phone's tour aims at is drawn in the phone's shape.
+        try std.testing.expectEqual(@as(u32, 0), player.timeouts);
+        player.unload();
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // The text commands, as a snippet keybind, a tape or an agent calls them: each one
     // undoable edit to the active document.
     {
@@ -12279,4 +12379,25 @@ test "settings: an untouched in-app material is not written; a chosen one is" {
     const chosen = try s.serialize(gpa);
     defer gpa.free(chosen);
     try std.testing.expect(std.mem.find(u8, chosen, ".in_app_material = .frost") != null);
+}
+
+test "settings: a fresh profile starts with glass off; a saved material is kept" {
+    const Settings = @import("app").settings.Settings;
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+
+    const fresh = try Settings.parseOnly(gpa, arena.allocator(), ".{}");
+    try std.testing.expectEqual(fizzy.core.material.Kind.none, fresh.window_material);
+    try std.testing.expectEqual(@as(?fizzy.core.material.Kind, null), fresh.in_app_material);
+
+    const saved = try Settings.parseOnly(gpa, arena.allocator(), ".{ .window_material = .liquid, .in_app_material = .frost }");
+    try std.testing.expectEqual(fizzy.core.material.Kind.liquid, saved.window_material);
+    try std.testing.expectEqual(@as(?fizzy.core.material.Kind, .frost), saved.in_app_material);
+
+    var chosen: Settings = .{};
+    chosen.window_material = .liquid;
+    const written = try chosen.serialize(gpa);
+    defer gpa.free(written);
+    try std.testing.expect(std.mem.find(u8, written, ".window_material = .liquid") != null);
 }

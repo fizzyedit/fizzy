@@ -225,6 +225,7 @@ test {
     _ = watch.SettingsWatcher;
     _ = watch.ExecutableWatcher;
     _ = store.Loader;
+    _ = store.Manager;
     _ = Tracks;
     _ = HistoryTransport;
     _ = dome;

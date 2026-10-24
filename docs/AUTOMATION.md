@@ -195,7 +195,7 @@ user's motion settings, timed in demo time.
 | `history.export:<abs path>`, `history.collapse:<abs path>` | the transport's export button, and the chevron that sends it back into the grip |
 | `fizzy.window:main` | the main window |
 | `fizzy.window:dialog:<title>`, `fizzy.window:float:<title>`, `fizzy.window:menu` | an OS window of the app's own: a dialog's, a popped-out view's, a menu's (a second of the same name gets `:2`) |
-| `region:<name>` | a layout region (`Main`, `Panel`, …) |
+| `region:<name>` | a layout region (`Main`, `Panel`, …). The name may be a role (`region:role:documents`, `role:explorer`, `role:panel`): the place this app's shape keeps for that kind, resolved at each step through `Stage.resolveRole`. Any anchor named for a place takes one (`region.arrange:role:explorer`) |
 | `region.arrange:<name>` | a region's arrange button, where it grows in the region's corner (move to the corner first to bring it up) |
 | `drop:center`, `drop:left`, `:right`, `:top`, `:bottom`, `:remove` | a bubble of the drop a carried view would land in, while it is carried over a place: only once the drag is under way, so `drag` carries it there `via` the place first |
 | `float-header:<place>`, `float-close:<place>` | a float's header, to carry it by, and its close button: `float-close:Float 1` |
@@ -555,8 +555,8 @@ to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
   rewinds to exactly the live state, a seek lands in the frame that asked for it with the app's
   clock following the demo, a seek back restores the nearest snapshot instead of the keyframe and
   the moments after it match the first pass, the scrubber follows as it is dragged, a replay that
-  differs is caught, a person's click pauses it and is undone on resume, real motion cannot move
-  the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
+  differs is caught, a real release does not end the tape's drag, a person's click pauses it and is
+  undone on resume, real motion cannot move the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
   round-trips.
 - `zig build test-integration` — `fizzy-demo-tests` (`tests/demos.zig`): every bundled demo, in
   the whole editor through fizzy's own stage. It plays to the end with no wait giving up and no

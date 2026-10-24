@@ -106,7 +106,7 @@ fn startOptions() dvui.App.StartOptions {
         const pref: ?[:0]const u8 = if (@import("app").profile.root) |root|
             std.mem.printSentinel(&pref_path_buf, "{s}", .{root}, 0) catch null
         else
-            paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
+            paths.configFolderZ(appAllocator(), &pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir);
         if (pref) |pref_path| {
             pref_path_len = pref_path.len;
             opts.pref_path = pref_path_buf[0..pref_path_len :0];
@@ -479,6 +479,7 @@ pub fn AppDeinit(_: *dvui.Window) void {
     // currently in flight finishes before we free state it touches.
     singleton.deinit();
     // The instances themselves, last: nothing that could reach them is left running.
+    fizzy.core.profile.hostDeinit();
     const allocator = appAllocator();
     allocator.destroy(fizzy.editor());
     allocator.free(fizzy.entry().root_path);
@@ -492,7 +493,7 @@ pub fn AppFrame() !dvui.App.Result {
     // dvui's refresh records, while someone reads them: the profiler, as frame causes, or a
     // `FIZZY_LOG_REFRESH` run.
     _ = dvui.debug.logRefresh(refresh_log_active or fizzy.core.profile.recordingCauses());
-    fizzy.core.profile.hostFrameBegin(lastSubmitNs(), gpuTotals());
+    fizzy.core.profile.hostFrameBegin(appAllocator(), lastSubmitNs(), gpuTotals());
     defer fizzy.core.profile.hostFrameEnd();
     revealOnceDrawn(false);
     defer revealOnceDrawn(true);

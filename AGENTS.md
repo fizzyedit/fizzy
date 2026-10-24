@@ -203,6 +203,8 @@ New and changed code and comments follow [`docs/STYLE.md`](docs/STYLE.md) (Zig n
 memory, errors, `anytype`, invariants, tests, comments) and [`docs/ZIG.md`](docs/ZIG.md) (writing Zig
 on purpose: ownership, errors, cost per frame, tests that prove the fix).
 
+Reviews and PR self-checks answer the four questions in [`docs/REVIEW.md`](docs/REVIEW.md).
+
 **Plans live in a private repo, [`fizzyedit/plans`](https://github.com/fizzyedit/plans)**, open to
 the `fizzyedit` organization. A path written `plans/X.md` — here, in the code's comments, in
 PRs — means `plans/X.md` in that repo. Clone it beside the others (`~/dev/fizzyedit/plans`,

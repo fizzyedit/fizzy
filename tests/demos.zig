@@ -67,6 +67,7 @@ const bundled_random_seeks = 16;
 
 test "demo: the rail's Files anchor the scripts spell out is the one fizzy publishes" {
     try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
+    try std.testing.expectEqualStrings("fizzy.mobile.tab:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_tab);
 }
 
 test "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after" {
@@ -91,6 +92,14 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
 
     for (fizzy.Editor.Demo.catalog.entries) |e| {
         try app.editor.demo.play(e.name);
+
+        // A role in an anchor's name is the place of that kind in the layout as it is.
+        for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+        const stage = app.editor.demo.player.stage;
+        var buf: [192]u8 = undefined;
+        try std.testing.expectEqualStrings("region:Main", automation.Input.resolve(stage, fizzy.Editor.Demo.catalog.documents, &buf));
+        try std.testing.expectEqualStrings("region:Sidebar", automation.Input.resolve(stage, "region:role:explorer", &buf));
+        try std.testing.expect(automation.Input.tagData(stage, fizzy.Editor.Demo.catalog.documents) != null);
 
         // Straight through, on the testing backend's clock (100 ms a step), keeping every moment
         // a seek could be asked to reproduce.
@@ -448,6 +457,8 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try std.testing.expect(host.docFromPath(draft) != null);
         try std.testing.expect(!std.mem.startsWith(u8, activePath(app.editor), "demo://"));
     }
+
+    try tourOnAPhone(&app);
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:
@@ -613,4 +624,39 @@ fn encodedDemo(name: []const u8, demo: bool) ![]u8 {
     var owned = try s.finish();
     defer owned.deinit();
     return automation.binary.encode(gpa, owned.tape, .{});
+}
+
+/// The tour on a phone: the files view is the explorer sheet over the documents, which the role
+/// `explorer` names, and the tour opens it. (Run from the test above: the editor comes up once.)
+fn tourOnAPhone(app: *BundledApp) !void {
+    const p = &app.editor.demo.player;
+    fizzy.core.platform.cached_form_factor = .mobile;
+    defer fizzy.core.platform.cached_form_factor = .desktop;
+    // A phone's screen, not the desktop's window with a phone's shape.
+    app.t.backend.size = .{ .w = 390, .h = 844 };
+    app.t.backend.size_pixels = .{ .w = 780, .h = 1688 };
+    defer {
+        app.t.backend.size = .{ .w = 1280, .h = 800 };
+        app.t.backend.size_pixels = .{ .w = 2560, .h = 1600 };
+    }
+    for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+
+    try app.editor.demo.play("tour");
+    for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+    var buf: [192]u8 = undefined;
+    const explorer = app.editor.regionFor(sdk.keywords.ide.sidebar) orelse return error.TestUnexpectedResult;
+    const resolved = automation.Input.resolve(p.stage, "region:role:explorer", &buf);
+    try std.testing.expectEqualStrings(explorer.name, resolved["region:".len..]);
+
+    var opened = false;
+    var frames: usize = 0;
+    while (p.state != .ended and frames < 20_000) : (frames += 1) {
+        _ = try dvui.testing.step(headlessFrame);
+        if (app.editor.regionFor(sdk.keywords.ide.sidebar)) |r| {
+            if (!r.isClosed() and dvui.tagGet("workbench.file:demo://tour/README.md") != null) opened = true;
+        }
+    }
+    try std.testing.expectEqual(automation.Player.State.ended, p.state);
+    try std.testing.expectEqual(@as(u32, 0), p.timeouts);
+    try std.testing.expect(opened);
 }

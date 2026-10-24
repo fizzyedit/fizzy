@@ -187,3 +187,48 @@ pub fn bundledPluginsModule(
     }
     return mod;
 }
+
+/// Wire an app-owned code or ZON layout against this target's framework modules.
+pub fn wireAppLayout(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.OptimizeMode,
+    app_layout: ?std.Build.LazyPath,
+    dvui: *std.Build.Module,
+    app: *std.Build.Module,
+    core: *std.Build.Module,
+    sdk_module: *std.Build.Module,
+    consumer: *std.Build.Module,
+) void {
+    if (app_layout) |path| {
+        const is_zon = std.mem.endsWith(u8, path.getDisplayName(), ".zon");
+        const app_layout_mod = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = if (is_zon) b.addWriteFiles().add("app_layout_spec.zig", spec_shim) else path,
+        });
+        if (is_zon) app_layout_mod.addAnonymousImport("app_layout_spec", .{ .root_source_file = path });
+        app_layout_mod.addImport("dvui", dvui);
+        app_layout_mod.addImport("app", app);
+        app_layout_mod.addImport("core", core);
+        app_layout_mod.addImport("fizzy_sdk", sdk_module);
+        consumer.addImport("app_layout", app_layout_mod);
+    }
+}
+
+/// The whole of a `.zon` shape's generated module: import the file as a `Shape` — which is where
+/// it is type-checked, at comptime, against the field names and enums `Shape` declares —
+/// and hand it to the same walk a hand-written shape's calls would have performed itself.
+const spec_shim =
+    \\//! Generated for `-Dapp-layout=<file>.zon`. See `app/layout/Shape.zig`.
+    \\const dvui = @import("dvui");
+    \\const layout_ns = @import("app").layout;
+    \\
+    \\pub const shape: layout_ns.Shape = @import("app_layout_spec");
+    \\
+    \\pub fn layout(_: ?*anyopaque, f: *layout_ns.Layout) !dvui.App.Result {
+    \\    try layout_ns.Shape.apply(shape, f);
+    \\    return .ok;
+    \\}
+    \\
+;

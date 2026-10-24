@@ -8,6 +8,7 @@ const Rule = enum {
     @"file-alias",
     anyerror,
     @"deprecated-names-replacement",
+    @"changelog-words",
 };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
@@ -98,30 +99,39 @@ fn reportFile(
                 budget = allow.count;
             }
         }
-        const status = ratchet(count, budget);
-        if (verbose or status == .over) {
+        // Collect real hits before deciding which wording should block a change.
+        if (rule == .@"changelog-words") {
             for (findings) |finding| {
-                if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s}\n", .{
+                if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s} (report-only)\n", .{
                     path, finding.line, @tagName(rule), finding.message,
                 });
             }
-        }
-        switch (status) {
-            .over => {
-                try writer.print(
-                    "{s}:1: {s}: count {d} exceeds allowance {d}\n",
-                    .{ path, @tagName(rule), count, budget },
-                );
-                failed = true;
-            },
-            .under => {
-                try writer.print(
-                    "{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n",
-                    .{ path, @tagName(rule), count, budget, count },
-                );
-                failed = true;
-            },
-            .equal => {},
+        } else {
+            const status = ratchet(count, budget);
+            if (verbose or status == .over) {
+                for (findings) |finding| {
+                    if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s}\n", .{
+                        path, finding.line, @tagName(rule), finding.message,
+                    });
+                }
+            }
+            switch (status) {
+                .over => {
+                    try writer.print(
+                        "{s}:1: {s}: count {d} exceeds allowance {d}\n",
+                        .{ path, @tagName(rule), count, budget },
+                    );
+                    failed = true;
+                },
+                .under => {
+                    try writer.print(
+                        "{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n",
+                        .{ path, @tagName(rule), count, budget, count },
+                    );
+                    failed = true;
+                },
+                .equal => {},
+            }
         }
     }
     return failed;
@@ -158,6 +168,31 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
             });
         } else {
             try suppressions.append(allocator, .{ .rule = text[prefix.len..close], .line = line_number });
+        }
+    }
+    lines.reset();
+    line_number = 0;
+    while (lines.next()) |line| {
+        line_number += 1;
+        const comment = commentStart(line) orelse continue;
+        const text = std.mem.trim(u8, line[comment + 2 ..], " /!\t\r");
+        if (std.mem.startsWith(u8, text, "lint-allow(")) continue;
+        if (silenced(suppressions.items, .@"changelog-words", line_number)) continue;
+        const words = [_][]const u8{ "fixed", "now", "used to", "previously", "formerly", "no longer", "new:" };
+        word_loop: for (words) |word| {
+            for (0..text.len) |start| {
+                if (start + word.len > text.len) break;
+                if (start > 0 and (std.ascii.isAlphanumeric(text[start - 1]) or text[start - 1] == '_')) continue;
+                const end = start + word.len;
+                if (end < text.len and (std.ascii.isAlphanumeric(text[end]) or text[end] == '_')) continue;
+                if (!std.ascii.eqlIgnoreCase(text[start..end], word)) continue;
+                try findings.append(allocator, .{
+                    .rule = .@"changelog-words",
+                    .line = line_number,
+                    .message = try allocator.print("comment contains '{s}': {s}", .{ word, text }),
+                });
+                break :word_loop;
+            }
         }
     }
     var create_line: ?usize = null;
@@ -598,4 +633,35 @@ test "deprecated marker honors lint-allow suppression and a file budget" {
     try std.testing.expect(!try reportFile(&output.writer, "sdk/src/allowed.zig", hit, &allowances, &seen, false));
     try std.testing.expect(try reportFile(&output.writer, "sdk/src/under.zig", hit, &allowances, &seen, false));
     try std.testing.expect(seen[0] and seen[1]);
+}
+
+test "changelog words report hits, honor line allows, and never fail the runner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const hit = try analyze(a, "// Previously used a different buffer.\nconst n = 1;");
+    try std.testing.expectEqual(@as(usize, 1), hit.len);
+    try std.testing.expectEqual(Rule.@"changelog-words", hit[0].rule);
+    try std.testing.expectEqual(@as(usize, 1), hit[0].line);
+    for ([_][:0]const u8{
+        "// lint-allow(changelog-words): describes buffer capacity\n// Fixed-size buffer.\nconst n = 1;",
+        "const n = 1; // lint-allow(changelog-words): describes capacity\n// Fixed-size buffer.",
+    }) |source| {
+        try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
+    }
+    for ([_][:0]const u8{
+        "const s = \"// now fixed\";",
+        "const s =\n    \\\\// now fixed\n;",
+        "// Unknown prefix and renewed storage.\nconst n = 1;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
+    for ([_][]const u8{ "fixed", "NOW", "used to", "previously", "formerly", "no longer", "New:" }) |word| {
+        const source = try a.printSentinel("//! {s} works.\n", .{word}, 0);
+        try std.testing.expectEqual(@as(usize, 1), (try analyze(a, source)).len);
+    }
+    var output: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expect(!try reportFile(&output.writer, "hit.zig", hit, &.{}, &.{}, false));
+    try std.testing.expectEqualStrings(
+        "hit.zig:1: changelog-words: comment contains 'previously': Previously used a different buffer. (report-only)\n",
+        output.written(),
+    );
 }
