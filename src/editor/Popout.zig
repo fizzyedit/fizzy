@@ -770,7 +770,7 @@ const glass_lit: f32 = 0.12;
 /// display's rate (60 frames a second where it could have 120). With the room to spare it moves
 /// only when the glass reaches past it, or it is far bigger than the glass needs, rather than
 /// every frame the drop moves. Null with no glass to cover.
-fn overlayArea(display: anytype, main_px: dvui.Rect.Physical, s: f32) ?dvui.Rect.Physical {
+fn overlayArea(display: viewports.Rect, main_px: dvui.Rect.Physical, s: f32) ?dvui.Rect.Physical {
     var glass: ?dvui.Rect.Physical = null;
     for (fizzy.core.native_glass.shapes()) |sh| {
         const r = inMainFrame(sh.rect, main_px) orelse continue;

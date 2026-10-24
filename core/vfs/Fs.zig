@@ -166,6 +166,7 @@ pub const Fs = struct {
         /// A vtable from a backend's functions, written with the natural signatures — each op
         /// returning `Error!Job` — rather than the `Result(Job)` that crosses. An op left out
         /// is undefined, as it would be in a vtable written by hand.
+        // anytype: Backend operation tuples contain different subsets of typed functions.
         pub fn of(comptime impl: anytype) VTable {
             const I = @TypeOf(impl);
             return .{

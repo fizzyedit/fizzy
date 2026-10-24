@@ -133,6 +133,7 @@ pub const Call = struct {
     }
 
     /// Return `value` (anything `std.zon.stringify` can write) as the command's result.
+    // anytype: Command return values have command-specific shapes serialized to ZON.
     pub fn returns(self: *Call, value: anytype) error{OutOfMemory}!void {
         var aw: std.Io.Writer.Allocating = .init(self.arena);
         std.zon.stringify.serialize(value, .{}, &aw.writer) catch return error.OutOfMemory;

@@ -1,7 +1,7 @@
 //! Repository lint with per-file budgets for existing findings.
 const std = @import("std");
 
-const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror, @"deprecated-names-replacement" };
+const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror, @"deprecated-names-replacement", @"anytype-reason" };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
 const Suppression = struct { rule: []const u8, line: usize };
@@ -53,6 +53,7 @@ pub fn main(init: std.process.Init) !void {
             const stem = entry.basename[0 .. entry.basename.len - ".zig".len];
             const findings = try std.mem.concat(allocator, Finding, &.{
                 try analyze(allocator, bytes),
+                try anytypeReasons(allocator, bytes),
                 try fileAlias(allocator, bytes, stem),
                 try deprecatedReplacement(allocator, bytes, path),
             });
@@ -184,6 +185,69 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         .message = "file has pub fn create* but no destroy function",
     });
     return findings.toOwnedSlice(allocator);
+}
+
+/// The caller owns the findings and frees them with `allocator`.
+fn anytypeReasons(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
+    var tree = try std.zig.Ast.parse(allocator, source, .{});
+    defer tree.deinit(allocator);
+    if (tree.errors.len != 0) return error.InvalidZigSource;
+    var findings: std.ArrayList(Finding) = .empty;
+    errdefer findings.deinit(allocator);
+    for (0..tree.nodes.len) |index| {
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(index));
+        // fn_decl and its fn_proto share parameters; visit only the prototype.
+        if (tree.nodeTag(node) == .fn_decl) continue;
+        var buffer: [1]std.zig.Ast.Node.Index = undefined;
+        const proto = tree.fullFnProto(&buffer, node) orelse continue;
+        var params = proto.iterate(&tree);
+        var has_format = false;
+        while (params.next()) |param| {
+            const name = tree.tokenSlice(param.name_token orelse continue);
+            if (param.comptime_noalias != null and
+                std.mem.eql(u8, tree.tokenSlice(param.comptime_noalias.?), "comptime") and
+                param.type_expr != null and
+                (std.mem.eql(u8, name, "fmt") or std.mem.eql(u8, name, "format") or
+                    std.mem.endsWith(u8, name, "_fmt")))
+            {
+                const ty = tree.getNodeSource(param.type_expr.?);
+                if (std.mem.eql(u8, ty, "[]const u8")) has_format = true;
+            }
+        }
+        params = proto.iterate(&tree);
+        while (params.next()) |param| {
+            const token = param.anytype_ellipsis3 orelse continue;
+            if (!std.mem.eql(u8, tree.tokenSlice(token), "anytype")) continue;
+            const name = if (param.name_token) |t| tree.tokenSlice(t) else "";
+            // Writer sinks and tuples forwarded to std-style formatting are open plumbing.
+            if (std.mem.eql(u8, name, "writer") or
+                (has_format and (std.mem.eql(u8, name, "args") or
+                    std.mem.endsWith(u8, name, "_args")))) continue;
+            const loc = tree.tokenLocation(0, token);
+            if (anytypeReason(source[loc.line_start..loc.line_end])) continue;
+            if (loc.line_start > 0) {
+                const end = loc.line_start - 1;
+                const start = if (std.mem.lastIndexOfScalar(u8, source[0..end], '\n')) |i| i + 1 else 0;
+                const previous = source[start..end];
+                if (std.mem.startsWith(u8, std.mem.trimStart(u8, previous, " \t"), "//") and
+                    anytypeReason(previous)) continue;
+            }
+            try findings.append(allocator, .{
+                .rule = .@"anytype-reason",
+                .line = loc.line + 1,
+                .message = "anytype parameter requires // anytype: <reason> on this or the preceding line",
+            });
+        }
+    }
+    return findings.toOwnedSlice(allocator);
+}
+
+fn anytypeReason(line: []const u8) bool {
+    const start = commentStart(line) orelse return false;
+    const text = std.mem.trim(u8, line[start + 2 ..], " \t\r");
+    const prefix = "anytype:";
+    return std.mem.startsWith(u8, text, prefix) and
+        std.mem.trim(u8, text[prefix.len..], " \t\r").len != 0;
 }
 
 /// A file-level `const X = @This();` is named for the file, as in std (`const Writer = @This();`).
@@ -566,4 +630,36 @@ test "deprecated marker honors lint-allow suppression and a file budget" {
     try std.testing.expect(!try reportFile(&output.writer, "sdk/src/allowed.zig", hit, &allowances, &seen, false));
     try std.testing.expect(try reportFile(&output.writer, "sdk/src/under.zig", hit, &allowances, &seen, false));
     try std.testing.expect(seen[0] and seen[1]);
+}
+
+test "anytype parameters require a local reason except writer and format plumbing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "fn f(value: anytype) void {}",
+        "fn f(value: anytype) void {} // anytype:",
+        "// anytype: tuple of types\n\nfn f(value: anytype) void {}",
+        "const F = fn (anytype) void;",
+        "fn f(args: anytype) void {}",
+        "fn f(fmt: u8, args: anytype) void {}",
+        "fn f(noalias fmt: []const u8, args: anytype) void {}",
+        "const s = \"// anytype: fake\"; fn f(x: anytype) void {}",
+    }) |source| {
+        const findings = try anytypeReasons(a, source);
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(Rule.@"anytype-reason", findings[0].rule);
+    }
+    for ([_][:0]const u8{
+        "// anytype: tuple of types\nfn f(value: anytype) void {}",
+        "fn f(value: anytype) void {} // anytype: tuple of types",
+        "fn f(\n    // anytype: callback context\n    ctx: anytype,\n) void {}",
+        "fn f(writer: anytype) void {}",
+        "fn f(comptime fmt: []const u8, args: anytype) void {}",
+        "fn f(comptime anchor_fmt: []const u8, anchor_args: anytype) void {}",
+        "const s = \"anytype\"; // anytype in a comment",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try anytypeReasons(a, source)).len);
+    const mixed = try anytypeReasons(a, "fn f(\n x: anytype, // anytype: callback context\n y: anytype,\n) void {}");
+    try std.testing.expectEqual(@as(usize, 1), mixed.len);
+    try std.testing.expectEqual(@as(usize, 3), mixed[0].line);
 }

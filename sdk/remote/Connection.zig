@@ -218,7 +218,7 @@ fn say(from: *Connection, to: *Connection, msg: Message) !void {
     try to.received(msg);
 }
 
-fn open(p: anytype) !void {
+fn open(p: *@TypeOf(pair())) !void {
     try say(&p.host, &p.editor, .{ .hello = p.host.local });
     try say(&p.editor, &p.host, .{ .hello = p.editor.local });
     try t.expectEqual(State.open, p.host.state);

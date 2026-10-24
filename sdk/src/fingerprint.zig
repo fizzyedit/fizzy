@@ -62,6 +62,7 @@ pub fn foldString(h: u64, s: []const u8) u64 {
 /// followed; data types should be listed at a depth that reaches their fields, while
 /// large opaque-by-pointer types (e.g. `dvui.Window`) can be folded at depth 0 (size
 /// + alignment only), matching the original size-based dvui check.
+// anytype: Boundary type tuples contain heterogeneous types traversed at comptime.
 pub fn hashAll(h_in: u64, comptime types: anytype, comptime depth: comptime_int) u64 {
     comptime {
         var h = h_in;
@@ -151,6 +152,7 @@ fn hashType(h_in: u64, comptime T: type, comptime depth: comptime_int) u64 {
 /// compiles it — unlike `hashAll`, whose result is real memory-layout information and must be
 /// (and is, via `dylib.abi_fingerprint`) recomputed live on both sides of the plugin boundary at
 /// load time rather than checked against a recorded literal.
+// anytype: Boundary type tuples contain heterogeneous types traversed at comptime.
 pub fn hashAllShape(h_in: u64, comptime types: anytype, comptime depth: comptime_int) u64 {
     comptime {
         var h = h_in;

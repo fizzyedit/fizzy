@@ -2970,7 +2970,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
 /// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
 /// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
 /// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
-fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: ?*const @import("app").Tracks.Track) usize {
     const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
     if (ds.kept_at != track_steps) {
         ds.kept_at = track_steps;
