@@ -86,7 +86,12 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     // shuts what was open rather than reading one as the other.
     const side = sideSheets();
     if (dvui.dataGet(null, body.data().id, "_side", bool)) |was| {
-        if (was != side) shutSheets(editor);
+        if (was != side) {
+            shutSheets(editor);
+            // The sheets of the other shape are other widgets, and read the extent saved under
+            // their name when they first draw: shut that too, or they open on the old turn's.
+            inline for (.{ explorer_name, panel_name }) |name| _ = f.state.setExtent(f.gpa, name, 0);
+        }
     }
     dvui.dataSet(null, body.data().id, "_side", side);
 
@@ -193,6 +198,7 @@ fn panelSheet(f: *Layout, side: bool) !Layout.Region {
         .name = panel_name,
         .keywords = bottom,
         .resize = true,
+        .max_extent = sideExtentCap(side),
         .card = true,
         .pane_cards = true,
     }, sheetOptions(side));
@@ -204,8 +210,16 @@ fn explorerSheet(editor: *fizzy.Editor, f: *Layout, side: bool) !Layout.Region {
         .keywords = sidebar,
         .content = .{ .ctx = editor, .draw = explorerPane },
         .resize = true,
+        .max_extent = sideExtentCap(side),
         .card = true,
     }, sheetOptions(side));
+}
+
+/// The widest a side sheet shows, drag or saved extent notwithstanding; null at the foot, where
+/// the column it stands in already bounds the width.
+fn sideExtentCap(side: bool) ?f32 {
+    if (!side) return null;
+    return @min(sheet_max_w, dvui.windowRect().w * side_share);
 }
 
 /// A side sheet reaches `side_share` of the width down the window; one at the foot, `sheet_share`
@@ -213,7 +227,7 @@ fn explorerSheet(editor: *fizzy.Editor, f: *Layout, side: bool) !Layout.Region {
 fn sheetOptions(side: bool) dvui.Options {
     const win = dvui.windowRect();
     if (side) return .{
-        .min_size_content = .{ .w = @min(sheet_max_w, win.w * side_share) },
+        .min_size_content = .{ .w = sideExtentCap(true).? },
         .expand = .vertical,
     };
     return .{ .min_size_content = .{ .h = win.h * sheet_share }, .expand = .horizontal };

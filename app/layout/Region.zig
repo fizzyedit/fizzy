@@ -281,6 +281,10 @@ pub const InitOptions = struct {
     /// starting extent comes from `min_size_content` in the `dvui.Options`; the user's drag
     /// replaces it and persists.
     resize: bool = false,
+    /// With `resize`, the most the extent shows, however far the user drags it or whatever a
+    /// saved layout holds. The stored extent is clamped to it too, so shrinking the cap (a
+    /// window turned narrower) is felt at once rather than only on the next drag.
+    max_extent: ?f32 = null,
     /// Collapse while nothing matches, rather than holding empty space open.
     hide_when_empty: bool = false,
     /// Drop this region from persisted extents when it is closed and has no assigned surface.
@@ -437,7 +441,8 @@ pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions,
         // The size the user chose. Auto-collapse must never overwrite it, or folding the window
         // small destroys the extent it is supposed to restore: the stored size stays put and
         // only what is *shown* goes to zero.
-        const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
+        var chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
+        if (init_opts.max_extent) |cap| chosen = @min(chosen, cap);
         if (init_opts.name.len > 0) {
             if (self.state.takeSlideOpen(init_opts.name)) |from| {
                 dvui.dataSet(null, id, "_shown", chosen * from);
