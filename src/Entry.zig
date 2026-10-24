@@ -430,6 +430,17 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.backend.showWindowUndrawn(win);
 }
 
+/// `FIZZY_STARTUP_REPORT=1` prints the time from `main` to the first frame on stderr, for
+/// `scripts/hello-numbers.py`. It bypasses `std.log`, which a release build compiles out below
+/// `err`, and the Output panel; unset, a shipped build prints nothing.
+fn reportFirstFrame() void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
+    const raw = std.c.getenv("FIZZY_STARTUP_REPORT") orelse return;
+    if (std.mem.eql(u8, std.mem.span(raw), "0")) return;
+    const ph = fizzy.core.profile.phases() orelse return;
+    std.debug.print("startup: first frame {d:.3} ms after main\n", .{ph.ms(ph.len - 1)});
+}
+
 /// Where the window's reveal is (`revealOnceDrawn`): drawing its first frame, then seen.
 var reveal: enum { first_frame, next_frame, done } = .first_frame;
 
@@ -442,6 +453,7 @@ fn revealOnceDrawn(at_end: bool) void {
     switch (reveal) {
         .first_frame => if (at_end) {
             fizzy.core.profile.phase(dvui.io, "first frame");
+            reportFirstFrame();
             reveal = .next_frame;
             dvui.refresh(null, @src(), null);
         },
