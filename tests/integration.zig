@@ -3158,6 +3158,50 @@ test "a bar tab opens the explorer sheet on its view, and picking the showing on
     try std.testing.expect(placeShut(editor, "Explorer"));
 }
 
+test "the Layout setting switches a desktop window to the mobile shape and back, held while a demo plays" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    editor.app.config_folder = dir_buf[0..try tmp.dir.realPath(dvui.io, &dir_buf)];
+    defer fizzy.core.platform.cached_layout_mode = .auto;
+
+    const state = &editor.app.layout;
+    const mobile_key = "mobile";
+
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+
+    // Mobile on a desktop form factor: the mobile shape at once.
+    editor.app.settings.layout_mode = .mobile;
+    editor.chooseShape();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    try std.testing.expectEqualStrings(mobile_key, state.shape);
+
+    // Desktop: the desktop arrangement is back.
+    editor.app.settings.layout_mode = .desktop;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+
+    // While a demo plays the change waits, and lands when it ends.
+    editor.app.settings.layout_mode = .mobile;
+    editor.demo.player.state = .playing;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+    editor.demo.player.state = .idle;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings(mobile_key, state.shape);
+}
+
 test "a form-factor flip saves the shape it leaves and loads the other's, leaving the first's file part alone" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

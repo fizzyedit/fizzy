@@ -232,6 +232,14 @@ pub const groups = [_]Group{
                 // Every panel is individually searchable — see `LayoutSettings`.
                 .search = .{ .score = LayoutSettings.score, .draw = LayoutSettings.draw },
             },
+            .{
+                .label = "Layout",
+                .key = "layout_mode",
+                .description = "Whether the window is laid out for a touch screen (Mobile: one " ++
+                    "full-screen place with sheets) or for a desktop. Auto follows the device.",
+                .keywords = "mobile tablet touch phone desktop layout form factor",
+                .draw = drawLayoutMode,
+            },
         },
     },
     .{
@@ -661,6 +669,44 @@ fn drawInputScheme() void {
         }) |choice| {
             if (dropdown.addChoiceLabel(choice[0])) {
                 fizzy.editor().app.settings.input_scheme = choice[1];
+                fizzy.editor().markSettingsDirty();
+                dvui.refresh(null, @src(), null);
+            }
+        }
+    }
+}
+
+fn drawLayoutMode() void {
+    var dropdown: core.widgets.DropdownWidget = undefined;
+    dropdown.init(@src(), .{}, .{
+        .expand = .horizontal,
+        .corners = dvui.CornerRect.all(1000),
+    });
+    defer dropdown.deinit();
+
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .vertical,
+        .gravity_x = 1.0,
+    });
+
+    const label_text: []const u8 = switch (fizzy.editor().app.settings.layout_mode) {
+        .auto => "Auto",
+        .mobile => "Mobile",
+        .desktop => "Desktop",
+    };
+    dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
+    core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+
+    hbox.deinit();
+
+    if (dropdown.dropped()) {
+        inline for (.{
+            .{ "Auto", Editor.Settings.LayoutMode.auto },
+            .{ "Mobile", Editor.Settings.LayoutMode.mobile },
+            .{ "Desktop", Editor.Settings.LayoutMode.desktop },
+        }) |choice| {
+            if (dropdown.addChoiceLabel(choice[0])) {
+                fizzy.editor().app.settings.layout_mode = choice[1];
                 fizzy.editor().markSettingsDirty();
                 dvui.refresh(null, @src(), null);
             }

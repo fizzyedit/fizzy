@@ -7,6 +7,10 @@ const std = @import("std");
 
 pub const FormFactor = enum { desktop, tablet, mobile };
 
+/// The person's Layout setting (`settings.zon`'s `layout_mode`): `auto` follows what was detected,
+/// the others force a shape on any device.
+pub const LayoutMode = enum { auto, mobile, desktop };
+
 /// A touch device whose short side is under this many CSS px is mobile.
 pub const mobile_short_side: f32 = 600;
 
@@ -35,6 +39,40 @@ pub fn overrideFromCode(code: i32) ?FormFactor {
 /// one, else the measured rule.
 pub fn resolve(coarse: bool, w: f32, h: f32, override: ?FormFactor) FormFactor {
     return override orelse classify(coarse, w, h);
+}
+
+/// The form factor the layout is drawn for: this visit's `override` (`?form=`) beats the setting,
+/// `mobile` and `desktop` force theirs, and `auto` is what was `detected`.
+pub fn effective(detected: FormFactor, mode: LayoutMode, override: ?FormFactor) FormFactor {
+    if (override) |o| return o;
+    return switch (mode) {
+        .auto => detected,
+        .mobile => .mobile,
+        .desktop => .desktop,
+    };
+}
+
+test "effective covers every detected form, mode and override" {
+    const overrides = [_]?FormFactor{ null, .desktop, .tablet, .mobile };
+    for (std.enums.values(FormFactor)) |detected| {
+        for (std.enums.values(LayoutMode)) |mode| {
+            for (overrides) |override| {
+                const want: FormFactor = if (override) |o| o else switch (mode) {
+                    .auto => detected,
+                    .mobile => .mobile,
+                    .desktop => .desktop,
+                };
+                try std.testing.expectEqual(want, effective(detected, mode, override));
+            }
+        }
+    }
+}
+
+test "a mode forces mobile or desktop on any device, and auto keeps a tablet a tablet" {
+    try std.testing.expectEqual(FormFactor.mobile, effective(.desktop, .mobile, null));
+    try std.testing.expectEqual(FormFactor.desktop, effective(.mobile, .desktop, null));
+    try std.testing.expectEqual(FormFactor.tablet, effective(.tablet, .auto, null));
+    try std.testing.expectEqual(FormFactor.desktop, effective(.tablet, .desktop, null));
 }
 
 test "a fine pointer is a desktop at any size" {
