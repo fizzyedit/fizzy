@@ -4460,6 +4460,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.tracks) |*t| {
         t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
         t.tick();
+        // A checkpoint's diff not done is carried on at the next frame's top, asleep or not.
+        if (t.due) dvui.refresh(null, @src(), null);
     }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
