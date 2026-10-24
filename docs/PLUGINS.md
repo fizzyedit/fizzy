@@ -1974,5 +1974,5 @@ plugins/<name>/
 bundled dylib); the root build aggregates every plugin's integration in
 [`build/plugins.zig`](../build/plugins.zig). Built-ins register in
 [`Editor.zig`](../src/editor/Editor.zig) `postInit` via `try <name>_mod.register(&editor.host)`;
-`bundled_modules` there is the list. `pixi` is not a built-in — it ships only through the store
+`bundled_plugins` there is the list, generated from what the application names (an app links only the plugins it names). `pixi` is not a built-in — it ships only through the store
 path in §6, with no special treatment in fizzy.
