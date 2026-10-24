@@ -568,8 +568,8 @@ pub fn init(
             .border = .{ .r = 47, .g = 179, .b = 135, .a = 255 },
             .text = .{ .r = 58, .g = 10, .b = 26, .a = 255 },
         };
-        // Pale enough to read on the red window and content fills (6.9:1 and 3.9:1; was 2.2:1 and
-        // 1.3:1, a red on red). The text colour was already 11.8:1 on the window.
+        // Pale enough to read as red on red: the fill is 6.9:1 on the window and 3.9:1 on the
+        // content fill; the text colour is 11.8:1 on the window.
         strawberry.err = .{
             .fill = .{ .r = 255, .g = 160, .b = 165, .a = 255 },
             .text = .{ .r = 255, .g = 238, .b = 228, .a = 255 },
