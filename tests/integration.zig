@@ -10233,10 +10233,21 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.demo.play("tour");
     var frames: usize = 0;
     var desktop_panes: PaneWatch = .{};
+    var relocations: usize = 0;
+    var prev: ?dvui.Rect = null;
+    var was_moving = false;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
         _ = try dvui.testing.step(headlessFrame);
         desktop_panes.look(&editor.workbench);
+        const now = calloutRect();
+        const moving = if (prev) |p| if (now) |n| @abs(n.x - p.x) + @abs(n.y - p.y) > 0.5 and @abs(n.w - p.w) < 0.5 else false else false;
+        if (moving and !was_moving) relocations += 1;
+        was_moving = moving;
+        prev = now;
     }
+    // The first callout holds its place: it set off 11 times before it stopped dodging the
+    // resting pointer (`overlay.keepClear`), 10 since.
+    try std.testing.expect(relocations <= 10);
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
     // A wide window sets the tour's two documents side by side.
     try std.testing.expect(desktop_panes.side_by_side);
