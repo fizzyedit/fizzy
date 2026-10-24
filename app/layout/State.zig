@@ -490,12 +490,6 @@ fn publishCardArea(self: *State) void {
     self.card_area_building = @splat(.{});
 }
 
-/// The shape's walk of the split trees is over: places dropped during it (`SplitTree.Forest.collapse`)
-/// are freed now, not under the walk that was drawing them.
-pub fn reapSplits(self: *State, gpa: std.mem.Allocator) void {
-    self.splits.reap(gpa);
-}
-
 /// The shape has finished declaring: make this frame's regions the ones `regionFor` answers with.
 pub fn publishRegions(self: *State) void {
     self.publishCardArea();

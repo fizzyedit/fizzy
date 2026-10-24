@@ -76,7 +76,9 @@ pub const Forest = struct {
 
     const Buried = struct { node: *Node, deep: bool };
 
-    /// Free the nodes buried since the last call. Call when no walk of the tree is under way.
+    /// Free the nodes buried since the last call. Call when no walk of the tree is under way: a
+    /// frame loop that collapses places must call it once per frame after its shape's walk, or the
+    /// nodes wait (bounded, nothing freed early) until `deinit`.
     pub fn reap(self: *Forest, gpa: std.mem.Allocator) void {
         for (self.buried.items) |b| if (b.deep) freeNode(gpa, b.node) else gpa.destroy(b.node);
         self.buried.clearRetainingCapacity();
@@ -487,7 +489,7 @@ test "a place collapsed mid-walk leaves the tree being walked readable until rea
     // down to the origin leaf, and the root itself goes with it.
     try std.testing.expect(f.collapse(gpa, "Main/l1"));
     try std.testing.expect(f.root("Main") == null);
-    // Still readable (the testing allocator would flag a freed read as a leak or poison it).
+    // Still readable: freed here, the debug allocator's poison would make these reads fail.
     try std.testing.expectEqualStrings("Main", branch.origin);
     try std.testing.expectEqualStrings("Main", leafName(branch.b.*).?);
     f.reap(gpa);

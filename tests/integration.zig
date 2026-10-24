@@ -3407,7 +3407,7 @@ const FizzySplitFrame = struct {
             defer main.deinit();
         }
         e.app.layout.publishRegions();
-        e.app.layout.reapSplits(e.app.gpa);
+        e.app.layout.splits.reap(e.app.gpa);
         return .ok;
     }
 };
