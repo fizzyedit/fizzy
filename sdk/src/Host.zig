@@ -49,7 +49,7 @@ pub const events = @import("events.zig");
 /// under `.plugins.<id>.settings` (a real, human-editable nested ZON struct literal, not an
 /// escaped-string blob — see `src/editor/SettingsPluginsZon.zig` and
 /// `plans/PLUGIN_MANIFEST_PLAN.md` R10/R12) and never interprets the contents.
-pub const PluginSettings = std.StringArrayHashMapUnmanaged(?[]const u8);
+pub const PluginSettings = std.array_hash_map.String(?[]const u8);
 
 /// Optional tint for a workbench file-tree row background. `color_index` is the row's
 /// stable index during the current tree draw (workbench increments per file). Return

@@ -145,10 +145,10 @@ pub const Watches = struct {
     said: ?Blocked = null,
     /// Where walks stopped: folders not yet watched, and watched folders whose children were
     /// not all seen, each with what it is still owed. Keys owned.
-    frontier: std.StringArrayHashMapUnmanaged(Owed) = .empty,
+    frontier: std.array_hash_map.String(Owed) = .empty,
     /// The frontier `catchUp` is working through, so a walk that finishes a folder still on
     /// it can take it off rather than have it walked and announced again. Keys owned.
-    todo: std.StringArrayHashMapUnmanaged(Owed) = .empty,
+    todo: std.array_hash_map.String(Owed) = .empty,
     /// Folders left out for reasons of their own, each said once and not tried again, until
     /// it goes or moves. Keys owned.
     lost: std.StringHashMapUnmanaged(void) = .empty,
@@ -227,7 +227,7 @@ pub const Watches = struct {
         // Each entry once per call: one refused again goes back on the frontier, not round
         // this loop for ever.
         std.debug.assert(self.todo.count() == 0);
-        std.mem.swap(std.StringArrayHashMapUnmanaged(Owed), &self.todo, &self.frontier);
+        std.mem.swap(std.array_hash_map.String(Owed), &self.todo, &self.frontier);
         defer {
             for (self.todo.keys(), self.todo.values()) |p, owed| {
                 self.leftOut(p, owed, ctx);

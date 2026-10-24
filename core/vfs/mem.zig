@@ -10,7 +10,7 @@ const Allocator = std.mem.Allocator;
 pub const Mem = struct {
     allocator: Allocator,
     /// Keyed by full path (`/docs/a.txt`). The root `/` is always present.
-    nodes: std.StringArrayHashMapUnmanaged(Node) = .empty,
+    nodes: std.array_hash_map.String(Node) = .empty,
     answers: Deferred,
     /// Bumped by every mutation, so a holder (an archive that was unpacked into this) can tell
     /// whether anything changed since it last looked.
