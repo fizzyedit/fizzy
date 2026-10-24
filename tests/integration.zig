@@ -3006,6 +3006,7 @@ fn regionHeight(editor: *fizzy.Editor, name: []const u8) f32 {
 }
 
 /// A left click at the middle of `r`, then the frames after it.
+// anytype: Frame callbacks have inferred error sets and run through the same tap sequence.
 fn tapAt(r: dvui.Rect.Physical, comptime frame: anytype) !void {
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = r.center() });
     _ = try dvui.currentWindow().addEventMouseButton(.left, .press);

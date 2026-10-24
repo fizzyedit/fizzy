@@ -2729,6 +2729,7 @@ fn syncDocument(self: *Client, io: std.Io, path: []const u8, bytes: []const u8) 
 
 // ---- JSON-RPC plumbing --------------------------------------------------------------------
 
+// anytype: JSON-RPC envelopes and payloads have method-specific shapes serialized by std.json.
 fn send(self: *Client, io: std.Io, value: anytype) !void {
     self.write_lock.lock();
     defer self.write_lock.unlock();
@@ -2757,6 +2758,7 @@ fn send(self: *Client, io: std.Io, value: anytype) !void {
 
 const SentRequest = struct { id: i64, slot: *ResponseSlot };
 
+// anytype: JSON-RPC envelopes and payloads have method-specific shapes serialized by std.json.
 fn sendRequest(self: *Client, io: std.Io, method: []const u8, params: anytype) !SentRequest {
     const gpa = self.config.allocator;
     const id = Protocol.nextRequestId(&self.next_id);
@@ -2784,6 +2786,7 @@ fn sendRequest(self: *Client, io: std.Io, method: []const u8, params: anytype) !
     return .{ .id = id, .slot = slot };
 }
 
+// anytype: JSON-RPC envelopes and payloads have method-specific shapes serialized by std.json.
 fn sendNotification(self: *Client, io: std.Io, method: []const u8, params: anytype) !void {
     const Params = @TypeOf(params);
     const Msg = struct {
@@ -2798,6 +2801,7 @@ fn sendNotification(self: *Client, io: std.Io, method: []const u8, params: anyty
 /// shape the server is waiting on, distinct from `sendRequest` (which sends a request *we*
 /// initiate) and `sendNotification` (which expects no reply at all). `id` is echoed back
 /// verbatim so the server can match this reply to the request it sent.
+// anytype: JSON-RPC envelopes and payloads have method-specific shapes serialized by std.json.
 fn sendResponse(self: *Client, io: std.Io, id: i64, result: anytype) !void {
     const Result = @TypeOf(result);
     const Msg = struct {

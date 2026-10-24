@@ -116,6 +116,7 @@ fn write(s: *Stringify, host: *sdk.Host, arena: std.mem.Allocator) Error!void {
     try s.endObject();
 }
 
+// anytype: Schema tuples have endpoint-specific fields preserved in the response type.
 fn jsonResponse(description: []const u8, schema: anytype) JsonResponse(@TypeOf(schema)) {
     return .{ .description = description, .content = .{ .@"application/json" = .{ .schema = schema } } };
 }

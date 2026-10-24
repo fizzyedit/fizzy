@@ -314,6 +314,7 @@ pub fn reorder(self: *Floats, order: []const usize) void {
 pub const max = 32;
 
 /// A rect as `float_rules` takes it.
+// anytype: Both untagged and natural-space dvui rects convert to the same rule coordinates.
 pub fn toRules(r: anytype) rules.Rect {
     return .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
 }
