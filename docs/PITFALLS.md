@@ -121,5 +121,5 @@ identify a behaviour to investigate; patch files mix prose and implementation hu
 so read only the commit-message part above the first `---` and never open the diff
 hunks while writing a note. State the behaviour in our own words. Cite only public OS
 documentation. Separate recorded observations, documented contracts and cases still
-awaiting observation;
-include platform and verification limits so a proposed test is not mistaken for a pass.
+awaiting observation, and include platform and verification limits so a proposed test
+is not mistaken for a pass.
