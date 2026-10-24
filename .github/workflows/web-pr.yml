@@ -26,13 +26,14 @@ env:
   ZIG_VERSION: "0.17.0"
   WEBSITE: fizzyedit/website
 
-# One preview per PR at a time; a push replaces the build in flight.
-concurrency:
-  group: web-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
+# One preview per PR at a time: a push replaces the build in flight, and removal replaces a build
+# that would put the preview back. The group is on the jobs, not the workflow: a skipped job never
+# joins it, so a label event for anything but `qa:needed` cannot cancel a running build.
 jobs:
   build:
+    concurrency:
+      group: web-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     # Labelled qa:needed, and (for the labeled event) by that very label.
     if: >-
       github.event.action != 'closed'
@@ -88,6 +89,10 @@ jobs:
 
   publish:
     needs: build
+    if: success()
+    concurrency:
+      group: web-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -127,12 +132,20 @@ jobs:
           printf 'Preview: %s\n\nA Debug build of %s, loading plugins from the store test channel. It is rebuilt on each push while the PR is labelled `qa:needed`, and removed when it closes or loses the label.\n' \
             "$url" "$SHA" | gh issue comment "$thread" -R fizzyedit/work --body-file -
 
-  # The release (and so /testapp/pr-N/) goes when the PR closes or loses the label.
+  # The release (and so /testapp/pr-N/) goes when the PR closes or loses the label, and when a
+  # build fails, so the URL never serves an older push's build as if it were this one.
   remove:
+    needs: build
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository
+      !cancelled()
+      && github.event.pull_request.head.repo.full_name == github.repository
       && (github.event.action == 'closed'
-          || (github.event.action == 'unlabeled' && github.event.label.name == 'qa:needed'))
+          || (github.event.action == 'unlabeled' && github.event.label.name == 'qa:needed')
+          || needs.build.result == 'failure')
+    concurrency:
+      group: web-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions: {}
     runs-on: ubuntu-latest
     env:
       RELEASE: web-pr-${{ github.event.pull_request.number }}
