@@ -988,3 +988,28 @@ test "a frame's GPU counts land in its own slot and the window's average, not be
     p.frameEnd();
     try std.testing.expectEqual(@as(f64, 2), p.stats.gpu.?.targets);
 }
+
+test "hostDeinit frees what recording made, and a second call does nothing" {
+    dvui.io = std.testing.io;
+    const gpa = std.testing.allocator;
+    // `hostFrameBegin` publishes through a dvui window a test has none of, so this makes what it
+    // makes the first recording frame, with the same allocator.
+    host_profiler = .{ .enabled = true };
+    defer host_profiler = .{};
+    host_gpa = gpa;
+    host_lookback = try Lookback.create(gpa, max_entries);
+    host_causes = try gpa.create(FrameCauses);
+    host_causes.?.* = .{};
+    host_spans = try Spans.create(gpa);
+
+    host_profiler.frameBegin(null, null);
+    try std.testing.expect(host_profiler.active);
+    const s = host_profiler.open("fizzy", "frame").?;
+    host_profiler.close(s);
+    host_profiler.frameEnd();
+
+    hostDeinit();
+    try std.testing.expect(host_lookback == null and host_causes == null and host_spans == null and host_gpa == null);
+    try std.testing.expectEqual(@as(usize, 0), Spans.image.load(.acquire));
+    hostDeinit();
+}
