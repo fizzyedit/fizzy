@@ -67,8 +67,7 @@ At most two fix rounds (`RULING`, `FIXES`, `VERIFY`, twice). If `VERIFY` still f
 after the second, stop patching: the PM rules a different approach and the author rebuilds
 from it rather than adding a third patch to the same mechanism.
 
-Nothing auto-merges. The maintainer merges (`CONTRIBUTING.md`); a worker never marks a PR ready
-or merges it.
+Nothing auto-merges (see Review).
 
 ## Kickoff template (the issue body, 1,600 characters at most)
 
@@ -143,8 +142,10 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 ## Review
 
 The stages and markers above are the review. Reviewer and author both answer the four questions
-in [`REVIEW.md`](REVIEW.md); a PR goes ready only when the gates pass and CI is green, and the
-ready, the merge and the `approve` yes are the maintainer's.
+in [`REVIEW.md`](REVIEW.md). A worker working an issue leaves its PR draft and never merges it:
+marking it ready (once the gates pass and CI is green), the merge and the `approve` yes are the
+maintainer's. `CONTRIBUTING.md`'s "take it to ready yourself" is for a person's own session, not
+for a worker on this contract.
 
 ## Which worker suits which work
 
