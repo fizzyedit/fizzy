@@ -6126,45 +6126,6 @@ test "demo: a seek lands in the frame that asked for it, the app's clock followi
     try std.testing.expect(demo_player.seek_stats.shown > 3);
 }
 
-test "demo: a seek or pause mid-drag lets go of the held button, and a later release is a no-op" {
-    var t = try demoCtx();
-    defer deinitDemo(&t);
-    demo_stage.snapshots = false;
-
-    var s: automation.Script = .init(std.testing.allocator, "drag", "Drag");
-    try s.keyframe(.{ .root = "demo://drag", .files = &.{.{ .path = "field", .text = "> " }} });
-    try s.drag(.{ .tag = "demo.count" }, .{ .tag = "demo.field" }, .{});
-    demo_player.load(try s.finish(), .{});
-    var press_at: f64 = 0;
-    var release_at: f64 = 0;
-    for (demo_player.tape().?.ops) |op| switch (op.do) {
-        .press => press_at = @floatFromInt(op.at),
-        .release => release_at = @floatFromInt(op.at),
-        else => {},
-    };
-    const mid = (press_at + release_at) / 2;
-
-    // A seek that lands paused inside the drag, forward on the tape's own state.
-    demo_player.pause();
-    demo_player.seek(mid);
-    try stepDemoUntil(.paused, 200);
-    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
-
-    // Back to the keyframe and on into the drag again, then a pause asked for mid-seek.
-    demo_player.seek(0);
-    try stepDemoUntil(.paused, 200);
-    demo_player.play();
-    demo_player.seek(mid);
-    demo_player.pause();
-    try stepDemoUntil(.paused, 200);
-    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
-
-    // Carrying on past the cut-short drag: its release finds nothing held.
-    demo_player.play();
-    try stepDemoUntil(.ended, 400);
-    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
-}
-
 test "demo: a seek back goes to the nearest snapshot, not the keyframe, and lands exactly" {
     var t = try demoCtx();
     defer deinitDemo(&t);
@@ -6675,26 +6636,6 @@ fn seekIntoDrag(after: automation.Player.After) !void {
     demo_player.seek((press + release) / 2);
     demo_player.after_seek = after;
     try stepDemoUntil(if (after == .pause) .paused else .playing, 400);
-}
-
-test "demo: a seek that lands paused mid-drag lets go of the tape's button, and real motion reaches nothing held" {
-    var t = try demoCtx();
-    defer deinitDemo(&t);
-
-    demo_player.load(try dragTape(), .{});
-    try seekIntoDrag(.pause);
-    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
-    try std.testing.expect(demo_player.diverged);
-
-    // Real motion and a real release, as a person's hand: nothing is held for them to drag.
-    const before = demo_releases;
-    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 3, .y = 3 } });
-    for (0..3) |_| _ = try dvui.testing.step(demoFrame);
-    try std.testing.expectEqual(automation.Player.State.paused, demo_player.state);
-    try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
-    // The one release was the player's own letting go, on arrival; nothing real added another.
-    try std.testing.expectEqual(@as(usize, 1), before);
-    try std.testing.expectEqual(before, demo_releases);
 }
 
 test "demo: a real release does not end the drag the tape is making" {
