@@ -118,7 +118,7 @@ fn pointerNotAtTargetOnPress(p: *const automation.Player, before: usize) bool {
         if (op.do.target()) |t| target = t;
         if (i < before or op.do != .press) continue;
         const t = target orelse return true;
-        const point = automation.Input.targetPoint(t) orelse return true;
+        const point = automation.Input.targetPoint(p.stage, t) orelse return true;
         const press = p.last_press orelse return true;
         // A pixel tolerates rounding between natural and physical coordinates.
         if (@abs(point.x - press.pt.x) > 1 or @abs(point.y - press.pt.y) > 1) return true;

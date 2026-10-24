@@ -216,8 +216,8 @@ fn from(ctx: *anyopaque) *LiveDriver {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn locate(_: *anyopaque, target: Tape.Target) ?Sequencer.Point {
-    return Input.targetPoint(target);
+fn locate(ctx: *anyopaque, target: Tape.Target) ?Sequencer.Point {
+    return Input.targetPoint(from(ctx).stage, target);
 }
 
 fn moveTo(ctx: *anyopaque, pt: Sequencer.Point) void {
@@ -257,7 +257,7 @@ fn command(ctx: *anyopaque, cmd: Tape.Command) void {
 fn keyframe(_: *anyopaque, _: *const Tape.Keyframe) void {}
 
 fn holds(ctx: *anyopaque, until: Tape.Until) bool {
-    return Input.tagHolds(until) orelse from(ctx).stage.idle();
+    return Input.tagHolds(from(ctx).stage, until) orelse from(ctx).stage.idle();
 }
 
 fn timedOut(ctx: *anyopaque, until: Tape.Until) void {

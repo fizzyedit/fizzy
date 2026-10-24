@@ -355,7 +355,6 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     self.transport = .{};
     self.mismatches = 0;
     self.timeouts = 0;
-    Input.stage = self.stage;
     self.stage.begin(t);
     self.seekTo(0, if (opts.autoplay) .play else .pause);
 }
@@ -395,7 +394,6 @@ pub fn unload(self: *Player) void {
 fn release(self: *Player, how: Leave) void {
     if (self.owned == null) return;
     self.input.releaseHeld();
-    Input.stage = null;
     if (self.state == .seeking) self.stage.fastForward(false);
     self.dropSnapshots();
     switch (how) {
@@ -601,7 +599,7 @@ fn restoreSnapshot(self: *Player, i: usize) bool {
 fn settle(self: *Player) bool {
     const st = &(self.settling orelse return false);
     st.runs += 1;
-    const pt = if (st.target) |t| Input.targetPoint(t) else null;
+    const pt = if (st.target) |t| Input.targetPoint(self.stage, t) else null;
     const still = if (st.target == null) true else if (pt != null and st.last != null)
         pt.?.x == st.last.?.x and pt.?.y == st.last.?.y
     else
@@ -1120,7 +1118,7 @@ fn targetStill(ctx: *anyopaque, target: Tape.Target) bool {
     const self = from(ctx);
     // Untagged, it is the window's own coordinates, which go nowhere.
     if (self.state != .seeking or target.tag.len == 0) return true;
-    const pt = Input.targetPoint(target) orelse {
+    const pt = Input.targetPoint(self.stage, target) orelse {
         self.aiming = null;
         return true;
     };
@@ -1142,8 +1140,8 @@ fn from(ctx: *anyopaque) *Player {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn locate(_: *anyopaque, target: Tape.Target) ?Sequencer.Point {
-    return Input.targetPoint(target);
+fn locate(ctx: *anyopaque, target: Tape.Target) ?Sequencer.Point {
+    return Input.targetPoint(from(ctx).stage, target);
 }
 
 fn moveTo(_: *anyopaque, pt: Sequencer.Point) void {
@@ -1188,7 +1186,7 @@ fn keyframe(ctx: *anyopaque, kf: *const Tape.Keyframe) void {
 }
 
 fn holds(ctx: *anyopaque, until: Tape.Until) bool {
-    return Input.tagHolds(until) orelse from(ctx).stage.idle();
+    return Input.tagHolds(from(ctx).stage, until) orelse from(ctx).stage.idle();
 }
 
 fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
