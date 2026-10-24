@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$DRAFT" = true ]; then
-            echo "draft pull request: the matrix runs when it is ready"
+            echo "::notice::draft pull request: nothing was built; the full CI runs at gh pr ready"
             printf 'code=false\nsdl=false\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi

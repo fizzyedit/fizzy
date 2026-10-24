@@ -162,6 +162,7 @@ in [`REVIEW.md`](REVIEW.md). A worker working an issue leaves its PR draft and n
 marking it ready (once the gates pass and CI is green), the merge and the `pm:approve` yes are the
 maintainer's. `CONTRIBUTING.md`'s "take it to ready yourself" is for a person's own session, not
 for a worker on this contract.
+A draft's CI is only the light `changes` job, so the full CI runs at ready and must be green before the merge question.
 
 ## Which worker suits which work
 
