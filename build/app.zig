@@ -827,6 +827,9 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.
         .{ "fizzy-state-delta-tests", "app/state_delta.zig" },
+        // A state packed for a track file (zero runs, then deflate): lossless, so a canvas of
+        // transparent pixels is not stored as tens of megabytes. std-only (see state_pack.zig).
+        .{ "fizzy-state-pack-tests", "app/state_pack.zig" },
         // Image diff (RGBA8 to rects) and text diff (histogram lines, unified output). std-only (see
         // core/diff.zig); `bench-diff` measures it.
         .{ "fizzy-diff-tests", "core/diff.zig" },
