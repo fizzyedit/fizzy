@@ -30,3 +30,4 @@ tools/msvc-libc*.ini
 
 # wrangler writes its account cache beside the config it is given.
 .wrangler/
+__pycache__/
