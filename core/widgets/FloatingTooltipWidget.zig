@@ -158,20 +158,23 @@ test "a screen smaller than its margins gives an empty rect, not a crash" {
     }
 }
 
-test "fitWidth keeps the caller's narrower cap and wraps at the screen otherwise" {
+test "fitWidth keeps the caller's narrower cap and height, and wraps at the screen otherwise" {
     var tt: FloatingTooltipWidget = undefined;
     tt.scale_val = 2;
     tt.options = .{};
+    tt.own_max = .{ .w = dvui.max_float_safe, .h = dvui.max_float_safe };
     const screen: Rect.Natural = .{ .x = 0, .y = 0, .w = 416, .h = 300 };
-    // (416 - 16) / 2 = 200 content units
+    // container units: 416 - 2 * margin, the scaler scales its children itself
     tt.fitWidth(screen);
-    try std.testing.expectEqual(@as(f32, 200), tt.options.max_size_content.?.w);
-    tt.options.max_size_content = .width(120);
+    try std.testing.expectEqual(screen.w - 2 * margin, tt.options.max_size_content.?.w);
+    tt.own_max = .{ .w = 120, .h = 80 };
     tt.fitWidth(screen);
     try std.testing.expectEqual(@as(f32, 120), tt.options.max_size_content.?.w);
-    tt.options.max_size_content = .width(900);
+    try std.testing.expectEqual(@as(f32, 80), tt.options.max_size_content.?.h);
+    tt.own_max = .{ .w = 900, .h = 80 };
     tt.fitWidth(screen);
-    try std.testing.expectEqual(@as(f32, 200), tt.options.max_size_content.?.w);
+    try std.testing.expectEqual(screen.w - 2 * margin, tt.options.max_size_content.?.w);
+    try std.testing.expectEqual(@as(f32, 80), tt.options.max_size_content.?.h);
     // a screen narrower than its margins still leaves a positive width
     tt.fitWidth(.{ .x = 0, .y = 0, .w = 4, .h = 4 });
     try std.testing.expectEqual(@as(f32, 1), tt.options.max_size_content.?.w);
@@ -289,6 +292,9 @@ scale_val: f32,
 scaler: dvui.ScaleWidget = undefined,
 animate: ?dvui.AnimateWidget = null,
 options: Options,
+/// The caller's `max_size_content` scaled to container units once, in `init`; `fitWidth` narrows
+/// `options.max_size_content` from it each frame.
+own_max: Options.MaxSize = .{ .w = dvui.max_float_safe, .h = dvui.max_float_safe },
 init_options: InitOptions,
 showing: bool = false,
 mouse_good_this_frame: bool = false,
@@ -335,6 +341,10 @@ pub fn init(self: *FloatingTooltipWidget, src: std.lang.SourceLocation, init_opt
     if (self.options.min_size_content) |msc| {
         self.options.min_size_content = msc.scale(self.scale_val, Size);
     }
+    if (self.options.max_size_content) |mxc| {
+        self.own_max = .{ .w = mxc.w * self.scale_val, .h = mxc.h * self.scale_val };
+        self.options.max_size_content = self.own_max;
+    }
 
     // if a rect got passed, we don't want to also pass it to scaler
     self.options.rect = null;
@@ -349,14 +359,13 @@ fn screenFor(self: *const FloatingTooltipWidget, r: Rect.Natural) Rect.Natural {
 }
 
 /// Keep the tooltip from being wider than `screen` less its margins: its text wraps instead.
-/// `max_size_content` is in the content's own units, before `scale_val`.
+/// `max_size_content` is in container units, as the scaler it is handed to measures; the caller's
+/// narrower width and its height cap are kept.
 fn fitWidth(self: *FloatingTooltipWidget, screen: Rect.Natural) void {
     const border = self.options.borderGet();
     const pad = self.options.paddingGet();
-    const room = (screen.w - 2 * margin) / self.scale_val - border.x - border.w - pad.x - pad.w;
-    const cap = @max(room, 1);
-    const own = if (self.options.max_size_content) |m| m.w else std.math.inf(f32);
-    self.options.max_size_content = .width(@min(own, cap));
+    const room = screen.w - 2 * margin - border.x - border.w - pad.x - pad.w;
+    self.options.max_size_content = .{ .w = @min(self.own_max.w, @max(room, 1)), .h = self.own_max.h };
 }
 
 pub fn shown(self: *FloatingTooltipWidget) bool {
