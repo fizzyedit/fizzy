@@ -200,8 +200,12 @@ today.
 // with the disk.
 ```
 
-Once the lint exists, this rule is report-only at first, then fails. A false hit (such as
-"fixed-size") goes on its allowlist with a reason; the word list is not loosened.
+`zig build lint` prints `changelog-words` findings without failing the gate. It checks Zig
+comments for whole words or phrases, ignoring case: "fixed", "now", "used to", "previously",
+"formerly", "no longer", and "new:". It reports at most one finding per line, including the
+comment text so real hits can guide tuning before enforcement. A false hit (such as
+"fixed-size") uses `// lint-allow(changelog-words): <reason>` on the line or immediately
+before it, following the lint's usual suppression syntax. String literals are excluded.
 
 ### When a comment is required
 
