@@ -101,8 +101,9 @@ Three places, in order: the worker's **local gates** (step 3), which decide whet
 worth pushing; **cross-review** by a different worker; and **CI at ready**. A draft PR runs only
 the light `changes` job (`ci.yml`), so pushing to a draft costs almost nothing and proves nothing;
 `gh pr ready` starts the full matrix, and `ci-ok` is the required check on that run. A reviewer
-waits for finished checks, so review a PR once it is ready, or read a draft's diff and the
-worker's gate output in its body.
+waits for finished checks, so a draft is reviewed from its diff and the gate output in its body,
+and a cross-reviewer may give a verdict on a draft without CI. The merge question waits for the
+full CI at ready.
 
 ## Review
 
