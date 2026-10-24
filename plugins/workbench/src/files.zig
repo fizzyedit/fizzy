@@ -257,7 +257,7 @@ fn rootLabel(path: []const u8) []const u8 {
     // period instead of the folder's name.
     const base = std.fs.path.basename(path);
     if (base.len > 0 and !std.mem.eql(u8, base, ".") and !std.mem.eql(u8, base, "..")) return base;
-    const resolved = std.fs.path.resolve(dvui.currentWindow().arena(), &.{path}) catch return base;
+    const resolved = std.fs.path.resolveAlloc(dvui.currentWindow().arena(), &.{path}) catch return base;
     const resolved_base = std.fs.path.basename(resolved);
     return if (resolved_base.len > 0) resolved_base else base;
 }

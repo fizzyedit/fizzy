@@ -22,7 +22,7 @@ pub fn normalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         if (tail.len == 1) return allocator.dupe(u8, path[0..n]);
         return std.mem.concat(allocator, u8, &.{ path[0..n], tail });
     }
-    return std.fs.path.resolve(allocator, &.{path});
+    return std.fs.path.resolveAlloc(allocator, &.{path});
 }
 
 /// Length of the mount prefix of a path on a mounted filesystem — `gdrive://me` in
@@ -154,7 +154,7 @@ test "mount paths normalize after the prefix and never touch the cwd" {
 pub fn normalizeJoin(allocator: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
     // A mount path is absolute in its own namespace; the cwd has nothing to add to it.
     if (isMountPath(path)) return normalize(allocator, path);
-    return std.fs.path.resolve(allocator, &.{ base, path });
+    return std.fs.path.resolveAlloc(allocator, &.{ base, path });
 }
 
 /// The OS "local configuration" root — fizzy's own canonical mapping (formerly `known-folders`
