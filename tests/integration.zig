@@ -6119,7 +6119,7 @@ test "demo: a seek lands in the frame that asked for it, the app's clock followi
     try std.testing.expect(demo_player.seek_stats.shown > 3);
 }
 
-test "demo: a seek or pause mid-drag lets go of the held button, and a later release is a no-op" {
+test "demo: a seek or pause mid-drag lets go of the held button, and the release of an unheld button sends no event" {
     var t = try demoCtx();
     defer deinitDemo(&t);
     demo_stage.snapshots = false;
@@ -6156,6 +6156,19 @@ test "demo: a seek or pause mid-drag lets go of the held button, and a later rel
     demo_player.play();
     try stepDemoUntil(.ended, 400);
     try std.testing.expectEqual(@as(usize, 0), demo_player.input.held.count());
+
+    // The release of a button nothing holds sends dvui no event; an empty `held` alone could not
+    // tell, since removing an absent button changes nothing.
+    const cw = dvui.currentWindow();
+    const sent = cw.event_num;
+    demo_player.input.button(.left, false);
+    try std.testing.expectEqual(sent, cw.event_num);
+    // The guard lets a release of a held button through.
+    demo_player.input.button(.left, true);
+    const pressed = cw.event_num;
+    try std.testing.expect(pressed > sent);
+    demo_player.input.button(.left, false);
+    try std.testing.expect(cw.event_num > pressed);
 }
 
 test "demo: a seek back goes to the nearest snapshot, not the keyframe, and lands exactly" {
