@@ -7039,7 +7039,7 @@ test "float: a float in an OS window with its own buttons still has a close a ta
     floats[0].viewport = .{ .rect = floats[0].rect, .os_buttons = true, .buttons_w = 60 };
 
     const WantFrame = struct {
-        fn frame() anyerror!dvui.App.Result {
+        fn frame() !dvui.App.Result {
             fizzy.core.anchor.want();
             return ManyPanelFrame.frame();
         }
