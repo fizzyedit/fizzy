@@ -17,6 +17,7 @@ const app = @import("app");
 const Editor = @import("Editor.zig");
 const Workbench = Editor.Workbench;
 const Layout = app.layout.Layout;
+const placement = fizzy.core.placement;
 
 const Workspaces = @This();
 
@@ -46,7 +47,7 @@ pub fn wanted(gpa: std.mem.Allocator) bool {
 /// Hand the workbench the app's places to arrange its panes in. Before the workbench registers,
 /// so it knows not to offer its one surface of every pane, and with `self` at its final address.
 pub fn install(self: *Workspaces, wb: *Workbench) void {
-    wb.places = .{ .ctx = self, .beside = beside, .placed = placed, .close = close, .open = open };
+    wb.places = .{ .ctx = self, .beside = beside, .beside_fitting = besideFitting, .placed = placed, .close = close, .open = open };
     // A document carried beside a view, rather than into a pane, opens a workspace there.
     self.editorOf().app.layout.documents = .{ .ctx = self, .house = house, .alone = alone, .fold = fold };
 }
@@ -125,7 +126,7 @@ pub fn sync(self: *Workspaces) void {
             first = g;
             continue;
         }
-        _ = beside(self, g, first.?, .right);
+        _ = besideFitting(self, g, first.?);
     }
 }
 
@@ -301,6 +302,25 @@ fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Sid
     l.state.assign(l.gpa, new, &.{id}) catch return false;
     l.state.markDirty();
     return true;
+}
+
+/// `beside` on the side the anchor's room asks for: right of a space wider than tall, below one
+/// taller (`core.placement`). A pane is a place of its own, so where the room is too small to
+/// split the split still follows its shape.
+// TODO(seam): a room too small to split gives the view a card in the anchor's group once mobile
+// cards exist (plans#60); `placement.place` already answers `.tab` for it.
+fn besideFitting(ctx: *anyopaque, grouping: u64, anchor: u64) bool {
+    const self: *Workspaces = @ptrCast(@alignCast(ctx));
+    const editor = self.editorOf();
+    var l = layoutOf(editor);
+    var abuf: [64]u8 = undefined;
+    const holder = Layout.ViewDrag.holderOf(&l, viewId(&abuf, anchor)) orelse return false;
+    const size = Layout.ViewDrag.placeSize(l.state, holder) orelse
+        return beside(ctx, grouping, anchor, .right);
+    return beside(ctx, grouping, anchor, switch (placement.splitAxis(.{ .w = size.w, .h = size.h })) {
+        .side_by_side => .right,
+        .stacked => .bottom,
+    });
 }
 
 /// A new workspace holding the documents `ids` (`Layout.State.documents`), for the layout to
