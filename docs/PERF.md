@@ -1,7 +1,7 @@
 # Measuring compile time
 
 `scripts/perf-compile` is the repeatable measurement behind the compile-speed numbers we trend.
-It runs headless on Linux and prints one JSON line per metric:
+It runs headless on Linux (it needs `bc`, GNU `/usr/bin/time` and `/proc`, and says so up front) and prints one JSON line per metric:
 
 ```json
 {"date":"…","commit":"79dec396","machine":"host/16cpu/27GiB","zig":"0.17.0","os":"Linux …","scenario":"touch_core","metric":"rebuild_time","value":8.1,"unit":"s"}

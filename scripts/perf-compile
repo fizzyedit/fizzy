@@ -8,14 +8,14 @@
 # One JSON line per metric:
 #   {"date","commit","machine","zig","os","scenario","metric","value","unit"}
 # Progress goes to stderr. docs/PERF.md says what each metric means. Run it on a quiet machine:
-# it waits for the 1-minute load average to drop under FIZZY_PERF_MAX_LOAD (default nproc/4) and
-# refuses to start a measurement otherwise after FIZZY_PERF_WAIT seconds (default 300).
+# it waits for the 1-minute load average to drop under FIZZY_PERF_MAX_LOAD (default nproc/4)
+# and gives up after FIZZY_PERF_WAIT seconds (default 300) without measuring.
 #
 # It times `zig` directly, not through scripts/zb, so a wait for a build slot is never counted;
-# run one perf-compile at a time. Every build uses a scratch cache dir and prefix under
-# a fresh directory made under $FIZZY_PERF_TMP (default $TMPDIR or /tmp), the shared global cache keeps the fetched dependencies, and
-# a plugin build installs into a scratch FIZZY_PROFILE, never the person's plugins directory.
-# Files touched for a rebuild are restored on exit.
+# run one perf-compile at a time. Every build uses a scratch cache dir and prefix, in a fresh
+# directory made under $FIZZY_PERF_TMP (default $TMPDIR or /tmp); the shared global cache keeps
+# the fetched dependencies, and a plugin build installs into a scratch FIZZY_PROFILE, never the
+# person's plugins directory. Files touched for a rebuild are restored on exit.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$PWD
@@ -36,10 +36,15 @@ while [ $# -gt 0 ]; do
     if [ "$1" = --runs ]; then runs=$2; else only=$2; fi
     shift 2 ;;
   --list) echo "$scenarios" | tr ' ' '\n'; exit 0 ;;
-  -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+  -h | --help) sed -n '2,17p' "$0"; exit 0 ;;
   *) echo "perf-compile: unknown argument $1" >&2; exit 2 ;;
   esac
 done
+
+for tool in bc /usr/bin/time; do
+  command -v "$tool" >/dev/null || { echo "perf-compile: needs $tool" >&2; exit 2; }
+done
+[ -r /proc/loadavg ] || { echo "perf-compile: needs /proc (Linux)" >&2; exit 2; }
 
 want() { [ -z "$only" ] || case ",$only," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
@@ -115,11 +120,6 @@ change() {
 }
 unchange() { replace "$1" "$backups/$(echo "$1" | tr / _)"; }
 
-# series <scenario> <metric> <unit> <fn>: median of $runs calls of fn, which sets $secs.
-report_time() { # scenario metric  (reads values from stdin)
-  emit "$1" "$2" "$(median)" s
-}
-
 cache=$tmp/cache
 out=$tmp/out
 log=$tmp/log
@@ -132,7 +132,7 @@ cold() { # <scenario> <optimize>
     run_zig "$root" "$log" build --cache-dir "$cache" --prefix "$out" "-Doptimize=$2"
     times+=("$secs"); mems+=("$rss_mib")
   done
-  printf '%s\n' "${times[@]}" | report_time "$1" wall_time
+  emit "$1" wall_time "$(printf '%s\n' "${times[@]}" | median)" s
   emit "$1" compiler_peak_rss "$(printf '%s\n' "${mems[@]}" | median)" MiB
 }
 
@@ -152,7 +152,7 @@ if want noop; then
     run_zig "$root" "$log" build --cache-dir "$cache" --prefix "$out"
     times+=("$secs")
   done
-  printf '%s\n' "${times[@]}" | report_time noop wall_time
+  emit noop wall_time "$(printf '%s\n' "${times[@]}" | median)" s
 fi
 
 touch_series() { # <scenario> <file>
@@ -165,7 +165,7 @@ touch_series() { # <scenario> <file>
     times+=("$secs")
   done
   unchange "$2"
-  printf '%s\n' "${times[@]}" | report_time "$1" rebuild_time
+  emit "$1" rebuild_time "$(printf '%s\n' "${times[@]}" | median)" s
 }
 
 # A `zig build -fincremental --watch` left running in <dir>: after each content change, the time
@@ -210,7 +210,7 @@ watch_series() { # <scenario> <dir> <file> <cache> <prefix>
   wait "$watch_pid" 2>/dev/null || true
   watch_pid=""
   unchange "$file"
-  printf '%s\n' "${times[@]}" | report_time "$scenario" rebuild_time_incremental
+  emit "$scenario" rebuild_time_incremental "$(printf '%s\n' "${times[@]}" | median)" s
 }
 
 if want touch_app; then touch_series touch_app "$touch_app"; fi
@@ -233,7 +233,7 @@ if want touch_plugin; then
     times+=("$secs")
   done
   unchange "$touch_plugin"
-  printf '%s\n' "${times[@]}" | report_time touch_plugin rebuild_time
+  emit touch_plugin rebuild_time "$(printf '%s\n' "${times[@]}" | median)" s
 fi
 
 if want incr_plugin; then watch_series incr_plugin "$root/$plugin_dir" "$touch_plugin" "$tmp/pcache" "$tmp/pout"; fi
@@ -255,7 +255,7 @@ if want plugin_roundtrip; then
     times+=("$secs")
   done
   unchange "$touch_plugin"
-  printf '%s\n' "${times[@]}" | report_time plugin_roundtrip build_install_time
+  emit plugin_roundtrip build_install_time "$(printf '%s\n' "${times[@]}" | median)" s
 fi
 
 # Compile the unit tests without running them (`zig build check`), cold.
@@ -267,6 +267,6 @@ if want test_build; then
     run_zig "$root" "$log" build check --cache-dir "$cache" --prefix "$out"
     times+=("$secs"); mems+=("$rss_mib")
   done
-  printf '%s\n' "${times[@]}" | report_time test_build wall_time
+  emit test_build wall_time "$(printf '%s\n' "${times[@]}" | median)" s
   emit test_build compiler_peak_rss "$(printf '%s\n' "${mems[@]}" | median)" MiB
 fi
