@@ -475,6 +475,7 @@ var test_band: dvui.Rect.Physical = .{};
 fn testDialog(id: dvui.Id) anyerror!void {
     const began = scopeBegin();
     defer scopeEnd(began);
+    // lint-allow(raw-transient-surface): snapshot test fixture, not a shown surface
     var win = dvui.floatingWindow(@src(), .{}, .{ .id_extra = id.asUsize(), .rect = .{ .x = 10, .y = 10, .w = 80, .h = 40 } });
     defer win.deinit();
     test_dialog_window = win.data().id;
@@ -488,6 +489,7 @@ fn testWindowsFrame() !dvui.App.Result {
         defer box.deinit();
         _ = dvui.button(@src(), "Main", .{}, .{});
         // Drawn in a part of the frame another window shows: in that window, by where it is.
+        // lint-allow(raw-transient-surface): snapshot test fixture, not a shown surface
         var band = dvui.floatingWindow(@src(), .{}, .{ .rect = .{ .x = 200, .y = 200, .w = 80, .h = 40 } });
         defer band.deinit();
         test_band = band.data().rectScale().r;
