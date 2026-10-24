@@ -399,6 +399,8 @@ pub fn shown(self: *FloatingTooltipWidget) bool {
                 self.data().rect = .cast(place(screen, ar, if (o == .horizontal) .right else .below, size.w, size.h));
             },
             .sticky => {
+                // The first frame only records the pointer and sizes the width; the rect is placed from
+                // the second, once the tooltip has a size to place.
                 if (dvui.firstFrame(self.data().id)) {
                     const mp = dvui.currentWindow().mouse_pt.toNatural();
                     dvui.dataSet(null, self.data().id, "_sticky_pt", mp);
