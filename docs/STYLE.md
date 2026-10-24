@@ -236,6 +236,8 @@ what CONTRIBUTING.md asks of a deferred feature. A bare `TODO` is deleted or giv
 
 ### Deprecated names its replacement
 
-In `sdk/src`, a doc comment `Deprecated: use` followed by the new name in backticks says what to move to, and adds the removal
-`sdk_version` when it is known. The shim stays until a release PR removes it, so a plugin
-author reading the marker sees what to change to. `scripts/lint.zig` rejects a marker with no backticked name; a justified exception uses `// lint-allow(deprecated-names-replacement): <reason>` on the line before it.
+In `sdk/src`, a `/// Deprecated` doc comment names its replacement in backticks
+and adds the removal `sdk_version` when it is known. The shim
+stays until a release PR removes it, so a plugin author reading the marker sees what to change
+to. `scripts/lint.zig` rejects a marker with no backticked name; a justified exception uses
+`// lint-allow(deprecated-names-replacement): <reason>` on the line before it.
