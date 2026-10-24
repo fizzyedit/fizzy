@@ -741,7 +741,8 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const since_stirred: i128 = if (tr.stirred_ns) |ns| wall_ns - ns else std.math.maxInt(i64);
     // Closed from its close button, it closes whatever else would keep it open (`Player.close`).
     const p = barProgress(tr, wall_ns, !tr.closing and !tr.tucked and
-        (player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns));
+        (player.state != .playing or tr.scrub != null or tr.speed_drag or since_stirred < bar_linger_ns));
+    tr.dropStaleDrag();
 
     // How far the tape has played: the corner's liquid, and the scrubber's. A jump knocks it; a
     // new chapter, played into, splashes it.

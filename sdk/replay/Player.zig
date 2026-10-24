@@ -273,6 +273,12 @@ pub const Transport = struct {
         return @intFromFloat(@round(f * @as(f32, Sequencer.speeds.len - 1)));
     }
 
+    /// Let go of a speed drag whose release can no longer arrive: the bar is gone, closing or
+    /// tucked away, so nothing under the pointer is the slider.
+    pub fn dropStaleDrag(self: *Transport) void {
+        if (self.bar == null or self.closing or self.tucked) self.speed_drag = false;
+    }
+
     /// The demo time under physical x on the track.
     pub fn timeAt(self: Transport, x: f32, total_ms: u32) f64 {
         if (self.track.w <= 0) return 0;
@@ -976,6 +982,9 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     const wd = dvui.currentWindow().data();
     const tr = &self.transport;
     if (me.action == .motion or me.action == .press) tr.pointer = me.p;
+    tr.dropStaleDrag();
+    // A press while dragging means the release was lost (focus left the window).
+    if (me.action == .press) tr.speed_drag = false;
     if (tr.speed_drag) {
         switch (me.action) {
             .motion => self.seq.setSpeedIndex(tr.speedAt(me.p.x)),
@@ -1192,4 +1201,35 @@ fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
 pub fn pointerShown(self: *const Player, fade_ms: f64) f32 {
     const t = self.tape() orelse return 1;
     return t.pointerShown(self.seq.cursor, self.seq.now, fade_ms);
+}
+
+test "the speed slider snaps to the nearest notch and clamps past its ends" {
+    const last = Sequencer.speeds.len - 1;
+    const tr: Transport = .{ .speed_line = .{ .x = 100, .y = 0, .w = 60, .h = 10 } };
+    try std.testing.expectEqual(@as(usize, 0), tr.speedAt(100));
+    try std.testing.expectEqual(@as(usize, 0), tr.speedAt(-50));
+    try std.testing.expectEqual(last, tr.speedAt(160));
+    try std.testing.expectEqual(last, tr.speedAt(900));
+    // The middle of the line is the middle notch; a hair off a notch snaps to it.
+    try std.testing.expectEqual(last / 2, tr.speedAt(130));
+    const notch = 60.0 / @as(f32, @floatFromInt(last));
+    try std.testing.expectEqual(@as(usize, 1), tr.speedAt(100 + notch * 1.2));
+    // Without a line there is nothing to land on.
+    try std.testing.expectEqual(@as(usize, 0), (Transport{}).speedAt(130));
+}
+
+test "a speed drag does not outlive the bar it began on" {
+    const bar: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 10, .h = 10 };
+    var tr: Transport = .{ .bar = bar, .speed_drag = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(tr.speed_drag);
+    tr.closing = true;
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    tr = .{ .bar = bar, .tucked = true, .speed_drag = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    tr = .{ .speed_drag = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
 }
