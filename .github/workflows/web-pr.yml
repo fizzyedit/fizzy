@@ -1,0 +1,162 @@
+# A preview of a pull request's head at fizzyed.it/testapp/pr-N/, for the PRs a person asked QA
+# on: **only those labelled `qa:needed`**, so unlabelled PRs cost no CI.
+#
+# - Built when the label is applied, and on each push while the PR carries it.
+# - A Debug build that loads plugins through the store's test channel, like
+#   fizzyed.it/testapp/debug/ (web.yml), with browser storage of its own per PR.
+# - Removed when the PR closes or loses the label: its release in fizzyedit/website is deleted and
+#   the site redeployed, which lays out only the releases that exist (website `deploy-web.yml`
+#   puts each `web-pr-N` under /testapp/pr-N/).
+# - The URL is commented on the PR's private thread (the fizzyedit/work issue titled
+#   `PR #N: ...`), never on the PR, whose watchers are public.
+#
+# Same-repo PRs only: a fork's code never gets a build here. The build job runs the PR's code
+# with no secret; only `publish`, which checks out nothing, holds WEBSITE_DISPATCH_TOKEN.
+#
+# Needs the secrets WEBSITE_DISPATCH_TOKEN (as web.yml) and WORK_THREAD_TOKEN: Issues read/write
+# on fizzyedit/work, for the thread comment (the step is skipped without it).
+
+name: Web PR preview
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize, reopened, closed]
+
+env:
+  ZIG_VERSION: "0.17.0"
+  WEBSITE: fizzyedit/website
+
+# One preview per PR at a time: a push replaces the build in flight, and removal replaces a build
+# that would put the preview back. The group is on the jobs, not the workflow: a skipped job never
+# joins it, so a label event for anything but `qa:needed` cannot cancel a running build.
+jobs:
+  build:
+    concurrency:
+      group: web-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    # Labelled qa:needed, and (for the labeled event) by that very label.
+    if: >-
+      github.event.action != 'closed'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && contains(github.event.pull_request.labels.*.name, 'qa:needed')
+      && (github.event.action != 'labeled' || github.event.label.name == 'qa:needed')
+      && github.event.action != 'unlabeled'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Zig cache key
+        id: zig-cache-key
+        run: |
+          prefix="zig-${{ env.ZIG_VERSION }}-web-pr-${{ runner.os }}-${{ runner.arch }}-"
+          echo "key=${prefix}${{ hashFiles('**/build.zig.zon') }}" >> "$GITHUB_OUTPUT"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      # Restore only: a PR's build never writes the cache main's builds share.
+      - name: Restore Zig cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: ${{ steps.zig-cache-key.outputs.key }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-
+      - name: Pre-create Zig cache tmp/
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch dependencies (with retries)
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Build web app
+        run: |
+          bash scripts/ci-retry.sh zig build web -Doptimize=Debug \
+            -Dweb-storage="fizzy-testapp-pr-${{ github.event.pull_request.number }}" \
+            -Dapp-registry-url=https://plugins.fizzyed.it/test/catalog
+      - name: Zip the build
+        env:
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          printf '{"channel":"pr-%s","sha":"%s","run":"%s/%s/actions/runs/%s"}\n' \
+            "$PR" "$SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > zig-out/web/build.json
+          (cd zig-out/web && zip -qr "$GITHUB_WORKSPACE/web.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-pr
+          path: web.zip
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: success()
+    concurrency:
+      group: web-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      RELEASE: web-pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-pr
+      - name: Hand the build to the website
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          notes="Preview of $GITHUB_REPOSITORY#$PR at https://fizzyed.it/testapp/pr-$PR/, built from $SHA"
+          if ! gh release view "$RELEASE" --repo "$WEBSITE" > /dev/null 2>&1; then
+            gh release create "$RELEASE" --repo "$WEBSITE" --prerelease --title "$RELEASE" --notes "$notes"
+          fi
+          gh release upload "$RELEASE" web.zip --clobber --repo "$WEBSITE"
+          gh release edit "$RELEASE" --repo "$WEBSITE" --notes "$notes"
+          gh api "repos/$WEBSITE/dispatches" -f event_type=fizzy-updated
+      # Once per PR: a later push replaces the build under the same URL.
+      - name: Tell the PR's private thread
+        env:
+          GH_TOKEN: ${{ secrets.WORK_THREAD_TOKEN }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "No WORK_THREAD_TOKEN: the thread is not told."; exit 0; fi
+          url="https://fizzyed.it/testapp/pr-$PR/"
+          thread=$(gh issue list -R fizzyedit/work --label pr-thread --state all --search "\"PR #$PR:\" in:title" \
+            --json number,title --jq "[.[] | select(.title | startswith(\"PR #$PR:\"))][0].number // empty")
+          if [ -z "$thread" ]; then echo "No thread for PR #$PR: nothing to comment on."; exit 0; fi
+          if gh issue view "$thread" -R fizzyedit/work --json comments --jq '.comments[].body' | grep -qF "Preview: $url"; then
+            echo "Thread already has the URL."; exit 0
+          fi
+          printf 'Preview: %s\n\nA Debug build of %s, loading plugins from the store test channel. It is rebuilt on each push while the PR is labelled `qa:needed`, and removed when it closes or loses the label.\n' \
+            "$url" "$SHA" | gh issue comment "$thread" -R fizzyedit/work --body-file -
+
+  # The release (and so /testapp/pr-N/) goes when the PR closes or loses the label, and when a
+  # build fails, so the URL never serves an older push's build as if it were this one.
+  remove:
+    needs: build
+    if: >-
+      !cancelled()
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && (github.event.action == 'closed'
+          || (github.event.action == 'unlabeled' && github.event.label.name == 'qa:needed')
+          || needs.build.result == 'failure')
+    concurrency:
+      group: web-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions: {}
+    runs-on: ubuntu-latest
+    env:
+      RELEASE: web-pr-${{ github.event.pull_request.number }}
+    steps:
+      - name: Remove the preview
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: |
+          if gh release view "$RELEASE" --repo "$WEBSITE" > /dev/null 2>&1; then
+            gh release delete "$RELEASE" --repo "$WEBSITE" --cleanup-tag --yes
+            gh api "repos/$WEBSITE/dispatches" -f event_type=fizzy-updated
+          else
+            echo "No $RELEASE to remove."
+          fi
