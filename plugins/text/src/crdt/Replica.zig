@@ -8,12 +8,13 @@
 //!
 //! Placement is YATA's rule (Yjs `Item.integrate`): an insert carries the two neighbours it was
 //! typed between (its origins), and a receiver scans only the items between them, breaking ties
-//! on `Id`. Fugue was prototyped beside it and dropped (its subtree test walks the tree, as deep
-//! as a typed run is long).
+//! on `Id`. Fugue, the other candidate, has not been measured against it here.
 //!
 //! Operations from one replica are applied in the order it made them, and an insert only once its
 //! two origins are present; anything earlier waits in `pending` (so any delivery order converges,
-//! and a duplicate is a no-op). std-only, so it builds for wasm.
+//! and a duplicate is a no-op). Releasing pending ops rescans all of `pending` after each applied
+//! op, so a long out-of-order burst costs O(pending^2); an index keyed by the missing origin is
+//! the seam if that ever matters. std-only, so it builds for wasm.
 
 const Replica = @This();
 
@@ -25,12 +26,15 @@ pub const Id = op_mod.Id;
 pub const Insert = op_mod.Insert;
 pub const Op = op_mod.Op;
 
+/// `InvalidChar`: an insert whose `ch` is not a Unicode scalar value (a surrogate).
+pub const ApplyError = Allocator.Error || error{InvalidChar};
+
 const none: u32 = std.math.maxInt(u32);
 const head: u32 = 0;
 
 const Item = struct {
     id: Id,
-    ch: u32,
+    ch: u21,
     /// Origins as item indexes (`none` at the end of the text).
     left: u32,
     right: u32,
@@ -44,7 +48,6 @@ replica: u32,
 items: std.MultiArrayList(Item) = .empty,
 /// replica -> the item index of each of its characters, by counter.
 by_replica: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty,
-tail: u32 = head,
 /// Operations whose origins have not arrived.
 pending: std.ArrayList(Op) = .empty,
 visible_len: usize = 0,
@@ -91,9 +94,10 @@ pub fn len(self: *const Replica) usize {
 }
 
 /// Inserts `ch` so it becomes the character at visible index `pos` (`pos <= len()`), and returns
-/// the op to send to the other replicas.
+/// the op to send to the other replicas. `ch` must be a Unicode scalar value.
 pub fn insert(self: *Replica, pos: usize, ch: u21) Allocator.Error!Op {
     std.debug.assert(pos <= self.visible_len);
+    std.debug.assert(std.unicode.utf8ValidCodepoint(ch));
     const l = self.nthVisible(pos);
     const r = self.items.items(.next)[l];
     const counter: u32 = if (self.by_replica.get(self.replica)) |list| @intCast(list.items.len) else 0;
@@ -123,8 +127,9 @@ pub fn delete(self: *Replica, pos: usize) ?Op {
 }
 
 /// Applies an op from any replica, this one's own included. An op whose origins have not
-/// arrived waits; one already applied changes nothing.
-pub fn apply(self: *Replica, op: Op) Allocator.Error!void {
+/// arrived waits; one already applied changes nothing; a surrogate `ch` is refused.
+pub fn apply(self: *Replica, op: Op) ApplyError!void {
+    if (op == .insert and !std.unicode.utf8ValidCodepoint(op.insert.ch)) return error.InvalidChar;
     if (!try self.tryApply(op)) {
         try self.pending.append(self.gpa, op);
         return;
@@ -158,16 +163,22 @@ pub fn toOwnedText(self: *const Replica, gpa: Allocator) Allocator.Error![]u8 {
     while (i != none) : (i = next[i]) {
         if (deleted[i]) continue;
         var buf: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(@intCast(ch[i]), &buf) catch unreachable; // every `ch` came from a `u21` the typist produced as a scalar value
+        const n = std.unicode.utf8Encode(ch[i], &buf) catch unreachable; // `insert` and `apply` admit only scalar values
         try out.appendSlice(gpa, buf[0..n]);
     }
     return out.toOwnedSlice(gpa);
 }
 
-/// Bytes held by items and the per-replica index (not the capacity slack, not `pending`).
+/// Bytes allocated for the text's state: the item arrays, the per-replica index, `pending` and
+/// the scratch sets, capacity slack included.
 pub fn memoryUsed(self: *const Replica) usize {
-    const per_item = @sizeOf(Id) + 5 * @sizeOf(u32) + @sizeOf(bool) + @sizeOf(u32);
-    return self.items.len * per_item;
+    var total = std.MultiArrayList(Item).capacityInBytes(self.items.capacity);
+    var it = self.by_replica.valueIterator();
+    while (it.next()) |list| total += list.capacity * @sizeOf(u32);
+    total += self.by_replica.capacity() * (@sizeOf(u32) + @sizeOf(std.ArrayList(u32)) + 1);
+    total += self.pending.capacity * @sizeOf(Op);
+    total += (self.scan_before.capacity() + self.scan_conflicting.capacity()) * (@sizeOf(u32) + 1);
+    return total;
 }
 
 fn tryApply(self: *Replica, op: Op) Allocator.Error!bool {
@@ -228,7 +239,7 @@ fn integrate(self: *Replica, ins: Insert, l: u32, r: u32) Allocator.Error!u32 {
     gop.value_ptr.appendAssumeCapacity(new);
     // `appendAssumeCapacity` never moves the arrays, so these slices are still valid.
     self.items.items(.next)[after] = new;
-    if (nx == none) self.tail = new else self.items.items(.prev)[nx] = new;
+    if (nx != none) self.items.items(.prev)[nx] = new;
     self.visible_len += 1;
     return new;
 }

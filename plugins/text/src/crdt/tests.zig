@@ -4,6 +4,7 @@
 const std = @import("std");
 const Replica = @import("Replica.zig");
 const Op = @import("op.zig").Op;
+const Id = @import("op.zig").Id;
 
 const gpa = std.testing.allocator;
 
@@ -166,4 +167,12 @@ fn concurrentWords(backwards: bool) !void {
 test "two words typed at one place do not interleave" {
     try concurrentWords(false);
     try concurrentWords(true);
+}
+
+test "a surrogate character is refused" {
+    var a = try Replica.init(std.testing.allocator, 1);
+    defer a.deinit();
+    const bad: Op = .{ .insert = .{ .id = .{ .replica = 2, .counter = 0 }, .ch = 0xD800, .left = Id.root, .right = null } };
+    try std.testing.expectError(error.InvalidChar, a.apply(bad));
+    try std.testing.expectEqual(@as(usize, 0), a.len());
 }
