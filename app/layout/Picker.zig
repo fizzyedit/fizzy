@@ -431,6 +431,27 @@ fn sectionOf(places: []const Place, id: []const u8, keywords: []const []const u8
     return best;
 }
 
+test "a disabled control icon is an opaque blend of its tint and the button's fill" {
+    const fills = [_]dvui.Color{ .{ .r = 30, .g = 30, .b = 34 }, .{ .r = 235, .g = 235, .b = 240 } }; // dark, light
+    const tints = [_]dvui.Color{ .{ .r = 220, .g = 220, .b = 225 }, .{ .r = 40, .g = 40, .b = 45 } };
+    for (fills, tints) |fill, tint| {
+        for ([_]f32{ 0.4, 0.65 }) |t| {
+            const got = disabledTint(tint, fill, t);
+            try std.testing.expectEqual(@as(u8, 255), got.a);
+            const want = tint.lerp(fill, t);
+            try std.testing.expectEqual(want.r, got.r);
+            try std.testing.expectEqual(want.g, got.g);
+            try std.testing.expectEqual(want.b, got.b);
+            // Dimmer than enabled, never past the fill.
+            const lo = @min(tint.r, fill.r);
+            const hi = @max(tint.r, fill.r);
+            try std.testing.expect(got.r >= lo and got.r <= hi and got.r != tint.r);
+        }
+    }
+    // A translucent theme fill does not leak alpha into the stroke.
+    try std.testing.expectEqual(@as(u8, 255), disabledTint(tints[0], .{ .r = 0, .g = 0, .b = 0, .a = 40 }, 0.5).a);
+}
+
 test "a view is listed under the place its keywords are for, the edited place first" {
     const kw = sdk.keywords.ide;
     const places = [_]Place{
@@ -759,22 +780,23 @@ fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place:
     // `.err`'s text colour is not red in every theme.
     const tint = if (destructive) theme.color(.err, .fill) else theme.color(.control, .text);
     // Disabled keeps the place's slot but dimmer; delete stays red enough to read as delete.
-    const dim: f32 = if (destructive) 0.6 else 0.35;
+    const toward_fill: f32 = if (destructive) 0.4 else 0.65;
+    const fill = theme.color(.control, .fill);
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{
         .id_extra = id_extra,
         .padding = dvui.Rect.all(5),
         .margin = .{ .x = 2 },
         .gravity_y = 0.5,
-        .color_fill_hover = if (enabled) null else .{ .color = theme.color(.control, .fill) },
-        .color_fill_press = if (enabled) null else .{ .color = theme.color(.control, .fill) },
+        .color_fill_hover = if (enabled) null else .{ .color = fill },
+        .color_fill_press = if (enabled) null else .{ .color = fill },
     });
     defer bw.deinit();
     if (enabled) core.anchor.mark(bw.data(), "region.menu.{f}:{s}", .{ c.action, place });
     bw.processEvents();
     bw.drawBackground();
     core.icon.icon(@src(), c.id, c.icon, .{
-        .stroke_color = .{ .color = if (enabled) tint else tint.opacity(dim) },
+        .stroke_color = .{ .color = if (enabled) tint else disabledTint(tint, fill, toward_fill) },
         // Clear fill takes the single-colour path, so the stroke shows in the tint as given.
         .fill_color = if (destructive) .{ .color = .transparent } else .white,
     }, .{
@@ -787,6 +809,15 @@ fn controlButton(src: std.lang.SourceLocation, c: place_commands.Command, place:
     const title = if (std.mem.find(u8, c.title, ": ")) |at| c.title[at + 2 ..] else c.title;
     core.widgets.tooltip(@src(), .{ .active_rect = bw.data().borderRectScale().r }, "{s}", .{title}, .{});
     return enabled and bw.clicked();
+}
+
+/// A disabled control icon's colour: `tint` part of the way (`toward_fill`) to the button's `fill`,
+/// opaque. A translucent stroke double-blends where its caps and joins overlap, which shows as
+/// darker dots; a solid mix reads as dimmed and draws clean.
+fn disabledTint(tint: dvui.Color, fill: dvui.Color, toward_fill: f32) dvui.Color {
+    var c = tint.lerp(fill, toward_fill);
+    c.a = 255;
+    return c;
 }
 
 fn contains(list: []const *sdk.Surface, id: []const u8) bool {
