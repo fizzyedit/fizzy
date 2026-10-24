@@ -9,6 +9,9 @@
 //! itself, under its own key as `FrameCauses` is, so the profiler's layout is untouched. Scopes are
 //! kept as entry indices into the profiler's entries, which stay put until the profiler is reset
 //! (the record is then too). std-only, fed plain numbers, so it tests on its own.
+//!
+//! Memory only: nothing here is written to disk. TODO(seam): when the one performance store
+//! (plans#74) exists, the record is written through it, never to a store of its own.
 const FrameRecord = @This();
 
 const std = @import("std");
