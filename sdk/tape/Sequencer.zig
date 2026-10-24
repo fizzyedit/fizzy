@@ -46,7 +46,7 @@ typing: ?Typing = null,
 holding: bool = false,
 held_ms: f64 = 0,
 /// Buttons the tape holds down: a glide while one is carries something (`Glide.carried`).
-pressed: u8 = 0,
+pressed: std.EnumSet(Tape.Button) = .empty,
 /// Set by whoever plays the tape while it replays to a moment rather than plays live (a seek):
 /// a carried glide then takes a frame per step of its path (`path_step_ms`).
 replaying: bool = false,
@@ -142,8 +142,8 @@ pub const Failure = struct {
         /// A move or trace never saw its target drawn.
         target: Tape.Target,
     },
-    /// The ops skipped after it: those up to the next chapter (or keyframe) that were not
-    /// releases of a button already held.
+    /// The ops skipped after it: those up to the next chapter (keyframes included) that were
+    /// not releases of a button already held.
     skipped: usize,
 };
 
@@ -185,7 +185,7 @@ pub fn restoreTo(self: *Sequencer, cursor: usize, now: f64, pointer: Point) void
     self.holding = false;
     self.held_ms = 0;
     // A moment is calm with no button held (`Player.keepSnapshot`).
-    self.pressed = 0;
+    self.pressed = .empty;
 }
 
 /// Play at `speed` times the tape's own pace, kept within `min_speed`...`max_speed`.
@@ -240,7 +240,7 @@ pub fn rewind(self: *Sequencer, op_index: usize) void {
     self.typing = null;
     self.holding = false;
     self.held_ms = 0;
-    self.pressed = 0;
+    self.pressed = .empty;
 }
 
 pub const Progress = enum {
@@ -306,7 +306,7 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 // A move only: a stroke's points are on a canvas that is not going anywhere, and a
                 // drawing has hundreds of them.
                 if (op.do == .move) if (sink.vtable.still) |still| if (!still(sink.ctx, target)) return .holding;
-                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now, .carried = self.pressed > 0 };
+                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now, .carried = self.pressed.count() > 0 };
                 self.cursor += 1;
             },
             .type => {
@@ -324,13 +324,13 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
             },
             .press => |b| {
                 self.cursor += 1;
-                self.pressed +|= 1;
+                self.pressed.insert(b);
                 sink.vtable.button(sink.ctx, b, true);
                 return .yielded;
             },
             .release => |b| {
                 self.cursor += 1;
-                self.pressed -|= 1;
+                self.pressed.remove(b);
                 sink.vtable.button(sink.ctx, b, false);
                 return .yielded;
             },
@@ -444,19 +444,19 @@ fn fail(self: *Sequencer, op: usize, what: @FieldType(Failure, "what"), sink: Si
         if (c.at > failed_at) break c.at;
     } else std.math.maxInt(u32);
     var end = self.cursor;
-    while (end < ops.len and ops[end].at < chapter_at and ops[end].do != .keyframe) end += 1;
+    while (end < ops.len and ops[end].at < chapter_at) end += 1;
     var skipped = end - self.cursor;
     var pressed = self.pressed;
     for (ops[self.cursor..end]) |o| {
-        if (o.do == .release and pressed > 0) {
-            pressed -= 1;
+        if (o.do == .release and pressed.contains(o.do.release)) {
+            pressed.remove(o.do.release);
             skipped -= 1;
         }
     }
     sink.vtable.failed(sink.ctx, .{ .op = op, .what = what, .skipped = skipped });
     for (ops[self.cursor..end]) |o| {
-        if (o.do == .release and self.pressed > 0) {
-            self.pressed -= 1;
+        if (o.do == .release and self.pressed.contains(o.do.release)) {
+            self.pressed.remove(o.do.release);
             sink.vtable.button(sink.ctx, o.do.release, false);
         }
     }
@@ -936,6 +936,41 @@ test "a timed-out wait still releases a button held across it, but not a press i
     try testing.expectEqualStrings("keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n", log.out.items);
 }
 
+test "a timed-out wait skips a keyframe and the commands after it, up to the next chapter" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .do = .{ .wait = .{ .until = .{ .shown = "never" }, .timeout = 50 } } },
+        .{ .at = 200, .do = .{ .keyframe = 0 } },
+        .{ .at = 300, .do = .{ .command = .{ .id = "skipped" } } },
+        .{ .at = 1000, .do = .{ .key = "plays" } },
+    };
+    const chapters = [_]Tape.Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 1000, .title = "two" } };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes, .chapters = &chapters };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\ntimeout 1 skipping 2\nkey plays\n", log.out.items);
+}
+
+test "a timed-out wait releases the buttons held across it, whichever order the tape lets go" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .press = .left } },
+        .{ .at = 10, .do = .{ .wait = .{ .until = .{ .shown = "never" }, .timeout = 10 } } },
+        .{ .at = 20, .do = .{ .press = .right } },
+        .{ .at = 30, .do = .{ .release = .right } },
+        .{ .at = 40, .do = .{ .release = .left } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (!seq.done()) _ = seq.advance(std.math.inf(f64), 30, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\npress left\ntimeout 2 skipping 2\nrelease left\n", log.out.items);
+    try testing.expectEqual(@as(usize, 0), seq.pressed.count());
+}
+
 test "a move to a target never drawn skips the chapter, so no press lands off target" {
     const ops = [_]Tape.Op{
         .{ .at = 0, .do = .{ .keyframe = 0 } },
@@ -1027,7 +1062,7 @@ test "carrying something, the pointer goes where the target settled; with nothin
     try log.tags.put(testing.allocator, "slot", .{ .x = 100, .y = 10 });
     playTo(&seq, 700, 16, log.sink());
     try testing.expectEqual(@as(f32, 700), seq.pointer.x);
-    try testing.expectEqual(@as(u8, 0), seq.pressed);
+    try testing.expectEqual(@as(usize, 0), seq.pressed.count());
 }
 
 test "replaying, a carried glide takes a frame per step of its path" {
