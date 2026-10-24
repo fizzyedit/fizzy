@@ -233,4 +233,5 @@ test {
     _ = HistoryFrames;
     _ = Recents;
     _ = @import("automation/Calm.zig");
+    _ = @import("automation/overlay.zig");
 }
