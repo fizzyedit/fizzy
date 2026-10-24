@@ -1164,8 +1164,12 @@ test "a caption's card is made of the material tooltips and menus wear" {
         var blur: f32 = 0;
         var tooltip: ?f32 = null;
         var caption: ?f32 = null;
+        var menu: ?core.widgets.BlurBackdrop.Pane = null;
+        var dialog: ?core.widgets.FloatingWindowWidget.Frost = null;
         fn frame() !dvui.App.Result {
             core.dialogs.publishStyle(.{ .blur = blur, .opacity = 0.5 });
+            menu = core.widgets.menuFrost();
+            dialog = core.dialogs.dialogFrost();
             {
                 var box = dvui.box(@src(), .{}, core.dialogs.tooltipOptions(0));
                 defer box.deinit();
@@ -1199,14 +1203,12 @@ test "a caption's card is made of the material tooltips and menus wear" {
     try std.testing.expectEqual(@as(?f32, 20), fns.tooltip);
     try std.testing.expectEqual(fns.tooltip, fns.caption);
     // The menus ask for the same frost from the same place.
-    const menu = core.widgets.menuFrost().?;
-    const dialog = core.dialogs.dialogFrost().?;
-    try std.testing.expectEqual(dialog.radius, menu.radius);
-    try std.testing.expectEqual(dialog.mix, menu.mix);
-    try std.testing.expectEqual(dialog.tint, menu.tint);
+    try std.testing.expectEqual(fns.dialog.?.radius, fns.menu.?.radius);
+    try std.testing.expectEqual(fns.dialog.?.mix, fns.menu.?.mix);
+    try std.testing.expectEqual(fns.dialog.?.tint, fns.menu.?.tint);
     // Blur off (and no glass program in the testing backend): a plain fill for both, no frost.
     try fns.drawnAt(0);
     try std.testing.expectEqual(@as(?f32, null), fns.tooltip);
     try std.testing.expectEqual(@as(?f32, null), fns.caption);
-    try std.testing.expect(core.widgets.menuFrost() == null);
+    try std.testing.expect(fns.menu == null);
 }
