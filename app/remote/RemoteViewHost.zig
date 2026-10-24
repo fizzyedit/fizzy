@@ -55,7 +55,7 @@ close_asked: bool = false,
 /// The newest frame the client asked for, and the newest answered; 0 before any.
 wanted: u64 = 0,
 answered: u64 = 0,
-input: std.ArrayListUnmanaged(Input) = .empty,
+input: std.ArrayList(Input) = .empty,
 /// The bytes of the `text` items in `input`.
 text_bytes: usize = 0,
 

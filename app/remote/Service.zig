@@ -31,7 +31,7 @@ pub const max_sessions = 8;
 gpa: std.mem.Allocator,
 /// What fizzy says first to each client.
 hello: remote.message.Hello,
-sessions: std.ArrayListUnmanaged(*Session) = .empty,
+sessions: std.ArrayList(*Session) = .empty,
 next_session: u32 = 1,
 /// The app draws the hosts itself (`end`); `pump` does not answer frames.
 editor_draws: bool = false,
@@ -102,7 +102,7 @@ pub fn closeAll(self: *Service) void {
 }
 
 /// Every open view, in the order they were opened, into `out`.
-pub fn views(self: *const Service, out: *std.ArrayListUnmanaged(*RemoteViewHost)) error{OutOfMemory}!void {
+pub fn views(self: *const Service, out: *std.ArrayList(*RemoteViewHost)) error{OutOfMemory}!void {
     for (self.sessions.items) |s| for (s.views.values()) |v| try out.append(self.gpa, v);
 }
 
@@ -132,7 +132,7 @@ const ViewInfo = struct {
 /// `fizzy.remote.views`: the open views, as a list.
 fn listViews(state: *anyopaque, call: *sdk.Command.Call) anyerror!void { // lint-allow(anyerror): `Command.runWith`'s signature
     const self: *Service = @ptrCast(@alignCast(state));
-    var list: std.ArrayListUnmanaged(ViewInfo) = .empty;
+    var list: std.ArrayList(ViewInfo) = .empty;
     for (self.sessions.items) |s| for (s.views.values()) |v| try list.append(call.arena, .{
         .connection = s.id,
         .view = v.id,

@@ -73,7 +73,7 @@ runs the publishing helper after collecting the edits.
    `AGENT_PREPARE_ALLOW_TMP=1` lifts the temp refusal for tests only.
    On Linux without Zig it runs `scripts/cloud-setup.sh`; later shells may need
    `$HOME/.local/bin` added to `PATH` as setup reports.
-2. Read `AGENTS.md`, `CONTRIBUTING.md`, `docs/STYLE.md` and each touched directory's
+2. Read `AGENTS.md`, `CONTRIBUTING.md`, `docs/STYLE.md`, `docs/ZIG.md` and each touched directory's
    `AGENTS.md`. Follow the issue's scope. Keep one PR and at most 800 changed lines outside
    tests and docs. Record a moved SDK fingerprint; leave `sdk_version` alone.
 3. Verify with `scripts/check-fmt.sh`, `scripts/zb build`, `scripts/zb build test`,
@@ -99,6 +99,7 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 
 - Draft PR on the first push; take it to ready only when the gates pass and CI is green.
 - A different worker than the author reviews the PR.
+- Reviewer and author both answer the four questions in [`REVIEW.md`](REVIEW.md).
 - No auto-merge. Merging is the maintainer's (`CONTRIBUTING.md`).
 
 ## Which worker suits which work

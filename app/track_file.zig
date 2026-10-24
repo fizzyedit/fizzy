@@ -40,9 +40,9 @@ pub const Read = struct {
     /// Where the track ended: a document that opens anywhere else is not where it left it.
     end: End,
     base: Track.State,
-    steps: std.ArrayListUnmanaged(Track.Rec),
-    bytes: std.ArrayListUnmanaged(u8),
-    checkpoints: std.ArrayListUnmanaged(Track.State),
+    steps: std.ArrayList(Track.Rec),
+    bytes: std.ArrayList(u8),
+    checkpoints: std.ArrayList(Track.State),
 
     pub fn deinit(self: *Read, gpa: std.mem.Allocator) void {
         gpa.free(self.owner);
@@ -103,9 +103,9 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8) !Read {
     const file_hash = r.takeInt(u64, .little) catch return error.NotATrack;
     const base = try takeState(gpa, &r);
     errdefer gpa.free(base.bytes);
-    var steps: std.ArrayListUnmanaged(Track.Rec) = .empty;
+    var steps: std.ArrayList(Track.Rec) = .empty;
     errdefer steps.deinit(gpa);
-    var held: std.ArrayListUnmanaged(u8) = .empty;
+    var held: std.ArrayList(u8) = .empty;
     errdefer held.deinit(gpa);
     const n = r.takeLeb128(usize) catch return error.NotATrack;
     for (0..n) |_| {
@@ -128,7 +128,7 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8) !Read {
             .motion = .{ .start = motion_at, .len = motion.len },
         });
     }
-    var checkpoints: std.ArrayListUnmanaged(Track.State) = .empty;
+    var checkpoints: std.ArrayList(Track.State) = .empty;
     errdefer {
         for (checkpoints.items) |c| gpa.free(c.bytes);
         checkpoints.deinit(gpa);

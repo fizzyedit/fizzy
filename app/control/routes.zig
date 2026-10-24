@@ -44,7 +44,7 @@ const zon_type = "application/zon";
 /// Answer what waits on `server`. On the UI thread, once a frame, before plugins' `beginFrame`, so
 /// a command run here is seen by the frame that follows.
 pub fn answerPending(server: *Server, state: *State, host: *sdk.Host) void {
-    var taken: std.ArrayListUnmanaged(*Server.Request) = .empty;
+    var taken: std.ArrayList(*Server.Request) = .empty;
     defer taken.deinit(server.gpa);
     var streaming = server.take(&taken) > 0;
     for (taken.items) |req| {
@@ -203,7 +203,7 @@ pub const State = struct {
     },
     on: bool = false,
     /// Requests whose commands answer in a later frame (`Waiter`). UI thread.
-    waiters: std.ArrayListUnmanaged(*Waiter) = .empty,
+    waiters: std.ArrayList(*Waiter) = .empty,
     /// The MCP clients that initialized (`mcp.Sessions`). UI thread.
     sessions: mcp.Sessions = .{},
     /// The remote-view clients (`GET /remote`), once one has connected. UI thread.
@@ -262,7 +262,7 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
     }
     if (std.mem.eql(u8, trimmed, "/commands")) {
         if (method != .GET and method != .HEAD) return notAllowed(arena, "GET");
-        var list: std.ArrayListUnmanaged(CommandInfo) = .empty;
+        var list: std.ArrayList(CommandInfo) = .empty;
         for (host.commands.items) |*c| try list.append(arena, try describe(c, arena));
         return ok(arena, list.items);
     }
@@ -327,7 +327,7 @@ fn route(host: *sdk.Host, method: std.http.Method, path: []const u8, content_typ
 fn call(host: *sdk.Host, c: *const sdk.Command, content_type: ?[]const u8, body: []const u8, arena: std.mem.Allocator, waiter: ?*Waiter) error{OutOfMemory}!Answer {
     const as_zon = isZon(content_type);
     const args = if (as_zon) body else args: {
-        var enum_keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        var enum_keys: std.ArrayList([]const u8) = .empty;
         for (c.params) |p| if (p.kind == .enumeration) try enum_keys.append(arena, p.key);
         break :args json.zonFromJson(arena, body, enum_keys.items) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,

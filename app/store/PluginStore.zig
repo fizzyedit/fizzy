@@ -124,7 +124,7 @@ const Job = struct {
     tasks: std.Io.Group = .init,
 };
 
-var jobs: std.StringArrayHashMapUnmanaged(*Job) = .empty;
+var jobs: std.array_hash_map.String(*Job) = .empty;
 
 /// UI actions queued during `draw` and applied in `tick` so plugin unload never mutates
 /// `host.plugins` (or dlcloses an image) while the store view is still iterating it.
@@ -136,7 +136,7 @@ const PendingAction = union(enum) {
     dismiss: struct { id: []u8 },
 };
 
-var pending_actions: std.ArrayListUnmanaged(PendingAction) = .empty;
+var pending_actions: std.ArrayList(PendingAction) = .empty;
 
 /// Last-known display name per plugin id (app-allocator owned). A sideloaded plugin only exposes
 /// its display name while loaded — once disabled it is unloaded and we'd otherwise fall back to the
@@ -144,14 +144,14 @@ var pending_actions: std.ArrayListUnmanaged(PendingAction) = .empty;
 /// toggled. We remember the name the first time we see it (loaded plugin or registry row) and reuse
 /// it as the stable title for the disabled/failed states. (Session-scoped: a plugin disabled before
 /// it was ever loaded this session still shows its id until enabled once.)
-var name_cache: std.StringArrayHashMapUnmanaged([]u8) = .empty;
+var name_cache: std.array_hash_map.String([]u8) = .empty;
 
 /// Last-known installed version per plugin id (app-allocator owned keys, plain values). Like
 /// `name_cache`, a sideloaded plugin only exposes its version while loaded — once disabled it is
 /// unloaded, and a failed build's version is only known if the dylib could be probed. We remember
 /// the version the first time we see it (loaded plugin, failed-load probe, or on-disk probe) and
 /// reuse it as the "current version" for disabled/failed cards.
-var version_cache: std.StringArrayHashMapUnmanaged(std.SemanticVersion) = .empty;
+var version_cache: std.array_hash_map.String(std.SemanticVersion) = .empty;
 
 /// Disk-probed manifest fields per plugin id (app-allocator owned keys and values; an all-empty
 /// entry means "probed, genuinely has nothing" so it isn't re-probed every frame either). Backs
@@ -159,7 +159,7 @@ var version_cache: std.StringArrayHashMapUnmanaged(std.SemanticVersion) = .empty
 /// `authorUrlFor` — registry and built-in values are already cheap and never touch this. One
 /// cache rather than one per field, because a single `dlopen` + parse yields all of them at once.
 /// Cleared by `refreshDiskScan`.
-var manifest_cache: std.StringArrayHashMapUnmanaged(PluginLoader.ProbedManifest) = .empty;
+var manifest_cache: std.array_hash_map.String(PluginLoader.ProbedManifest) = .empty;
 
 /// Every plugin id with a directory in `{config}/plugins/` (app-allocator owned), refreshed by
 /// `refreshDiskScan`. The installed pane's in-memory sources (loaded plugins, disabled ids,
@@ -167,7 +167,7 @@ var manifest_cache: std.StringArrayHashMapUnmanaged(PluginLoader.ProbedManifest)
 /// what is actually on disk, which is the only thing that guarantees a broken plugin always has
 /// a card to uninstall or reinstall from — even one that arrived in a state nothing recorded
 /// (a half-finished install, a sideloaded directory, a build fizzy never tried to load).
-var disk_ids: std.ArrayListUnmanaged([]u8) = .empty;
+var disk_ids: std.ArrayList([]u8) = .empty;
 /// Set when the plugins directory may have changed (first draw, Refresh, and after any install /
 /// uninstall / enable-disable applied in `tick`) so `draw` rescans once instead of listing the
 /// directory on every frame the tab is open.
@@ -195,7 +195,7 @@ pub fn uninstalledCatalog(arena: std.mem.Allocator) []const CatalogOffer {
     const snap = c.acquire();
     defer c.release();
     const s = snap orelse return &.{};
-    var out: std.ArrayListUnmanaged(CatalogOffer) = .empty;
+    var out: std.ArrayList(CatalogOffer) = .empty;
     for (s.summary.plugins) |p| {
         if (presentLocally(p.id)) continue;
         const rel = s.shard.releaseFor(p.id) orelse continue;
@@ -884,7 +884,7 @@ pub const PendingUpdate = struct {
     }
 };
 
-var pending_updates: std.ArrayListUnmanaged(PendingUpdate) = .empty;
+var pending_updates: std.ArrayList(PendingUpdate) = .empty;
 
 /// Where the once-per-session update check has got to.
 const AutoPhase = enum {
@@ -951,23 +951,23 @@ fn markPendingUpdateFailed(id: []const u8) void {
 /// simply replaced) and from inside the card list's own draw, since it touches no catalog state.
 /// Ids whose web load or update is in flight — the page is fetching and linking, and the host
 /// has not yet accepted or refused the module. `app.gpa`-owned; one entry per id.
-var web_in_flight: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_in_flight: std.array_hash_map.String(void) = .empty;
 
 /// The web's plugins directory: every id the page remembers a build for (it brings each back at
 /// startup) or that loaded this visit. `refreshDiskScan` lists the ones the page still remembers
 /// into `disk_ids`, so everything the desktop does with a plugin on disk — the Installed card,
 /// Uninstall and Reinstall, the update pass — applies here too. `app.gpa`-owned keys.
-var web_known: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_known: std.array_hash_map.String(void) = .empty;
 /// Startup loads the page asked for that have not landed yet. The update pass waits for these:
 /// until a remembered build has been accepted or refused, the pass cannot tell a plugin that is
 /// running from one that needs repairing.
-var web_startup_waiting: std.StringArrayHashMapUnmanaged(void) = .empty;
+var web_startup_waiting: std.array_hash_map.String(void) = .empty;
 /// The page has made all of its startup requests (`webStartupRequested`).
 var web_startup_requested = false;
 
 const web_loader = if (builtin.target.cpu.arch == .wasm32) @import("PluginLoader_web.zig") else struct {};
 
-fn putId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
+fn putId(set: *std.array_hash_map.String(void), id: []const u8) void {
     const gop = set.getOrPut(app.gpa, id) catch return;
     if (!gop.found_existing) {
         gop.key_ptr.* = app.gpa.dupe(u8, id) catch {
@@ -977,11 +977,11 @@ fn putId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
     }
 }
 
-fn removeId(set: *std.StringArrayHashMapUnmanaged(void), id: []const u8) void {
+fn removeId(set: *std.array_hash_map.String(void), id: []const u8) void {
     if (set.fetchSwapRemove(id)) |kv| app.gpa.free(kv.key);
 }
 
-fn freeIds(set: *std.StringArrayHashMapUnmanaged(void)) void {
+fn freeIds(set: *std.array_hash_map.String(void)) void {
     for (set.keys()) |k| app.gpa.free(k);
     set.deinit(app.gpa);
     set.* = .empty;
@@ -2000,7 +2000,7 @@ fn entryScoreLess(_: void, lhs: StoreEntry, rhs: StoreEntry) bool {
 
 /// Drop non-matching entries and order what's left. With no query this is the plain A→Z list the
 /// store has always shown; with one, the best match is the first card.
-fn rankEntries(entries: *std.ArrayListUnmanaged(StoreEntry), query: *const fuzzy.Query) void {
+fn rankEntries(entries: *std.ArrayList(StoreEntry), query: *const fuzzy.Query) void {
     if (query.isEmpty()) {
         std.sort.pdq(StoreEntry, entries.items, {}, entryLess);
         return;
@@ -2056,7 +2056,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
 
     // Store entries (STORE tab): one row per registry plugin, independent of local install
     // state — a pure "what does the store publish" list. See `drawStoreCard`.
-    var store_entries: std.ArrayListUnmanaged(StoreEntry) = .empty;
+    var store_entries: std.ArrayList(StoreEntry) = .empty;
     if (maybe_snapshot) |snap| {
         for (snap.summary.plugins) |entry| {
             rememberName(entry.id, entry.name);
@@ -2074,7 +2074,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // Installed entries (INSTALLED tab): everything genuinely present locally — loaded,
     // disabled-on-disk, sideloaded, or a failed/rejected build — enriched with a matching
     // registry row (for "store vX" / Update-availability) wherever the registry knows the id too.
-    var installed_entries: std.ArrayListUnmanaged(StoreEntry) = .empty;
+    var installed_entries: std.ArrayList(StoreEntry) = .empty;
     for (app.host.plugins.items) |plugin| {
         // The app's own registrations (the store page owner) are plugins to the document
         // machinery and nothing a user manages: no version, no update, nothing to uninstall.

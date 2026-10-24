@@ -23,7 +23,7 @@ pub const Folders = struct {
 /// Read `plugins_dir`'s entries (folders and links to them). A folder not made yet holds nothing;
 /// one that cannot be read is `error.Unreadable`, which a caller treats as a possible clash.
 pub fn read(gpa: std.mem.Allocator, io: std.Io, plugins_dir: []const u8) error{ Unreadable, OutOfMemory }!Folders {
-    var names: std.ArrayListUnmanaged([]const u8) = .empty;
+    var names: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (names.items) |n| gpa.free(n);
         names.deinit(gpa);

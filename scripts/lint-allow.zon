@@ -1,6 +1,5 @@
 // Per-rule, per-file budgets. Lower counts when findings are removed; do not raise them.
 .{
-    .{ .rule = .anyerror, .file = "app/Tracks.zig", .count = 3 },
     .{ .rule = .anyerror, .file = "app/layout/Layout.zig", .count = 1 },
     .{ .rule = .anyerror, .file = "app/layout/Region.zig", .count = 5 },
     .{ .rule = .anyerror, .file = "app/layout/place_commands.zig", .count = 1 },

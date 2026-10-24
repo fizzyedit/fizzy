@@ -230,8 +230,15 @@ pub const Transport = struct {
     /// Sent into where it rests (its tab): the bar stays there, playing or not, until that brings it
     /// back (a press here, the pointer held on it in the overlay).
     tucked: bool = false,
-    /// The speed on the track (`Sequencer.speed`), which a press steps through `Sequencer.speeds`.
+    /// The speed slider, label and line (`Sequencer.speed`), whose notches are `Sequencer.speeds`.
     speed: dvui.Rect.Physical = .{},
+    /// The slider's line alone, where a press lands on a notch.
+    speed_line: dvui.Rect.Physical = .{},
+    /// A viewer is dragging the slider's knob.
+    speed_drag: bool = false,
+    /// The slider took the last press: the arrow keys, Home and End move its notch (and
+    /// do not pause the demo) until a press lands elsewhere.
+    speed_focus: bool = false,
     /// The demo time the scrubber is held at while a viewer drags it; the player seeks there as
     /// it moves (`frame`), and once more when it is let go.
     scrub: ?f64 = null,
@@ -258,6 +265,22 @@ pub const Transport = struct {
     closing: bool = false,
     /// Shut, having been closing — the overlay's word to `frame` that the demo can go now.
     shut: bool = false,
+
+    /// The notch of `Sequencer.speeds` nearest physical x on the speed line.
+    pub fn speedAt(self: Transport, x: f32) usize {
+        if (self.speed_line.w <= 0) return 0;
+        const f = std.math.clamp((x - self.speed_line.x) / self.speed_line.w, 0, 1);
+        return @intFromFloat(@round(f * @as(f32, Sequencer.speeds.len - 1)));
+    }
+
+    /// Let go of a speed drag (and the slider's key focus) that can no longer be answered: the
+    /// bar is gone, closing or tucked away, so nothing under the pointer is the slider.
+    pub fn dropStaleDrag(self: *Transport) void {
+        if (self.bar == null or self.closing or self.tucked) {
+            self.speed_drag = false;
+            self.speed_focus = false;
+        }
+    }
 
     /// The demo time under physical x on the track.
     pub fn timeAt(self: Transport, x: f32, total_ms: u32) f64 {
@@ -889,6 +912,7 @@ fn takeRealInput(self: *Player) void {
             .mouse => |me| {
                 if (me.action == .position) continue;
                 if (self.transportTakes(e, me)) continue;
+                if (me.action == .press) self.transport.speed_focus = false;
                 switch (self.state) {
                     .playing => switch (me.action) {
                         // The tape owns the pointer while it plays.
@@ -910,7 +934,18 @@ fn takeRealInput(self: *Player) void {
                     .idle => {},
                 }
             },
-            .key, .text => switch (self.state) {
+            .key => |ke| if (self.speedKey(e, ke)) {} else switch (self.state) {
+                .playing => {
+                    e.handle(@src(), wd);
+                    self.pause();
+                },
+                .seeking => e.handle(@src(), wd),
+                .paused, .ended => {
+                    self.diverged = true;
+                },
+                .idle => {},
+            },
+            .text => switch (self.state) {
                 .playing => {
                     e.handle(@src(), wd);
                     self.pause();
@@ -926,11 +961,42 @@ fn takeRealInput(self: *Player) void {
     }
 }
 
+/// A key on the speed slider, while it holds focus or the pointer is on it: the arrows step a
+/// notch, Home and End go to the ends, Escape lets go. True when it took the key.
+fn speedKey(self: *Player, e: *dvui.Event, ke: dvui.Event.Key) bool {
+    const tr = &self.transport;
+    const hovered = if (tr.pointer) |p| tr.speed.contains(p) else false;
+    if (tr.bar == null or tr.closing or !(tr.speed_focus or hovered)) return false;
+    switch (ke.code) {
+        .left, .down => if (ke.action != .up) self.seq.nudgeSpeed(-1),
+        .right, .up => if (ke.action != .up) self.seq.nudgeSpeed(1),
+        .home => if (ke.action != .up) self.seq.setSpeedIndex(0),
+        .end => if (ke.action != .up) self.seq.setSpeedIndex(Sequencer.speeds.len - 1),
+        .escape => tr.speed_focus = false,
+        else => return false,
+    }
+    e.handle(@src(), dvui.currentWindow().data());
+    dvui.refresh(null, @src(), null);
+    return true;
+}
+
 /// Whether a real pointer event belongs to the transport bar; if so it is handled here.
 fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     const wd = dvui.currentWindow().data();
     const tr = &self.transport;
     if (me.action == .motion or me.action == .press) tr.pointer = me.p;
+    tr.dropStaleDrag();
+    // A press while dragging means the release was lost (focus left the window).
+    if (me.action == .press) tr.speed_drag = false;
+    if (tr.speed_drag) {
+        switch (me.action) {
+            .motion => self.seq.setSpeedIndex(tr.speedAt(me.p.x)),
+            .release => tr.speed_drag = false,
+            else => {},
+        }
+        e.handle(@src(), wd);
+        return true;
+    }
     if (tr.scrub != null) {
         switch (me.action) {
             .motion => tr.scrub = tr.timeAt(me.p.x, self.duration()),
@@ -971,6 +1037,7 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         return true;
     }
     if (me.action == .press and me.button.pointer()) {
+        tr.speed_focus = tr.speed.contains(me.p);
         if (on_tab) {
             tr.tucked = true;
             tr.stirred_ns = null;
@@ -978,7 +1045,8 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         } else if (tr.play.contains(me.p)) {
             self.toggle();
         } else if (tr.speed.contains(me.p)) {
-            self.seq.stepSpeed();
+            tr.speed_drag = true;
+            self.seq.setSpeedIndex(tr.speedAt(me.p.x));
         } else if (tr.track.contains(me.p)) {
             tr.scrub = tr.timeAt(me.p.x, self.duration());
             self.scrub_after = if (self.state == .playing or (self.state == .seeking and self.after_seek == .play)) .play else .pause;
@@ -1136,4 +1204,36 @@ fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
 pub fn pointerShown(self: *const Player, fade_ms: f64) f32 {
     const t = self.tape() orelse return 1;
     return t.pointerShown(self.seq.cursor, self.seq.now, fade_ms);
+}
+
+test "the speed slider snaps to the nearest notch and clamps past its ends" {
+    const last = Sequencer.speeds.len - 1;
+    const tr: Transport = .{ .speed_line = .{ .x = 100, .y = 0, .w = 60, .h = 10 } };
+    try std.testing.expectEqual(@as(usize, 0), tr.speedAt(100));
+    try std.testing.expectEqual(@as(usize, 0), tr.speedAt(-50));
+    try std.testing.expectEqual(last, tr.speedAt(160));
+    try std.testing.expectEqual(last, tr.speedAt(900));
+    // The middle of the line is the middle notch; a hair off a notch snaps to it.
+    try std.testing.expectEqual(last / 2, tr.speedAt(130));
+    const notch = 60.0 / @as(f32, @floatFromInt(last));
+    try std.testing.expectEqual(@as(usize, 1), tr.speedAt(100 + notch * 1.2));
+    // Without a line there is nothing to land on.
+    try std.testing.expectEqual(@as(usize, 0), (Transport{}).speedAt(130));
+}
+
+test "a speed drag does not outlive the bar it began on" {
+    const bar: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 10, .h = 10 };
+    var tr: Transport = .{ .bar = bar, .speed_drag = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(tr.speed_drag);
+    tr.closing = true;
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    tr = .{ .bar = bar, .tucked = true, .speed_drag = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    tr = .{ .speed_drag = true, .speed_focus = true };
+    tr.dropStaleDrag();
+    try std.testing.expect(!tr.speed_drag);
+    try std.testing.expect(!tr.speed_focus);
 }

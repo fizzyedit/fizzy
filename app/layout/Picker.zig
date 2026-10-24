@@ -357,7 +357,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
         // already in. Not the last view out of the place, though: a lit card that is all the
         // place shows only says so (Clear empties a place on purpose).
         if (on and contents.len == 1) continue;
-        var ids = std.ArrayListUnmanaged([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
+        var ids = std.ArrayList([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
         for (contents) |c| if (!std.mem.eql(u8, c.id, s.id)) ids.appendAssumeCapacity(c.id);
         if (!on) ids.appendAssumeCapacity(s.id);
         state.assign(gpa, region.name, ids.items) catch |err| {
@@ -376,7 +376,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
 /// no document in a plain place, only documents in a document pane) — that match `query`, best
 /// first. In registry order while the query is empty. Indices into `host.surfaces`.
 fn offered(f: *Layout, region: *const Layout.Region, query: *const core.fuzzy.Query) []core.fuzzy.Ranked(usize) {
-    var out: std.ArrayListUnmanaged(core.fuzzy.Ranked(usize)) = .empty;
+    var out: std.ArrayList(core.fuzzy.Ranked(usize)) = .empty;
     for (f.host.surfaces.items, 0..) |*s, i| {
         if (s.hidden) continue;
         if (!f.offers(region, s)) continue;
@@ -400,7 +400,7 @@ const Place = struct {
 /// resolved by keywords are one per keyword group (the icon rail and the explorer it chooses for
 /// are one place); a place resolved by name (a split's leaf, a float) is its own.
 fn placesFor(f: *Layout, region: *const Layout.Region) []const Place {
-    var out: std.ArrayListUnmanaged(Place) = .empty;
+    var out: std.ArrayList(Place) = .empty;
     out.append(f.arena, .{ .name = region.name, .keywords = region.keywords, .holds = f.matchingIn(region) }) catch return &.{};
     for (f.state.regions.items) |*r| {
         if (r.name.len == 0 or r.kind_slot) continue;
@@ -498,7 +498,7 @@ fn ownerName(s: *const sdk.Surface) []const u8 {
 /// finds Files through its title and its plugin together, where scoring each field on its own
 /// would need both words in one of them.
 fn searchText(f: *Layout, s: *const sdk.Surface) []const u8 {
-    var text: std.ArrayListUnmanaged(u8) = .empty;
+    var text: std.ArrayList(u8) = .empty;
     const a = f.arena;
     text.appendSlice(a, s.title) catch return s.title;
     text.print(a, " {s}", .{ownerName(s)}) catch {};
@@ -854,7 +854,7 @@ fn flushPendingStore(f: *Layout, region: *const Layout.Region) void {
 
     // Beside what the place holds, as a card picked there goes.
     const held = f.matchingIn(region);
-    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
     for (held) |h| ids.append(f.arena, h.id) catch return;
     var first: ?[]const u8 = null;
     for (f.host.surfaces.items) |*s| {
@@ -884,7 +884,7 @@ fn drawStoreSection(
     col: *usize,
     query: *const core.fuzzy.Query,
 ) void {
-    var offers: std.ArrayListUnmanaged(State.StoreOffer) = .empty;
+    var offers: std.ArrayList(State.StoreOffer) = .empty;
     for (store.uninstalled(f.arena)) |offer| {
         const fields = [_][]const u8{ offer.title, offer.id };
         if (core.fuzzy.scoreBest(&fields, query, .{}) == null) continue;

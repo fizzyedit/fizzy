@@ -1,7 +1,7 @@
 //! Repository lint with per-file budgets for existing findings.
 const std = @import("std");
 
-const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror };
+const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror, @"deprecated-names-replacement" };
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
 const Suppression = struct { rule: []const u8, line: usize };
@@ -54,6 +54,7 @@ pub fn main(init: std.process.Init) !void {
             const findings = try std.mem.concat(allocator, Finding, &.{
                 try analyze(allocator, bytes),
                 try fileAlias(allocator, bytes, stem),
+                try deprecatedReplacement(allocator, bytes, path),
             });
             failed = try reportFile(&output.writer, path, findings, parsed, seen, verbose) or failed;
         }
@@ -207,6 +208,66 @@ fn fileAlias(allocator: std.mem.Allocator, source: [:0]const u8, stem: []const u
             .rule = .@"file-alias",
             .line = tree.tokenLocation(0, decl.ast.mut_token).line + 1,
             .message = try allocator.print("@This() alias is {s}; name it for the file ({s})", .{ name, stem }),
+        });
+    }
+    return findings.toOwnedSlice(allocator);
+}
+
+/// The caller owns the findings and frees them with `allocator`.
+fn deprecatedReplacement(allocator: std.mem.Allocator, source: [:0]const u8, path: []const u8) ![]Finding {
+    var findings: std.ArrayList(Finding) = .empty;
+    errdefer findings.deinit(allocator);
+    if (!std.mem.startsWith(u8, path, "sdk/src/")) return findings.toOwnedSlice(allocator);
+    var suppressions: std.ArrayList(Suppression) = .empty;
+    defer suppressions.deinit(allocator);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var line_number: usize = 0;
+    while (lines.next()) |line| {
+        line_number += 1;
+        const comment = commentStart(line) orelse continue;
+        const text = std.mem.trim(u8, line[comment + 2 ..], " \t\r");
+        const prefix = "lint-allow(";
+        if (!std.mem.startsWith(u8, text, prefix)) continue;
+        const close = std.mem.findScalar(u8, text, ')') orelse continue;
+        try suppressions.append(allocator, .{ .rule = text[prefix.len..close], .line = line_number });
+    }
+    var tokenizer = std.zig.Tokenizer.init(source);
+    var in_block = false;
+    while (true) {
+        const token = tokenizer.next();
+        if (token.tag == .eof) break;
+        const continues_block = in_block;
+        in_block = token.tag == .doc_comment;
+        if (!in_block or continues_block) continue;
+        const text = std.mem.trimStart(u8, source[token.loc.start + 3 .. token.loc.end], " \t");
+        if (!std.mem.startsWith(u8, text, "Deprecated")) continue;
+        const tail = text["Deprecated".len..];
+        if (tail.len > 0 and (std.ascii.isAlphanumeric(tail[0]) or tail[0] == '_')) continue;
+        var description: std.ArrayList(u8) = .empty;
+        defer description.deinit(allocator);
+        try description.appendSlice(allocator, tail);
+        var following = tokenizer;
+        while (true) {
+            const next = following.next();
+            if (next.tag != .doc_comment) break;
+            try description.append(allocator, '\n');
+            try description.appendSlice(allocator, source[next.loc.start + 3 .. next.loc.end]);
+        }
+        var ticks = std.mem.splitScalar(u8, description.items, '`');
+        _ = ticks.next();
+        var replacement = false;
+        while (ticks.next()) |name| {
+            if (ticks.next() == null) break;
+            if (std.mem.trim(u8, name, " \t\r\n").len > 0) {
+                replacement = true;
+                break;
+            }
+        }
+        const line = std.mem.count(u8, source[0..token.loc.start], "\n") + 1;
+        if (!replacement and !silenced(suppressions.items, .@"deprecated-names-replacement", line)) try findings.append(allocator, .{
+            .rule = .@"deprecated-names-replacement",
+            .line = line,
+            .message = "Deprecated marker must name a backticked replacement",
         });
     }
     return findings.toOwnedSlice(allocator);
@@ -445,4 +506,64 @@ test "anyerror return type covers hit, allowed file, suppressed line, and ratche
             "under.zig:1: anyerror: count 1 is under allowance 2; lower the allowance to 1\n",
         output.written(),
     );
+}
+
+test "SDK deprecated markers name a backticked replacement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "/// Deprecated\npub const old = 1;",
+        "/// Deprecated: use replacement.\npub const old = 1;",
+        "/// Deprecated: use ``.\npub const old = 1;",
+        "/// Deprecated: use `replacement.\npub const old = 1;",
+        "/// Deprecated\n// internal note about `helper`\n/// No replacement.\npub const old = 1;",
+    }) |source| {
+        const findings = try deprecatedReplacement(a, source, "sdk/src/nested/old.zig");
+        try std.testing.expectEqual(@as(usize, 1), findings.len);
+        try std.testing.expectEqual(@as(usize, 1), findings[0].line);
+        var output: std.Io.Writer.Allocating = .init(a);
+        defer output.deinit();
+        try std.testing.expect(try reportFile(&output.writer, "sdk/src/old.zig", findings, &.{}, &.{}, false));
+        try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, source, "core/old.zig")).len);
+    }
+    for ([_][:0]const u8{
+        "/// Deprecated: use `replacement`.\npub const old = 1;",
+        "/// Deprecated.\n/// Use `replacement`.\npub const old = 1;",
+        "// Deprecated\npub const old = 1;",
+        "//! Deprecated\npub const old = 1;",
+        "const text = \"/// Deprecated\";",
+        "/// DeprecatedThing is an identifier.\npub const old = 1;",
+        "/// Foo\n/// Deprecated, see below\npub const old = 1;",
+    }) |source| try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len);
+}
+
+test "deprecated marker honors lint-allow suppression and a file budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const suppressed = "// lint-allow(deprecated-names-replacement): removed with the next SDK\n/// Deprecated\npub const old = 1;";
+    try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, suppressed, "sdk/src/old.zig")).len);
+    const inside_doc = "/// Deprecated // lint-allow(deprecated-names-replacement): not a comment\npub const old = 1;";
+    try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, inside_doc, "sdk/src/old.zig")).len);
+    // Two markers in one doc block are one finding.
+    const twice = "/// Deprecated: gone.\n/// Deprecated: still gone.\npub const old = 1;";
+    try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, twice, "sdk/src/old.zig")).len);
+    // A suppression for another rule, or two lines above the marker, does not silence it.
+    for ([_][:0]const u8{
+        "// lint-allow(anyerror): wrong rule\n/// Deprecated\npub const old = 1;",
+        "// lint-allow(deprecated-names-replacement): too far\n\n/// Deprecated\npub const old = 1;",
+    }) |source| try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len);
+
+    const hit = try deprecatedReplacement(a, "/// Deprecated\npub const old = 1;", "sdk/src/old.zig");
+    const allowances = [_]Allow{
+        .{ .rule = .@"deprecated-names-replacement", .file = "sdk/src/allowed.zig", .count = 1 },
+        .{ .rule = .@"deprecated-names-replacement", .file = "sdk/src/under.zig", .count = 2 },
+    };
+    var seen = [_]bool{ false, false };
+    var output: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expect(try reportFile(&output.writer, "sdk/src/hit.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(!try reportFile(&output.writer, "sdk/src/allowed.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(try reportFile(&output.writer, "sdk/src/under.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(seen[0] and seen[1]);
 }

@@ -182,6 +182,7 @@ pub fn play(self: *Demo, name: []const u8) !void {
     var script: automation.Script = .init(self.editor.app.gpa, entry.name, entry.title);
     errdefer script.deinit();
     script.check = automation.Input.check;
+    script.compact = core.platform.formFactor() == .mobile;
     try entry.build(&script);
     self.player.load(try script.finish(), .{});
 }

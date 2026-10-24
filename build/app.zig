@@ -510,7 +510,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     // `zig build web` produces `zig-out/web/{web.wasm, web.js, index.html, NotoSansKR-Regular.ttf}`,
     // deployable as-is to a static host.
-    const w = web.build(b, optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
+    const w = web.build(b, optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, cfg.app_layout_path, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
     const built = try native(b, target, optimize, opts, cfg, assets_module, app_icon_module);
     install(b, target, optimize, cfg, w, built);
     try addTests(b, target, optimize, cfg, built, assets_module, app_icon_module);
@@ -799,7 +799,7 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
         .{ "fizzy-reveal-tests", "core/reveal.zig" },
-        // Phone, tablet or desktop from the page's pointer and viewport. std-only (see
+        // Mobile, tablet or desktop from the page's pointer and viewport. std-only (see
         // form_factor.zig); `platform.zig` holds the live value.
         .{ "fizzy-form-factor-tests", "core/form_factor.zig" },
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
@@ -1353,6 +1353,34 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         check_integration_step.dependOn(&demo_tests.step);
     }
 
+    {
+        const fuzz_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/fuzz_tapes.zig"),
+        });
+        fuzz_module.addImport("fizzy", fizzy_test_module);
+        fuzz_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        fuzz_module.addImport("app", app_module_test);
+        fuzz_module.addImport("workbench", workbench_module_test);
+        fuzz_module.addAnonymousImport("hello", .{ .root_source_file = b.path("docs/demos/hello.zon") });
+        const fuzz_tests = b.addTest(.{
+            .name = "fizzy-fuzz-tapes",
+            .root_module = fuzz_module,
+            .filters = test_filters,
+        });
+        if (target.result.os.tag == .windows) fuzz_tests.root_module.linkSystemLibrary("comctl32", .{});
+        fuzz_tests.root_module.link_libcpp = !target_is_windows_msvc;
+        if (velopack_enabled) if (vz) |v| {
+            try velopack.linkVelopack(b, v, fuzz_tests, .{ .target = target, .optimize = optimize, .c_modules = &.{app_module_test} });
+        };
+        // Its output is the report, so a cached run must not hide it.
+        const fuzz_run = b.addRunArtifact(fuzz_tests);
+        fuzz_run.has_side_effects = true;
+        b.step("fuzz-tapes", "Explore seeded tape interruptions and print shrunk findings")
+            .dependOn(&fuzz_run.step);
+    }
+
     // The `app` framework module's own tests — the split trees, seeds, drop plans and view drag
     // under `app/layout/` (`Layout.zig`'s `test` block). `addTest` collects from its root module
     // only, so the integration tests above, which import `app`, never ran them. Against dvui's
@@ -1398,6 +1426,8 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
             .root_source_file = b.path("core/profile.zig"),
         });
         profile_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        // `core/profile.zig` times the in-app glass through `glass.prof`.
+        profile_module.addImport("glass", core_module_test.import_table.get("glass").?);
         const profile_tests = b.addTest(.{
             .name = "fizzy-profile-tests",
             .root_module = profile_module,
@@ -1654,6 +1684,26 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         text_plugin_tests.root_module.link_libcpp = !target_is_windows_msvc;
         test_integration_step.dependOn(&b.addRunArtifact(text_plugin_tests).step);
         check_integration_step.dependOn(&text_plugin_tests.step);
+    }
+
+    // Give the file extension tests a root; the plugin's lazy exports do not collect them.
+    {
+        const files_tests_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("plugins/workbench/src/files.zig"),
+        });
+        var imports = workbench_module_test.import_table.iterator();
+        while (imports.next()) |entry| {
+            files_tests_module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        const workbench_tests = b.addTest(.{
+            .name = "fizzy-workbench-plugin-tests",
+            .root_module = files_tests_module,
+            .filters = test_filters,
+        });
+        test_integration_step.dependOn(&b.addRunArtifact(workbench_tests).step);
+        check_integration_step.dependOn(&workbench_tests.step);
     }
 
     // Every `test` block in the repo is in a binary some step builds (`scripts/tests_reached.zig`):

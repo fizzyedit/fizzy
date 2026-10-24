@@ -67,6 +67,7 @@ const bundled_random_seeks = 16;
 
 test "demo: the rail's Files anchor the scripts spell out is the one fizzy publishes" {
     try std.testing.expectEqualStrings("fizzy.rail:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_icon);
+    try std.testing.expectEqualStrings("fizzy.mobile.tab:" ++ workbench.view_files, fizzy.Editor.Demo.catalog.files_tab);
 }
 
 test "demo: every bundled demo plays to the end through fizzy's stage, a seek lands on what playing reached, and the person's own folder is theirs again after" {

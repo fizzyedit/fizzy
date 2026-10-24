@@ -115,12 +115,21 @@ pub const palette = "fizzy.palette";
 /// `tests/demos.zig` holds them equal.
 pub const files_icon = "fizzy.rail:workbench.files";
 
+/// The phone's bar icon for the same view (`layout_mobile.zig`); a click opens the explorer sheet on
+/// it, and puts the sheet away again when it is showing.
+pub const files_tab = "fizzy.mobile.tab:workbench.files";
+
+/// The rail's Plugins icon, and the phone bar's.
+pub const store_icon = "fizzy.rail:fizzy.store";
+pub const store_tab = "fizzy.mobile.tab:fizzy.store";
+
 /// Open `rel` the way a person who keeps the explorer put away would: open the explorer from the
 /// rail, click the file, and put the explorer away again so the editor has the room. A demo's
 /// keyframe starts with the explorer put away (`Keyframe.Layout.focused`).
 pub fn openFile(s: *Script, rel: []const u8) !void {
-    try s.click(.{ .tag = files_icon }, .{});
+    const opener = if (s.compact) files_tab else files_icon;
+    try s.click(.{ .tag = opener }, .{});
     try s.click(.{ .tag = try file(s, rel) }, .{});
     try s.waitFor(try editor(s, rel), .{});
-    try s.click(.{ .tag = files_icon }, .{});
+    try s.click(.{ .tag = opener }, .{});
 }

@@ -968,7 +968,7 @@ pub fn deinit(self: *Dockspace) void {
                 .clear = frost.clear,
             });
         } else {
-            self.hover_rect.fill(.all(8 * s), .{ .color = .{ .color = highlight.opacity(0.5) } });
+            self.hover_rect.fill(.all(8 * s), .{ .color = .{ .color = highlight.opacity(0.5) }, .fade = 1 });
         }
     }
 

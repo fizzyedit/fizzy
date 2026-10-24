@@ -407,7 +407,7 @@ test "a remote client opens a view, sends input, gets frames, and leaves without
     const listed = host.callCommand("fizzy.remote.views", "", arena_state.allocator());
     try std.testing.expect(std.mem.find(u8, listed.ok.?, ".target = \"Main\"") != null);
     try std.testing.expect(std.mem.find(u8, listed.ok.?, ".width = 320") != null);
-    var all: std.ArrayListUnmanaged(*RemoteViewHost) = .empty;
+    var all: std.ArrayList(*RemoteViewHost) = .empty;
     defer all.deinit(gpa);
     try remote_service.views(&all);
     try std.testing.expectEqual(@as(usize, 1), all.items.len);

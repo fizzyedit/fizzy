@@ -556,7 +556,7 @@ fn tooltipGlass(wd: *dvui.WidgetData, r: dvui.Rect.Physical, scale: f32, t: f32,
     const f = dialogFrost() orelse {
         const prect = r.insetAll(scale * bs.shrink).offsetPoint(bs.offset.scale(scale, dvui.Point.Physical));
         prect.fill(phys_corners, .{ .color = .{ .color = bs.color.opacity(bs.alpha * p) }, .fade = scale * bs.fade });
-        r.fill(phys_corners, .{ .color = .{ .color = dialogFill().opacity(p) } });
+        r.fill(phys_corners, .{ .color = .{ .color = dialogFill().opacity(p) }, .fade = 1 });
         return;
     };
     // The shadow as a ring round the glass, after it (`glassShadow`), so the glass does not blur

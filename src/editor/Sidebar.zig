@@ -225,7 +225,7 @@ fn drawIcon(editor: *Editor, c: *Chooser, view: *Layout.Surface, index: usize) f
         dot.y -= r;
         dot.fill(dvui.CornerRect.Physical.round(r), .{
             .color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
-            .fade = 0,
+            .fade = 1,
         });
     }
     return cell.y + cell.h;

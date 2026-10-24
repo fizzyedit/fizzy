@@ -179,6 +179,26 @@ pub fn stepSpeed(self: *Sequencer) void {
     self.setSpeed(speeds[0]);
 }
 
+/// The index in `speeds` of the notch nearest the current speed.
+pub fn speedIndex(self: *const Sequencer) usize {
+    var best: usize = 0;
+    for (speeds, 0..) |sp, i| {
+        if (@abs(sp - self.speed) < @abs(speeds[best] - self.speed)) best = i;
+    }
+    return best;
+}
+
+/// Play at the notch `i` of `speeds`, kept within them.
+pub fn setSpeedIndex(self: *Sequencer, i: usize) void {
+    self.setSpeed(speeds[@min(i, speeds.len - 1)]);
+}
+
+/// Move `by` notches from the nearest one, stopping at the ends.
+pub fn nudgeSpeed(self: *Sequencer, by: i32) void {
+    const i: i32 = @intCast(self.speedIndex());
+    self.setSpeedIndex(@intCast(std.math.clamp(i + by, 0, @as(i32, speeds.len) - 1)));
+}
+
 /// The demo time `wall_ms` of live playing reaches: what to ask `advance` for.
 pub fn playUntil(self: Sequencer, wall_ms: f64) f64 {
     return self.now + wall_ms * self.speed;
@@ -940,6 +960,19 @@ test "a trace runs ruled: on the line between, evenly" {
     const op: Tape.Op = .{ .at = 0, .ms = 100, .do = .{ .trace = .{} } };
     try testing.expectEqual(@as(f32, 0), pathPoint(op, a, b, 0.5).y);
     try testing.expectEqual(@as(f32, 100), pathPoint(op, a, b, 0.25).x);
+}
+
+test "speed notches snap and nudge to the ends" {
+    const tape: Tape = .{ .name = "t", .ops = &.{} };
+    var seq = Sequencer.init(&tape);
+    seq.setSpeed(1.4);
+    try testing.expectEqual(@as(usize, 3), seq.speedIndex());
+    seq.nudgeSpeed(-1);
+    try testing.expectEqual(@as(f32, 1), seq.speed);
+    seq.nudgeSpeed(100);
+    try testing.expectEqual(@as(f32, 4), seq.speed);
+    seq.nudgeSpeed(-100);
+    try testing.expectEqual(@as(f32, 0.5), seq.speed);
 }
 
 test "speed is clamped, steps through its notches and divides demo time" {

@@ -81,17 +81,18 @@ jobs:
             echo "sdk ${sdk_url:+$sdk_tag}"
             # A store plugin's own zon, as its default branch holds it now.
             while read -r repo; do
-              { gh api "repos/$repo/git/trees/HEAD?recursive=1" --jq '.tree[] | select(.path | test("(^|/)build\\.zig\\.zon$")) | .path' 2>/dev/null || true; } |
-                while read -r path; do
-                  gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$path" 2>/dev/null |
-                    { grep -o -E '\.hash = "[^"]+"' || true; } | sed -E 's/.*"([^"]+)"/\1/' || true
-                done
-            done < "$RUNNER_TEMP/store-plugins.txt" | sort -u
+              echo "repo $repo"
+              gh api "repos/$repo/git/trees/HEAD?recursive=1" --jq '.tree[] | select(.path | test("(^|/)build\\.zig\\.zon$")) | .path' > "$RUNNER_TEMP/store-zons.txt"
+              while read -r path; do
+                gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$path" > "$RUNNER_TEMP/store.zon"
+                { grep -o -E '\.hash = "[^"]+"' "$RUNNER_TEMP/store.zon" || true; } | sed -E 's/.*"([^"]+)"/\1/'
+              done < "$RUNNER_TEMP/store-zons.txt"
+            done < "$RUNNER_TEMP/store-plugins.txt"
             find . -name build.zig.zon -print0 |
               xargs -0 grep -h -o -E '\.hash = "[^"]+"' | sed -E 's/.*"([^"]+)"/\1/' | sort -u
             # What a build reaches (a lazy dependency named by a build script) can change
             # without a hash moving.
-            git ls-files 'build.zig' 'build/*' 'sdk/*.zig' 'plugins/*/build.zig' 'scripts/store-plugin-repos.sh' |
+            git ls-files 'build.zig' 'build/*' 'sdk/*.zig' 'plugins/*/build.zig' 'scripts/store-plugin-repos.sh' '.github/workflows/deps-cache.yml' |
               xargs sha256sum | sha256sum
           } > "$RUNNER_TEMP/$MANIFEST"
           cat "$RUNNER_TEMP/$MANIFEST"

@@ -25,7 +25,7 @@ id: u32 = 0,
 link: *Link,
 endpoint: remote.Endpoint,
 views: std.AutoArrayHashMapUnmanaged(message.ViewId, *RemoteViewHost) = .empty,
-inbound: std.ArrayListUnmanaged(u8) = .empty,
+inbound: std.ArrayList(u8) = .empty,
 /// The stream is over: it broke the protocol, the client left or said `bye`. The link closes
 /// once what is queued is written.
 dead: bool = false,

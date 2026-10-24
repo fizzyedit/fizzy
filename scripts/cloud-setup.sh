@@ -14,8 +14,9 @@
 # fizzy-sdk package those plugins pin, which the proxy resets if a build fetches it by URL, and
 # the dependencies of each store plugin. Set PLUGIN_REPO to that repo's checkout (or `1` for the
 # current directory, which under curl|bash may not be the checkout; so pass the path), on the bash
-# side of the pipe (`curl ... | PLUGIN_REPO=/path/to/repo bash`), and the script ends by running `zig build --fetch` there, so a package the
-# cache lacks shows up at setup time rather than as a build failure; it never fails the setup.
+# side of the pipe (`curl ... | PLUGIN_REPO=/path/to/repo bash`). The script ends by running
+# `zig build --fetch` there, so a package the cache lacks shows up at setup time rather than as a
+# build failure; it never fails the setup.
 #
 # jj is not needed here: the script never calls it, so a machine without it is fine.
 #
@@ -80,7 +81,7 @@ if [ -n "${PLUGIN_REPO:-}" ]; then
     repo_dir="$PLUGIN_REPO"
     [ "$repo_dir" = 1 ] && repo_dir="$PWD"
     if [ -f "$repo_dir/build.zig.zon" ]; then
-        if (cd "$repo_dir" && zig build --fetch); then
+        if (cd "$repo_dir" && ZIG_GLOBAL_CACHE_DIR="$cache" zig build --fetch); then
             echo "every dependency of $repo_dir is in the cache"
         else
             echo "warning: zig build --fetch failed in $repo_dir: a dependency is not in the cache" >&2

@@ -135,20 +135,20 @@ pub const Watches = struct {
     cancel: *const std.atomic.Value(bool),
     /// Every folder watched, sorted, so a folder and what is below it are found by binary
     /// search. Owned.
-    paths: std.ArrayListUnmanaged([]u8) = .empty,
+    paths: std.ArrayList([]u8) = .empty,
     /// Watched by the walk in progress, merged into `paths` in one pass when it ends: a walk
     /// adds folders by the thousand, and inserting each into a sorted list is quadratic. Owned.
-    fresh: std.ArrayListUnmanaged([]u8) = .empty,
+    fresh: std.ArrayList([]u8) = .empty,
     /// The limit reached, until a watch is freed or added again.
     blocked: ?Blocked = null,
     /// The limit last said, until caught up: said once per time behind, not per retry.
     said: ?Blocked = null,
     /// Where walks stopped: folders not yet watched, and watched folders whose children were
     /// not all seen, each with what it is still owed. Keys owned.
-    frontier: std.StringArrayHashMapUnmanaged(Owed) = .empty,
+    frontier: std.array_hash_map.String(Owed) = .empty,
     /// The frontier `catchUp` is working through, so a walk that finishes a folder still on
     /// it can take it off rather than have it walked and announced again. Keys owned.
-    todo: std.StringArrayHashMapUnmanaged(Owed) = .empty,
+    todo: std.array_hash_map.String(Owed) = .empty,
     /// Folders left out for reasons of their own, each said once and not tried again, until
     /// it goes or moves. Keys owned.
     lost: std.StringHashMapUnmanaged(void) = .empty,
@@ -227,7 +227,7 @@ pub const Watches = struct {
         // Each entry once per call: one refused again goes back on the frontier, not round
         // this loop for ever.
         std.debug.assert(self.todo.count() == 0);
-        std.mem.swap(std.StringArrayHashMapUnmanaged(Owed), &self.todo, &self.frontier);
+        std.mem.swap(std.array_hash_map.String(Owed), &self.todo, &self.frontier);
         defer {
             for (self.todo.keys(), self.todo.values()) |p, owed| {
                 self.leftOut(p, owed, ctx);
@@ -594,7 +594,7 @@ pub const Watches = struct {
         // Renaming a common prefix keeps the run in order, so it merges back in one pass.
         const start, const end = self.below(src);
         const at = self.indexOf(src);
-        var run: std.ArrayListUnmanaged([]u8) = .empty;
+        var run: std.ArrayList([]u8) = .empty;
         defer run.deinit(self.gpa);
         run.ensureTotalCapacity(self.gpa, end - start + 1) catch {
             if (self.drop(src, true, dst, ctx) > 0) self.blocked = null;

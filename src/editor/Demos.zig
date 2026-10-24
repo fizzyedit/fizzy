@@ -26,6 +26,12 @@ arena: std.heap.ArenaAllocator,
 infos: std.ArrayListUnmanaged(Api.Info) = .empty,
 /// The host's demos generation `infos` was built for; null: never built.
 built_for: ?u32 = null,
+/// The form factor the tapes were built for: a phone's tour has other steps and other timings.
+built_phone: bool = false,
+/// The form factor `generation` last saw, and how many times it has changed since: a different
+/// form factor lists different timings, so it moves the generation as a plugin's demo does.
+seen_phone: bool = false,
+form_changes: u32 = 0,
 /// What `play` last started, while it is the tape loaded: its name (gpa), and the tape's ops,
 /// which no other load shares, to tell it from a tape loaded another way since.
 playing: ?struct { name: []u8, ops: [*]const automation.Tape.Op } = null,
@@ -59,12 +65,23 @@ fn from(ctx: *anyopaque) *Demos {
 }
 
 fn generation(ctx: *anyopaque) u32 {
-    return from(ctx).editor.app.host.demos_generation;
+    const self = from(ctx);
+    self.noteFormFactor();
+    return self.editor.app.host.demos_generation +% self.form_changes;
+}
+
+fn noteFormFactor(self: *Demos) void {
+    const phone = fizzy.core.platform.formFactor() == .mobile;
+    if (phone == self.seen_phone) return;
+    self.seen_phone = phone;
+    self.form_changes +%= 1;
 }
 
 fn list(ctx: *anyopaque) []const Api.Info {
     const self = from(ctx);
-    if (self.built_for != self.editor.app.host.demos_generation) self.build();
+    self.noteFormFactor();
+    const phone = self.seen_phone;
+    if (self.built_for != self.editor.app.host.demos_generation or self.built_phone != phone) self.build();
     return self.infos.items;
 }
 
@@ -72,10 +89,12 @@ fn build(self: *Demos) void {
     _ = self.arena.reset(.retain_capacity);
     self.infos = .empty;
     self.built_for = self.editor.app.host.demos_generation;
+    self.built_phone = fizzy.core.platform.formFactor() == .mobile;
     const gpa = self.editor.app.gpa;
     for (&Demo.catalog.entries) |*e| {
         var script: automation.Script = .init(gpa, e.name, e.title);
         script.check = automation.Input.check;
+        script.compact = self.built_phone;
         e.build(&script) catch |err| {
             script.deinit();
             dvui.log.warn("demos: '{s}' did not build: {t}", .{ e.name, err });

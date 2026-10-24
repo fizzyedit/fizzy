@@ -57,9 +57,9 @@ on: bool = false,
 /// The tracks of open documents, by document id.
 open: std.AutoArrayHashMapUnmanaged(u64, *Track) = .empty,
 /// Tracks that ended this session: their document closed, or its history started over.
-ended: std.ArrayListUnmanaged(*Track) = .empty,
+ended: std.ArrayList(*Track) = .empty,
 /// Which document the person was working in, each time it changed, as steps landed.
-focus: std.ArrayListUnmanaged(Focus) = .empty,
+focus: std.ArrayList(Focus) = .empty,
 /// Some track wants its document's state taken at the next frame's top.
 due: bool = false,
 /// A document being replayed into: its own steps are not recorded meanwhile.
@@ -98,6 +98,11 @@ pub const checkpoint_steps = 256;
 pub const checkpoint_max_steps = 8192;
 pub const checkpoint_gap_ms = 30_000;
 pub const state_share = 1;
+/// And a checkpoint is a capture of the whole document (`take`, on a frame) whatever it keeps, so
+/// the steps since must also be worth a `capture_share`th of the document's state: a seek then
+/// replays at most that much step data to be spared a restore of the whole, and a big document is
+/// not captured again for the first step after a pause.
+pub const capture_share = 64;
 
 pub const Focus = struct {
     /// ms since the session's start.
@@ -117,10 +122,10 @@ pub const Track = struct {
     /// Where the document's history stood when the base was taken (`HistoryLine`'s step id, 0
     /// before any): what an export rewinds the document to for its file (`exportTape`).
     base_top: u64 = 0,
-    steps: std.ArrayListUnmanaged(Rec) = .empty,
+    steps: std.ArrayList(Rec) = .empty,
     /// Every step's effect and motion, one after another.
-    bytes: std.ArrayListUnmanaged(u8) = .empty,
-    checkpoints: std.ArrayListUnmanaged(State) = .empty,
+    bytes: std.ArrayList(u8) = .empty,
+    checkpoints: std.ArrayList(State) = .empty,
     checkpoint_due: bool = false,
     /// The size of the last checkpoint kept as a delta: about what the next will cost. 0 after a
     /// whole state, whose next delta starts small.
@@ -130,6 +135,11 @@ pub const Track = struct {
     since_bytes: usize = 0,
     /// How many steps its kept file holds (`keep`, `pickUp`): one written since, it moved on from.
     kept_steps: usize = 0,
+
+    /// What taking a state costs: the size of the document's state (the base's).
+    fn captureLen(t: *const Track) usize {
+        return if (t.base) |b| b.bytes.len else 0;
+    }
 
     pub const Rec = struct {
         kind: sdk.Step.Kind,
@@ -242,7 +252,7 @@ pub fn keepOpen(self: *Tracks) void {
 /// a restart's does. Taken on the frame the documents' states are, so each ends where its state
 /// does. A saved document opens from its file after a crash, with nothing to recover. Owned.
 pub fn takeChanged(self: *Tracks) []KeptFile {
-    var out: std.ArrayListUnmanaged(KeptFile) = .empty;
+    var out: std.ArrayList(KeptFile) = .empty;
     for (self.open.values()) |t| {
         if (t.steps.items.len == t.kept_steps or !t.owner.isDirty(t.doc)) continue;
         const k = self.encodeKept(t) orelse continue;
@@ -346,7 +356,7 @@ pub fn sweep(self: *Tracks) void {
     var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(dvui.io);
     const Kept = struct { name: []const u8, size: u64, written: i96 };
-    var files: std.ArrayListUnmanaged(Kept) = .empty;
+    var files: std.ArrayList(Kept) = .empty;
     var total: u64 = 0;
     var it = dir.iterate();
     while (it.next(dvui.io) catch null) |e| {
@@ -632,7 +642,10 @@ pub fn tick(self: *Tracks) void {
             var s = self.take(t.doc, t.steps.items.len) orelse continue;
             // As what differs from the latest whole state, unless that is half the document or
             // more: then whole, and the next ones differ from it.
-            if (state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes)) |delta| {
+            const prof_delta = core.profile.begin("fizzy", "tracks.delta");
+            const encoded = state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes);
+            prof_delta.end();
+            if (encoded) |delta| {
                 if (delta.len * 2 < s.bytes.len) {
                     self.gpa.free(s.bytes);
                     s.bytes = delta;
@@ -726,6 +739,8 @@ fn historyTop(doc: sdk.DocHandle, gpa: std.mem.Allocator) ?u64 {
 }
 
 fn take(self: *Tracks, doc: sdk.DocHandle, count: usize) ?Track.State {
+    const prof = core.profile.begin("fizzy", "tracks.take");
+    defer prof.end();
     const bytes = doc.owner.captureDocumentState(doc, self.gpa) orelse return null;
     return .{ .at = self.now(), .step = count, .bytes = bytes, .fingerprint = doc.owner.documentFingerprint(doc) };
 }
@@ -784,7 +799,7 @@ fn step(ctx: *anyopaque, doc_id: u64, st: sdk.Step) void {
     if (self.held > self.cap) self.shed();
     // After a pause the state is taken just after the step that ended it: near enough the
     // pause's start for a seek, and taken where nothing is half applied.
-    const worth = t.since_bytes * state_share >= t.state_len;
+    const worth = t.since_bytes * state_share >= @max(t.state_len, t.captureLen() / capture_share);
     if (t.since_steps >= checkpoint_max_steps or (worth and (t.since_steps >= checkpoint_steps or at -| last_at >= checkpoint_gap_ms))) {
         t.checkpoint_due = true;
         self.due = true;
@@ -862,7 +877,7 @@ pub const ExportError = error{
 /// known: an undo or redo reached an entry from before the track began.
 pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{OutOfMemory}!?u64 {
     // The entries added since the track began, and how many of them are done.
-    var line: std.ArrayListUnmanaged(u64) = .empty;
+    var line: std.ArrayList(u64) = .empty;
     defer line.deinit(gpa);
     var at: usize = 0;
     for (t.steps.items[0..@min(count, t.steps.items.len)]) |r| switch (r.kind) {
@@ -886,8 +901,8 @@ pub fn topAfter(t: *const Track, gpa: std.mem.Allocator, count: usize) error{Out
 /// known (an undo or redo reaching an entry from before the track began, or a restart), or where
 /// a step's effect was not kept. The parts are `t`'s bytes: they last as long as it does.
 pub fn historyOf(t: *const Track, arena: std.mem.Allocator) error{OutOfMemory}!?sdk.Plugin.RestoredHistory {
-    const Building = struct { id: u64, parts: std.ArrayListUnmanaged([]const u8) = .empty };
-    var line: std.ArrayListUnmanaged(Building) = .empty;
+    const Building = struct { id: u64, parts: std.ArrayList([]const u8) = .empty };
+    var line: std.ArrayList(Building) = .empty;
     var at: usize = 0;
     for (t.steps.items) |r| switch (r.kind) {
         .added => {
@@ -947,7 +962,7 @@ pub fn summarize(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, arena
     };
 
     var timing: Timing = .init(t, base, first, opts.real_time);
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    var authors: std.ArrayList(sdk.Author) = .empty;
     for (t.steps.items[first..to]) |r| {
         out.played_ms = timing.place(r) + r.ms;
         const who = host.stepAuthor(doc.id, r.id);
@@ -1085,7 +1100,7 @@ fn fileAt(self: *Tracks, host: *sdk.Host, doc: sdk.DocHandle, arena: std.mem.All
 fn lineSteps(t: *const Track, arena: std.mem.Allocator, line: sdk.Plugin.HistoryLine, lo: usize, hi: usize) ExportError![]Track.Rec {
     var want: std.AutoHashMapUnmanaged(u64, bool) = .empty;
     for (line.entries[lo..hi]) |e| try want.put(arena, e.id, false);
-    var out: std.ArrayListUnmanaged(Track.Rec) = .empty;
+    var out: std.ArrayList(Track.Rec) = .empty;
     for (t.steps.items) |r| switch (r.kind) {
         .added, .joined => if (want.getPtr(r.id)) |seen| {
             if (r.kind == .added) seen.* = true;
@@ -1108,7 +1123,7 @@ pub fn lineSummary(self: *Tracks, host: *const sdk.Host, doc: sdk.DocHandle, are
     if (recs.len == 0) return null;
     var timing: Timing = .{ .recorded_end = recs[0].at, .real_time = false };
     var out: Summary = .{ .from = lo, .to = hi, .steps = hi - lo, .recorded_ms = 0, .played_ms = 0, .authors = &.{} };
-    var authors: std.ArrayListUnmanaged(sdk.Author) = .empty;
+    var authors: std.ArrayList(sdk.Author) = .empty;
     for (recs) |r| {
         out.played_ms = timing.place(r) + r.ms;
         const who = host.stepAuthor(doc.id, r.id);
@@ -1200,15 +1215,18 @@ const Stand = struct {
     fn clock() i128 {
         return clock_ns;
     }
+    // lint-allow(anyerror): the vtable's signature
     fn capture(_: *anyopaque, _: sdk.DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
         return allocator.dupe(u8, &bytes);
     }
+    // lint-allow(anyerror): the vtable's signature
     fn restore(_: *anyopaque, _: sdk.DocHandle, saved: []const u8) anyerror!void {
         @memcpy(&bytes, saved);
     }
     fn fingerprint(_: *anyopaque, _: sdk.DocHandle) u64 {
         return std.hash.Wyhash.hash(0, &bytes);
     }
+    // lint-allow(anyerror): the vtable's signature
     fn apply(_: *anyopaque, _: sdk.DocHandle, effect: []const u8, _: []const u8, _: u32) anyerror!void {
         @memcpy(bytes[0..effect.len], effect);
     }
@@ -1300,6 +1318,57 @@ test "a checkpoint is what differs from the whole state, taken once the steps si
     try testing.expectEqualSlices(u8, &want, &Stand.bytes);
     // And through the one before the whole state.
     try t.replayInto(1, Stand.doc(2), track.checkpoints.items[1].step);
+}
+
+/// A stand-in whose document is a big buffer, counting the states taken from it.
+const BigStand = struct {
+    const size = 32 << 20;
+    var bytes: [size]u8 = @splat(0);
+    var captures: usize = 0;
+
+    // lint-allow(anyerror): the vtable's signature
+    fn capture(_: *anyopaque, _: sdk.DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
+        captures += 1;
+        return allocator.dupe(u8, &bytes);
+    }
+    fn fingerprint(_: *anyopaque, _: sdk.DocHandle) u64 {
+        return 0;
+    }
+    var state: u8 = 0;
+    const vtable: sdk.Plugin.VTable = .{ .captureDocumentState = capture, .documentFingerprint = fingerprint };
+    var plugin: sdk.Plugin = .{ .state = &state, .vtable = &vtable, .id = "bigstand", .display_name = "BigStand", .step_format = 1 };
+
+    fn doc(id: u64) sdk.DocHandle {
+        return .{ .ptr = &state, .owner = &plugin, .id = id };
+    }
+};
+
+test "a big document is not captured again for a step after a pause, but still checkpoints in a long session" {
+    BigStand.captures = 0;
+    var t: Tracks = .init(testing.allocator);
+    defer t.deinit();
+    t.clock = Stand.clock;
+    Stand.clock_ns = 0;
+    t.on = true;
+    t.opened(BigStand.doc(1));
+    t.tick();
+    try testing.expectEqual(@as(usize, 1), BigStand.captures); // the base
+    const rec = t.recorder();
+    // One small step after a pause of a minute: nothing taken, no work on the frame.
+    Stand.clock_ns += 60 * std.time.ns_per_s;
+    const small: [100]u8 = @splat(1);
+    rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1, .effect = &small });
+    t.tick();
+    try testing.expectEqual(@as(usize, 1), BigStand.captures);
+    try testing.expectEqual(@as(usize, 0), t.trackOf(1).?.checkpoints.items.len);
+    // Steps worth a share of the document, then a pause: one is taken.
+    const chunk: [64 << 10]u8 = @splat(2);
+    for (0..BigStand.size / capture_share / chunk.len + 1) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 2 + i, .effect = &chunk });
+    Stand.clock_ns += 60 * std.time.ns_per_s;
+    rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1000, .effect = &small });
+    t.tick();
+    try testing.expectEqual(@as(usize, 2), BigStand.captures);
+    try testing.expectEqual(@as(usize, 1), t.trackOf(1).?.checkpoints.items.len);
 }
 
 test "checkpoints older than an hour thin to one per sparse_steps" {

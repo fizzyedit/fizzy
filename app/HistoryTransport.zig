@@ -327,7 +327,10 @@ pub fn draw(self: *HistoryTransport, doc: sdk.DocHandle, area: dvui.Rect.Physica
     // Out: where, for a bar that would cover it to stand clear (`dome.barsOut`).
     if (self.place(area, now)) |pl| dome.publishBar(pl);
     const arena = dvui.currentWindow().arena();
-    const line = doc.owner.historyLine(doc, arena) orelse return pressed;
+    const prof_line = core.profile.begin("fizzy", "history.line");
+    const line_opt = doc.owner.historyLine(doc, arena);
+    prof_line.end();
+    const line = line_opt orelse return pressed;
     const n = line.entries.len;
     // The first stop a part can begin at: where `export_from` is on the line. Gone from it (undone
     // past and edited over), nothing can be exported.
@@ -694,12 +697,14 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
     const right = xt + handle_w * s;
     if (left > r.x) (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = left - r.x, .h = r.h }).fill(.{ .tl = outer, .bl = outer, .tr = ri, .br = ri }, .{ .color = .{ .color = dim }, .fade = 1 });
     if (right < r.x + r.w) (dvui.Rect.Physical{ .x = right, .y = r.y, .w = r.x + r.w - right, .h = r.h }).fill(.{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = dim }, .fade = 1 });
+    // Square and abutting the handles: left at fill's default fade of 0, or a feathered edge leaves a seam.
     (dvui.Rect.Physical{ .x = xf, .y = r.y, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
     (dvui.Rect.Physical{ .x = xf, .y = r.y + r.h - edge, .w = xt - xf, .h = edge }).fill(.{}, .{ .color = .{ .color = yellow } });
     for ([_]f32{ left, xt }, [_]bool{ true, false }) |x, is_left| {
         const hr: dvui.Rect.Physical = .{ .x = x, .y = r.y, .w = handle_w * s, .h = r.h };
         hr.fill(if (is_left) .{ .tl = outer, .bl = outer, .tr = ri, .br = ri } else .{ .tl = ri, .bl = ri, .tr = outer, .br = outer }, .{ .color = .{ .color = yellow }, .fade = 1 });
         const notch: dvui.Rect.Physical = .{ .x = x + handle_w * s / 2 - 0.75 * s, .y = r.y + r.h / 2 - 6 * s, .w = 1.5 * s, .h = 12 * s };
+        // 1.5px wide: a fade (default 0) would dim it.
         notch.fill(.round(0.75 * s), .{ .color = .{ .color = .black } });
     }
 }
@@ -710,7 +715,7 @@ fn paintWindow(vessel: dvui.Rect.Physical, radius: f32, x0: f32, x1: f32, win: r
 /// pixel for one (`history_transport.oneToOne`), its middle in the column's, so across the strip
 /// the steps read as the actions themselves, as crisp as the pane. A stop with no picture shows the
 /// nearest that has one; none at all, the stretch stays glass. Where the document is, `at`, a line
-/// across the strip says, as a recorder's playhead does, over the middle of its stop's column where
+/// across the strip says, as a recorder's playhead does, over its stop's column where
 /// the knob below it is.
 fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, line: sdk.Plugin.HistoryLine, at: usize, s: f32, grown: f32) void {
     if (r.h < 4 * s or r.w < 4 * s) return;
@@ -733,6 +738,7 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
             .tr = if (i == columns.len - 1) end else square,
             .br = if (i == columns.len - 1) end else square,
         };
+        // Columns abut and are square but at the strip's ends: default fade of 0, or a feathered edge leaves a seam.
         const plain: dvui.Color = ink.opacity(0.06 * grown);
         const pic = nearestPicture(frames, line, c.stop) orelse {
             col.fill(corners, .{ .color = .{ .color = plain } });
@@ -752,8 +758,8 @@ fn paintStrip(r: dvui.Rect.Physical, radius: f32, frames: *const HistoryFrames, 
     const hx = rules.stopX(at, r.x, r.x + r.w, n);
     const over = 3 * s;
     const head: dvui.Rect.Physical = .{ .x = hx - 1 * s, .y = r.y - over, .w = 2 * s, .h = r.h + 2 * over };
-    head.outsetAll(0.75 * s).fill(.round(1.75 * s), .{ .color = .{ .color = dvui.Color.black.opacity(0.4 * grown) } });
-    head.fill(.round(1 * s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) } });
+    head.outsetAll(0.75 * s).fill(.round(1.75 * s), .{ .color = .{ .color = dvui.Color.black.opacity(0.4 * grown) }, .fade = 1 });
+    head.fill(.round(1 * s), .{ .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(grown) }, .fade = 1 });
 }
 
 /// The trim bracket's gap to what it holds, the width of its yellow and of its handles, in points;
@@ -805,13 +811,14 @@ const LineLiquid = struct {
 fn paintLine(r: dvui.Rect.Physical, at: usize, n: usize, ink: dvui.Color, s: f32, liquid: LineLiquid) void {
     const h = 4 * s;
     const line: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + (r.h - h) / 2, .w = r.w, .h = h };
-    line.fill(.round(h / 2), .{ .color = .{ .color = ink.opacity(0.15) } });
+    line.fill(.round(h / 2), .{ .color = .{ .color = ink.opacity(0.15) }, .fade = 1 });
     const accent = dvui.themeGet().color(.highlight, .fill);
     const knob_x = rules.stopX(at, r.x, r.x + r.w, n);
     // A tick per step while they stand 6 points apart; past that the line is its own scale.
     if (n > 0 and r.w / @as(f32, @floatFromInt(n)) >= 6 * s) for (1..n) |i| {
         const x = rules.stopX(i, r.x, r.x + r.w, n);
         const tick: dvui.Rect.Physical = .{ .x = x - 0.5 * s, .y = r.y + 1 * s, .w = 1 * s, .h = r.h - 2 * s };
+        // 1px and square: default fade of 0.
         tick.fill(.{}, .{ .color = .{ .color = ink.opacity(0.25) } });
     };
     // The applied part, a liquid in a tube a little thicker than the line, its head tipped by the

@@ -15,6 +15,8 @@
 
 ### Note: This project, while started without AI years ago, is now heavily driven by AI development. I intend for that to be transparent, and that any mistakes or code quality issues be brought forward through issues. I realize this is controversial, and respect your decision to avoid this software if you disagree with how it is being created. 
 
+If you would like to learn how AI is being used on this project, there will be a description of the current system at the bottom of this readme. 
+
 Fizzy is an empty modular editor shell, which dynamically loads and unloads compiled plugins to provide editor functionality. It includes a store where plugins can be published as well as a store tab to browse and install these plugins.
 
 Fizzy currently offers multiple ways for an application to be created, taking advantage of its windowing or other features.
@@ -59,3 +61,11 @@ Fizzy offers a SDK for developing plugins and several plugins already exist that
 Fizzy is [MIT](LICENSE), and will stay free. Plugins and applications built on it may be
 commercial and closed-source. What that promises, and what it asks, is in
 [LICENSING.md](LICENSING.md); the name and logo are covered by [TRADEMARKS.md](TRADEMARKS.md).
+
+## AI usage
+
+Fizzy, as an empty shell and application framework, is currently driven by human planning and 3 AI development teams, one each for Windows, Linux and macOS. Currently, one project manager agent communicates with myself, and orchestrates load balancing and efficiently distributing work to each team. Teams can currently be Claude, Codex or Gemini, and these rotate to try to maximise exposure. These agents' work are local to 3 machines I run at my home, and can drive the app through planned tapes/recordings, and capture directly from the app if needed for visually inspecting the app. 
+
+Each team is required to be approved by the project manager to have their PRs merged. The project manager requires that each teams PR be reviewed by a separate team prior to marking it ready for CI, which must be green to merge, passing the test suite. The project manager is then required to run each one by me before they are merged. There are also superfans that are distributed to run each day, each focused on a specific case and inspecting the existing code. The primary one pretends to be a zig team member and references the std to look for code quality issues each day. 
+
+

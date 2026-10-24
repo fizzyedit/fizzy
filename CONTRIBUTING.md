@@ -207,7 +207,7 @@ maintainer makes the SDK **live** on the site (below).
 | What | Where |
 |---|---|
 | What fizzy is, and its architecture rules | `AGENTS.md` |
-| How Zig and comments are written | `docs/STYLE.md` |
+| How Zig and comments are written | `docs/STYLE.md`, `docs/ZIG.md` |
 | How we work | this file |
 | The plugin contract | `docs/PLUGINS.md` |
 | Letting any agent claim a labelled issue | `docs/AGENT_WORK.md` |
@@ -238,7 +238,7 @@ copied from elsewhere must carry a license compatible with MIT, and keeps its no
   general primitive (an event its owner fires, a host-owned copy) rather than a fix for this one
   plugin (a per-frame poll, a slice borrowed from plugin memory). Moving the fingerprint for the
   clearer shape is fine.
-- **Comments follow [`docs/STYLE.md`](docs/STYLE.md).** `//` says why, not what; `///` states
+- **Code and comments follow [`docs/STYLE.md`](docs/STYLE.md) and [`docs/ZIG.md`](docs/ZIG.md).** `//` says why, not what; `///` states
   the contract and ownership; no comment narrates history; `TODO(seam)` names its seam.
 - **Pitfalls go where they bite.** A trap that cost real time is written down in the
   `AGENTS.md` of the directory it lives in, or `docs/PITFALLS.md` if it has none.

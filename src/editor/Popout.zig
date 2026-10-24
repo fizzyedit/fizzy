@@ -744,7 +744,7 @@ fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Phys
             nd += 1;
         } else if (c.a > 0) {
             // A card or a tab: a rounded rect of its own, nothing to run into.
-            r.insetAll(inset).fill(.all(@max(0, sh.radius - inset)), .{ .color = .{ .color = c } });
+            r.insetAll(inset).fill(.all(@max(0, sh.radius - inset)), .{ .color = .{ .color = c }, .fade = 1 });
         }
     }
     fizzy.core.liquid_blob.fill(discs[0..nd], spacing * s, s, color, 0, .white, fizzy.core.liquid_blob.cell_points * @max(s, 0.5));
@@ -845,7 +845,7 @@ fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, r
         if (fill > 0) {
             var color = base(false);
             color.a = @intFromFloat(@round(255 * std.math.clamp(fill, 0, 1)));
-            shape.fill(.round(radius), .{ .color = .{ .color = color } });
+            shape.fill(.round(radius), .{ .color = .{ .color = color }, .fade = 1 });
         }
     }
     return .{ .picture = picture, .shown = shown };
@@ -1247,7 +1247,7 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, color: dvui.C
     defer dvui.alphaSet(prev_alpha);
     const theme = dvui.themeGet();
     const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
-    bounds.fill(corners, .{ .color = .{ .color = color } });
+    bounds.fill(corners, .{ .color = .{ .color = color }, .fade = 1 });
 }
 
 /// Whether menus are windows of their own (`menuFrame`): where the OS can show them (macOS; Windows,
@@ -1385,7 +1385,7 @@ fn menuFrame() void {
             const prev_alpha = cw.alpha;
             dvui.alphaSet(1);
             defer dvui.alphaSet(prev_alpha);
-            frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) } });
+            frame.fill(dvui.CornerRect.Physical.all(corner * s), .{ .color = .{ .color = Editor.windowBase(op) }, .fade = 1 });
         }
         dvui.currentWindow().renderSubwindow(sw, .{ .take = true });
         // What opened from it and stays above it (a tooltip on one of its buttons) is drawn in its

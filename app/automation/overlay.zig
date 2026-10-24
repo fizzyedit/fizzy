@@ -190,7 +190,7 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
         const pc = c.scale(s, dvui.CornerRect.Physical);
         const shadow = rect.insetAll(s * bs.shrink).offsetPoint(bs.offset.scale(s, dvui.Point.Physical));
         shadow.fill(pc, .{ .color = .{ .color = bs.color.opacity(bs.alpha * r.alpha) }, .fade = s * bs.fade });
-        rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) } });
+        rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) }, .fade = 1 });
     }
     dvui.clipSet(dvui.clipGet().intersect(rect));
 }
@@ -741,7 +741,8 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const since_stirred: i128 = if (tr.stirred_ns) |ns| wall_ns - ns else std.math.maxInt(i64);
     // Closed from its close button, it closes whatever else would keep it open (`Player.close`).
     const p = barProgress(tr, wall_ns, !tr.closing and !tr.tucked and
-        (player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns));
+        (player.state != .playing or tr.scrub != null or tr.speed_drag or since_stirred < bar_linger_ns));
+    tr.dropStaleDrag();
 
     // How far the tape has played: the corner's liquid, and the scrubber's. A jump knocks it; a
     // new chapter, played into, splashes it.
@@ -1033,19 +1034,28 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
     const x1 = r.x + r.w - pad;
     const small_font = dvui.Font.theme(.body).larger(-2);
 
-    // The speed, top right of the capsule: a press steps it (`Sequencer.stepSpeed`).
+    // The speed, top right of the capsule: its value, then a line with a notch for each of
+    // `Sequencer.speeds`, which a press or drag snaps to (`Player.transportTakes`) and the arrow
+    // keys step (`Player.speedKey`).
     var speed_buf: [8]u8 = undefined;
-    const speed = std.mem.print(&speed_buf, "{d}\u{00D7}", .{player.seq.speed}) catch "";
-    const speed_w = small_font.textSize(speed).w;
-    const speed_r: dvui.Rect = .{ .x = x1 - speed_w, .y = r.y + 5, .w = speed_w, .h = small_font.lineHeight() };
+    const speed = std.mem.print(&speed_buf, "{d}x", .{player.seq.speed}) catch "";
+    const value_w = small_font.textSize("0.75x").w;
+    const slider_w: f32 = 64;
+    const slider_h = small_font.lineHeight();
+    const line_r: dvui.Rect = .{ .x = x1 - slider_w - 6, .y = r.y + 5, .w = slider_w, .h = slider_h };
+    const value_r: dvui.Rect = .{ .x = line_r.x - 8 - value_w, .y = r.y + 5, .w = value_w, .h = slider_h };
     dvui.labelNoFmt(@src(), speed, .{}, .{
-        .rect = .{ .x = speed_r.x - bounds.x, .y = speed_r.y - bounds.y, .w = speed_r.w + 2, .h = speed_r.h },
+        .rect = .{ .x = value_r.x - bounds.x, .y = value_r.y - bounds.y, .w = value_r.w + 2, .h = value_r.h },
         .padding = .{},
         .margin = .{},
         .font = small_font,
         .color_text = .{ .color = ink.opacity(if (player.seq.speed == 1) 0.65 else 0.95) },
     });
-    player.transport.speed = wrs.rectToPhysical(speed_r.outsetAll(4));
+    const line_p = wrs.rectToPhysical(line_r);
+    player.transport.speed = wrs.rectToPhysical(line_r.outsetAll(4));
+    player.transport.speed_line = line_p;
+    paintSpeed(line_p, player.seq.speedIndex(), player.transport.speed_focus, ink, wrs.s);
+    const speed_w = value_w + slider_w + 14;
     const chapter = if (tape.chapterAt(now)) |i| tape.chapters[i].title else tape.title;
     const ch = small_font.lineHeight();
     if (x1 - x0 > 8) {
@@ -1094,13 +1104,35 @@ fn seconds(ms: f64) u32 {
 fn paintTrack(r: dvui.Rect.Physical, tape: *const Tape, total: f64, ink: dvui.Color, s: f32) void {
     const line_h = 4 * s;
     const line: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + (r.h - line_h) / 2, .w = r.w, .h = line_h };
-    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.15) } });
+    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.15) }, .fade = 1 });
     for (tape.chapters) |c| {
         if (c.at == 0 or total <= 0) continue;
         const x = r.x + r.w * @as(f32, @floatCast(@as(f64, @floatFromInt(c.at)) / total));
         const tick: dvui.Rect.Physical = .{ .x = x - 1 * s, .y = r.y + 1 * s, .w = 2 * s, .h = r.h - 2 * s };
-        tick.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(0.35) } });
+        tick.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(0.35) }, .fade = 1 });
     }
+}
+
+/// The speed slider's line in `r`: a notch for each of `Sequencer.speeds`, the knob on the chosen
+/// one, ringed while the arrow keys are its.
+fn paintSpeed(r: dvui.Rect.Physical, at: usize, focused: bool, ink: dvui.Color, s: f32) void {
+    const n = Sequencer.speeds.len;
+    const line_h = 2 * s;
+    const mid = r.y + r.h / 2;
+    const knob_d = 9 * s;
+    const inset = knob_d / 2;
+    const span = r.w - 2 * inset;
+    const line: dvui.Rect.Physical = .{ .x = r.x + inset, .y = mid - line_h / 2, .w = span, .h = line_h };
+    line.fill(.all(line_h / 2), .{ .color = .{ .color = ink.opacity(0.2) } });
+    for (0..n) |i| {
+        const x = line.x + span * @as(f32, @floatFromInt(i)) / @as(f32, n - 1);
+        const notch: dvui.Rect.Physical = .{ .x = x - 1 * s, .y = mid - 3 * s, .w = 2 * s, .h = 6 * s };
+        notch.fill(.all(1 * s), .{ .color = .{ .color = ink.opacity(if (i == at) 0 else 0.4) } });
+    }
+    const kx = line.x + span * @as(f32, @floatFromInt(at)) / @as(f32, n - 1);
+    const knob: dvui.Rect.Physical = .{ .x = kx - knob_d / 2, .y = mid - knob_d / 2, .w = knob_d, .h = knob_d };
+    if (focused) knob.outsetAll(2 * s).fill(.all(knob_d), .{ .color = .{ .color = ink.opacity(0.25) } });
+    knob.fill(.all(knob_d / 2), .{ .color = .{ .color = ink } });
 }
 
 const Glyph = enum { play, pause, replay, prev, next, close };
@@ -1124,8 +1156,8 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
     dvui.labelNoFmt(@src(), "Catching up\u{2026}", .{}, .{ .color_text = .{ .color = theme().color(.content, .text) } });
     const wd = dvui.spacer(@src(), .{ .expand = .horizontal, .min_size_content = .{ .w = 120, .h = 3 } });
     const r = wd.rectScale().r;
-    r.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.content, .text).opacity(0.15) } });
+    r.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.content, .text).opacity(0.15) }, .fade = 1 });
     var done = r;
     done.w *= f;
-    done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) } });
+    done.fill(.all(r.h / 2), .{ .color = .{ .color = theme().color(.highlight, .fill) }, .fade = 1 });
 }

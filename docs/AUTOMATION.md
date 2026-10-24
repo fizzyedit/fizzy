@@ -257,8 +257,9 @@ glide, a hover before the press, a beat after each action, 12 characters a secon
 it takes to read unless given `ms`: `Script.readingMs`, 0.3 s a word of title and text at 1x
 (`reading_ms_per_word`) and between 2 s (`reading_min_ms`) and 12 s (`reading_max_ms`).
 
-**Playback speed** is `Sequencer.speed`, a plain `f32` in 0.5…4 (default 1; the transport steps
-`Sequencer.speeds`: 0.5, 0.75, 1, 1.5, 2, 3, 4). It divides every demo time on the wall clock —
+**Playback speed** is `Sequencer.speed`, a plain `f32` in 0.5…4 (default 1; the bar's slider snaps to
+the notches `Sequencer.speeds`: 0.5, 0.75, 1, 1.5, 2, 3, 4 — a press or drag, or the arrow keys,
+Home and End while it holds focus or the pointer). It divides every demo time on the wall clock —
 `playUntil` turns a frame's wall time into the demo time to advance to. A caption's `ms` is demo
 time too, so it is up for `ms / speed` of the wall clock with no conversion of its own — the
 captions and the demo around them speed up together. A seek asks `advance` for a demo time, which
