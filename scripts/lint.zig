@@ -88,34 +88,27 @@ fn reportFile(
                 budget = allow.count;
             }
         }
-        // Collect real hits before deciding which wording should block a change.
-        if (rule == .@"changelog-words") {
+        // Report-only rules collect real hits before any wording should block a change.
+        const report_only = rule == .@"changelog-words";
+        const status = ratchet(count, budget);
+        if (verbose or report_only or status == .over) {
             for (findings) |finding| {
-                if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s} (report-only)\n", .{
-                    path, finding.line, @tagName(rule), finding.message,
+                if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s}{s}\n", .{
+                    path, finding.line, @tagName(rule), finding.message, if (report_only) " (report-only)" else "",
                 });
             }
-        } else {
-            const status = ratchet(count, budget);
-            if (verbose or status == .over) {
-                for (findings) |finding| {
-                    if (finding.rule == rule) try writer.print("{s}:{d}: {s}: {s}\n", .{
-                        path, finding.line, @tagName(rule), finding.message,
-                    });
-                }
-            }
-            switch (status) {
-                .over => {
-                    try writer.print("{s}:1: {s}: count {d} exceeds allowance {d}\n", .{ path, @tagName(rule), count, budget });
-                    failed = true;
-                },
-                .under => {
-                    try writer.print("{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n", .{ path, @tagName(rule), count, budget, count });
-                    failed = true;
-                },
-                .equal => {},
-            }
         }
+        if (!report_only) switch (status) {
+            .over => {
+                try writer.print("{s}:1: {s}: count {d} exceeds allowance {d}\n", .{ path, @tagName(rule), count, budget });
+                failed = true;
+            },
+            .under => {
+                try writer.print("{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n", .{ path, @tagName(rule), count, budget, count });
+                failed = true;
+            },
+            .equal => {},
+        };
     }
     return failed;
 }
