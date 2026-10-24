@@ -90,7 +90,7 @@ pub fn setWindowStyle(_: *dvui.Window) void {}
 /// popup already returns to the page that opened it.
 pub fn raiseWindow() void {}
 
-/// The page's `keydown` check (`web/index.html`): it writes `KeyboardEvent.key` here, then asks
+/// The page's `keydown` check (`web/fizzy.js`): it writes `KeyboardEvent.key` here, then asks
 /// `FizzyWebKeyBound` whether the app binds it — see `Keybinds.webKeyBound`.
 export fn FizzyWebKeyBuffer() [*]u8 {
     return &fizzy.Editor.Keybinds.web_key_buf;
@@ -108,7 +108,7 @@ const page = if (builtin.target.cpu.arch == .wasm32) struct {
     fn fizzy_web_toggle_fullscreen() void {}
 };
 
-/// The page's Fullscreen API (`web/index.html`), which also takes the keyboard lock so the
+/// The page's Fullscreen API (`web/fizzy.js`), which also takes the keyboard lock so the
 /// shortcuts a browser keeps for itself (⌘W, ⌘T, Ctrl+Tab) reach the app while full screen.
 /// Runs a frame after the key press or click that asked for it, which is inside the browser's
 /// user-activation window.
@@ -161,13 +161,13 @@ pub fn setupMacOSMenuBar() void {}
 pub fn teardownMacOSMenuBar() void {}
 
 // Browser trackpad pinch arrives as a `wheel` event with `ctrlKey=true` (synthesized by every
-// modern browser). The bootstrap JS in `web/index.html` intercepts those events in the
+// modern browser). The bootstrap JS in `web/fizzy.js` intercepts those events in the
 // capture phase, prevents the browser's default page-zoom, and forwards the magnification
 // delta into the wasm export below. Same accumulator pattern as the macOS native trackpad
 // monitor — the canvas widget drains via `takeTrackpadPinchRatio` once per frame.
 var pending_pinch_ratio: f32 = 1.0;
 
-/// Called from `web/index.html` via `app.instance.exports.FizzyWebTrackpadMagnification`
+/// Called from `web/fizzy.js` via `app.instance.exports.FizzyWebTrackpadMagnification`
 /// for every pinch wheel event. `delta` is a small relative magnification (positive = zoom in)
 /// derived from `-ev.deltaY` scaled to match macOS NSEvent magnification magnitudes.
 export fn FizzyWebTrackpadMagnification(delta: f32) void {

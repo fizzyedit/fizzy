@@ -7,7 +7,7 @@
 //!
 //! Native uses a worker thread + `std.http.Client` and stores encoded bytes (stb decodes
 //! them later). Web has neither threads nor that HTTP client — the browser loads the URL
-//! instead (`new Image`, see `web/index.html`). When CORS allows it, the pixels are copied
+//! instead (`new Image`, see `web/fizzy.js`). When CORS allows it, the pixels are copied
 //! into a dvui texture. When it does not — GitHub Actions badges are the usual case —
 //! the browser still has the image, so the preview positions an `<img>` over the canvas
 //! rather than drawing the "open" fallback link. Same ownership shape as fizzy's own
@@ -75,7 +75,7 @@ var gpa: ?std.mem.Allocator = null;
 var next_id: u32 = 1;
 
 const wasm = if (is_wasm) struct {
-    /// Starts a browser load for `url`. Wired in `web/index.html` by adding a `fizzy`
+    /// Starts a browser load for `url`. Wired in `web/fizzy.js` by adding a `fizzy`
     /// import namespace at instantiate time — dvui's `web.js` only provides `dvui.*`.
     extern "fizzy" fn fizzy_web_image_request(id: u32, url_ptr: [*]const u8, url_len: usize) void;
 } else struct {};

@@ -528,7 +528,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         , .{cfg.branding.pixel_art})),
     });
 
-    // `zig build web` produces `zig-out/web/{web.wasm, web.js, index.html, NotoSansKR-Regular.ttf}`,
+    // `zig build web` produces `zig-out/web/{web.wasm, fizzy.js, web.js, index.html, …}`,
     // deployable as-is to a static host.
     const w = web.build(b, frameworks.getWeb(b, optimize), optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, cfg.app_layout_path, try @import("sdk.zig").pluginsFor(b, opts.app_plugins, .web), opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
     const built = try native(b, target, optimize, opts, cfg, frameworks.getNative(b, target, optimize, cfg), assets_module, app_icon_module);

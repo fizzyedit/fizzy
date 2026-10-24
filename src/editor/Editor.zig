@@ -1623,7 +1623,7 @@ fn beginWebPluginLoad(editor: *Editor, id: []const u8, url: []const u8, sha256: 
     // Two requests for one id before the first lands (the page's remembered list and a
     // `?plugin=` of the same id, say) would register it twice; the second one waits for nothing.
     // The first one's `arrived` reports for both, so the store's spinner still ends: every
-    // request ends in exactly one `arrived` (the page's fetches have a deadline, `index.html`'s
+    // request ends in exactly one `arrived` (the page's fetches have a deadline, `fizzy.js`'s
     // `fetchPluginBytes`, and its `.catch` reports a failure), and `arrived` settles the store's
     // row by id, so this early return cannot leave a row on "Updating…".
     if (web_loads_in_flight.contains(id)) return;
