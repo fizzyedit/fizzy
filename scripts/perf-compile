@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# perf-compile: a repeatable measurement of fizzy's compile and rebuild time.
+#
+#   scripts/perf-compile                    # every scenario, median of 5, JSON lines on stdout
+#   scripts/perf-compile --runs 3 --only cold,noop
+#   scripts/perf-compile --list
+#
+# One JSON line per metric:
+#   {"date","commit","machine","zig","os","scenario","metric","value","unit"}
+# Progress goes to stderr. docs/PERF.md says what each metric means. Run it on a quiet machine:
+# it waits for the 1-minute load average to drop under FIZZY_PERF_MAX_LOAD (default nproc/4)
+# and gives up after FIZZY_PERF_WAIT seconds (default 300) without measuring.
+#
+# It times `zig` directly, not through scripts/zb, so a wait for a build slot is never counted;
+# run one perf-compile at a time. Every build uses a scratch cache dir and prefix, in a fresh
+# directory made under $FIZZY_PERF_TMP (default $TMPDIR or /tmp); the shared global cache keeps
+# the fetched dependencies, and a plugin build installs into a scratch FIZZY_PROFILE, never the
+# person's plugins directory. Files touched for a rebuild are restored on exit.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+root=$PWD
+
+runs=5
+only=""
+scenarios="cold_debug cold_releasefast noop touch_app touch_core touch_plugin incr_app incr_core incr_plugin plugin_roundtrip test_build"
+
+# The files a rebuild touches: one in the app, one in core, one in a plugin.
+touch_app=src/editor/CommandPalette.zig
+touch_core=core/anim.zig
+touch_plugin=plugins/text/src/Settings.zig
+
+while [ $# -gt 0 ]; do
+  case $1 in
+  --runs | --only)
+    [ $# -ge 2 ] || { echo "perf-compile: $1 needs a value" >&2; exit 2; }
+    if [ "$1" = --runs ]; then runs=$2; else only=$2; fi
+    shift 2 ;;
+  --list) echo "$scenarios" | tr ' ' '\n'; exit 0 ;;
+  -h | --help) sed -n '2,17p' "$0"; exit 0 ;;
+  *) echo "perf-compile: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+for tool in bc /usr/bin/time; do
+  command -v "$tool" >/dev/null || { echo "perf-compile: needs $tool" >&2; exit 2; }
+done
+[ -r /proc/loadavg ] || { echo "perf-compile: needs /proc (Linux)" >&2; exit 2; }
+
+want() { [ -z "$only" ] || case ",$only," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+
+# Always a fresh child of the base, so the exit trap deletes only what this run made.
+tmp_base=${FIZZY_PERF_TMP:-${TMPDIR:-/tmp}}
+mkdir -p "$tmp_base"
+tmp=$(mktemp -d "$tmp_base/perf-compile.XXXXXX")
+backups=$tmp/backups
+mkdir -p "$backups"
+watch_pid=""
+
+restore() {
+  [ -n "$watch_pid" ] && kill "$watch_pid" 2>/dev/null || true
+  for f in "$touch_app" "$touch_core" "$touch_plugin"; do
+    [ -f "$backups/$(echo "$f" | tr / _)" ] && cp "$backups/$(echo "$f" | tr / _)" "$root/$f"
+  done
+  rm -rf "$tmp"
+}
+trap restore EXIT
+for f in "$touch_app" "$touch_core" "$touch_plugin"; do
+  cp "$f" "$backups/$(echo "$f" | tr / _)"
+done
+
+date_s=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+commit=$(git rev-parse --short HEAD)
+machine="$(hostname)/$(nproc)cpu/$(awk '/MemTotal/ {printf "%dGiB", $2/1048576}' /proc/meminfo)"
+zigv=$(zig version)
+os=$(uname -sr)
+
+emit() { # scenario metric value unit
+  printf '{"date":"%s","commit":"%s","machine":"%s","zig":"%s","os":"%s","scenario":"%s","metric":"%s","value":%s,"unit":"%s"}\n' \
+    "$date_s" "$commit" "$machine" "$zigv" "$os" "$1" "$2" "$3" "$4"
+}
+
+median() { sort -n | awk '{a[NR]=$1} END {print (NR%2) ? a[(NR+1)/2] : (a[NR/2]+a[NR/2+1])/2}'; }
+
+max_load=${FIZZY_PERF_MAX_LOAD:-$(( $(nproc) / 4 ))}
+[ "$max_load" -ge 1 ] || max_load=1
+quiet() {
+  local waited=0 load
+  while :; do
+    load=$(cut -d. -f1 /proc/loadavg)
+    [ "$load" -lt "$max_load" ] && return 0
+    [ "$waited" -ge "${FIZZY_PERF_WAIT:-300}" ] && { echo "perf-compile: load $load stays over $max_load; not measuring" >&2; exit 1; }
+    sleep 5; waited=$((waited + 5))
+  done
+}
+
+now() { date +%s.%N; }
+
+# run_zig <dir> <logfile> <zig args...>: waits for quiet, runs, sets $secs and $rss_mib.
+run_zig() {
+  local dir=$1 log=$2; shift 2
+  quiet
+  local t0 t1
+  t0=$(now)
+  (cd "$dir" && /usr/bin/time -f '%M' -o "$log.time" zig "$@") >"$log" 2>&1 || { echo "perf-compile: zig $* failed in $dir; see $log" >&2; tail -20 "$log" >&2; exit 1; }
+  t1=$(now)
+  secs=$(echo "$t1 - $t0" | bc -l)
+  rss_mib=$(( $(tail -1 "$log.time") / 1024 ))
+}
+
+# change <file> <n>: a content change zig must recompile, as a declaration nothing refers to.
+# The new content is written beside the file and renamed over it, so a watcher sees one complete
+# edit and never a truncated or half-written file.
+replace() { # <file> <source>
+  local tmpf="$root/$1.perf-compile.new"
+  cp "$2" "$tmpf" && mv -f "$tmpf" "$root/$1"
+}
+change() {
+  { cat "$backups/$(echo "$1" | tr / _)"; printf '\npub const perf_compile_probe_%s = %s;\n' "$2" "$2"; } >"$tmp/probe"
+  replace "$1" "$tmp/probe"
+}
+unchange() { replace "$1" "$backups/$(echo "$1" | tr / _)"; }
+
+cache=$tmp/cache
+out=$tmp/out
+log=$tmp/log
+
+cold() { # <scenario> <optimize>
+  local times=() mems=() i
+  for i in $(seq "$runs"); do
+    rm -rf "$cache" "$out"
+    echo "perf-compile: $1 run $i/$runs" >&2
+    run_zig "$root" "$log" build --cache-dir "$cache" --prefix "$out" "-Doptimize=$2"
+    times+=("$secs"); mems+=("$rss_mib")
+  done
+  emit "$1" wall_time "$(printf '%s\n' "${times[@]}" | median)" s
+  emit "$1" compiler_peak_rss "$(printf '%s\n' "${mems[@]}" | median)" MiB
+}
+
+if want cold_debug; then cold cold_debug Debug; fi
+if want cold_releasefast; then cold cold_releasefast ReleaseFast; fi
+
+warm() { # build the app into $cache, Debug
+  rm -rf "$cache" "$out"
+  run_zig "$root" "$log" build --cache-dir "$cache" --prefix "$out"
+}
+
+if want noop; then
+  warm
+  times=()
+  for i in $(seq "$runs"); do
+    echo "perf-compile: noop run $i/$runs" >&2
+    run_zig "$root" "$log" build --cache-dir "$cache" --prefix "$out"
+    times+=("$secs")
+  done
+  emit noop wall_time "$(printf '%s\n' "${times[@]}" | median)" s
+fi
+
+touch_series() { # <scenario> <file>
+  warm
+  local times=() i
+  for i in $(seq "$runs"); do
+    echo "perf-compile: $1 run $i/$runs" >&2
+    change "$2" "$i"
+    run_zig "$root" "$log" build --cache-dir "$cache" --prefix "$out"
+    times+=("$secs")
+  done
+  unchange "$2"
+  emit "$1" rebuild_time "$(printf '%s\n' "${times[@]}" | median)" s
+}
+
+# A `zig build -fincremental --watch` left running in <dir>: after each content change, the time
+# until the next build summary appears in its output. `--summary line` makes every build print
+# one, which the default does not on success.
+watch_series() { # <scenario> <dir> <file> <cache> <prefix>
+  local scenario=$1 dir=$2 file=$3 wlog=$tmp/watch.log
+  rm -rf "$4" "$5"
+  quiet
+  : >"$wlog"
+  (cd "$dir" && FIZZY_PROFILE=$tmp/profile exec zig build --cache-dir "$4" --prefix "$5" --summary line -fincremental --watch) >"$wlog" 2>&1 &
+  watch_pid=$!
+  local seen=0 deadline times=() i t0
+  summaries() { grep -c 'Build Summary' "$wlog" || true; }
+  wait_build() { # block until one more build finished; sets $seen
+    deadline=$(( $(date +%s) + 900 ))
+    while [ "$(summaries)" -le "$seen" ]; do
+      kill -0 "$watch_pid" 2>/dev/null || { echo "perf-compile: $scenario watch process died" >&2; tail -20 "$wlog" >&2; exit 1; }
+      [ "$(date +%s)" -lt "$deadline" ] || { echo "perf-compile: $scenario watch build timed out" >&2; exit 1; }
+      sleep 0.05
+    done
+    seen=$((seen + 1))
+    # A failed build prints "(N failed)" on the same line.
+    if ! grep 'Build Summary' "$wlog" | tail -1 | grep -q 'steps succeeded' ||
+      grep 'Build Summary' "$wlog" | tail -1 | grep -q 'failed'; then
+      echo "perf-compile: $scenario watch build failed; see $wlog" >&2; tail -20 "$wlog" >&2; exit 1
+    fi
+  }
+  wait_build
+  for i in $(seq "$runs"); do
+    echo "perf-compile: $scenario run $i/$runs" >&2
+    # Let the watcher go idle, and count any build the previous edit still owed, so the next
+    # summary is the one this edit causes.
+    sleep 1
+    seen=$(summaries)
+    t0=$(now)
+    change "$file" "$i"
+    wait_build
+    times+=("$(echo "$(now) - $t0" | bc -l)")
+  done
+  kill "$watch_pid" 2>/dev/null || true
+  wait "$watch_pid" 2>/dev/null || true
+  watch_pid=""
+  unchange "$file"
+  emit "$scenario" rebuild_time_incremental "$(printf '%s\n' "${times[@]}" | median)" s
+}
+
+if want touch_app; then touch_series touch_app "$touch_app"; fi
+if want touch_core; then touch_series touch_core "$touch_core"; fi
+if want incr_app; then watch_series incr_app "$root" "$touch_app" "$cache" "$out"; fi
+if want incr_core; then watch_series incr_core "$root" "$touch_core" "$cache" "$out"; fi
+
+# Plugin builds: the plugin's own build.zig, installing into a scratch profile.
+plugin_dir=plugins/text
+pbuild() { FIZZY_PROFILE=$tmp/profile run_zig "$root/$plugin_dir" "$log" build --cache-dir "$tmp/pcache" --prefix "$tmp/pout" "$@"; }
+
+if want touch_plugin; then
+  rm -rf "$tmp/pcache" "$tmp/pout"
+  pbuild
+  times=()
+  for i in $(seq "$runs"); do
+    echo "perf-compile: touch_plugin run $i/$runs" >&2
+    change "$touch_plugin" "$i"
+    pbuild
+    times+=("$secs")
+  done
+  unchange "$touch_plugin"
+  emit touch_plugin rebuild_time "$(printf '%s\n' "${times[@]}" | median)" s
+fi
+
+if want incr_plugin; then watch_series incr_plugin "$root/$plugin_dir" "$touch_plugin" "$tmp/pcache" "$tmp/pout"; fi
+
+# The headless part of a plugin hot-reload: change a plugin, build its dylib, install it. The
+# running app's dlopen of the result is not measured here (it needs a window).
+if want plugin_roundtrip; then
+  rm -rf "$tmp/pcache" "$tmp/pout" "$tmp/profile"
+  pbuild
+  times=()
+  for i in $(seq "$runs"); do
+    echo "perf-compile: plugin_roundtrip run $i/$runs" >&2
+    change "$touch_plugin" "$i"
+    touch "$tmp/stamp"
+    pbuild
+    if [ -z "$(find "$tmp/profile" -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -newer "$tmp/stamp" 2>/dev/null | head -1)" ]; then
+      echo "perf-compile: plugin_roundtrip installed no new dylib into $tmp/profile" >&2; exit 1
+    fi
+    times+=("$secs")
+  done
+  unchange "$touch_plugin"
+  emit plugin_roundtrip build_install_time "$(printf '%s\n' "${times[@]}" | median)" s
+fi
+
+# Compile the unit tests without running them (`zig build check`), cold.
+if want test_build; then
+  times=(); mems=()
+  for i in $(seq "$runs"); do
+    rm -rf "$cache" "$out"
+    echo "perf-compile: test_build run $i/$runs" >&2
+    run_zig "$root" "$log" build check --cache-dir "$cache" --prefix "$out"
+    times+=("$secs"); mems+=("$rss_mib")
+  done
+  emit test_build wall_time "$(printf '%s\n' "${times[@]}" | median)" s
+  emit test_build compiler_peak_rss "$(printf '%s\n' "${mems[@]}" | median)" MiB
+fi
