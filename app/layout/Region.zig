@@ -1044,7 +1044,6 @@ fn drawCornerGlyph(c: dvui.Point.Physical, scale: f32, size: f32, color: dvui.Co
             return .{ .x = ox + x * st, .y = oy + y * st, .w = cl, .h = cl };
         }
     }.f;
-    // Pixel-snapped cells with a 0.4px corner: no fade (square in effect, kept crisp).
     // The one that slides right.
     at(slide, 0, x0, y0, step, cell).fill(corner, .{ .color = .{ .color = color }, .fade = 0 });
     // The one that slides up.
