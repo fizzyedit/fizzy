@@ -2295,7 +2295,7 @@ pub fn postInit(editor: *Editor) !void {
     // near-empty fizzy's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
-    // Every plugin the build lists (`bundled_plugins`; an application links only those it names):
+    // Every plugin the build lists (`bundled_plugins`):
     // its dylib beside the exe when the build made one, else the copy linked in. A plugin with
     // a dylib loads the way a third-party plugin does, so that path is exercised every run; one
     // with none (or any on the web) fails the load quietly and its static copy registers.
