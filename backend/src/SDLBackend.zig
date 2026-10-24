@@ -216,6 +216,9 @@ pub const Viewport = struct {
     /// pointer is read against it, and it is kept above every window by its level, not ordered over
     /// the main one.
     passive: bool = false,
+    /// Windows: whether a carry window is topmost, as last applied
+    /// (`win32_titlebar.viewportCarryTopmost`): while the app is active, not after it is left.
+    carry_topmost: bool = true,
     /// A held pointer over it is read as over what is beneath it — the main window — this frame
     /// (`viewportSeeThrough`): a float's window gone to its ghost while a view is carried out of it.
     see_through: bool = false,
@@ -1524,7 +1527,7 @@ pub fn viewportOpenMenu(self: *SDLBackend, at: viewport_map.Rect, radius: f32, r
         .macos => {
             _ = fizzy_macos_viewport_menu(cocoaWindow(vp.window), cocoaWindow(self.window), platform.window.ns_visual_effect_material, radius, @intFromBool(dialog));
             // Gone while the app is left (a quiet run is never active: its menus stay).
-            if (!dialog and !quiet) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
+            if (platform.window_layout.hidesWhenAppLeft(if (dialog) .dialog else .menu, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(vp.window));
             vp.ride = switch (ride) {
                 .none => null,
                 .main => self.window,
@@ -1777,12 +1780,19 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     // Dressed by `viewportOpenMenu`, and no hit test: nothing in it moves or resizes it.
     if (menu) return vp;
     if (role == .overlay) {
-        if (comptime builtin.target.os.tag == .macos) fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+        if (comptime builtin.target.os.tag == .macos) {
+            fizzy_macos_viewport_overlay(cocoaWindow(window), cocoaWindow(self.window));
+            // Its bubbles and zones stood over other apps' windows while fizzy was in the background.
+            if (platform.window_layout.hidesWhenAppLeft(.overlay, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(window));
+        }
         return vp;
     }
     if (carry) {
         switch (comptime builtin.target.os.tag) {
-            .macos => fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material),
+            .macos => {
+                fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
+                if (platform.window_layout.hidesWhenAppLeft(.carry, quiet)) fizzy_macos_viewport_menu_hides(cocoaWindow(window));
+            },
             .windows => if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd| {
                 platform.win32_titlebar.viewportCarryChrome(hwnd);
             },
@@ -2828,6 +2838,16 @@ pub fn renderPresent(self: *SDLBackend) void {
     // window is (`mainHeld`). Presented into while a sibling's way ran, every frame waited on its
     // drawable, and the moving window's way ran at 55 frames a second, the main window's at 120.
     const main_moving = platform.window.windowMovingItself(self.window);
+    // A carry window stands over every window only while the app is the active one.
+    if (comptime builtin.target.os.tag == .windows) {
+        const active = appActive();
+        for (&self.viewport_slots) |*slot| {
+            const vp = if (slot.*) |*v| v else continue;
+            if (!vp.passive or vp.carry_topmost == active) continue;
+            vp.carry_topmost = active;
+            if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null)) |hwnd| platform.win32_titlebar.viewportCarryTopmost(hwnd, active);
+        }
+    }
     var moving_vp: ?*Viewport = null;
     for (&self.viewport_slots) |*slot| if (slot.*) |*v| if (v.shown and platform.window.windowMovingItself(v.window)) {
         moving_vp = v;
@@ -3567,6 +3587,8 @@ pub fn addEvent(self: *SDLBackend, win: *dvui.Window, event: c.SDL_Event) !bool 
             if (self.log_events) {
                 log.debug("event FOCUS_GAINED\n", .{});
             }
+            // A frame to put a carry window back over the others (`renderPresent`).
+            if (builtin.target.os.tag == .windows) self.refresh();
             if (dvui.accesskit_enabled and builtin.target.os.tag == .linux) {
                 dvui.AccessKit.c.accesskit_unix_adapter_update_window_focus_state(win.accesskit.adapter, true);
             } else if (dvui.accesskit_enabled and builtin.target.os.tag == .macos) {
