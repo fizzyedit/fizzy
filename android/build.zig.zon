@@ -8,7 +8,7 @@
         "build.zig.zon",
         "README.md",
         "src",
-        "project",
+        "AndroidManifest.xml",
     },
     // The repo's one dvui is pinned in `sdk/build.zig.zon`; this package reaches it through the SDK
     // package (as `build/sdk.zig`'s `dvuiDependency` does), so it cannot drift from fizzy's.

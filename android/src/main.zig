@@ -3,15 +3,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 
-const window_icon_png = @embedFile("icon.png");
-
 pub const dvui_app: dvui.App = .{
     .config = .{
         .options = .{
             .size = .{ .w = 800.0, .h = 600.0 },
             .min_size = .{ .w = 250.0, .h = 350.0 },
             .title = "Fizzy",
-            .icon = window_icon_png,
             .window_init_options = .{
                 // Could set a default theme here
                 // .theme = dvui.Theme.builtin.dracula,
@@ -24,12 +21,12 @@ pub const dvui_app: dvui.App = .{
 };
 pub const main = dvui.App.main;
 
-// NOTE: this is a static lib (like the iOS example), so zig's start.zig never runs and
-// never builds the std.process.Init dvui.App.main needs. main.c has the real C main()
-// and calls this exported symbol; hand-build the same minimal Init here.
-export fn dvui_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
+// SDL's activity looks this symbol up in the library and calls it on its own thread. This is a
+// static lib linked into a JNI library, so zig's start.zig never runs and never builds the
+// std.process.Init dvui.App.main needs; hand-build the same minimal Init here.
+export fn SDL_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     return runDvuiMain(argc, argv) catch |err| {
-        std.log.err("dvui_main failed: {t}", .{err});
+        std.log.err("SDL_main failed: {t}", .{err});
         return 1;
     };
 }
