@@ -36,7 +36,7 @@ wait
 # A slot whose holder is dead is reclaimed.
 rm -f "$T/go" "$T/status" "$T/ran"; : >"$T/pids"
 sh -c : & dead=$!; wait $dead
-ln -s $dead "$T/slots/slot.0"; ln -s $dead "$T/slots/slot.1"
+for n in 0 1; do mkdir -p "$T/slots/slot.$n"; echo $dead >"$T/slots/slot.$n/pid"; done
 touch "$T/go"
 ./zb build d >"$T/o4" 2>&1 || fail "dead slot not reclaimed: $(cat "$T/o4")"
 grep -q '^build d' "$T/ran" || fail "build d did not run"
