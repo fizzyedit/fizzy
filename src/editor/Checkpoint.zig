@@ -52,12 +52,14 @@ warned: bool = false,
 generation: u32 = 0,
 
 const Job = struct {
-    kept: KeptDocuments,
+    /// The documents' states; null for a job that only writes closed documents' tracks.
+    kept: ?KeptDocuments,
     /// The tracks of its unsaved documents that moved (`Tracks.takeChanged`).
     tracks: []Tracks.KeptFile,
     /// Told when they are written (`Tracks.doneWriting`), when there are any.
     owner: ?*Tracks = null,
     dir: []u8,
+    gpa: std.mem.Allocator,
     generation: u32,
     thread: std.Thread = undefined,
     done: std.atomic.Value(bool) = .init(false),
@@ -108,8 +110,12 @@ pub fn tick(self: *Checkpoint, editor: *Editor) void {
     if (self.job) |job| if (job.done.load(.acquire)) {
         job.thread.join();
         if (job.ok) self.written = true;
+        // A write of closed documents' tracks: the folder's cap, now that they are in it.
+        const closed_only = job.kept == null;
         self.freeJob(editor, job);
+        if (closed_only) if (editor.app.tracks) |*t| t.sweep();
     };
+    if (self.job == null) if (editor.app.tracks) |*t| if (t.pending.items.len > 0) self.start(editor, false) catch {};
     const now = std.Io.Clock.awake.now(dvui.io).nanoseconds;
     // Looked up every frame, which keeps a pending timer alive (dvui drops one nobody asks after).
     const timer_id = dvui.currentWindow().data().id.update("checkpoint");
@@ -127,7 +133,7 @@ pub fn tick(self: *Checkpoint, editor: *Editor) void {
         } else if (self.job == null and self.due(now)) {
             self.last_ns = now;
             self.touched = false;
-            self.start(editor) catch |err| {
+            self.start(editor, true) catch |err| {
                 if (!self.warned) dvui.log.warn("checkpoint: unsaved work is not kept against a crash ({t})", .{err});
                 self.warned = true;
             };
@@ -157,23 +163,25 @@ fn nextLook(self: *const Checkpoint) ?i96 {
     return null;
 }
 
-fn start(self: *Checkpoint, editor: *Editor) !void {
+/// Start a write: of the documents too (`with_documents`), or only of the tracks `Tracks.takeChanged`
+/// hands over.
+fn start(self: *Checkpoint, editor: *Editor, with_documents: bool) !void {
     const gpa = editor.app.gpa;
     // A document whose owner cannot capture its unsaved changes (no state hook) fails the
     // capture, as it stops a restart from keeping documents: then there is no checkpoint.
-    var kept = try KeptDocuments.capture(editor, null);
-    errdefer kept.deinit();
+    var kept: ?KeptDocuments = if (with_documents) try KeptDocuments.capture(editor, null) else null;
+    errdefer if (kept) |*k| k.deinit();
     const path = try dir(gpa, editor.app.config_folder);
     errdefer gpa.free(path);
     const job = try gpa.create(Job);
     errdefer gpa.destroy(job);
-    self.generation += 1;
+    if (with_documents) self.generation += 1;
     // Their histories too, ending where the states just captured do: a document the checkpoint
     // brings back picks its history up (`Tracks.pickUp`), rather than coming back with only its
     // unsaved changes to undo.
-    const tracks: []Tracks.KeptFile = if (editor.app.tracks) |*t| t.takeChanged() else &.{};
+    const tracks: []Tracks.KeptFile = if (editor.app.tracks) |*t| t.takeChanged(with_documents) else &.{};
     const owner: ?*Tracks = if (tracks.len > 0) &editor.app.tracks.? else null;
-    job.* = .{ .kept = kept, .tracks = tracks, .owner = owner, .dir = path, .generation = self.generation };
+    job.* = .{ .kept = kept, .tracks = tracks, .owner = owner, .dir = path, .gpa = gpa, .generation = self.generation };
     job.thread = std.Thread.spawn(.{}, write, .{job}) catch |err| {
         if (owner) |t| t.doneWriting();
         for (tracks) |k| k.deinit(gpa);
@@ -190,14 +198,15 @@ fn write(job: *Job) void {
     defer timed.end();
     // The histories first: a crash between the two leaves them ahead of the documents, which then
     // open without them (`Tracks.pickUp` finds them ending elsewhere), never the reverse.
-    for (job.tracks) |k| _ = Tracks.writeKept(k, "checkpoint");
+    for (job.tracks) |k| _ = Tracks.writeKept(job.gpa, k, "checkpoint");
     if (job.owner) |t| t.doneWriting();
-    job.kept.saveGeneration(job.dir, job.generation) catch return;
+    const kept = job.kept orelse return;
+    kept.saveGeneration(job.dir, job.generation) catch return;
     job.ok = true;
 }
 
 fn freeJob(self: *Checkpoint, editor: *Editor, job: *Job) void {
-    job.kept.deinit();
+    if (job.kept) |*kept| kept.deinit();
     for (job.tracks) |k| k.deinit(editor.app.gpa);
     editor.app.gpa.free(job.tracks);
     editor.app.gpa.free(job.dir);

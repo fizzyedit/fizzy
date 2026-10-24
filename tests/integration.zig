@@ -10945,6 +10945,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
                     if (!ed.docSaving(d)) break;
                 }
                 try ed.rawCloseFileID(d.id);
+                // Its history is packed and written by the checkpoint's thread.
+                for (0..400) |_| {
+                    _ = try dvui.testing.step(headlessFrame);
+                    if (ed.app.tracks.?.pending.items.len == 0 and ed.checkpoint.job == null) break;
+                } else return error.TestUnexpectedResult;
                 try dvui.testing.settle(headlessFrame);
             }
         }.run;
