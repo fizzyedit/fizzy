@@ -218,6 +218,19 @@ fn deprecatedReplacement(allocator: std.mem.Allocator, source: [:0]const u8, pat
     var findings: std.ArrayList(Finding) = .empty;
     errdefer findings.deinit(allocator);
     if (!std.mem.startsWith(u8, path, "sdk/src/")) return findings.toOwnedSlice(allocator);
+    var suppressions: std.ArrayList(Suppression) = .empty;
+    defer suppressions.deinit(allocator);
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var line_number: usize = 0;
+    while (lines.next()) |line| {
+        line_number += 1;
+        const comment = commentStart(line) orelse continue;
+        const text = std.mem.trim(u8, line[comment + 2 ..], " \t\r");
+        const prefix = "lint-allow(";
+        if (!std.mem.startsWith(u8, text, prefix)) continue;
+        const close = std.mem.findScalar(u8, text, ')') orelse continue;
+        try suppressions.append(allocator, .{ .rule = text[prefix.len..close], .line = line_number });
+    }
     var tokenizer = std.zig.Tokenizer.init(source);
     while (true) {
         const token = tokenizer.next();
@@ -245,9 +258,10 @@ fn deprecatedReplacement(allocator: std.mem.Allocator, source: [:0]const u8, pat
                 break;
             }
         }
-        if (!replacement) try findings.append(allocator, .{
+        const line = std.mem.count(u8, source[0..token.loc.start], "\n") + 1;
+        if (!replacement and !silenced(suppressions.items, .@"deprecated-names-replacement", line)) try findings.append(allocator, .{
             .rule = .@"deprecated-names-replacement",
-            .line = std.mem.count(u8, source[0..token.loc.start], "\n") + 1,
+            .line = line,
             .message = "Deprecated marker must name a backticked replacement",
         });
     }
@@ -515,4 +529,33 @@ test "SDK deprecated markers name a backticked replacement" {
         "const text = \"/// Deprecated\";",
         "/// DeprecatedThing is an identifier.\npub const old = 1;",
     }) |source| try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len);
+}
+
+test "deprecated marker honors lint-allow suppression and a file budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][:0]const u8{
+        "// lint-allow(deprecated-names-replacement): removed with the next SDK\n/// Deprecated\npub const old = 1;",
+        "/// Deprecated // lint-allow(deprecated-names-replacement): not a comment\npub const old = 1;",
+    }, [_]usize{ 0, 1 }) |source, expected| {
+        try std.testing.expectEqual(expected, (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len);
+    }
+    // A suppression for another rule, or two lines above the marker, does not silence it.
+    for ([_][:0]const u8{
+        "// lint-allow(anyerror): wrong rule\n/// Deprecated\npub const old = 1;",
+        "// lint-allow(deprecated-names-replacement): too far\n\n/// Deprecated\npub const old = 1;",
+    }) |source| try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len);
+
+    const hit = try deprecatedReplacement(a, "/// Deprecated\npub const old = 1;", "sdk/src/old.zig");
+    const allowances = [_]Allow{
+        .{ .rule = .@"deprecated-names-replacement", .file = "sdk/src/allowed.zig", .count = 1 },
+        .{ .rule = .@"deprecated-names-replacement", .file = "sdk/src/under.zig", .count = 2 },
+    };
+    var seen = [_]bool{ false, false };
+    var output: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expect(try reportFile(&output.writer, "sdk/src/hit.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(!try reportFile(&output.writer, "sdk/src/allowed.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(try reportFile(&output.writer, "sdk/src/under.zig", hit, &allowances, &seen, false));
+    try std.testing.expect(seen[0] and seen[1]);
 }
