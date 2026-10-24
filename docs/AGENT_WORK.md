@@ -99,6 +99,7 @@ PR creation. Fix the reported problem and retry finish. Neither helper merges or
 
 - Draft PR on the first push; take it to ready only when the gates pass and CI is green.
 - A different worker than the author reviews the PR.
+- Reviewer and author both answer the four questions in [`REVIEW.md`](REVIEW.md).
 - No auto-merge. Merging is the maintainer's (`CONTRIBUTING.md`).
 
 ## Which worker suits which work
