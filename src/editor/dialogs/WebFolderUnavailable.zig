@@ -29,7 +29,7 @@ pub fn active(win: *dvui.Window) bool {
     return false;
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(12) });
     defer outer.deinit();
 
@@ -50,4 +50,4 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     return true;
 }
 
-pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) anyerror!void {}
+pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) fizzy.core.dialogs.Error!void {}

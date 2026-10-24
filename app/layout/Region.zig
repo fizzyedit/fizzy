@@ -237,7 +237,18 @@ pub const Content = struct {
     /// regions and splits, and nothing about whose furniture is being drawn. Same `ctx` idiom
     /// as `Surface.draw`, for the same reason.
     ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) anyerror!dvui.App.Result,
+    draw: *const fn (ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) Error!dvui.App.Result,
+};
+
+/// What declaring a region can fail with, which is what drawing its contents can: a surface
+/// draws through `Layout.surfaceDraw`, which maps whatever it raised into one of these. A shape
+/// that cannot recover passes it up to the frame loop.
+pub const Error = error{
+    OutOfMemory,
+    /// The surface's plugin failed; `Plugin.failed` logged the cause under the plugin's own name.
+    PluginFailed,
+    /// Fizzy's own surface failed; `surfaceDraw` logged the cause.
+    Failed,
 };
 
 /// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
@@ -327,7 +338,7 @@ pub const InitOptions = struct {
 /// }
 /// f.split(@src(), .{});
 /// ```
-pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions, opts_given: dvui.Options) anyerror!Region {
+pub fn init(self: *Layout, src: std.lang.SourceLocation, init_opts: InitOptions, opts_given: dvui.Options) Error!Region {
     const opts = withCard(self, init_opts, opts_given);
     if (self.depth >= Layout.max_nesting) {
         dvui.log.err("layout nests deeper than {d} regions; \"{s}\" ignored", .{ Layout.max_nesting, init_opts.name });
@@ -1195,7 +1206,7 @@ fn drawContentsPhotographed(
     keywords: []const []const u8,
     rect: dvui.Rect.Physical,
     shot: ViewDrag.Shot,
-) !void {
+) Error!void {
     // The frame as last drawn, when there is one (`ViewDrag.photographFromFrame`): no capture,
     // so the place draws as usual and does not flash.
     if (shot.card and ViewDrag.photographFromFrame(self, rect)) {
@@ -1256,7 +1267,7 @@ fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, sho
 /// `keywords` rather than `opts.keywords`: chrome is handed the region's *qualified* set, so a
 /// tab strip inside a sub-region lists what that sub-region accepts and not what its kind accepts
 /// everywhere in the app.
-fn drawContents(self: *Layout, opts: InitOptions, keywords: []const []const u8) !dvui.App.Result {
+fn drawContents(self: *Layout, opts: InitOptions, keywords: []const []const u8) Error!dvui.App.Result {
     if (opts.content) |content| return content.draw(content.ctx, self, keywords);
     const place: Region = .{
         .name = opts.name,
@@ -1297,7 +1308,7 @@ fn initTree(
     init_opts: InitOptions,
     opts: dvui.Options,
     node: *SplitTree.Node,
-) anyerror!Region {
+) Error!Region {
     const parent: ?*Layout.Container = if (self.depth == 0) null else &self.containers[self.depth - 1];
     const axis: dvui.enums.Direction = if (parent) |p| p.dir else .horizontal;
     const id = dvui.parentGet().extendId(src, opts.idExtra());
@@ -1407,7 +1418,7 @@ fn drawTreeChildren(
     shape: InitOptions,
     shape_opts: dvui.Options,
     branch: SplitTree.Branch,
-) anyerror!void {
+) Error!void {
     const omit_a: SplitTree.Side = switch (branch.dir) {
         .horizontal => .right,
         .vertical => .bottom,
@@ -1520,7 +1531,7 @@ fn drawTreeNode(
     node: *SplitTree.Node,
     omit: SplitTree.Side,
     leftover: bool,
-) anyerror!void {
+) Error!void {
     switch (node.kind) {
         .leaf => |name| {
             var o = shape;
