@@ -770,6 +770,8 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         .{ "fizzy-textcore-tests", "plugins/text/src/textcore/textcore.zig" },
         // A text document's state as bytes, for a demo's snapshot. std-only (see doc_state.zig).
         .{ "fizzy-text-doc-state-tests", "plugins/text/src/doc_state.zig" },
+        // The text plugin's sequence CRDT (YATA), prototype: std-only, no link to the document yet.
+        .{ "fizzy-text-crdt-tests", "plugins/text/src/crdt/crdt.zig" },
         // Profiles: taking `--profile` out of argv, and each profile's own lock name. std-only;
         // where a profile's folders go is `single_instance` and the editor's, run by hand.
         .{ "fizzy-profile-tests", "app/profile.zig" },
