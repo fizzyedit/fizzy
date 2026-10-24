@@ -72,7 +72,11 @@ pub fn main(init: std.process.Init) !void {
                     const name = testName(arena, line) orelse continue;
                     file_tests += 1;
                     if (reached(arena, binaries.items, abs, name)) continue;
-                    if (missing == 0) std.debug.print("Tests no test binary compiles (none of `zig build test` / `test-integration` reaches the file):\n", .{});
+                    if (missing == 0) std.debug.print(
+                        "Tests no test binary compiles " ++
+                            "(none of `zig build test` / `test-integration` reaches the file):\n",
+                        .{},
+                    );
                     std.debug.print("  {s}: {s} \"{s}\"\n", .{ rel, name.kind, name.name });
                     missing += 1;
                 }
