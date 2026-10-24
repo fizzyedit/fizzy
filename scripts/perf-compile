@@ -103,12 +103,17 @@ run_zig() {
 }
 
 # change <file> <n>: a content change zig must recompile, as a declaration nothing refers to.
-# The file is rewritten from its backup in one write, so a watcher sees one edit, not a restore
-# and then an append.
-change() {
-  { cat "$backups/$(echo "$1" | tr / _)"; printf '\npub const perf_compile_probe_%s = %s;\n' "$2" "$2"; } >"$root/$1"
+# The new content is written beside the file and renamed over it, so a watcher sees one complete
+# edit and never a truncated or half-written file.
+replace() { # <file> <source>
+  local tmpf="$root/$1.perf-compile.new"
+  cp "$2" "$tmpf" && mv -f "$tmpf" "$root/$1"
 }
-unchange() { cp "$backups/$(echo "$1" | tr / _)" "$root/$1"; }
+change() {
+  { cat "$backups/$(echo "$1" | tr / _)"; printf '\npub const perf_compile_probe_%s = %s;\n' "$2" "$2"; } >"$tmp/probe"
+  replace "$1" "$tmp/probe"
+}
+unchange() { replace "$1" "$backups/$(echo "$1" | tr / _)"; }
 
 # series <scenario> <metric> <unit> <fn>: median of $runs calls of fn, which sets $secs.
 report_time() { # scenario metric  (reads values from stdin)

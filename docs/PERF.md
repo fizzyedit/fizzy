@@ -49,7 +49,7 @@ Yes, on Zig 0.17.0 and this build graph: `zig build -fincremental --watch` rebui
 each plugin, and reports a successful summary after an edit; `incr_core` and `incr_plugin` give
 the edit-to-summary times. The script fails the
 run if a watched build's summary reports a failed step. Watched builds run with `--summary line`
-(the default prints nothing on success), and each edit is one write after the watcher has gone
+(the default prints nothing on success), and each edit is one rename of a complete file over the original, after the watcher has gone
 idle, so the next summary is the build that edit caused. The cost of the first build under
 `-fincremental` and `--watch`'s inotify use on a tree this size are not measured separately.
 What is not yet known is how it behaves for edits that change analyzed code (see the probe
