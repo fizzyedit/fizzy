@@ -9830,6 +9830,10 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
         // The list differs by form factor, so its generation moves and a retained one is stale.
         try std.testing.expect(desktop_api.generation() != desktop_generation);
+        // The tour opens among the documents already open, and a phone's strip scrolls: with this
+        // test's own tabs ahead of them, the tour's would sit off the screen and never be drawn.
+        while (editor.app.open_files.count() > 0) try editor.rawCloseFileID(editor.app.open_files.keys()[0]);
+        try dvui.testing.settle(headlessFrame);
         try editor.demo.play("tour");
         const player = &editor.demo.player;
         var phone_frames: usize = 0;
@@ -9840,6 +9844,9 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         // No wait gave up: every anchor the phone's tour aims at is drawn in the phone's shape.
         try std.testing.expectEqual(@as(u32, 0), player.timeouts);
         player.unload();
+        try dvui.testing.settle(headlessFrame);
+        // What follows works on the notes the test opened first.
+        _ = try editor.openFilePath(notes, editor.workbench.currentGroupingID());
         try dvui.testing.settle(headlessFrame);
     }
 

@@ -2,8 +2,9 @@
 //! the window's materials, the plugins everything is made of, and the history kept of every change
 //! — about a minute, in chapters a viewer can jump between (the guides view lists them).
 //!
-//! One keyframe, at the start: each chapter carries on in the window the last one left, a split, a
-//! float and all, rather than cutting it back to a fresh one. A snapshot holds the window's
+//! One keyframe, at the start, which leaves the window as the person has it: each chapter carries on
+//! in the window the last one left, a split, a float and all, rather than cutting it back to a
+//! fresh one. The explorer is pressed open only if it is not showing already. A snapshot holds the window's
 //! arrangement too (`Demo.Snapshot`), so a seek back across a split or a float puts the window
 //! back as it was then, rather than replaying from the keyframe.
 const Tape = @import("tape").Tape;
@@ -41,7 +42,7 @@ const files = [_]Tape.File{
     .{ .path = "notes/ideas.md", .text = ideas },
 };
 
-/// The tour's folder, cut to: its three files open as tabs, README in front, nothing else showing.
+/// The tour's folder: its three files open as tabs in the person's current group, README in front.
 fn scene(s: *Script) !void {
     try s.keyframe(.{
         .root = "demo://tour",
@@ -81,14 +82,19 @@ pub fn build(s: *Script) !void {
     if (s.compact) {
         // A phone has no rail and no Sidebar place: the bar's icon opens the explorer as a sheet.
         try s.caption("The bar opens the explorer, a sheet over the documents.", .{ .near = catalog.files_tab });
+        // A sheet the person already has open is left as it is: this is theirs to show.
+        const sheet = try s.skipIfShown(try catalog.file(s, "README.md"));
         try s.click(.{ .tag = catalog.files_tab }, .{});
         try s.waitFor(try catalog.file(s, "README.md"), .{});
         s.pause(1800);
         try s.click(.{ .tag = catalog.files_tab }, .{});
         s.pause(900);
+        s.endSkip(sheet);
     } else {
         try s.caption("The rail opens the explorer, in a place of its own beside the documents.", .{ .near = catalog.files_icon });
+        const rail = try s.skipIfShown(try catalog.file(s, "README.md"));
         try s.click(.{ .tag = catalog.files_icon }, .{});
+        s.endSkip(rail);
         try s.waitFor(try catalog.file(s, "README.md"), .{});
         s.pause(900);
         try s.caption("Every place has a corner. Its button chooses what the place shows…", .{});

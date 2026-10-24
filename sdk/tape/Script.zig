@@ -233,6 +233,21 @@ pub fn waitIdle(self: *Script, opts: WaitOptions) !void {
     try self.push(.{ .at = self.t, .do = .{ .wait = .{ .until = .idle, .timeout = opts.timeout } } });
 }
 
+/// A `skipIfShown` op, by index into the ops, for `endSkip` to close.
+pub const Skip = usize;
+
+/// Leave out everything up to `endSkip` when `tag` is drawn already. The gesture to bring it up
+/// goes between, so a person's layout that has it open is left as it is.
+pub fn skipIfShown(self: *Script, tag: []const u8) !Skip {
+    try self.push(.{ .at = self.t, .do = .{ .skip = .{ .when = .{ .shown = try self.dupe(tag) }, .count = 0 } } });
+    return self.ops.items.len - 1;
+}
+
+/// The ops pushed since `skipIfShown` returned `mark` are what it leaves out.
+pub fn endSkip(self: *Script, mark: Skip) void {
+    self.ops.items[mark].do.skip.count = @intCast(self.ops.items.len - mark - 1);
+}
+
 // ---- the pointer ---------------------------------------------------------------------------
 
 pub const MoveOptions = struct {
@@ -375,6 +390,23 @@ pub fn commandWith(self: *Script, id: []const u8, args: anytype) !void {
 // ---- tests ---------------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "a skip counts the ops pushed between it and its end" {
+    var s: Script = .init(testing.allocator, "t", "T");
+    try s.keyframe(.{ .root = "demo://t" });
+    const mark = try s.skipIfShown("rail");
+    try s.click(.{ .tag = "button" }, .{});
+    s.endSkip(mark);
+    try s.key("enter");
+    var owned = try s.finish();
+    defer owned.deinit();
+    const ops = owned.tape.ops;
+    const skip = ops[mark].do.skip;
+    try testing.expectEqualStrings("rail", skip.when.shown);
+    // The wait for the button, the aim, the press and the release; the key after is not left out.
+    try testing.expectEqual(@as(u32, 4), skip.count);
+    try testing.expectEqualStrings("enter", ops[mark + 1 + skip.count].do.key);
+}
 
 test "a script paces a person's actions and waits for what it aims at" {
     var s: Script = .init(testing.allocator, "t", "Test");

@@ -304,6 +304,10 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 }
                 self.cursor += 1;
             },
+            .skip => |sk| {
+                self.cursor += 1;
+                if (sink.vtable.holds(sink.ctx, sk.when)) self.cursor = @min(self.cursor + sk.count, ops.len);
+            },
             .move, .trace => |target| {
                 // A move only: a stroke's points are on a canvas that is not going anywhere, and a
                 // drawing has hundreds of them.
@@ -885,6 +889,30 @@ test "a wait holds demo time until it holds, then carries on in the same frame" 
     // A command's arguments reach the sink as written, a frame after the command before it.
     try testing.expectEqual(Progress.yielded, seq.advance(100, 16, log.sink()));
     try testing.expectEqualStrings("keyframe demo://a\ncommand x.go\ncommand x.to .{ .line = 3 }\n", log.out.items);
+}
+
+test "a skip leaves out the ops after it when its condition holds, and plays them when it does not" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 10, .do = .{ .skip = .{ .when = .{ .shown = "open" }, .count = 2 } } },
+        .{ .at = 20, .do = .{ .key = "a" } },
+        .{ .at = 30, .do = .{ .key = "b" } },
+        .{ .at = 40, .do = .{ .key = "c" } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    try log.tags.put(testing.allocator, "open", .{ .x = 0, .y = 0 });
+    playTo(&seq, 100, 16, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\nkey c\n", log.out.items);
+
+    // Rewound and replayed with it shut, the same ops play whole.
+    log.out.clearRetainingCapacity();
+    _ = log.tags.remove("open");
+    seq.rewind(0);
+    playTo(&seq, 100, 16, log.sink());
+    try testing.expectEqualStrings("keyframe demo://a\nkey a\nkey b\nkey c\n", log.out.items);
 }
 
 test "a wait that never holds gives up after its timeout, in wall time" {
