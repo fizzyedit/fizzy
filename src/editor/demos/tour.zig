@@ -142,8 +142,8 @@ pub fn build(s: *Script) !void {
     if (s.compact) try s.click(.{ .tag = store }, .{});
 
     try s.chapter("History");
-    // The store left open beside it: shutting it would slide the page over just as the pointer
-    // went for it.
+    // On a desktop the store is left open beside it: shutting it would slide the page over just as
+    // the pointer went for it. A phone's sheet was put away above.
     try s.click(.{ .tag = try catalog.tab(s, "README.md") }, .{});
     try s.caption("Every change is kept, a step at a time.", try catalog.aboutWriting(s, "README.md"));
     try s.click(.{ .tag = try catalog.end(s, "README.md") }, .{});
@@ -159,7 +159,7 @@ pub fn build(s: *Script) !void {
     s.pause(3200);
 
     try s.chapter("Your turn");
-    try s.caption("That's the tour. Find it again, and more, in Guides on the rail.", .{
+    try s.caption(if (s.compact) "That's the tour. Find it again, and more, in Guides." else "That's the tour. Find it again, and more, in Guides on the rail.", .{
         .title = "Your turn",
         .place = .middle,
         .ms = 4000,

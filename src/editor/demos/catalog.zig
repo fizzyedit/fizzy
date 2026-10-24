@@ -127,8 +127,9 @@ pub const store_tab = "fizzy.mobile.tab:fizzy.store";
 /// rail, click the file, and put the explorer away again so the editor has the room. A demo's
 /// keyframe starts with the explorer put away (`Keyframe.Layout.focused`).
 pub fn openFile(s: *Script, rel: []const u8) !void {
-    try s.click(.{ .tag = files_icon }, .{});
+    const opener = if (s.compact) files_tab else files_icon;
+    try s.click(.{ .tag = opener }, .{});
     try s.click(.{ .tag = try file(s, rel) }, .{});
     try s.waitFor(try editor(s, rel), .{});
-    try s.click(.{ .tag = files_icon }, .{});
+    try s.click(.{ .tag = opener }, .{});
 }
