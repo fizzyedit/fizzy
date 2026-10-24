@@ -201,8 +201,6 @@ pub fn wireAppLayout(
     consumer: *std.Build.Module,
 ) void {
     if (app_layout) |path| {
-        // A ZON shape needs a typed shim so code and data layouts share the same callable
-        // contract on native and web targets.
         const is_zon = std.mem.endsWith(u8, path.getDisplayName(), ".zon");
         const app_layout_mod = b.createModule(.{
             .target = target,
