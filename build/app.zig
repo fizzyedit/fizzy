@@ -510,7 +510,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     // `zig build web` produces `zig-out/web/{web.wasm, web.js, index.html, NotoSansKR-Regular.ttf}`,
     // deployable as-is to a static host.
-    const w = web.build(b, optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
+    const w = web.build(b, optimize, cfg.build_opts, cfg.workbench_opts, assets_module, app_icon_module, cfg.app_layout_path, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs, opts.own != null);
     const built = try native(b, target, optimize, opts, cfg, assets_module, app_icon_module);
     install(b, target, optimize, cfg, w, built);
     try addTests(b, target, optimize, cfg, built, assets_module, app_icon_module);
