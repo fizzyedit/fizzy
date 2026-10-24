@@ -10974,6 +10974,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         }
         try std.testing.expectEqual(@as(usize, 0), try at(host, doc));
         {
+            // The knob's stop 0 is the line's very start: the end cell is half a stop wide
+            // (40 stops: 1/80 of the line), so a press at 2/100 across is stop 1, not 0.
+            var s: automation.Script = .init(gpa, "transport-first-stop", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0.02 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 1), try at(host, doc));
+        {
+            var s: automation.Script = .init(gpa, "transport-start-again", "");
+            s.check = automation.Input.check;
+            s.check.live = true;
+            try s.click(.{ .tag = line_tag, .x = 0 }, .{});
+            try play(editor, &s);
+        }
+        try std.testing.expectEqual(@as(usize, 0), try at(host, doc));
+        {
             // Redo: one step on.
             var s: automation.Script = .init(gpa, "transport-forward", "");
             s.check = automation.Input.check;

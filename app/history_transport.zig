@@ -206,15 +206,17 @@ pub fn cellEnd(i: usize, x0: f32, x1: f32, n: usize) f32 {
 pub const Column = struct { stop: usize, x0: f32, x1: f32 };
 
 /// How the strip from `x0` to `x1` is shared among the line's `n + 1` stops, into `out`: each stop
-/// its own cell, centred on its knob (`stopX`; the two end cells are half as wide), so the picture of the document
-/// then stands under the knob that goes there. Too many stops for each to have `min_w`, the strip
-/// is cut into columns of `min_w` instead, each showing the stop at its middle (`stopAt`).
+/// its own cell, centred on its knob (`stopX`; the two end cells are half as wide), so the
+/// picture of the document then stands under the knob that goes there. Too many stops for the
+/// narrowest cell (an end one) to have `min_w`, the strip is cut into columns of `min_w`
+/// instead, each showing the stop at its middle (`stopAt`).
 /// Returns the columns, left to right, covering the strip.
 pub fn stripColumns(n: usize, x0: f32, x1: f32, min_w: f32, out: []Column) []Column {
     const w = x1 - x0;
     if (w <= 0 or out.len == 0) return out[0..0];
     const stops = n + 1;
-    if (w / @as(f32, @floatFromInt(stops)) >= min_w and stops <= out.len) {
+    const narrowest = w / @as(f32, @floatFromInt(@max(1, 2 * n)));
+    if (narrowest >= min_w and stops <= out.len) {
         for (out[0..stops], 0..) |*c, i| c.* = .{ .stop = i, .x0 = cellStart(i, x0, x1, n), .x1 = cellEnd(i, x0, x1, n) };
         return out[0..stops];
     }
@@ -385,10 +387,17 @@ test "each stop takes the stretch of the strip round its knob, or columns share 
         try testing.expectEqual(i, c.stop);
         const want: f32 = if (i == 0 or i == 4) 12.5 else 25;
         try testing.expectApproxEqAbs(want, c.x1 - c.x0, 1e-4);
-        if (i != 0 and i != 4) try testing.expectApproxEqAbs(stopX(i, 0, 100, 4), (c.x0 + c.x1) / 2, 1e-4);
+        const mid = (c.x0 + c.x1) / 2;
+        // An end cell is centred on its stop only along its inner half: the knob sits on its edge.
+        if (i == 0) try testing.expectApproxEqAbs(@as(f32, 6.25), mid, 1e-4);
+        if (i == 4) try testing.expectApproxEqAbs(@as(f32, 93.75), mid, 1e-4);
+        if (i != 0 and i != 4) try testing.expectApproxEqAbs(stopX(i, 0, 100, 4), mid, 1e-4);
     }
     try testing.expectEqual(@as(f32, 0), few[0].x0);
     try testing.expectApproxEqAbs(@as(f32, 100), few[4].x1, 1e-4);
+    // The end cell (12.5 wide) must hold `min_w`: 12.5 keeps cells, 13 makes columns.
+    try testing.expectEqual(@as(usize, 5), stripColumns(4, 0, 100, 12.5, &buf).len);
+    try testing.expect(stripColumns(4, 0, 100, 13, &buf).len != 5);
     // More stops than room: columns of the least width, each the stop at its middle, in order.
     const many = stripColumns(1000, 0, 100, 4, &buf);
     try testing.expectEqual(@as(usize, 25), many.len);
