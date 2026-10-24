@@ -273,10 +273,13 @@ pub const Transport = struct {
         return @intFromFloat(@round(f * @as(f32, Sequencer.speeds.len - 1)));
     }
 
-    /// Let go of a speed drag whose release can no longer arrive: the bar is gone, closing or
-    /// tucked away, so nothing under the pointer is the slider.
+    /// Let go of a speed drag (and the slider's key focus) that can no longer be answered: the
+    /// bar is gone, closing or tucked away, so nothing under the pointer is the slider.
     pub fn dropStaleDrag(self: *Transport) void {
-        if (self.bar == null or self.closing or self.tucked) self.speed_drag = false;
+        if (self.bar == null or self.closing or self.tucked) {
+            self.speed_drag = false;
+            self.speed_focus = false;
+        }
     }
 
     /// The demo time under physical x on the track.
@@ -1229,7 +1232,8 @@ test "a speed drag does not outlive the bar it began on" {
     tr = .{ .bar = bar, .tucked = true, .speed_drag = true };
     tr.dropStaleDrag();
     try std.testing.expect(!tr.speed_drag);
-    tr = .{ .speed_drag = true };
+    tr = .{ .speed_drag = true, .speed_focus = true };
     tr.dropStaleDrag();
     try std.testing.expect(!tr.speed_drag);
+    try std.testing.expect(!tr.speed_focus);
 }
