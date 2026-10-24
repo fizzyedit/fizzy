@@ -131,13 +131,16 @@ fn seekOverBudget(p: *const automation.Player, elapsed: i128) bool {
     return elapsed > p.budget_ns * 4;
 }
 
-fn timedOutWaitThenOpsRan(p: *const automation.Player, timed_out_cursor: ?usize) bool {
-    return if (timed_out_cursor) |cursor| p.seq.cursor > cursor else false;
+/// A failed op skips to the next chapter (or a keyframe): the op it resumed at begins one.
+fn failureResumedMidChapter(p: *const automation.Player) bool {
+    const tape = p.tape() orelse return false;
+    const at = p.seq.resumed_at orelse return false;
+    if (at == 0 or at >= tape.ops.len or tape.ops[at].do == .keyframe) return false;
+    return tape.chapterAt(@floatFromInt(tape.ops[at].at)) == tape.chapterAt(@floatFromInt(tape.ops[at - 1].at));
 }
 
 const Observation = struct {
     verdict: Verdict = .empty,
-    timeout_cursor: ?usize = null,
     seek_frames: usize = 0,
     over_budget: usize = 0,
     worst_ns: i128 = 0,
@@ -155,8 +158,7 @@ const Observation = struct {
         const elapsed = std.Io.Clock.awake.now(dvui.io).nanoseconds - start;
         if (heldButton(p)) self.verdict.insert(.held_button);
         if (captionNotTopLayer()) self.verdict.insert(.caption_layer);
-        if (p.timeouts > timeouts) self.timeout_cursor = p.seq.cursor;
-        if (timedOutWaitThenOpsRan(p, self.timeout_cursor)) self.verdict.insert(.timeout_then_ops);
+        if (p.timeouts > timeouts and failureResumedMidChapter(p)) self.verdict.insert(.timeout_then_ops);
         if (seeking) {
             self.seek_frames += 1;
             self.worst_ns = @max(self.worst_ns, elapsed);
@@ -355,8 +357,15 @@ const fixtures = [_]Fixture{
         .{ .action = .scripted_key, .value = 816815299 },
         .{ .action = .mid_drag, .value = 3417069504 },
     } },
+};
+
+/// Former holes, now closed: each must keep passing.
+const fixed_fixtures = [_]Fixture{
     .{ .tape = "markdown", .category = .timeout_then_ops, .steps = &.{
         .{ .action = .missing_anchor, .value = 1044382321 },
+    } },
+    .{ .tape = "tour", .category = .timeout_then_ops, .steps = &.{
+        .{ .action = .missing_anchor, .value = 0 },
     } },
 };
 
@@ -370,5 +379,12 @@ fn checkFixtures(app: *BundledApp) !void {
         const holds = obs.verdict.contains(f.category);
         std.debug.print("- {s}/{t}: {s}\n", .{ f.tape, f.category, if (holds) "still fails (expected)" else "FIXED, delete the fixture" });
         try std.testing.expect(holds);
+    }
+    for (fixed_fixtures) |f| {
+        _ = try run(app, f.tape, &.{}, null);
+        const clean = app.editor.demo.player.stage.fingerprint() orelse return error.NoFingerprint;
+        const obs = try run(app, f.tape, f.steps, clean);
+        std.debug.print("- {s}/{t}: {s}\n", .{ f.tape, f.category, if (obs.verdict.contains(f.category)) "REGRESSED" else "holds" });
+        try std.testing.expect(!obs.verdict.contains(f.category));
     }
 }
