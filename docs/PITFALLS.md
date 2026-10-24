@@ -114,11 +114,10 @@ Three that the release builds (`zig build package`, MSVC) hit and the macOS buil
 
 ## Window behaviour notes: clean-room hygiene
 
-Write `docs/window-notes/` from observed behaviour or documentation read, citing only
-public OS documentation. Do not consult source code or copy code, comments or tables from
-SDL, GLFW or another implementation while writing a note. Our patch descriptions and
+Write `docs/window-notes/` in our own words from observed behaviour or documentation read,
+citing only public OS documentation. Do not consult source code or copy code, comments or
+tables from SDL, GLFW or another implementation while writing a note. Our patch descriptions and
 recorded pitfalls can identify a behaviour to investigate; patch files mix prose and
 implementation hunks, so read only the commit-message part above the first `---`.
-State the behaviour in our own words. Separate recorded observations, documented contracts
-and cases still awaiting observation, and include platform and verification limits so a
-proposed test is not mistaken for a pass.
+Separate recorded observations, documented contracts and cases still awaiting observation,
+and include platform and verification limits so a proposed test is not mistaken for a pass.
