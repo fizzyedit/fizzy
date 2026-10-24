@@ -7,6 +7,7 @@ const plugin = @import("fizzy_sdk").plugin;
 const core_mod = @import("fizzy_sdk").core_module;
 const common = @import("common.zig");
 const plugins = @import("plugins.zig");
+const plugin_list = @import("plugin_list.zig");
 const sdk = @import("sdk.zig");
 // Fizzy's native backend, a package of its own (`backend/`): its build helpers wire it under dvui.
 const fizzy_backend = @import("fizzy_backend");
@@ -341,7 +342,7 @@ pub fn addFizzyExecutableForTarget(
         }, workbench_opts);
     } else null;
 
-    const text_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "text")) blk: {
+    const text_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugin_list.linksFizzys(app_plugins, "text")) blk: {
         break :blk text_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
@@ -351,7 +352,7 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const markdown_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "markdown")) blk: {
+    const markdown_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugin_list.linksFizzys(app_plugins, "markdown")) blk: {
         break :blk markdown_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,
@@ -360,7 +361,7 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const image_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugins.linksFizzys(app_plugins, "image")) blk: {
+    const image_dylib: ?*std.Build.Step.Compile = if (dynamic_plugins and resolved_target.result.cpu.arch != .wasm32 and plugin_list.linksFizzys(app_plugins, "image")) blk: {
         break :blk image_plugin.addDylib(b, resolved_target, optimize, .{
             .dvui = dvui_proxy_mod,
             .core = core_proxy_module,

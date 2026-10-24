@@ -876,6 +876,8 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         .{ "fizzy-issues-url-tests", "build/issues_url.zig" },
         // The default bundle id an app built on fizzy gets. std-only, like issues_url.zig.
         .{ "fizzy-bundle-id-tests", "build/bundle_id.zig" },
+        // The rules of an app's plugin list (an empty one links nothing). std-only, like those.
+        .{ "fizzy-plugin-list-tests", "build/plugin_list.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],
