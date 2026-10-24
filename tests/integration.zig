@@ -10176,6 +10176,24 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try std.testing.expect(beside);
     }
 
+    // A pane opened to the side follows its room's shape (`core.placement`): on the right of a pane
+    // wider than tall, below one taller. The window cannot be resized under a whole editor
+    // headlessly (the testing backend crashes), so the tall room is the pane's own rect, set.
+    {
+        const wb = &editor.workbench;
+        const here = wb.open_workspace_grouping;
+        const ws = wb.workspaces.getPtr(here) orelse return error.TestUnexpectedResult;
+        const drawn = ws.pane_rect_physical orelse return error.TestUnexpectedResult;
+        defer ws.pane_rect_physical = drawn;
+        const s = dvui.windowNaturalScale();
+        ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 1200 * s, .h = 800 * s };
+        try std.testing.expectEqual(fizzy.core.widgets.DockLayout.Side.right, wb.sideBeside(here));
+        ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 700 * s, .h = 1400 * s };
+        try std.testing.expectEqual(fizzy.core.widgets.DockLayout.Side.bottom, wb.sideBeside(here));
+        ws.pane_rect_physical = .{ .x = 0, .y = 0, .w = 1000 * s, .h = 1000 * s };
+        try std.testing.expectEqual(fizzy.core.widgets.DockLayout.Side.right, wb.sideBeside(here));
+    }
+
     // A document's history as a line (`Plugin.historyLine`): each step keeps its id through
     // undo and redo, and going to one (`historyGoTo`) is so many undos or redos.
     {

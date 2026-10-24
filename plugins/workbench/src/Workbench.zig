@@ -104,6 +104,9 @@ loading: std.array_hash_map.String(Loading) = .empty,
 /// it is called in the app's layout is the app's business.
 pub const Places = struct {
     ctx: *anyopaque,
+    /// Give `grouping`'s pane a place beside the one holding `anchor`'s, on the side the room's
+    /// shape asks (`layout.placement`): the pane is the person's to arrange afterwards.
+    beside_fitting: *const fn (ctx: *anyopaque, grouping: u64, anchor: u64) bool,
     /// Give `grouping`'s pane a place on `side` of the place holding `anchor`'s. False when there
     /// is no room, or `anchor`'s pane is in no place yet.
     beside: *const fn (ctx: *anyopaque, grouping: u64, anchor: u64, side: Panes.Side) bool,
@@ -186,7 +189,7 @@ pub fn paneLeaf(self: *Workbench, grouping: u64) ?Panes.NodeIndex {
 
 /// Give `grouping` a leaf if it has none: the root when the tree is empty, else a split off the
 /// current pane's right edge (or off the last pane, when the current one is gone). Where the app
-/// arranges the panes, a place beside the current one's.
+/// arranges the panes, a place beside the current one's, below it when the room is taller than wide.
 fn seatPane(self: *Workbench, grouping: u64) !void {
     if (self.places) |p| {
         if (p.placed(p.ctx, grouping)) return;
@@ -196,7 +199,7 @@ fn seatPane(self: *Workbench, grouping: u64) !void {
             if (g != grouping) break g;
         } else return;
         // No room yet (the layout has not drawn): the app places it once there is.
-        _ = p.beside(p.ctx, grouping, anchor, .right);
+        _ = p.beside_fitting(p.ctx, grouping, anchor);
         return;
     }
     if (self.paneLeaf(grouping) != null) return;
@@ -213,7 +216,21 @@ fn seatPane(self: *Workbench, grouping: u64) !void {
         const last = self.panes.lastLeaf(self.panes.root);
         break :blk Workspace.groupingOfName(self.panes.nodes.items[last].leaf.tabs.items[0]) orelse self.open_workspace_grouping;
     };
-    try self.paneBeside(grouping, anchor, .right);
+    try self.paneBeside(grouping, anchor, self.sideBeside(anchor));
+}
+
+/// The side a pane opened beside `anchor`'s goes on: right of a room wider than tall, below one
+/// taller (`core.placement`). A pane is a place of its own, so where the room is too small to
+/// split the split still follows its shape.
+// TODO(seam): a room too small to split gives the view a card in the anchor's group once
+// mobile cards exist (plans#60).
+pub fn sideBeside(self: *Workbench, anchor: u64) Panes.Side {
+    const pr = (self.workspaces.get(anchor) orelse return .right).pane_rect_physical orelse return .right;
+    const s = dvui.windowNaturalScale();
+    return switch (core.placement.splitAxis(.{ .w = pr.w / s, .h = pr.h / s })) {
+        .side_by_side => .right,
+        .stacked => .bottom,
+    };
 }
 
 /// Open a new pane for `grouping` on `side` of `anchor`'s pane — a drop on a pane's edge. The
