@@ -184,6 +184,27 @@ pub fn menusDismissed() bool {
     return dvui.dataGet(null, key_id, "_menus_dismissed", bool) orelse false;
 }
 
+/// The window a tooltip raised from inside subwindow `from` is drawn in, natural, when that is an
+/// OS window of its own — a menu's or a dialog's, where those are (`nativeMenus`, `nativeDialogs`)
+/// — found through the subwindows it stays above. Such a window is exactly the menu's or dialog's
+/// size, and what is drawn in it is cut at its edge, so a tooltip there is kept inside it rather
+/// than on the display. Null: it is drawn in the window it was raised in, on `screenFor`.
+pub fn nativeWindowOf(from: dvui.Id) ?dvui.Rect.Natural {
+    const cw = dvui.currentWindow();
+    var at = from;
+    var depth: u8 = 0;
+    while (depth < 8) : (depth += 1) {
+        const sw = cw.subwindows.get(at) orelse return null;
+        if ((nativeMenus() and isMenu(at)) or dialog(at) != null) {
+            const m = dvui.windowNaturalScale();
+            const r = sw.rect_pixels;
+            return .{ .x = r.x / m, .y = r.y / m, .w = r.w / m, .h = r.h / m };
+        }
+        at = sw.stay_above_parent_window orelse return null;
+    }
+    return null;
+}
+
 /// A menu, in a subwindow of its own this frame: where menus are windows of their own
 /// (`publishMenus`), the app shows each in one (`Popout`). Each frame it is drawn.
 pub fn markMenu(id: dvui.Id) void {
