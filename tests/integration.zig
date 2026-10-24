@@ -12393,21 +12393,16 @@ test "mobile sheets: capped in width in portrait, side sheets in landscape" {
     }
 }
 
-/// A mobile-shaped window of `size` with the test's surfaces registered, torn down after `body`.
-fn withMobileWindow(size: SheetSize, comptime body: fn (*shim.Ctx) anyerror!void) !void {
-    var ctx = try shim.initSized(std.testing.allocator, .{ .w = size.w, .h = size.h });
-    defer ctx.deinit(std.testing.allocator);
+/// Frees what a mobile-shaped test window leaves behind; deferred right after `shim.initSized`.
+fn mobileTeardown(ctx: *shim.Ctx) void {
     const editor = ctx.editor;
-    try mobileCase(&ctx);
-    defer fizzy.core.platform.cached_form_factor = .desktop;
-    defer MobileFrame.editor = null;
-    defer editor.app.layout.regions.deinit(editor.app.gpa);
-    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
-    defer editor.app.layout.deinitExtents(editor.app.gpa);
-    defer editor.app.layout.deinitQualified(editor.app.gpa);
-    defer editor.app.layout.deinitAssignments(editor.app.gpa);
-    try dvui.testing.settle(MobileFrame.frame);
-    try body(&ctx);
+    fizzy.core.platform.cached_form_factor = .desktop;
+    MobileFrame.editor = null;
+    editor.app.layout.regions.deinit(editor.app.gpa);
+    editor.app.layout.regions_building.deinit(editor.app.gpa);
+    editor.app.layout.deinitExtents(editor.app.gpa);
+    editor.app.layout.deinitQualified(editor.app.gpa);
+    editor.app.layout.deinitAssignments(editor.app.gpa);
 }
 
 /// Turns the window to `w` x `h` points, keeping the pixel ratio it started with.
@@ -12420,7 +12415,12 @@ fn resizeWindow(ctx: *shim.Ctx, w: f32, h: f32) !void {
     try dvui.testing.settle(MobileFrame.frame);
 }
 
-fn dragExtentCaseBody(ctx: *shim.Ctx) !void {
+test "mobile sheets: a dragged or kept side sheet never shows wider than the cap" {
+    var ctx = try shim.initSized(std.testing.allocator, .{ .w = 1366, .h = 1024 });
+    defer ctx.deinit(std.testing.allocator);
+    defer mobileTeardown(&ctx);
+    try mobileCase(&ctx);
+    try dvui.testing.settle(MobileFrame.frame);
     const editor = ctx.editor;
     const sheet = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return error.TestUnexpectedResult;
     sheet.open();
@@ -12435,15 +12435,16 @@ fn dragExtentCaseBody(ctx: *shim.Ctx) !void {
     try std.testing.expect(dvui.dataGet(null, sheet.id, "_size", f32).? <= 560);
 
     // A smaller window in the same orientation lowers the cap: half of 900 is 450.
-    try resizeWindow(ctx, 900, 700);
+    try resizeWindow(&ctx, 900, 700);
     try std.testing.expect(regionRect(editor, "Explorer").?.w <= 450 + 0.5);
 }
 
-test "mobile sheets: a dragged or kept side sheet never shows wider than the cap" {
-    try withMobileWindow(.{ .name = "1366x1024", .w = 1366, .h = 1024 }, dragExtentCaseBody);
-}
-
-fn rotationCaseBody(ctx: *shim.Ctx) !void {
+test "mobile sheets: turning the window with a sheet open shuts it, in both directions" {
+    var ctx = try shim.initSized(std.testing.allocator, .{ .w = 768, .h = 1024 });
+    defer ctx.deinit(std.testing.allocator);
+    defer mobileTeardown(&ctx);
+    try mobileCase(&ctx);
+    try dvui.testing.settle(MobileFrame.frame);
     const editor = ctx.editor;
     const kw = fizzy.sdk.keywords.ide;
     (editor.regionFor(kw.sidebar) orelse return error.TestUnexpectedResult).open();
@@ -12453,7 +12454,7 @@ fn rotationCaseBody(ctx: *shim.Ctx) !void {
     try std.testing.expect(regionRect(editor, "Explorer").?.w <= 560 + 16 + 0.5);
 
     // Turned on its side: what was open shuts, rather than a height being read as a width.
-    try resizeWindow(ctx, 1024, 768);
+    try resizeWindow(&ctx, 1024, 768);
     try std.testing.expect(placeShut(editor, "Explorer"));
     try std.testing.expect(placeShut(editor, "Panel"));
 
@@ -12465,13 +12466,9 @@ fn rotationCaseBody(ctx: *shim.Ctx) !void {
     try std.testing.expect(side.h > 768 * 0.6);
 
     // And back upright: shut again, and the next one rises from the foot.
-    try resizeWindow(ctx, 768, 1024);
+    try resizeWindow(&ctx, 768, 1024);
     try std.testing.expect(placeShut(editor, "Explorer"));
     (editor.regionFor(kw.panel) orelse return error.TestUnexpectedResult).open();
     try dvui.testing.settle(MobileFrame.frame);
     try std.testing.expectApproxEqAbs(1024 * 0.6 + 16, regionRect(editor, "Panel").?.h, 1);
-}
-
-test "mobile sheets: turning the window with a sheet open shuts it, in both directions" {
-    try withMobileWindow(.{ .name = "768x1024", .w = 768, .h = 1024 }, rotationCaseBody);
 }
