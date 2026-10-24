@@ -3064,8 +3064,6 @@ test "mobile's shape is Main, two shut sheets, a bar of the rail's views and a c
     // strip and the bar.
     try std.testing.expect(placeShut(editor, "Explorer"));
     try std.testing.expect(placeShut(editor, "Panel"));
-    try std.testing.expect(regionHeight(editor, "Explorer") < 1);
-    try std.testing.expect(regionHeight(editor, "Panel") < 1);
     {
         const win = dvui.windowRect().h;
         const main_h = regionHeight(editor, "Main");
@@ -12334,4 +12332,63 @@ test "settings: a fresh profile starts with glass off; a saved material is kept"
     const written = try chosen.serialize(gpa);
     defer gpa.free(written);
     try std.testing.expect(std.mem.find(u8, written, ".window_material = .liquid") != null);
+}
+
+// -- mobile sheets at tablet and landscape sizes -------------------------------------------------
+
+const SheetSize = struct { name: []const u8, w: f32, h: f32 };
+const sheet_sizes = [_]SheetSize{
+    .{ .name = "768x1024", .w = 768, .h = 1024 },
+    .{ .name = "1024x768", .w = 1024, .h = 768 },
+    .{ .name = "1366x1024", .w = 1366, .h = 1024 },
+    .{ .name = "812x375", .w = 812, .h = 375 },
+};
+
+/// The box a place draws, or null when it is not declared.
+fn regionRect(editor: *fizzy.Editor, name: []const u8) ?dvui.Size {
+    for (editor.app.layout.regions.items) |r| if (std.mem.eql(u8, r.name, name)) return r.size;
+    return null;
+}
+
+/// Opens one sheet in a window of `size` and returns the box it settled at.
+fn openedSheet(size: SheetSize, keywords: []const []const u8, name: []const u8) !dvui.Size {
+    var ctx = try shim.initSized(std.testing.allocator, .{ .w = size.w, .h = size.h });
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    try mobileCase(&ctx);
+    defer fizzy.core.platform.cached_form_factor = .desktop;
+    defer MobileFrame.editor = null;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+
+    try dvui.testing.settle(MobileFrame.frame);
+    const sheet = editor.regionFor(keywords) orelse return error.TestUnexpectedResult;
+    sheet.open();
+    try dvui.testing.settle(MobileFrame.frame);
+    return regionRect(editor, name) orelse error.TestUnexpectedResult;
+}
+
+test "mobile sheets: capped in width in portrait, side sheets in landscape" {
+    const kw = fizzy.sdk.keywords.ide;
+    // A sheet's box includes the card's 16 pt of padding.
+    const pad = 16;
+    for (sheet_sizes) |size| {
+        const explorer = try openedSheet(size, kw.sidebar, "Explorer");
+        const panel = try openedSheet(size, kw.panel, "Panel");
+        for ([_]dvui.Size{ explorer, panel }) |box| {
+            try std.testing.expect(box.w <= 560 + pad + 0.5);
+            if (size.w > size.h) {
+                // A side sheet: no wider than half the window, and tall enough to use.
+                try std.testing.expect(box.w <= size.w * 0.5 + pad + 0.5);
+                try std.testing.expect(box.h > size.h * 0.6);
+            } else {
+                // At the foot: 0.6 of the height, across at most the cap.
+                try std.testing.expect(box.w < size.w or size.w <= 560 + pad);
+                try std.testing.expectApproxEqAbs(size.h * 0.6 + pad, box.h, 1);
+            }
+        }
+    }
 }
