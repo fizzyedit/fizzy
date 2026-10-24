@@ -132,6 +132,10 @@ turns.
   have taken its load past 17 and crashed it; don't poll `uptime` and start anyway. Every gate
   below runs as `scripts/zb build …` (`scripts/zb build test-integration`). Not for `zig build run`
   of the editor, which would hold the slot until it quits; `FIZZY_BUILD_SKIP=1` runs at once.
+- **Edit with `scripts/watch`.** It runs `zig build -fincremental --watch` (the app, or one
+  plugin: `scripts/watch plugins/text`), so a saved `.zig` file rebuilds in well under a second.
+  Restart it after changing a `build.zig`, which costs a slow rebuild; `docs/PERF.md` has the
+  numbers and `scripts/perf-incremental` measures them. It is not a gate.
 - **Gates:** `scripts/check-fmt.sh` (`--fix` formats), `zig build`, `zig build test`,
   `zig build test-integration`, `zig build check-web`, `zig build test-sdk-version`,
   `zig build lint` (or `zig run scripts/lint.zig`), `zig build check-tests-reached`. CI runs all of them, `test-integration` on
