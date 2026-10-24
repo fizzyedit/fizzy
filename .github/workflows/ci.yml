@@ -128,15 +128,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse and check Windows PowerShell compatibility
+      - name: Parse, check Windows PowerShell compatibility, run doctor tests
         shell: powershell
         run: |
           if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Expected Windows PowerShell 5.1' }
+          # Also runs scripts/test-windows-doctor.ps1: fixtures and the hosted VM's read-only probes.
           & ./scripts/test-runner-setup.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Runner script checks failed' }
-      - name: Doctor fixtures and hosted VM read-only probes
-        shell: powershell
-        run: ./scripts/test-windows-doctor.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Runner and doctor script checks failed' }
 
   test:
     name: Tests (${{ matrix.name }})

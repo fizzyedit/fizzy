@@ -12,7 +12,7 @@ function ConvertFrom-JsonRows($lines) {
 }
 $preview = & $engine -NoProfile -ExecutionPolicy Bypass -File $doctor -DryRun
 Assert ($LASTEXITCODE -eq 0) 'DryRun must have no reds'
-Assert (@($preview).Count -ge 25) 'DryRun omitted checks'
+Assert (@($preview).Count -ge 20) 'DryRun omitted checks'
 foreach ($line in $preview) { Assert ($line -match '^AMBER [^:]+: .+$') "Invalid preview line: $line" }
 $previewJson = ConvertFrom-JsonRows (& $engine -NoProfile -ExecutionPolicy Bypass -File $doctor -DryRun -Json)
 Assert ($previewJson.Count -eq @($preview).Count) 'JSON and text checks differ'
@@ -34,7 +34,7 @@ try {
 '@
     Set-Content -LiteralPath "$tmp/config.psd1" -Value $fixture
     $harness = @'
-param($doctor, $config, $mode)
+param($doctor, $config, $mode, $local = 'missing-local.psd1')
 $env:GH_TOKEN = ''; $env:GITHUB_TOKEN = ''
 function Get-CimInstance {
     param($ClassName, $Filter)
@@ -56,8 +56,8 @@ function Get-HotFix { [pscustomobject]@{ HotFixID = 'fixture'; InstalledOn = (Ge
 function Get-WinEvent { param($FilterHashtable) throw 'fixture denied' }
 function Get-ItemProperty { param($LiteralPath) throw 'fixture denied' }
 function Get-ItemPropertyValue { param($LiteralPath, $Name) return 1 }
-if ($mode -eq 'json') { & $doctor -ConfigPath $config -Json }
-else { & $doctor -ConfigPath $config }
+if ($mode -eq 'json') { & $doctor -ConfigPath $config -LocalConfigPath $local -Json }
+else { & $doctor -ConfigPath $config -LocalConfigPath $local }
 exit $LASTEXITCODE
 '@
     Set-Content -LiteralPath "$tmp/harness.ps1" -Value $harness
@@ -74,6 +74,11 @@ exit $LASTEXITCODE
         $row = @($rows | Where-Object { $_.item -eq $pair[0] })
         Assert ($row.Count -eq 1 -and $row[0].status -eq $pair[1]) "Wrong fixture result: $($pair[0])"
     }
+    # A local file overrides the repo policy key by key.
+    Set-Content -LiteralPath "$tmp/local.psd1" -Value "@{ Tasks = @('other-task') }"
+    $rows = ConvertFrom-JsonRows (& $engine -NoProfile -ExecutionPolicy Bypass -File "$tmp/harness.ps1" $doctor "$tmp/config.psd1" json "$tmp/local.psd1")
+    Assert (@($rows | Where-Object { $_.item -eq 'task other-task' }).Count -eq 1) 'Local override ignored'
+    Assert (@($rows | Where-Object { $_.item -eq 'task test-task' }).Count -eq 0) 'Local override did not replace the key'
     $text = & $engine -NoProfile -ExecutionPolicy Bypass -File "$tmp/harness.ps1" $doctor "$tmp/config.psd1" text
     Assert ($LASTEXITCODE -eq $reds) 'Text exit differs'
     Assert (@($text).Count -eq $rows.Count) 'Text and JSON counts differ'
@@ -88,7 +93,7 @@ if ($env:OS -eq 'Windows_NT') {
     Write-Output $raw
     $rows = ConvertFrom-JsonRows $raw
     Assert ($code -eq @($rows | Where-Object { $_.status -eq 'RED' }).Count) 'Hosted VM exit count differs'
-    Assert ($rows.Count -ge 25) 'Hosted VM omitted checks'
+    Assert ($rows.Count -ge 20) 'Hosted VM omitted checks'
     Write-Output "ok: hosted VM read-only probes; exit=$code (worker policy reds are expected here)"
 }
 # Successful contract checks must not inherit the expected unhealthy probe exit status.

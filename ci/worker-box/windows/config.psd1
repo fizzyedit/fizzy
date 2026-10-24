@@ -1,16 +1,19 @@
-# Desired worker policy; reading this file never converges the machine.
+# Desired worker policy; reading this file never converges the machine. Machine-specific values
+# (runner name, extra users and tasks) belong in a local file the box reads, not here: see
+# doctor.ps1 -LocalConfigPath.
 @{
     RunnerRoot = 'C:\fizzy\actions-runner'
     RunnerRepo = 'fizzyedit/work'
-    RunnerName = 'FOXNNE-DESKTOP'
+    # Empty means this machine's name.
+    RunnerName = ''
     BuildSlots = 2
     Services = @(
         @{ Name = 'Tailscale'; Account = 'LocalSystem' }
         @{ Name = 'sshd'; Account = 'LocalSystem' }
         @{ Name = 'actions.runner.fizzyedit-work.*'; Account = '.\fizzy-worker' }
     )
-    Tasks = @('FizzyRunnerClean', 'FizzyHeartbeat', 'FizzyUpdate')
-    AllowedUsers = @('foxnn', 'fizzy-worker')
+    Tasks = @('FizzyRunnerClean')
+    AllowedUsers = @('fizzy-worker')
     MinDiskFreeGiB = 100
     MinAvailableRamGiB = 4
     MaxPatchDays = 30

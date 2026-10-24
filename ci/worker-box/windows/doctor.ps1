@@ -1,14 +1,22 @@
 # Read-only Windows worker diagnostics. Unknown or inaccessible evidence is AMBER.
 # -DryRun lists checks without probing; normal execution never changes system configuration.
-# Exit status is the number of RED results. JSON is an array of status/item/detail objects.
+# A local .psd1 (-LocalConfigPath, else FIZZY_DOCTOR_LOCAL, else C:\fizzy\doctor.local.psd1) overrides
+# config.psd1 key by key, so one box's names stay off the repo. Exit status is the number of RED results. JSON is an array of status/item/detail objects.
 #requires -Version 5.1
 [CmdletBinding()]
-param([switch]$Json, [switch]$DryRun, [string]$ConfigPath)
+param([switch]$Json, [switch]$DryRun, [string]$ConfigPath, [string]$LocalConfigPath)
 Set-StrictMode -Version 2
 # $PSScriptRoot is empty inside a param() default in Windows PowerShell 5.1, so resolve it here.
 if (-not $ConfigPath) { $ConfigPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'config.psd1' }
 $ErrorActionPreference = 'Stop'
 $config = Import-PowerShellDataFile -LiteralPath $ConfigPath
+if (-not $LocalConfigPath) { $LocalConfigPath = $env:FIZZY_DOCTOR_LOCAL }
+if (-not $LocalConfigPath) { $LocalConfigPath = 'C:\fizzy\doctor.local.psd1' }
+if (Test-Path -LiteralPath $LocalConfigPath -PathType Leaf) {
+    $local = Import-PowerShellDataFile -LiteralPath $LocalConfigPath
+    foreach ($key in $local.Keys) { $config[$key] = $local[$key] }
+}
+if (-not $config.RunnerName) { $config.RunnerName = $env:COMPUTERNAME }
 $results = New-Object 'Collections.Generic.List[object]'
 function Result($status, $item, $detail) {
     $results.Add([pscustomobject]@{ status = $status; item = $item; detail = ("$detail" -replace '[\r\n]+', ' ') })
@@ -49,9 +57,6 @@ Check 'runner Online' {
     $status = 'RED'
     if ($runners.Count -eq 1 -and $runners[0].status -eq 'online') { $status = 'GREEN' }
     Result $status 'runner Online' "repo=$($config.RunnerRepo); name=$($config.RunnerName); matching online=$(@($runners | Where-Object { $_.status -eq 'online' }).Count)"
-}
-Check 'power plan' {
-    Result GREEN 'power plan' (Native "$env:SystemRoot\System32\powercfg.exe" @('/getactivescheme'))
 }
 # GUIDs and hex indices avoid localized powercfg setting names.
 foreach ($setting in @(
@@ -136,7 +141,9 @@ Check 'zig-cache' {
     $stack = New-Object 'Collections.Generic.Stack[string]'
     $stack.Push($config.ZigCache)
     $bytes = [long]0
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     while ($stack.Count) {
+        if ($clock.Elapsed.TotalSeconds -gt 60) { Result AMBER 'zig-cache' 'sizing stopped after 60 s; cache too large to measure here'; return }
         $path = $stack.Pop()
         $entry = Get-Item -LiteralPath $path -Force
         if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparse point prevents complete sizing' }
