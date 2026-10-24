@@ -6,17 +6,28 @@
 # people's code that is not ours to reformat. The list comes from jj where there is one: in a
 # colocated checkout git's index trails jj's working copy, and a jj workspace has none of its own.
 set -euo pipefail
+TIMEOUT=
+if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 120"; fi
 cd "$(dirname "$0")/.."
 
-if command -v jj >/dev/null 2>&1 && jj root >/dev/null 2>&1; then
-  files=$(jj file list 'glob:**/*.zig' 'glob:**/*.zon')
-else
-  files=$(git ls-files '*.zig' '*.zon')
+echo "check-fmt: listing tracked files" >&2
+# jj snapshots the working copy before it lists, which can take minutes beside large untracked
+# trees (zig-pkg, .zig-cache) on Windows, so bound it where `timeout` exists and fall back to git.
+files=
+if command -v jj >/dev/null 2>&1 && ${TIMEOUT:-} jj root >/dev/null 2>&1; then
+  files=$(${TIMEOUT:-} jj file list 'glob:**/*.zig' 'glob:**/*.zon') || {
+    echo "check-fmt: jj did not answer in time; using git ls-files" >&2
+    files=
+  }
 fi
+[ -n "$files" ] || files=$(git ls-files '*.zig' '*.zon')
 if [ -z "$files" ]; then
   echo "check-fmt: no tracked .zig or .zon files found" >&2
   exit 1
 fi
+
+count=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
+echo "check-fmt: checking $count files" >&2
 
 if [ "${1:-}" = --fix ]; then
   printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 zig fmt
