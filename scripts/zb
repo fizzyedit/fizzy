@@ -99,15 +99,18 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-waited=0
+start=$(date +%s)
+next_tell=0
 while :; do
     load=$(load1)
     if awk "BEGIN{exit !($load <= $max_load)}" && try_slot; then break; fi
+    waited=$(($(date +%s) - start))
     if [ "$waited" -ge "$wait_max" ]; then
         echo "zb: no build slot after ${wait_max}s (slots in $dir; pids$(busy_pids)); remove a stale slot.* there, or set FIZZY_BUILD_SKIP=1" >&2
         exit 1
     fi
-    if [ "$waited" -eq 0 ] || [ $((waited % 30)) -lt "$poll" ]; then
+    if [ "$waited" -ge "$next_tell" ]; then
+        next_tell=$((waited + 30))
         if [ -n "$(busy_pids)" ] && ! awk "BEGIN{exit !($load > $max_load)}"; then
             echo "zb: waiting for a build slot ($slots busy: pids$(busy_pids), ${waited}s)" >&2
         else
@@ -115,7 +118,6 @@ while :; do
         fi
     fi
     sleep "$poll"
-    waited=$((waited + poll))
 done
 
 # Foreground, so zig keeps the terminal's stdin and signals; Ctrl-C reaches it directly, and the
