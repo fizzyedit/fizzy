@@ -1,7 +1,64 @@
+# Performance data: one store
+
+Every performance number fizzy keeps goes in **one store, in one format**: the superfans' perf
+findings (`plans/` #58), `scripts/perf-compile`, and the project manager's CI history all append to
+it, and the dashboard and the recaps read it. Nothing keeps a private file of its own.
+
+## Where it lives
+
+**Not in this repo.** Measurements are data that only grows, and the library repo stays lean. The
+store is the repo `fizzyedit/perf-data` (private, like `fizzyedit/plans`), holding only:
+
+```
+YYYY-MM.jsonl     one file per month, append-only
+```
+
+Monthly files keep each one small (a full `perf-compile` run is 17 lines), bound a clone's cost to
+what is read, and make a write a plain append. A line is never edited or deleted; a wrong run is
+answered by a later line, or by dropping the file's tail in a PR to that repo.
+
+Until that repo exists, the PM machine's `perf/history.jsonl` is the only copy and is imported
+as-is into the store (its lines already fit the format below).
+
+## Format
+
+JSON Lines, UTF-8, one object per line, keys in this order:
+
+```json
+{"date":"2026-10-24T10:00:00Z","commit":"79dec396","machine":"host/16cpu/27GiB","os":"Linux 6.9.3","scenario":"touch_core","metric":"rebuild_time","value":8.1,"unit":"s"}
+```
+
+| key | meaning |
+|---|---|
+| `date` | UTC, ISO 8601, to the second: when the run started. Names the file (`YYYY-MM.jsonl`) |
+| `commit` | short hash of the tree measured |
+| `machine` | `host/<N>cpu/<M>GiB`: numbers are only comparable on one machine |
+| `os` | `uname -sr` (or the OS name and version off Linux) |
+| `scenario` | what was run (a table row below, or a fan's or CI job's own stable name) |
+| `metric` | what was read from it (`wall_time`, `rebuild_time`, `compiler_peak_rss`, ...) |
+| `value` | a JSON number, median of the run's samples where there are several |
+| `unit` | `s`, `MiB`, `ms`, `B`, `count` |
+
+Optional extra keys (`zig`, `runs`, `source`) are allowed and readers ignore keys they do not know.
+`perf-compile` writes `zig`. Names are lowercase `snake_case`, and a scenario keeps its name for
+good so a series stays one series.
+
+## Who appends, who reads
+
+- **Writers** append whole lines to the month's file. `scripts/perf-compile` writes to a local
+  store directory (`--store DIR`, else `$FIZZY_PERF_STORE`, else
+  `~/.local/share/fizzy/perf`; `--no-store` writes none) and still prints the same lines on stdout.
+  That local directory is a checkout-shaped working copy: the PM's job and CI commit its new lines
+  to `fizzyedit/perf-data` (a rebase-and-push of an append never conflicts on content). A fan
+  files its findings as issues as before, and records the numbers behind them as lines here.
+- **Readers** take the store as read-only text: the dashboard (`plugins/devtools`) and the
+  recaps read `*.jsonl`, group by `machine`, `scenario` and `metric`, and order by `date`.
+  A trend compares like with like only: the same machine and the same scenario.
+
 # Measuring compile time
 
 `scripts/perf-compile` is the repeatable measurement behind the compile-speed numbers we trend.
-It runs headless on Linux (it needs `bc`, GNU `/usr/bin/time` and `/proc`, and says so up front) and prints one JSON line per metric:
+It runs headless on Linux (it needs `bc`, GNU `/usr/bin/time` and `/proc`, and says so up front) and prints one line per metric, in the store's format above (and appends it to the local store):
 
 ```json
 {"date":"…","commit":"79dec396","machine":"host/16cpu/27GiB","zig":"0.17.0","os":"Linux …","scenario":"touch_core","metric":"rebuild_time","value":8.1,"unit":"s"}
