@@ -88,7 +88,7 @@ fn button(src: std.lang.SourceLocation, label_text: []const u8, style: dvui.Them
     return b.clicked();
 }
 
-pub fn dialog(_: dvui.Id) anyerror!bool {
+pub fn dialog(_: dvui.Id) fizzy.core.dialogs.Error!bool {
     const editor = fizzy.editor();
     const q = editor.save_question orelse return false;
 

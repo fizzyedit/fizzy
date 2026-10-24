@@ -160,7 +160,7 @@ fn sheets(editor: *fizzy.Editor, f: *Layout) !bool {
     return tapped;
 }
 
-fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) Layout.Region.Error!dvui.App.Result {
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     return editor.explorer.draw(editor, f, keywords);
 }
