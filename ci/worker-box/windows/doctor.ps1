@@ -225,7 +225,7 @@ function Test-WorkerRead($path, $workerSid) {
         try { $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }
         if ($broad -notcontains $sid) { continue }
         if (-not ($rule.FileSystemRights -band $readRights)) { continue }
-        if ($rule.AccessControlType -eq 'Deny' -and $sid -eq $workerSid.Value) { return $false }
+        if ($rule.AccessControlType -eq 'Deny') { return $false }
         if ($rule.AccessControlType -eq 'Allow') { return $true }
     }
     return $false
@@ -274,9 +274,9 @@ if ($config.ContainsKey('Worker')) {
             $workerRuns = [bool]$canRun[$script:workerSid.Value] -or [bool]$canRun['S-1-5-32-545'] -or [bool]$canRun['S-1-5-11'] -or [bool]$canRun['S-1-1-0']
             $info = $folder.GetTask($t.Name).Definition.Principal
             if ($info.UserId -notin 'SYSTEM', 'S-1-5-18', 'NT AUTHORITY\SYSTEM') { $runsAsSystem = $false }
-            $ok = $runsAsSystem -and -not $canWrite -and ($workerRuns -eq $t.Worker)
+            $ok = $runsAsSystem -and -not $canWrite -and ($workerRuns -eq $t.Worker) -and ([bool]$canRun['maintainer'] -eq $t.Maintainer)
             $status = 'RED'; if ($ok) { $status = 'GREEN' }
-            Result $status $item "runs as SYSTEM=$runsAsSystem; worker can trigger=$workerRuns (want $($t.Worker)); worker can write=$canWrite"
+            Result $status $item "runs as SYSTEM=$runsAsSystem; worker can trigger=$workerRuns (want $($t.Worker)); worker can write=$canWrite; maintainer can trigger=$([bool]$canRun['maintainer']) (want $($t.Maintainer))"
         }
     }
     Check 'task folder not writable by worker' {

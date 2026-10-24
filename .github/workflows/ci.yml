@@ -128,7 +128,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse and check Windows PowerShell compatibility; setup.ps1 and runner-setup.ps1 dry runs
+      - name: Parse and check Windows PowerShell compatibility; setup.ps1, runner-setup.ps1 and runner-clean.ps1 dry runs
         shell: powershell
         run: |
           if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Expected Windows PowerShell 5.1' }

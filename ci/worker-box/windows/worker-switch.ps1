@@ -39,8 +39,9 @@ function Get-Jobs { return @(Get-Process -Name Runner.Worker -ErrorAction Silent
 function Set-Cap {
     $count = [Environment]::ProcessorCount
     $mask = $null
-    if ($CoreCap -gt 0 -and $CoreCap -lt $count -and $count -le 64) {
-        $mask = [int64](([math]::Pow(2, $CoreCap) - 1) * [math]::Pow(2, $count - $CoreCap))
+    # Bit 63 would overflow Int64, so a 64-core machine is left uncapped.
+    if ($CoreCap -gt 0 -and $CoreCap -lt $count -and $count -le 63) {
+        $mask = (([int64]1 -shl $CoreCap) - 1) -shl ($count - $CoreCap)
     }
     foreach ($p in @(Get-Process -Name Runner.Listener, Runner.Worker -ErrorAction SilentlyContinue)) {
         try {
@@ -76,9 +77,9 @@ switch ($Mode) {
         # accepted in that window is cancelled by the stop, which GitHub shows as a cancelled run.
         $deadline = (Get-Date).AddHours($DrainHours)
         $quiet = 0
-        Write-Log "draining; $((Get-Jobs).Count) job(s) running"
+        Write-Log "draining; $(@(Get-Jobs).Count) job(s) running"
         while ($quiet -lt 3 -and (Get-Date) -lt $deadline) {
-            if ((Get-Jobs).Count) { $quiet = 0 } else { $quiet++ }
+            if (@(Get-Jobs).Count) { $quiet = 0 } else { $quiet++ }
             if ($quiet -lt 3) { Start-Sleep -Seconds 2 }
         }
         if ($quiet -lt 3) { Write-Log "job still running after $DrainHours h; leaving the service up (use ForceOff)"; exit 1 }
@@ -101,10 +102,10 @@ switch ($Mode) {
         Set-Cap
         $name = Get-RunnerService
         $status = (Get-Service -Name $name).Status
-        Set-Content -LiteralPath (Join-Path $state 'heartbeat.txt') -Value "$((Get-Date).ToString('o')) service=$status jobs=$((Get-Jobs).Count)"
+        Set-Content -LiteralPath (Join-Path $state 'heartbeat.txt') -Value "$((Get-Date).ToString('o')) service=$status jobs=$(@(Get-Jobs).Count)"
     }
     'Update' {
-        if ((Get-Jobs).Count) { Write-Log 'a job is running; skipping this week'; exit 0 }
+        if (@(Get-Jobs).Count) { Write-Log 'a job is running; skipping this week'; exit 0 }
         $winget = @(Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1)
         if (-not $winget.Count) { Write-Log 'winget not available to SYSTEM; nothing updated'; exit 0 }
         foreach ($id in 'Git.Git', 'GitHub.cli') {

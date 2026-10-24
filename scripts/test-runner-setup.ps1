@@ -1,7 +1,7 @@
 # Checks the pure parts of scripts/runner-setup.ps1 through -DryRun, as test-runner-setup.sh does
-# for the Ubuntu script. Needs pwsh and a POSIX or Windows host; skips cleanly without pwsh.
-$pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
-if (-not $pwsh) { Write-Host 'skip: pwsh not installed'; exit 0 }
+# for the Ubuntu script. The child scripts run under the engine running this one, so CI's Windows
+# PowerShell 5.1 job exercises 5.1 and the Linux job pwsh.
+$engine = (Get-Process -Id $PID).Path
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('runner-test-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $tmp | Out-Null
@@ -20,7 +20,7 @@ $sep = [IO.Path]::PathSeparator
 function Invoke-Child($script) {
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { return (& $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $script -DryRun 2>&1 | Out-String) }
+    try { return (& $engine -NoProfile -ExecutionPolicy Bypass -File $script -DryRun 2>&1 | Out-String) }
     finally { $ErrorActionPreference = $old }
 }
 function Setup($extraEnv) {
@@ -128,6 +128,4 @@ foreach ($want in 'FIZZY_WORKER_ROOT=', 'FizzyWorkerOff', 'Fast Startup off', 'B
 $out = Invoke-Child "$dir/runner-clean.ps1"
 if ($LASTEXITCODE -ne 0) { Fail "runner-clean dry run failed: $out" }
 Remove-Item -Recurse -Force $tmp
-& $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File "$dir/test-windows-doctor.ps1"
-if ($LASTEXITCODE -ne 0) { throw 'Doctor tests failed' }
 Write-Host 'ok'

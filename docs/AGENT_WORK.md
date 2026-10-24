@@ -281,7 +281,7 @@ there is such a job.
 agents' home, normally a drive of its own; `FIZZY_WORKER_ROOT` is the same value for `runner-setup.ps1`
 alone), then converges the rest: Fast Startup and hibernation off, never sleep, `sshd` and Tailscale
 automatic, the runner and its children at BelowNormal (`CoreCap` logical cores at most), `gh` on the
-runner's PATH, a deny for `fizzy-worker` on every other fixed drive, and the SYSTEM tasks below. It
+runner's PATH, a deny for `fizzy-worker` on every other fixed drive (an inheriting ACE on that drive's root, so it changes ACLs outside the worker's root and is hard to undo), and the SYSTEM tasks below. It
 reports (never deletes) accounts outside `AllowedUsers`, and ends by running `doctor.ps1`; any RED
 fails it. Every item has a doctor check, so `doctor.ps1` alone tells you whether the box still matches.
 

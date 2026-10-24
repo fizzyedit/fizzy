@@ -6,4 +6,5 @@ if ! command -v pwsh >/dev/null 2>&1; then
     echo 'skip: pwsh not installed'
     exit 0
 fi
-exec pwsh -NoProfile -ExecutionPolicy Bypass -File ./test-runner-setup.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./test-runner-setup.ps1 || exit 1
+exec pwsh -NoProfile -ExecutionPolicy Bypass -File ./test-windows-doctor.ps1
