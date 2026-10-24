@@ -213,6 +213,9 @@ jobs:
         run: bash scripts/ci-retry.sh zig build check --summary all
       - name: Run tests
         shell: bash
+        # The step the hang is in, bounded on its own: the job's 30 minutes also cover a cold
+        # cache, which a healthy run may spend most of before this step starts.
+        timeout-minutes: 15
         run: bash scripts/ci-retry.sh zig build test --summary all
 
       # Not on Windows: the wasm it compiles is the same from any host, Linux and macOS compile it
