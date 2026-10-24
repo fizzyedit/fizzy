@@ -64,9 +64,10 @@ its next run; if its fingerprint no longer reproduces, close it with one line sa
 
 ## 4. Filing
 
-- Repo `fizzyedit/work` (private). Labels `agent`, `superfan`, `fan:<name>`, one of
+- Repo `fizzyedit/work` (private). Labels `superfan`, `fan:<name>`, one of
   `sev:high` `sev:med` `sev:low`. The labels exist; a fan never creates labels. A missing label
-  is a setup failure (section 1, step 3).
+  is a setup failure (section 1, step 3). A fan never adds `agent`, `os:*`, `kind:*` or
+  `prio:*`: the PM triages each finding against the goals, then labels it for agents.
 - Title `fan:<name>: <what is wrong>`, at most 72 characters.
 - Body: severity; one paragraph on why it matters; **Repro** (the exact command or tape,
   expected against actual); `file:line` at the commit examined (`main@<sha>`); for medium and
@@ -87,7 +88,7 @@ file what is confirmed. Report tokens used in the run record.
 ## 6. Run record
 
 Every run, including zero findings and `unchanged`, ends by adding one comment to the pinned
-issue `fan:<name>: runs` in `fizzyedit/work` (create it the first time: labels `agent`,
+issue `fan:<name>: runs` in `fizzyedit/work` (create it the first time: labels
 `superfan`, `fan:<name>`). One line:
 
 `<UTC date> runner=<name> main@<sha> tokens=<n> filed=<n> duplicates=<n> gate=<pass|fail|unchanged|no runner> <note>`
