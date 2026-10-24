@@ -58,6 +58,7 @@ const Job = struct {
     /// Told when they are written (`Tracks.doneWriting`), when there are any.
     owner: ?*Tracks = null,
     dir: []u8,
+    gpa: std.mem.Allocator,
     generation: u32,
     thread: std.Thread = undefined,
     done: std.atomic.Value(bool) = .init(false),
@@ -173,7 +174,7 @@ fn start(self: *Checkpoint, editor: *Editor) !void {
     // unsaved changes to undo.
     const tracks: []Tracks.KeptFile = if (editor.app.tracks) |*t| t.takeChanged() else &.{};
     const owner: ?*Tracks = if (tracks.len > 0) &editor.app.tracks.? else null;
-    job.* = .{ .kept = kept, .tracks = tracks, .owner = owner, .dir = path, .generation = self.generation };
+    job.* = .{ .kept = kept, .tracks = tracks, .owner = owner, .dir = path, .gpa = gpa, .generation = self.generation };
     job.thread = std.Thread.spawn(.{}, write, .{job}) catch |err| {
         if (owner) |t| t.doneWriting();
         for (tracks) |k| k.deinit(gpa);
@@ -190,7 +191,7 @@ fn write(job: *Job) void {
     defer timed.end();
     // The histories first: a crash between the two leaves them ahead of the documents, which then
     // open without them (`Tracks.pickUp` finds them ending elsewhere), never the reverse.
-    for (job.tracks) |k| _ = Tracks.writeKept(k, "checkpoint");
+    for (job.tracks) |k| _ = Tracks.writeKept(job.gpa, k, "checkpoint");
     if (job.owner) |t| t.doneWriting();
     job.kept.saveGeneration(job.dir, job.generation) catch return;
     job.ok = true;

@@ -492,10 +492,11 @@ fn keep(self: *Tracks, t: *Track) void {
     defer k.deinit(self.gpa);
     // A checkpoint's older copy, still being written, would land over this one.
     while (self.writing.load(.acquire) != 0) std.Thread.yield() catch {};
-    if (writeKept(k, "part")) t.kept_steps = t.steps.items.len;
+    if (writeKept(self.gpa, k, "part")) t.kept_steps = t.steps.items.len;
 }
 
-/// A track as its kept file holds it, to write (`writeKept`): owned.
+/// A track as its kept file holds it, to write (`writeKept`): owned. Its bytes are the version 1
+/// file, unpacked (`track_file.compact`), so taking one costs a copy; `writeKept` packs them.
 pub const KeptFile = struct {
     file: []u8,
     bytes: []u8,
@@ -518,22 +519,27 @@ fn encodeKept(self: *Tracks, t: *const Track) ?KeptFile {
     defer prof.end();
     const file = self.keptFile(self.gpa, path) orelse return null;
     const ends: track_file.End = .{ .fingerprint = fingerprint, .file_hash = if (t.owner.isDirty(t.doc)) null else fileHashOf(self.gpa, path) };
-    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends) catch {
+    const bytes = track_file.write(self.gpa, t, t.owner.id, path, ends, 1) catch {
         self.gpa.free(file);
         return null;
     };
     return .{ .file = file, .bytes = bytes };
 }
 
-/// Write `k` beside its file as `<file>.<part>`, then rename it over: any thread. Each writer names
-/// its own `part`, so two never write into one.
-pub fn writeKept(k: KeptFile, part: []const u8) bool {
+/// Pack `k` and write it beside its file as `<file>.<part>`, then rename it over: any thread, with
+/// `gpa` safe to use there. Each writer names its own `part`, so two never write into one.
+pub fn writeKept(gpa: std.mem.Allocator, k: KeptFile, part: []const u8) bool {
     if (comptime !can_keep) return false;
+    const packed_bytes = track_file.compact(gpa, k.bytes) catch |err| {
+        dvui.log.warn("tracks: could not pack {s}: {t}", .{ k.file, err });
+        return false;
+    };
+    defer gpa.free(packed_bytes);
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const beside = std.mem.print(&buf, "{s}.{s}", .{ k.file, part }) catch return false;
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(dvui.io, std.fs.path.dirname(k.file).?) catch {};
-    cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = k.bytes }) catch |err| {
+    cwd.writeFile(dvui.io, .{ .sub_path = beside, .data = packed_bytes }) catch |err| {
         dvui.log.warn("tracks: could not keep {s}: {t}", .{ k.file, err });
         return false;
     };

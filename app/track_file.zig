@@ -60,14 +60,10 @@ pub const Read = struct {
     }
 };
 
-/// `t` as a file's bytes, for `path`'s document whose owner is `owner`, ending at `end`. `t` must
-/// have its base.
-pub fn write(gpa: std.mem.Allocator, t: *const Track, owner: []const u8, path: []const u8, end: End) ![]u8 {
-    return writeAs(gpa, t, owner, path, end, version);
-}
-
-/// `write`, as the file of `file_version` (a test writes version 1, to read it back).
-fn writeAs(gpa: std.mem.Allocator, t: *const Track, owner: []const u8, path: []const u8, end: End, file_version: u32) ![]u8 {
+/// `t` as the bytes of a file of `file_version`, for `path`'s document whose owner is `owner`,
+/// ending at `end`. `t` must have its base. Version 1 packs nothing: a copy cheap enough to take on
+/// a frame, which `compact` packs elsewhere.
+pub fn write(gpa: std.mem.Allocator, t: *const Track, owner: []const u8, path: []const u8, end: End, file_version: u32) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     errdefer out.deinit();
     const w = &out.writer;
@@ -93,6 +89,25 @@ fn writeAs(gpa: std.mem.Allocator, t: *const Track, owner: []const u8, path: []c
     try w.writeUleb128(t.checkpoints.items.len);
     for (t.checkpoints.items) |c| try writeState(gpa, w, c, file_version >= 2);
     return out.toOwnedSlice();
+}
+
+/// The version 2 file for a version 1 file's `raw` bytes: the packing (`state_pack`) that writing
+/// version 1 left out, for a thread that is not drawing.
+pub fn compact(gpa: std.mem.Allocator, raw: []const u8) ![]u8 {
+    var r = try read(gpa, raw);
+    defer r.deinit(gpa);
+    const t: Track = .{
+        .doc_id = 0,
+        .doc = undefined,
+        .owner = undefined,
+        .format = r.format,
+        .base_top = r.base_top,
+        .base = r.base,
+        .steps = r.steps,
+        .bytes = r.bytes,
+        .checkpoints = r.checkpoints,
+    };
+    return write(gpa, &t, r.owner, r.path, r.end, version);
 }
 
 /// A track from a file's `bytes`, or `error.NotATrack` for anything else (another version, cut
@@ -242,7 +257,7 @@ test "a track written to a file reads back as it was" {
     }
     try t.checkpoints.append(gpa, .{ .at = 200, .step = 2, .bytes = try gpa.dupe(u8, "delta"), .whole = false, .fingerprint = null });
 
-    const bytes = try write(gpa, &t, "text", "/a/b.txt", .{ .fingerprint = 77, .file_hash = 5 });
+    const bytes = try write(gpa, &t, "text", "/a/b.txt", .{ .fingerprint = 77, .file_hash = 5 }, version);
     defer gpa.free(bytes);
     var back = try read(gpa, bytes);
     defer back.deinit(gpa);
@@ -283,8 +298,6 @@ test "a track written to a file reads back as it was" {
     } else |_| {};
 }
 
-/// A track of `n_steps` one-byte steps over a document of `len` bytes, mostly transparent, with a
-/// checkpoint that differs from it by a stroke.
 fn freeSparse(gpa: std.mem.Allocator, t: *Track) void {
     gpa.free(t.base.?.bytes);
     for (t.checkpoints.items) |c| gpa.free(c.bytes);
@@ -293,6 +306,8 @@ fn freeSparse(gpa: std.mem.Allocator, t: *Track) void {
     t.bytes.deinit(gpa);
 }
 
+/// A track of `n_steps` one-byte steps over a document of `len` bytes, mostly transparent, with a
+/// checkpoint that differs from it by a stroke.
 fn sparseTrack(gpa: std.mem.Allocator, len: usize, n_steps: usize) !Track {
     var t: Track = .{ .doc_id = 1, .doc = undefined, .owner = undefined, .format = 1 };
     errdefer freeSparse(gpa, &t);
@@ -314,7 +329,7 @@ test "a base of a mostly transparent document is kept at the size of what is dra
     const gpa = testing.allocator;
     var t = try sparseTrack(gpa, 30 << 20, 100);
     defer freeSparse(gpa, &t);
-    const bytes = try write(gpa, &t, "pixi", "/a/b.pixi", .{ .fingerprint = 1 });
+    const bytes = try write(gpa, &t, "pixi", "/a/b.pixi", .{ .fingerprint = 1 }, version);
     defer gpa.free(bytes);
     const steps_bytes = t.bytes.items.len + t.steps.items.len * 24;
     try testing.expect(bytes.len < 20 * steps_bytes + 100 * 1024);
@@ -329,11 +344,25 @@ test "a version 1 file, its base stored as it was, still reads" {
     const gpa = testing.allocator;
     var t = try sparseTrack(gpa, 1 << 20, 3);
     defer freeSparse(gpa, &t);
-    const old = try writeAs(gpa, &t, "pixi", "/a/b.pixi", .{ .fingerprint = 1 }, 1);
+    const old = try write(gpa, &t, "pixi", "/a/b.pixi", .{ .fingerprint = 1 }, 1);
     defer gpa.free(old);
     try testing.expect(old.len > 1 << 20);
     var back = try read(gpa, old);
     defer back.deinit(gpa);
     try testing.expectEqualSlices(u8, t.base.?.bytes, back.base.bytes);
     try testing.expectEqualStrings("/a/b.pixi", headPath(old).?);
+}
+
+test "a version 1 file, compacted, is the version 2 file of the same track" {
+    const gpa = testing.allocator;
+    var t = try sparseTrack(gpa, 4 << 20, 5);
+    defer freeSparse(gpa, &t);
+    const raw = try write(gpa, &t, "pixi", "/a/b.pixi", .{ .fingerprint = 1, .file_hash = 9 }, 1);
+    defer gpa.free(raw);
+    const small = try compact(gpa, raw);
+    defer gpa.free(small);
+    const direct = try write(gpa, &t, "pixi", "/a/b.pixi", .{ .fingerprint = 1, .file_hash = 9 }, version);
+    defer gpa.free(direct);
+    try testing.expectEqualSlices(u8, direct, small);
+    try testing.expectError(error.NotATrack, compact(gpa, raw[0 .. raw.len / 2]));
 }
