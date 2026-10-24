@@ -36,7 +36,9 @@ tape: *const Tape,
 now: f64 = 0,
 /// The next op to start, as an index into `tape.ops`.
 cursor: usize = 0,
-/// Where the last failure (see `Failure`) resumed the tape: the op index its skip stopped at.
+/// The last failure (see `Failure`): the op that failed and the op index its skip resumed at.
+/// Only tests read these, to check the skip landed on the next chapter.
+failed_op: ?usize = null,
 resumed_at: ?usize = null,
 /// Where the pointer is, in the sink's coordinates.
 pointer: Point = .{},
@@ -446,21 +448,24 @@ fn fail(self: *Sequencer, op: usize, what: @FieldType(Failure, "what"), sink: Si
     var end = self.cursor;
     while (end < ops.len and ops[end].at < chapter_at) end += 1;
     var skipped = end - self.cursor;
+    // A button releases at most once while skipped (the set is empty after), so the releases fit
+    // one slot per button, in tape order.
+    var releases: [std.enums.values(Tape.Button).len]Tape.Button = undefined;
+    var released: usize = 0;
     var pressed = self.pressed;
     for (ops[self.cursor..end]) |o| {
         if (o.do == .release and pressed.contains(o.do.release)) {
             pressed.remove(o.do.release);
+            releases[released] = o.do.release;
+            released += 1;
             skipped -= 1;
         }
     }
     sink.vtable.failed(sink.ctx, .{ .op = op, .what = what, .skipped = skipped });
-    for (ops[self.cursor..end]) |o| {
-        if (o.do == .release and self.pressed.contains(o.do.release)) {
-            self.pressed.remove(o.do.release);
-            sink.vtable.button(sink.ctx, o.do.release, false);
-        }
-    }
+    for (releases[0..released]) |button| sink.vtable.button(sink.ctx, button, false);
+    self.pressed = pressed;
     self.cursor = end;
+    self.failed_op = op;
     self.resumed_at = end;
 }
 
