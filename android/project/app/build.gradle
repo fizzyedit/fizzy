@@ -1,0 +1,74 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace = "dev.fizzyedit.hello"
+    compileSdk = 35
+    ndkVersion = '27.2.12479018'
+
+    defaultConfig {
+        applicationId = 'dev.fizzyedit.hello'
+        // SDL needs 21, but zig's std.Io calls preadv64/pwritev64, introduced in bionic at 24
+        minSdk = 24
+        targetSdk = 35
+        versionCode = 1
+        versionName = '0.0.1'
+
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=none', '-DANDROID_PLATFORM=android-24', '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                // arm64 is the phone; x86_64 is the emulator on an x86_64 host. -PabiFilters=arm64-v8a
+                // builds the phone's alone.
+                abiFilters(*(project.findProperty('abiFilters') ?: 'arm64-v8a,x86_64').split(','))
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = 'src/main/c/CMakeLists.txt'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    // SDL's Java side (org.libsdl.app), installed by `zig build lib` from the same SDL source
+    // the native libSDL3.a is built from (identical for every ABI).
+    sourceSets {
+        main {
+            java.srcDirs += '../../zig-out/arm64-v8a/java'
+        }
+    }
+}
+
+// Runs `zig build lib` for each ABI before every build. Optional local.properties entry:
+// zig.path=/abs/path/to/zig (Android Studio may not see your shell PATH).
+def ndkDir = androidComponents.sdkComponents.ndkDirectory
+def zigTargets = ['arm64-v8a': 'aarch64-linux-android', 'x86_64': 'x86_64-linux-android']
+def props = new Properties()
+rootProject.file('local.properties').withInputStream { props.load(it) }
+def host = System.getProperty('os.name').toLowerCase().with {
+    it.contains('mac') ? 'darwin-x86_64' : it.contains('win') ? 'windows-x86_64' : 'linux-x86_64'
+}
+(project.findProperty('abiFilters') ?: 'arm64-v8a,x86_64').split(',').each { abi ->
+    def zigBuild = tasks.register("zigBuild_${abi}", Exec) {
+        workingDir = file('../../')
+        doFirst {
+            commandLine props.getProperty('zig.path', 'zig'), 'build', 'lib',
+                    '-p', "zig-out/${abi}",
+                    "-Dtarget=${zigTargets[abi]}.24",
+                    '-Doptimize=ReleaseSafe',
+                    "-Dandroid_include_path=${ndkDir.get()}/toolchains/llvm/prebuilt/${host}/sysroot/usr/include"
+        }
+    }
+    preBuild.dependsOn zigBuild
+}
