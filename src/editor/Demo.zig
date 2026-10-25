@@ -1145,11 +1145,17 @@ fn restoreArrangement(editor: *Editor, snap: *const Snapshot, graceful: bool) !v
             if (!std.mem.eql(u8, was.name, f.name) or at.x != f.rect.x or at.y != f.rect.y or at.w != f.rect.w or at.h != f.rect.h) break;
             kept += 1;
         }
-        // Past `kept` they go: at once for a seek, flying shut for the tape's end (`graceful`).
+        // Past `kept` they go: at once for a seek, flying shut for the tape's end (`graceful`),
+        // but only a float the snapshot lacks flies shut. One it has goes at once, or its closing
+        // self would still hold the name and `applySavedRegions` would not bring it back.
         var i = state.floats.items.items.len;
         while (i > kept) {
             i -= 1;
-            if (graceful) @import("app").layout.Layout.Floats.flyShut(state, i) else state.floats.removeAt(i);
+            const name = state.floats.items.items[i].name;
+            const saved_float = for (floats.items) |r| {
+                if (std.mem.eql(u8, r.name, name)) break true;
+            } else false;
+            if (graceful and !saved_float) @import("app").layout.Layout.Floats.flyShut(state, i) else state.floats.removeAt(i);
         }
         editor.applySavedRegions(saved);
     }

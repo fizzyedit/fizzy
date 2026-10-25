@@ -511,6 +511,7 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     }
 
     try revertClosesWhatTheTourOpened(&app);
+    try revertKeepsAMovedFloat(&app);
     try tourOnAPhone(&app);
 }
 
@@ -540,6 +541,41 @@ fn revertClosesWhatTheTourOpened(app: *BundledApp) !void {
     try std.testing.expectEqual(print_before, fizzy.Editor.Demo.layoutPrint(editor));
     try std.testing.expectEqual(closed_before, editor.explorer.closed);
     try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+}
+
+/// A float the person had, then moved while the tour played, is back where it was after the
+/// revert, not flying shut: only what the snapshot lacks glides away.
+fn revertKeepsAMovedFloat(app: *BundledApp) !void {
+    const editor = app.editor;
+    const p = &editor.demo.player;
+    const gpa = editor.app.gpa;
+    const state = &editor.app.layout;
+
+    const at: dvui.Rect = .{ .x = 120, .y = 90, .w = 220, .h = 160 };
+    try state.assign(gpa, "Float 1", &.{"devtools.dashboard"});
+    _ = try state.floats.add(gpa, .{ .name = state.internName(gpa, "Float 1"), .rect = at, .home = "" });
+    try dvui.testing.settle(headlessFrame);
+
+    try editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    var frames: usize = 0;
+    while (frames < 60) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expectEqual(automation.Player.State.playing, p.state);
+
+    const moved = state.floats.find("Float 1") orelse return error.TestExpectedEqual;
+    state.floats.items.items[moved].rect.x += 40;
+
+    p.unload();
+    try std.testing.expect(!editor.demo.active());
+    frames = 0;
+    while (frames < 120) : (frames += 1) _ = try dvui.testing.step(headlessFrame);
+
+    const back = state.floats.items.items[state.floats.find("Float 1") orelse return error.TestExpectedEqual];
+    try std.testing.expect(!back.closing);
+    try std.testing.expectEqual(at.x, back.rect.x);
+    try std.testing.expectEqual(@as(usize, 1), state.floats.items.items.len);
+
+    state.floats.removeAt(0);
+    try state.assign(gpa, "Float 1", &.{});
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:
