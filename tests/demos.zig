@@ -372,6 +372,54 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
         try dvui.testing.settle(headlessFrame);
     }
 
+    // The tour on the person's window: a file they open while it plays is theirs, and the panes
+    // the tour splits off are not written to `panes.zon` as theirs and are back as they were when
+    // it ends.
+    {
+        const wb = &app.editor.workbench;
+        const later = try gpa.print("{s}/later.md", .{app.root_buf[0 .. std.mem.findScalar(u8, &app.root_buf, 0) orelse 0]});
+        defer gpa.free(later);
+        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = later, .data = "# Later\n" });
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        const panes_before = try wb.arrangement(arena.allocator());
+        // The person's saved panes, which a split saved during the tour would overwrite.
+        const dir = host.pluginInstallDir("workbench") orelse return error.TestUnexpectedResult;
+        defer host.allocator.free(dir);
+        try std.Io.Dir.cwd().createDirPath(dvui.io, dir);
+        const panes_zon = try std.fs.path.join(gpa, &.{ dir, "panes.zon" });
+        defer gpa.free(panes_zon);
+        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = panes_zon, .data = ".{ .persons = true }" });
+
+        try app.editor.demo.play("tour");
+        var held = true;
+        var split = false;
+        frames = 0;
+        while (p.state != .ended and frames < 5_000) : (frames += 1) {
+            _ = try dvui.testing.step(headlessFrame);
+            if (frames == 30) _ = try app.editor.openFilePath(later, wb.currentGroupingID());
+            if (frames > 5 and p.state == .playing) held = held and wb.panes_held;
+            split = split or wb.workspaces.count() > panes_before.groupings.len;
+        }
+        try std.testing.expectEqual(automation.Player.State.ended, p.state);
+        try std.testing.expect(held);
+        try std.testing.expect(split);
+        p.unload();
+        try dvui.testing.settle(headlessFrame);
+
+        try std.testing.expect(host.docFromPath(later) != null);
+        var saved_panes: [64]u8 = undefined;
+        const saved_len = (try std.Io.Dir.cwd().readFile(dvui.io, panes_zon, &saved_panes)).len;
+        try std.testing.expectEqualStrings(".{ .persons = true }", saved_panes[0..saved_len]);
+        try std.testing.expect(!wb.panes_held and !wb.panes_dirty);
+        const panes_after = try wb.arrangement(arena.allocator());
+        try std.testing.expectEqual(panes_before.open, panes_after.open);
+        try std.testing.expectEqualSlices(u64, panes_before.groupings, panes_after.groupings);
+        try std.testing.expectEqualStrings(panes_before.tree, panes_after.tree);
+        try app.editor.rawCloseFileID(host.docFromPath(later).?.id);
+        try dvui.testing.settle(headlessFrame);
+    }
+
     // A tape loaded some other way is not the one the service started.
     try app.editor.demo.play("markdown");
     try std.testing.expectEqual(@as(?[]const u8, null), api.current());

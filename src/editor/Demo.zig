@@ -106,11 +106,10 @@ const Pending = union(enum) {
 
 const Saved = struct {
     folder: ?[]u8,
-    /// The person's open documents, by id: open all along (`ownsDocument`).
-    docs: []const u64,
-    /// The paths they have open or are opening, to tell their document that arrives later (an open
-    /// on its way as the demo began, a plugin reload's new handle) from one the demo opened.
-    paths: []const []const u8,
+    /// The panes of the documents as they were, and what holds them (`arena`): put back at the end
+    /// of the tape, while `Workbench.panes_held` keeps the demo's from `panes.zon`.
+    panes: ?Editor.Workbench.Arrangement,
+    panes_arena: std.heap.ArenaAllocator,
     /// The one they were in.
     active: ?u64,
     /// The explorer's open folders, and whether its root had opened (`Workbench.file_tree_root_opened`).
@@ -465,26 +464,15 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
         null;
 
     // Their documents stay open where they are, and nothing of the demo's closes, saves or
-    // restores them (`ownsDocument`). A demo's left open by the last (one whose close failed) is
-    // not theirs.
+    // restores them (`ownsDocument`).
     const gpa = editor.app.gpa;
-    var docs: std.ArrayList(u64) = .empty;
-    for (editor.app.open_files.values()) |doc| {
-        if (std.mem.startsWith(u8, doc.owner.documentPath(doc), "demo://")) continue;
-        docs.append(gpa, doc.id) catch continue;
-    }
-    const held = docs.toOwnedSlice(gpa) catch &.{};
-    var paths: std.ArrayList([]const u8) = .empty;
-    for (editor.app.open_files.values()) |doc| {
-        const path = doc.owner.documentPath(doc);
-        if (std.mem.startsWith(u8, path, "demo://")) continue;
-        const copy = gpa.dupe(u8, path) catch continue;
-        paths.append(gpa, copy) catch gpa.free(copy);
-    }
-    for (editor.openings.entries.keys()) |path| {
-        const copy = gpa.dupe(u8, path) catch continue;
-        paths.append(gpa, copy) catch gpa.free(copy);
-    }
+    var panes_arena: std.heap.ArenaAllocator = .init(gpa);
+    const panes: ?Editor.Workbench.Arrangement = editor.workbench.arrangement(panes_arena.allocator()) catch |err| blk: {
+        dvui.log.warn("demo: could not note the panes: {t}", .{err});
+        break :blk null;
+    };
+    // Held only when there is something to put back: the panes would be saved as the person's.
+    editor.workbench.panes_held = panes != null;
     const branches: []const dvui.Id = if (gpa.alloc(dvui.Id, editor.workbench.open_branches.count())) |out| blk: {
         var it = editor.workbench.open_branches.keyIterator();
         for (out) |*b| b.* = it.next().?.*;
@@ -496,9 +484,15 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     const folder = editor.app.folder orelse "";
     self.saved = .{
         .folder = if (folder.len > 0 and !std.mem.startsWith(u8, folder, "demo://")) gpa.dupe(u8, folder) catch null else null,
-        .docs = held,
-        .paths = paths.toOwnedSlice(gpa) catch &.{},
-        .active = in_front orelse if (held.len > 0) held[held.len - 1] else null,
+        .panes = panes,
+        .panes_arena = panes_arena,
+        .active = in_front orelse blk: {
+            var last: ?u64 = null;
+            for (editor.app.open_files.values()) |doc| {
+                if (!isDemoPath(doc.owner.documentPath(doc))) last = doc.id;
+            }
+            break :blk last;
+        },
         .branches = branches,
         .root_opened = editor.workbench.file_tree_root_opened,
         .focus = dvui.focusedWidgetId() orelse .zero,
@@ -506,18 +500,14 @@ fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
     };
 }
 
-/// Whether `doc` is the demo's: one it opened or made. The person's are those open at `begin`, and
-/// any other of a file they had open or were opening then.
-pub fn ownsDocument(self: *const Demo, doc: sdk.DocHandle) bool {
-    const saved = self.saved orelse return true;
-    if (std.mem.findScalar(u64, saved.docs, doc.id) != null) return false;
-    return !self.isPersonsPath(doc.owner.documentPath(doc));
+/// Whether `doc` is the demo's: one of its mounted files (`demo://…`). A document of a file the
+/// person opens while it plays is theirs, however late it lands.
+pub fn ownsDocument(_: *const Demo, doc: sdk.DocHandle) bool {
+    return isDemoPath(doc.owner.documentPath(doc));
 }
 
-fn isPersonsPath(self: *const Demo, path: []const u8) bool {
-    const saved = self.saved orelse return false;
-    for (saved.paths) |p| if (std.mem.eql(u8, p, path)) return true;
-    return false;
+fn isDemoPath(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "demo://");
 }
 
 fn end(ctx: *anyopaque) void {
@@ -525,6 +515,7 @@ fn end(ctx: *anyopaque) void {
     const editor = self.editor;
     self.fast = false;
     if (self.quitting) {
+        editor.workbench.panes_held = false;
         self.freeSaved();
         self.freeSavedSettings();
         return;
@@ -542,6 +533,11 @@ fn end(ctx: *anyopaque) void {
     editor.command_palette.finishClose();
 
     const saved = self.saved orelse return;
+    // The documents' panes are the workbench's own, kept from `panes.zon` while the tape played
+    // (`Workbench.panes_held`), so what is on screen goes back as noted at `begin`.
+    if (saved.panes) |a| editor.workbench.arrange(a) catch |err| dvui.log.warn("demo: could not put the panes back: {t}", .{err});
+    editor.workbench.panes_held = false;
+    editor.workbench.panes_dirty = false;
     if (saved.folder) |f| {
         editor.setProjectFolder(f) catch |err| dvui.log.warn("demo: could not reopen {s}: {t}", .{ f, err });
     } else {
@@ -569,6 +565,9 @@ fn keep(ctx: *anyopaque) void {
     if (self.quitting) return end(ctx);
     self.restoreSettings();
     self.freeSaved();
+    // The panes on screen are the person's now, and saved with them.
+    editor.workbench.panes_held = false;
+    editor.workbench.panes_dirty = true;
     editor.app.layout.dirty = true;
     dvui.refresh(null, @src(), null);
 }
@@ -582,9 +581,8 @@ fn freeSaved(self: *Demo) void {
     self.entries.clearAndFree(gpa);
     const saved = self.saved orelse return;
     if (saved.folder) |f| gpa.free(f);
-    gpa.free(saved.docs);
-    for (saved.paths) |p| gpa.free(p);
-    gpa.free(saved.paths);
+    var panes_arena = saved.panes_arena;
+    panes_arena.deinit();
     gpa.free(saved.branches);
     self.saved = null;
 }
@@ -805,14 +803,32 @@ fn unmountFiles(self: *Demo) void {
     }
 }
 
+/// Drop the loads and openings of the demo's files still on their way; the person's go on.
+fn cancelDemoLoads(editor: *Editor) void {
+    var jobs = editor.loading_jobs.iterator();
+    while (jobs.next()) |job| {
+        if (isDemoPath(job.key_ptr.*)) job.value_ptr.*.cancelled.store(true, .monotonic);
+    }
+    var l = editor.doc_io.loads.count();
+    while (l > 0) {
+        l -= 1;
+        const path = editor.doc_io.loads.keys()[l];
+        if (isDemoPath(path)) editor.doc_io.cancel(path);
+    }
+    var o = editor.openings.entries.count();
+    while (o > 0) {
+        o -= 1;
+        const path = editor.openings.entries.keys()[o];
+        if (isDemoPath(path)) editor.openings.drop(editor, path);
+    }
+}
+
 /// Close every document of the demo's, discarding changes: none is the person's, whose are set
 /// aside (`ownsDocument`). Loads still on their way are dropped too, or they would land in the
 /// next keyframe.
 fn closeDemoDocuments(self: *Demo) void {
     const editor = self.editor;
-    editor.cancelAllLoadingJobs();
-    while (editor.doc_io.loads.count() > 0) editor.doc_io.cancel(editor.doc_io.loads.keys()[0]);
-    while (editor.openings.entries.count() > 0) editor.openings.drop(editor, editor.openings.entries.keys()[0]);
+    cancelDemoLoads(editor);
     var i = editor.app.open_files.count();
     while (i > 0) {
         i -= 1;
@@ -1191,19 +1207,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
 
     // What has started since — loads, documents opened after it — goes.
     editor.command_palette.finishClose();
-    editor.cancelAllLoadingJobs();
-    var l = editor.doc_io.loads.count();
-    while (l > 0) {
-        l -= 1;
-        const path = editor.doc_io.loads.keys()[l];
-        if (!self.isPersonsPath(path)) editor.doc_io.cancel(path);
-    }
-    var o = editor.openings.entries.count();
-    while (o > 0) {
-        o -= 1;
-        const path = editor.openings.entries.keys()[o];
-        if (!self.isPersonsPath(path)) editor.openings.drop(editor, path);
-    }
+    cancelDemoLoads(editor);
     var i = editor.app.open_files.count();
     while (i > 0) {
         i -= 1;

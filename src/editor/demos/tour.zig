@@ -83,7 +83,8 @@ pub fn build(s: *Script) !void {
         // A phone has no rail and no Sidebar place: the bar's icon opens the explorer as a sheet.
         try s.caption("The bar opens the explorer, a sheet over the documents.", .{ .near = catalog.files_tab });
         // A sheet the person already has open is left as it is: this is theirs to show.
-        const sheet = try s.skipIfShown(try catalog.file(s, "README.md"));
+        try s.waitIdle(.{});
+        const sheet = try s.skipIfShown(try catalog.place(s, "role:explorer"));
         try s.click(.{ .tag = catalog.files_tab }, .{});
         try s.waitFor(try catalog.file(s, "README.md"), .{});
         s.pause(1800);
@@ -92,7 +93,8 @@ pub fn build(s: *Script) !void {
         s.endSkip(sheet);
     } else {
         try s.caption("The rail opens the explorer, in a place of its own beside the documents.", .{ .near = catalog.files_icon });
-        const rail = try s.skipIfShown(try catalog.file(s, "README.md"));
+        try s.waitIdle(.{});
+        const rail = try s.skipIfShown(try catalog.place(s, "role:explorer"));
         try s.click(.{ .tag = catalog.files_icon }, .{});
         s.endSkip(rail);
         try s.waitFor(try catalog.file(s, "README.md"), .{});

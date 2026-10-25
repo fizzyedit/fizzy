@@ -38,6 +38,9 @@ workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
 /// plugin's own directory whenever it changes (`workbench_layout.savePanes`).
 panes: Panes,
 panes_dirty: bool = false,
+/// Set while a demo plays: the panes it arranges are not written to `panes.zon`, which keeps the
+/// person's own until the demo puts them back or lets them go (`Demo.end`, `Demo.keep`).
+panes_held: bool = false,
 /// Where the panes are arranged when the app arranges them instead of `panes`: each pane a view
 /// of the app's, in a place of the app's, beside another by a split of the app's (fizzy's
 /// `Workspaces`, behind `FIZZY_WORKSPACES=1`). Null: the panes are this tree's leaves, as before.

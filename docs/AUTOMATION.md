@@ -302,8 +302,13 @@ card ends the captions still showing, so they close as it opens rather than comp
 A keyframe never arranges the window: the person's places, panes and floats stay as they have
 them, and their documents stay open and showing beside the demo's. A demo that needs the explorer
 presses the rail for it only if it is not showing already (`s.skipIfShown(tag)` … `s.endSkip(mark)`
-leave out the ops between when `tag` is drawn); `catalog.openFile(s, "README.md")` does that and
-opens the file.
+leave out the ops between when `tag` is drawn, `s.skipIfGone(tag)` when it is not; aim it at the
+place (`region:role:explorer`), after a `waitIdle`, not at a row inside it); `catalog.openFile(s,
+"README.md")` does that and opens the file, and on a phone puts away the sheet it brought up.
+
+A demo owns only what it opened: its `demo://` documents. A file the person opens while it plays is
+theirs, and the workbench does not write the panes the demo arranges to `panes.zon`
+(`Workbench.panes_held`); they go back as they were when the tape plays to its end.
 
 **One keyframe, then carry on.** A keyframe is a cut, and a cut mid-demo snaps the window back to
 a fresh layout in front of the viewer. Chapters continue in the window the last one left; one that

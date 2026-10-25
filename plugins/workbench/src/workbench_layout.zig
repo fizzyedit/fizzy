@@ -159,7 +159,7 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     }
     if (dock.changed) wb.panes_dirty = true;
     dock.deinit();
-    if (wb.panes_dirty) savePanes(wb);
+    if (wb.panes_dirty and !wb.panes_held) savePanes(wb);
     if (result != .ok) return result;
 
     return .ok;
