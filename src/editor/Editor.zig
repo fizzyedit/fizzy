@@ -3666,11 +3666,17 @@ pub fn useShape(editor: *Editor, shape: []const u8) void {
     dvui.refresh(null, @src(), null);
 }
 
-/// Draw with the shape the Layout setting and the device call for. The setting reaches
-/// `core.platform` here and is held while a demo plays: `useShape` replaces floats and the
-/// in-memory arrangement, which a demo's stage depends on, so the switch waits for the demo to end.
-pub fn chooseShape(editor: *Editor) void {
+/// Hand the Layout setting to `core.platform`, where `formFactor()` (and so `Layout.form_factor`,
+/// whatever shape an app draws) reads it. Held while a demo plays: a form-factor flip replaces
+/// floats and the in-memory arrangement, which a demo's stage depends on, so it waits for the demo.
+pub fn syncLayoutMode(editor: *Editor) void {
     if (!editor.demo.active()) fizzy.core.platform.cached_layout_mode = editor.app.settings.layout_mode;
+}
+
+/// Draw with the shape the Layout setting and the device call for. fizzy's own shapes only: an app
+/// supplying its layout chooses for itself and gets the setting through `syncLayoutMode`.
+pub fn chooseShape(editor: *Editor) void {
+    editor.syncLayoutMode();
     const mobile = fizzy.core.platform.formFactor() == .mobile;
     editor.useShape(if (mobile) mobile_layout.shape_key else "");
 }
@@ -4843,7 +4849,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `layout.zon`'s first arrangement. Before the `Layout` is made over the state, since
             // switching replaces what is in it.
             const own_shapes = comptime !build_opts.has_app_layout;
-            if (own_shapes) editor.chooseShape();
+            if (own_shapes) editor.chooseShape() else editor.syncLayoutMode();
             var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
             // Published for the duration of the shape, so a plugin drawing inside a region can
             // declare one of its own through `Host.region`. Cleared below: a `*Layout` that

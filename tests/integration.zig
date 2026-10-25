@@ -3202,6 +3202,27 @@ test "the Layout setting switches a desktop window to the mobile shape and back,
     try std.testing.expectEqualStrings(mobile_key, state.shape);
 }
 
+test "syncLayoutMode hands the Layout setting to the form factor without switching the shape, held while a demo plays" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    defer fizzy.core.platform.cached_layout_mode = .auto;
+
+    const shape_before = editor.app.layout.shape;
+    editor.app.settings.layout_mode = .mobile;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    try std.testing.expectEqualStrings(shape_before, editor.app.layout.shape);
+
+    editor.app.settings.layout_mode = .desktop;
+    editor.demo.player.state = .playing;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    editor.demo.player.state = .idle;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.desktop, fizzy.core.platform.formFactor());
+}
+
 test "a form-factor flip saves the shape it leaves and loads the other's, leaving the first's file part alone" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
