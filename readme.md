@@ -44,9 +44,15 @@ Download `hello-numbers-<OS>-<arch>` from a run for the exact JSON lines and sou
 
 | Linux x86_64, example-app minimal | ReleaseFast | ReleaseSmall |
 | --- | --- | --- |
-| Stripped executable | 22,466,776 B | 14,854,952 B |
-| Gzipped wasm | 4,137,331 B | 3,348,122 B |
-| Installer, first frame, idle RSS after 30 s | [`installer_bytes`, `first_frame_ms`, `idle_rss_bytes` in the JSONL artifacts](https://github.com/fizzyedit/fizzy/actions/workflows/hello-numbers.yml) | same |
+| Stripped executable | 21,789,128 B | 14,892,728 B |
+| Installer (`.AppImage`) | 31,582,712 B | 15,084,024 B |
+| First frame (`core.profile`) | 491 ms | 87 ms |
+| Idle RSS after 30 s | 144,674,816 B | 133,455,872 B |
+| Gzipped wasm | 4,145,339 B | 3,348,450 B |
+
+Source: [run 40195192369](https://github.com/fizzyedit/fizzy/actions/runs/40195192369) at
+`c4f0e401` (Xvfb with Mesa software rendering on a GitHub runner; one sample each). The macOS
+column is not yet recorded: that run's macOS job failed.
 
 See the [method and manual Electron/Tauri comparison](docs/HELLO_NUMBERS.md) before comparing
 samples: runner hardware, OS caches, packaged resources and startup clocks affect the results.
