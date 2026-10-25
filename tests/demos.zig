@@ -47,8 +47,12 @@ const BundledApp = struct {
         try dvui.testing.settle(headlessFrame);
     }
 
+    /// Quits the way `appQuit` does: after the last frame, with no window current.
     fn down(self: *BundledApp) void {
+        const harness_window = dvui.current_window;
+        dvui.current_window = null;
         self.editor.deinit() catch {};
+        dvui.current_window = harness_window;
         gpa.destroy(self.editor);
         gpa.destroy(self.entry);
         @import("app").profile.root = null;
@@ -511,6 +515,11 @@ test "demo: every bundled demo plays to the end through fizzy's stage, a seek la
     }
 
     try tourOnAPhone(&app);
+
+    // Left loaded for `down`, which quits the way `appQuit` does.
+    try app.editor.demo.play(fizzy.Editor.Demo.catalog.entries[0].name);
+    for (0..5) |_| _ = try dvui.testing.step(headlessFrame);
+    try std.testing.expect(app.editor.demo.active());
 }
 
 /// What straight play of a demo must keep steady, watched a frame at a time:
