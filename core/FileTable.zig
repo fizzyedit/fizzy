@@ -437,6 +437,7 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
     if (self.pending.contains(directory)) return null;
     if (self.listings.count() >= max_cached_dirs) self.invalidateListings();
 
+    self.publishWake();
     const job = ListJob.create(self, directory) catch return null;
     self.pending.put(self.gpa, job.directory, job) catch {
         job.destroy();
@@ -454,8 +455,6 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
     // folder of hundreds of thousands of notes costs no frame its read; a small one lands within
     // `inline_wait_ns` and is answered here, so opening an ordinary folder shows no "loading".
     if (target.mount == null and comptime @import("builtin").target.cpu.arch != .wasm32) {
-        self.local.wake = wakeFrame;
-        self.local.wake_ctx = self;
         const give_up = std.Io.Clock.boot.now(self.io).nanoseconds + inline_wait_ns;
         while (self.pending.contains(directory)) {
             target.fs.pump();
@@ -465,6 +464,15 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
     }
     if (self.listings.get(directory)) |listing| return listing;
     return null;
+}
+
+/// Hand the disk's pool threads the callback that asks for a frame. Set once, before the first
+/// read is started and never rewritten, so a thread that runs a read sees both fields whole.
+fn publishWake(self: *FileTable) void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
+    if (self.local.wake_ctx != null) return;
+    self.local.wake = wakeFrame;
+    self.local.wake_ctx = self;
 }
 
 /// How long `listDir` waits on the disk for a listing before leaving it to arrive on a later frame.
@@ -645,6 +653,8 @@ pub fn search(self: *FileTable, root: []const u8, query_text: []const u8) []cons
     // paths, and typing must not wait for all of them. What is shown meanwhile is the last answer.
     const deadline = std.Io.Clock.boot.now(self.io).nanoseconds + rank_budget_ns;
     while (self.rank_next < self.index.items.len) {
+        // Checked before any skip: a query that matches nothing still walks the whole index.
+        if (self.rank_next % 256 == 0 and std.Io.Clock.boot.now(self.io).nanoseconds >= deadline) break;
         const i = self.rank_next;
         self.rank_next += 1;
         // Only what sits under this root; the index may cover others too.
@@ -658,7 +668,6 @@ pub fn search(self: *FileTable, root: []const u8, query_text: []const u8) []cons
             fuzzy.sort(usize, self.rank_hits.items);
             self.rank_hits.shrinkRetainingCapacity(max_results);
         }
-        if (self.rank_next % 256 == 0 and std.Io.Clock.boot.now(self.io).nanoseconds >= deadline) break;
     }
     if (self.rank_next < self.index.items.len) {
         self.env.refresh(self.env.ctx);
@@ -717,6 +726,7 @@ fn ensureIndex(self: *FileTable, root: []const u8) void {
         return;
     };
 
+    self.publishWake();
     const job = self.index_job orelse IndexJob.create(self) catch return;
     self.index_job = job;
     job.ask(root, 0);
@@ -820,6 +830,9 @@ const IndexJob = struct {
         const table = job.table;
         while (true) {
             if (job.in_flight.items.len == 0) {
+                // A backlog left by `work` is taken in on later frames; tearing down now would
+                // drop it and leave the root marked indexed.
+                if (job.backlog.items.len != 0) return;
                 // Nothing left to hear back from (or nothing could be asked): finished, not
                 // cancelled — same teardown.
                 job.cancel();
@@ -1424,6 +1437,47 @@ test "search ranks by relative path and prunes ignored directories" {
 
     // An empty query is not a match-everything.
     try t.expectEqual(@as(usize, 0), settledSearch(table, fx.root, "").len);
+}
+
+test "a query matching nothing stops at its budget instead of scanning the whole index" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    // An index already built for the root, so `search` goes straight to ranking it.
+    table.index_stale = false;
+    try table.index_roots.append(t.allocator, try t.allocator.dupe(u8, fx.root));
+    const n = 1_000_000;
+    try table.index.ensureTotalCapacity(t.allocator, n);
+    for (0..n) |i| {
+        table.index.appendAssumeCapacity(try std.fmt.allocPrint(t.allocator, "{s}/dir{d}/file{d}.txt", .{ fx.root, i % 997, i }));
+    }
+
+    _ = table.search(fx.root, "qqqqqqqq");
+    try t.expect(table.rank_next > 0);
+    try t.expect(table.ranking());
+}
+
+test "a folder bigger than one frame's share is indexed whole" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    const count = 20_000;
+    var name_buf: [32]u8 = undefined;
+    for (0..count) |i| {
+        const name = try std.fmt.bufPrint(&name_buf, "bulk/n{d}.txt", .{i});
+        if (i == 0) try fx.tmp.dir.createDirPath(std.testing.io, "bulk");
+        try fx.tmp.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = "" });
+    }
+
+    _ = settledSearch(table, fx.root, "n19999");
+    try t.expect(!table.indexing());
+    try t.expectEqual(@as(usize, 1), settledSearch(table, fx.root, "n19999.txt").len);
+    // Entries from the tail of the listing, taken in after the first frame's share was spent.
+    try t.expectEqual(@as(usize, 1), settledSearch(table, fx.root, "bulk/n15000.txt").len);
 }
 
 test "noteFileModified re-reads a parent only for a name it has not seen" {
