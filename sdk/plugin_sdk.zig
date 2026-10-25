@@ -597,6 +597,7 @@ pub const StaticModuleOptions = struct {
 ///
 /// The application calls it with the plugin's builder (`dep.builder`) for each kind of
 /// executable it builds, and lists the result in `fizzy.buildApp`.
+// anytype: the Framework of fizzy's build, a build-time duck type
 pub fn staticModule(b: *std.Build, framework: anytype, opts: StaticModuleOptions) *std.Build.Module {
     const wasm = framework.target.result.cpu.arch == .wasm32;
     const m = readManifest(b);
