@@ -328,7 +328,7 @@ fn rowMenu(
                     side_grouping = if (runtime.host().openDocCount() == 0)
                         runtime.workbench().currentGroupingID()
                     else
-                        runtime.workbench().newGroupingID();
+                        runtime.workbench().besideGrouping();
                     have_grouping = true;
                 }
                 _ = runtime.host().openFile(.{ .path = p, .grouping = side_grouping }) catch {
@@ -420,14 +420,23 @@ fn rowMenu(
     }, true);
 }
 
-/// The row an expanded folder shows while its listing is on the way (a mount: see
-/// `FileTable.listingPending`). Dim, where the first child will be.
-fn drawLoadingRow(id_extra: usize) void {
-    dvui.labelNoFmt(@src(), "Loading\u{2026}", .{}, .{
+/// The row an expanded folder shows while its listing is on the way (a mount, or a folder too big
+/// for the disk to answer in a moment: see `FileTable.listingPending`). Dim, where the first child
+/// will be; `read` is how many entries the disk has given so far, when it says.
+fn drawLoadingRow(id_extra: usize, read: ?usize) void {
+    const opts: dvui.Options = .{
         .id_extra = id_extra,
         .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
         .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.45) },
-    });
+    };
+    if (read) |count| {
+        dvui.label(@src(), "Loading\u{2026} {d} entries", .{count}, opts);
+        // The count moves on the pool's thread, which wakes no frame: ask for the next one.
+        const timer_id = dvui.parentGet().extendId(@src(), id_extra);
+        if (dvui.timerDoneOrNone(timer_id)) dvui.timer(timer_id, 100_000);
+    } else {
+        dvui.labelNoFmt(@src(), "Loading\u{2026}", .{}, opts);
+    }
 }
 
 fn pointerReleaseInRectWithoutSelectionModifier(r: dvui.Rect.Physical) bool {
@@ -694,7 +703,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                 break :blk t.listDir(directory) orelse {
                     // A mount answers later: say so in the folder rather than leave it open and
                     // empty, which reads as "nothing here" until everything appears at once.
-                    if (t.listingPending(directory)) drawLoadingRow(inner_id_extra.*);
+                    if (t.listingPending(directory)) drawLoadingRow(inner_id_extra.*, t.listingProgress(directory));
                     return;
                 };
             } else null;
@@ -1161,7 +1170,6 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                             //     .alpha = 0.15 * t,
                             // },
                         })) {
-                            runtime.workbench().setBranchOpen(branch_id, true);
                             try search(
                                 abs_path,
                                 tree,
@@ -1172,15 +1180,9 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                                 branch,
                                 if (root) |r| r.ranked else null,
                             );
-                        } else {
-                            if (runtime.workbench().open_branches.contains(branch_id)) {
-                                runtime.workbench().setBranchOpen(branch_id, false);
-                            }
                         }
-                        // Keep open_branches in sync so hover-expand and drop-into expand persist next frame
-                        if (branch.expanded) {
-                            runtime.workbench().setBranchOpen(branch_id, true);
-                        }
+                        // The host's open state is the only one; the tree reports what the user asked for.
+                        if (branch.requested) |open| runtime.workbench().setBranchOpen(branch_id, open);
                         color_id.* = color_id.* + 1;
                     },
                     else => {},
@@ -1191,7 +1193,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
     };
 
     const ranked: ?[]const FileTable.Entry = if (outer_filter_text.len > 0)
-        (table() orelse return).search(root_directory, outer_filter_text, dvui.currentWindow().arena())
+        (table() orelse return).search(root_directory, outer_filter_text)
     else
         null;
     const root_entry: FileTable.Entry = .{ .name = root_label, .kind = .directory };

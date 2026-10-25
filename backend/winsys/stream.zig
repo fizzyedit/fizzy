@@ -135,8 +135,8 @@ pub const Ids = struct {
         return out;
     }
 
+    // anytype: The four identity maps have different key types but share lookup and numbering.
     fn name(gpa: Allocator, map: anytype, key: anytype) Allocator.Error!u64 {
-        // anytype: one lookup over the four maps, whose key types differ.
         const slot = try map.getOrPut(gpa, key);
         if (!slot.found_existing) slot.value_ptr.* = @intCast(map.count());
         return slot.value_ptr.*;

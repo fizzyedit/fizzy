@@ -155,6 +155,10 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     self.active = if (selected) |s| documentOf(s) else null;
     const pane_r = pane_box.rectScale().r;
     self.pane_rect_physical = pane_r;
+    // The person's pane, when it has the room for an open beside to split it: a tape that drops a
+    // tab on the edge asks for this first, or skips the drop (`core.placement`).
+    if (core.anchor.wanted() and runtime.workbench().open_workspace_grouping == self.grouping and
+        runtime.workbench().besideEdge() != null) core.anchor.mark(pane_box, "workbench.beside-room", .{});
 
     if (tabs.len > 0) {
         self.dropSnapshot();
@@ -745,7 +749,7 @@ pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
         .center => grouping,
         .edge => |side| blk: {
             const g = wb.newGroupingID();
-            wb.paneBeside(g, grouping, paneSide(side)) catch return false;
+            wb.paneBeside(g, grouping, paneSide(side), false) catch return false;
             break :blk g;
         },
     };

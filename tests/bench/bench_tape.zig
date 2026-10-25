@@ -42,6 +42,7 @@ fn recording(arena: std.mem.Allocator, n: usize) !Tape {
 const runs = 7;
 
 /// The best of `runs` timings of `f(args)`, in ms.
+// anytype: Benchmark functions take different argument tuples passed through @call.
 fn best(comptime f: anytype, args: anytype) !f64 {
     var fastest: i96 = std.math.maxInt(i96);
     for (0..runs) |_| {

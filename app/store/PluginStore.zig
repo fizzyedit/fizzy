@@ -2617,15 +2617,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                         },
                         "{s}",
                         .{desc_label.label_str},
-                        .{
-                            .border = .all(0),
-                            .box_shadow = .{
-                                .color = .black,
-                                .corners = core.corners.all(core.corners.surface),
-                                .fade = 4,
-                                .alpha = 0.25,
-                            },
-                        },
+                        .{},
                     );
                 }
                 desc_label.deinit();

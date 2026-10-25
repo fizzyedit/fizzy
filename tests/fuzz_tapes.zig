@@ -359,18 +359,7 @@ test "exploratory tape interruptions report and shrink every failing seed" {
 /// The worst shrunk sequences, kept as expected failures: each is a hole today. When a fix lands
 /// the matching test stops reproducing, fails, and the fixture is deleted with the fix.
 const Fixture = struct { tape: []const u8, category: Category, steps: []const Step };
-const fixtures = [_]Fixture{
-    .{ .tape = "tour", .category = .held_button, .steps = &.{
-        .{ .action = .pause, .value = 3709114103 },
-        .{ .action = .mid_drag, .value = 3417069504 },
-    } },
-    .{ .tape = "tour", .category = .pointer_target, .steps = &.{
-        .{ .action = .edit, .value = 1179371865 },
-        .{ .action = .mid_drag, .value = 3225570326 },
-        .{ .action = .scripted_key, .value = 816815299 },
-        .{ .action = .mid_drag, .value = 3417069504 },
-    } },
-};
+const fixtures = [_]Fixture{};
 
 /// Former holes, now closed: each must keep passing.
 const fixed_fixtures = [_]Fixture{

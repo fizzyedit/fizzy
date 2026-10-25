@@ -568,8 +568,10 @@ pub fn init(
             .border = .{ .r = 47, .g = 179, .b = 135, .a = 255 },
             .text = .{ .r = 58, .g = 10, .b = 26, .a = 255 },
         };
+        // Pale enough to read as red on red: the fill is 6.9:1 on the window and 3.9:1 on the
+        // content fill; the text colour is 11.8:1 on the window.
         strawberry.err = .{
-            .fill = .{ .r = 199, .g = 17, .b = 20, .a = 255 },
+            .fill = .{ .r = 255, .g = 160, .b = 165, .a = 255 },
             .text = .{ .r = 255, .g = 238, .b = 228, .a = 255 },
         };
 
@@ -2970,7 +2972,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
 /// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
 /// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
 /// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
-fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: ?*const @import("app").Tracks.Track) usize {
     const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
     if (ds.kept_at != track_steps) {
         ds.kept_at = track_steps;
@@ -3006,9 +3008,6 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     });
     // The owner's own name for it, when it has one, copied in (`Host.documentTitleChanged`).
     editor.app.host.documentTitleChanged(doc);
-    // One of the person's, set aside while a demo plays (made again by a rename, or landing in a
-    // pane of theirs): hidden too.
-    if (!editor.demo.ownsDocument(doc)) editor.app.host.setSurfaceHidden(ds.id, true);
 }
 
 fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
@@ -4460,6 +4459,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.tracks) |*t| {
         t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
         t.tick();
+        // A checkpoint's diff not done is carried on at the next frame's top, asleep or not.
+        if (t.due) dvui.refresh(null, @src(), null);
     }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
@@ -5169,6 +5170,7 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = l.name };
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
+            gop.value_ptr.adaptive = if (l.adaptive) true else null;
         }
     }
     {
@@ -5267,7 +5269,8 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
     for (order) |r| {
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
-        _ = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        if (made != null and (r.adaptive orelse false)) _ = state.splits.markAdaptive(r.name);
     }
 }
 
@@ -7519,9 +7522,10 @@ fn pmError(err: anyerror) PluginManager.Error {
     };
 }
 
-/// `anytype` because the call sites return different `void` error unions (the loader's, the
-/// installer's, `Allocator.Error`), and a named type for them would be `anyerror!void`, which
-/// says less; each is only `catch`ed and translated by `pmError`.
+/// The call sites return different `void` error unions (the loader's, the installer's,
+/// `Allocator.Error`), and a named type for them would be `anyerror!void`, which says less;
+/// each is only `catch`ed and translated by `pmError`.
+// anytype: differing void error unions, each only caught and translated
 fn pmResult(result: anytype) PluginManager.Error!void {
     result catch |err| return pmError(err);
 }

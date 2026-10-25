@@ -36,10 +36,27 @@ wait
 # A slot whose holder is dead is reclaimed.
 rm -f "$T/go" "$T/status" "$T/ran"; : >"$T/pids"
 sh -c : & dead=$!; wait $dead
-ln -s $dead "$T/slots/slot.0"; ln -s $dead "$T/slots/slot.1"
+for n in 0 1; do mkdir -p "$T/slots/slot.$n"; echo $dead >"$T/slots/slot.$n/pid"; done
 touch "$T/go"
 ./zb build d >"$T/o4" 2>&1 || fail "dead slot not reclaimed: $(cat "$T/o4")"
 grep -q '^build d' "$T/ran" || fail "build d did not run"
+
+# With every slot held by a live pid, a build gives up after FIZZY_BUILD_WAIT, loudly, naming the pids.
+rm -rf "$T/slots"; mkdir -p "$T/slots/slot.0" "$T/slots/slot.1"
+for n in 0 1; do echo $$ >"$T/slots/slot.$n/pid"; done
+FIZZY_BUILD_WAIT=1 ./zb build g >"$T/o6" 2>&1 && fail "build ran with every slot held"
+grep -q "zb: no build slot after 1s" "$T/o6" || fail "no wait-limit line: $(cat "$T/o6")"
+grep -q "pids $$ $$" "$T/o6" || fail "wait-limit line does not name the holders: $(cat "$T/o6")"
+grep -q '^build g' "$T/ran" && fail "build g ran while both slots were held"
+
+# A slot with no pid file is its taker between mkdir and the write: held while young, reclaimed once
+# a minute old.
+rm -f "$T"/slots/slot.*/pid
+FIZZY_BUILD_WAIT=1 ./zb build h >"$T/o7" 2>&1 && fail "build reclaimed a young pid-less slot"
+grep -q "zb: no build slot after 1s" "$T/o7" || fail "young pid-less slot not held: $(cat "$T/o7")"
+touch -t 200001010000 "$T/slots/slot.0" "$T/slots/slot.1"
+./zb build i >"$T/o8" 2>&1 || fail "old pid-less slot not reclaimed: $(cat "$T/o8")"
+grep -q '^build i' "$T/ran" || fail "build i did not run"
 
 # Over the load ceiling, a build waits (and says so) until it is lifted.
 FIZZY_BUILD_MAX_LOAD=-1 ./zb build e >"$T/o5" 2>&1 & p5=$!; echo $p5 >>"$T/pids"

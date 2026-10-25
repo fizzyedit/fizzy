@@ -105,7 +105,7 @@ const max_path_len: usize = if (@import("builtin").target.cpu.arch == .wasm32) 4
 
 /// Refuse to index a pathological tree rather than stall a frame. A project past this many files
 /// still searches — just over the first `max_indexed_files` discovered.
-const max_indexed_files: usize = 200_000;
+const max_indexed_files: usize = 500_000;
 const max_index_depth: usize = 32;
 
 /// Hard cap on returned search results. Every result becomes a real widget in the caller — an
@@ -114,6 +114,12 @@ const max_index_depth: usize = 32;
 /// index and drew tens of thousands of rows per frame, which froze the app. Past a few hundred
 /// hits the ranking is noise anyway; the answer is to type another character.
 const max_results: usize = 300;
+
+/// What the index walk spends taking in the listings that landed, per frame.
+const index_budget_ns: i96 = 4 * std.time.ns_per_ms;
+
+/// What `search` spends ranking per frame before it hands the frame back and carries on in the next.
+const rank_budget_ns: i96 = 4 * std.time.ns_per_ms;
 
 /// Directories held at once. A tree with more than this expanded isn't a UI anyone is reading;
 /// dropping the whole cache beats maintaining an LRU for a case nobody reaches.
@@ -182,6 +188,17 @@ results_root: []u8 = &.{},
 results_generation: u64 = 0,
 results_valid: bool = false,
 
+/// The ranking under way, a slice of the index per frame (`search`): the best `max_results`
+/// candidates of `index[0..rank_next]` so far, for `rank_query` under `rank_root`. A walk that
+/// only appends to the index (`index_epoch` unmoved) carries the ranking on from where it was.
+rank_hits: std.ArrayList(fuzzy.Ranked(usize)) = .empty,
+rank_next: usize = 0,
+rank_query: []u8 = &.{},
+rank_root: []u8 = &.{},
+rank_epoch: u64 = 0,
+/// Bumped when the index is thrown away, which is when a ranking over it is no use to continue.
+index_epoch: u64 = 0,
+
 pub fn init(gpa: std.mem.Allocator, io: std.Io) FileTable {
     return .{ .gpa = gpa, .io = io, .local = .init(gpa, io) };
 }
@@ -194,12 +211,17 @@ pub fn deinit(self: *FileTable) void {
     self.pending.deinit(self.gpa);
     for (self.mounts.items) |m| self.gpa.free(m.prefix);
     self.mounts.deinit(self.gpa);
+    // Before the disk goes: a walk in flight cancels its requests there.
+    if (self.index_job) |job| job.cancel();
     self.local.deinit();
 
     self.freeIndex();
     self.index.deinit(self.gpa);
     self.index_roots.deinit(self.gpa);
     self.results.deinit(self.gpa);
+    self.rank_hits.deinit(self.gpa);
+    if (self.rank_query.len > 0) self.gpa.free(self.rank_query);
+    if (self.rank_root.len > 0) self.gpa.free(self.rank_root);
     if (self.results_query.len > 0) self.gpa.free(self.results_query);
     self.results_query = &.{};
     if (self.results_root.len > 0) self.gpa.free(self.results_root);
@@ -314,6 +336,9 @@ fn pathOnMount(path: []const u8, prefix: []const u8) bool {
 pub fn pump(self: *FileTable) void {
     self.local.fs().pump();
     for (self.mounts.items) |m| m.fs.pump();
+    // A listing taken in over several frames is carried on here (`IndexJob.work`), after the
+    // pumps that may have landed more.
+    if (self.index_job) |job| if (job.backlog.items.len > 0) job.work();
 }
 
 // ---- invalidation ----------------------------------------------------------------------------
@@ -412,6 +437,7 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
     if (self.pending.contains(directory)) return null;
     if (self.listings.count() >= max_cached_dirs) self.invalidateListings();
 
+    self.publishWake();
     const job = ListJob.create(self, directory) catch return null;
     self.pending.put(self.gpa, job.directory, job) catch {
         job.destroy();
@@ -424,11 +450,51 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
         job.destroy();
         return null;
     };
-    // The disk answers inside this call; a mount answers from the host's per-frame `pump`,
-    // never here — this runs mid-draw, and a mount's completions may open or close documents.
-    if (target.mount == null) target.fs.pump();
+    // A mount answers from the host's per-frame `pump`, never here — this runs mid-draw, and a
+    // mount's completions may open or close documents. The disk reads on the `Io`'s pool, so a
+    // folder of hundreds of thousands of notes costs no frame its read; a small one lands within
+    // `inline_wait_ns` and is answered here, so opening an ordinary folder shows no "loading".
+    if (target.mount == null and comptime @import("builtin").target.cpu.arch != .wasm32) {
+        const give_up = std.Io.Clock.boot.now(self.io).nanoseconds + inline_wait_ns;
+        while (self.pending.contains(directory)) {
+            target.fs.pump();
+            if (std.Io.Clock.boot.now(self.io).nanoseconds >= give_up) break;
+            std.Thread.yield() catch {};
+        }
+    }
     if (self.listings.get(directory)) |listing| return listing;
     return null;
+}
+
+/// Hand the disk's pool threads the callback that asks for a frame. Set once, before the first
+/// read is started and never rewritten, so a thread that runs a read sees both fields whole.
+fn publishWake(self: *FileTable) void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
+    if (self.local.wake_ctx != null) return;
+    self.local.wake = wakeFrame;
+    self.local.wake_ctx = self;
+}
+
+/// How long `listDir` waits on the disk for a listing before leaving it to arrive on a later frame.
+const inline_wait_ns: i96 = 2 * std.time.ns_per_ms;
+
+/// A pool thread finished a listing: ask for the frame that delivers it (`pump`).
+fn wakeFrame(ctx: ?*anyopaque) void {
+    const self: *FileTable = @ptrCast(@alignCast(ctx.?));
+    self.env.refresh(self.env.ctx);
+}
+
+/// Whether `search` has more of the index to rank than it has ranked.
+pub fn ranking(self: *const FileTable) bool {
+    return self.rank_next < self.index.items.len;
+}
+
+/// How many entries of `directory` have been read so far while its listing is pending, or null
+/// when the listing is not a pending read of the disk (a mount does not say).
+pub fn listingProgress(self: *FileTable, directory: []const u8) ?usize {
+    const job = self.pending.get(directory) orelse return null;
+    if (self.isMounted(directory)) return null;
+    return self.local.listProgress(job.job);
 }
 
 /// One directory asked of a filesystem. Owns the path (which is also the `pending` key).
@@ -467,13 +533,15 @@ const ListJob = struct {
             table.env.refresh(table.env.ctx);
             return;
         };
-        defer vfs.freeEntries(table.gpa, entries);
+        // `install` takes the names; the slice that held them is ours to free.
+        defer table.gpa.free(entries);
         table.install(job.directory, entries, job.asked_at_ms);
         table.env.refresh(table.env.ctx);
     }
 };
 
-/// Screen, sort and cache a listing that just arrived for `directory`.
+/// Screen, sort and cache a listing that just arrived for `directory`. Takes ownership of the
+/// names in `raw` (kept ones become the listing's, the rest are freed); the slice is the caller's.
 fn install(self: *FileTable, directory: []const u8, raw: []const vfs.Entry, read_at_ms: i64) void {
     const gpa = self.gpa;
     var entries: std.ArrayList(Entry) = .empty;
@@ -485,20 +553,23 @@ fn install(self: *FileTable, directory: []const u8, raw: []const vfs.Entry, read
     var path_buf: [max_path_len]u8 = undefined;
 
     const on_mount = self.isMounted(directory);
+    entries.ensureTotalCapacity(gpa, raw.len) catch {};
     for (raw) |entry| {
         const kind: std.Io.File.Kind = if (entry.kind == .dir) .directory else .file;
         if (proj_root) |root| {
             const abs = (if (on_mount)
                 std.mem.print(&path_buf, "{s}/{s}", .{ directory, entry.name })
             else
-                std.mem.print(&path_buf, "{s}" ++ std.fs.path.sep_str ++ "{s}", .{ directory, entry.name })) catch continue;
-            if (self.env.ignored(self.env.ctx, root, abs, entry.name, kind)) continue;
+                std.mem.print(&path_buf, "{s}" ++ std.fs.path.sep_str ++ "{s}", .{ directory, entry.name })) catch {
+                gpa.free(entry.name);
+                continue;
+            };
+            if (self.env.ignored(self.env.ctx, root, abs, entry.name, kind)) {
+                gpa.free(entry.name);
+                continue;
+            }
         }
-        const name = gpa.dupe(u8, entry.name) catch continue;
-        entries.append(gpa, .{ .name = name, .kind = kind }) catch {
-            gpa.free(name);
-            continue;
-        };
+        entries.append(gpa, .{ .name = entry.name, .kind = kind }) catch gpa.free(entry.name);
     }
 
     const owned = entries.toOwnedSlice(gpa) catch {
@@ -506,7 +577,9 @@ fn install(self: *FileTable, directory: []const u8, raw: []const vfs.Entry, read
         entries.deinit(gpa);
         return;
     };
-    std.mem.sort(Entry, owned, {}, entryLessThan);
+    // The disk's listings arrive in order (`LocalFs`), and a pass to see that costs far less than
+    // sorting what is sorted.
+    if (!std.sort.isSorted(Entry, owned, {}, entryLessThan)) std.mem.sort(Entry, owned, {}, entryLessThan);
 
     var dir_count: usize = 0;
     while (dir_count < owned.len and owned[dir_count].kind == .directory) dir_count += 1;
@@ -540,13 +613,11 @@ fn install(self: *FileTable, directory: []const u8, raw: []const vfs.Entry, read
 /// filepath mode: `src/files.zig` beats `s/r/c/f/i/l/e/s.zig` for the query `srcfiles`, and a
 /// query containing a `/` is treated as a path constraint. A substring test on the basename alone
 /// could not express either.
-/// `arena` is scratch for the duration of the call only — the frame arena, in a draw.
-pub fn search(
-    self: *FileTable,
-    root: []const u8,
-    query_text: []const u8,
-    arena: std.mem.Allocator,
-) []const Entry {
+///
+/// The index is read, and the ranking done, a slice at a time over the frames that follow the
+/// first call: until they finish this returns the last answer (nothing, for a first query), and
+/// `indexing` / `ranking` say it is still going. A frame is asked for to carry it on.
+pub fn search(self: *FileTable, root: []const u8, query_text: []const u8) []const Entry {
     self.ensureIndex(root);
 
     var query = fuzzy.Query.init(query_text);
@@ -563,22 +634,51 @@ pub fn search(
     }
 
     const gpa = self.gpa;
-    const Hit = fuzzy.Ranked(usize);
-    var hits: std.ArrayList(Hit) = .empty;
 
-    for (self.index.items, 0..) |abs_path, i| {
+    // A new query, root or index starts the ranking over; the same ones carry it on.
+    if (self.rank_epoch != self.index_epoch or
+        !std.mem.eql(u8, self.rank_query, query_text) or
+        !std.mem.eql(u8, self.rank_root, root))
+    {
+        self.rank_hits.clearRetainingCapacity();
+        self.rank_next = 0;
+        self.rank_epoch = self.index_epoch;
+        if (self.rank_query.len > 0) gpa.free(self.rank_query);
+        self.rank_query = gpa.dupe(u8, query_text) catch &.{};
+        if (self.rank_root.len > 0) gpa.free(self.rank_root);
+        self.rank_root = gpa.dupe(u8, root) catch &.{};
+    }
+
+    // Scored for as long as the frame's share allows: the index can be hundreds of thousands of
+    // paths, and typing must not wait for all of them. What is shown meanwhile is the last answer.
+    const deadline = std.Io.Clock.boot.now(self.io).nanoseconds + rank_budget_ns;
+    while (self.rank_next < self.index.items.len) {
+        // Checked before any skip: a query that matches nothing still walks the whole index.
+        if (self.rank_next % 256 == 0 and std.Io.Clock.boot.now(self.io).nanoseconds >= deadline) break;
+        const i = self.rank_next;
+        self.rank_next += 1;
         // Only what sits under this root; the index may cover others too.
-        const rel = relativeTo(abs_path, root) orelse continue;
+        const rel = relativeTo(self.index.items[i], root) orelse continue;
         const score = fuzzy.score(rel, &query, .{ .plain = false }) orelse continue;
         // Shorter paths win ties — the same tie-break zf's own frontend uses.
-        hits.append(arena, .{ .item = i, .score = score, .tie = rel.len }) catch break;
+        self.rank_hits.append(gpa, .{ .item = i, .score = score, .tie = rel.len }) catch break;
+        // Only the best `max_results` can ever be shown: a stable sort keeps the earlier of two
+        // equal candidates, so cutting to them now is the same answer as ranking them all.
+        if (self.rank_hits.items.len >= 4 * max_results) {
+            fuzzy.sort(usize, self.rank_hits.items);
+            self.rank_hits.shrinkRetainingCapacity(max_results);
+        }
     }
-    fuzzy.sort(usize, hits.items);
+    if (self.rank_next < self.index.items.len) {
+        self.env.refresh(self.env.ctx);
+        return self.results.items;
+    }
+    fuzzy.sort(usize, self.rank_hits.items);
 
     // Results borrow the index strings, so they live exactly as long as the index does —
     // `freeIndex` drops them.
     self.results.clearRetainingCapacity();
-    for (hits.items) |hit| {
+    for (self.rank_hits.items) |hit| {
         if (self.results.items.len >= max_results) break;
         const abs_path = self.index.items[hit.item];
         self.results.append(gpa, .{
@@ -626,6 +726,7 @@ fn ensureIndex(self: *FileTable, root: []const u8) void {
         return;
     };
 
+    self.publishWake();
     const job = self.index_job orelse IndexJob.create(self) catch return;
     self.index_job = job;
     job.ask(root, 0);
@@ -644,6 +745,25 @@ const IndexJob = struct {
     /// Listings answered since the last `drive` iteration — how it knows the disk is still
     /// answering inline.
     answered: usize = 0,
+    /// Listings that landed and are still being indexed: a folder of hundreds of thousands of
+    /// entries is taken in over several frames (`work`), not in the one it landed in.
+    backlog: std.ArrayList(Batch) = .empty,
+    /// Inside `work`: a listing that lands from there only joins the backlog.
+    working: bool = false,
+
+    const Batch = struct {
+        directory: []u8,
+        depth: usize,
+        entries: []vfs.Entry,
+        /// Names before this are taken in and freed already.
+        next: usize = 0,
+
+        fn release(batch: Batch, gpa: std.mem.Allocator) void {
+            gpa.free(batch.directory);
+            for (batch.entries[batch.next..]) |e| gpa.free(e.name);
+            gpa.free(batch.entries);
+        }
+    };
 
     const DirReq = struct {
         job: *IndexJob,
@@ -669,6 +789,8 @@ const IndexJob = struct {
             table.gpa.destroy(req);
         }
         job.in_flight.deinit(table.gpa);
+        for (job.backlog.items) |batch| batch.release(table.gpa);
+        job.backlog.deinit(table.gpa);
         table.index_job = null;
         table.gpa.destroy(job);
     }
@@ -708,6 +830,9 @@ const IndexJob = struct {
         const table = job.table;
         while (true) {
             if (job.in_flight.items.len == 0) {
+                // A backlog left by `work` is taken in on later frames; tearing down now would
+                // drop it and leave the root marked indexed.
+                if (job.backlog.items.len != 0) return;
                 // Nothing left to hear back from (or nothing could be asked): finished, not
                 // cancelled — same teardown.
                 job.cancel();
@@ -729,10 +854,7 @@ const IndexJob = struct {
         const job = req.job;
         const table = job.table;
         const gpa = table.gpa;
-        defer {
-            gpa.free(req.directory);
-            gpa.destroy(req);
-        }
+        defer gpa.destroy(req);
         for (job.in_flight.items, 0..) |r, i| {
             if (r == req) {
                 _ = job.in_flight.swapRemove(i);
@@ -741,30 +863,72 @@ const IndexJob = struct {
         }
         job.answered += 1;
 
-        const entries = result catch return job.settle();
-        defer vfs.freeEntries(gpa, entries);
+        const entries = result catch {
+            gpa.free(req.directory);
+            return job.settle();
+        };
+        job.backlog.append(gpa, .{ .directory = req.directory, .depth = req.depth, .entries = entries }) catch {
+            gpa.free(req.directory);
+            vfs.freeEntries(gpa, entries);
+            return job.settle();
+        };
+        job.work();
+    }
 
-        const on_mount = table.isMounted(req.directory);
+    /// Index the backlog for as long as this frame's share allows, then carry on from `pump`.
+    fn work(job: *IndexJob) void {
+        if (job.working) return;
+        job.working = true;
+        const table = job.table;
+        const gpa = table.gpa;
+        const deadline = std.Io.Clock.boot.now(table.io).nanoseconds + index_budget_ns;
         const proj_root = table.env.root(table.env.ctx);
-        for (entries) |entry| {
-            if (table.index.items.len >= max_indexed_files) break;
-            const child = joinChild(gpa, req.directory, entry.name, on_mount) catch continue;
-            var keep = false;
-            defer if (!keep) gpa.free(child);
+        var spent = false;
+        while (job.backlog.items.len > 0 and !spent) {
+            const on_mount = table.isMounted(job.backlog.items[0].directory);
+            while (job.backlog.items[0].next < job.backlog.items[0].entries.len) {
+                // Re-taken each entry: a request made below may add to the backlog and move it.
+                const batch = &job.backlog.items[0];
+                if (batch.next % 128 == 0 and std.Io.Clock.boot.now(table.io).nanoseconds >= deadline) {
+                    spent = true;
+                    break;
+                }
+                if (table.index.items.len >= max_indexed_files) {
+                    for (batch.entries[batch.next..]) |e| gpa.free(e.name);
+                    batch.next = batch.entries.len;
+                    break;
+                }
+                const entry = batch.entries[batch.next];
+                batch.next += 1;
+                // Freed as it is taken in, not all at once when the batch ends: freeing hundreds
+                // of thousands of names in one go is a frame of its own.
+                defer gpa.free(entry.name);
+                const child = joinChild(gpa, batch.directory, entry.name, on_mount) catch continue;
+                var keep = false;
+                defer if (!keep) gpa.free(child);
 
-            const kind: std.Io.File.Kind = if (entry.kind == .dir) .directory else .file;
-            if (proj_root) |root| {
-                if (table.env.ignored(table.env.ctx, root, child, entry.name, kind)) continue;
+                const kind: std.Io.File.Kind = if (entry.kind == .dir) .directory else .file;
+                if (proj_root) |root| {
+                    if (table.env.ignored(table.env.ctx, root, child, entry.name, kind)) continue;
+                }
+                switch (entry.kind) {
+                    .file => {
+                        table.index.append(gpa, child) catch continue;
+                        keep = true;
+                    },
+                    .dir => job.ask(child, batch.depth + 1),
+                }
             }
-            switch (entry.kind) {
-                .file => {
-                    table.index.append(gpa, child) catch continue;
-                    keep = true;
-                },
-                .dir => job.ask(child, req.depth + 1),
+            table.index_generation += 1;
+            const batch = &job.backlog.items[0];
+            if (batch.next >= batch.entries.len) {
+                batch.release(gpa);
+                _ = job.backlog.orderedRemove(0);
             }
         }
-        table.index_generation += 1;
+        // Cleared before `settle`, which may free the job.
+        job.working = false;
+        if (spent) table.env.refresh(table.env.ctx);
         job.settle();
     }
 
@@ -773,7 +937,7 @@ const IndexJob = struct {
     fn settle(job: *IndexJob) void {
         const table = job.table;
         table.results_valid = false;
-        if (job.in_flight.items.len != 0) return;
+        if (job.in_flight.items.len != 0 or job.backlog.items.len != 0) return;
         job.cancel();
         table.env.refresh(table.env.ctx);
     }
@@ -792,6 +956,7 @@ fn freeIndex(self: *FileTable) void {
     for (self.index_roots.items) |r| self.gpa.free(r);
     self.index_roots.clearRetainingCapacity();
     self.index_generation += 1;
+    self.index_epoch += 1;
     // Results borrow the index strings.
     self.results_valid = false;
     self.results.clearRetainingCapacity();
@@ -1117,26 +1282,7 @@ fn freeListing(self: *FileTable, listing: *Listing) void {
     self.gpa.destroy(listing);
 }
 
-/// Display order for two names: case-insensitive, so `README.md`, `docs/` and `zig-out/` sort
-/// where a reader expects rather than splitting into an uppercase run followed by a lowercase one
-/// (`std.mem.order` compares raw bytes, and every uppercase ASCII letter sorts below every
-/// lowercase one).
-///
-/// Falls back to an exact byte comparison when two names differ only in case. That keeps the
-/// order *total* — without it `README` and `readme`, which can coexist on a case-sensitive
-/// filesystem, would compare equal and their relative position would depend on the sort's
-/// internals. `listingHasFile` binary-searches with this same function, so the tiebreak is load
-/// bearing, not cosmetic.
-pub fn nameOrder(a: []const u8, b: []const u8) std.math.Order {
-    const n = @min(a.len, b.len);
-    for (a[0..n], b[0..n]) |ca, cb| {
-        const la = std.ascii.toLower(ca);
-        const lb = std.ascii.toLower(cb);
-        if (la != lb) return if (la < lb) .lt else .gt;
-    }
-    if (a.len != b.len) return if (a.len < b.len) .lt else .gt;
-    return std.mem.order(u8, a, b);
-}
+pub const nameOrder = vfs.nameOrder;
 
 fn entryLessThan(_: void, lhs: Entry, rhs: Entry) bool {
     if (lhs.kind == .directory and rhs.kind != .directory) return true;
@@ -1233,7 +1379,7 @@ test "listDir sorts directories first and screens ignored names" {
     defer fx.deinit();
     const table = fx.wire();
 
-    const listing = table.listDir(fx.root) orelse return error.ListingFailed;
+    const listing = settledListDir(table, fx.root) orelse return error.ListingFailed;
     try t.expectEqual(@as(usize, 1), listing.dir_count);
     try t.expectEqualStrings("src", listing.entries[0].name);
     try t.expectEqualStrings("Alpha.zig", listing.entries[1].name);
@@ -1247,7 +1393,7 @@ test "a second listDir is served from the cache, and invalidation drops it" {
     defer fx.deinit();
     const table = fx.wire();
 
-    const first = table.listDir(fx.root) orelse return error.ListingFailed;
+    const first = settledListDir(table, fx.root) orelse return error.ListingFailed;
     // No watcher in the fixture, so freshness rests on the TTL — which has not elapsed, so this
     // must be the very same allocation rather than a re-read.
     try t.expectEqual(first, table.listDir(fx.root).?);
@@ -1260,17 +1406,38 @@ test "a second listDir is served from the cache, and invalidation drops it" {
     try t.expectEqual(@as(usize, 0), table.retired.items.len);
 }
 
+/// `listDir` once the disk has answered: the read runs on the `Io`'s pool and `listDir` waits only
+/// `inline_wait_ns` for it, so on a slow machine (a Windows runner) the first call is still null.
+fn settledListDir(table: *FileTable, directory: []const u8) ?*const Listing {
+    const give_up = std.Io.Clock.boot.now(table.io).nanoseconds + 10 * std.time.ns_per_s;
+    while (table.listDir(directory) == null and table.listingPending(directory)) {
+        if (std.Io.Clock.boot.now(table.io).nanoseconds >= give_up) return null;
+        table.pump();
+        std.Thread.yield() catch {};
+    }
+    return table.listDir(directory);
+}
+
+/// `search` run to the end: the disk's index lands and is ranked on later frames, so a test that
+/// wants the answer pumps until nothing is left to do.
+fn settledSearch(table: *FileTable, root: []const u8, query: []const u8) []const Entry {
+    const give_up = std.Io.Clock.boot.now(table.io).nanoseconds + 10 * std.time.ns_per_s;
+    var hits = table.search(root, query);
+    while ((table.indexing() or table.ranking()) and std.Io.Clock.boot.now(table.io).nanoseconds < give_up) {
+        table.pump();
+        std.Thread.yield() catch {};
+        hits = table.search(root, query);
+    }
+    return hits;
+}
+
 test "search ranks by relative path and prunes ignored directories" {
     const t = std.testing;
-    var arena_state = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     var fx = try Fixture.init(t.allocator);
     defer fx.deinit();
     const table = fx.wire();
 
-    const hits = table.search(fx.root, "main", arena);
+    const hits = settledSearch(table, fx.root, "main");
     try t.expectEqual(@as(usize, 1), hits.len);
     try t.expectEqualStrings("main.zig", hits[0].name);
     // Search results carry their own parent, since they come from all over the project.
@@ -1278,10 +1445,51 @@ test "search ranks by relative path and prunes ignored directories" {
 
     // The query matches `ignored/secret.zig` on name, so an empty result proves the walk pruned
     // the directory rather than filtering after the fact.
-    try t.expectEqual(@as(usize, 0), table.search(fx.root, "secret", arena).len);
+    try t.expectEqual(@as(usize, 0), settledSearch(table, fx.root, "secret").len);
 
     // An empty query is not a match-everything.
-    try t.expectEqual(@as(usize, 0), table.search(fx.root, "", arena).len);
+    try t.expectEqual(@as(usize, 0), settledSearch(table, fx.root, "").len);
+}
+
+test "a query matching nothing stops at its budget instead of scanning the whole index" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    // An index already built for the root, so `search` goes straight to ranking it.
+    table.index_stale = false;
+    try table.index_roots.append(t.allocator, try t.allocator.dupe(u8, fx.root));
+    const n = 1_000_000;
+    try table.index.ensureTotalCapacity(t.allocator, n);
+    for (0..n) |i| {
+        table.index.appendAssumeCapacity(try std.fmt.allocPrint(t.allocator, "{s}/dir{d}/file{d}.txt", .{ fx.root, i % 997, i }));
+    }
+
+    _ = table.search(fx.root, "qqqqqqqq");
+    try t.expect(table.rank_next > 0);
+    try t.expect(table.ranking());
+}
+
+test "a folder bigger than one frame's share is indexed whole" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    const count = 20_000;
+    var name_buf: [32]u8 = undefined;
+    for (0..count) |i| {
+        const name = try std.fmt.bufPrint(&name_buf, "bulk/n{d}.txt", .{i});
+        if (i == 0) try fx.tmp.dir.createDirPath(std.testing.io, "bulk");
+        try fx.tmp.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = "" });
+    }
+
+    _ = settledSearch(table, fx.root, "n19999");
+    try t.expect(!table.indexing());
+    try t.expectEqual(@as(usize, 1), settledSearch(table, fx.root, "n19999.txt").len);
+    // Entries from the tail of the listing, taken in after the first frame's share was spent.
+    try t.expectEqual(@as(usize, 1), settledSearch(table, fx.root, "bulk" ++ std.fs.path.sep_str ++ "n15000.txt").len);
 }
 
 test "noteFileModified re-reads a parent only for a name it has not seen" {
@@ -1294,7 +1502,7 @@ test "noteFileModified re-reads a parent only for a name it has not seen" {
     defer fx.deinit();
     const table = fx.wire();
 
-    _ = table.listDir(fx.root) orelse return error.ListingFailed;
+    _ = settledListDir(table, fx.root) orelse return error.ListingFailed;
 
     // A save of an already-listed file: nothing to do.
     table.noteFileModified(try fx.join(arena, "beta.zig"));
@@ -1330,12 +1538,12 @@ test "disk mutations complete inside the call and drop the caches" {
     const table = fx.wire();
     var sink: DoneSink = .{};
 
-    _ = table.listDir(fx.root) orelse return error.ListingFailed;
+    _ = settledListDir(table, fx.root) orelse return error.ListingFailed;
     try table.createFile(try fx.join(arena, "gamma.zig"), DoneSink.onDone, &sink);
     try t.expectEqual(@as(usize, 1), sink.calls);
     try t.expect(sink.err == null);
     try t.expectEqual(@as(usize, 0), table.listings.count());
-    const listing = table.listDir(fx.root) orelse return error.ListingFailed;
+    const listing = settledListDir(table, fx.root) orelse return error.ListingFailed;
     try t.expectEqual(@as(usize, 4), listing.entries.len);
 
     try table.createDir(try fx.join(arena, "docs"), DoneSink.onDone, &sink);
@@ -1391,7 +1599,7 @@ test "a mount answers paths under its prefix; the disk keeps the rest" {
     try t.expect(!table.isDir("mem://box/a.txt"));
 
     // The disk still works beside it.
-    try t.expect(table.listDir(fx.root) != null);
+    try t.expect(settledListDir(table, fx.root) != null);
 }
 
 test "a move across mounts copies the tree and removes the source" {
@@ -1552,10 +1760,6 @@ test "a mount that answers later is pending, then installed" {
 
 test "search walks a mount, and the disk beside it, as separate roots of one index" {
     const t = std.testing;
-    var arena_state = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     var fx = try Fixture.init(t.allocator);
     defer fx.deinit();
     const table = fx.wire();
@@ -1571,32 +1775,28 @@ test "search walks a mount, and the disk beside it, as separate roots of one ind
 
     // A mount root: walked through its listings (which land on the frame pump — two levels,
     // two frames), pruned by the same ignore rule as the disk.
-    try t.expectEqual(@as(usize, 0), table.search("mem://box", "main", arena).len);
+    try t.expectEqual(@as(usize, 0), table.search("mem://box", "main").len);
     table.pump();
     table.pump();
-    const cloud = table.search("mem://box", "main", arena);
+    const cloud = table.search("mem://box", "main");
     try t.expectEqual(@as(usize, 1), cloud.len);
     try t.expectEqualStrings("main.md", cloud[0].name);
     try t.expectEqualStrings("mem://box/notes", cloud[0].dir.?);
     try t.expect(!table.indexing());
 
     // The disk root joins the same index; each search sees only its own root.
-    const disk = table.search(fx.root, "main", arena);
+    const disk = settledSearch(table, fx.root, "main");
     try t.expectEqual(@as(usize, 1), disk.len);
     try t.expectEqualStrings("main.zig", disk[0].name);
     try t.expectEqual(@as(usize, 2), table.index_roots.items.len);
     // …and switching back is a re-rank, not a rebuild.
     const before = table.index_generation;
-    try t.expectEqual(@as(usize, 1), table.search("mem://box", "main", arena).len);
+    try t.expectEqual(@as(usize, 1), table.search("mem://box", "main").len);
     try t.expectEqual(before, table.index_generation);
 }
 
 test "search over a mount that answers later fills in across frames" {
     const t = std.testing;
-    var arena_state = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     var fx = try Fixture.init(t.allocator);
     defer fx.deinit();
     const table = fx.wire();
@@ -1638,22 +1838,22 @@ test "search over a mount that answers later fills in across frames" {
     defer table.unmount("slow://x");
 
     // Nothing has answered yet: no results, but the walk is on.
-    try t.expectEqual(@as(usize, 0), table.search("slow://x", "md", arena).len);
+    try t.expectEqual(@as(usize, 0), table.search("slow://x", "md").len);
     try t.expect(table.indexing());
     // The gate holds each listing for one pump. Frame 2: the root lands — `top.md` is
     // searchable, `deep/` has been asked; two frames later it lands too.
     table.pump();
     table.pump();
-    try t.expectEqual(@as(usize, 1), table.search("slow://x", "md", arena).len);
+    try t.expectEqual(@as(usize, 1), table.search("slow://x", "md").len);
     try t.expect(table.indexing());
     table.pump();
     table.pump();
-    try t.expectEqual(@as(usize, 2), table.search("slow://x", "md", arena).len);
+    try t.expectEqual(@as(usize, 2), table.search("slow://x", "md").len);
     try t.expect(!table.indexing());
 
     // Ending the session mid-walk cancels it cleanly (nothing leaks, nothing lands later).
     table.invalidateIndex();
-    try t.expectEqual(@as(usize, 0), table.search("slow://x", "md", arena).len);
+    try t.expectEqual(@as(usize, 0), table.search("slow://x", "md").len);
     try t.expect(table.indexing());
     table.invalidateIndex();
     try t.expect(!table.indexing());

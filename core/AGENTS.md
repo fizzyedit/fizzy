@@ -60,3 +60,8 @@ paths, fuzzy matching, the LSP client, the profiler.
   16.7 ms, so "half the fps" means the frame crossed the line. Log `CLOCK_THREAD_CPUTIME_ID` per
   frame, or `sample` the process and read the `nextDrawable` wait as headroom.
   `SDL_RENDER_VSYNC=0` stops holding once the window is frontmost.
+- **The disk answers a listing later, like a mount.** `FileTable.listDir` waits at most 2 ms for
+  `LocalFs`'s pool thread, then returns null and the answer lands on a later frame's `pump`;
+  `search` likewise indexes and ranks a slice per frame (`indexing`, `ranking`). A caller that
+  needs the whole answer pumps until they are false (`settledSearch` in `FileTable.zig`'s
+  tests); one that draws shows a loading row (`listingPending`, `listingProgress`).

@@ -37,7 +37,15 @@ pub const Ctx = struct {
 };
 
 pub fn init(gpa: std.mem.Allocator) !Ctx {
-    var t = try dvui.testing.init(.{ .allocator = gpa });
+    return initSized(gpa, null);
+}
+
+/// `init` with a window of `size` points, or dvui's default when null.
+pub fn initSized(gpa: std.mem.Allocator, size: ?dvui.Size) !Ctx {
+    var t = if (size) |sz|
+        try dvui.testing.init(.{ .allocator = gpa, .window_size = sz })
+    else
+        try dvui.testing.init(.{ .allocator = gpa });
     errdefer t.deinit();
 
     const app_ptr = try gpa.create(fizzy.Entry);

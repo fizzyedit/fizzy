@@ -315,7 +315,7 @@ fn drawOwnerBranch(
         drawOwnerGrid(editor, group, query, id_extra, platform, theme);
     }
 
-    if (!searching) setOwnerOpen(group.key, b.expanded);
+    if (!searching) if (b.requested) |open| setOwnerOpen(group.key, open);
 }
 
 /// Solid dot, drawn rather than iconified — lucide's circles are stroked outlines, and a

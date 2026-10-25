@@ -16,9 +16,9 @@
 //! checkpoint kept whole because its delta had come to half the document. Older
 //! checkpoints are thinned (`thin`), and past `cap` the oldest ended tracks go, then all but each
 //! open track's newest checkpoint (`shed`); steps and bases stay, since undo will walk them.
-//! Taking and diffing a checkpoint happen on the frame that takes it, on every target (the web has
-//! no threads); were that ever too long, the diff would be spread over the frames after, a slice
-//! each, the copy being immutable once taken. They record while `on`: in fizzy by default, as its
+//! A checkpoint's capture happens on the frame that takes it; its diff is spread over that frame
+//! and the ones after, `encode_slice` bytes a frame (`Track.pending`), on every target (the web has
+//! no threads), the copy being immutable once taken. They record while `on`: in fizzy by default, as its
 //! setting says (`record_history`, `FIZZY_TRACKS` over it). `zig build bench-tracks` measures what
 //! a step, a checkpoint and a replay cost.
 //!
@@ -106,6 +106,9 @@ pub const state_share = 1;
 /// replays at most that much step data to be spared a restore of the whole, and a big document is
 /// not captured again for the first step after a pause.
 pub const capture_share = 64;
+/// Bytes of a pending checkpoint compared in one frame's top: about 1 ms, which a debug build
+/// takes 30 times as long to compare.
+pub const encode_slice: usize = if (builtin.mode == .debug) 256 << 10 else 8 << 20;
 
 pub const Focus = struct {
     /// ms since the session's start.
@@ -130,6 +133,10 @@ pub const Track = struct {
     bytes: std.ArrayList(u8) = .empty,
     checkpoints: std.ArrayList(State) = .empty,
     checkpoint_due: bool = false,
+    /// The checkpoint being diffed, a slice a frame (`tick`). Its encoder borrows the latest whole
+    /// state, so that must stay until it is done (`settle`, `cancel`). While one is pending no
+    /// other is taken: `checkpoint_due` waits, and the next is late, never skipped.
+    pending: ?Pending = null,
     /// The size of the last checkpoint kept as a delta: about what the next will cost. 0 after a
     /// whole state, whose next delta starts small.
     state_len: usize = 0,
@@ -153,6 +160,12 @@ pub const Track = struct {
         ms: u32,
         effect: Span,
         motion: Span,
+    };
+
+    pub const Pending = struct {
+        /// The capture: whole until the encoder is done.
+        state: State,
+        encoder: state_delta.Encoder,
     };
 
     pub const Span = struct { start: usize, len: usize };
@@ -206,15 +219,25 @@ pub const Track = struct {
         return .{ .bytes = try state_delta.apply(gpa, self.wholeBefore(i), s.bytes), .owned = true };
     }
 
+    /// Drop the pending checkpoint, if any.
+    fn cancel(self: *Track, gpa: std.mem.Allocator) void {
+        var p = self.pending orelse return;
+        p.encoder.deinit();
+        gpa.free(p.state.bytes);
+        self.pending = null;
+    }
+
     /// Bytes this track holds.
     pub fn size(self: *const Track) usize {
         var n = self.bytes.items.len + self.steps.items.len * @sizeOf(Rec);
         if (self.base) |b| n += b.bytes.len;
         for (self.checkpoints.items) |c| n += c.bytes.len;
+        if (self.pending) |p| n += p.state.bytes.len;
         return n;
     }
 
     fn deinit(self: *Track, gpa: std.mem.Allocator) void {
+        self.cancel(gpa);
         if (self.base) |b| gpa.free(b.bytes);
         for (self.checkpoints.items) |c| gpa.free(c.bytes);
         self.checkpoints.deinit(gpa);
@@ -432,6 +455,7 @@ pub fn forget(self: *Tracks, doc: sdk.DocHandle) bool {
     };
     if (self.open.get(doc.id)) |t| {
         self.held -|= t.size();
+        t.cancel(self.gpa);
         if (t.base) |b| self.gpa.free(b.bytes);
         t.base = null;
         for (t.checkpoints.items) |c| self.gpa.free(c.bytes);
@@ -499,6 +523,7 @@ fn keepable(path: []const u8) bool {
 fn keep(self: *Tracks, t: *Track) void {
     // The web has no profile folder to keep them in (nor threads to wait out).
     if (comptime !can_keep) return;
+    self.settle(t);
     const k = self.encodeKept(t) orelse return;
     defer k.deinit(self.gpa);
     // A checkpoint's older copy, still being written, would land over this one.
@@ -655,6 +680,7 @@ fn pickUp(self: *Tracks, t: *Track) bool {
 }
 
 fn end(self: *Tracks, t: *Track) void {
+    self.settle(t);
     if (t.base == null) return self.drop(t);
     self.ended.append(self.gpa, t) catch self.drop(t);
 }
@@ -664,14 +690,16 @@ fn drop(self: *Tracks, t: *Track) void {
     t.deinit(self.gpa);
 }
 
-/// At the top of a frame, before anything draws: take each state a track asked for. Returns at
-/// once when none did.
+/// At the top of a frame, before anything draws: take each state a track asked for, and carry
+/// on the diff of each checkpoint taken, `encode_slice` bytes in all. Returns at once when none
+/// did.
 pub fn tick(self: *Tracks) void {
     if (!self.due) return;
     self.due = false;
     self.worked += 1;
     const prof = core.profile.begin("fizzy", "tracks.tick");
     defer prof.end();
+    var budget: usize = encode_slice;
     for (self.open.values()) |t| {
         const before = t.size();
         if (t.base == null) {
@@ -686,33 +714,77 @@ pub fn tick(self: *Tracks) void {
             }
             t.base = self.take(t.doc, 0) orelse continue;
             t.base_top = historyTop(t.doc, self.gpa) orelse 0;
+            t.checkpoint_due = false;
+            t.since_steps = 0;
+            t.since_bytes = 0;
+            t.state_len = 0;
+        } else if (t.pending != null) {
+            self.advance(t, &budget);
         } else if (t.checkpoint_due) {
-            var s = self.take(t.doc, t.steps.items.len) orelse continue;
-            // As what differs from the latest whole state, unless that is half the document or
-            // more: then whole, and the next ones differ from it.
-            const prof_delta = core.profile.begin("fizzy", "tracks.delta");
-            const encoded = state_delta.encode(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes);
-            prof_delta.end();
-            if (encoded) |delta| {
-                if (delta.len * 2 < s.bytes.len) {
-                    self.gpa.free(s.bytes);
-                    s.bytes = delta;
-                    s.whole = false;
-                } else self.gpa.free(delta);
-            } else |_| {}
-            t.checkpoints.append(self.gpa, s) catch {
-                self.gpa.free(s.bytes);
-                continue;
-            };
-            self.thin(t);
+            self.startCheckpoint(t, &budget);
         } else continue;
-        t.checkpoint_due = false;
-        t.since_steps = 0;
-        t.since_bytes = 0;
-        t.state_len = if (t.checkpoints.getLastOrNull()) |c| (if (c.whole) 0 else c.bytes.len) else 0;
+        // A diff not done carries on next frame (`due`, which the caller sees and asks a frame for).
+        if (t.pending != null) self.due = true;
         self.held = self.held - @min(self.held, before) + t.size();
     }
     if (self.held > self.cap) self.shed();
+}
+
+/// Take the checkpoint `t` asked for and start its diff.
+fn startCheckpoint(self: *Tracks, t: *Track, budget: *usize) void {
+    const s = self.take(t.doc, t.steps.items.len) orelse return;
+    t.pending = .{ .state = s, .encoder = .init(self.gpa, t.wholeBefore(t.checkpoints.items.len), s.bytes) };
+    t.checkpoint_due = false;
+    t.since_steps = 0;
+    t.since_bytes = 0;
+    self.advance(t, budget);
+}
+
+/// Compare on within `budget`, and keep the checkpoint once its diff is done.
+fn advance(self: *Tracks, t: *Track, budget: *usize) void {
+    const p = &t.pending.?;
+    const prof_delta = core.profile.begin("fizzy", "tracks.delta");
+    const done = p.encoder.step(budget) catch {
+        // Out of memory: kept whole, as when the diff cannot be made.
+        prof_delta.end();
+        return self.keepPending(t, null);
+    };
+    if (!done) return prof_delta.end();
+    const encoded = p.encoder.finish();
+    prof_delta.end();
+    self.keepPending(t, encoded);
+}
+
+/// Put `t`'s pending checkpoint among its checkpoints: as `delta`, the diff from the latest whole
+/// state, unless that is half the document or more (or null): then whole, and the next ones differ
+/// from it.
+fn keepPending(self: *Tracks, t: *Track, delta: ?[]u8) void {
+    var s = t.pending.?.state;
+    t.pending.?.encoder.deinit();
+    t.pending = null;
+    if (delta) |d| {
+        if (d.len * 2 < s.bytes.len) {
+            self.gpa.free(s.bytes);
+            s.bytes = d;
+            s.whole = false;
+        } else self.gpa.free(d);
+    }
+    t.checkpoints.append(self.gpa, s) catch {
+        self.gpa.free(s.bytes);
+        return;
+    };
+    self.thin(t);
+    t.state_len = if (t.checkpoints.getLastOrNull()) |c| (if (c.whole) 0 else c.bytes.len) else 0;
+    if (t.checkpoint_due) self.due = true;
+}
+
+/// Finish `t`'s pending checkpoint now, for what must read or free all of its states.
+fn settle(self: *Tracks, t: *Track) void {
+    if (t.pending == null) return;
+    const before = t.size();
+    var budget: usize = std.math.maxInt(usize);
+    self.advance(t, &budget);
+    self.held = self.held - @min(self.held, before) + t.size();
 }
 
 /// Thin `t`'s checkpoints older than `dense_ms` to one per `sparse_steps` steps: a seek that far
@@ -1512,9 +1584,123 @@ test "a big document is not captured again for a step after a pause, but still c
     for (0..BigStand.size / capture_share / chunk.len + 1) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 2 + i, .effect = &chunk });
     Stand.clock_ns += 60 * std.time.ns_per_s;
     rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 1000, .effect = &small });
-    t.tick();
+    while (t.due) t.tick();
     try testing.expectEqual(@as(usize, 2), BigStand.captures);
     try testing.expectEqual(@as(usize, 1), t.trackOf(1).?.checkpoints.items.len);
+}
+
+/// A `BigStand` track with its checkpoint asked for, `BigStand.bytes` changed in a few places
+/// since the base. The caller restores the bytes.
+fn bigAsked(t: *Tracks) *Track {
+    BigStand.captures = 0;
+    t.clock = Stand.clock;
+    Stand.clock_ns = 0;
+    t.on = true;
+    t.opened(BigStand.doc(1));
+    t.tick();
+    for ([_]usize{ 1000, BigStand.size / 3, BigStand.size - 5000 }) |at| @memset(BigStand.bytes[at..][0..300], 0xee);
+    const rec = t.recorder();
+    const small: [8]u8 = @splat(1);
+    for (0..checkpoint_max_steps) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = i + 1, .effect = &small });
+    return t.trackOf(1).?;
+}
+
+test "a big document's checkpoint is diffed a slice a frame, and is the one a whole diff makes" {
+    defer @memset(&BigStand.bytes, 0);
+    var t: Tracks = .init(testing.allocator);
+    defer t.deinit();
+    const track = bigAsked(&t);
+    const base = track.base.?.bytes;
+    var frames: usize = 0;
+    var progress: usize = 0;
+    while (t.due) : (frames += 1) {
+        t.tick();
+        // No frame compares or writes more than its slice, a block over for where it stopped and
+        // a run's counts for the header; the one that finishes it hands the delta over, which
+        // moves no bytes.
+        if (track.pending) |p| {
+            const worked = p.encoder.prefix + p.encoder.suffix + p.encoder.it.at + p.encoder.out.items.len;
+            try testing.expect(worked - progress <= encode_slice + 2 * state_delta.block + 64);
+            progress = worked;
+        } else try testing.expect(track.checkpoints.items[0].bytes.len < 1024);
+        // The first frame took the capture and one slice; nothing is kept until the diff is done.
+        if (frames == 0) {
+            try testing.expect(track.pending != null);
+            try testing.expectEqual(@as(usize, 0), track.checkpoints.items.len);
+            // A seek meanwhile starts from the base, not the pending one.
+            try testing.expect(track.stateBefore(track.steps.items.len) == &track.base.?);
+        }
+    }
+    try testing.expect(frames >= BigStand.size / encode_slice);
+    try testing.expect(frames <= BigStand.size / encode_slice + 4);
+    try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
+    try testing.expect(track.pending == null and !track.checkpoint_due);
+    const c = track.checkpoints.items[0];
+    try testing.expectEqual(@as(usize, checkpoint_max_steps), c.step);
+    const want = try state_delta.encode(testing.allocator, base, &BigStand.bytes);
+    defer testing.allocator.free(want);
+    try testing.expect(!c.whole);
+    try testing.expectEqualSlices(u8, want, c.bytes);
+    const whole = try track.wholeState(testing.allocator, &track.checkpoints.items[0]);
+    defer if (whole.owned) testing.allocator.free(whole.bytes);
+    try testing.expectEqualSlices(u8, &BigStand.bytes, whole.bytes);
+}
+
+test "a step asked for a checkpoint while one is pending waits, and is taken after" {
+    defer @memset(&BigStand.bytes, 0);
+    var t: Tracks = .init(testing.allocator);
+    defer t.deinit();
+    const track = bigAsked(&t);
+    t.tick();
+    try testing.expect(track.pending != null);
+    const rec = t.recorder();
+    const small: [8]u8 = @splat(1);
+    for (0..checkpoint_max_steps) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = 10_000 + i, .effect = &small });
+    try testing.expect(track.checkpoint_due);
+    while (t.due) t.tick();
+    try testing.expectEqual(@as(usize, 2), track.checkpoints.items.len);
+    try testing.expectEqual(@as(usize, 2 * checkpoint_max_steps), track.checkpoints.items[1].step);
+    try testing.expectEqual(t.held, track.size());
+}
+
+test "a pending checkpoint is kept when its track ends or sheds, and freed when its track goes" {
+    defer @memset(&BigStand.bytes, 0);
+    // Closed: the diff is finished first.
+    {
+        var t: Tracks = .init(testing.allocator);
+        defer t.deinit();
+        _ = bigAsked(&t);
+        t.tick();
+        t.closed(1);
+        try testing.expectEqual(@as(usize, 1), t.trackOf(1).?.checkpoints.items.len);
+        try testing.expectEqual(t.held, t.trackOf(1).?.size());
+    }
+    // Deinit with one pending: nothing leaks (the testing allocator).
+    {
+        var t: Tracks = .init(testing.allocator);
+        defer t.deinit();
+        _ = bigAsked(&t);
+        t.tick();
+    }
+    // Shed over the cap: the pending diff and its reference stay, and it finishes. Even with a
+    // cap below one track's base, the ticks end.
+    {
+        var t: Tracks = .init(testing.allocator);
+        defer t.deinit();
+        const track = bigAsked(&t);
+        t.tick();
+        t.cap = 0;
+        t.shed();
+        try testing.expect(track.pending != null and !track.checkpoint_due);
+        try testing.expectEqual(t.held, track.size());
+        var frames: usize = 0;
+        while (t.due) : (frames += 1) {
+            try testing.expect(frames < 2 * BigStand.size / encode_slice + 8);
+            t.tick();
+        }
+        try testing.expect(track.pending == null and !track.checkpoint_due);
+        try testing.expectEqual(@as(usize, 1), track.checkpoints.items.len);
+    }
 }
 
 test "checkpoints older than an hour thin to one per sparse_steps" {

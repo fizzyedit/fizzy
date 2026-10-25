@@ -205,6 +205,7 @@ pub const Watches = struct {
     }
 
     /// Watch the root and every folder under it not skipped, when it is opened.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn walk(self: *Watches, io: std.Io, ctx: anytype) void {
         self.walkFrom(io, self.root, .{}, ctx);
     }
@@ -212,6 +213,7 @@ pub const Watches = struct {
     /// `dir` was created, and is watched only now: whatever was made in it before then had
     /// no event, so it is announced — unless `announced`, when the backend already did (a
     /// folder moved in from outside the tree, which inotify reports with all it holds).
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn appeared(self: *Watches, io: std.Io, dir: []const u8, announced: bool, ctx: anytype) void {
         if (!inside(dir, self.root) or underSegment(self.root, dir, skipWatchDir)) return;
         if (self.contains(dir)) {
@@ -223,6 +225,7 @@ pub const Watches = struct {
     }
 
     /// Go on from where walks stopped. Call after a batch of folder events, not per event.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn catchUp(self: *Watches, io: std.Io, ctx: anytype) void {
         // Each entry once per call: one refused again goes back on the frontier, not round
         // this loop for ever.
@@ -244,6 +247,7 @@ pub const Watches = struct {
         }
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn walkFrom(self: *Watches, io: std.Io, dir: []const u8, pass: Pass, ctx: anytype) void {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         if (dir.len > buf.len) {
@@ -304,6 +308,7 @@ pub const Watches = struct {
     }
 
     /// False when the walk stopped before the tree ran out.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn walkDir(self: *Watches, io: std.Io, buf: *[std.fs.max_path_bytes]u8, len: usize, pass: Pass, top: bool, ctx: anytype) bool {
         if (self.cancel.load(.acquire)) return false;
         const path = buf[0..len];
@@ -381,6 +386,7 @@ pub const Watches = struct {
     }
 
     /// A folder that couldn't be opened to walk.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn unreadable(self: *Watches, path: []const u8, err: std.Io.Dir.OpenError, owed: Owed, ctx: anytype) void {
         switch (err) {
             // Gone already: nothing to watch.
@@ -394,6 +400,7 @@ pub const Watches = struct {
         }
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn watch(self: *Watches, path: []const u8, ctx: anytype) Watched {
         if (self.paths.items.len + self.fresh.items.len >= self.limit) return self.block(.cap, ctx);
         return self.add(path, 2, ctx);
@@ -401,6 +408,7 @@ pub const Watches = struct {
 
     /// Add a watch on `path`, asking why when refused; `tries` bounds the retries a refusal
     /// that has since cleared up gets.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn add(self: *Watches, path: []const u8, tries: u8, ctx: anytype) Watched {
         ctx.add(path) catch |err| switch (err) {
             error.OutOfMemory => {
@@ -429,6 +437,7 @@ pub const Watches = struct {
         return .added;
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn degrade(self: *Watches, ctx: anytype) void {
         if (self.degraded) return;
         self.degraded = true;
@@ -436,6 +445,7 @@ pub const Watches = struct {
     }
 
     /// `path` is left out for good, said once.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn lose(self: *Watches, path: []const u8, reason: []const u8, ctx: anytype) Watched {
         const gop = self.lost.getOrPut(self.gpa, path) catch {
             self.degrade(ctx);
@@ -452,6 +462,7 @@ pub const Watches = struct {
     }
 
     /// An entry of `dir` whose path is too long to walk.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn loseLong(self: *Watches, dir: []const u8, name: []const u8, ctx: anytype) void {
         const p = self.gpa.print("{s}{c}{s}", .{ dir, std.fs.path.sep, name }) catch return self.degrade(ctx);
         defer self.gpa.free(p);
@@ -470,6 +481,7 @@ pub const Watches = struct {
         }
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn block(self: *Watches, why: Blocked, ctx: anytype) Watched {
         if (self.said != why) ctx.say(.{ .blocked = .{ .why = why, .watched = self.paths.items.len + self.fresh.items.len } });
         self.said = why;
@@ -477,6 +489,7 @@ pub const Watches = struct {
         return .blocked;
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn leftOut(self: *Watches, path: []const u8, owed: Owed, ctx: anytype) void {
         const gop = self.frontier.getOrPut(self.gpa, path) catch return self.degrade(ctx);
         if (gop.found_existing) {
@@ -491,6 +504,7 @@ pub const Watches = struct {
     }
 
     /// Frontier entries at or under `src` follow it to `dst`, or go, with no `dst`.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn reframe(self: *Watches, src: []const u8, dst: ?[]const u8, ctx: anytype) void {
         var f: usize = 0;
         while (f < self.frontier.count()) {
@@ -545,6 +559,7 @@ pub const Watches = struct {
     /// Take `dir` and what is below it out of `paths` without allocating. With `remove`, each
     /// watch goes too, named as the backend knows it now: under `as` when it has been moved
     /// there. Returns how many keys went.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn drop(self: *Watches, dir: []const u8, remove: bool, as: ?[]const u8, ctx: anytype) usize {
         const start, const end = self.below(dir);
         const at = self.indexOf(dir);
@@ -557,6 +572,7 @@ pub const Watches = struct {
         return n;
     }
 
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     fn dropKey(self: *Watches, k: []u8, dir: []const u8, remove: bool, as: ?[]const u8, buf: *[std.fs.max_path_bytes]u8, ctx: anytype) void {
         defer self.gpa.free(k);
         if (!remove) return;
@@ -569,6 +585,7 @@ pub const Watches = struct {
     /// `dir` left the tree: deleted (the OS dropped its watches with it) or moved out (it
     /// kept them). Either way they are removed, which also clears the backend's own record,
     /// and nothing below it is waited for or lost any longer.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn gone(self: *Watches, dir: []const u8, ctx: anytype) void {
         if (self.drop(dir, true, null, ctx) > 0) self.blocked = null;
         self.forgetLost(dir);
@@ -580,6 +597,7 @@ pub const Watches = struct {
     /// of the tree, where they are removed. A folder moved in from a skipped name is walked,
     /// its contents announced: the backend reports the rename alone, and nothing was said
     /// about them while it was out of view.
+    // anytype: Native watch backends and test contexts supply add/remove/created/say callbacks.
     pub fn moved(self: *Watches, io: std.Io, src: []const u8, dst: []const u8, ctx: anytype) void {
         if (!inside(dst, self.root)) return self.gone(src, ctx);
         // Renamed over an empty folder: that folder's key goes. Not its watch: the OS dropped

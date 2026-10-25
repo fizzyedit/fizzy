@@ -124,13 +124,32 @@ pub const files_tab = "fizzy.mobile.tab:workbench.files";
 pub const store_icon = "fizzy.rail:fizzy.store";
 pub const store_tab = "fizzy.mobile.tab:fizzy.store";
 
-/// Open `rel` the way a person who keeps the explorer put away would: open the explorer from the
-/// rail, click the file, and put the explorer away again so the editor has the room. A demo's
-/// keyframe starts with the explorer put away (`Keyframe.Layout.focused`).
+/// Open `rel` the way a person would: from the explorer, which the rail or the bar brings up only
+/// when its place is not showing already, then the file's row. On a desktop the explorer stays as it
+/// is after. On a phone its sheet covers the document, so one the demo brought up it puts away
+/// again, and one the person had open stays.
 pub fn openFile(s: *Script, rel: []const u8) !void {
-    const opener = if (s.compact) files_tab else files_icon;
-    try s.click(.{ .tag = opener }, .{});
-    try s.click(.{ .tag = try file(s, rel) }, .{});
+    const row = try file(s, rel);
+    const explorer = try place(s, "role:explorer");
+    // The choice reads a frame drawn after whatever came before settled.
+    try s.waitIdle(.{});
+    if (!s.compact) {
+        const skip = try s.skipIfShown(explorer);
+        try s.click(.{ .tag = files_icon }, .{});
+        s.endSkip(skip);
+        try s.click(.{ .tag = row }, .{});
+        try s.waitFor(try editor(s, rel), .{});
+        return;
+    }
+    const brought = try s.skipIfShown(explorer);
+    try s.click(.{ .tag = files_tab }, .{});
+    try s.click(.{ .tag = row }, .{});
     try s.waitFor(try editor(s, rel), .{});
-    try s.click(.{ .tag = opener }, .{});
+    try s.click(.{ .tag = files_tab }, .{});
+    try s.waitGone(explorer, .{});
+    s.endSkip(brought);
+    const theirs = try s.skipIfGone(explorer);
+    try s.click(.{ .tag = row }, .{});
+    try s.waitFor(try editor(s, rel), .{});
+    s.endSkip(theirs);
 }

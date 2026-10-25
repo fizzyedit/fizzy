@@ -83,19 +83,35 @@ pub fn main(init: std.process.Init) !void {
 
 /// Write `t` as `<name>.tape` in `out`, having read it back from those bytes. The row is `arena`'s:
 /// the tape goes before the index is written.
-fn emit(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, out: std.Io.Dir, rows: []const Row, name: []const u8, t: Tape, live: bool) !Row {
+fn emit(
+    arena: std.mem.Allocator,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    out: std.Io.Dir,
+    rows: []const Row,
+    name: []const u8,
+    t: Tape,
+    live: bool,
+) !Row {
     for (rows) |r| if (std.mem.eql(u8, r.name, name)) return fail("two tapes are named '{s}'", .{name});
     var bytes: std.Io.Writer.Allocating = .init(arena);
     try tape.binary.write(gpa, t, &bytes.writer, .{ .deflate = true });
     var c = check;
     c.live = live;
-    var back = tape.binary.read(gpa, bytes.written(), c) catch |err| return fail("{s}: its tape does not read back: {t}", .{ name, err });
+    var back = tape.binary.read(gpa, bytes.written(), c) catch |err|
+        return fail("{s}: its tape does not read back: {t}", .{ name, err });
     defer back.deinit();
     if (back.tape.ops.len != t.ops.len or back.tape.duration() != t.duration())
         return fail("{s}: its tape reads back as another", .{name});
     const file = try arena.print("{s}.tape", .{name});
     try out.writeFile(io, .{ .sub_path = file, .data = bytes.written() });
-    return .{ .name = try arena.dupe(u8, name), .title = try arena.dupe(u8, t.title), .file = file, .ms = t.duration(), .live = live };
+    return .{
+        .name = try arena.dupe(u8, name),
+        .title = try arena.dupe(u8, t.title),
+        .file = file,
+        .ms = t.duration(),
+        .live = live,
+    };
 }
 
 fn fail(comptime fmt: []const u8, args: anytype) error{DemoFailed} {
