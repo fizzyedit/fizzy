@@ -1379,7 +1379,7 @@ test "listDir sorts directories first and screens ignored names" {
     defer fx.deinit();
     const table = fx.wire();
 
-    const listing = table.listDir(fx.root) orelse return error.ListingFailed;
+    const listing = settledListDir(table, fx.root) orelse return error.ListingFailed;
     try t.expectEqual(@as(usize, 1), listing.dir_count);
     try t.expectEqualStrings("src", listing.entries[0].name);
     try t.expectEqualStrings("Alpha.zig", listing.entries[1].name);
@@ -1393,7 +1393,7 @@ test "a second listDir is served from the cache, and invalidation drops it" {
     defer fx.deinit();
     const table = fx.wire();
 
-    const first = table.listDir(fx.root) orelse return error.ListingFailed;
+    const first = settledListDir(table, fx.root) orelse return error.ListingFailed;
     // No watcher in the fixture, so freshness rests on the TTL — which has not elapsed, so this
     // must be the very same allocation rather than a re-read.
     try t.expectEqual(first, table.listDir(fx.root).?);
@@ -1404,6 +1404,18 @@ test "a second listDir is served from the cache, and invalidation drops it" {
     try t.expectEqual(@as(usize, 1), table.retired.items.len);
     table.releaseRetired();
     try t.expectEqual(@as(usize, 0), table.retired.items.len);
+}
+
+/// `listDir` once the disk has answered: the read runs on the `Io`'s pool and `listDir` waits only
+/// `inline_wait_ns` for it, so on a slow machine (a Windows runner) the first call is still null.
+fn settledListDir(table: *FileTable, directory: []const u8) ?*const Listing {
+    const give_up = std.Io.Clock.boot.now(table.io).nanoseconds + 10 * std.time.ns_per_s;
+    while (table.listDir(directory) == null and table.listingPending(directory)) {
+        if (std.Io.Clock.boot.now(table.io).nanoseconds >= give_up) return null;
+        table.pump();
+        std.Thread.yield() catch {};
+    }
+    return table.listDir(directory);
 }
 
 /// `search` run to the end: the disk's index lands and is ranked on later frames, so a test that
@@ -1477,7 +1489,7 @@ test "a folder bigger than one frame's share is indexed whole" {
     try t.expect(!table.indexing());
     try t.expectEqual(@as(usize, 1), settledSearch(table, fx.root, "n19999.txt").len);
     // Entries from the tail of the listing, taken in after the first frame's share was spent.
-    try t.expectEqual(@as(usize, 1), settledSearch(table, fx.root, "bulk/n15000.txt").len);
+    try t.expectEqual(@as(usize, 1), settledSearch(table, fx.root, "bulk" ++ std.fs.path.sep_str ++ "n15000.txt").len);
 }
 
 test "noteFileModified re-reads a parent only for a name it has not seen" {
@@ -1490,7 +1502,7 @@ test "noteFileModified re-reads a parent only for a name it has not seen" {
     defer fx.deinit();
     const table = fx.wire();
 
-    _ = table.listDir(fx.root) orelse return error.ListingFailed;
+    _ = settledListDir(table, fx.root) orelse return error.ListingFailed;
 
     // A save of an already-listed file: nothing to do.
     table.noteFileModified(try fx.join(arena, "beta.zig"));
@@ -1526,12 +1538,12 @@ test "disk mutations complete inside the call and drop the caches" {
     const table = fx.wire();
     var sink: DoneSink = .{};
 
-    _ = table.listDir(fx.root) orelse return error.ListingFailed;
+    _ = settledListDir(table, fx.root) orelse return error.ListingFailed;
     try table.createFile(try fx.join(arena, "gamma.zig"), DoneSink.onDone, &sink);
     try t.expectEqual(@as(usize, 1), sink.calls);
     try t.expect(sink.err == null);
     try t.expectEqual(@as(usize, 0), table.listings.count());
-    const listing = table.listDir(fx.root) orelse return error.ListingFailed;
+    const listing = settledListDir(table, fx.root) orelse return error.ListingFailed;
     try t.expectEqual(@as(usize, 4), listing.entries.len);
 
     try table.createDir(try fx.join(arena, "docs"), DoneSink.onDone, &sink);
@@ -1587,7 +1599,7 @@ test "a mount answers paths under its prefix; the disk keeps the rest" {
     try t.expect(!table.isDir("mem://box/a.txt"));
 
     // The disk still works beside it.
-    try t.expect(table.listDir(fx.root) != null);
+    try t.expect(settledListDir(table, fx.root) != null);
 }
 
 test "a move across mounts copies the tree and removes the source" {
