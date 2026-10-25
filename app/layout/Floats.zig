@@ -668,6 +668,22 @@ fn drawOne(l: *Layout, i: usize) bool {
     // For demo tapes (`docs/AUTOMATION.md`): its header, to move it by, and its close button.
     core.anchor.markRect(win_id, header, true, "float-header:{s}", .{first.name});
     if (header_close) |r| core.anchor.markRect(win_id, r, true, "float-close:{s}", .{first.name});
+    // The OS draws the close button of a float that is its own window, outside the frame: a real
+    // click there never reaches it. A tape aims at the same spot in the frame (the leading
+    // traffic light), and a press there closes the float as the OS button does.
+    if (header_close == null and osButtons(first) and core.anchor.wanted()) {
+        const side = 12 * scale;
+        const spot: dvui.Rect.Physical = .{ .x = header.x + 7 * scale, .y = header.y + (header.h - side) / 2, .w = side, .h = side };
+        core.anchor.markRect(win_id, spot, true, "float-close:{s}", .{first.name});
+        for (dvui.events()) |*e| {
+            if (e.evt != .mouse or e.handled) continue;
+            const me = e.evt.mouse;
+            if (me.action != .press or !me.button.pointer()) continue;
+            if (!dvui.eventMatch(e, .{ .id = win_id, .r = spot })) continue;
+            e.handle(@src(), win.data());
+            open = false;
+        }
+    }
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
     // the drop put it — nor while it is out of the way. Not over its OS window's own buttons
     // either, which are theirs: the move cursor showed over the traffic lights.

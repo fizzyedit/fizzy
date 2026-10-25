@@ -2829,7 +2829,7 @@ fn showNewDocumentChooser(parent_path: ?[]const u8) void {
     mutex.mutex.unlock(dvui.io);
 }
 
-fn newDocumentChooserDisplay(id: dvui.Id) anyerror!bool {
+fn newDocumentChooserDisplay(id: dvui.Id) core.dialogs.Error!bool {
     const host = runtime.host();
     const has_parent = dvui.dataGet(null, id, "_nf_has_parent", bool) orelse false;
     const parent_path: ?[]const u8 = if (has_parent) dvui.dataGetSlice(null, id, "_nf_parent_path", []u8) else null;

@@ -1537,9 +1537,30 @@ const ScrollWatch = struct {
 
 /// A surface's draw, timed in the frame profiler under its owner (fizzy's own when it has none)
 /// and its id.
-fn surfaceDraw(s: *Surface) anyerror!dvui.App.Result {
+fn surfaceDraw(s: *Surface) Region.Error!dvui.App.Result {
     const prof = core.profile.begin(if (s.owner) |o| o.id else "fizzy", s.id);
     defer prof.end();
-    const owner = s.owner orelse return s.draw(s.ctx);
-    return s.draw(s.ctx) catch |err| owner.failed(s.id, err);
+    return s.draw(s.ctx) catch |err| if (s.owner) |o| o.failed(s.id, err) else switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => {
+            dvui.log.err("{s}: draw failed: {s}", .{ s.id, @errorName(err) });
+            return error.Failed;
+        },
+    };
+}
+
+test "a surface's draw failure reaches a caller as Region.Error; an allocation keeps its name" {
+    const fns = struct {
+        // lint-allow(anyerror): `Surface.draw`'s own type.
+        fn starved(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return error.OutOfMemory;
+        }
+    };
+    var s: Surface = .{ .id = "test.surface", .title = "Test", .draw = fns.starved };
+    const why: []const u8 = if (surfaceDraw(&s)) |_| "ok" else |err| switch (err) {
+        error.OutOfMemory => "oom",
+        error.PluginFailed => "plugin",
+        error.Failed => "failed",
+    };
+    try std.testing.expectEqualStrings("oom", why);
 }

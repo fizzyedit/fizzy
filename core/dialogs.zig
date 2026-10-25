@@ -744,8 +744,20 @@ pub fn takeDialogCloseRectOverride() ?dvui.Rect.Physical {
     return rect;
 }
 
-pub const DisplayFn = *const fn (dvui.Id) anyerror!bool;
-pub const CallAfterFn = *const fn (dvui.Id, dvui.enums.DialogResponse) anyerror!void;
+/// What a dialog's `displayFn` and `callafterFn` can fail with. `dialogWindow` logs it and carries
+/// on, so the cause matters only to the log: `Failed` is whatever the dialog's own code raised.
+pub const Error = error{ OutOfMemory, Failed };
+
+/// `err`, raised by `what` in a dialog's own code, as the `Error` a `displayFn` returns; the cause
+/// is logged because `Failed` carries none.
+pub fn failed(what: []const u8, err: anyerror) Error {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
+    dvui.log.err("dialog {s} failed: {s}", .{ what, @errorName(err) });
+    return error.Failed;
+}
+
+pub const DisplayFn = *const fn (dvui.Id) Error!bool;
+pub const CallAfterFn = *const fn (dvui.Id, dvui.enums.DialogResponse) Error!void;
 
 /// Header type icon for `windowHeader` (glyph only). Placement follows `dvui.currentWindow().button_order`:
 /// `.cancel_ok` (macOS): dismiss close on the leading edge, icon on the trailing edge.
@@ -789,14 +801,14 @@ pub const DialogOptions = struct {
     header_kind: DialogHeaderKind = .none,
 };
 
-pub fn defaultDialogDisplay(id: dvui.Id) anyerror!bool {
+pub fn defaultDialogDisplay(id: dvui.Id) Error!bool {
     // Placeholder body; every real dialog supplies its own `displayFn`. Kept free
     // of plugin (atlas/sprite) draws so the core dialog code stays plugin-agnostic.
     _ = id;
     return true;
 }
 
-pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void {
+pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) Error!void {
     switch (response) {
         .ok => {
             dvui.log.info("Dialog callafter for {d} returned {any}", .{ id, response });
@@ -887,6 +899,7 @@ pub fn closeFloatingDialogAnchored() void {
     dvui.dataSet(null, sub.id, "_close_rect", close_rect);
 }
 
+// lint-allow(anyerror): this is `dvui.Dialog.DisplayFn`, dvui's own type, which a dialog window must match.
 pub fn dialogWindow(id: dvui.Id) anyerror!void {
     // Shown after dvui has stopped capturing the frame: in one an agent is taking a snapshot of,
     // the dialog captures itself (`replay.Snapshot.scopeBegin`).
@@ -1914,4 +1927,19 @@ test "a toast's surface is the window's material: frosted with the blur on, fill
     // `transparent` and `none` have no blur: a plain fill, and no frost (`LiquidField` is not
     // there to draw clear glass in the testing backend).
     try std.testing.expect(!try fns.drawnAt(0));
+}
+
+test "a dialog's failure is one of Error, and only an allocation failure keeps its name" {
+    const fns = struct {
+        fn display(_: dvui.Id) Error!bool {
+            return error.Failed;
+        }
+    };
+    const df: DisplayFn = fns.display;
+    const why: []const u8 = if (df(dvui.Id.zero)) |_| "ok" else |err| switch (err) {
+        error.OutOfMemory => "oom",
+        error.Failed => "failed",
+    };
+    try std.testing.expectEqualStrings("failed", why);
+    try std.testing.expectEqual(@as(Error, error.OutOfMemory), failed("test", error.OutOfMemory));
 }

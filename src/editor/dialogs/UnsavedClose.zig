@@ -27,7 +27,7 @@ fn fileBasename(file_id: u64) []const u8 {
     return std.fs.path.basename(doc.owner.documentPath(doc));
 }
 
-pub fn dialog(id: dvui.Id) anyerror!bool {
+pub fn dialog(id: dvui.Id) fizzy.core.dialogs.Error!bool {
     const file_id = dvui.dataGet(null, id, "_unsaved_file_id", u64) orelse return false;
     const name = fileBasename(file_id);
 
@@ -50,11 +50,11 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     defer btn_row.deinit();
 
     if (fizzy.core.dialogs.bodyButton(@src(), id, "Close", .control, 1, 0)) {
-        try onDiscard(file_id);
+        onDiscard(file_id) catch |err| return fizzy.core.dialogs.failed("discard", err);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (fizzy.core.dialogs.bodyButton(@src(), id, "Save and Close", .highlight, 2, 1)) {
-        try saveAndClose(file_id);
+        saveAndClose(file_id) catch |err| return fizzy.core.dialogs.failed("save and close", err);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (fizzy.core.dialogs.bodyButton(@src(), id, "Cancel", .control, 3, 2)) {
