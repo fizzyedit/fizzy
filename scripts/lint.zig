@@ -745,14 +745,17 @@ test "changelog words report hits, honor line allows, and never fail the runner"
         "const s =\n    \\\\// now fixed\n;",
         "// Unknown prefix and renewed storage.\nconst n = 1;",
     }) |source| try std.testing.expectEqual(@as(usize, 0), (try analyze(a, source)).len);
-    for ([_][]const u8{ "fixed", "NOW", "used to", "previously", "formerly", "no longer", "New:", "new:behavior" }) |word| {
+    for ([_][]const u8{
+        "fixed", "NOW", "used to", "previously", "formerly", "no longer", "New:", "new:behavior",
+    }) |word| {
         const source = try a.printSentinel("//! {s} works.\n", .{word}, 0);
         try std.testing.expectEqual(@as(usize, 1), (try analyze(a, source)).len);
     }
     var output: std.Io.Writer.Allocating = .init(a);
     try std.testing.expect(!try reportFile(&output.writer, "hit.zig", hit, &.{}, &.{}, false));
     try std.testing.expectEqualStrings(
-        "hit.zig:1: changelog-words: comment contains 'previously': Previously used a different buffer. (report-only)\n",
+        "hit.zig:1: changelog-words: comment contains 'previously': " ++
+            "Previously used a different buffer. (report-only)\n",
         output.written(),
     );
 }
