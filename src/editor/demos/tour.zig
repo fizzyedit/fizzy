@@ -72,17 +72,13 @@ pub fn build(s: *Script) !void {
     try s.chapter("Tabs");
     try s.caption("Tabs go where you drag them.", .{ .near = try catalog.tab(s, "README.md") });
     try s.drag(.{ .tag = try catalog.tab(s, "README.md") }, .{ .tag = try catalog.tab(s, "src/main.zig"), .x = 0.2 }, .{});
-    switch (s.beside) {
-        .right, .bottom => {
-            try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
-            const edge = if (s.beside == .right) "drop:right" else "drop:bottom";
-            try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = edge }, .{ .via = .{ .tag = catalog.documents } });
-        },
+    if (s.compact) {
         // Too small for two documents side by side: each is a card, and a tap brings one forward.
-        .card => {
-            try s.caption("Here every document is a card. Tap a tab to bring it forward.", .{ .near = try catalog.tab(s, "src/main.zig") });
-            try s.click(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{});
-        },
+        try s.caption("Here every document is a card. Tap a tab to bring it forward.", .{ .near = try catalog.tab(s, "src/main.zig") });
+        try s.click(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{});
+    } else {
+        try s.caption("Drop one on the editor's edge, and it opens beside the others.", .{});
+        try s.drag(.{ .tag = try catalog.tab(s, "src/main.zig") }, .{ .tag = "drop:beside" }, .{ .via = .{ .tag = catalog.documents } });
     }
     try s.waitFor(try catalog.editor(s, "src/main.zig"), .{});
     s.pause(900);

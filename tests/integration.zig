@@ -3705,6 +3705,73 @@ test "a split of a carded place, and of its new half, opens even halves" {
     try std.testing.expectApproxEqAbs(top.h, bottom.h, 1);
 }
 
+// A split fizzy made turns with its space: stacked when the room is taller than wide, side by
+// side when wider. The turn is how it is drawn, not what is saved: the person's side and extent
+// stay as they left them, nothing is written, and the new half keeps its share of the room.
+test "an adaptive split turns with the window, keeps its share and writes nothing" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+
+    ColumnCardFrame.editor = editor;
+    defer ColumnCardFrame.editor = null;
+
+    // A tablet held across: wider than tall.
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    _ = try dvui.testing.step(ColumnCardFrame.frame);
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        try std.testing.expectEqualStrings("Main/r1", layout.splitOn("Main", .right) orelse return error.TestExpectedEqual);
+        layout.markAdaptive("Main/r1");
+    }
+    try dvui.testing.settle(ColumnCardFrame.frame);
+    const old = try ColumnCardFrame.sizeOf(editor, "Main");
+    const new = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expect(new.w > 40);
+    try std.testing.expectApproxEqAbs(old.h, new.h, 1);
+    const share = new.w / (old.w + new.w);
+    const saved_extent = editor.app.layout.extent("Main/r1", 0);
+    editor.app.layout.dirty = false;
+
+    // Turned upright: the new half is below, with the share it had beside.
+    ctx.t.backend.size = .{ .w = 820, .h = 1180 };
+    ctx.t.backend.size_pixels = .{ .w = 820, .h = 1180 };
+    // The turn eases (the place slides shut, and open the other way): the frames it takes.
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const top = try ColumnCardFrame.sizeOf(editor, "Main");
+    const bottom = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(top.w, bottom.w, 1);
+    try std.testing.expectApproxEqAbs(share, bottom.h / (top.h + bottom.h), 0.03);
+    try std.testing.expect(!editor.app.layout.dirty);
+    try std.testing.expectEqual(saved_extent, editor.app.layout.extent("Main/r1", 0));
+    {
+        const links = editor.app.layout.splits.collectLinks(std.testing.allocator);
+        defer std.testing.allocator.free(links);
+        try std.testing.expectEqual(@as(usize, 1), links.len);
+        try std.testing.expectEqual(fizzy.Editor.Layout.State.SplitTree.Side.right, links[0].side);
+        try std.testing.expect(links[0].adaptive);
+    }
+
+    // And back across: beside again, the same share.
+    ctx.t.backend.size = .{ .w = 1180, .h = 820 };
+    ctx.t.backend.size_pixels = .{ .w = 1180, .h = 820 };
+    for (0..40) |_| _ = try dvui.testing.step(ColumnCardFrame.frame);
+    const left = try ColumnCardFrame.sizeOf(editor, "Main");
+    const right = try ColumnCardFrame.sizeOf(editor, "Main/r1");
+    try std.testing.expectApproxEqAbs(left.h, right.h, 1);
+    try std.testing.expectApproxEqAbs(share, right.w / (left.w + right.w), 0.03);
+    try std.testing.expect(!editor.app.layout.dirty);
+}
+
 /// Main | (Main/r1 over Main/r1/b1) in fizzy's split forest, each holding one view. Main/r1 is two
 /// things at once: the half Main's split minted, and the half its own split kept.
 const NestedSplitCase = struct {

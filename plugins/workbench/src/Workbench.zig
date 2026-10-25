@@ -241,25 +241,46 @@ pub fn sideBeside(self: *const Workbench, anchor: u64) Panes.Side {
     return sideFor(room.w, room.h);
 }
 
-/// The grouping a document opened beside the person's goes in (`core.placement.place`): another
-/// pane that is there, else a new one when the person's has room for two, else the person's own,
-/// where it becomes a card. The caller makes it the front card, as a plain open does.
-pub fn besideGrouping(self: *Workbench) u64 {
+/// What opening beside the person's pane asks of `core.placement.place`: the other pane that is
+/// there, if any, and the answer over the person's room and that pane's. Null before the person's
+/// pane has drawn, with no room to judge.
+const Beside = struct { other: ?u64, answer: ?core.placement.Result };
+
+fn besideAnswer(self: *Workbench) Beside {
     const here = self.open_workspace_grouping;
     const other = for (self.workspaces.values()) |ws| {
         if (ws.grouping != here and !self.paneClosing(ws.grouping)) break ws.grouping;
     } else null;
-    // Not drawn yet, so no room to judge: beside as before, in the other pane if there is one.
-    const room = self.paneSize(here) orelse return other orelse self.newGroupingID();
+    const room = self.paneSize(here) orelse return .{ .other = other, .answer = null };
     var others: [1]core.placement.Size = undefined;
     const places: []const core.placement.Size = if (other) |g| blk: {
         others[0] = self.paneSize(g) orelse .{ .w = 0, .h = 0 };
         break :blk &others;
     } else &.{};
-    return switch (core.placement.place(room, places)) {
-        .into => other.?,
+    return .{ .other = other, .answer = core.placement.place(room, places) };
+}
+
+/// The grouping a document opened beside the person's goes in (`core.placement.place`): another
+/// pane that is there, else a new one when the person's has room for two, else the person's own,
+/// where it becomes a card. The caller makes it the front card, as a plain open does.
+pub fn besideGrouping(self: *Workbench) u64 {
+    const asked = self.besideAnswer();
+    // Not drawn yet, so no room to judge: beside as before, in the other pane if there is one.
+    const answer = asked.answer orelse return asked.other orelse self.newGroupingID();
+    return switch (answer) {
+        .into => asked.other.?,
         .split => self.newGroupingID(),
-        .tab => here,
+        .tab => self.open_workspace_grouping,
+    };
+}
+
+/// The edge of the person's pane an open beside splits it on, or null where it joins a pane or
+/// becomes a card. What a demo's `drop:beside` aims at.
+pub fn besideEdge(self: *Workbench) ?Panes.Side {
+    const room = self.paneSize(self.open_workspace_grouping) orelse return null;
+    return switch (self.besideAnswer().answer orelse return null) {
+        .split => sideFor(room.w, room.h),
+        .into, .tab => null,
     };
 }
 
