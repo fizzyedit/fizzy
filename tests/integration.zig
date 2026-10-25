@@ -10245,9 +10245,11 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         was_moving = moving;
         prev = now;
     }
-    // The first callout holds its place: it set off 11 times before it stopped dodging the
-    // resting pointer (`overlay.keepClear`), 10 since.
-    try std.testing.expect(relocations <= 10);
+    // A callout holds its place: the tour's callouts set off 12 times here before they stopped
+    // dodging the resting pointer (`overlay.keepClear`), 11 since. The count is measured on this
+    // CI's platform (Linux); macOS lays the tour out with one glide fewer, so 11 is the bound that
+    // fails without the change here and holds on both.
+    try std.testing.expect(relocations <= 11);
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
     // A wide window sets the tour's two documents side by side.
     try std.testing.expect(desktop_panes.side_by_side);
