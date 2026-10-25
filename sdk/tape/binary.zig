@@ -33,13 +33,13 @@
 //! reader refuses a version it does not know (`error.UnsupportedVersion`) rather than guess, and
 //! reads every older one it does. 2 gave a `command` op its arguments, in the record's second
 //! string; a version-1 command has none. 3 added steps, files' owner and format, the blob table
-//! and the deflated form.
+//! and the deflated form. 4 added the `skip` op.
 const std = @import("std");
 const flate = std.compress.flate;
 const Tape = @import("Tape.zig");
 
 pub const magic = "FZTP".*;
-pub const version: u16 = 3;
+pub const version: u16 = 4;
 /// The oldest version `read` still reads.
 pub const oldest_version: u16 = 1;
 
@@ -95,9 +95,26 @@ const clear_size = 4;
 const chapter_size = 8;
 
 /// An op's kind on disk. Appended to, never reordered.
-const Kind = enum(u8) { keyframe, move, press, release, scroll, key, type, command, wait, trace, step };
+const Kind = enum(u8) { keyframe, move, press, release, scroll, key, type, command, wait, trace, step, skip };
 /// A wait's condition on disk.
 const UntilKind = enum(u8) { idle, shown, gone };
+
+/// A condition's record fields: its kind, and its tag's index in the string table.
+fn untilFields(table: *const Strings, until: Tape.Until) struct { u8, u32 } {
+    return switch (until) {
+        .idle => .{ @backingInt(UntilKind.idle), 0 },
+        .shown => |s| .{ @backingInt(UntilKind.shown), table.index(s) },
+        .gone => |s| .{ @backingInt(UntilKind.gone), table.index(s) },
+    };
+}
+
+fn untilOf(strings: Table, small: u8, tag: u32) !Tape.Until {
+    return switch (std.enums.fromInt(UntilKind, small) orelse return error.Corrupt) {
+        .idle => .idle,
+        .shown => .{ .shown = try strings.get(tag) },
+        .gone => .{ .gone = try strings.get(tag) },
+    };
+}
 
 // ---- writing -------------------------------------------------------------------------------
 
@@ -152,6 +169,10 @@ fn writeBody(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
             _ = try table.intern(gpa, c.args);
         },
         .wait => |wt| switch (wt.until) {
+            .shown, .gone => |s| _ = try table.intern(gpa, s),
+            .idle => {},
+        },
+        .skip => |sk| switch (sk.when) {
             .shown, .gone => |s| _ = try table.intern(gpa, s),
             .idle => {},
         },
@@ -264,17 +285,12 @@ fn writeBody(gpa: std.mem.Allocator, tape: Tape, w: *std.Io.Writer) !void {
             .wait => |wt| {
                 kind = .wait;
                 b = wt.timeout;
-                switch (wt.until) {
-                    .idle => small = @backingInt(UntilKind.idle),
-                    .shown => |s| {
-                        small = @backingInt(UntilKind.shown);
-                        a = table.index(s);
-                    },
-                    .gone => |s| {
-                        small = @backingInt(UntilKind.gone);
-                        a = table.index(s);
-                    },
-                }
+                small, a = untilFields(&table, wt.until);
+            },
+            .skip => |sk| {
+                kind = .skip;
+                b = sk.count;
+                small, a = untilFields(&table, sk.when);
             },
         }
         try w.writeInt(u32, op.at, .little);
@@ -463,6 +479,7 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
         const at = try f.int(u32);
         const ms = try f.int(u32);
         const kind = std.enums.fromInt(Kind, try f.int(u8)) orelse return error.Corrupt;
+        if (kind == .skip and tape_version < 4) return error.Corrupt;
         const small = try f.int(u8);
         _ = try f.int(u16);
         const ia = try f.int(u32);
@@ -483,11 +500,8 @@ pub fn read(gpa: std.mem.Allocator, bytes: []const u8, check: Tape.Check) ReadEr
                 .id = try strings.get(ia),
                 .args = if (tape_version >= 2) try strings.get(ib) else "",
             } },
-            .wait => .{ .wait = .{ .timeout = ib, .until = switch (std.enums.fromInt(UntilKind, small) orelse return error.Corrupt) {
-                .idle => .idle,
-                .shown => .{ .shown = try strings.get(ia) },
-                .gone => .{ .gone = try strings.get(ia) },
-            } } },
+            .wait => .{ .wait = .{ .timeout = ib, .until = try untilOf(strings, small, ia) } },
+            .skip => .{ .skip = .{ .count = ib, .when = try untilOf(strings, small, ia) } },
             .step => .{ .step = .{ .file = try strings.get(ia), .effect = try blobs.get(ib), .motion = try blobs.get(words[0]) } },
         } };
     }
@@ -684,6 +698,8 @@ const Everything = struct {
         .{ .at = 1800, .ms = 250, .do = .{ .step = .{ .file = "a.pixi", .effect = "\x00\x01\xff", .motion = "\x02\x00" } } },
         // The same effect again is stored again; one with no motion stores an empty one.
         .{ .at = 2100, .do = .{ .step = .{ .file = "a.pixi", .effect = "\x00\x01\xff" } } },
+        .{ .at = 2200, .do = .{ .skip = .{ .when = .{ .shown = "fizzy.rail:workbench.files" }, .count = 3 } } },
+        .{ .at = 2300, .do = .{ .skip = .{ .when = .idle, .count = 0 } } },
     };
     const captions = [_]Tape.Caption{
         .{ .at = 0, .ms = 900, .title = "Hi", .text = "Welcome.", .place = .middle },
@@ -705,7 +721,7 @@ fn everything() Tape {
 /// `everything` as version 2 could hold it, before steps: what `testdata/everything-v2.tape` is,
 /// written by the version-2 codec.
 fn everythingV2() Tape {
-    const keyframes = [_]Tape.Keyframe{ Everything.keyframe, .{ .root = "demo://t" } };
+    const keyframes = [_]Tape.Keyframe{ Everything.keyframe, .{ .root = "demo://t", .layout = .focused } };
     return Everything.tape(&Everything.ops_v2, &keyframes);
 }
 

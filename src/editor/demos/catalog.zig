@@ -124,13 +124,15 @@ pub const files_tab = "fizzy.mobile.tab:workbench.files";
 pub const store_icon = "fizzy.rail:fizzy.store";
 pub const store_tab = "fizzy.mobile.tab:fizzy.store";
 
-/// Open `rel` the way a person who keeps the explorer put away would: open the explorer from the
-/// rail, click the file, and put the explorer away again so the editor has the room. A demo's
-/// keyframe starts with the explorer put away (`Keyframe.Layout.focused`).
+/// Open `rel` the way a person would: from the rail's explorer, which is pressed only when it is
+/// not showing already, then the file's row. The explorer stays as it is after, the person's to put
+/// away.
 pub fn openFile(s: *Script, rel: []const u8) !void {
     const opener = if (s.compact) files_tab else files_icon;
+    const row = try file(s, rel);
+    const skip = try s.skipIfShown(row);
     try s.click(.{ .tag = opener }, .{});
-    try s.click(.{ .tag = try file(s, rel) }, .{});
+    s.endSkip(skip);
+    try s.click(.{ .tag = row }, .{});
     try s.waitFor(try editor(s, rel), .{});
-    try s.click(.{ .tag = opener }, .{});
 }
