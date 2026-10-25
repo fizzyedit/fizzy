@@ -5,7 +5,6 @@
     .{ .rule = .anyerror, .file = "app/store/PluginManager.zig", .count = 16 },
     .{ .rule = .anyerror, .file = "app/store/PluginPage.zig", .count = 5 },
     .{ .rule = .anyerror, .file = "app/store/PluginStore.zig", .count = 1 },
-    .{ .rule = .anyerror, .file = "app/update/move_offer.zig", .count = 2 },
     .{ .rule = .anyerror, .file = "core/shell_env.zig", .count = 1 },
     .{ .rule = .anyerror, .file = "plugins/archive/plugin.zig", .count = 11 },
     .{ .rule = .anyerror, .file = "plugins/devtools/plugin.zig", .count = 3 },
