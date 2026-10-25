@@ -12,20 +12,33 @@ while [ ! -e "$T/go" ]; do sleep 0.1; done
 exit \$(cat "$T/status" 2>/dev/null || echo 0)
 FAKE
 chmod +x "$T/zig"
+unset FIZZY_BUILD_SKIP FIZZY_BUILD_WAIT
 export FIZZY_BUILD_ZIG=$T/zig FIZZY_BUILD_SLOTS=2 FIZZY_BUILD_MAX_LOAD=100000 \
     FIZZY_BUILD_SLOTS_DIR=$T/slots FIZZY_BUILD_POLL=0.2
 fail() { echo "FAIL: $1"; exit 1; }
 alive() { kill -0 "$1" 2>/dev/null; }
+# poll <what> <file> <pattern>: poll for the pattern in the file (a slow runner is not a failure),
+# failing after 20s with what the file held.
+poll() {
+    i=0
+    while ! grep -q "$3" "$2" 2>/dev/null; do
+        i=$((i + 1))
+        [ $i -le 200 ] || fail "$1 never showed '$3' in $2 after 20s: $(cat "$2" 2>/dev/null) ran: $(cat "$T/ran" 2>/dev/null) slots: $(cat "$T"/slots/*/pid 2>/dev/null) env: $(env | grep FIZZY_BUILD | tr '\n' ' ')"
+        sleep 0.1
+    done
+}
 
 # Two builds hold the two slots; the third waits, then runs when they finish.
 ./zb build a >"$T/o1" 2>&1 & echo $! >>"$T/pids"
 ./zb build b >"$T/o2" 2>&1 & echo $! >>"$T/pids"
-sleep 1
+poll "builds a and b" "$T/ran" '^build b'
+poll "builds a and b" "$T/ran" '^build a'
+poll "slot 0 held" "$T/slots/slot.0/pid" '^[0-9]'
+poll "slot 1 held" "$T/slots/slot.1/pid" '^[0-9]'
 ./zb build c >"$T/o3" 2>&1 & p3=$!; echo $p3 >>"$T/pids"
-sleep 1
-alive $p3 || fail "third build did not wait"
-grep -q 'zb: waiting for a build slot' "$T/o3" || fail "no waiting line: $(cat "$T/o3")"
-grep -q '^build c' "$T/ran" && fail "third build ran while both slots were held"
+poll "third build" "$T/o3" 'zb: waiting for a build slot'
+alive $p3 || fail "third build did not wait: $(cat "$T/o3") ran: $(cat "$T/ran")"
+grep -q '^build c' "$T/ran" && fail "third build ran while both slots were held: $(cat "$T/ran")"
 echo 3 >"$T/status"
 touch "$T/go"
 wait $p3; [ $? = 3 ] || fail "zig's exit status not passed on"
@@ -60,9 +73,8 @@ grep -q '^build i' "$T/ran" || fail "build i did not run"
 
 # Over the load ceiling, a build waits (and says so) until it is lifted.
 FIZZY_BUILD_MAX_LOAD=-1 ./zb build e >"$T/o5" 2>&1 & p5=$!; echo $p5 >>"$T/pids"
-sleep 1
+poll "build above the load ceiling" "$T/o5" 'waiting for load'
 alive $p5 || fail "build ran above the load ceiling"
-grep -q 'waiting for load' "$T/o5" || fail "no load line: $(cat "$T/o5")"
 kill $p5
 
 # Light commands pass straight through, and FIZZY_BUILD_SKIP bypasses the wait.
