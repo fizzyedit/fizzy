@@ -698,6 +698,24 @@ test "anytype parameters require a local reason except writer and format plumbin
     try std.testing.expectEqual(@as(usize, 3), mixed[0].line);
 }
 
+test "anytype reasons block the runner without a baseline and pass with a reason" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const bare = try anytypeReasons(a, "fn f(value: anytype) void {}");
+    var output: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expect(try reportFile(&output.writer, "bare.zig", bare, &.{}, &.{}, false));
+    try std.testing.expectEqualStrings(
+        "bare.zig:1: anytype-reason: anytype parameter requires // anytype: <reason> on this or the preceding line\n" ++
+            "bare.zig:1: anytype-reason: count 1 exceeds allowance 0\n",
+        output.written(),
+    );
+    const reasoned = try anytypeReasons(a, "fn f(value: anytype) void {} // anytype: heterogeneous tuple");
+    var quiet: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expect(!try reportFile(&quiet.writer, "reasoned.zig", reasoned, &.{}, &.{}, false));
+    try std.testing.expectEqualStrings("", quiet.written());
+}
+
 test "changelog words report hits, honor line allows, and never fail the runner" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
