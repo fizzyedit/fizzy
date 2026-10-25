@@ -568,8 +568,10 @@ pub fn init(
             .border = .{ .r = 47, .g = 179, .b = 135, .a = 255 },
             .text = .{ .r = 58, .g = 10, .b = 26, .a = 255 },
         };
+        // Pale enough to read as red on red: the fill is 6.9:1 on the window and 3.9:1 on the
+        // content fill; the text colour is 11.8:1 on the window.
         strawberry.err = .{
-            .fill = .{ .r = 199, .g = 17, .b = 20, .a = 255 },
+            .fill = .{ .r = 255, .g = 160, .b = 165, .a = 255 },
             .text = .{ .r = 255, .g = 238, .b = 228, .a = 255 },
         };
 
@@ -5168,6 +5170,7 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = l.name };
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
+            gop.value_ptr.adaptive = if (l.adaptive) true else null;
         }
     }
     {
@@ -5266,7 +5269,8 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
     for (order) |r| {
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
-        _ = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        if (made != null and (r.adaptive orelse false)) _ = state.splits.markAdaptive(r.name);
     }
 }
 

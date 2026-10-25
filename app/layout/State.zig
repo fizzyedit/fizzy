@@ -169,6 +169,10 @@ tree_cleared: bool = false,
 slide_open: []const u8 = "",
 /// A place's view being dragged to another place. Empty `name` when idle.
 view_drag: ViewDrag = .{},
+/// The edge an open beside splits the documents' place on right now, set each frame by the app
+/// while a demo plays: that edge's drop zone is also published as the anchor `drop:beside`, so a
+/// tape aims at the place's answer, not at an edge it chose when it was written.
+beside: ?SplitTree.Side = null,
 /// Floats are OS windows of their own (the application says so each frame, where it has them): a
 /// view let go over no window of the app's opens one there (`ViewDrag.apply`).
 floats_windowed: bool = false,

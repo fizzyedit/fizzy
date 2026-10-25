@@ -112,6 +112,34 @@ pub const WriteOptions = struct {
     if_unmodified_ms: ?i64 = null,
 };
 
+/// Display order for two names: case-insensitive, so `README.md`, `docs/` and `zig-out/` sort
+/// where a reader expects rather than splitting into an uppercase run followed by a lowercase one
+/// (`std.mem.order` compares raw bytes, and every uppercase ASCII letter sorts below every
+/// lowercase one).
+///
+/// Falls back to an exact byte comparison when two names differ only in case. That keeps the
+/// order *total* — without it `README` and `readme`, which can coexist on a case-sensitive
+/// filesystem, would compare equal and their relative position would depend on the sort's
+/// internals. `listingHasFile` binary-searches with this same function, so the tiebreak is load
+/// bearing, not cosmetic.
+pub fn nameOrder(a: []const u8, b: []const u8) std.math.Order {
+    const n = @min(a.len, b.len);
+    for (a[0..n], b[0..n]) |ca, cb| {
+        const la = std.ascii.toLower(ca);
+        const lb = std.ascii.toLower(cb);
+        if (la != lb) return if (la < lb) .lt else .gt;
+    }
+    if (a.len != b.len) return if (a.len < b.len) .lt else .gt;
+    return std.mem.order(u8, a, b);
+}
+
+/// Directories first, then `nameOrder`: how a listing is shown, so a listing sorted by this on
+/// whatever thread read it needs no sorting again (a sorted run costs a pass).
+pub fn entryLess(_: void, lhs: Entry, rhs: Entry) bool {
+    if ((lhs.kind == .dir) != (rhs.kind == .dir)) return lhs.kind == .dir;
+    return nameOrder(lhs.name, rhs.name) == .lt;
+}
+
 pub fn freeEntries(allocator: Allocator, entries: []Entry) void {
     for (entries) |entry| allocator.free(entry.name);
     allocator.free(entries);

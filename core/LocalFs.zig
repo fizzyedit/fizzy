@@ -7,11 +7,12 @@
 //! `FileTable` pumps the mount it just asked right away, so a local listing still comes back
 //! in the same call that requested it and nothing above notices a difference.
 //!
-//! A read is the one op worth overlapping: a cold index of a large vault is hundreds of
-//! thousands of small files, each ~120 µs of waiting when nothing else is in flight. `readFile`
-//! goes through `io.async`, which the host's threaded `Io` runs on its pool and a
-//! single-threaded `Io` (tests, or a saturated pool) runs inline — one implementation, and
-//! the caller that issues a window of reads and pumps gets the overlap where it exists.
+//! A read and a listing are the ops worth overlapping: a cold index of a large vault is hundreds
+//! of thousands of small files, each ~120 µs of waiting when nothing else is in flight, and one
+//! folder of that many notes is seconds of directory reads that a frame must not wait for.
+//! `readFile` and `listDir` go through `io.concurrent`, which the host's threaded `Io` runs on its
+//! pool and a single-threaded `Io` (tests, or a saturated pool) runs inline — one implementation,
+//! and the caller that issues a window of them and pumps gets the overlap where it exists.
 const std = @import("std");
 const builtin = @import("builtin");
 const vfs = @import("vfs/vfs.zig");
@@ -29,7 +30,13 @@ ready: vfs.http.Completions(Completion),
 /// Reads in flight on `io.async`, by job id. Guarded by `lock`; the futures themselves are
 /// awaited from `pump` only once their task has set `done`.
 reads: std.AutoArrayHashMapUnmanaged(u64, *ReadJob) = .empty,
+/// Listings in flight on `io.concurrent`, by job id; guarded by `lock` like `reads`.
+lists: std.AutoArrayHashMapUnmanaged(u64, *ListJob) = .empty,
 lock: SpinLock = .{},
+/// Called from the pool thread when a listing has finished, so a frame is asked for to deliver
+/// it (`pump`). Set by whoever owns the table; safe from any thread by contract.
+wake: ?*const fn (ctx: ?*anyopaque) void = null,
+wake_ctx: ?*anyopaque = null,
 
 const SpinLock = struct {
     inner: std.atomic.Mutex = .unlocked,
@@ -58,6 +65,28 @@ const ReadJob = struct {
     fn run(job: *ReadJob) vfs.Error!vfs.Read {
         defer job.done.store(true, .release);
         return job.owner.readImpl(job.allocator, job.path);
+    }
+};
+
+const ListJob = struct {
+    owner: *LocalFs,
+    id: u64,
+    allocator: std.mem.Allocator,
+    cb: vfs.ListDirFn,
+    ctx: ?*anyopaque,
+    path: []u8,
+    future: std.Io.Future(vfs.Error![]vfs.Entry) = undefined,
+    done: std.atomic.Value(bool) = .init(false),
+    /// Entries read so far, for a "loading" row to count.
+    seen: std.atomic.Value(usize) = .init(0),
+    cancelled: bool = false,
+
+    fn run(job: *ListJob) vfs.Error![]vfs.Entry {
+        defer {
+            job.done.store(true, .release);
+            if (job.owner.wake) |wake| wake(job.owner.wake_ctx);
+        }
+        return job.owner.listImpl(job.allocator, job.path, &job.seen);
     }
 };
 
@@ -97,6 +126,12 @@ pub fn deinit(self: *LocalFs) void {
         self.gpa.destroy(job);
     }
     self.reads.deinit(self.gpa);
+    for (self.lists.values()) |job| {
+        if (job.future.await(self.io)) |entries| vfs.freeEntries(job.allocator, entries) else |_| {}
+        self.gpa.free(job.path);
+        self.gpa.destroy(job);
+    }
+    self.lists.deinit(self.gpa);
     for (self.ready.items.items) |item| item.payload.discard();
     self.ready.deinit();
 }
@@ -170,7 +205,7 @@ fn queue(self: *LocalFs, completion: Completion) vfs.Error!vfs.Job {
     return .{ .id = id };
 }
 
-fn listImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8) vfs.Error![]vfs.Entry {
+fn listImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8, seen: *std.atomic.Value(usize)) vfs.Error![]vfs.Entry {
     const io = self.io;
     var dir = std.Io.Dir.cwd().openDir(io, path, .{ .access_sub_paths = true, .iterate = true }) catch |err| return mapErr(err);
     defer dir.close(io);
@@ -199,13 +234,41 @@ fn listImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8) vfs.
         const name = try allocator.dupe(u8, entry.name);
         errdefer allocator.free(name);
         try entries.append(allocator, .{ .name = name, .kind = kind });
+        seen.store(entries.items.len, .monotonic);
     }
+    // Sorted here, on the thread that read it, so the frame that installs it finds it in order.
+    std.mem.sort(vfs.Entry, entries.items, {}, vfs.entryLess);
     return try entries.toOwnedSlice(allocator);
 }
 
 fn listDir(ptr: *anyopaque, allocator: std.mem.Allocator, path: []const u8, cb: vfs.ListDirFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {
     const self: *LocalFs = @ptrCast(@alignCast(ptr));
-    return self.queue(.{ .list = .{ .allocator = allocator, .cb = cb, .ctx = ctx, .result = self.listImpl(allocator, path) } });
+    const job = try self.gpa.create(ListJob);
+    errdefer self.gpa.destroy(job);
+    const owned_path = try self.gpa.dupe(u8, path);
+    errdefer self.gpa.free(owned_path);
+    self.lock.acquire();
+    const id = self.ready.nextId();
+    self.lock.release();
+    job.* = .{ .owner = self, .id = id, .allocator = allocator, .cb = cb, .ctx = ctx, .path = owned_path };
+    self.lock.acquire();
+    defer self.lock.release();
+    try self.lists.put(self.gpa, id, job);
+    // Registered before it starts, so a task that finishes inline is already there for `pump`.
+    job.future = self.io.concurrent(ListJob.run, .{job}) catch blk: {
+        var f: std.Io.Future(vfs.Error![]vfs.Entry) = .{ .any_future = null, .result = undefined };
+        f.result = ListJob.run(job);
+        break :blk f;
+    };
+    return .{ .id = id };
+}
+
+/// How many entries the listing `job` has read so far, or null when it is not one in flight.
+pub fn listProgress(self: *LocalFs, job: vfs.Job) ?usize {
+    self.lock.acquire();
+    defer self.lock.release();
+    const list = self.lists.get(job.id) orelse return null;
+    return list.seen.load(.monotonic);
 }
 
 fn statImpl(self: *LocalFs, path: []const u8) vfs.Error!vfs.Stat {
@@ -322,8 +385,10 @@ fn cancel(ptr: *anyopaque, job: vfs.Job) void {
     self.lock.acquire();
     const read = self.reads.get(job.id);
     if (read) |r| r.cancelled = true;
+    const list = self.lists.get(job.id);
+    if (list) |l| l.cancelled = true;
     self.lock.release();
-    if (read != null) return; // delivered as nothing by the next pump
+    if (read != null or list != null) return; // delivered as nothing by the next pump
     if (self.ready.remove(job.id)) |completion| completion.discard();
 }
 
@@ -349,6 +414,31 @@ fn pump(ptr: *anyopaque) void {
         const result = job.future.await(self.io);
         if (job.cancelled) {
             if (result) |r| job.allocator.free(r.bytes) else |_| {}
+        } else {
+            job.cb(job.ctx, .of(result));
+        }
+        self.gpa.free(job.path);
+        self.gpa.destroy(job);
+    }
+
+    var listed: std.ArrayList(*ListJob) = .empty;
+    defer listed.deinit(self.gpa);
+    {
+        self.lock.acquire();
+        defer self.lock.release();
+        var i: usize = 0;
+        while (i < self.lists.count()) {
+            const job = self.lists.values()[i];
+            if (job.done.load(.acquire)) {
+                listed.append(self.gpa, job) catch break;
+                self.lists.swapRemoveAt(i);
+            } else i += 1;
+        }
+    }
+    for (listed.items) |job| {
+        const result = job.future.await(self.io);
+        if (job.cancelled) {
+            if (result) |entries| vfs.freeEntries(job.allocator, entries) else |_| {}
         } else {
             job.cb(job.ctx, .of(result));
         }

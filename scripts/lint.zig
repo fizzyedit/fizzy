@@ -1,7 +1,16 @@
 //! Repository lint with per-file budgets for existing findings.
 const std = @import("std");
 
-const Rule = enum { @"fn-length", @"create-needs-destroy", @"lint-allow-reason", @"file-alias", anyerror, @"deprecated-names-replacement", @"anytype-reason", @"changelog-words" };
+const Rule = enum {
+    @"fn-length",
+    @"create-needs-destroy",
+    @"lint-allow-reason",
+    @"file-alias",
+    anyerror,
+    @"deprecated-names-replacement",
+    @"anytype-reason",
+    @"changelog-words",
+};
 const Finding = struct { rule: Rule, line: usize, message: []const u8 };
 const Allow = struct { rule: Rule, file: []const u8, count: usize };
 const Suppression = struct { rule: []const u8, line: usize };
@@ -61,7 +70,10 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     for (parsed, seen) |allow, visited| if (!visited) {
-        try output.writer.print("{s}:1: {s}: file not found; remove its allowance of {d}\n", .{ allow.file, @tagName(allow.rule), allow.count });
+        try output.writer.print(
+            "{s}:1: {s}: file not found; remove its allowance of {d}\n",
+            .{ allow.file, @tagName(allow.rule), allow.count },
+        );
         failed = true;
     };
     std.debug.print("{s}", .{output.written()});
@@ -101,11 +113,17 @@ fn reportFile(
         }
         if (!report_only) switch (status) {
             .over => {
-                try writer.print("{s}:1: {s}: count {d} exceeds allowance {d}\n", .{ path, @tagName(rule), count, budget });
+                try writer.print(
+                    "{s}:1: {s}: count {d} exceeds allowance {d}\n",
+                    .{ path, @tagName(rule), count, budget },
+                );
                 failed = true;
             },
             .under => {
-                try writer.print("{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n", .{ path, @tagName(rule), count, budget, count });
+                try writer.print(
+                    "{s}:1: {s}: count {d} is under allowance {d}; lower the allowance to {d}\n",
+                    .{ path, @tagName(rule), count, budget, count },
+                );
                 failed = true;
             },
             .equal => {},
@@ -138,7 +156,11 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const close = std.mem.findScalar(u8, text, ')') orelse text.len;
         const tail = if (close < text.len) std.mem.trim(u8, text[close + 1 ..], " \t\r") else "";
         if (tail.len < 2 or tail[0] != ':' or std.mem.trim(u8, tail[1..], " \t\r").len == 0) {
-            try findings.append(allocator, .{ .rule = .@"lint-allow-reason", .line = line_number, .message = "lint-allow requires a reason after ':'" });
+            try findings.append(allocator, .{
+                .rule = .@"lint-allow-reason",
+                .line = line_number,
+                .message = "lint-allow requires a reason after ':'",
+            });
         } else {
             try suppressions.append(allocator, .{ .rule = text[prefix.len..close], .line = line_number });
         }
@@ -204,7 +226,11 @@ fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) ![]Finding {
         const end = tree.tokenLocation(0, tree.lastToken(node)).line + 1;
         const length = end - line + 1;
         if (length > 150 and !silenced(suppressions.items, .@"fn-length", line)) {
-            try findings.append(allocator, .{ .rule = .@"fn-length", .line = line, .message = try allocator.print("function {s} is {d} lines (limit 150)", .{ name, length }) });
+            try findings.append(allocator, .{
+                .rule = .@"fn-length",
+                .line = line,
+                .message = try allocator.print("function {s} is {d} lines (limit 150)", .{ name, length }),
+            });
         }
     }
     if (create_line != null and !has_destroy) try findings.append(allocator, .{
@@ -356,11 +382,12 @@ fn deprecatedReplacement(allocator: std.mem.Allocator, source: [:0]const u8, pat
             }
         }
         const line = std.mem.count(u8, source[0..token.loc.start], "\n") + 1;
-        if (!replacement and !silenced(suppressions.items, .@"deprecated-names-replacement", line)) try findings.append(allocator, .{
-            .rule = .@"deprecated-names-replacement",
-            .line = line,
-            .message = "Deprecated marker must name a backticked replacement",
-        });
+        if (!replacement and !silenced(suppressions.items, .@"deprecated-names-replacement", line))
+            try findings.append(allocator, .{
+                .rule = .@"deprecated-names-replacement",
+                .line = line,
+                .message = "Deprecated marker must name a backticked replacement",
+            });
     }
     return findings.toOwnedSlice(allocator);
 }
@@ -627,14 +654,18 @@ test "SDK deprecated markers name a backticked replacement" {
         "const text = \"/// Deprecated\";",
         "/// DeprecatedThing is an identifier.\npub const old = 1;",
         "/// Foo\n/// Deprecated, see below\npub const old = 1;",
-    }) |source| try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len);
+    }) |source| try std.testing.expectEqual(
+        @as(usize, 0),
+        (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len,
+    );
 }
 
 test "deprecated marker honors lint-allow suppression and a file budget" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const suppressed = "// lint-allow(deprecated-names-replacement): removed with the next SDK\n/// Deprecated\npub const old = 1;";
+    const suppressed = "// lint-allow(deprecated-names-replacement): removed with the next SDK\n" ++
+        "/// Deprecated\npub const old = 1;";
     try std.testing.expectEqual(@as(usize, 0), (try deprecatedReplacement(a, suppressed, "sdk/src/old.zig")).len);
     const inside_doc = "/// Deprecated // lint-allow(deprecated-names-replacement): not a comment\npub const old = 1;";
     try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, inside_doc, "sdk/src/old.zig")).len);
@@ -645,7 +676,10 @@ test "deprecated marker honors lint-allow suppression and a file budget" {
     for ([_][:0]const u8{
         "// lint-allow(anyerror): wrong rule\n/// Deprecated\npub const old = 1;",
         "// lint-allow(deprecated-names-replacement): too far\n\n/// Deprecated\npub const old = 1;",
-    }) |source| try std.testing.expectEqual(@as(usize, 1), (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len);
+    }) |source| try std.testing.expectEqual(
+        @as(usize, 1),
+        (try deprecatedReplacement(a, source, "sdk/src/old.zig")).len,
+    );
 
     const hit = try deprecatedReplacement(a, "/// Deprecated\npub const old = 1;", "sdk/src/old.zig");
     const allowances = [_]Allow{

@@ -125,7 +125,12 @@ pub fn sync(self: *Workspaces) void {
             first = g;
             continue;
         }
-        _ = beside(self, g, first.?, .right);
+        // The anchor's room asks the side, when it has one yet.
+        var l = layoutOf(editor);
+        var abuf: [64]u8 = undefined;
+        const room = if (Layout.ViewDrag.holderOf(&l, viewId(&abuf, first.?))) |holder| Layout.ViewDrag.placeSize(l.state, holder) else null;
+        const side = if (room) |r| Workbench.sideFor(r.w, r.h) else .right;
+        _ = beside(self, g, first.?, side, true);
     }
 }
 
@@ -284,7 +289,7 @@ fn layoutOf(editor: *Editor) Layout {
     return Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.host.arena());
 }
 
-fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Side) bool {
+fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Side, adaptive: bool) bool {
     const self: *Workspaces = @ptrCast(@alignCast(ctx));
     const editor = self.editorOf();
     var l = layoutOf(editor);
@@ -299,6 +304,7 @@ fn beside(ctx: *anyopaque, grouping: u64, anchor: u64, side: Workbench.Panes.Sid
     var buf: [64]u8 = undefined;
     const id = l.arena.dupe(u8, viewId(&buf, grouping)) catch return false;
     l.state.assign(l.gpa, new, &.{id}) catch return false;
+    if (adaptive) Layout.markAdaptive(&l, new);
     l.state.markDirty();
     return true;
 }
