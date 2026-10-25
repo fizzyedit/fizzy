@@ -327,7 +327,7 @@ fn floorAlong(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Directio
     const layout = self.init_opts.layout;
     return switch (layout.nodes.items[node]) {
         .leaf, .free => 0,
-        .split => |sp| if (sp.dir == dir)
+        .split => |sp| if (sp.axis() == dir)
             self.floorAlong(sp.first, dir) + self.gapOf(node) + self.floorAlong(sp.second, dir)
         else
             @max(self.floorAlong(sp.first, dir), self.floorAlong(sp.second, dir)),
@@ -365,14 +365,18 @@ fn extentKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
 /// ratio is a share of (the extent less the sash and both floors).
 fn divide(self: *Dockspace, node: Layout.NodeIndex, extent: f32, ratio: f32) Row.Division {
     const sp = self.init_opts.layout.nodes.items[node].split;
-    return Row.divide(extent, ratio, self.gapOf(node), self.floorAlong(sp.first, sp.dir), self.floorAlong(sp.second, sp.dir));
+    return self.divideAlong(node, sp.axis(), extent, ratio);
 }
 
-/// The child rects and sash rect for a split of content size `cr` at `ratio`.
-fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32) @TypeOf(Row.cellRects(cr, .horizontal, 0, 0)) {
+fn divideAlong(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction, extent: f32, ratio: f32) Row.Division {
     const sp = self.init_opts.layout.nodes.items[node].split;
-    const d = self.divide(node, along(cr, sp.dir), ratio);
-    return Row.cellRects(cr, sp.dir, d.first, self.gapOf(node));
+    return Row.divide(extent, ratio, self.gapOf(node), self.floorAlong(sp.first, dir), self.floorAlong(sp.second, dir));
+}
+
+/// The child rects and sash rect for a split of content size `cr` at `ratio`, running along `dir`.
+fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32, dir: dvui.enums.Direction) @TypeOf(Row.cellRects(cr, .horizontal, 0, 0)) {
+    const d = self.divideAlong(node, dir, along(cr, dir), ratio);
+    return Row.cellRects(cr, dir, d.first, self.gapOf(node));
 }
 
 fn minKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
@@ -389,7 +393,7 @@ fn fittedRatio(self: *Dockspace, node: Layout.NodeIndex, fit: Layout.Node.Split.
     if (layout.nodes.items[child] != .leaf) return null;
     if (usable <= 0) return null;
     const min = dvui.dataGet(null, self.data().id, self.minKey(child), Size) orelse return null;
-    const need = along(.{ .w = min.w, .h = min.h }, sp.dir);
+    const need = along(.{ .w = min.w, .h = min.h }, sp.axis());
     const share = std.math.clamp(need / usable, fit.min, fit.max);
     return switch (fit.child) {
         .first => share,
@@ -422,7 +426,7 @@ fn collectRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Directio
         .split => |sp| sp,
         else => return,
     };
-    if (sp.dir != dir) return;
+    if (sp.axis() != dir) return;
     const ratio = if (dvui.dataGet(null, self.data().id, self.shownKey(node), f32)) |v| v else Layout.targetRatio(sp, extent);
     const d = self.divide(node, extent, ratio);
     self.collectRow(sp.first, dir, origin, d.first, out);
@@ -435,7 +439,7 @@ fn collectRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Directio
 fn collectCells(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction, out: *std.ArrayList(Layout.NodeIndex)) void {
     const layout = self.init_opts.layout;
     switch (layout.nodes.items[node]) {
-        .split => |sp| if (sp.dir == dir) {
+        .split => |sp| if (sp.axis() == dir) {
             self.collectCells(sp.first, dir, out);
             self.collectCells(sp.second, dir, out);
             return;
@@ -452,7 +456,7 @@ fn assignRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction
         .split => |sp| sp,
         else => return,
     };
-    if (sp.dir != dir) return;
+    if (sp.axis() != dir) return;
     const pos = for (collected) |b| {
         if (b.node == node) break b.pos;
     } else return;
@@ -577,9 +581,12 @@ fn enterNode(self: *Dockspace, node: Layout.NodeIndex, cell: ?Rect) ?Panel {
     // still laid out, unseen, so the fit keeps learning its size (`measureOnly`).
     if (cell) |c| if (c.w <= 0.5 or c.h <= 0.5) return self.measureOnly(node, c);
     switch (layout.nodes.items[node]) {
-        .split => |sp| {
+        .split => {
             const cr = cell orelse self.data().contentRect().justSize();
-            const extent = along(cr, sp.dir);
+            self.orientSplit(node, cr);
+            const sp = layout.nodes.items[node].split;
+            const axis = sp.axis();
+            const extent = along(cr, axis);
             dvui.dataSet(null, self.data().id, self.extentKey(node), extent);
             const d0 = self.divide(node, extent, 0);
             var target = Layout.targetRatio(sp, d0.usable);
@@ -610,10 +617,11 @@ fn enterNode(self: *Dockspace, node: Layout.NodeIndex, cell: ?Rect) ?Panel {
                 break :blk ptr;
             };
 
-            var rects = self.cellRects(node, cr, shown.*);
+            const turn = self.turnOf(node);
+            var rects = self.turnedRects(node, cr, shown.*, axis, turn);
             self.stack.append(dvui.currentWindow().arena(), .{
                 .node = node,
-                .dir = sp.dir,
+                .dir = axis,
                 .rect = cr,
                 .shown = shown,
                 .extent = extent,
@@ -625,12 +633,15 @@ fn enterNode(self: *Dockspace, node: Layout.NodeIndex, cell: ?Rect) ?Panel {
             // The sash: fizzy's split handle, placed in the gap, matched on the box so it grows
             // as the pointer approaches. Run before the children so a press near the sash is the
             // sash's, not the pane's.
-            var sash = Split.initSized(@src(), sp.dir, layout.keyOf(node), rects.sash, self.gapOf(node));
+            // Mid-turn the sash has no place to be: it is between a strip along the width and a
+            // strip along the height, and would be a slab across the middle.
+            if (turn != null) return null;
+            var sash = Split.initSized(@src(), axis, layout.keyOf(node), rects.sash, self.gapOf(node));
             const g = sash.grab(self.data());
             if (dvui.captured(sash.box.data().id)) self.dragging = true;
             if (g.to) |to| {
                 self.dragTo(frame, to);
-                rects = self.cellRects(node, cr, shown.*);
+                rects = self.cellRects(node, cr, shown.*, axis);
                 frame.first_rect = rects.first;
                 frame.second_rect = rects.second;
             }
@@ -641,6 +652,65 @@ fn enterNode(self: *Dockspace, node: Layout.NodeIndex, cell: ?Rect) ?Panel {
         .leaf => return self.openLeaf(node, cell),
         .free => unreachable,
     }
+}
+
+fn turnKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
+    return dvui.currentWindow().arena().print("_turn:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_turn";
+}
+
+/// Set the direction an adaptive split draws in this frame from the shape of its cell. When it
+/// changes (a device turned, a window narrowed) the split does not snap: the cell rects slide
+/// from the old direction to the new over the panes' opening slide (`turnedRects`), at the
+/// same ratio. A split's first frame, and a layout that does not animate, take the new
+/// direction at once.
+fn orientSplit(self: *Dockspace, node: Layout.NodeIndex, cr: Rect) void {
+    const layout = self.init_opts.layout;
+    const sp = &layout.nodes.items[node].split;
+    if (!sp.adaptive) return;
+    const was = sp.drawn;
+    const now = sp.orientedFor(cr.w, cr.h);
+    sp.drawn = now;
+    const prev = was orelse return;
+    if (prev == now or !layout.animated) return;
+    const id = self.data().id;
+    dvui.dataSet(null, id, self.turnKey(node), prev);
+    dvui.animation(id, self.turnKey(node), .{ .start_val = 0, .end_val = 1, .end_time = motion.duration(anim.slide.ms(true) * std.time.us_per_ms), .easing = motion.settle });
+}
+
+const Turn = struct { from: dvui.enums.Direction, progress: f32 };
+
+/// How far an adaptive split has turned, while it is turning: the direction it came from and
+/// the eased share of the way to the one it is drawn in. Null at rest.
+fn turnOf(self: *Dockspace, node: Layout.NodeIndex) ?Turn {
+    const id = self.data().id;
+    const a = dvui.animationGet(id, self.turnKey(node)) orelse return null;
+    if (a.done()) return null;
+    const from = dvui.dataGet(null, id, self.turnKey(node), dvui.enums.Direction) orelse return null;
+    self.animating = true;
+    dvui.refresh(null, @src(), id);
+    return .{ .from = from, .progress = a.value() };
+}
+
+/// The cell rects of `node` at `ratio`, running along `axis`, or slid part of the way to it from
+/// the direction it `turn`s from.
+fn turnedRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32, axis: dvui.enums.Direction, turn: ?Turn) @TypeOf(Row.cellRects(cr, .horizontal, 0, 0)) {
+    const to = self.cellRects(node, cr, ratio, axis);
+    const t = turn orelse return to;
+    const from = self.cellRects(node, cr, ratio, t.from);
+    return .{
+        .first = lerpRect(from.first, to.first, t.progress),
+        .second = lerpRect(from.second, to.second, t.progress),
+        .sash = lerpRect(from.sash, to.sash, t.progress),
+    };
+}
+
+fn lerpRect(a: Rect, b: Rect, t: f32) Rect {
+    return .{
+        .x = std.math.lerp(a.x, b.x, t),
+        .y = std.math.lerp(a.y, b.y, t),
+        .w = std.math.lerp(a.w, b.w, t),
+        .h = std.math.lerp(a.h, b.h, t),
+    };
 }
 
 /// A leaf squeezed to nothing whose parent split fits to it (`fit.child`) is laid out anyway —
@@ -659,7 +729,7 @@ fn measureOnly(self: *Dockspace, node: Layout.NodeIndex, cell: Rect) ?Panel {
     // Zero along the split: dvui sizes it to its content there. Across it keeps the cell's
     // extent, which is what the content wraps to.
     var r = cell;
-    switch (parent.dir) {
+    switch (parent.axis()) {
         .horizontal => {
             r.w = 0;
             r.y -= 100_000;

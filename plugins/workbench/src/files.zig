@@ -328,7 +328,7 @@ fn rowMenu(
                     side_grouping = if (runtime.host().openDocCount() == 0)
                         runtime.workbench().currentGroupingID()
                     else
-                        runtime.workbench().newGroupingID();
+                        runtime.workbench().besideGrouping();
                     have_grouping = true;
                 }
                 _ = runtime.host().openFile(.{ .path = p, .grouping = side_grouping }) catch {

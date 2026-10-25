@@ -5169,6 +5169,7 @@ pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.back
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = l.name };
             gop.value_ptr.parent = l.parent;
             gop.value_ptr.from = @tagName(l.side);
+            gop.value_ptr.adaptive = if (l.adaptive) true else null;
         }
     }
     {
@@ -5267,7 +5268,8 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
     for (order) |r| {
         const parent = r.parent orelse continue;
         const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
-        _ = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        const made = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+        if (made != null and (r.adaptive orelse false)) _ = state.splits.markAdaptive(r.name);
     }
 }
 

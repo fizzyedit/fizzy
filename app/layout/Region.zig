@@ -1305,6 +1305,7 @@ fn initTree(
 
     if (init_opts.resize) self.drawPendingSplit(id) else self.drawPendingSplit(null);
 
+    orientBranch(self, &node.kind.branch, id);
     const branch = node.kind.branch;
     var box_opts = opts;
     var default_extent: f32 = 0;
@@ -1366,6 +1367,7 @@ fn initTree(
     box_opts.padding = .{};
     const box = dvui.box(src, .{ .dir = branch.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
+    if (branch.adaptive) dvui.dataSet(null, id, "_dims", box.data().rect.size());
 
     if (keywords.len > 0) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
@@ -1399,6 +1401,37 @@ fn initTree(
         .kind_slot = init_opts.kind_slot,
         .resize = init_opts.resize,
     };
+}
+
+/// Turn an adaptive branch to the direction its box's shape asks, from the size the box had last
+/// frame (`_dims` on `id`). The new half keeps its share of the box through the turn: its extent,
+/// in points along the old axis, becomes the same share along the new one, and the place eases
+/// there as any extent that moved for a reason other than a drag does (`Split.eased`). Saved as it
+/// turned, since a place's size is points.
+fn orientBranch(self: *Layout, branch: *SplitTree.Branch, id: dvui.Id) void {
+    if (!branch.adaptive) return;
+    const dims = dvui.dataGet(null, id, "_dims", dvui.Size) orelse return;
+    const was: core.placement.Axis = switch (branch.dir) {
+        .horizontal => .side_by_side,
+        .vertical => .stacked,
+    };
+    if (core.placement.orient(was, dims.w, dims.h) == was) return;
+    const before = switch (branch.dir) {
+        .horizontal => dims.w,
+        .vertical => dims.h,
+    };
+    SplitTree.turn(branch);
+    const after = switch (branch.dir) {
+        .horizontal => dims.w,
+        .vertical => dims.h,
+    };
+    if (before <= 0) return;
+    const share = self.state.extent(branch.created, 0) / before;
+    const extent = std.math.clamp(share * after, 0, @max(0, after - Split.handle_size));
+    if (self.state.setExtent(self.gpa, branch.created, extent)) self.extents_changed = true;
+    if (idOf(self.state, branch.created)) |at| dvui.dataSet(null, at, "_size", extent);
+    self.state.markDirty();
+    dvui.refresh(null, @src(), id);
 }
 
 fn drawTreeChildren(
@@ -1568,8 +1601,10 @@ fn drawTreeNode(
             var r = try init(self, src, o, child_opts);
             r.deinit();
         },
-        .branch => |b| {
+        .branch => |*branch| {
             if (self.depth >= Layout.max_nesting) return;
+            orientBranch(self, branch, dvui.parentGet().extendId(src, nameExtra(branch.origin)));
+            const b = branch.*;
             const parent_dir = if (self.depth > 0) self.containers[self.depth - 1].dir else .horizontal;
             // Same extra as the leaf this branch replaced, so the parent sash
             // keeps the widget it was already dragging.
@@ -1608,6 +1643,7 @@ fn drawTreeNode(
                 }
             }
             const box = dvui.box(src, .{ .dir = b.dir }, box_opts);
+            if (b.adaptive) dvui.dataSet(null, box.data().id, "_dims", box.data().rect.size());
             if (!leftover) {
                 const id = box.data().id;
                 Split.recordEdges(id, box.data(), parent_dir);
@@ -1741,6 +1777,17 @@ pub fn splitOnSized(self: *Layout, name: []const u8, side: SplitTree.Side, size:
     self.state.markDirty();
     dvui.refresh(null, @src(), null);
     return new;
+}
+
+/// Fizzy made the split that minted `new` (`splitOn`), not the person: it runs the way its space's
+/// shape asks from here on and turns with it (`core.placement`).
+pub fn markAdaptive(self: *Layout, new: []const u8) void {
+    if (self.state.dock) |*dock| if (dock.findPanel(new)) |leaf| {
+        if (dock.findParent(leaf)) |parent| dock.nodes.items[parent.idx].split.adaptive = true;
+        self.state.markDirty();
+        return;
+    };
+    if (self.state.splits.markAdaptive(new)) self.state.markDirty();
 }
 
 fn splitDock(

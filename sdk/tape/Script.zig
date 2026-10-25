@@ -42,9 +42,16 @@ home: []const u8 = "",
 /// Set by the app that builds it; a tape built where there is no window (`zig build demos`) is the
 /// desktop's.
 compact: bool = false,
+/// Where a view opened beside the documents goes in the window the script is built for: a script
+/// that drags a tab to an edge aims at the edge the app would split on, and where it would not
+/// split (a phone) brings the card forward instead. Set by the app that builds it, from the
+/// window's shape (`core.placement`); a tape built where there is no window is the desktop's.
+beside: Beside = .right,
 /// What the app says about a tape (`Tape.Check`): its spelling of key chords, checked as each is
 /// written and again when the tape is finished.
 check: Tape.Check = .{},
+
+pub const Beside = enum { right, bottom, card };
 
 /// How a person moves, by default. Every call can override its own.
 pub const Pace = struct {

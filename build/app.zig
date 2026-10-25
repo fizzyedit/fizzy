@@ -825,7 +825,7 @@ fn addTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.
         // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
         .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
         // Where a new view goes by the shape of the room, and which way an adaptive split runs.
-        // std-only (see placement.zig); `Workspaces` asks it.
+        // std-only (see placement.zig); the workbench and the docking widget ask it.
         .{ "fizzy-placement-tests", "core/placement.zig" },
         // A document state as the bytes that differ from another: how a track's checkpoints
         // stay small. std-only (see state_delta.zig); `Tracks` keeps its checkpoints with it.

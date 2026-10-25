@@ -1087,6 +1087,8 @@ pub const region = Region.init;
 pub const splitNamed = Region.splitNamed;
 /// Divide a named place from a specific edge — a view-drag drop onto that side.
 pub const splitOn = Region.splitOn;
+/// Mark the split that minted a place as fizzy's own, so it follows its space's shape (`core.placement`).
+pub const markAdaptive = Region.markAdaptive;
 /// Move the visible surface from one place to another — a view-drag drop.
 pub const placeVisible = ViewDrag.place;
 

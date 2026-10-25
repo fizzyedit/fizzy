@@ -1,6 +1,6 @@
 //! Where a new view goes, decided from the shape of the room and nothing else: a space taller
-//! than wide stacks two views, a wider one sets them side by side, and one too small for either
-//! takes the view as a tab. No OS, device or pointer is asked, so a phone held upright, a narrow
+//! than wide stacks two views, a wider one sets them side by side, and one too small for two
+//! takes the view as a card. No OS, device or pointer is asked, so a phone held upright, a narrow
 //! desktop window and a portrait monitor all land the same way. std-only, so the table in the
 //! tests below is the specification (`build/app.zig`). In `core` so a plugin that arranges its own
 //! panes (the workbench) asks the same answer as an app that places them in layout.
@@ -19,11 +19,10 @@ pub const Axis = enum {
 /// pixel.
 pub const dead_band = 1.15;
 
-/// The room each half of a split must keep for a document to be worth reading in, in points.
-pub const min_half = Size{ .w = 360, .h = 440 };
-
-/// The gap a split's sash takes.
-pub const handle: f32 = 8;
+/// The room each half of a split must keep for a document to be worth reading in, in points. Sized
+/// so that no phone splits by itself, held either way up (the largest, 956 x 440, gives 478-wide
+/// halves), and a tablet or a desktop window does.
+pub const split_half = Size{ .w = 480, .h = 360 };
 
 pub const Size = struct { w: f32, h: f32 };
 
@@ -35,46 +34,30 @@ pub fn orient(prev: ?Axis, w: f32, h: f32) Axis {
     return prev orelse .side_by_side;
 }
 
-/// The size of one half of `space` split along `axis`.
-pub fn half(space: Size, axis: Axis) Size {
-    return switch (axis) {
-        .side_by_side => .{ .w = (space.w - handle) / 2, .h = space.h },
-        .stacked => .{ .w = space.w, .h = (space.h - handle) / 2 },
-    };
-}
-
-/// Whether a view can be read in a place of `s`.
-pub fn fits(s: Size) bool {
-    return s.w >= min_half.w and s.h >= min_half.h;
-}
-
 pub const Result = union(enum) {
     /// The view goes into the place at this index of `places`.
     into: usize,
     /// Split the anchor along this axis; the new place is the trailing half.
     split: Axis,
-    /// Neither a place nor a split has room: the view joins the anchor's place as a tab.
+    /// Neither a place nor a split has room: the view joins the anchor's place as a card.
     tab,
 };
 
-/// Where a view opened beside `anchor` (the place the person is in) goes. `places` are the
-/// other places already showing, in the order to prefer. The person's arrangement comes first:
-/// a place that fits takes the view, and only without one does the anchor split, along the axis
-/// its shape asks, or the other when only that one fits.
+/// Where a view opened beside `anchor` (the place the person is in) goes. `places` are the other
+/// places drawn now that take the view, in the order to prefer: the caller leaves out any that
+/// are hidden or do not accept it. The person's arrangement comes first: the first of them takes
+/// the view, whatever its size, because the person made it. Without one the anchor splits along
+/// the axis its shape asks, if both halves keep `split_half`; otherwise the view is a card in
+/// the anchor's place.
 pub fn place(anchor: Size, places: []const Size) Result {
-    for (places, 0..) |p, i| if (fits(p)) return .{ .into = i };
-    const want = orient(null, anchor.w, anchor.h);
-    if (fits(half(anchor, want))) return .{ .split = want };
-    const other: Axis = if (want == .stacked) .side_by_side else .stacked;
-    if (fits(half(anchor, other))) return .{ .split = other };
+    if (places.len > 0) return .{ .into = 0 };
+    const axis = orient(null, anchor.w, anchor.h);
+    const half: Size = switch (axis) {
+        .side_by_side => .{ .w = anchor.w / 2, .h = anchor.h },
+        .stacked => .{ .w = anchor.w, .h = anchor.h / 2 },
+    };
+    if (half.w >= split_half.w and half.h >= split_half.h) return .{ .split = axis };
     return .tab;
-}
-
-/// The axis a split off `anchor` runs when it must split even though `place` said `.tab`: the
-/// shape's own, so a caller with no tabs to give (a pane is a place of its own) still follows
-/// the room.
-pub fn splitAxis(anchor: Size) Axis {
-    return orient(null, anchor.w, anchor.h);
 }
 
 const Case = struct {
@@ -88,40 +71,45 @@ test "place: the table" {
     const cases = [_]Case{
         .{ .name = "phone portrait", .anchor = .{ .w = 390, .h = 844 }, .want = .tab },
         .{ .name = "phone landscape", .anchor = .{ .w = 844, .h = 390 }, .want = .tab },
+        .{ .name = "large phone, 932 x 430 on its side", .anchor = .{ .w = 932, .h = 430 }, .want = .tab },
+        .{ .name = "largest phone, 956 x 440 on its side", .anchor = .{ .w = 956, .h = 440 }, .want = .tab },
         .{ .name = "tablet portrait", .anchor = .{ .w = 820, .h = 1180 }, .want = .{ .split = .stacked } },
         .{ .name = "tablet landscape", .anchor = .{ .w = 1180, .h = 820 }, .want = .{ .split = .side_by_side } },
-        .{ .name = "narrow desktop window", .anchor = .{ .w = 700, .h = 800 }, .want = .tab },
+        .{ .name = "narrow desktop window is a phone's", .anchor = .{ .w = 700, .h = 800 }, .want = .tab },
         .{ .name = "tall desktop window", .anchor = .{ .w = 900, .h = 1100 }, .want = .{ .split = .stacked } },
         .{ .name = "wide desktop window", .anchor = .{ .w = 1440, .h = 900 }, .want = .{ .split = .side_by_side } },
         .{ .name = "square fits side by side", .anchor = .{ .w = 1000, .h = 1000 }, .want = .{ .split = .side_by_side } },
         .{
-            // Stacked halves are 700x386, too short; side by side they are 346 wide, too thin.
-            .name = "neither axis fits",
-            .anchor = .{ .w = 700, .h = 780 },
+            // Tall by ratio, so it asks for stacked halves of 730 x 425: they fit. It does not
+            // fall back to the other axis when they do not (the next row).
+            .name = "tall, and the stacked halves fit",
+            .anchor = .{ .w = 730, .h = 850 },
+            .want = .{ .split = .stacked },
+        },
+        .{
+            // Stacked halves are 580 x 350, too short; side by side would be 290 wide, too thin.
+            // Neither is tried when the shape picks the other.
+            .name = "the shape's axis does not fit: a card, not the other axis",
+            .anchor = .{ .w = 580, .h = 700 },
             .want = .tab,
         },
         .{
-            // Tall by ratio, but its stacked halves are 421 high; side by side they fit.
-            .name = "the other axis, when only it fits",
-            .anchor = .{ .w = 730, .h = 850 },
-            .want = .{ .split = .side_by_side },
-        },
-        .{
-            .name = "an existing place that fits wins over a split",
+            .name = "a place the person made takes the view, whatever its size",
             .anchor = .{ .w = 1440, .h = 900 },
-            .places = &.{.{ .w = 600, .h = 900 }},
+            .places = &.{.{ .w = 200, .h = 900 }},
             .want = .{ .into = 0 },
         },
         .{
-            .name = "a place too small to read in is skipped",
+            .name = "the first of the places wins",
             .anchor = .{ .w = 1440, .h = 900 },
-            .places = &.{ .{ .w = 200, .h = 900 }, .{ .w = 500, .h = 900 } },
-            .want = .{ .into = 1 },
+            .places = &.{ .{ .w = 500, .h = 900 }, .{ .w = 600, .h = 900 } },
+            .want = .{ .into = 0 },
         },
         .{
-            .name = "phone with a second group: into it",
-            .anchor = .{ .w = 390, .h = 844 },
-            .places = &.{.{ .w = 390, .h = 844 }},
+            // Two groups stacked on a phone, each about 390 x 418: the other is filled.
+            .name = "phone with two groups: into the other",
+            .anchor = .{ .w = 390, .h = 418 },
+            .places = &.{.{ .w = 390, .h = 418 }},
             .want = .{ .into = 0 },
         },
     };

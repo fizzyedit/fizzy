@@ -183,6 +183,11 @@ pub fn play(self: *Demo, name: []const u8) !void {
     errdefer script.deinit();
     script.check = automation.Input.check;
     script.compact = core.platform.formFactor() == .mobile;
+    const win = dvui.windowRect();
+    script.beside = switch (core.placement.place(.{ .w = win.w, .h = win.h }, &.{})) {
+        .split => |axis| if (axis == .stacked) .bottom else .right,
+        .into, .tab => .card,
+    };
     try entry.build(&script);
     self.player.load(try script.finish(), .{});
 }
