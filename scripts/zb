@@ -59,8 +59,9 @@ slot_pid() { cat "$1/pid" 2>/dev/null; }
 # Take a free slot, reclaiming one whose holder died. Sets $mine. A slot appears with its pid
 # already inside (a rename of a directory made in private), so a live holder is never seen without
 # one and is never reclaimed by age; a slot with no pid file is a taker that died mid-way, held
-# until it is a minute old. A rename onto a slot taken meanwhile nests inside it instead of
-# failing, so the take counts only when the slot's pid is ours.
+# until it is a minute old, then claimed by an exclusive create of its pid. A rename onto a slot
+# taken meanwhile nests inside it instead of failing, so the take counts only when the slot's pid
+# is ours.
 mine=
 try_slot() {
     i=0
@@ -81,13 +82,25 @@ try_slot() {
         p=$(slot_pid "$s")
         if [ -z "$p" ]; then
             [ -n "$(find "$s" -maxdepth 0 -mmin +1 2>/dev/null)" ] || continue
+            # Exclusive create: it fails if a taker has put its pid there since we looked.
+            if (set -C && echo "$$" >"$s/pid") 2>/dev/null; then
+                mine=$s
+                return 0
+            fi
+            continue
         elif alive "$p"; then
             continue
         fi
-        # Rename is atomic, so only one waiter wins a dead slot; it retries the take next pass.
-        if mv "$s" "$dir/dead.$$" 2>/dev/null; then
-            rm -rf "$dir/dead.$$"
-            i=$((i - 1))
+        # Moving the pid file away leaves a young pid-less slot that every other waiter holds, and
+        # fails if another reclaimer got there first. What was moved is checked: if the slot was
+        # taken after we read the pid, it holds a live pid, which goes back.
+        if mv "$s/pid" "$s/pid.$$" 2>/dev/null; then
+            if [ "$(cat "$s/pid.$$")" = "$p" ] && ! alive "$p"; then
+                rm -rf "$s"
+                i=$((i - 1))
+            else
+                mv "$s/pid.$$" "$s/pid"
+            fi
         fi
     done
     return 1
