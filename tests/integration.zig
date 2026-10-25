@@ -9945,8 +9945,6 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
         try dvui.testing.settle(headlessFrame);
         // Their documents are still open: the demo owns only what it opened.
         try std.testing.expect(editor.docFromPath(notes) != null);
-        // The tour's own arrangement is not left to be saved as the person's, and their
-        // documents are still open: the demo owns only what it opened.
     }
 
     // The text commands, as a snippet keybind, a tape or an agent calls them: each one
