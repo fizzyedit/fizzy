@@ -44,13 +44,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb xauth libgtk-3-dev libgl1-mesa-dri libegl1 libvulkan1 mesa-vulkan-drivers libfuse2
+          echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
+          echo "SDL_VIDEO_DRIVER=x11" >> "$GITHUB_ENV"
           echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
       - name: Test the measurement harness without windows
         run: python3 scripts/test-hello-numbers.py
       - name: Measure both release modes
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          SDL_VIDEO_DRIVER: x11
         run: |
           set -euo pipefail
           args=(--output "$RUNNER_TEMP/hello-numbers.jsonl"

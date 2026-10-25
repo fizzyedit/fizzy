@@ -26,16 +26,23 @@ var cached_is_macos: bool = builtin.target.os.tag.isDarwin();
 pub const form_factor = @import("form_factor.zig");
 pub const FormFactor = form_factor.FormFactor;
 
-/// Native is always `.desktop` until Android and iOS read their own; the web backend writes it
-/// with `form_factor.classify`. A module global, so a dylib plugin sees its own copy: that is
-/// right while native is constant and web plugins link statically. Once native sets it, it must
-/// travel through the host instead.
+/// What was detected. Native is always `.desktop` until Android and iOS read their own; the web
+/// backend writes it with `form_factor.classify`. A module global, so a dylib plugin sees its own
+/// copy, without the Layout setting or `?form=`: plugins read `Layout.form_factor`, which the host
+/// fills from `formFactor()`.
 pub var cached_form_factor: FormFactor = .desktop;
 
-/// Whether the device is mobile, a tablet or a desktop. Read it where a shape is chosen; it
-/// changes on rotation or a resize across the threshold, so ask each frame rather than once.
+/// This visit's `?form=` on web, never stored; null elsewhere.
+pub var cached_form_override: ?FormFactor = null;
+
+/// The person's Layout setting, written by the editor each frame (held while a demo plays).
+pub var cached_layout_mode: form_factor.LayoutMode = .auto;
+
+/// Whether the layout is drawn for mobile, a tablet or a desktop: the detected value, the Layout
+/// setting and `?form=` together. Read it where a shape is chosen; it changes on rotation, a
+/// resize across the threshold or a settings change, so ask each frame rather than once.
 pub inline fn formFactor() FormFactor {
-    return cached_form_factor;
+    return form_factor.effective(cached_form_factor, cached_layout_mode, cached_form_override);
 }
 
 /// Call once after `dvui.Window.init`. On native this is a no-op (the comptime

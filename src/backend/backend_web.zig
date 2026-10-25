@@ -182,9 +182,9 @@ export fn FizzyWebTrackpadMagnification(delta: f32) void {
 /// `FormFactor` number, for the page's console readout.
 export fn FizzyWebSetFormFactor(coarse: bool, w_css: f32, h_css: f32, override: i32) u8 {
     const platform = fizzy.core.platform;
-    const chosen = platform.form_factor.resolve(coarse, w_css, h_css, platform.form_factor.overrideFromCode(override));
-    platform.cached_form_factor = chosen;
-    return @backingInt(chosen);
+    platform.cached_form_factor = platform.form_factor.classify(coarse, w_css, h_css);
+    platform.cached_form_override = platform.form_factor.overrideFromCode(override);
+    return @backingInt(platform.formFactor());
 }
 
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires

@@ -100,17 +100,56 @@ the machinery, and the absolute edit-to-binary time of a real edit as somewhat h
 running app `dlopen` the result, which needs a window and so is not part of a headless run; the
 dylib build is where the time goes.
 
-## Does incremental compilation work here?
+## Which edits stay incremental
 
-Yes, on Zig 0.17.0 and this build graph: `zig build -fincremental --watch` rebuilds the app, and
-each plugin, and reports a successful summary after an edit; `incr_core` and `incr_plugin` give
-the edit-to-summary times. The script fails the
-run if a watched build's summary reports a failed step. Watched builds run with `--summary line`
-(the default prints nothing on success), and each edit is one rename of a complete file over the original, after the watcher has gone
-idle, so the next summary is the build that edit caused. The cost of the first build under
-`-fincremental` and `--watch`'s inotify use on a tree this size are not measured separately.
-What is not yet known is how it behaves for edits that change analyzed code (see the probe
-note above); extend the probe before relying on incremental numbers as a target.
+Yes, on Zig 0.17.0 and this build graph: `zig build -fincremental --watch` (`scripts/watch`)
+rebuilds the app, core, the SDK and every in-tree plugin after a save, and no edit kind falls
+back with a message or fails to rebuild. `scripts/perf-incremental` measures it: for each target
+one watch process, and per edit kind the time from the save to the next Build Summary, against
+the same edits in a plain `zig build`. Median of 3, Linux x86_64 (16 CPUs, 27 GiB), Zig 0.17.0,
+Debug; macOS and Windows are unmeasured.
 
-See a run's numbers in the PR that last changed this file, and append new runs there rather than
-here: they depend on the machine.
+| edit kind | what the script appends |
+|---|---|
+| `new_decl` | a new `pub const` nothing uses |
+| `body` | a different literal in a function body |
+| `sig` | a function's return type changes, with a caller |
+| `comptime_const` | a `pub const` used as an array length changes |
+| `import` | a `comptime { _ = @import(..) }` added and removed |
+| `compile_error` | a `@compileError`; the build must fail, and the next edit must recover |
+| `build_zig` | a comment appended to the target's `build.zig` |
+
+Seconds, watch / full (`-` where not run):
+
+| target | new_decl | body | sig | comptime_const | import | compile_error | build_zig |
+|---|---|---|---|---|---|---|---|
+| app | 0.38 / 11.2 | 0.50 / 8.7 | 0.93 / 10.7 | 0.83 / 8.5 | 0.82 / 14.3 | 0.17 / 7.1 | 37.0 / 1.2 |
+| core | 1.6 / 16.5 | 2.8 / 12.6 | 2.4 / 13.5 | 2.4 / 19.5 | 0.44 / 28.9 | 0.23 / 12.2 | - |
+| sdk | 0.45 / 24.3 | 2.5 / 9.6 | 5.8 / 15.3 | 4.8 / 24.2 | 12.5 / 28.5 | 0.53 / 9.9 | - |
+| plugin archive | 0.17 / 1.8 | 0.16 / 1.7 | 0.30 / 1.7 | 0.30 / 1.8 | 0.83 / 1.7 | 0.17 / 1.6 | 7.4 / 1.2 |
+| plugin devtools | 0.31 / 2.0 | 0.19 / 1.9 | 0.32 / 2.0 | 0.19 / 2.0 | 0.30 / 2.0 | 0.12 / 1.8 | 10.4 / 1.2 |
+| plugin guides | 0.72 / 1.7 | 0.29 / 1.8 | 0.67 / 1.7 | 0.16 / 1.7 | 0.73 / 1.7 | 0.12 / 1.6 | 8.6 / 1.3 |
+| plugin image | 0.28 / 1.8 | 0.18 / 1.8 | 0.29 / 1.8 | 0.29 / 1.8 | 0.28 / 1.8 | 0.13 / 1.6 | 7.8 / 1.0 |
+| plugin markdown | 0.33 / 4.5 | 0.18 / 4.5 | 0.49 / 15.7 | 1.2 / 4.4 | 4.5 / 4.3 | 0.13 / 2.7 | 10.8 / 3.3 |
+| plugin text | 0.40 / 2.1 | 0.33 / 2.1 | 0.18 / 2.1 | 0.33 / 2.1 | 1.4 / 2.1 | 0.17 / 1.9 | 12.5 / 1.2 |
+| plugin workbench | 0.33 / 4.8 | 0.19 / 3.5 | 0.33 / 3.7 | 0.32 / 5.9 | 0.19 / 2.2 | 0.13 / 1.9 | 8.0 / 1.7 |
+
+(The first eight rows were measured at commit `5fc11d83`, text and workbench at current `main`;
+no later commit touched the build graph. The `text` `comptime_const` watch figure was rerun, 5
+runs, after a first sample coalesced with the previous build and read 0.01 s.)
+
+What the table says:
+
+- **A saved `.zig` file is fast everywhere**, from 0.1 s (a plugin) to a few seconds (core and the
+  SDK, which everything imports), 5 to 60 times quicker than a full rebuild, and a compile error
+  and its fix both stay incremental.
+- **A change to `build.zig` is the exception, and a loss**: 7 to 37 s under `--watch` against
+  1 to 3 s for a plain rebuild. The build runner restarts and the watched compilations start over (the
+  app's 37 s is about a full Debug build); the cause is not isolated. Stop and restart `scripts/watch` after editing a `build.zig` or
+  `build.zig.zon`, or accept the one slow rebuild.
+- **An SDK `import` or `sig` edit costs seconds**, because every plugin and the app depend on it:
+  that is analysis the compiler really has to redo, not a fallback.
+- Nothing printed a fallback or "unsupported" line, so there is no compiler bug to report.
+
+The numbers depend on the machine: rerun `scripts/perf-incremental` before relying on them, and
+put new runs in the PR that changes the build graph as well as here.

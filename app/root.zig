@@ -218,6 +218,7 @@ pub const store = struct {
 // whose tests no std-only test root of their own reaches. `Layout`'s own `test` block brings in
 // the split trees, seeds, regions, drop plans and view drag beside it.
 test {
+    _ = settings.Settings;
     _ = view.ViewHost;
     _ = layout.Layout;
     _ = layout.Shape;

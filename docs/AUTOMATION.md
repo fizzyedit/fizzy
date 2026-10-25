@@ -284,7 +284,7 @@ there, by a callout in the main window. This is the rule, not an option.
 It moves like a guide, not a label (`app/automation/Calm.zig`): it keeps its spot while the spot is
 still on the window, clear and near enough, and moves only when the pointer's aim moves on to
 something else (a quarter second ahead of the pointer, so it arrives with it) or its spot stops
-being good; then it travels once, on a gentle eased curve, 300–600 ms by distance (a jump with
+being good (never the pointer itself: it is not dodged); then it travels once, on a gentle eased curve, 300–600 ms by distance (a jump with
 motion off). A pointer's wiggle over the same thing moves nothing. It anchors as
 `automation.callout`, for a test to check what it covers. So write one caption per action rather
 than one over several. For typing, `catalog.aboutWriting(s, "README.md")` puts the callout beside where

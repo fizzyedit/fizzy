@@ -485,14 +485,10 @@ fn subjectOf(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect
 /// (`Caption.clear`); what the pointer goes to in the caption's time — the thing, or the point on
 /// a pane, since covering an editor is unavoidable but covering where in it the pointer goes is
 /// not; every bar out under the overlay (`dome.barsOut`: a document's history bar, a corner
-/// vial), which is what a step brings out; and the pointer while it rests. Not while it moves: it
-/// passes under the callout on its way, and would push it about.
+/// vial), which is what a step brings out. Never the pointer itself: a callout holds its place
+/// rather than dodging it.
 fn keepClear(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, in_window: bool, buf: []dvui.Rect) []const dvui.Rect {
     var keep: std.ArrayList(dvui.Rect) = .initBuffer(buf);
-    if (player.pointerShown(0) > 0 and !pointerMoving(tape, player.now())) {
-        const p = dvui.windowRectScale().pointFromPhysical(.{ .x = player.seq.pointer.x, .y = player.seq.pointer.y });
-        keep.appendAssumeCapacity(.{ .x = p.x - 4, .y = p.y - 4, .w = 22, .h = 28 });
-    }
     // Every OS window shown over the main one, where it lies there: a callout in the main window is
     // under it, and is not placed where it would be hidden. Not the subject's own, which the
     // callout is drawn in (`in_window`).
@@ -542,17 +538,6 @@ fn windowAround(player: *Player, r: dvui.Rect) ?dvui.Rect {
         return if (natural.w >= min_window.w and natural.h >= min_window.h) natural else null;
     }
     return null;
-}
-
-/// Whether a move or a trace is carrying the tape's pointer at `now` (demo ms).
-fn pointerMoving(tape: *const Tape, now: f64) bool {
-    for (tape.ops) |op| {
-        const at: f64 = @floatFromInt(op.at);
-        if (at > now) break;
-        if (op.do != .move and op.do != .trace) continue;
-        if (now < at + @as(f64, @floatFromInt(op.ms))) return true;
-    }
-    return false;
 }
 
 /// A point (physical) as a small rect around it, natural.

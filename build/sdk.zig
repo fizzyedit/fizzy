@@ -153,13 +153,54 @@ pub fn buildOptsModule(opts: *std.Build.Step.Options) *std.Build.Module {
     return m;
 }
 
+/// The kinds of executable an app builds: the desktop ones (the plain executable and the one
+/// `package` packs share a framework) and the web one.
+pub const Platform = enum { native, web };
+
 pub const BundledPlugin = struct {
     /// The plugin's import name and id — `plugin_id` in its root, `plugin.zig.zon`'s `.id`.
     name: []const u8,
     /// The plugin's static module. Null for one of fizzy's own (`fizzy.plugins`), which fizzy
     /// builds for each executable.
     module: ?*std.Build.Module = null,
+    /// The kinds of executable that link it, each with its own module if it has one (built
+    /// against that kind's framework). Null: every kind, with `module`.
+    targets: ?[]const Target = null,
+
+    pub const Target = struct {
+        target: Platform,
+        /// Null: the plugin's `module`.
+        module: ?*std.Build.Module = null,
+    };
+
+    /// One of fizzy's own: no module for any executable.
+    pub fn isFizzys(self: BundledPlugin) bool {
+        if (self.module != null) return false;
+        for (self.targets orelse &.{}) |t| if (t.module != null) return false;
+        return true;
+    }
+
+    /// The entry as `platform`'s executables link it, or null if they do not.
+    pub fn forPlatform(self: BundledPlugin, platform: Platform) ?BundledPlugin {
+        const targets = self.targets orelse return self;
+        for (targets) |t| if (t.target == platform) return .{ .name = self.name, .module = t.module orelse self.module };
+        return null;
+    }
 };
+
+/// The plugins `platform`'s executables link, in order, each with that kind's module.
+pub fn pluginsFor(b: *std.Build, plugins: []const BundledPlugin, platform: Platform) ![]const BundledPlugin {
+    var linked: std.ArrayList(BundledPlugin) = .empty;
+    for (plugins) |p| {
+        const entry = p.forPlatform(platform) orelse continue;
+        for (linked.items) |l| if (std.mem.eql(u8, l.name, entry.name)) {
+            std.log.err("fizzy: plugin '{s}' is listed twice", .{entry.name});
+            return error.PluginListedTwice;
+        };
+        try linked.append(b.allocator, entry);
+    }
+    return linked.items;
+}
 
 /// The generated `bundled_plugins` module: `pub const modules = .{ @import("a"), @import("b") … }`
 /// over the statically linked plugins, in order. The runtime (`app.App`) iterates it at

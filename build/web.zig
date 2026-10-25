@@ -6,13 +6,17 @@ const plugins = @import("plugins.zig");
 const sdk = @import("sdk.zig");
 const rehome_fixture = @import("rehome_fixture.zig");
 
-/// What `build` made: the wasm module, and the site beside it.
+/// What `build` made: the wasm module, and the site around it.
 pub const Web = struct {
     wasm: *std.Build.Step.Compile,
-    /// Everything but the wasm: the stamped `index.html`, `web.js`, the worker, the font, the OAuth
-    /// page, the hosted demo tapes under `demos/` (fizzy's own build) and each plugin's pages
-    /// under `plugins/<id>/`.
-    dir: std.Build.LazyPath,
+    /// The whole site, deployable as it is: `files` and `page`.
+    site: std.Build.LazyPath,
+    /// Everything but the page: the wasm, `web.js`, the worker, the font, the OAuth page, the
+    /// hosted demo tapes under `demos/` (fizzy's own build) and each plugin's pages under
+    /// `plugins/<id>/`.
+    files: std.Build.LazyPath,
+    /// `index.html`, stamped with the wasm's hash and the storage name.
+    page: std.Build.LazyPath,
     /// Fizzy's own build: a native-built plugin graph re-homed to wasm32 and compiled apart from
     /// the app, for `check-web`.
     rehome_fixture: ?*std.Build.Step.Compile,
@@ -21,25 +25,8 @@ pub const Web = struct {
     demos: ?std.Build.LazyPath,
 };
 
-/// The web (wasm) build, apart from the native exe so it cannot disturb packaging, SDL or
-/// Velopack. Adds no step of its own; `install` puts it under `zig-out/web/`.
-pub fn build(
-    b: *std.Build,
-    optimize: std.lang.OptimizeMode,
-    build_opts: *std.Build.Step.Options,
-    workbench_opts: *std.Build.Step.Options,
-    assets_module: *std.Build.Module,
-    /// The window's icon (`app.Branding.png`); `src/Entry.zig` imports it.
-    app_icon_module: *std.Build.Module,
-    app_layout: ?std.Build.LazyPath,
-    app_plugins: []const sdk.BundledPlugin,
-    web_plugin_deps: []const []const u8,
-    web_plugin_dirs: []const @import("app.zig").WebPluginDir,
-    /// Fizzy's own build (`Options.own`): the hosted demo tapes come from `docs/demos/` and
-    /// `scripts/`, which fizzy's package leaves out, so an app built on fizzy has none.
-    own: bool,
-) Web {
-    const web_target = b.resolveTargetQuery(.{
+pub fn target(b: *std.Build) std.Build.ResolvedTarget {
+    return b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
         .cpu_features_add = std.Target.wasm.featureSet(&.{
@@ -48,7 +35,20 @@ pub fn build(
             .bulk_memory,
         }),
     });
+}
 
+/// What the web executable links and builds its plugins against (`exe.NativeFramework`'s twin).
+pub const Framework = struct {
+    dvui_dep: *std.Build.Dependency,
+    dvui: *std.Build.Module,
+    backend: *std.Build.Module,
+    core: *std.Build.Module,
+    sdk: *std.Build.Module,
+    icons: ?*std.Build.Module,
+};
+
+pub fn framework(b: *std.Build, optimize: std.lang.OptimizeMode) Framework {
+    const web_target = target(b);
     // The web backend is fizzy's own (`src/backend/WebBackend.zig` + `web/web.js`), started as a
     // copy of dvui's: dvui is built in its `custom` mode and our backend linked to it, as dvui's
     // build does for its own (`linkBackend`). Every option is the one dvui's `web` mode sets, so
@@ -77,6 +77,49 @@ pub fn build(
     web_backend.addImport("dvui", dvui_web);
     dvui_web.addImport("backend", web_backend);
     const dvui_web_proxy_bridge = sdk.addProxyBridgeModule(b, web_target, optimize, dvui_web_dep, dvui_web);
+
+    // Shared `core` module for the wasm build (dvui web backend variant).
+    const core_module_web = b.createModule(.{
+        .target = web_target,
+        .optimize = optimize,
+        .root_source_file = b.path("core/core.zig"),
+        .link_libc = false,
+        .single_threaded = true,
+    });
+    const icons_web = core_mod.addImports(b, core_module_web, dvui_web, b.dependency("fizzy_sdk", .{}).builder, web_target, optimize, null, null);
+    return .{
+        .dvui_dep = dvui_web_dep,
+        .dvui = dvui_web,
+        .backend = web_backend,
+        .core = core_module_web,
+        .sdk = sdk.wireSdkModule(b, web_target, optimize, dvui_web, dvui_web_proxy_bridge, core_module_web, null),
+        .icons = icons_web,
+    };
+}
+
+/// The web (wasm) build, apart from the native exe so it cannot disturb packaging, SDL or
+/// Velopack. Adds no step of its own; `install` puts it under `zig-out/web/`.
+pub fn build(
+    b: *std.Build,
+    fw: Framework,
+    optimize: std.lang.OptimizeMode,
+    build_opts: *std.Build.Step.Options,
+    workbench_opts: *std.Build.Step.Options,
+    assets_module: *std.Build.Module,
+    /// The window's icon (`app.Branding.png`); `src/Entry.zig` imports it.
+    app_icon_module: *std.Build.Module,
+    app_layout: ?std.Build.LazyPath,
+    app_plugins: []const sdk.BundledPlugin,
+    web_plugin_deps: []const []const u8,
+    web_plugin_dirs: []const @import("app.zig").WebPluginDir,
+    /// Fizzy's own build (`Options.own`): the hosted demo tapes come from `docs/demos/` and
+    /// `scripts/`, which fizzy's package leaves out, so an app built on fizzy has none.
+    own: bool,
+) Web {
+    const web_target = target(b);
+    const dvui_web_dep = fw.dvui_dep;
+    const dvui_web = fw.dvui;
+    const web_backend = fw.backend;
 
     const web_exe = b.addExecutable(.{
         .name = "web",
@@ -176,18 +219,12 @@ pub fn build(
     // wasm path is gated by `arch != .wasm32` in `auto_update.impl`.
     web_exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
-    // Shared `core` module for the wasm build (dvui web backend variant).
-    const core_module_web = b.createModule(.{
-        .target = web_target,
-        .optimize = optimize,
-        .root_source_file = b.path("core/core.zig"),
-        .link_libc = false,
-        .single_threaded = true,
-    });
-    const icons_web = core_mod.addImports(b, core_module_web, dvui_web, b.dependency("fizzy_sdk", .{}).builder, web_target, optimize, null, null);
+    const core_module_web = fw.core;
+    const icons_web = fw.icons;
     web_exe.root_module.addImport("core", core_module_web);
     if (icons_web) |icons| web_exe.root_module.addImport("icons", icons);
-    const sdk_module_web = sdk.wireSdkModule(b, web_target, optimize, dvui_web, dvui_web_proxy_bridge, core_module_web, web_exe.root_module);
+    const sdk_module_web = fw.sdk;
+    web_exe.root_module.addImport("fizzy_sdk", sdk_module_web);
 
     // Three editor files have `const sdl3 = @import("backend").c;` at file
     // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
@@ -286,7 +323,7 @@ pub fn build(
     const index_html_with_hash = cb_run.captureStdOut(.{});
 
     const dir = b.addWriteFiles();
-    _ = dir.addCopyFile(index_html_with_hash, "index.html");
+    _ = dir.addCopyFile(web_exe.getEmittedBin(), web_exe.out_filename);
     _ = dir.addCopyFile(b.path("web/web.js"), "web.js");
     // Worker mode (`?worker=1`): the editor in a worker, drawing through an OffscreenCanvas.
     _ = dir.addCopyFile(b.path("web/fizzy-worker.js"), "fizzy-worker.js");
@@ -324,7 +361,20 @@ pub fn build(
         break :blk b.addObject(.{ .name = "rehome-fixture-web", .root_module = module });
     } else null;
 
-    return .{ .wasm = web_exe, .dir = dir.getDirectory(), .rehome_fixture = rehome_check, .demos = demos };
+    const site = b.addWriteFiles();
+    _ = site.addCopyDirectory(dir.getDirectory(), "", .{});
+    _ = site.addCopyFile(index_html_with_hash, "index.html");
+    // For an app built on fizzy, which installs it into its own prefix: a dependency's prefix is a
+    // directory in the cache.
+    b.addNamedLazyPath("web", site.getDirectory());
+    return .{
+        .wasm = web_exe,
+        .site = site.getDirectory(),
+        .files = dir.getDirectory(),
+        .page = index_html_with_hash,
+        .rehome_fixture = rehome_check,
+        .demos = demos,
+    };
 }
 
 /// The steps over `build`'s result: `web` installs it into `zig-out/web/`, and the ones that
@@ -332,17 +382,13 @@ pub fn build(
 pub fn install(b: *std.Build, web: Web) void {
     b.addNamedLazyPath("web-wasm", web.wasm.getEmittedBin());
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
-    const install_wasm = b.addInstallArtifact(web.wasm, .{
-        .dest_dir = .{ .override = web_install_dir },
-    });
     const install_site = b.addInstallDirectory(.{
-        .source_dir = web.dir,
+        .source_dir = web.site,
         .install_dir = web_install_dir,
         .install_subdir = "",
     });
 
     const web_step = b.step("web", "Build the fizzy web (wasm) app into zig-out/web/");
-    web_step.dependOn(&install_wasm.step);
     web_step.dependOn(&install_site.step);
     if (web.demos) |tapes| {
         const install_demos = b.addInstallDirectory(.{

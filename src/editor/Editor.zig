@@ -3648,9 +3648,9 @@ pub fn markWindowRatiosDirty(editor: *Editor) void {
 /// left is written first if it has unsaved changes. A no-op while the shape is the same.
 ///
 /// Limit: it replaces the in-memory arrangement outright, floats included, whatever else is
-/// happening, a demo playing among it. The mobile form factor comes from the screen's short side,
-/// not the window, so it changes with the device and not with a resize, and nothing guards
-/// against a flip mid-demo; none is expected.
+/// happening. `chooseShape` is the caller that holds a Layout setting change while a demo plays;
+/// the detected form factor comes from the screen's short side, so it changes with the device and
+/// not with a resize.
 pub fn useShape(editor: *Editor, shape: []const u8) void {
     const state = &editor.app.layout;
     if (std.mem.eql(u8, state.shape, shape)) return;
@@ -3663,6 +3663,21 @@ pub fn useShape(editor: *Editor, shape: []const u8) void {
     state.dirty = false;
     editor.loadSavedLayout();
     dvui.refresh(null, @src(), null);
+}
+
+/// Hand the Layout setting to `core.platform`, where `formFactor()` (and so `Layout.form_factor`,
+/// whatever shape an app draws) reads it. Held while a demo plays: a form-factor flip replaces
+/// floats and the in-memory arrangement, which a demo's stage depends on, so it waits for the demo.
+pub fn syncLayoutMode(editor: *Editor) void {
+    if (!editor.demo.active()) fizzy.core.platform.cached_layout_mode = editor.app.settings.layout_mode;
+}
+
+/// Draw with the shape the Layout setting and the device call for. fizzy's own shapes only: an app
+/// supplying its layout chooses for itself and gets the setting through `syncLayoutMode`.
+pub fn chooseShape(editor: *Editor) void {
+    editor.syncLayoutMode();
+    const mobile = fizzy.core.platform.formFactor() == .mobile;
+    editor.useShape(if (mobile) mobile_layout.shape_key else "");
 }
 
 /// Forget extents, assignments and runtime splits, write an empty region list,
@@ -3931,6 +3946,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.app.settings.kept_history_gb = parsed.kept_history_gb;
     editor.app.settings.control_server = parsed.control_server;
     editor.app.settings.input_scheme = parsed.input_scheme;
+    editor.app.settings.layout_mode = parsed.layout_mode;
     editor.app.settings.plugin_update_mode = parsed.plugin_update_mode;
 
     // Re-apply the existing idempotent appliers unconditionally — cheap, and each already
@@ -4834,8 +4850,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // `layout.zon`'s first arrangement. Before the `Layout` is made over the state, since
             // switching replaces what is in it.
             const own_shapes = comptime !build_opts.has_app_layout;
-            const mobile = own_shapes and fizzy.core.platform.formFactor() == .mobile;
-            if (own_shapes) editor.useShape(if (mobile) mobile_layout.shape_key else "");
+            if (own_shapes) editor.chooseShape() else editor.syncLayoutMode();
             var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
             // Published for the duration of the shape, so a plugin drawing inside a region can
             // declare one of its own through `Host.region`. Cleared below: a `*Layout` that
@@ -4851,7 +4866,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             layout.ctx = ctx;
             const shell_result = if (comptime build_opts.has_app_layout)
                 @import("app_layout").layout(ctx, &layout)
-            else if (mobile)
+            else if (fizzy.core.platform.formFactor() == .mobile)
                 mobile_layout.layout(ctx, &layout)
             else
                 fizzy_layout.layout(ctx, &layout);

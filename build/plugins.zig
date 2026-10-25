@@ -141,16 +141,22 @@ const Rehome = struct {
         self.stale.deinit(self.b.allocator);
     }
 
+    /// What the SDK package exports a plugin (`sdk/plugin_sdk.zig`'s `exportModules`), as this
+    /// consumer has it. `tape` and `replay` are the ones `core` was built with, so a `Tape` the
+    /// plugin makes is the one fizzy plays.
+    const framework_names = [_][]const u8{ "dvui", "core", "fizzy_sdk", "icons", "tape", "replay" };
+
     fn framework(self: *const Rehome, name: []const u8) ?*std.Build.Module {
         if (std.mem.eql(u8, name, "dvui")) return self.w.dvui;
         if (std.mem.eql(u8, name, "core")) return self.w.core;
         if (std.mem.eql(u8, name, "fizzy_sdk")) return self.w.sdk;
         if (std.mem.eql(u8, name, "icons")) return self.w.icons;
+        if (std.mem.eql(u8, name, "tape") or std.mem.eql(u8, name, "replay")) return self.w.core.import_table.get(name);
         return null;
     }
 
     fn isFrameworkName(name: []const u8) bool {
-        for ([_][]const u8{ "dvui", "core", "fizzy_sdk", "icons" }) |n| if (std.mem.eql(u8, name, n)) return true;
+        for (framework_names) |n| if (std.mem.eql(u8, name, n)) return true;
         return false;
     }
 
@@ -183,7 +189,12 @@ const Rehome = struct {
         }
         for (fresh.items) |m| {
             var direct = self.pinnedElsewhere(m);
-            for (m.import_table.keys()) |name| direct = direct or isFrameworkName(name);
+            // A module already built against this consumer's framework (`fizzy.framework`) is
+            // not stale for importing it.
+            var it = m.import_table.iterator();
+            while (it.next()) |kv| if (isFrameworkName(kv.key_ptr.*)) {
+                direct = direct or self.framework(kv.key_ptr.*) != kv.value_ptr.*;
+            };
             if (direct) self.stale.put(gpa, m, {}) catch @panic("OOM");
         }
         var changed = true;
@@ -279,14 +290,17 @@ const Rehome = struct {
         return m;
     }
 
-    /// A plugin's root module is always copied and always gets this consumer's framework modules,
-    /// whether or not its own table named them: its build need not wire what its source imports.
+    /// A plugin's root module always gets this consumer's framework modules, whether or not its
+    /// own table named them: its build need not wire what its source imports. It is copied unless
+    /// it was built against this consumer's framework (it imports this `dvui`), along with all it
+    /// imports; only then are the missing ones added to it in place, as they are this framework's.
     fn copy(self: *Rehome, name: []const u8, src: *std.Build.Module) *std.Build.Module {
         self.analyze(src);
-        self.stale.put(self.b.allocator, src, {}) catch @panic("OOM");
+        const own = src.import_table.get("dvui") == self.w.dvui and !self.stale.contains(src);
+        if (!own) self.stale.put(self.b.allocator, src, {}) catch @panic("OOM");
         self.root = src;
         const m = self.copyAnalyzed(name, src);
-        inline for (.{ "dvui", "core", "fizzy_sdk", "icons" }) |import_name| {
+        for (framework_names) |import_name| {
             if (m.import_table.get(import_name) == null) if (self.framework(import_name)) |fw| m.addImport(import_name, fw);
         }
         return m;

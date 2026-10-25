@@ -167,13 +167,56 @@ pub fn platformModule(
     return fizzy_backend.platformModule(backendDependency(b), native.dvui, native.backend, backendOptions(target, optimize, macos_sdl_paths));
 }
 
+/// What every native executable of one target links and builds its plugins against: dvui on the
+/// native backend, `core`, the SDK and `icons`. Made once, so the plain executable and the
+/// packaged one share it.
+pub const NativeFramework = struct {
+    native: NativeDvui,
+    core: *std.Build.Module,
+    sdk: *std.Build.Module,
+    icons: ?*std.Build.Module,
+    /// The glass look the backend dresses OS windows with; the dylibs' `core` takes it too.
+    glass_look: *std.Build.Module,
+};
+
+pub fn nativeFramework(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.OptimizeMode,
+    accesskit: dvui.AccesskitOptions,
+    native_backend: NativeBackend,
+    macos_sdl_paths: ?MacosSdlPaths,
+) NativeFramework {
+    const native = nativeDvui(b, native_backend, target, optimize, accesskit, macos_sdl_paths);
+    const glass_look = fizzy_backend.glassLookModule(backendDependency(b));
+    // Its in-app glass, the backend's (`glassModule`): `core` over the same dvui takes the same one.
+    const glass = fizzy_backend.glassModule(backendDependency(b), native.dvui);
+
+    // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
+    // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.
+    const core_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("core/core.zig"),
+    });
+    const icons = core_mod.addImports(b, core_module, native.dvui, b.dependency("fizzy_sdk", .{}).builder, target, optimize, glass_look, glass);
+    const proxy_bridge_host_mod = sdk.addProxyBridgeModule(b, target, optimize, native.dep, native.dvui);
+    return .{
+        .native = native,
+        .core = core_module,
+        .sdk = sdk.wireSdkModule(b, target, optimize, native.dvui, proxy_bridge_host_mod, core_module, null),
+        .icons = icons,
+        .glass_look = glass_look,
+    };
+}
+
 pub fn addFizzyExecutableForTarget(
     b: *std.Build,
     /// Null on the configure pass that fetches Velopack (`app.readConfig`).
     vz: ?velopack.Dep,
     resolved_target: std.Build.ResolvedTarget,
     optimize: std.lang.OptimizeMode,
-    accesskit: dvui.AccesskitOptions,
+    framework: NativeFramework,
     native_backend: NativeBackend,
     build_opts: *std.Build.Step.Options,
     workbench_opts: *std.Build.Step.Options,
@@ -200,8 +243,7 @@ pub fn addFizzyExecutableForTarget(
     /// False for a link-only app (`-Ddynamic-plugins=false`): no plugin dylib is built.
     dynamic_plugins: bool,
 ) !FizzyExecutable {
-    const native = nativeDvui(b, native_backend, resolved_target, optimize, accesskit, macos_sdl_paths);
-    const dvui_dep = native.dep;
+    const native = framework.native;
     const dvui_mod = native.dvui;
 
     const dvui_proxy_dep = sdk.dvuiDependency(b, .{
@@ -211,7 +253,6 @@ pub fn addFizzyExecutableForTarget(
         .accesskit = .off,
     });
     const dvui_proxy_mod = dvui_proxy_dep.module("dvui_proxy");
-    const proxy_bridge_host_mod = sdk.addProxyBridgeModule(b, resolved_target, optimize, dvui_dep, dvui_mod);
     const proxy_bridge_plugin_mod = dvui_proxy_dep.module("proxy_bridge");
 
     const exe = b.addExecutable(.{
@@ -259,19 +300,8 @@ pub fn addFizzyExecutableForTarget(
     native_backend_opts.addOption(bool, "fizzy", native_backend == .fizzy);
     exe.root_module.addImport("native_backend", native_backend_opts.createModule());
 
-    // The glass look the backend dresses OS windows with; `core` takes the same module.
-    const glass_look = fizzy_backend.glassLookModule(backendDependency(b));
-    // Its in-app glass, the backend's (`glassModule`): `core` over the same dvui takes the same one.
-    const glass = fizzy_backend.glassModule(backendDependency(b), dvui_mod);
-
-    // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
-    // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.
-    const core_module = b.createModule(.{
-        .target = resolved_target,
-        .optimize = optimize,
-        .root_source_file = b.path("core/core.zig"),
-    });
-    const icons_module = core_mod.addImports(b, core_module, dvui_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize, glass_look, glass);
+    const core_module = framework.core;
+    const icons_module = framework.icons;
     exe.root_module.addImport("core", core_module);
     if (icons_module) |icons| exe.root_module.addImport("icons", icons);
 
@@ -280,7 +310,7 @@ pub fn addFizzyExecutableForTarget(
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize, glass_look, null);
+    _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, b.dependency("fizzy_sdk", .{}).builder, resolved_target, optimize, framework.glass_look, null);
 
     // `macos_fsevents` is load-bearing for `FolderWatcher`: it watches a whole project folder,
     // and the kqueue fallback needs a file descriptor per directory *and* per file — exactly the
@@ -294,7 +324,8 @@ pub fn addFizzyExecutableForTarget(
         exe.root_module.addImport("nightwatch", dep.module("nightwatch"));
     }
 
-    const sdk_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_mod, proxy_bridge_host_mod, core_module, exe.root_module);
+    const sdk_module = framework.sdk;
+    exe.root_module.addImport("fizzy_sdk", sdk_module);
     const sdk_proxy_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_proxy_mod, proxy_bridge_plugin_mod, core_proxy_module, null);
     // What this application links, as build data: a generated module whose `modules` tuple
     // names every statically linked plugin, so the runtime registers, probes and falls back

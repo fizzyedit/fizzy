@@ -3157,6 +3157,71 @@ test "a bar tab opens the explorer sheet on its view, and picking the showing on
     try std.testing.expect(placeShut(editor, "Explorer"));
 }
 
+test "the Layout setting switches a desktop window to the mobile shape and back, held while a demo plays" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    const io_before = dvui.io;
+    defer dvui.io = io_before;
+    dvui.io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    editor.app.config_folder = dir_buf[0..try tmp.dir.realPath(dvui.io, &dir_buf)];
+    defer fizzy.core.platform.cached_layout_mode = .auto;
+
+    const state = &editor.app.layout;
+    const mobile_key = "mobile";
+
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+
+    // Mobile on a desktop form factor: the mobile shape at once.
+    editor.app.settings.layout_mode = .mobile;
+    editor.chooseShape();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    try std.testing.expectEqualStrings(mobile_key, state.shape);
+
+    // Desktop: the desktop arrangement is back.
+    editor.app.settings.layout_mode = .desktop;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+
+    // While a demo plays the change waits, and lands when it ends.
+    editor.app.settings.layout_mode = .mobile;
+    editor.demo.player.state = .playing;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings("", state.shape);
+    editor.demo.player.state = .idle;
+    editor.chooseShape();
+    try std.testing.expectEqualStrings(mobile_key, state.shape);
+}
+
+test "syncLayoutMode hands the Layout setting to the form factor without switching the shape, held while a demo plays" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    defer fizzy.core.platform.cached_layout_mode = .auto;
+
+    const shape_before = editor.app.layout.shape;
+    editor.app.settings.layout_mode = .mobile;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    try std.testing.expectEqualStrings(shape_before, editor.app.layout.shape);
+
+    editor.app.settings.layout_mode = .desktop;
+    editor.demo.player.state = .playing;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.mobile, fizzy.core.platform.formFactor());
+    editor.demo.player.state = .idle;
+    editor.syncLayoutMode();
+    try std.testing.expectEqual(fizzy.core.platform.FormFactor.desktop, fizzy.core.platform.formFactor());
+}
+
 test "a form-factor flip saves the shape it leaves and loads the other's, leaving the first's file part alone" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -10236,10 +10301,23 @@ test "headless: the whole editor comes up, opens a file, plays the tour and goes
     try editor.demo.play("tour");
     var frames: usize = 0;
     var desktop_panes: PaneWatch = .{};
+    var relocations: usize = 0;
+    var prev: ?dvui.Rect = null;
+    var was_moving = false;
     while (editor.demo.player.state != .ended and frames < 5000) : (frames += 1) {
         _ = try dvui.testing.step(headlessFrame);
         desktop_panes.look(&editor.workbench);
+        const now = calloutRect();
+        const moving = if (prev) |p| if (now) |n| @abs(n.x - p.x) + @abs(n.y - p.y) > 0.5 and @abs(n.w - p.w) < 0.5 else false else false;
+        if (moving and !was_moving) relocations += 1;
+        was_moving = moving;
+        prev = now;
     }
+    // A callout holds its place: the tour's callouts set off 12 times here before they stopped
+    // dodging the resting pointer (`overlay.keepClear`), 11 since. The count is measured on this
+    // CI's platform (Linux); macOS lays the tour out with one glide fewer, so 11 is the bound that
+    // fails without the change here and holds on both.
+    try std.testing.expect(relocations <= 11);
     try std.testing.expectEqual(app.automation.Player.State.ended, editor.demo.player.state);
     // A wide window sets the tour's two documents side by side.
     try std.testing.expect(desktop_panes.side_by_side);
