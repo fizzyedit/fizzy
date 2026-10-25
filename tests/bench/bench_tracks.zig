@@ -140,6 +140,36 @@ test "bench tracks: a step, a frame's top, a replay, what a session holds" {
         std.debug.print("a checkpoint of a {d} KB document at a frame's top: {d:.3} ms\n", .{ size >> 10, @as(f64, @floatFromInt(best)) / std.time.ns_per_ms });
     }
 
+    // A checkpoint of a document with edits scattered through it, frame by frame: the longest
+    // frame's top it takes, how many frames, and what the owner's capture (its copy and fingerprint) alone costs.
+    for ([_]usize{ 8 << 20, 32 << 20 }) |size| {
+        var tracks = try fresh(size);
+        defer tracks.deinit();
+        const rec = tracks.recorder();
+        var effect: [8]u8 = @splat(1);
+        for (0..Tracks.checkpoint_max_steps) |i| rec.vtable.step(rec.ctx, 1, .{ .kind = .added, .id = i + 1, .effect = &effect });
+        for (0..16) |i| @memset(doc_bytes[i * (size / 16) + 1000 ..][0..300], 0xee);
+        const c0 = nowNs();
+        const copy = try std.testing.allocator.dupe(u8, doc_bytes);
+        std.mem.doNotOptimizeAway(Owner.fingerprint(&owner_state, doc(1)));
+        const copy_ns = nowNs() - c0;
+        std.testing.allocator.free(copy);
+        var longest: i96 = 0;
+        var frames: usize = 0;
+        while (tracks.due) {
+            const t0 = nowNs();
+            tracks.tick();
+            longest = @max(longest, nowNs() - t0);
+            frames += 1;
+        }
+        std.debug.print("a checkpoint of a {d} KB document, edits scattered: longest frame {d:.3} ms over {d} frames (the owner's capture alone {d:.3} ms)\n", .{
+            size >> 10,
+            @as(f64, @floatFromInt(longest)) / std.time.ns_per_ms,
+            frames,
+            @as(f64, @floatFromInt(copy_ns)) / std.time.ns_per_ms,
+        });
+    }
+
     // The first small step after a pause, at a frame's top: the stall a checkpoint taken for it
     // costs, by the document's size.
     for ([_]usize{ 1 << 20, 8 << 20, 32 << 20 }) |size| {

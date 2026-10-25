@@ -365,6 +365,7 @@ pub fn command(self: *Script, id: []const u8) !void {
 /// Run a command with arguments: `args` is any value `std.zon.stringify` can write, keyed by the
 /// command's parameters — `try s.commandWith("text.goToLine", .{ .line = 12 })`. Whether they fit
 /// is the command's to say when it runs, as it is for a person's.
+// anytype: Command arguments have command-specific shapes serialized to ZON.
 pub fn commandWith(self: *Script, id: []const u8, args: anytype) !void {
     var out: std.Io.Writer.Allocating = .init(self.arena.allocator());
     std.zon.stringify.serialize(args, .{}, &out.writer) catch return error.OutOfMemory;

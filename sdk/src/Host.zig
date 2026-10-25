@@ -2317,6 +2317,7 @@ pub fn deliverEvents(self: *Host) void {
 }
 
 /// `emit` with `value` written as ZON, written only when someone listens.
+// anytype: Event payloads have plugin-defined shapes serialized to ZON.
 pub fn emitZon(self: *Host, name: []const u8, value: anytype) void {
     if (!self.listening.load(.acquire)) return;
     var out: std.Io.Writer.Allocating = .init(self.allocator);

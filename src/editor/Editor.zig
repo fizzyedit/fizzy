@@ -2970,7 +2970,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
 /// How many steps `doc`'s owner keeps of its history, for its grip's fill: the history limit
 /// counts its entries, not the track's steps (each undo, redo and joined step its own). Asked of the
 /// owner only when the track moved; 0 for a document not recorded, whose grip is plain.
-fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: anytype) usize {
+fn keptSteps(ds: *DocSurface, doc: sdk.DocHandle, recorded: ?*const @import("app").Tracks.Track) usize {
     const track_steps = if (recorded) |tr| tr.steps.items.len else return 0;
     if (ds.kept_at != track_steps) {
         ds.kept_at = track_steps;
@@ -4460,6 +4460,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     if (editor.app.tracks) |*t| {
         t.kept_cap = @intFromFloat(@max(0, editor.app.settings.kept_history_gb) * (1 << 30));
         t.tick();
+        // A checkpoint's diff not done is carried on at the next frame's top, asleep or not.
+        if (t.due) dvui.refresh(null, @src(), null);
     }
     if (editor.share_pending) |p| {
         editor.share_pending = null;
@@ -7519,9 +7521,10 @@ fn pmError(err: anyerror) PluginManager.Error {
     };
 }
 
-/// `anytype` because the call sites return different `void` error unions (the loader's, the
-/// installer's, `Allocator.Error`), and a named type for them would be `anyerror!void`, which
-/// says less; each is only `catch`ed and translated by `pmError`.
+/// The call sites return different `void` error unions (the loader's, the installer's,
+/// `Allocator.Error`), and a named type for them would be `anyerror!void`, which says less;
+/// each is only `catch`ed and translated by `pmError`.
+// anytype: differing void error unions, each only caught and translated
 fn pmResult(result: anytype) PluginManager.Error!void {
     result catch |err| return pmError(err);
 }

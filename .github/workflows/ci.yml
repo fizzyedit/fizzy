@@ -116,6 +116,8 @@ jobs:
         run: bash scripts/test-agent-work.sh
       - name: superfans (fan-dedupe, fan-route, fan-lint on seeded input)
         run: bash scripts/test-fan.sh
+      - name: scripts/perf-compile (store)
+        run: bash scripts/test-perf-compile.sh
       - name: scripts/runner-setup.sh (private-repo check)
         run: sh scripts/test-runner-setup.sh
       - name: scripts/runner-setup.ps1 (private-repo check, dry run under pwsh)

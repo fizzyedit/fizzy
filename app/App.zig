@@ -603,6 +603,7 @@ pub fn pluginList(app: *App, arena: std.mem.Allocator) error{OutOfMemory}![]sdk.
 }
 
 /// How many of `items` (a host registry: each has an `owner`) `plugin` registered.
+// anytype: Host registries contain different item types sharing an owner field.
 fn countOwned(items: anytype, plugin: *sdk.Plugin) u32 {
     var n: u32 = 0;
     for (items) |item| n += @intFromBool(item.owner == plugin);

@@ -396,7 +396,7 @@ fn drawBranch(
         try drawLeaves(branch, query);
     }
 
-    if (!searching) setOpen(branch.key, b.expanded);
+    if (!searching) if (b.requested) |open| setOpen(branch.key, open);
 }
 
 /// One setting row: the setting name (match-highlighted while searching), then the control body.

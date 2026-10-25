@@ -440,6 +440,7 @@ fn describe(c: *const sdk.Command, arena: std.mem.Allocator) error{OutOfMemory}!
     };
 }
 
+// anytype: Response bodies have route-specific shapes serialized to JSON.
 fn ok(arena: std.mem.Allocator, value: anytype) error{OutOfMemory}!Answer {
     return .{ .status = .ok, .body = try std.json.Stringify.valueAlloc(arena, value, .{ .emit_null_optional_fields = false }) };
 }

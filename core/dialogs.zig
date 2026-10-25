@@ -667,6 +667,7 @@ pub fn tooltipBeginAt(wd: *dvui.WidgetData, origin: dvui.Point.Physical) f32 {
 /// menus' clock like any other tooltip, rather than riding the widget's fade, which runs over a
 /// fifth of the delay and played the whole grow in a blink. Returns the alpha to restore after
 /// the contents, as `tooltipBegin` does.
+// anytype: Both core and dvui tooltip widgets expose animation and widget data.
 pub fn tooltipBeginFor(tt: anytype, duration_us: i32) f32 {
     if (tt.animate) |fade_in| {
         // Still waiting out the delay: nothing, and no showing begun yet.

@@ -129,6 +129,7 @@ pub fn collapseToPrimary(self: *Selection, gpa: Allocator) !void {
 pub fn mapRanges(
     self: *Selection,
     gpa: Allocator,
+    // anytype: Each cursor motion supplies its own callback context type.
     ctx: anytype,
     comptime f: fn (@TypeOf(ctx), Range) Range,
 ) !void {

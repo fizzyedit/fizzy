@@ -389,7 +389,9 @@ pub fn branch(self: *TreeWidget, src: std.lang.SourceLocation, init_opts: Branch
 
 pub const Branch = struct {
     pub const InitOptions = struct {
-        // if true, the branch is currently expanded
+        /// Whether the caller wants the branch open, passed every frame. The caller owns this
+        /// state; the branch only eases toward it (`Branch.expanded` is what is drawn) and reports
+        /// a click or key press in `Branch.requested`.
         expanded: bool = false,
 
         // if null, uses widget id
@@ -425,10 +427,13 @@ pub const Branch = struct {
     /// One of the rows carried back over the tree (`TreeWidget.carriedOver`): the rows drawn
     /// inside it are carried with it.
     carried_source: bool = false,
+    /// What is drawn: open while opening and while closing, until the close animation ends.
+    /// Follows `init_options.expanded` and is never to be copied back into the caller's state.
     expanded: bool = false,
-    /// Left/Right pressed on this row this frame: `expander()` toggles the branch the way a
-    /// click does (animated, and before the caller reads `expanded` back), so a caller passing
-    /// last frame's open state cannot undo it.
+    /// The open state the user asked for this frame (a click, Left/Right, hover-to-open), null
+    /// when they asked for nothing. Valid after `expander()`; the caller applies it to its own state.
+    requested: ?bool = null,
+    /// Left/Right pressed on this row this frame; `expander()` turns it into `requested`.
     key_toggle: bool = false,
     can_expand: bool = false,
     anim: ?*dvui.AnimateWidget = null,
@@ -567,6 +572,7 @@ pub const Branch = struct {
                         // replays the same open animation as a click.
                         if (dvui.timerDone(self.data().id)) {
                             self.init_options.expanded = true;
+                            self.requested = true;
                         } else {
                             _ = dvui.timer(self.data().id, 500_000);
                         }
@@ -704,7 +710,7 @@ pub const Branch = struct {
                     switch (ke.code) {
                         .right => {
                             e.handle(@src(), self.button.data());
-                            if (self.expanded) {
+                            if (self.init_options.expanded) {
                                 dvui.tabIndexNextEx(e.num, self.tree.group.tab_index_prev, self.tree.data().id, false);
                             } else {
                                 self.key_toggle = true;
@@ -712,7 +718,7 @@ pub const Branch = struct {
                         },
                         .left => {
                             e.handle(@src(), self.button.data());
-                            if (self.expanded) {
+                            if (self.init_options.expanded) {
                                 self.key_toggle = true;
                             } else if (self.parent_focus_id) |pid| {
                                 dvui.focusWidget(pid, null, e.num);
@@ -771,19 +777,35 @@ pub const Branch = struct {
             default_opts.override(opts),
         );
 
-        if (clicked or self.key_toggle or self.init_options.expanded != self.expanded) {
-            if (self.expanded) {
-                self.anim.?.init_opts.easing = motion.settle;
-                self.anim.?.init_opts.duration = motion.duration(@divTrunc(self.init_options.animation_duration, 2));
-                self.anim.?.startEnd();
+        const toggled = clicked or self.key_toggle;
+        const want = self.init_options.expanded != toggled;
+        if (toggled) self.requested = want;
+
+        const anim = self.anim.?;
+        // A close in flight, through the frame it ends on (when `end()` reports it).
+        const closing_anim = if (dvui.animationGet(anim.data().id, "_end")) |a| (if (a.end_val == 0) a else null) else null;
+        if (want and (!self.expanded or closing_anim != null)) {
+            if (closing_anim) |a| {
+                // Reopen from where the close had got to.
+                dvui.animation(anim.data().id, "_end", .{
+                    .start_val = a.value(),
+                    .end_val = 1.0,
+                    .end_time = anim.init_opts.duration,
+                    .easing = anim.init_opts.easing orelse dvui.easing.linear,
+                });
+                anim.val = a.value();
             } else {
-                self.anim.?.val = 0.0;
-                self.anim.?.start();
-                self.expanded = true;
+                anim.val = 0.0;
+                anim.start();
             }
+            self.expanded = true;
+        } else if (!want and self.expanded and closing_anim == null) {
+            anim.init_opts.easing = motion.settle;
+            anim.init_opts.duration = motion.duration(@divTrunc(self.init_options.animation_duration, 2));
+            anim.startEnd();
         }
 
-        if (self.anim.?.end()) {
+        if (!want and anim.end()) {
             self.expanded = false;
         }
 
